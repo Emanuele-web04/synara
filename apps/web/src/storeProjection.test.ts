@@ -45,6 +45,71 @@ import {
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 describe("store projection", () => {
+  it("restores cache reviews from shell snapshots and retains them during detail eviction", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const incoming = makeReadModelThread({
+      claudeCacheReview: {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe("held-message"),
+        sourceEventSequence: 8,
+        assessment: {
+          observedAt: "2026-09-16T10:00:00.000Z",
+          state: "likely-expired",
+          source: "session-start",
+          contextTokens: 800_000,
+        },
+        status: "pending",
+        createdAt: "2026-09-16T10:00:00.000Z",
+      },
+    });
+    const restored = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(incoming));
+    expect(restored.threadShellById?.[threadId]?.claudeCacheReview).toEqual(
+      incoming.claudeCacheReview,
+    );
+    expect(getThreadFromState(restored, threadId)?.claudeCacheReview).toEqual(
+      incoming.claudeCacheReview,
+    );
+
+    const hydrated = syncServerThreadDetailHotPath(restored, incoming);
+    const evicted = evictThreadDetailFromClientState(hydrated, threadId);
+    expect(getThreadFromState(evicted, threadId)?.claudeCacheReview).toEqual(
+      incoming.claudeCacheReview,
+    );
+
+    const cleared = applyShellEvent(evicted, {
+      kind: "thread-upserted",
+      sequence: 9,
+      thread: { ...incoming, claudeCacheReview: null },
+    });
+    expect(getThreadFromState(cleared, threadId)?.claudeCacheReview).toBeNull();
+  });
+
+  it("restores a failed cache review and clears it from an authoritative full snapshot", () => {
+    const incoming = makeReadModelThread({
+      claudeCacheReview: {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe("held-message"),
+        sourceEventSequence: 8,
+        assessment: {
+          observedAt: "2026-09-16T10:00:00.000Z",
+          state: "likely-expired",
+          source: "session-start",
+        },
+        status: "failed",
+        error: "Compaction was interrupted",
+        createdAt: "2026-09-16T10:00:00.000Z",
+      },
+    });
+    const restored = syncServerReadModel(makeState(makeThread()), makeReadModel(incoming));
+    expect(threadsOf(restored)[0]?.claudeCacheReview).toEqual(incoming.claudeCacheReview);
+
+    const cleared = syncServerReadModel(restored, {
+      ...makeReadModel({ ...incoming, claudeCacheReview: null }),
+      snapshotSequence: 2,
+    });
+    expect(threadsOf(cleared)[0]?.claudeCacheReview).toBeNull();
+  });
+
   it("preserves a semantic branch when a temp worktree branch arrives from the read model", () => {
     const initialThread = makeThread({
       branch: "feature/semantic-branch",

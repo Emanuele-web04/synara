@@ -19,6 +19,10 @@
   // apps/desktop and apps/server sources on purpose and is bundled by bun, so
   // it stays outside the composite project list the way apps/desktop keeps
   // src/cuaFixtures out of its own.
-  "include": ["**/*.ts", "../apps/server/src/device/helperSandbox.ts"],
+  "include": [
+    "**/*.ts",
+    "../apps/server/src/device/helperSandbox.ts",
+    "../apps/desktop/src/desktopAppIcon.ts"
+  ],
   "exclude": ["computer-use-fixtures"]
 }

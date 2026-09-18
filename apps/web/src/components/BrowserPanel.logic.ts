@@ -280,8 +280,8 @@ export interface BrowserChromeStatus {
   label: string;
 }
 
-// The address field and tab pills share one chrome-control surface so the whole row reads
-// as a single cohesive control: matching height, radius, border width, and type scale.
+// Address and tab controls share the same radius and border treatment;
+// the tab strip overrides the height and type size for compact chrome.
 export const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-xs";
 // The address field's filled look, reused by the active tab so the selected tab visually
 // matches the search input (same border tone + faint fill).

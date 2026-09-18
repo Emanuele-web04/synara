@@ -47,6 +47,8 @@ import {
 } from "./queuedComposerPreview";
 import { resolveChatPromptCaptures } from "./resolveChatPromptCaptures";
 import { useChatTurnExecution } from "./useChatTurnExecution";
+import { useStore } from "../../store";
+import { getThreadFromState } from "../../threadDerivation";
 
 export function useChatTurnSubmission({
   threadId,
@@ -249,6 +251,7 @@ export function useChatTurnSubmission({
         !api ||
         !lateSendHandlers ||
         !activeThread ||
+        activeThread.claudeCacheReview != null ||
         activeThread.sidechatExpiredAt ||
         isSendBusy ||
         isConnecting ||
@@ -258,6 +261,9 @@ export function useChatTurnSubmission({
       ) {
         return false;
       }
+      const hasPendingCacheReview = () =>
+        getThreadFromState(useStore.getState(), activeThread.id)?.claudeCacheReview != null;
+      if (hasPendingCacheReview()) return false;
       sendPreflightInFlightRef.current = true;
       const editorSaved = await flushWorkspaceEditors(
         queryClient,
@@ -276,6 +282,7 @@ export function useChatTurnSubmission({
         await waitForPendingComposerImages();
         sendPreflightInFlightRef.current = false;
       }
+      if (hasPendingCacheReview()) return false;
       if (activePendingProgress) {
         const activeQuestion = activePendingProgress.activeQuestion;
         const liveComposerSnapshot = composerEditorRef.current?.readSnapshot() ?? null;
@@ -347,6 +354,7 @@ export function useChatTurnSubmission({
         }
       }
       const composerFilesForSend = queuedChatTurn?.files ?? composerFiles;
+      if (hasPendingCacheReview()) return false;
       const composerAssistantSelectionsForSend =
         queuedChatTurn?.assistantSelections ?? composerAssistantSelections;
       const composerBrowserAnnotationsForSend =
@@ -480,6 +488,7 @@ export function useChatTurnSubmission({
               proposedPlan: activeProposedPlan,
             })
           : undefined);
+      if (hasPendingCacheReview()) return false;
       if (!hasSendableContent) {
         if (expiredTerminalContextCount > 0) {
           const toastCopy = buildExpiredTerminalContextToastCopy(
@@ -527,6 +536,7 @@ export function useChatTurnSubmission({
         });
         if (handled) return true;
       }
+      if (hasPendingCacheReview()) return false;
       sendPreflightInFlightRef.current = true;
       const sendProviderAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: selectedModelSelectionForSend.provider,
@@ -542,6 +552,7 @@ export function useChatTurnSubmission({
         });
         return false;
       }
+      if (hasPendingCacheReview()) return false;
 
       const captures = await resolveChatPromptCaptures({
         api,
@@ -552,6 +563,7 @@ export function useChatTurnSubmission({
         composerAssistantSelectionsForSend,
       });
       composerImagesForSend = captures.composerImagesForSend;
+      if (hasPendingCacheReview()) return false;
 
       if (hasQueueableLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
         clearComposerInput(activeThread.id);
@@ -636,6 +648,7 @@ export function useChatTurnSubmission({
         queryClient,
       });
       if (workspace === false) return false;
+      if (hasPendingCacheReview()) return false;
       const {
         threadIdForSend,
         title,

@@ -3,6 +3,7 @@ import {
   buildVisibleToastLayout,
   DEFAULT_TOAST_TIMEOUT_MS,
   shouldHideCollapsedToastContent,
+  shouldRunVisibleToastAutoDismiss,
 } from "./toast.logic";
 
 describe("DEFAULT_TOAST_TIMEOUT_MS", () => {
@@ -22,6 +23,62 @@ describe("shouldHideCollapsedToastContent", () => {
 
   it("hides non-front toasts until the stack is expanded", () => {
     assert.equal(shouldHideCollapsedToastContent(1, 3), true);
+  });
+});
+
+describe("shouldRunVisibleToastAutoDismiss", () => {
+  it("runs only while the toast is visible, the window is focused, and the toast has no focus", () => {
+    assert.equal(
+      shouldRunVisibleToastAutoDismiss({
+        paused: false,
+        documentVisible: true,
+        windowFocused: true,
+        toastFocused: false,
+      }),
+      true,
+    );
+  });
+
+  it("pauses while keyboard focus is inside the toast", () => {
+    assert.equal(
+      shouldRunVisibleToastAutoDismiss({
+        paused: false,
+        documentVisible: true,
+        windowFocused: true,
+        toastFocused: true,
+      }),
+      false,
+    );
+  });
+
+  it("also pauses for explicit, visibility, and window-focus gates", () => {
+    assert.equal(
+      shouldRunVisibleToastAutoDismiss({
+        paused: true,
+        documentVisible: true,
+        windowFocused: true,
+        toastFocused: false,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldRunVisibleToastAutoDismiss({
+        paused: false,
+        documentVisible: false,
+        windowFocused: true,
+        toastFocused: false,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldRunVisibleToastAutoDismiss({
+        paused: false,
+        documentVisible: true,
+        windowFocused: false,
+        toastFocused: false,
+      }),
+      false,
+    );
   });
 });
 

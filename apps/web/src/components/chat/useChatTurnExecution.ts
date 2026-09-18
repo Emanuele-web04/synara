@@ -38,6 +38,8 @@ import {
 } from "../../lib/composerSend";
 import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
 import { clearPendingTurnDispatch } from "../../pendingTurnDispatch";
+import { useStore } from "../../store";
+import { getThreadFromState } from "../../threadDerivation";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type Thread } from "../../types";
 import {
@@ -591,26 +593,42 @@ export function useChatTurnExecution({
           provider: dispatchSettings.modelSelection.provider,
           providerOptions: dispatchSettings.providerOptions,
         });
-        await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
-          api.orchestration.dispatchCommand({
-            type: "thread.turn.start",
-            commandId: newCommandId(),
-            threadId: threadIdForSend,
-            message: {
-              messageId: messageIdForSend,
-              role: "user",
-              text: outgoingMessageText,
-              attachments: turnAttachments,
-              ...(mentionedSkillsForSend.length > 0 ? { skills: mentionedSkillsForSend } : {}),
-              ...(mentionedPluginMentionsForSend.length > 0
-                ? { mentions: mentionedPluginMentionsForSend }
+        await stagedTurnAttachments.runWithDispatch(async (turnAttachments) => {
+          if (getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview != null) {
+            throw new Error(
+              "Choose how to resume the held message before sending another message.",
+            );
+          }
+          await api.orchestration
+            .dispatchCommand({
+              type: "thread.turn.start",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              message: {
+                messageId: messageIdForSend,
+                role: "user",
+                text: outgoingMessageText,
+                attachments: turnAttachments,
+                ...(mentionedSkillsForSend.length > 0 ? { skills: mentionedSkillsForSend } : {}),
+                ...(mentionedPluginMentionsForSend.length > 0
+                  ? { mentions: mentionedPluginMentionsForSend }
+                  : {}),
+              },
+              ...turnStartDispatchFields(dispatchSettings, dispatchMode),
+              ...(sourceProposedPlanForSend
+                ? { sourceProposedPlan: sourceProposedPlanForSend }
                 : {}),
-            },
-            ...turnStartDispatchFields(dispatchSettings, dispatchMode),
-            ...(sourceProposedPlanForSend ? { sourceProposedPlan: sourceProposedPlanForSend } : {}),
-            createdAt: messageCreatedAt,
-          }),
-        );
+              createdAt: messageCreatedAt,
+            })
+            .catch((error: unknown) => {
+              if (
+                getThreadFromState(useStore.getState(), threadIdForSend)?.claudeCacheReview
+                  ?.messageId !== messageIdForSend
+              ) {
+                throw error;
+              }
+            });
+        });
         turnStartSucceeded = true;
         if (
           shouldResumeSettledLocalThread &&

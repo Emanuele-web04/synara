@@ -54,6 +54,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           attachments_json,
           skills_json,
           mentions_json,
+          async_user_input_json,
           dispatch_mode,
           dispatch_origin,
           starts_new_turn,
@@ -73,6 +74,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           ${nextAttachmentsJson},
           ${nextSkillsJson},
           ${nextMentionsJson},
+          ${row.asyncUserInput !== undefined ? JSON.stringify(row.asyncUserInput) : null},
           ${row.dispatchMode ?? null},
           ${row.dispatchOrigin ?? null},
           ${row.startsNewTurn === undefined ? null : row.startsNewTurn ? 1 : 0},
@@ -100,6 +102,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
             excluded.mentions_json,
             projection_thread_messages.mentions_json
           ),
+          async_user_input_json = COALESCE(excluded.async_user_input_json, projection_thread_messages.async_user_input_json),
           dispatch_mode = COALESCE(
             excluded.dispatch_mode,
             projection_thread_messages.dispatch_mode
@@ -137,6 +140,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           attachments_json AS "attachments",
           skills_json AS "skills",
           mentions_json AS "mentions",
+          async_user_input_json AS "asyncUserInput",
           dispatch_mode AS "dispatchMode",
           dispatch_origin AS "dispatchOrigin",
           starts_new_turn AS "startsNewTurn",
@@ -190,6 +194,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
           attachments_json AS "attachments",
           skills_json AS "skills",
           mentions_json AS "mentions",
+          async_user_input_json AS "asyncUserInput",
           dispatch_mode AS "dispatchMode",
           dispatch_origin AS "dispatchOrigin",
           starts_new_turn AS "startsNewTurn",

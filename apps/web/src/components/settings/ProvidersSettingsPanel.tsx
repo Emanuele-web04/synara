@@ -31,8 +31,10 @@ import { type MouseEvent, type ReactNode, useCallback, useMemo, useRef, useState
 
 import type { AppSettings, AppSettingsBinding } from "~/appSettings";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { CentralIcon } from "~/lib/central-icons";
 import { DownloadIcon, ExternalLinkIcon, Loader2Icon } from "~/lib/icons";
+import { providerSetupStatusLabel } from "~/lib/providerSetupStatus";
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
@@ -119,11 +121,11 @@ type ProviderInstallSettings = {
   readonly fields: readonly ProviderInstallField[];
 };
 
-const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> =
-  PROVIDER_DESCRIPTORS.map((descriptor) => ({
-    provider: descriptor.kind,
-    title: descriptor.displayName,
-  }));
+const PROVIDER_VISIBILITY_OPTIONS = PROVIDER_DESCRIPTORS.map((descriptor) => ({
+  provider: descriptor.kind,
+  title: descriptor.displayName,
+  setupDocsHref: descriptor.setupDocsHref,
+}));
 
 const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   {
@@ -439,6 +441,7 @@ function SortableProviderVisibilityRow(props: {
   option: { provider: ProviderKind; title: string };
   providerStatus: ServerProviderStatus | undefined;
   statusReconciled: boolean;
+  isDisabled: boolean;
   isHidden: boolean;
   onHiddenChange: (hidden: boolean) => void;
 }) {
@@ -484,7 +487,11 @@ function SortableProviderVisibilityRow(props: {
         <span className="min-w-0">
           <span className="block truncate text-sm text-foreground">{props.option.title}</span>
           <span className="block text-[11px] text-muted-foreground">
-            {isChecking ? "Checking" : isAvailable ? "Installed" : "CLI not installed"}
+            {providerSetupStatusLabel({
+              status: props.providerStatus,
+              reconciled: props.statusReconciled,
+              disabled: props.isDisabled,
+            })}
           </span>
         </span>
       </div>
@@ -497,7 +504,7 @@ function SortableProviderVisibilityRow(props: {
             ? `Checking ${props.option.title} CLI availability`
             : isAvailable
               ? `Show ${props.option.title} in the provider picker`
-              : `${props.option.title} CLI is not installed`
+              : `${props.option.title} is unavailable in the provider picker`
         }
       />
     </div>
@@ -795,6 +802,9 @@ export function ProvidersSettingsPanel({
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const localProviderStatuses = useProviderStatusesForLocalConfig();
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
+  const [refreshingProviders, setRefreshingProviders] = useState(false);
+  const refreshProvidersInFlightRef = useRef(false);
   const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>(
@@ -953,12 +963,35 @@ export function ProvidersSettingsPanel({
 
   if (!active) return null;
 
+  const refreshProviders = async () => {
+    if (refreshProvidersInFlightRef.current) return;
+    refreshProvidersInFlightRef.current = true;
+    setRefreshingProviders(true);
+    try {
+      await refreshProviderStatuses();
+    } finally {
+      refreshProvidersInFlightRef.current = false;
+      setRefreshingProviders(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <SettingsSection title="Provider activity">
         <SettingsRow
           title="Enabled providers"
-          description="Disabling a provider stops its background health checks, model and command discovery, updates, and new turns. Existing threads stay visible and continue after you re-enable it; a turn already running is not interrupted."
+          description="Allow background checks and new turns. Enabling a provider does not install it or sign it in. Disabling keeps existing threads and does not interrupt a running turn."
+          control={
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={refreshingProviders}
+              onClick={() => void refreshProviders()}
+            >
+              {refreshingProviders ? <Loader2Icon className="size-3.5 animate-spin" /> : null}
+              {refreshingProviders ? "Checking setup" : "Refresh status"}
+            </Button>
+          }
           status={
             providerEnablementMutationPending
               ? "Saving provider activity"
@@ -982,6 +1015,7 @@ export function ProvidersSettingsPanel({
           >
             {orderedProviderVisibilityOptions.map((option) => {
               const enabled = !disabledProviderSet.has(option.provider);
+              const providerStatus = providerStatusByProvider.get(option.provider);
               return (
                 <SettingsListRow
                   key={option.provider}
@@ -991,22 +1025,50 @@ export function ProvidersSettingsPanel({
                       <span>{option.title}</span>
                     </span>
                   }
-                  description={enabled ? "Background activity allowed" : "Disabled on the server"}
+                  description={
+                    <>
+                      <span className="block">
+                        {providerSetupStatusLabel({
+                          status: providerStatus,
+                          reconciled: providerStatusesReconciled,
+                          disabled: !enabled,
+                        })}
+                      </span>
+                      {enabled &&
+                      providerStatusesReconciled &&
+                      providerStatus?.message &&
+                      (providerStatus.status !== "ready" ||
+                        providerStatus.authStatus !== "authenticated") ? (
+                        <span className="mt-1 block">{providerStatus.message}</span>
+                      ) : null}
+                    </>
+                  }
                   actions={
-                    <Switch
-                      checked={enabled}
-                      disabled={!serverSettingsQuery.data || providerEnablementMutationPending}
-                      onCheckedChange={(checked) =>
-                        void updateProviderEnablement(
-                          setProviderListMembership(
-                            settings.disabledProviders,
-                            option.provider,
-                            !Boolean(checked),
-                          ),
-                        )
-                      }
-                      aria-label={`${enabled ? "Disable" : "Enable"} ${option.title}`}
-                    />
+                    <>
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        render={<a href={option.setupDocsHref} target="_blank" rel="noreferrer" />}
+                        aria-label={`${option.title} setup guide`}
+                      >
+                        Setup guide
+                        <ExternalLinkIcon className="size-3" />
+                      </Button>
+                      <Switch
+                        checked={enabled}
+                        disabled={!serverSettingsQuery.data || providerEnablementMutationPending}
+                        onCheckedChange={(checked) =>
+                          void updateProviderEnablement(
+                            setProviderListMembership(
+                              settings.disabledProviders,
+                              option.provider,
+                              !Boolean(checked),
+                            ),
+                          )
+                        }
+                        aria-label={`${enabled ? "Disable" : "Enable"} ${option.title}`}
+                      />
+                    </>
                   }
                 />
               );
@@ -1061,6 +1123,7 @@ export function ProvidersSettingsPanel({
                     option={option}
                     providerStatus={providerStatusByProvider.get(option.provider)}
                     statusReconciled={providerStatusesReconciled}
+                    isDisabled={disabledProviderSet.has(option.provider)}
                     isHidden={hiddenProviderSet.has(option.provider)}
                     onHiddenChange={(hidden) =>
                       updateSettings({

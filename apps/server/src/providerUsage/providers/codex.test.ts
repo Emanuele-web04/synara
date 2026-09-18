@@ -16,6 +16,10 @@ const { readKeychainPasswordMock } = vi.hoisted(() => ({
   readKeychainPasswordMock: vi.fn(),
 }));
 
+vi.mock("../codexResetCredits", () => ({
+  fetchCodexResetCredits: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../credentials", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../credentials")>()),
   readKeychainPassword: readKeychainPasswordMock,

@@ -1326,6 +1326,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   messages: readonly ChatMessage[];
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
+  claudeCacheReview?: Thread["claudeCacheReview"];
   threadError: string | null | undefined;
 }): boolean {
   if (!input.localDispatch) {
@@ -1335,6 +1336,8 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.phase === "running" ||
     input.hasPendingApproval ||
     input.hasPendingUserInput ||
+    (input.localDispatch.expectedUserMessageId !== null &&
+      input.claudeCacheReview?.messageId === input.localDispatch.expectedUserMessageId) ||
     Boolean(input.threadError)
   ) {
     return true;
@@ -1409,6 +1412,7 @@ export function hasLiveTurnTakenOver(input: {
   session: Thread["session"] | null;
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
+  claudeCacheReview?: Thread["claudeCacheReview"];
   threadError: string | null | undefined;
   now?: number;
 }): boolean {
@@ -1422,6 +1426,12 @@ export function hasLiveTurnTakenOver(input: {
     return true;
   }
   if (input.hasPendingApproval || input.hasPendingUserInput || Boolean(input.threadError)) {
+    return true;
+  }
+  if (
+    input.localDispatch.expectedUserMessageId !== null &&
+    input.claudeCacheReview?.messageId === input.localDispatch.expectedUserMessageId
+  ) {
     return true;
   }
 

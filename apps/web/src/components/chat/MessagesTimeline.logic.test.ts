@@ -927,6 +927,34 @@ describe("deriveMessagesTimelineRows", () => {
   const collapsedSignature = (row: MessageTimelineRow): string[] =>
     (row.collapsedTurnItems ?? []).map((item) => `${item.kind}:${String(item.id)}`);
 
+  it("keeps async question cards visible after their originating turn settles", () => {
+    const question = assistantEntry("question", "2026-01-01T00:00:01Z", {
+      turnId: "t1",
+      text: "Which action?",
+    });
+    if (question.kind !== "message") throw new Error("Expected a message");
+    question.message.asyncUserInput = { questions: [{ title: "Which action?" }] };
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        question,
+        workEntry("w1", "2026-01-01T00:00:02Z", "Inspecting code"),
+        assistantEntry("done", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "Done.",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+    expect(messageRow(rows, "question")?.message.asyncUserInput?.questions).toEqual([
+      { title: "Which action?" },
+    ]);
+    expect(
+      messageRow(rows, "done")?.collapsedTurnItems?.some((item) => item.id === "question"),
+    ).not.toBe(true);
+  });
+
   it("folds a settled turn's narration and work into one collapsed group on the terminal message", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,

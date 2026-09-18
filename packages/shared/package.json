@@ -12,6 +12,10 @@
       "types": "./src/modelImageBudget.ts",
       "import": "./src/modelImageBudget.ts"
     },
+    "./claudeCache": {
+      "types": "./src/claudeCache.ts",
+      "import": "./src/claudeCache.ts"
+    },
     "./model": {
       "types": "./src/model.ts",
       "import": "./src/model.ts"
@@ -355,6 +359,10 @@
     "./desktopOperationQueue": {
       "types": "./src/desktopOperationQueue.ts",
       "import": "./src/desktopOperationQueue.ts"
+    },
+    "./asyncUserInput": {
+      "types": "./src/asyncUserInput.ts",
+      "import": "./src/asyncUserInput.ts"
     }
   },
   "scripts": {

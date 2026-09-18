@@ -1723,6 +1723,20 @@ export class DesktopBrowserManager {
       this.perfCounters.setPanelBoundsNoopSkips += 1;
       return;
     }
+    const previousBounds = this.getVisibleBoundsForThread(input.threadId);
+    if (
+      state.open &&
+      nextBounds &&
+      activeRuntime &&
+      (previousBounds?.width !== nextBounds.width ||
+        previousBounds?.height !== nextBounds.height ||
+        this.getVisiblePageZoomFactor(input.threadId) !== nextPageZoomFactor ||
+        previewChanged)
+    ) {
+      // browser_resize pins Chromium's layout even after the native view resizes.
+      // Restore panel sizing on a new presentation, while preserving overrides on moves.
+      this.clearRuntimeViewportOverride(activeRuntime);
+    }
     this.setActivePageZoomFactor(input.threadId, nextPageZoomFactor);
     this.setActiveBounds(input.threadId, nextBounds);
 
@@ -2338,6 +2352,15 @@ export class DesktopBrowserManager {
       // The guest may be tearing down between a bounds update and its cleanup.
     }
     this.runtimePageZoomFactors.set(runtime.key, nextPageZoomFactor);
+  }
+
+  private clearRuntimeViewportOverride(runtime: LiveTabRuntime): void {
+    if (runtime.webContents.isDestroyed() || !runtime.webContents.debugger.isAttached()) return;
+    void runtime.webContents.debugger
+      .sendCommand("Emulation.clearDeviceMetricsOverride")
+      .catch(() => {
+        // A closing guest can disconnect between the bounds update and CDP acknowledgement.
+      });
   }
 
   private resetRuntimePageZoomForThread(threadId: ThreadId): void {
