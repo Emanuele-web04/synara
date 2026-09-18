@@ -78,7 +78,7 @@ interface StoredPendingAppSnapCapture {
   sourceWindowTitle: string | null;
 }
 
-type AppSnapHelperMessage =
+export type AppSnapHelperMessage =
   | {
       type: "permissions";
       accessibility?: "granted" | "denied";
@@ -87,6 +87,8 @@ type AppSnapHelperMessage =
     }
   | { type: "ready" }
   | { type: "triggered"; id: string; capturedAt?: string }
+  | { type: "escape"; capturedAt?: string }
+  | { type: "escape-monitor-state"; armed: boolean; capturedAt?: string }
   | {
       type: "captured";
       id: string;
@@ -323,6 +325,19 @@ export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | 
     return {
       type: "triggered",
       id: value.id,
+      ...(typeof value.capturedAt === "string" ? { capturedAt: value.capturedAt } : {}),
+    };
+  }
+  if (value.type === "escape") {
+    return {
+      type: "escape",
+      ...(typeof value.capturedAt === "string" ? { capturedAt: value.capturedAt } : {}),
+    };
+  }
+  if (value.type === "escape-monitor-state" && typeof value.armed === "boolean") {
+    return {
+      type: "escape-monitor-state",
+      armed: value.armed,
       ...(typeof value.capturedAt === "string" ? { capturedAt: value.capturedAt } : {}),
     };
   }

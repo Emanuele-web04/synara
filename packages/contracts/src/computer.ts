@@ -31,6 +31,13 @@ export const COMPUTER_WS_METHODS = {
   selectText: "computer.selectText",
   getThreadState: "computer.getThreadState",
   setControlEnabled: "computer.setControlEnabled",
+  /**
+   * Clears the physical-Escape kill latch on both the manager and the GUI
+   * host. It is the only path that re-opens input after `inputStopped`
+   * reports true: deliberately a named action rather than a side effect of
+   * setControlEnabled, so re-arming is always the user's explicit choice.
+   */
+  rearmInput: "computer.rearmInput",
   subscribeEvents: "computer.subscribeEvents",
   /**
    * Durable per-app consent management: the grants a user created by
@@ -635,6 +642,13 @@ export const ThreadComputerState = Schema.Struct({
    * and every producer of this state has a backend to ask.
    */
   capabilities: ComputerCapabilities,
+  /**
+   * The physical-Escape kill latch: true means every mutating admission —
+   * this thread's, other threads', and pane input — is refused until the
+   * user re-arms through `computer.rearmInput`. Optional for compatibility
+   * with servers that predate the latch; absent reads as not stopped.
+   */
+  inputStopped: Schema.optional(Schema.Boolean),
   lastError: Schema.NullOr(Schema.String.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH))),
 });
 export type ThreadComputerState = typeof ThreadComputerState.Type;
@@ -655,6 +669,8 @@ export const ComputerStatusResult = Schema.Struct({
   availability: ComputerAvailability,
   health: ComputerHealth,
   capabilities: ComputerCapabilities,
+  /** The host-wide Escape kill latch; same field `ThreadComputerState` carries. */
+  inputStopped: Schema.optional(Schema.Boolean),
 });
 export type ComputerStatusResult = typeof ComputerStatusResult.Type;
 
@@ -868,6 +884,22 @@ export const ComputerControlEnabledResult = Schema.Struct({
   generation: Schema.optional(NonNegativeInt),
 });
 export type ComputerControlEnabledResult = typeof ComputerControlEnabledResult.Type;
+
+/**
+ * The re-arm carries no payload: host-wide and thread-independent, like the
+ * press that set the latch. Everything it means is implied by the
+ * authenticated caller being the person at the machine.
+ */
+export const ComputerRearmInput = Schema.Struct({});
+export type ComputerRearmInput = typeof ComputerRearmInput.Type;
+export const ComputerRearmResult = Schema.Struct({
+  /** True once the host confirmed its own latch lifted; a failed relay throws instead. */
+  rearmed: Schema.Boolean,
+  /** Whether a stop latch was actually held — false means the re-arm was a no-op. */
+  wasStopped: Schema.Boolean,
+});
+export type ComputerRearmResult = typeof ComputerRearmResult.Type;
+
 export const ComputerThreadInput = Schema.Struct({ threadId: ThreadId });
 export type ComputerThreadInput = typeof ComputerThreadInput.Type;
 
@@ -1373,12 +1405,25 @@ export const ComputerOpenPaneRequestedEvent = Schema.Struct({
 });
 export type ComputerOpenPaneRequestedEvent = typeof ComputerOpenPaneRequestedEvent.Type;
 
+/**
+ * The physical-Escape kill latch changed. Host-wide and thread-independent:
+ * the press belongs to the person at the machine, not to any conversation,
+ * so it cannot ride `computer.thread-state` — which also does not exist at
+ * all until a pane has opened for the thread.
+ */
+export const ComputerInputStoppedEvent = Schema.Struct({
+  type: Schema.Literal("computer.input-stopped"),
+  stopped: Schema.Boolean,
+});
+export type ComputerInputStoppedEvent = typeof ComputerInputStoppedEvent.Type;
+
 export const ComputerEvent = Schema.Union([
   ComputerThreadStateEvent,
   ComputerWindowsChangedEvent,
   ComputerActionEvent,
   ComputerFrameEvent,
   ComputerOpenPaneRequestedEvent,
+  ComputerInputStoppedEvent,
 ]);
 export type ComputerEvent = typeof ComputerEvent.Type;
 

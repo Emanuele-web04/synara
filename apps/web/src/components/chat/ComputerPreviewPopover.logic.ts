@@ -132,9 +132,13 @@ export function computerPreviewCardOpen(phase: ComputerPreviewPhase | undefined)
  */
 export function computerPreviewStatusLabel(input: {
   readonly agentActive: boolean;
+  readonly inputStopped?: boolean;
   readonly currentActivity: string | null;
   readonly lastActionLabel: string | null;
 }): string | null {
+  // The Escape kill outranks "live": frames may still arrive, but nothing the
+  // chip could say about activity is true while input admission is closed.
+  if (input.inputStopped === true) return "Stopped — Escape";
   if (input.agentActive) return input.currentActivity ?? input.lastActionLabel ?? "Live";
   return input.lastActionLabel;
 }

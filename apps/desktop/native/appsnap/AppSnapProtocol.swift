@@ -21,6 +21,10 @@ enum AppSnapMode {
         ownerPID: pid_t?,
         socketPath: String
     )
+    /// Long-running listener that reports physical Escape keypresses while the
+    /// parent marks computer control armed. Emits `escape`,
+    /// `escape-monitor-state`, `error`, and `ready`.
+    case escapeMonitor
 }
 
 struct AppSnapOptions {
@@ -66,7 +70,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--release-held-input", "--watch", "--permission-guide", "--computer-frames":
+            case "--check-permissions", "--request-permissions", "--release-held-input", "--watch", "--permission-guide", "--computer-frames", "--escape-monitor":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -176,6 +180,15 @@ struct AppSnapOptions {
                     externalTrigger: externalTrigger
                 )
             )
+        case "--escape-monitor":
+            try rejectWatchArguments("The Escape monitor does not accept watch arguments.")
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--escape-monitor does not accept permission selectors."
+                )
+            }
+            return AppSnapOptions(mode: .escapeMonitor)
         case "--computer-frames":
             try rejectWatchArguments("Computer frames do not accept watch arguments.")
             guard permissions.isEmpty else {
@@ -219,7 +232,7 @@ struct AppSnapOptions {
         default:
             throw AppSnapFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, --release-held-input, --watch, --permission-guide, or --computer-frames."
+                message: "Expected --check-permissions, --request-permissions, --release-held-input, --watch, --permission-guide, --computer-frames, or --escape-monitor."
             )
         }
     }
@@ -318,6 +331,21 @@ final class NDJSONEmitter {
             "type": "windows",
             "requestId": requestId,
             "windows": windows,
+        ])
+    }
+
+    func emitEscape(capturedAt: String) {
+        emit([
+            "type": "escape",
+            "capturedAt": capturedAt,
+        ])
+    }
+
+    func emitEscapeMonitorState(armed: Bool, capturedAt: String) {
+        emit([
+            "type": "escape-monitor-state",
+            "armed": armed,
+            "capturedAt": capturedAt,
         ])
     }
 

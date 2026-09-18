@@ -706,6 +706,13 @@ export interface ComputerBackend {
   detachStream(): Promise<void>;
   requestKeyframe?(): Promise<void>;
   stopInput?(): Promise<void>;
+  /**
+   * Clear the host's physical-kill latch after the user's explicit re-arm.
+   * Absent on backends with no host-side latch — there the manager's own
+   * latch is the only one, and skipping the relay is the honest answer
+   * rather than a stubbed success.
+   */
+  rearmInput?(): Promise<void>;
   /** Release task-owned observation resources, including read-only turns. */
   endTask?(threadId: string, turnId?: string): Promise<void>;
   /**

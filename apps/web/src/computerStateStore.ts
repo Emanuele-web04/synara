@@ -13,8 +13,16 @@ interface ComputerStateStore {
   threadStatesByThreadId: Record<string, ThreadComputerState | undefined>;
   /** Newest desktop action per thread, so one thread never reads another's. */
   lastActionByThreadId: Record<string, ComputerActionEvent | undefined>;
+  /**
+   * Host-wide physical-Escape kill latch, true after a `computer.input-stopped`
+   * push until the user's explicit re-arm. Kept beside the per-thread states
+   * because the press belongs to no thread — a conversation with no pane state
+   * still has to see input is stopped.
+   */
+  inputStopped: boolean;
   upsertThreadState: (state: ThreadComputerState) => void;
   applyWindowsChanged: (windows: readonly ComputerWindow[]) => void;
+  setInputStopped: (stopped: boolean) => void;
   recordAction: (action: ComputerActionEvent) => void;
   removeThreadState: (threadId: ThreadId) => void;
   clear: () => void;
@@ -23,6 +31,7 @@ interface ComputerStateStore {
 export const useComputerStateStore = create<ComputerStateStore>()((set) => ({
   threadStatesByThreadId: {},
   lastActionByThreadId: {},
+  inputStopped: false,
   upsertThreadState: (state) =>
     set((current) => {
       const previousState = current.threadStatesByThreadId[state.threadId];
@@ -49,6 +58,19 @@ export const useComputerStateStore = create<ComputerStateStore>()((set) => ({
         changed = true;
       }
       return changed ? { ...current, threadStatesByThreadId: nextStates } : current;
+    }),
+  setInputStopped: (stopped) =>
+    set((current) => {
+      if (current.inputStopped === stopped) return current;
+      // Stamp the flag onto every cached thread state too, so a pane reading
+      // only `ThreadComputerState.inputStopped` sees the transition without
+      // waiting for the server's republish — and a republish arriving first
+      // cannot leave the two disagreeing.
+      const nextStates: Record<string, ThreadComputerState | undefined> = {};
+      for (const [threadId, state] of Object.entries(current.threadStatesByThreadId)) {
+        nextStates[threadId] = state ? { ...state, inputStopped: stopped } : state;
+      }
+      return { ...current, inputStopped: stopped, threadStatesByThreadId: nextStates };
     }),
   recordAction: (action) =>
     set((current) => {
@@ -88,6 +110,9 @@ export const useComputerStateStore = create<ComputerStateStore>()((set) => ({
     set({
       threadStatesByThreadId: {},
       lastActionByThreadId: {},
+      // A wholesale reset (server restart) cannot inherit the old latch: the
+      // new server's own `computer.input-stopped` state is the truth.
+      inputStopped: false,
     }),
 }));
 

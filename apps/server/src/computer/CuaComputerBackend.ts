@@ -2247,6 +2247,30 @@ export class CuaComputerBackend implements ComputerBackend {
     this.observedGeometry.clear();
     this.snapshotAt = 0;
   }
+  /**
+   * Relay the user's re-arm to the GUI host, the only place the physical
+   * Escape latch lives. The host answers `{rearmed, wasStopped}`; a failed
+   * relay throws so the manager keeps its own latch held — reporting input
+   * re-armed while the driver still refuses it would be the worst outcome.
+   */
+  async rearmInput() {
+    if (!this.endpoint || this.disposed) {
+      throw new CuaActionError(
+        "The desktop host is not connected; computer input stays stopped.",
+        "not-dispatched",
+        "gui_host_required",
+      );
+    }
+    const result = await this.request<CuaReply>(this.endpoint, {
+      method: "rearm",
+      capability: this.capability,
+    });
+    if (!result.ok)
+      throw new CuaActionError(
+        result.error ?? "Computer re-arm was not acknowledged.",
+        "not-dispatched",
+      );
+  }
   async endTask(threadId: string, turnId?: string): Promise<void> {
     if (!this.endpoint || this.disposed) return;
     const matches = [...this.previewTasks].filter(

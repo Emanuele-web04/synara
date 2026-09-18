@@ -89,6 +89,8 @@ import {
   ComputerPressKeyInput,
   ComputerProvisionInput,
   ComputerProvisionResult,
+  ComputerRearmInput,
+  ComputerRearmResult,
   ComputerRevokeGrantInput,
   ComputerRevokeGrantResult,
   ComputerRightClickInput,
@@ -849,6 +851,12 @@ export const WsComputerSetControlEnabledRpc = Rpc.make(COMPUTER_WS_METHODS.setCo
   error: WsRpcError,
 });
 
+export const WsComputerRearmInputRpc = Rpc.make(COMPUTER_WS_METHODS.rearmInput, {
+  payload: ComputerRearmInput,
+  success: ComputerRearmResult,
+  error: WsRpcError,
+});
+
 export const WsComputerGetThreadStateRpc = Rpc.make(COMPUTER_WS_METHODS.getThreadState, {
   payload: ComputerThreadInput,
   success: ThreadComputerState,
@@ -914,6 +922,7 @@ export const WsComputerRpcGroup = RpcGroup.make(
   WsComputerSelectTextRpc,
   WsComputerGetThreadStateRpc,
   WsComputerSetControlEnabledRpc,
+  WsComputerRearmInputRpc,
   WsComputerInputClickRpc,
   WsComputerInputScrollRpc,
   WsComputerInputKeyRpc,

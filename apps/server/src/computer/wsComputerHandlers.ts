@@ -29,6 +29,8 @@ import {
   type ComputerPressKeyInput,
   type ComputerProvisionInput,
   type ComputerProvisionResult,
+  type ComputerRearmInput,
+  type ComputerRearmResult,
   type ComputerRevokeGrantInput,
   type ComputerRevokeGrantResult,
   type ComputerRightClickInput,
@@ -80,6 +82,9 @@ export interface WsComputerHandlers {
   readonly [COMPUTER_WS_METHODS.setControlEnabled]: (
     input: ComputerSetControlEnabledInput,
   ) => Effect.Effect<{ enabled: boolean; generation: number }, WsRpcError>;
+  readonly [COMPUTER_WS_METHODS.rearmInput]: (
+    input: ComputerRearmInput,
+  ) => Effect.Effect<ComputerRearmResult, WsRpcError>;
   readonly [COMPUTER_WS_METHODS.getStatus]: (
     input: ComputerGetStatusInput,
   ) => Effect.Effect<ComputerStatusResult, WsRpcError>;
@@ -199,6 +204,7 @@ export function makeWsComputerHandlers(
     return {
       [COMPUTER_WS_METHODS.setControlEnabled]: () =>
         Effect.fail(new WsRpcError({ message: UNSUPPORTED_MESSAGE })),
+      [COMPUTER_WS_METHODS.rearmInput]: () => unsupported(),
       [COMPUTER_WS_METHODS.getStatus]: () => Effect.succeed(unsupportedStatus),
       [COMPUTER_WS_METHODS.provision]: () => unsupported(),
       [COMPUTER_WS_METHODS.listWindows]: () => unsupported(),
@@ -248,6 +254,8 @@ export function makeWsComputerHandlers(
         registry?.setComputerControlEnabled?.(input.threadId, result.enabled);
         return result;
       }, "Failed to change computer authority"),
+    [COMPUTER_WS_METHODS.rearmInput]: () =>
+      attempt(() => manager.rearmInput(), "Failed to re-arm computer input"),
     [COMPUTER_WS_METHODS.getStatus]: () =>
       attempt(() => manager.getStatus(), "Failed to read computer status"),
     [COMPUTER_WS_METHODS.provision]: () =>

@@ -190,6 +190,8 @@ import type {
   ComputerListWindowsResult,
   ComputerProvisionInput,
   ComputerProvisionResult,
+  ComputerRearmInput,
+  ComputerRearmResult,
   ComputerRevokeGrantInput,
   ComputerRevokeGrantResult,
   ComputerSetControlEnabledInput,
@@ -1077,6 +1079,8 @@ export interface NativeApi {
     setControlEnabled: (
       input: ComputerSetControlEnabledInput,
     ) => Promise<ComputerControlEnabledResult>;
+    /** Re-arms input after the physical-Escape kill; the only path that clears `inputStopped`. */
+    rearmInput: (input: ComputerRearmInput) => Promise<ComputerRearmResult>;
     getThreadState: (input: ComputerThreadInput) => Promise<ThreadComputerState>;
     getState: (input: ComputerGetStateInput) => Promise<ComputerState>;
     /** User input from the computer dock pane; needs no agent turn in flight. */
