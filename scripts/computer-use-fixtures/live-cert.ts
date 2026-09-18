@@ -69,7 +69,10 @@ interface Row {
 
 const rows: Row[] = [];
 const skipSet = new Set(
-  (process.argv.find((a) => a.startsWith("--skip=")) ?? "").replace("--skip=", "").split(",").filter(Boolean),
+  (process.argv.find((a) => a.startsWith("--skip=")) ?? "")
+    .replace("--skip=", "")
+    .split(",")
+    .filter(Boolean),
 );
 const outIdx = process.argv.indexOf("--out");
 const outArg = outIdx > 0 ? process.argv[outIdx + 1] : undefined;
@@ -84,9 +87,23 @@ function log(...args: unknown[]) {
   if (!quiet) console.log(...args);
 }
 
-function row(name: string, verdict: Verdict, detail?: string, evidence?: unknown, elapsedMs?: number) {
-  rows.push({ name, verdict, ...(detail ? { detail } : {}), ...(evidence !== undefined ? { evidence } : {}), ...(elapsedMs !== undefined ? { elapsedMs } : {}) });
-  log(`${verdict === "pass" ? "  PASS" : verdict === "fail" ? "  FAIL" : "  SKIP"} ${name}${detail ? ` — ${detail}` : ""}`);
+function row(
+  name: string,
+  verdict: Verdict,
+  detail?: string,
+  evidence?: unknown,
+  elapsedMs?: number,
+) {
+  rows.push({
+    name,
+    verdict,
+    ...(detail ? { detail } : {}),
+    ...(evidence !== undefined ? { evidence } : {}),
+    ...(elapsedMs !== undefined ? { elapsedMs } : {}),
+  });
+  log(
+    `${verdict === "pass" ? "  PASS" : verdict === "fail" ? "  FAIL" : "  SKIP"} ${name}${detail ? ` — ${detail}` : ""}`,
+  );
 }
 
 const wanted = (name: string) => !skipSet.has(name);
@@ -110,9 +127,13 @@ function exemptEnd(start: number) {
 
 function startProbe(label: string) {
   if (!existsSync(PROBE_BIN)) {
-    const build = spawnSync("sh", [join(root, "scripts/computer-use-fixtures/build-focus-probe.sh")], {
-      stdio: quiet ? "pipe" : "inherit",
-    });
+    const build = spawnSync(
+      "sh",
+      [join(root, "scripts/computer-use-fixtures/build-focus-probe.sh")],
+      {
+        stdio: quiet ? "pipe" : "inherit",
+      },
+    );
     if (build.status !== 0 || !existsSync(PROBE_BIN)) return false;
   }
   probeStartWall = Date.now();
@@ -155,7 +176,9 @@ async function stopProbe(): Promise<ReturnType<typeof analyzeFocusSamples> | und
     (sample) => !exemptSpans.some((sp) => sample.t >= sp.start - 500 && sample.t <= sp.end + 500),
   );
   const report = analyzeFocusSamples(samples, { minSamples: 40, settleMs: 500 });
-  return { ...report, exemptSpans } as ReturnType<typeof analyzeFocusSamples> & { exemptSpans: typeof exemptSpans };
+  return { ...report, exemptSpans } as ReturnType<typeof analyzeFocusSamples> & {
+    exemptSpans: typeof exemptSpans;
+  };
 }
 
 // ── driver calls ─────────────────────────────────────────────────────────
@@ -163,22 +186,38 @@ async function stopProbe(): Promise<ReturnType<typeof analyzeFocusSamples> | und
 let endpoint = "";
 let capability = "";
 
-async function call<T = unknown>(name: string, args?: Record<string, unknown>, timeoutMs = 30_000): Promise<T> {
-  return cuaRequest<T>(endpoint, {
-    method: "call",
-    name,
-    ...(args ? { args } : {}),
-    capability,
-  }, { timeoutMs, mutation: true });
+async function call<T = unknown>(
+  name: string,
+  args?: Record<string, unknown>,
+  timeoutMs = 30_000,
+): Promise<T> {
+  return cuaRequest<T>(
+    endpoint,
+    {
+      method: "call",
+      name,
+      ...(args ? { args } : {}),
+      capability,
+    },
+    { timeoutMs, mutation: true },
+  );
 }
 
-async function callReply(name: string, args?: Record<string, unknown>, timeoutMs = 30_000): Promise<CuaReply> {
-  return cuaRequest<CuaReply>(endpoint, {
-    method: "call",
-    name,
-    ...(args ? { args } : {}),
-    capability,
-  }, { timeoutMs, mutation: true });
+async function callReply(
+  name: string,
+  args?: Record<string, unknown>,
+  timeoutMs = 30_000,
+): Promise<CuaReply> {
+  return cuaRequest<CuaReply>(
+    endpoint,
+    {
+      method: "call",
+      name,
+      ...(args ? { args } : {}),
+      capability,
+    },
+    { timeoutMs, mutation: true },
+  );
 }
 
 /** A reply is only OK when it carries no refusal/error surface at all. */
@@ -221,17 +260,30 @@ interface AxElement {
   frame?: { x: number; y: number; width: number; height: number };
 }
 
-async function textAreaToken(pid: number, windowId: number): Promise<{ token: string; elements: number } | undefined> {
-  const reply = await callReply("get_window_state", { pid, window_id: windowId, max_elements: 512 });
+async function textAreaToken(
+  pid: number,
+  windowId: number,
+): Promise<{ token: string; elements: number } | undefined> {
+  const reply = await callReply("get_window_state", {
+    pid,
+    window_id: windowId,
+    max_elements: 512,
+  });
   const sc = reply.result?.structuredContent as { elements?: AxElement[] } | undefined;
   const el = (sc?.elements ?? []).find(
     (e) => e.role === "AXTextArea" && typeof e.element_token === "string",
   );
-  return el?.element_token ? { token: el.element_token, elements: sc?.elements?.length ?? 0 } : undefined;
+  return el?.element_token
+    ? { token: el.element_token, elements: sc?.elements?.length ?? 0 }
+    : undefined;
 }
 
 async function textAreaValue(pid: number, windowId: number): Promise<string | undefined> {
-  const reply = await callReply("get_window_state", { pid, window_id: windowId, max_elements: 512 });
+  const reply = await callReply("get_window_state", {
+    pid,
+    window_id: windowId,
+    max_elements: 512,
+  });
   const sc = reply.result?.structuredContent as { elements?: AxElement[] } | undefined;
   const el = (sc?.elements ?? []).find((e) => e.role === "AXTextArea");
   return el?.value;
@@ -247,17 +299,34 @@ function osa(script: string): string {
 }
 
 function frontmostName(): string {
-  return osa('tell application "System Events" to get name of first process whose frontmost is true');
+  return osa(
+    'tell application "System Events" to get name of first process whose frontmost is true',
+  );
 }
 
 async function launchTextEdit(extra: string[] = []): Promise<number | undefined> {
   const before = new Set(
-    spawnSync("pgrep", ["-x", "TextEdit"], { encoding: "utf8" }).stdout?.split("\n").map(Number).filter(Boolean) ?? [],
+    spawnSync("pgrep", ["-x", "TextEdit"], { encoding: "utf8" })
+      .stdout?.split("\n")
+      .map(Number)
+      .filter(Boolean) ?? [],
   );
-  spawnSync("open", [...extra, "-n", "-a", "TextEdit", "--args", "-ApplePersistenceIgnoreState", "YES"]);
+  spawnSync("open", [
+    ...extra,
+    "-n",
+    "-a",
+    "TextEdit",
+    "--args",
+    "-ApplePersistenceIgnoreState",
+    "YES",
+  ]);
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 500));
-    const now = spawnSync("pgrep", ["-x", "TextEdit"], { encoding: "utf8" }).stdout?.split("\n").map(Number).filter(Boolean) ?? [];
+    const now =
+      spawnSync("pgrep", ["-x", "TextEdit"], { encoding: "utf8" })
+        .stdout?.split("\n")
+        .map(Number)
+        .filter(Boolean) ?? [];
     const fresh = now.find((p) => !before.has(p));
     if (fresh) {
       spawnedPids.push(fresh);
@@ -305,11 +374,15 @@ try {
   const pidOp = await launchTextEdit(["-g"]);
   const opWin = pidOp ? await windowOfPid(pidOp) : undefined;
   if (opWin) {
-    osa(`tell application "System Events" to tell (first process whose unix id is ${opWin.pid}) to set frontmost to true`);
+    osa(
+      `tell application "System Events" to tell (first process whose unix id is ${opWin.pid}) to set frontmost to true`,
+    );
     await new Promise((r) => setTimeout(r, 900));
   }
   const probeStarted = startProbe(SENTINEL);
-  log(`probe ${probeStarted ? `up @${probeMetaHz || "?"}hz` : "UNAVAILABLE (rows needing theft coverage will skip)"}`);
+  log(
+    `probe ${probeStarted ? `up @${probeMetaHz || "?"}hz` : "UNAVAILABLE (rows needing theft coverage will skip)"}`,
+  );
   const operatorFront = frontmostName();
   log(`operator front: ${operatorFront} (pid ${pidOp})`);
 
@@ -322,10 +395,29 @@ try {
     const win = pidVisible ? await windowOfPid(pidVisible) : undefined;
     if (wanted("launch-isolation")) {
       if (pidVisible && win && front === operatorFront)
-        row("launch-isolation", "pass", `open -g TextEdit pid ${pidVisible}; front stayed ${front}`, { pid: pidVisible, window: win.window_id, front }, Date.now() - t);
+        row(
+          "launch-isolation",
+          "pass",
+          `open -g TextEdit pid ${pidVisible}; front stayed ${front}`,
+          { pid: pidVisible, window: win.window_id, front },
+          Date.now() - t,
+        );
       else if (pidVisible && win)
-        row("launch-isolation", "fail", `front moved ${operatorFront}→${front}`, { pid: pidVisible, front }, Date.now() - t);
-      else row("launch-isolation", "fail", "no fresh TextEdit pid/window after open -g", { pidVisible, win: win?.window_id }, Date.now() - t);
+        row(
+          "launch-isolation",
+          "fail",
+          `front moved ${operatorFront}→${front}`,
+          { pid: pidVisible, front },
+          Date.now() - t,
+        );
+      else
+        row(
+          "launch-isolation",
+          "fail",
+          "no fresh TextEdit pid/window after open -g",
+          { pidVisible, win: win?.window_id },
+          Date.now() - t,
+        );
     }
   }
 
@@ -336,12 +428,32 @@ try {
     const target = win ? await textAreaToken(win.pid, win.window_id) : undefined;
     if (win && target) {
       const value = `${SENTINEL}-visible`;
-      const res = await callReply("set_value", { pid: win.pid, window_id: win.window_id, element_token: target.token, value });
-      const effect = (res.result?.structuredContent as { effect?: string } | undefined)?.effect ?? (res.result as { effect?: string } | undefined)?.effect;
+      const res = await callReply("set_value", {
+        pid: win.pid,
+        window_id: win.window_id,
+        element_token: target.token,
+        value,
+      });
+      const effect =
+        (res.result?.structuredContent as { effect?: string } | undefined)?.effect ??
+        (res.result as { effect?: string } | undefined)?.effect;
       const readback = await textAreaValue(win.pid, win.window_id);
       const ok = replyOk(res) && readback === value;
-      row("visible-nonkey-write", ok ? "pass" : "fail", `effect=${effect} readback=${readback === value ? "exact" : JSON.stringify(readback)?.slice(0, 80)}`, { effect, readback, reply: ok ? undefined : JSON.stringify(res).slice(0, 400) }, Date.now() - t);
-    } else row("visible-nonkey-write", "skipped", win ? "no AXTextArea token" : "no window", { win: win?.window_id, elements: target?.elements }, Date.now() - t);
+      row(
+        "visible-nonkey-write",
+        ok ? "pass" : "fail",
+        `effect=${effect} readback=${readback === value ? "exact" : JSON.stringify(readback)?.slice(0, 80)}`,
+        { effect, readback, reply: ok ? undefined : JSON.stringify(res).slice(0, 400) },
+        Date.now() - t,
+      );
+    } else
+      row(
+        "visible-nonkey-write",
+        "skipped",
+        win ? "no AXTextArea token" : "no window",
+        { win: win?.window_id, elements: target?.elements },
+        Date.now() - t,
+      );
   }
 
   // ── hidden-write ──
@@ -352,11 +464,34 @@ try {
     const target = win ? await textAreaToken(win.pid, win.window_id) : undefined;
     if (win && target) {
       const value = `${SENTINEL}-hidden`;
-      const res = await callReply("set_value", { pid: win.pid, window_id: win.window_id, element_token: target.token, value });
+      const res = await callReply("set_value", {
+        pid: win.pid,
+        window_id: win.window_id,
+        element_token: target.token,
+        value,
+      });
       const readback = await textAreaValue(win.pid, win.window_id);
       const ok = replyOk(res) && readback === value;
-      row("hidden-write", ok ? "pass" : "fail", `is_on_screen=${win.is_on_screen} readback=${readback === value ? "exact" : "mismatch"}`, { visible: win.is_on_screen, elements: target.elements, readback, reply: ok ? undefined : JSON.stringify(res).slice(0, 400) }, Date.now() - t);
-    } else row("hidden-write", win ? "fail" : "skipped", win ? "hidden window found but no AXTextArea token" : "open -j produced no listable window", { pid, win: win?.window_id, elements: target?.elements }, Date.now() - t);
+      row(
+        "hidden-write",
+        ok ? "pass" : "fail",
+        `is_on_screen=${win.is_on_screen} readback=${readback === value ? "exact" : "mismatch"}`,
+        {
+          visible: win.is_on_screen,
+          elements: target.elements,
+          readback,
+          reply: ok ? undefined : JSON.stringify(res).slice(0, 400),
+        },
+        Date.now() - t,
+      );
+    } else
+      row(
+        "hidden-write",
+        win ? "fail" : "skipped",
+        win ? "hidden window found but no AXTextArea token" : "open -j produced no listable window",
+        { pid, win: win?.window_id, elements: target?.elements },
+        Date.now() - t,
+      );
   }
 
   // ── minimized-write ──
@@ -365,18 +500,46 @@ try {
     const pid = await launchTextEdit(["-g"]);
     const win = pid ? await windowOfPid(pid) : undefined;
     if (win) {
-      await callReply("set_window_minimized", { pid: win.pid, window_id: win.window_id, minimized: true }).catch(() => undefined);
+      await callReply("set_window_minimized", {
+        pid: win.pid,
+        window_id: win.window_id,
+        minimized: true,
+      }).catch(() => undefined);
       await new Promise((r) => setTimeout(r, 1200));
       const min = (await listWindows(win.pid)).find((w) => w.window_id === win.window_id);
-      const minimizedObserved = min?.minimized ?? (min?.is_on_screen === false ? "off-screen" : undefined);
+      const minimizedObserved =
+        min?.minimized ?? (min?.is_on_screen === false ? "off-screen" : undefined);
       const target = await textAreaToken(win.pid, win.window_id);
       if (target) {
         const value = `${SENTINEL}-minimized`;
-        const res = await callReply("set_value", { pid: win.pid, window_id: win.window_id, element_token: target.token, value });
+        const res = await callReply("set_value", {
+          pid: win.pid,
+          window_id: win.window_id,
+          element_token: target.token,
+          value,
+        });
         const readback = await textAreaValue(win.pid, win.window_id);
         const ok = replyOk(res) && readback === value;
-        row("minimized-write", ok ? "pass" : "fail", `minimized=${min?.minimized ?? minimizedObserved} readback=${readback === value ? "exact" : "mismatch"}`, { minimized: min?.minimized, isOnScreen: min?.is_on_screen, readback, reply: ok ? undefined : JSON.stringify(res).slice(0, 400) }, Date.now() - t);
-      } else row("minimized-write", "skipped", "minimized window produced no AXTextArea token", { minimized: min?.minimized, isOnScreen: min?.is_on_screen }, Date.now() - t);
+        row(
+          "minimized-write",
+          ok ? "pass" : "fail",
+          `minimized=${min?.minimized ?? minimizedObserved} readback=${readback === value ? "exact" : "mismatch"}`,
+          {
+            minimized: min?.minimized,
+            isOnScreen: min?.is_on_screen,
+            readback,
+            reply: ok ? undefined : JSON.stringify(res).slice(0, 400),
+          },
+          Date.now() - t,
+        );
+      } else
+        row(
+          "minimized-write",
+          "skipped",
+          "minimized window produced no AXTextArea token",
+          { minimized: min?.minimized, isOnScreen: min?.is_on_screen },
+          Date.now() - t,
+        );
     } else row("minimized-write", "skipped", "no second TextEdit window", { pid }, Date.now() - t);
   }
 
@@ -386,22 +549,45 @@ try {
     const pids = await Promise.all([launchTextEdit(["-g"]), launchTextEdit(["-g"])]);
     const targets = (
       await Promise.all(
-        [pidVisible, ...pids].filter((p): p is number => typeof p === "number").map(async (p) => {
-          const w = await windowOfPid(p);
-          const tok = w ? await textAreaToken(w.pid, w.window_id) : undefined;
-          return w && tok ? { w, tok } : undefined;
-        }),
+        [pidVisible, ...pids]
+          .filter((p): p is number => typeof p === "number")
+          .map(async (p) => {
+            const w = await windowOfPid(p);
+            const tok = w ? await textAreaToken(w.pid, w.window_id) : undefined;
+            return w && tok ? { w, tok } : undefined;
+          }),
       )
     ).filter((x): x is { w: WinInfo; tok: { token: string; elements: number } } => !!x);
     if (targets.length >= 3) {
       const writes = targets.map(({ w, tok }, i) =>
-        callReply("set_value", { pid: w.pid, window_id: w.window_id, element_token: tok.token, value: `${SENTINEL}-conc-${i}` }),
+        callReply("set_value", {
+          pid: w.pid,
+          window_id: w.window_id,
+          element_token: tok.token,
+          value: `${SENTINEL}-conc-${i}`,
+        }),
       );
       const results = await Promise.all(writes);
-      const readbacks = await Promise.all(targets.map(({ w }) => textAreaValue(w.pid, w.window_id)));
-      const ok = results.every(replyOk) && readbacks.every((rb, i) => rb === `${SENTINEL}-conc-${i}`);
-      row("concurrent-writes", ok ? "pass" : "fail", `${targets.length} targets, readbacks ${readbacks.filter((rb, i) => rb === `${SENTINEL}-conc-${i}`).length}/${targets.length} exact`, { readbacks }, Date.now() - t);
-    } else row("concurrent-writes", "skipped", `only ${targets.length}/3 targets resolved`, { targets: targets.length }, Date.now() - t);
+      const readbacks = await Promise.all(
+        targets.map(({ w }) => textAreaValue(w.pid, w.window_id)),
+      );
+      const ok =
+        results.every(replyOk) && readbacks.every((rb, i) => rb === `${SENTINEL}-conc-${i}`);
+      row(
+        "concurrent-writes",
+        ok ? "pass" : "fail",
+        `${targets.length} targets, readbacks ${readbacks.filter((rb, i) => rb === `${SENTINEL}-conc-${i}`).length}/${targets.length} exact`,
+        { readbacks },
+        Date.now() - t,
+      );
+    } else
+      row(
+        "concurrent-writes",
+        "skipped",
+        `only ${targets.length}/3 targets resolved`,
+        { targets: targets.length },
+        Date.now() - t,
+      );
   }
 
   // ── operator-typing (CGEvent into the standing front doc while agent writes hidden) ──
@@ -421,7 +607,12 @@ try {
 end repeat`,
       ]);
       await new Promise((r) => setTimeout(r, 250));
-      const res = await callReply("set_value", { pid: agentWin.pid, window_id: agentWin.window_id, element_token: agentTok.token, value: agentText });
+      const res = await callReply("set_value", {
+        pid: agentWin.pid,
+        window_id: agentWin.window_id,
+        element_token: agentTok.token,
+        value: agentText,
+      });
       await new Promise((r) => typeSim.once("exit", r));
       await new Promise((r) => setTimeout(r, 500));
       const opValue = await textAreaValue(opWin.pid, opWin.window_id);
@@ -432,29 +623,55 @@ end repeat`,
         typeof opValue === "string" &&
         opValue.includes(humanText) &&
         !opValue.includes("bgagent");
-      row("operator-typing", ok ? "pass" : "fail", `front doc got human-only=${opValue?.includes(humanText) && !opValue.includes("bgagent")}; hidden doc exact=${agentValue === agentText}`, { opValue: opValue?.slice(0, 120), agentValue }, Date.now() - t);
-    } else row("operator-typing", "skipped", "targets unresolved", { opWin: opWin?.window_id, agentWin: agentWin?.window_id, tok: !!agentTok }, Date.now() - t);
+      row(
+        "operator-typing",
+        ok ? "pass" : "fail",
+        `front doc got human-only=${opValue?.includes(humanText) && !opValue.includes("bgagent")}; hidden doc exact=${agentValue === agentText}`,
+        { opValue: opValue?.slice(0, 120), agentValue },
+        Date.now() - t,
+      );
+    } else
+      row(
+        "operator-typing",
+        "skipped",
+        "targets unresolved",
+        { opWin: opWin?.window_id, agentWin: agentWin?.window_id, tok: !!agentTok },
+        Date.now() - t,
+      );
   }
 
   // ── space-roundtrip (needs a second managed desktop) ──
   if (wanted("space-roundtrip")) {
     const t = Date.now();
     if (!existsSync(SPACE_CTL)) {
-      spawnSync("sh", [join(root, "scripts/computer-use-fixtures/build-space-ctl.sh")], { stdio: "pipe" });
+      spawnSync("sh", [join(root, "scripts/computer-use-fixtures/build-space-ctl.sh")], {
+        stdio: "pipe",
+      });
     }
     if (!existsSync(SPACE_CTL)) {
       row("space-roundtrip", "skipped", "space-ctl build failed", undefined, Date.now() - t);
     } else {
       const list = spawnSync(SPACE_CTL, ["list"], { encoding: "utf8" }).stdout ?? "";
       const desktops = [...list.matchAll(/space (\d+) type=0/g)].map((m) => Number(m[1]));
-      const active = Number((spawnSync(SPACE_CTL, ["active-space"], { encoding: "utf8" }).stdout ?? "").match(/active space (\d+)/)?.[1]);
+      const active = Number(
+        (spawnSync(SPACE_CTL, ["active-space"], { encoding: "utf8" }).stdout ?? "").match(
+          /active space (\d+)/,
+        )?.[1],
+      );
       const other = desktops.find((d) => d !== active);
       if (other === undefined) {
-        row("space-roundtrip", "skipped", "skipped-single-desktop — one managed desktop space; create a second in Mission Control to enable", { desktops, active }, Date.now() - t);
+        row(
+          "space-roundtrip",
+          "skipped",
+          "skipped-single-desktop — one managed desktop space; create a second in Mission Control to enable",
+          { desktops, active },
+          Date.now() - t,
+        );
       } else {
         // Switch to the other desktop, launch there (window lands on it), act, switch back.
         const span = exemptStart();
-        const sw1 = spawnSync(SPACE_CTL, ["set-current", String(other)], { encoding: "utf8" }).stdout ?? "";
+        const sw1 =
+          spawnSync(SPACE_CTL, ["set-current", String(other)], { encoding: "utf8" }).stdout ?? "";
         let win: WinInfo | undefined;
         let writeOk = false;
         if (/verified=1/.test(sw1)) {
@@ -462,15 +679,29 @@ end repeat`,
           win = pid ? await windowOfPid(pid) : undefined;
           const tok = win ? await textAreaToken(win.pid, win.window_id) : undefined;
           if (tok) {
-            const res = await callReply("set_value", { pid: win!.pid, window_id: win!.window_id, element_token: tok.token, value: `${SENTINEL}-space` });
-            writeOk = replyOk(res) && (await textAreaValue(win!.pid, win!.window_id)) === `${SENTINEL}-space`;
+            const res = await callReply("set_value", {
+              pid: win!.pid,
+              window_id: win!.window_id,
+              element_token: tok.token,
+              value: `${SENTINEL}-space`,
+            });
+            writeOk =
+              replyOk(res) &&
+              (await textAreaValue(win!.pid, win!.window_id)) === `${SENTINEL}-space`;
           }
         }
-        const sw2 = spawnSync(SPACE_CTL, ["set-current", String(active)], { encoding: "utf8" }).stdout ?? "";
+        const sw2 =
+          spawnSync(SPACE_CTL, ["set-current", String(active)], { encoding: "utf8" }).stdout ?? "";
         exemptEnd(span);
         const back = /verified=1/.test(sw2);
         const ok = /verified=1/.test(sw1) && writeOk && back;
-        row("space-roundtrip", ok ? "pass" : "fail", `switch ${active}→${other}: ${/verified=1/.test(sw1)}; write: ${writeOk}; back: ${back}`, { sw1: sw1.trim(), writeOk, sw2: sw2.trim(), win: win?.window_id }, Date.now() - t);
+        row(
+          "space-roundtrip",
+          ok ? "pass" : "fail",
+          `switch ${active}→${other}: ${/verified=1/.test(sw1)}; write: ${writeOk}; back: ${back}`,
+          { sw1: sw1.trim(), writeOk, sw2: sw2.trim(), win: win?.window_id },
+          Date.now() - t,
+        );
       }
     }
   }
@@ -483,7 +714,11 @@ end repeat`,
     } else {
       const list = spawnSync(SPACE_CTL, ["list"], { encoding: "utf8" }).stdout ?? "";
       const desktops = [...list.matchAll(/space (\d+) type=0/g)].map((m) => Number(m[1]));
-      const active = Number((spawnSync(SPACE_CTL, ["active-space"], { encoding: "utf8" }).stdout ?? "").match(/active space (\d+)/)?.[1]);
+      const active = Number(
+        (spawnSync(SPACE_CTL, ["active-space"], { encoding: "utf8" }).stdout ?? "").match(
+          /active space (\d+)/,
+        )?.[1],
+      );
       const other = desktops.find((d) => d !== active);
       if (other === undefined) {
         row("off-space-refusal", "skipped", "skipped-single-desktop", { desktops }, Date.now() - t);
@@ -497,7 +732,13 @@ end repeat`,
         spawnSync(SPACE_CTL, ["set-current", String(active)]);
         exemptEnd(span);
         const win = pid ? await windowOfPid(pid) : undefined;
-        const res = win ? await callReply("get_window_state", { pid: win.pid, window_id: win.window_id, max_elements: 64 }) : undefined;
+        const res = win
+          ? await callReply("get_window_state", {
+              pid: win.pid,
+              window_id: win.window_id,
+              max_elements: 64,
+            })
+          : undefined;
         const sc = res?.result?.structuredContent as { elements?: unknown[] } | undefined;
         const elCount = sc?.elements?.length ?? 0;
         let outcome = "unresolved";
@@ -506,7 +747,12 @@ end repeat`,
           const tok = elCount > 0 ? await textAreaToken(win.pid, win.window_id) : undefined;
           if (tok) {
             const value = `${SENTINEL}-offspace`;
-            const wr = await callReply("set_value", { pid: win.pid, window_id: win.window_id, element_token: tok.token, value });
+            const wr = await callReply("set_value", {
+              pid: win.pid,
+              window_id: win.window_id,
+              element_token: tok.token,
+              value,
+            });
             const rb = await textAreaValue(win.pid, win.window_id);
             honest = !replyOk(wr) || rb === value || rb === undefined || rb === null;
             outcome = replyOk(wr)
@@ -528,7 +774,13 @@ end repeat`,
           } else outcome = `no element token; elements=${elCount}`;
         }
         const ok = !!win && honest && outcome !== "unresolved";
-        row("off-space-refusal", ok ? "pass" : win ? "fail" : "skipped", win ? `off-space window: elements=${elCount}, write=${outcome}` : "no window", { win: win?.window_id, elements: elCount, outcome }, Date.now() - t);
+        row(
+          "off-space-refusal",
+          ok ? "pass" : win ? "fail" : "skipped",
+          win ? `off-space window: elements=${elCount}, write=${outcome}` : "no window",
+          { win: win?.window_id, elements: elCount, outcome },
+          Date.now() - t,
+        );
       }
     }
   }
@@ -538,15 +790,37 @@ end repeat`,
     const t = Date.now();
     const win = pidVisible ? await windowOfPid(pidVisible) : undefined;
     if (win) {
-      const res = await callReply("get_window_state", { pid: win.pid, window_id: win.window_id, include_screenshot: true });
+      const res = await callReply("get_window_state", {
+        pid: win.pid,
+        window_id: win.window_id,
+        include_screenshot: true,
+      });
       const sc = res.result?.structuredContent as
-        | { screenshot_frame_valid?: boolean; screenshot_frame_freshness?: string; window_bounds?: unknown }
+        | {
+            screenshot_frame_valid?: boolean;
+            screenshot_frame_freshness?: string;
+            window_bounds?: unknown;
+          }
         | undefined;
-      const image = res.result?.content?.find((c) => c.type === "image" && typeof c.data === "string");
+      const image = res.result?.content?.find(
+        (c) => c.type === "image" && typeof c.data === "string",
+      );
       const hasPng = typeof image?.data === "string" && image.data.length > 500;
       const valid = sc?.screenshot_frame_valid !== false;
       const ok = replyOk(res) && hasPng && valid;
-      row("screenshot-fresh", ok ? "pass" : "fail", `png=${hasPng} valid=${valid} freshness=${sc?.screenshot_frame_freshness}`, { hasPng, valid, freshness: sc?.screenshot_frame_freshness, bounds: sc?.window_bounds, pngBytes: image?.data?.length }, Date.now() - t);
+      row(
+        "screenshot-fresh",
+        ok ? "pass" : "fail",
+        `png=${hasPng} valid=${valid} freshness=${sc?.screenshot_frame_freshness}`,
+        {
+          hasPng,
+          valid,
+          freshness: sc?.screenshot_frame_freshness,
+          bounds: sc?.window_bounds,
+          pngBytes: image?.data?.length,
+        },
+        Date.now() - t,
+      );
     } else row("screenshot-fresh", "skipped", "no visible window", undefined, Date.now() - t);
   }
 
@@ -561,7 +835,13 @@ end repeat`,
     }).catch((e) => ({ ok: false, error: String(e) }) as CuaReply);
     const refusal = JSON.stringify(res);
     const refused = res.ok === false || /stale_element_token|stale|refus/i.test(refusal);
-    row("stale-token", refused ? "pass" : "fail", `forged token → ${refusal.slice(0, 160)}`, { reply: res }, Date.now() - t);
+    row(
+      "stale-token",
+      refused ? "pass" : "fail",
+      `forged token → ${refusal.slice(0, 160)}`,
+      { reply: res },
+      Date.now() - t,
+    );
   }
 
   // ── verify-state ──
@@ -574,9 +854,17 @@ end repeat`,
         window_id: win.window_id,
         expect: [{ element: { selector: { role: "AXTextArea" }, exists: true } }],
       });
-      const sc2 = res.result?.structuredContent as { status?: string; stable?: boolean } | undefined;
+      const sc2 = res.result?.structuredContent as
+        | { status?: string; stable?: boolean }
+        | undefined;
       const verdictOk = replyOk(res) && (sc2?.status === "satisfied" || sc2?.status === "unknown");
-      row("verify-state", verdictOk ? "pass" : "fail", JSON.stringify(sc2 ?? res.result ?? res).slice(0, 200), { reply: res }, Date.now() - t);
+      row(
+        "verify-state",
+        verdictOk ? "pass" : "fail",
+        JSON.stringify(sc2 ?? res.result ?? res).slice(0, 200),
+        { reply: res },
+        Date.now() - t,
+      );
     } else row("verify-state", "skipped", "no visible window", undefined, Date.now() - t);
   }
 
@@ -588,21 +876,35 @@ end repeat`,
       // 2578 chars at ~38ms/char ≈ 98s of real keystrokes — a 2s abort
       // lands ~50 chars in: an unambiguous mid-flight interruption.
       const longText = `${SENTINEL}-` + "cancel-me ".repeat(250);
-      const promise = cuaRequest<CuaReply>(endpoint, {
-        method: "call",
-        name: "type_text",
-        args: { pid: opWin.pid, window_id: opWin.window_id, text: longText, force_synthetic: true },
-        capability,
-      }, { mutation: true, signal: ac.signal, timeoutMs: 120_000 }).catch((e) => ({ ok: false, error: String(e) }) as CuaReply);
+      const promise = cuaRequest<CuaReply>(
+        endpoint,
+        {
+          method: "call",
+          name: "type_text",
+          args: {
+            pid: opWin.pid,
+            window_id: opWin.window_id,
+            text: longText,
+            force_synthetic: true,
+          },
+          capability,
+        },
+        { mutation: true, signal: ac.signal, timeoutMs: 120_000 },
+      ).catch((e) => ({ ok: false, error: String(e) }) as CuaReply);
       setTimeout(() => ac.abort(), 2000);
       const res = await promise;
       const after = await textAreaValue(opWin.pid, opWin.window_id);
-      const sc = res.result?.structuredContent as { effect?: string; delivered_chars?: number } | undefined;
+      const sc = res.result?.structuredContent as
+        | { effect?: string; delivered_chars?: number }
+        | undefined;
       const effect = sc?.effect ?? (res as { effect?: string }).effect;
       const typedChars =
-        typeof sc?.delivered_chars === "number" ? sc.delivered_chars
-        : typeof after === "string" ? (after.match(/cancel-me/g)?.length ?? 0) * 10 + (after.includes(SENTINEL) ? SENTINEL.length + 1 : 0)
-        : undefined;
+        typeof sc?.delivered_chars === "number"
+          ? sc.delivered_chars
+          : typeof after === "string"
+            ? (after.match(/cancel-me/g)?.length ?? 0) * 10 +
+              (after.includes(SENTINEL) ? SENTINEL.length + 1 : 0)
+            : undefined;
       const cancelled =
         res.ok === false ||
         !replyOk(res) ||
@@ -612,7 +914,18 @@ end repeat`,
       // clean not-dispatched cancel (0 chars). Fail = full delivery after
       // abort, or cancellation that couldn't stop the transport.
       const ok = cancelled && typeof typedChars === "number" && typedChars < longText.length;
-      row("cancellation", ok ? "pass" : "fail", `cancelled=${cancelled} effect=${effect} delivered=${typedChars ?? "?"}/${longText.length} chars`, { effect, delivered: typedChars, afterLen: after?.length, reply: JSON.stringify(res).slice(0, 400) }, Date.now() - t);
+      row(
+        "cancellation",
+        ok ? "pass" : "fail",
+        `cancelled=${cancelled} effect=${effect} delivered=${typedChars ?? "?"}/${longText.length} chars`,
+        {
+          effect,
+          delivered: typedChars,
+          afterLen: after?.length,
+          reply: JSON.stringify(res).slice(0, 400),
+        },
+        Date.now() - t,
+      );
     } else row("cancellation", "skipped", "no operator doc", undefined, Date.now() - t);
   }
 } catch (e) {
@@ -625,20 +938,43 @@ end repeat`,
     if (!report) {
       row("focus-invariant", "skipped", "probe unavailable — no theft coverage", undefined, 0);
     } else if (!report.ok) {
-      row("focus-invariant", "skipped", `insufficient coverage: ${report.issues.join("; ") || "samples too few"}`, { sampleCount: report.sampleCount, issues: report.issues }, 0);
+      row(
+        "focus-invariant",
+        "skipped",
+        `insufficient coverage: ${report.issues.join("; ") || "samples too few"}`,
+        { sampleCount: report.sampleCount, issues: report.issues },
+        0,
+      );
     } else {
       // `topWin`-only blips under 2s are transient OS overlays (banners,
       // tooltips) — recorded as warnings, not agent theft. Hard theft =
       // frontmost pid, key window, active space, or focused pid changed.
       const HARD = new Set(["pid", "keyWin", "space", "focusedPid"]);
       const theft = report.offBaseline.filter((v) => v.changedFields.some((f) => HARD.has(f)));
-      const warnings = report.offBaseline.filter((v) => !v.changedFields.some((f) => HARD.has(f)) && v.durationMs < 2000);
-      const persistent = report.offBaseline.filter((v) => !v.changedFields.some((f) => HARD.has(f)) && v.durationMs >= 2000);
+      const warnings = report.offBaseline.filter(
+        (v) => !v.changedFields.some((f) => HARD.has(f)) && v.durationMs < 2000,
+      );
+      const persistent = report.offBaseline.filter(
+        (v) => !v.changedFields.some((f) => HARD.has(f)) && v.durationMs >= 2000,
+      );
       const ok = theft.length === 0 && persistent.length === 0;
       const detail = ok
         ? `theft-free across ${report.sampleCount} samples (${warnings.length} topWin blips tolerated)`
         : `${theft.length} hard + ${persistent.length} persistent violations (${warnings.length} blips)`;
-      row("focus-invariant", ok ? "pass" : "fail", detail, { theft: theft.slice(0, 8), persistent: persistent.slice(0, 4), warnings: warnings.slice(0, 4), drift: report.drift.slice(0, 4), sampleCount: report.sampleCount, issues: report.issues }, 0);
+      row(
+        "focus-invariant",
+        ok ? "pass" : "fail",
+        detail,
+        {
+          theft: theft.slice(0, 8),
+          persistent: persistent.slice(0, 4),
+          warnings: warnings.slice(0, 4),
+          drift: report.drift.slice(0, 4),
+          sampleCount: report.sampleCount,
+          issues: report.issues,
+        },
+        0,
+      );
     }
   }
 
@@ -649,7 +985,9 @@ end repeat`,
     }
   }
   try {
-    await cuaRequest(endpoint, { method: "stop", capability }, { timeoutMs: 10_000 }).catch(() => undefined);
+    await cuaRequest(endpoint, { method: "stop", capability }, { timeoutMs: 10_000 }).catch(
+      () => undefined,
+    );
   } catch {
     /* host already down */
   }
@@ -693,6 +1031,8 @@ end repeat`,
   await writeFile(notesPath, md, { mode: 0o600 });
   log(`\nreport: ${reportPath}`);
   log(`notes:  ${notesPath}`);
-  log(`${summary.summary.pass} pass / ${summary.summary.fail} fail / ${summary.summary.skipped} skipped in ${Math.round(summary.elapsedMs / 1000)}s`);
+  log(
+    `${summary.summary.pass} pass / ${summary.summary.fail} fail / ${summary.summary.skipped} skipped in ${Math.round(summary.elapsedMs / 1000)}s`,
+  );
   process.exit(failed.length > 0 ? 2 : 0);
 }
