@@ -35,6 +35,7 @@ import {
   actionableElements,
   diffActionableElements,
   normalizeLabelSpaces,
+  resolveComputerSemanticTarget,
   ComputerTargetError,
   type ComputerActionableElementRef,
   type ComputerActionableElements,
@@ -2514,7 +2515,17 @@ export function makeAgentGatewayComputerTools(
       "start",
       "length",
     ],
-    wait: ["duration_ms", "label", "role", "window_id", "windowId"],
+    wait: [
+      "duration_ms",
+      "label",
+      "role",
+      "ref",
+      "ref_ordinal",
+      "refOrdinal",
+      "window_id",
+      "windowId",
+      "absent",
+    ],
     activate_window: ["window_id", "windowId"],
     launch_app: ["app", "arguments", "wait_for_window", "hidden"],
     write_clipboard: ["text"],
@@ -2526,10 +2537,20 @@ export function makeAgentGatewayComputerTools(
     set_app_visibility: ["pid", "hidden"],
   };
 
+  /**
+   * Fields every step type accepts on top of its own: element conditions
+   * evaluated against live state at the moment the step would run, and the
+   * per-step failure policy.
+   */
+  const RUN_CONDITION_FIELDS = ["if_element", "unless_element", "continue_on_error"] as const;
+
   interface PreparedRunStep {
     readonly type: string;
     /** The step object as declared — the inner record's redaction input. */
     readonly step: Record<string, unknown>;
+    readonly ifElement: ComputerTarget | undefined;
+    readonly unlessElement: ComputerTarget | undefined;
+    readonly continueOnError: boolean;
     readonly run: () => Promise<unknown>;
   }
 
@@ -2653,27 +2674,36 @@ export function makeAgentGatewayComputerTools(
       }
       case "wait": {
         const durationMs = readWaitDurationMs(step);
-        const label = readVerbatimStringArg(step, "label");
-        const windowId = readWindowIdArg(step);
-        const role = readStringArg(step, "role");
-        if (label !== undefined) {
-          if (!windowId || !label.trim()) {
+        const absent = readBooleanArg(step, "absent") === true;
+        const raw = readScreenshotTarget(step);
+        const target =
+          raw.ref !== undefined ||
+          raw.label !== undefined ||
+          raw.role !== undefined ||
+          raw.refOrdinal !== undefined
+            ? resolveTarget(raw, threadId)
+            : undefined;
+        if (target !== undefined) {
+          if (target.label === undefined || !target.label.trim()) {
             throw new ToolInputError(
-              'A "wait" step with "label" requires a nonempty label and "window_id".',
+              'A "wait" step with an element target requires a nonempty label or a ref.',
             );
           }
-          const target: ComputerTarget = {
-            label,
-            windowId,
-            ...(role ? { role } : {}),
-          };
           return () =>
             waitForControl(
-              () => manager.getState({ includeTree: true, windowId }),
+              () =>
+                manager.getState({
+                  includeTree: true,
+                  ...(target.windowId !== undefined ? { windowId: target.windowId } : {}),
+                }),
               target,
               durationMs,
               desktopOperationSignal(),
+              { absent },
             );
+        }
+        if (absent) {
+          throw new ToolInputError('A "wait" step with "absent" requires an element target.');
         }
         return async () => {
           if (durationMs > 0)
@@ -2776,6 +2806,59 @@ export function makeAgentGatewayComputerTools(
   };
 
   /**
+   * An `if_element`/`unless_element` clause: a target object carrying the
+   * same fields an action step does — label, role, ref, window_id. A ref is
+   * bound to its listed identity at parse time, so the check asks about the
+   * element the model meant, not whatever its ref happens to point at later.
+   * Only a label-carrying target is a usable condition: a bare window or
+   * role matches everything, which is no condition at all.
+   */
+  const readStepElementCondition = (
+    step: Record<string, unknown>,
+    name: string,
+    threadId: string,
+  ): ComputerTarget | undefined => {
+    const value = readRecordArg(step, name);
+    if (value === undefined) return undefined;
+    const target = resolveTarget(readScreenshotTarget(value), threadId);
+    if (target.label === undefined) {
+      throw new ToolInputError(`"${name}" needs a label, or a ref whose element has one.`);
+    }
+    return target;
+  };
+
+  /**
+   * Live presence of a condition element at the moment the step would run:
+   * one fresh tree read, resolved the same way an action would resolve it.
+   * "Present" means an action could reach it now: a resolvable on-screen
+   * match, or ambiguous candidates — several hits still prove the element
+   * is there, whichever one it is. An off-screen-only match counts as
+   * absent (a step gated on it could not act anyway), as does a missing or
+   * unreadable tree — no guesses.
+   */
+  const elementConditionPresent = async (target: ComputerTarget): Promise<boolean> => {
+    const state = await manager.getState({
+      includeTree: true,
+      ...(target.windowId !== undefined ? { windowId: target.windowId } : {}),
+    });
+    if (
+      !state.root ||
+      state.accessibility?.status === "unavailable" ||
+      (target.windowId !== undefined &&
+        state.accessibility?.unavailableWindowIds?.includes(target.windowId))
+    ) {
+      return false;
+    }
+    try {
+      resolveComputerSemanticTarget(state.root, target);
+      return true;
+    } catch (error) {
+      if (!(error instanceof ComputerTargetError)) throw error;
+      return error.code === "computer_target_ambiguous";
+    }
+  };
+
+  /**
    * The error one failed step reports. Same taxonomy the outer handler maps
    * to whole-call results, kept compact: the batch result is data, and the
    * step's failure is one entry in it.
@@ -2845,7 +2928,12 @@ export function makeAgentGatewayComputerTools(
           `Step ${index}: "type" must be one of ${Object.keys(RUN_STEP_FIELDS).join(", ")}.`,
         );
       }
-      const unknown = Object.keys(step).filter((key) => key !== "type" && !fields.includes(key));
+      const unknown = Object.keys(step).filter(
+        (key) =>
+          key !== "type" &&
+          !fields.includes(key) &&
+          !(RUN_CONDITION_FIELDS as readonly string[]).includes(key),
+      );
       if (unknown.length > 0) {
         throw new ToolInputError(
           `Step ${index} (${type}): unknown field ${unknown
@@ -2853,7 +2941,14 @@ export function makeAgentGatewayComputerTools(
             .join(", ")}.`,
         );
       }
-      return { type, step, run: prepareRunStep(type, step, context) };
+      return {
+        type,
+        step,
+        ifElement: readStepElementCondition(step, "if_element", threadId),
+        unlessElement: readStepElementCondition(step, "unless_element", threadId),
+        continueOnError: readBooleanArg(step, "continue_on_error") === true,
+        run: prepareRunStep(type, step, context),
+      };
     });
 
     const steps: Record<string, unknown>[] = [];
@@ -2893,6 +2988,34 @@ export function makeAgentGatewayComputerTools(
       });
       const stepCapture = manager.recordingCaptureFor(threadId);
       const stepStartedAt = Date.now();
+      // Element conditions evaluate against live state at the moment the step
+      // would run — the answer a get_state gave ten steps ago is not it.
+      const skippedReason = await (async (): Promise<string | undefined> => {
+        if (
+          preparedStep.ifElement !== undefined &&
+          !(await elementConditionPresent(preparedStep.ifElement))
+        ) {
+          return "if_element_absent";
+        }
+        if (
+          preparedStep.unlessElement !== undefined &&
+          (await elementConditionPresent(preparedStep.unlessElement))
+        ) {
+          return "unless_element_present";
+        }
+        return undefined;
+      })();
+      if (skippedReason !== undefined) {
+        recordRunStep(preparedStep, stepCapture, { effect: "not-dispatched" }, stepStartedAt);
+        steps.push({
+          step: index,
+          type: preparedStep.type,
+          ok: true,
+          skipped: true,
+          skippedReason,
+        });
+        continue;
+      }
       try {
         const value = await manager.cursorActivity.during(
           threadId,
@@ -2945,8 +3068,10 @@ export function makeAgentGatewayComputerTools(
           ok: false,
           error: runStepError(error),
         });
-        stopped = true;
-        break;
+        if (!preparedStep.continueOnError) {
+          stopped = true;
+          break;
+        }
       }
     }
 
@@ -2992,10 +3117,14 @@ export function makeAgentGatewayComputerTools(
       }
     })();
 
+    const skippedCount = steps.filter((entry) => entry.skipped === true).length;
     const payload: Record<string, unknown> = {
       computerId: manager.computerId,
       steps,
-      completed: steps.filter((entry) => entry.ok === true).length,
+      // A skipped step satisfied its condition check, not its action — count
+      // it apart so "completed" keeps meaning "actually ran".
+      completed: steps.filter((entry) => entry.ok === true && entry.skipped !== true).length,
+      ...(skippedCount > 0 ? { skipped: skippedCount } : {}),
       stopped,
       ...stateFields,
     };
@@ -4199,6 +4328,18 @@ export function makeAgentGatewayComputerTools(
                 ref_ordinal: { type: "integer", minimum: 0 },
                 refOrdinal: { type: "integer", minimum: 0 },
                 window_id: { type: "string" },
+                if_element: {
+                  type: "object",
+                  description:
+                    "Run this step only if the element resolves live; the same target fields as a step (label/role/ref/window_id).",
+                },
+                unless_element: {
+                  type: "object",
+                  description:
+                    "Skip this step if the element resolves live; the same target fields as a step.",
+                },
+                continue_on_error: { type: "boolean" },
+                absent: { type: "boolean" },
                 modifiers: MODIFIERS_PROPERTY.modifiers,
                 from: {
                   type: "object",

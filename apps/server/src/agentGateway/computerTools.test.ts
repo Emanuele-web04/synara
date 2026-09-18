@@ -4244,3 +4244,200 @@ describe("element refs", () => {
     }
   });
 });
+describe("computer_run flow control", () => {
+  it("skips a step whose if_element is absent and runs it when present", async () => {
+    const { backend, call, manager } = await setup();
+    try {
+      await call("computer_get_state", {});
+      const run = resultJson(
+        await call("computer_run", {
+          steps: [
+            {
+              type: "click",
+              label: "Calculate",
+              window_id: "fake-calculator",
+              if_element: { label: "Does not exist" },
+            },
+            {
+              type: "click",
+              label: "Calculate",
+              window_id: "fake-calculator",
+              if_element: { label: "Calculate", window_id: "fake-calculator" },
+            },
+          ],
+        }),
+      ) as {
+        steps: { ok: boolean; skipped?: boolean; skippedReason?: string }[];
+        skipped: number;
+        completed: number;
+      };
+      expect(run.steps[0]).toMatchObject({
+        ok: true,
+        skipped: true,
+        skippedReason: "if_element_absent",
+      });
+      expect(run.steps[1]).toMatchObject({ ok: true });
+      expect(run.steps[1]!.skipped).toBeUndefined();
+      expect(run.skipped).toBe(1);
+      // Only the second click dispatched — a skipped step touches nothing.
+      expect(backend.callsFor("click")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("skips a step whose unless_element is present", async () => {
+    const { backend, call, manager } = await setup();
+    try {
+      await call("computer_get_state", {});
+      const run = resultJson(
+        await call("computer_run", {
+          steps: [
+            {
+              type: "click",
+              label: "Calculate",
+              window_id: "fake-calculator",
+              unless_element: { label: "Calculate", window_id: "fake-calculator" },
+            },
+            {
+              type: "click",
+              label: "Calculate",
+              window_id: "fake-calculator",
+              unless_element: { label: "Not there" },
+            },
+          ],
+        }),
+      ) as { steps: { skipped?: boolean; skippedReason?: string }[] };
+      expect(run.steps[0]!.skippedReason).toBe("unless_element_present");
+      expect(run.steps[1]!.skipped).toBeUndefined();
+      expect(backend.callsFor("click")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("evaluates an if_element ref against the element it was minted for", async () => {
+    const { backend, call, manager } = await setup();
+    try {
+      const elements = (
+        resultJson(await call("computer_get_state", {})) as {
+          elements: { ref: number; label: string }[];
+        }
+      ).elements;
+      const calculate = elements.find((element) => element.label === "Calculate")!;
+      const run = resultJson(
+        await call("computer_run", {
+          steps: [
+            {
+              type: "click",
+              label: "Calculate",
+              window_id: "fake-calculator",
+              if_element: { ref: calculate.ref },
+            },
+          ],
+        }),
+      ) as { steps: { ok: boolean; skipped?: boolean }[] };
+      expect(run.steps[0]!.skipped).toBeUndefined();
+      expect(run.steps[0]!.ok).toBe(true);
+      expect(backend.callsFor("click")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("continues past a failed step with continue_on_error", async () => {
+    const { backend, call, manager } = await setup();
+    try {
+      await call("computer_get_state", {});
+      const run = resultJson(
+        await call("computer_run", {
+          steps: [
+            {
+              type: "click",
+              label: "Missing control",
+              window_id: "fake-calculator",
+              continue_on_error: true,
+            },
+            { type: "click", label: "Calculate", window_id: "fake-calculator" },
+          ],
+        }),
+      ) as {
+        steps: { ok: boolean }[];
+        stopped: boolean;
+        completed: number;
+      };
+      expect(run.steps[0]!.ok).toBe(false);
+      expect(run.steps[1]!.ok).toBe(true);
+      expect(run.stopped).toBe(false);
+      expect(run.completed).toBe(1);
+      expect(backend.callsFor("click")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("still stops the run on a failure without continue_on_error", async () => {
+    const { backend, call, manager } = await setup();
+    try {
+      await call("computer_get_state", {});
+      const run = resultJson(
+        await call("computer_run", {
+          steps: [
+            { type: "click", label: "Missing control", window_id: "fake-calculator" },
+            { type: "click", label: "Calculate", window_id: "fake-calculator" },
+          ],
+        }),
+      ) as { steps: { ok: boolean }[]; stopped: boolean };
+      expect(run.steps).toHaveLength(1);
+      expect(run.stopped).toBe(true);
+      expect(backend.callsFor("click")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("waits for an element to be absent with absent:true", async () => {
+    const { call, manager } = await setup();
+    try {
+      await call("computer_get_state", {});
+      const run = resultJson(
+        await call("computer_run", {
+          steps: [
+            {
+              type: "wait",
+              duration_ms: 500,
+              absent: true,
+              label: "Never present",
+              window_id: "fake-calculator",
+            },
+          ],
+        }),
+      ) as { steps: { ok: boolean; result?: { status?: string } }[] };
+      expect(run.steps[0]!.ok).toBe(true);
+      expect(run.steps[0]!.result?.status).toBe("ready");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses a condition with no label-carrying target", async () => {
+    const { call, manager } = await setup();
+    try {
+      const run = await call("computer_run", {
+        steps: [
+          {
+            type: "click",
+            label: "Calculate",
+            window_id: "fake-calculator",
+            if_element: { window_id: "fake-calculator" },
+          },
+        ],
+      });
+      expect(run.isError).toBe(true);
+      const text = run.content.find((entry) => entry.type === "text");
+      expect(text?.type === "text" ? text.text : "").toContain("if_element");
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
