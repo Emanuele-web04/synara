@@ -23,11 +23,7 @@ import {
   describeExternalMcpProjects,
   externalMcpSetupAction,
 } from "./externalMcpSetup";
-import {
-  SettingsListRow,
-  SettingsRow,
-  SettingsSection,
-} from "./SettingsPanelPrimitives";
+import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 
 const INTEGRATIONS_QUERY_KEY = ["server", "externalMcpIntegrations"] as const;
 const PROJECTS_QUERY_KEY = ["orchestration", "externalMcpProjects"] as const;
@@ -46,9 +42,7 @@ function dateMillis(value: string): number {
 function formatDate(value: string | null): string {
   if (!value) return "Never";
   const milliseconds = dateMillis(value);
-  return Number.isNaN(milliseconds)
-    ? String(value)
-    : new Date(milliseconds).toLocaleString();
+  return Number.isNaN(milliseconds) ? String(value) : new Date(milliseconds).toLocaleString();
 }
 
 function copyWithToast(value: string, title: string): void {
@@ -58,8 +52,7 @@ function copyWithToast(value: string, title: string): void {
       toastManager.add({
         type: "error",
         title: "Could not copy",
-        description:
-          error instanceof Error ? error.message : "Clipboard access failed.",
+        description: error instanceof Error ? error.message : "Clipboard access failed.",
       }),
   );
 }
@@ -68,18 +61,14 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState<string>(DEFAULT_NAME);
   const [allProjects, setAllProjects] = useState(true);
-  const [selectedProjects, setSelectedProjects] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
+  const [selectedProjects, setSelectedProjects] = useState<ReadonlySet<string>>(new Set());
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [allowProjectRead, setAllowProjectRead] = useState(false);
   const [allowLocal, setAllowLocal] = useState(false);
   const [allowFullAccess, setAllowFullAccess] = useState(false);
   const [allowComputerControl, setAllowComputerControl] = useState(false);
-  const [setup, setSetup] = useState<ExternalMcpCreateIntegrationResult | null>(
-    null,
-  );
+  const [setup, setSetup] = useState<ExternalMcpCreateIntegrationResult | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -119,9 +108,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
         ...(allProjects
           ? {}
           : {
-              projectIds: [...selectedProjects].map((projectId) =>
-                ProjectId.makeUnsafe(projectId),
-              ),
+              projectIds: [...selectedProjects].map((projectId) => ProjectId.makeUnsafe(projectId)),
             }),
         capabilities,
         expiresInDays: 30,
@@ -133,16 +120,14 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
       toastManager.add({
         type: "success",
         title: "Connection ready",
-        description:
-          "Give your agent the setup prompt before the one-time code expires.",
+        description: "Give your agent the setup prompt before the one-time code expires.",
       });
     },
     onError: (error: unknown) =>
       toastManager.add({
         type: "error",
         title: "Could not create connection",
-        description:
-          error instanceof Error ? error.message : "External MCP setup failed.",
+        description: error instanceof Error ? error.message : "External MCP setup failed.",
       }),
   });
 
@@ -165,8 +150,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
       toastManager.add({
         type: "error",
         title: "Could not revoke connection",
-        description:
-          error instanceof Error ? error.message : "Revocation failed.",
+        description: error instanceof Error ? error.message : "Revocation failed.",
       }),
   });
 
@@ -179,22 +163,18 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
       toastManager.add({
         type: "success",
         title: "New pairing code ready",
-        description:
-          "Copy the refreshed setup prompt. The new one-time code lasts 10 minutes.",
+        description: "Copy the refreshed setup prompt. The new one-time code lasts 10 minutes.",
       });
     },
     onError: (error: unknown) =>
       toastManager.add({
         type: "error",
         title: "Could not resume pairing",
-        description:
-          error instanceof Error ? error.message : "Pairing refresh failed.",
+        description: error instanceof Error ? error.message : "Pairing refresh failed.",
       }),
   });
 
-  const continuePairedSetup = (
-    integration: NonNullable<typeof integrationsQuery.data>[number],
-  ) => {
+  const continuePairedSetup = (integration: NonNullable<typeof integrationsQuery.data>[number]) => {
     setManualOpen(false);
     setSetup({
       integration,
@@ -212,8 +192,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
 
   const setupIntegration = setup
     ? (integrationsQuery.data?.find(
-        (integration) =>
-          integration.integrationId === setup.integration.integrationId,
+        (integration) => integration.integrationId === setup.integration.integrationId,
       ) ?? setup.integration)
     : null;
 
@@ -230,11 +209,8 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   const integrationExpired = setupIntegration
     ? dateMillis(setupIntegration.expiresAt) <= nowMs
     : false;
-  const pairingExpired = setup
-    ? dateMillis(setup.pairingExpiresAt) <= nowMs
-    : false;
-  const setupUnavailable =
-    revoked || integrationExpired || (!paired && pairingExpired);
+  const pairingExpired = setup ? dateMillis(setup.pairingExpiresAt) <= nowMs : false;
+  const setupUnavailable = revoked || integrationExpired || (!paired && pairingExpired);
   const setupAction = externalMcpSetupAction({
     revoked,
     integrationExpired,
@@ -291,9 +267,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
           <SettingsRow
             title="Access all of Synara"
             description="The agent can discover and work in every project, including ones you add later. Turn off to pick specific projects."
-            control={
-              <Switch checked={allProjects} onCheckedChange={setAllProjects} />
-            }
+            control={<Switch checked={allProjects} onCheckedChange={setAllProjects} />}
           >
             <DisclosureRegion open={!allProjects} contentClassName="mt-3">
               <div className="grid gap-2 sm:grid-cols-2">
@@ -304,9 +278,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                       key={project.id}
                       className={cn(
                         "flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs transition-colors",
-                        checked
-                          ? "border-foreground/30 bg-muted/70"
-                          : "border-border/70",
+                        checked ? "border-foreground/30 bg-muted/70" : "border-border/70",
                       )}
                     >
                       <span className="min-w-0 truncate">{project.title}</span>
@@ -326,9 +298,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                   );
                 })}
                 {projects.length === 0 ? (
-                  <span className="text-xs text-muted-foreground">
-                    No projects are available.
-                  </span>
+                  <span className="text-xs text-muted-foreground">No projects are available.</span>
                 ) : null}
               </div>
             </DisclosureRegion>
@@ -344,10 +314,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                 onClick={() => setAdvancedOpen((current) => !current)}
               >
                 Review
-                <DisclosureChevron
-                  open={advancedOpen}
-                  className="ml-1 size-3.5"
-                />
+                <DisclosureChevron open={advancedOpen} className="ml-1 size-3.5" />
               </Button>
             }
           >
@@ -357,59 +324,42 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-xs font-medium">
-                    Read other project tasks
-                  </div>
+                  <div className="text-xs font-medium">Read other project tasks</div>
                   <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-                    Without this permission, the agent can read only tasks it
-                    creates.
+                    Without this permission, the agent can read only tasks it creates.
                   </div>
                 </div>
-                <Switch
-                  checked={allowProjectRead}
-                  onCheckedChange={setAllowProjectRead}
-                />
+                <Switch checked={allowProjectRead} onCheckedChange={setAllowProjectRead} />
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-xs font-medium">
-                    Use the shared local checkout
-                  </div>
+                  <div className="text-xs font-medium">Use the shared local checkout</div>
                   <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-                    High impact. Tasks may modify the checkout you are actively
-                    using instead of an isolated worktree.
+                    High impact. Tasks may modify the checkout you are actively using instead of an
+                    isolated worktree.
                   </div>
                 </div>
                 <Switch checked={allowLocal} onCheckedChange={setAllowLocal} />
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-xs font-medium">
-                    Run without approval prompts
-                  </div>
+                  <div className="text-xs font-medium">Run without approval prompts</div>
                   <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-                    High impact. The external agent may start full-access
-                    execution without asking you to approve tool actions.
+                    High impact. The external agent may start full-access execution without asking
+                    you to approve tool actions.
                   </div>
                 </div>
-                <Switch
-                  checked={allowFullAccess}
-                  onCheckedChange={setAllowFullAccess}
-                />
+                <Switch checked={allowFullAccess} onCheckedChange={setAllowFullAccess} />
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="text-xs font-medium">Computer control</div>
                   <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-                    High impact. Tasks may drive this Mac&apos;s screen —
-                    observe, click, type, menus, clipboard. Every computer
-                    action still asks for your approval.
+                    High impact. Tasks may drive this Mac&apos;s screen — observe, click, type,
+                    menus, clipboard. Every computer action still asks for your approval.
                   </div>
                 </div>
-                <Switch
-                  checked={allowComputerControl}
-                  onCheckedChange={setAllowComputerControl}
-                />
+                <Switch checked={allowComputerControl} onCheckedChange={setAllowComputerControl} />
               </div>
             </DisclosureRegion>
           </SettingsRow>
@@ -417,11 +367,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
             title="Create connection"
             description="The connection lasts 30 days and can be revoked at any time. The next screen gives you one prompt to paste into your agent."
             control={
-              <Button
-                size="sm"
-                disabled={!canCreate}
-                onClick={() => createMutation.mutate()}
-              >
+              <Button size="sm" disabled={!canCreate} onClick={() => createMutation.mutate()}>
                 {createMutation.isPending ? "Creating..." : "Create connection"}
               </Button>
             }
@@ -429,11 +375,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
         </SettingsSection>
       ) : null}
 
-      {setup &&
-      setupIntegration &&
-      setupPrompt &&
-      manualConfiguration &&
-      examplePrompt ? (
+      {setup && setupIntegration && setupPrompt && manualConfiguration && examplePrompt ? (
         <SettingsSection title={`Connect ${setupIntegration.name}`}>
           <SettingsRow
             title={
@@ -476,9 +418,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                   size="xs"
                   variant="destructive-outline"
                   disabled={revokeMutation.isPending}
-                  onClick={() =>
-                    revokeMutation.mutate(setupIntegration.integrationId)
-                  }
+                  onClick={() => revokeMutation.mutate(setupIntegration.integrationId)}
                 >
                   Revoke and start over
                 </Button>
@@ -488,15 +428,9 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     size="xs"
                     variant="outline"
                     disabled={refreshPairingMutation.isPending}
-                    onClick={() =>
-                      refreshPairingMutation.mutate(
-                        setupIntegration.integrationId,
-                      )
-                    }
+                    onClick={() => refreshPairingMutation.mutate(setupIntegration.integrationId)}
                   >
-                    {refreshPairingMutation.isPending
-                      ? "Resuming..."
-                      : "Resume pairing"}
+                    {refreshPairingMutation.isPending ? "Resuming..." : "Resume pairing"}
                   </Button>
                   <Button size="xs" variant="ghost" onClick={closeSetup}>
                     Back
@@ -522,9 +456,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                 size="xs"
                 variant="outline"
                 disabled={setupUnavailable}
-                onClick={() =>
-                  copyWithToast(setupPrompt, "Setup prompt copied")
-                }
+                onClick={() => copyWithToast(setupPrompt, "Setup prompt copied")}
               >
                 Copy setup prompt
               </Button>
@@ -545,10 +477,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                 onClick={() => setManualOpen((current) => !current)}
               >
                 Show
-                <DisclosureChevron
-                  open={manualOpen}
-                  className="ml-1 size-3.5"
-                />
+                <DisclosureChevron open={manualOpen} className="ml-1 size-3.5" />
               </Button>
             }
           >
@@ -559,19 +488,12 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
               {!paired ? (
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="text-xs font-medium">
-                      Pairing command (run in Terminal)
-                    </span>
+                    <span className="text-xs font-medium">Pairing command (run in Terminal)</span>
                     <Button
                       size="xs"
                       variant="outline"
                       disabled={setupUnavailable}
-                      onClick={() =>
-                        copyWithToast(
-                          setup.setupCommand,
-                          "Pairing command copied",
-                        )
-                      }
+                      onClick={() => copyWithToast(setup.setupCommand, "Pairing command copied")}
                     >
                       Copy
                     </Button>
@@ -583,19 +505,12 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
               ) : null}
               <div>
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium">
-                    MCP configuration (JSON)
-                  </span>
+                  <span className="text-xs font-medium">MCP configuration (JSON)</span>
                   <Button
                     size="xs"
                     variant="outline"
                     disabled={revoked || integrationExpired}
-                    onClick={() =>
-                      copyWithToast(
-                        manualConfiguration.value,
-                        "Configuration copied",
-                      )
-                    }
+                    onClick={() => copyWithToast(manualConfiguration.value, "Configuration copied")}
                   >
                     Copy
                   </Button>
@@ -619,9 +534,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                 size="xs"
                 variant="outline"
                 disabled={!paired || revoked || integrationExpired}
-                onClick={() =>
-                  copyWithToast(examplePrompt, "Example prompt copied")
-                }
+                onClick={() => copyWithToast(examplePrompt, "Example prompt copied")}
               >
                 Copy example prompt
               </Button>
@@ -642,8 +555,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
         ) : integrationsQuery.data?.length ? (
           integrationsQuery.data.map((integration) => {
             const active =
-              integration.revokedAt === null &&
-              dateMillis(integration.expiresAt) > nowMs;
+              integration.revokedAt === null && dateMillis(integration.expiresAt) > nowMs;
             const status = active
               ? integration.lastUsedAt
                 ? "Connected"
@@ -661,12 +573,9 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                 description={
                   <div className="space-y-1">
                     <div>{status}</div>
+                    <div>Projects: {describeExternalMcpProjects(integration)}</div>
                     <div>
-                      Projects: {describeExternalMcpProjects(integration)}
-                    </div>
-                    <div>
-                      Permissions:{" "}
-                      {describeExternalMcpPermissions(integration.capabilities)}
+                      Permissions: {describeExternalMcpPermissions(integration.capabilities)}
                     </div>
                     <div>
                       Created {formatDate(integration.createdAt)} · Last used{" "}
@@ -683,25 +592,17 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                         variant="outline"
                         disabled={refreshPairingMutation.isPending}
                         onClick={() => {
-                          if (integration.pairedAt)
-                            continuePairedSetup(integration);
-                          else
-                            refreshPairingMutation.mutate(
-                              integration.integrationId,
-                            );
+                          if (integration.pairedAt) continuePairedSetup(integration);
+                          else refreshPairingMutation.mutate(integration.integrationId);
                         }}
                       >
-                        {integration.pairedAt
-                          ? "Continue setup"
-                          : "Resume pairing"}
+                        {integration.pairedAt ? "Continue setup" : "Resume pairing"}
                       </Button>
                       <Button
                         size="xs"
                         variant="destructive-outline"
                         disabled={revokeMutation.isPending}
-                        onClick={() =>
-                          revokeMutation.mutate(integration.integrationId)
-                        }
+                        onClick={() => revokeMutation.mutate(integration.integrationId)}
                       >
                         Revoke
                       </Button>

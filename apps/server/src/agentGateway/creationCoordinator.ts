@@ -42,11 +42,7 @@ import {
   makeAgentCreationIds,
   stableGatewayDigest,
 } from "./creationUtils.ts";
-import {
-  mcpToolResultError,
-  mcpToolResultJson,
-  type McpToolCallResult,
-} from "./protocol.ts";
+import { mcpToolResultError, mcpToolResultJson, type McpToolCallResult } from "./protocol.ts";
 import {
   AgentGatewayTargetError,
   resolveAgentGatewayTarget,
@@ -57,9 +53,7 @@ import { GatewayToolError, gatewayToolErrorResult } from "./toolRuntime.ts";
 
 const CREATION_REPLAY_WAIT_MS = 60_000;
 
-function interactionModeForGatewayTarget(
-  target: ModelSelection,
-): ProviderInteractionMode {
+function interactionModeForGatewayTarget(target: ModelSelection): ProviderInteractionMode {
   if (target.provider === "opencode" && target.options?.agent === "plan") {
     return "plan";
   }
@@ -74,10 +68,9 @@ interface PullRequestSelector {
 function parsePullRequestSelector(ref: string): PullRequestSelector | null {
   const trimmed = ref.trim();
   const shorthandMatch = /^#(\d+)$/u.exec(trimmed);
-  const urlMatch =
-    /^https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)(?:[/?#].*)?$/iu.exec(
-      trimmed,
-    );
+  const urlMatch = /^https?:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/(\d+)(?:[/?#].*)?$/iu.exec(
+    trimmed,
+  );
   const rawNumber = shorthandMatch?.[1] ?? urlMatch?.[1];
   if (!rawNumber) return null;
   const value = Number(rawNumber);
@@ -124,17 +117,11 @@ export type GatewayCreationContext =
       readonly assertAuthority: () => Effect.Effect<void, GatewayToolError>;
     };
 
-type CreationOperationRecord =
-  AgentGatewayOperationRecord | ExternalMcpOperationRecord;
+type CreationOperationRecord = AgentGatewayOperationRecord | ExternalMcpOperationRecord;
 
 interface CreationOperationStore {
-  readonly getExisting: () => Effect.Effect<
-    CreationOperationRecord | null,
-    Error
-  >;
-  readonly getById: (
-    operationId: string,
-  ) => Effect.Effect<CreationOperationRecord | null, Error>;
+  readonly getExisting: () => Effect.Effect<CreationOperationRecord | null, Error>;
+  readonly getById: (operationId: string) => Effect.Effect<CreationOperationRecord | null, Error>;
   readonly reserve: (input: {
     readonly operationId: string;
     readonly requestId: string;
@@ -144,11 +131,7 @@ interface CreationOperationStore {
     readonly now: string;
   }) => Effect.Effect<
     | {
-        readonly kind:
-          | "reserved"
-          | "replay"
-          | "idempotency_conflict"
-          | "creation_plan_locked";
+        readonly kind: "reserved" | "replay" | "idempotency_conflict" | "creation_plan_locked";
         readonly operation: CreationOperationRecord;
       }
     | {
@@ -199,15 +182,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
     requireThreadShell,
   } = dependencies;
   const lockIndex = yield* Semaphore.make(1);
-  const locks = new Map<
-    string,
-    { readonly lock: Semaphore.Semaphore; users: number }
-  >();
+  const locks = new Map<string, { readonly lock: Semaphore.Semaphore; users: number }>();
 
-  const withCreationPlanLock = <A, E, R>(
-    key: string,
-    effect: Effect.Effect<A, E, R>,
-  ) =>
+  const withCreationPlanLock = <A, E, R>(key: string, effect: Effect.Effect<A, E, R>) =>
     Effect.acquireUseRelease(
       lockIndex.withPermits(1)(
         Effect.gen(function* () {
@@ -226,8 +203,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         lockIndex.withPermits(1)(
           Effect.sync(() => {
             entry.users -= 1;
-            if (entry.users === 0 && locks.get(key) === entry)
-              locks.delete(key);
+            if (entry.users === 0 && locks.get(key) === entry) locks.delete(key);
           }),
         ),
     );
@@ -252,9 +228,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         yield* Effect.sleep(25);
         operation = yield* operationStore
           .getById(operationId)
-          .pipe(
-            Effect.mapError((error) => new ToolInputError(errorText(error))),
-          );
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
       }
       yield* assertAuthority();
       if (operation?.status === "completed") {
@@ -267,9 +241,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             "The original thread-creation operation failed; it will not create replacement threads.",
             {
               operationId,
-              error: operation.errorJson
-                ? JSON.parse(operation.errorJson)
-                : null,
+              error: operation.errorJson ? JSON.parse(operation.errorJson) : null,
             },
           ),
         );
@@ -297,9 +269,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
     return orchestrationEngine
       .dispatch({
         type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe(
-          `agent:${marker}:threads-created-recap`,
-        ),
+        commandId: CommandId.makeUnsafe(`agent:${marker}:threads-created-recap`),
         threadId: ThreadId.makeUnsafe(input.callerThreadId),
         activity: {
           id: EventId.makeUnsafe(`gateway:${marker}:threads-created-recap`),
@@ -321,27 +291,18 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       })
       .pipe(
         Effect.catch((error) =>
-          Effect.logWarning(
-            "agent gateway could not append thread creation recap",
-            {
-              operationId: input.result.operationId,
-              callerThreadId: input.callerThreadId,
-              error: errorText(error),
-            },
-          ),
+          Effect.logWarning("agent gateway could not append thread creation recap", {
+            operationId: input.result.operationId,
+            callerThreadId: input.callerThreadId,
+            error: errorText(error),
+          }),
         ),
       );
   };
 
-  const run = (
-    input: typeof SynaraCreateThreadsInput.Type,
-    context: GatewayCreationContext,
-  ) => {
+  const run = (input: typeof SynaraCreateThreadsInput.Type, context: GatewayCreationContext) => {
     return Effect.gen(function* () {
-      if (
-        context.kind === "provider-session" &&
-        context.callerTurnId === null
-      ) {
+      if (context.kind === "provider-session" && context.callerTurnId === null) {
         return yield* Effect.fail(
           new GatewayToolError(
             "caller_turn_inactive",
@@ -357,8 +318,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           ),
         );
       }
-      const callerTurnId =
-        context.kind === "provider-session" ? context.callerTurnId! : null;
+      const callerTurnId = context.kind === "provider-session" ? context.callerTurnId! : null;
       const caller =
         context.kind === "provider-session"
           ? yield* requireThreadShell(context.callerThreadId)
@@ -366,19 +326,14 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       const operationId = `gateway:create:${stableGatewayDigest({
         principalKind: context.kind,
         principalId:
-          context.kind === "provider-session"
-            ? context.callerThreadId
-            : context.integrationId,
+          context.kind === "provider-session" ? context.callerThreadId : context.integrationId,
         ...(callerTurnId ? { callerTurnId } : {}),
         requestId: input.requestId,
       })}`;
       const fingerprint = stableGatewayDigest(input, 64);
       const externalOperationRepository =
         context.kind === "external-client" ? externalMcpRepository : undefined;
-      if (
-        context.kind === "external-client" &&
-        externalOperationRepository === undefined
-      ) {
+      if (context.kind === "external-client" && externalOperationRepository === undefined) {
         return yield* Effect.fail(
           new GatewayToolError(
             "external_mcp_unavailable",
@@ -406,8 +361,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               markDispatching: operationRepository.markDispatching,
               recordWorktreeCreated: operationRepository.recordWorktreeCreated,
               markCompensating: operationRepository.markCompensating,
-              recordCompensationFailure:
-                operationRepository.recordCompensationFailure,
+              recordCompensationFailure: operationRepository.recordCompensationFailure,
               complete: operationRepository.complete,
               fail: operationRepository.fail,
               registerTask: () => Effect.void,
@@ -426,12 +380,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   integrationId: context.integrationId,
                   requestedCount: 1,
                 }),
-              markDispatching:
-                externalOperationRepository!.markOperationDispatching,
-              recordWorktreeCreated:
-                externalOperationRepository!.recordOperationWorktreeCreated,
-              markCompensating:
-                externalOperationRepository!.markOperationCompensating,
+              markDispatching: externalOperationRepository!.markOperationDispatching,
+              recordWorktreeCreated: externalOperationRepository!.recordOperationWorktreeCreated,
+              markCompensating: externalOperationRepository!.markOperationCompensating,
               recordCompensationFailure:
                 externalOperationRepository!.recordOperationCompensationFailure,
               complete: externalOperationRepository!.completeOperation,
@@ -480,9 +431,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           );
         }
         if (existingOperation.status === "completed") {
-          return mcpToolResultJson(
-            JSON.parse(existingOperation.resultJson ?? "{}"),
-          );
+          return mcpToolResultJson(JSON.parse(existingOperation.resultJson ?? "{}"));
         }
         if (existingOperation.status === "failed") {
           return yield* Effect.fail(
@@ -491,9 +440,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               "The original thread-creation operation failed; it will not create replacement threads.",
               {
                 operationId: existingOperation.operationId,
-                error: existingOperation.errorJson
-                  ? JSON.parse(existingOperation.errorJson)
-                  : null,
+                error: existingOperation.errorJson ? JSON.parse(existingOperation.errorJson) : null,
               },
             ),
           );
@@ -504,9 +451,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           context.assertAuthority,
         );
       }
-      const deprecatedBranchName = input.threads.find(
-        (spec) => spec.branchName !== undefined,
-      );
+      const deprecatedBranchName = input.threads.find((spec) => spec.branchName !== undefined);
       if (deprecatedBranchName) {
         return yield* Effect.fail(
           new ToolInputError(
@@ -519,23 +464,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
       const prepared = yield* Effect.forEach(input.threads, (spec, index) =>
         Effect.gen(function* () {
-          if (
-            context.kind === "external-client" &&
-            spec.projectId === undefined
-          ) {
+          if (context.kind === "external-client" && spec.projectId === undefined) {
             return yield* Effect.fail(
-              new ToolInputError(
-                "External MCP task creation requires an explicit projectId.",
-              ),
+              new ToolInputError("External MCP task creation requires an explicit projectId."),
             );
           }
-          const projectId = ProjectId.makeUnsafe(
-            spec.projectId ?? caller!.projectId,
-          );
-          if (
-            context.kind === "external-client" &&
-            !context.allowedProjectIds.has(projectId)
-          ) {
+          const projectId = ProjectId.makeUnsafe(spec.projectId ?? caller!.projectId);
+          if (context.kind === "external-client" && !context.allowedProjectIds.has(projectId)) {
             return yield* Effect.fail(
               new GatewayToolError(
                 "capability_denied",
@@ -543,42 +478,28 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               ),
             );
           }
-          const project = yield* snapshotQuery
-            .getProjectShellById(projectId)
-            .pipe(
-              Effect.mapError((error) => new ToolInputError(errorText(error))),
-              Effect.flatMap(
-                Option.match({
-                  onNone: () =>
-                    Effect.fail(
-                      new ToolInputError(
-                        `Project "${projectId}" was not found.`,
-                      ),
-                    ),
-                  onSome: Effect.succeed,
-                }),
-              ),
-            );
-          const providerAvailability = providerAvailabilities.get(
-            spec.target.provider,
+          const project = yield* snapshotQuery.getProjectShellById(projectId).pipe(
+            Effect.mapError((error) => new ToolInputError(errorText(error))),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(new ToolInputError(`Project "${projectId}" was not found.`)),
+                onSome: Effect.succeed,
+              }),
+            ),
           );
+          const providerAvailability = providerAvailabilities.get(spec.target.provider);
           const target = yield* resolveAgentGatewayTarget({
             target: spec.target,
             discovery: providerDiscovery,
-            ...(providerAvailability !== undefined
-              ? { availability: providerAvailability }
-              : {}),
+            ...(providerAvailability !== undefined ? { availability: providerAvailability } : {}),
             cwd: project.workspaceRoot,
           });
           const externalPolicy =
             context.kind === "external-client"
               ? resolveExternalMcpRuntimePolicy({
-                  ...(spec.environment
-                    ? { requestedEnvironment: spec.environment }
-                    : {}),
-                  ...(spec.runtimeMode
-                    ? { requestedRuntimeMode: spec.runtimeMode }
-                    : {}),
+                  ...(spec.environment ? { requestedEnvironment: spec.environment } : {}),
+                  ...(spec.runtimeMode ? { requestedRuntimeMode: spec.runtimeMode } : {}),
                   capabilities: context.capabilities,
                 })
               : null;
@@ -596,8 +517,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           const runtimeMode =
             externalPolicy?.runtimeMode ??
             spec.runtimeMode ??
-            (context.kind === "external-client" ||
-            caller!.runtimeMode === "auto"
+            (context.kind === "external-client" || caller!.runtimeMode === "auto"
               ? "approval-required"
               : caller!.runtimeMode);
           if (
@@ -627,21 +547,14 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               );
             }
           }
-          const title =
-            spec.title ?? buildPromptThreadTitleFallback(spec.prompt);
+          const title = spec.title ?? buildPromptThreadTitleFallback(spec.prompt);
           let worktreeRef: string | null = null;
           let copyChangesFrom: string | null = null;
           let plannedWorktreePath: string | null = null;
           if (environment === "worktree") {
-            if (
-              spec.baseRef &&
-              spec.baseBranch &&
-              spec.baseRef !== spec.baseBranch
-            ) {
+            if (spec.baseRef && spec.baseBranch && spec.baseRef !== spec.baseBranch) {
               return yield* Effect.fail(
-                new ToolInputError(
-                  "baseRef and its deprecated baseBranch alias must match.",
-                ),
+                new ToolInputError("baseRef and its deprecated baseBranch alias must match."),
               );
             }
             const requestedRef = spec.baseRef ?? spec.baseBranch ?? "HEAD";
@@ -658,12 +571,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                 ? git.execute({
                     operation: "AgentGateway.resolveWorktreeRef",
                     cwd: sourceCwd,
-                    args: [
-                      "rev-parse",
-                      "--verify",
-                      "--end-of-options",
-                      `${requestedRef}^{commit}`,
-                    ],
+                    args: ["rev-parse", "--verify", "--end-of-options", `${requestedRef}^{commit}`],
                     timeoutMs: 5_000,
                   })
                 : git.withMutation(
@@ -674,8 +582,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                         prNumber: pullRequest.number,
                         ...(pullRequest.repositoryNameWithOwner
                           ? {
-                              expectedRepositoryNameWithOwner:
-                                pullRequest.repositoryNameWithOwner,
+                              expectedRepositoryNameWithOwner: pullRequest.repositoryNameWithOwner,
                             }
                           : {}),
                       })
@@ -709,9 +616,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               })
               .pipe(
                 Effect.map((result) => result.stdout.trim()),
-                Effect.mapError(
-                  (error) => new ToolInputError(errorText(error)),
-                ),
+                Effect.mapError((error) => new ToolInputError(errorText(error))),
               );
             copyChangesFrom = sourceHead === worktreeRef ? sourceCwd : null;
             plannedWorktreePath = join(
@@ -785,19 +690,14 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           const failureMessage = interrupted
             ? "The MCP request was interrupted after thread creation dispatch began."
             : errorText(Cause.squash(cause));
-          yield* operationStore
-            .markCompensating({ operationId, now: gatewayIsoNow() })
-            .pipe(
-              Effect.catch((error) =>
-                Effect.logWarning(
-                  "agent gateway could not persist compensating status",
-                  {
-                    operationId,
-                    error: errorText(error),
-                  },
-                ),
-              ),
-            );
+          yield* operationStore.markCompensating({ operationId, now: gatewayIsoNow() }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("agent gateway could not persist compensating status", {
+                operationId,
+                error: errorText(error),
+              }),
+            ),
+          );
           const compensationErrors: string[] = [];
           let compensatedThreadCount = 0;
           let compensatedWorktreeCount = 0;
@@ -818,9 +718,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   ),
                   Effect.catch((error) =>
                     Effect.sync(() =>
-                      compensationErrors.push(
-                        `thread ${entry.ids.threadId}: ${errorText(error)}`,
-                      ),
+                      compensationErrors.push(`thread ${entry.ids.threadId}: ${errorText(error)}`),
                     ),
                   ),
                 ),
@@ -901,9 +799,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   ),
                   Effect.catch((error) =>
                     Effect.sync(() =>
-                      compensationErrors.push(
-                        `worktree ${worktree.path}: ${errorText(error)}`,
-                      ),
+                      compensationErrors.push(`worktree ${worktree.path}: ${errorText(error)}`),
                     ),
                   ),
                 ),
@@ -915,13 +811,10 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           // briefly admit a replacement while this task may still be running.
           yield* operationStore.markTaskStatus(operationId, "failed").pipe(
             Effect.catch((error) =>
-              Effect.logWarning(
-                "agent gateway could not mark external task failed",
-                {
-                  operationId,
-                  error: errorText(error),
-                },
-              ),
+              Effect.logWarning("agent gateway could not mark external task failed", {
+                operationId,
+                error: errorText(error),
+              }),
             ),
           );
           const failure = {
@@ -941,22 +834,16 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               })
               .pipe(
                 Effect.catch((error) =>
-                  Effect.logWarning(
-                    "agent gateway compensation status could not be persisted",
-                    {
-                      operationId,
-                      error: errorText(error),
-                    },
-                  ),
+                  Effect.logWarning("agent gateway compensation status could not be persisted", {
+                    operationId,
+                    error: errorText(error),
+                  }),
                 ),
               );
-            yield* Effect.logWarning(
-              "agent gateway compensation remains pending",
-              {
-                operationId,
-                errors: compensationErrors,
-              },
-            );
+            yield* Effect.logWarning("agent gateway compensation remains pending", {
+              operationId,
+              errors: compensationErrors,
+            });
             return new GatewayToolError(
               "operation_failed",
               "Synara could not dispatch the exact creation plan and cleanup is still pending. The durable operation remains compensating and will never create replacements.",
@@ -987,13 +874,10 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               })
               .pipe(
                 Effect.catch((error) =>
-                  Effect.logWarning(
-                    "agent gateway fallback status could not be persisted",
-                    {
-                      operationId,
-                      error: errorText(error),
-                    },
-                  ),
+                  Effect.logWarning("agent gateway fallback status could not be persisted", {
+                    operationId,
+                    error: errorText(error),
+                  }),
                 ),
               );
             return new GatewayToolError(
@@ -1037,9 +921,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               ),
               now: gatewayIsoNow(),
             })
-            .pipe(
-              Effect.mapError((error) => new ToolInputError(errorText(error))),
-            );
+            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
 
           if (reservation.kind === "idempotency_conflict") {
             return yield* Effect.fail(
@@ -1072,21 +954,13 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               ),
             );
           }
-          if (
-            reservation.kind === "replay" &&
-            reservation.operation.status === "completed"
-          ) {
+          if (reservation.kind === "replay" && reservation.operation.status === "completed") {
             return {
               kind: "replay" as const,
-              result: mcpToolResultJson(
-                JSON.parse(reservation.operation.resultJson ?? "{}"),
-              ),
+              result: mcpToolResultJson(JSON.parse(reservation.operation.resultJson ?? "{}")),
             };
           }
-          if (
-            reservation.kind === "replay" &&
-            reservation.operation.status === "failed"
-          ) {
+          if (reservation.kind === "replay" && reservation.operation.status === "failed") {
             return yield* Effect.fail(
               new GatewayToolError(
                 "operation_failed",
@@ -1100,36 +974,23 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               ),
             );
           }
-          if (
-            reservation.kind === "replay" &&
-            reservation.operation.status !== "reserved"
-          ) {
+          if (reservation.kind === "replay" && reservation.operation.status !== "reserved") {
             return {
               kind: "replay" as const,
               result: yield* restore(
-                awaitCreationReplay(
-                  operationStore,
-                  operationId,
-                  context.assertAuthority,
-                ),
+                awaitCreationReplay(operationStore, operationId, context.assertAuthority),
               ),
             };
           }
 
           const claimed = yield* operationStore
             .markDispatching({ operationId, now: gatewayIsoNow() })
-            .pipe(
-              Effect.mapError((error) => new ToolInputError(errorText(error))),
-            );
+            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
           if (!claimed) {
             return {
               kind: "replay" as const,
               result: yield* restore(
-                awaitCreationReplay(
-                  operationStore,
-                  operationId,
-                  context.assertAuthority,
-                ),
+                awaitCreationReplay(operationStore, operationId, context.assertAuthority),
               ),
             };
           }
@@ -1158,45 +1019,35 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                   let worktreePath: string | null = null;
                   let associatedWorktreeRef: string | null = null;
                   if (entry.environment === "worktree") {
-                    const { created, trackedWorktree } =
-                      yield* Effect.uninterruptible(
-                        Effect.gen(function* () {
-                          const created = yield* git.createDetachedWorktree({
-                            cwd: entry.workspaceRoot,
-                            ref: entry.worktreeRef!,
-                            path: entry.plannedWorktreePath,
-                            ...(entry.newBranch
-                              ? { newBranch: entry.newBranch }
-                              : {}),
-                            ...(entry.copyChangesFrom
-                              ? { copyChangesFrom: entry.copyChangesFrom }
-                              : {}),
-                          });
-                          const trackedWorktree = {
-                            cwd: entry.workspaceRoot,
-                            path: created.worktree.path,
-                            branch: created.worktree.branch,
-                            proof:
-                              null as (typeof createdWorktrees)[number]["proof"],
-                          };
-                          createdWorktrees.push(trackedWorktree);
-                          return { created, trackedWorktree };
-                        }),
-                      );
+                    const { created, trackedWorktree } = yield* Effect.uninterruptible(
+                      Effect.gen(function* () {
+                        const created = yield* git.createDetachedWorktree({
+                          cwd: entry.workspaceRoot,
+                          ref: entry.worktreeRef!,
+                          path: entry.plannedWorktreePath,
+                          ...(entry.newBranch ? { newBranch: entry.newBranch } : {}),
+                          ...(entry.copyChangesFrom
+                            ? { copyChangesFrom: entry.copyChangesFrom }
+                            : {}),
+                        });
+                        const trackedWorktree = {
+                          cwd: entry.workspaceRoot,
+                          path: created.worktree.path,
+                          branch: created.worktree.branch,
+                          proof: null as (typeof createdWorktrees)[number]["proof"],
+                        };
+                        createdWorktrees.push(trackedWorktree);
+                        return { created, trackedWorktree };
+                      }),
+                    );
                     // The setup script can run for minutes, so it must stay
                     // interruptible: the abort signal kills the child process and
                     // the tracked, still-ownerless worktree is compensated away.
                     yield* Effect.tryPromise({
                       try: (signal) =>
-                        runWorktreeSetupScript(
-                          entry.projectScripts,
-                          trackedWorktree.path,
-                          signal,
-                        ),
+                        runWorktreeSetupScript(entry.projectScripts, trackedWorktree.path, signal),
                       catch: (cause) =>
-                        new Error(
-                          `Worktree setup script failed: ${errorText(cause)}`,
-                        ),
+                        new Error(`Worktree setup script failed: ${errorText(cause)}`),
                     });
                     yield* Effect.uninterruptible(
                       Effect.gen(function* () {
@@ -1206,21 +1057,18 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                           token: randomUUID(),
                         });
                         trackedWorktree.proof = proof;
-                        const ownershipRecorded =
-                          yield* operationStore.recordWorktreeCreated({
-                            operationId,
-                            index: entry.index,
-                            workspaceRoot: entry.workspaceRoot,
-                            path: trackedWorktree.path,
-                            branch: trackedWorktree.branch,
-                            token: proof.token,
-                            gitDir: proof.gitDir,
-                            head: proof.head,
-                            ...(proof.stateHash
-                              ? { stateHash: proof.stateHash }
-                              : {}),
-                            now: gatewayIsoNow(),
-                          });
+                        const ownershipRecorded = yield* operationStore.recordWorktreeCreated({
+                          operationId,
+                          index: entry.index,
+                          workspaceRoot: entry.workspaceRoot,
+                          path: trackedWorktree.path,
+                          branch: trackedWorktree.branch,
+                          token: proof.token,
+                          gitDir: proof.gitDir,
+                          head: proof.head,
+                          ...(proof.stateHash ? { stateHash: proof.stateHash } : {}),
+                          now: gatewayIsoNow(),
+                        });
                         if (!ownershipRecorded) {
                           return yield* Effect.fail(
                             new Error(
@@ -1235,9 +1083,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                     associatedWorktreeRef = created.worktree.ref;
                   }
 
-                  const interactionMode = interactionModeForGatewayTarget(
-                    entry.target,
-                  );
+                  const interactionMode = interactionModeForGatewayTarget(entry.target);
                   yield* context.assertAuthority();
                   yield* orchestrationEngine
                     .dispatch({
@@ -1253,14 +1099,10 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       branch,
                       worktreePath,
                       creationSource:
-                        context.kind === "external-client"
-                          ? "external_mcp"
-                          : "synara_mcp",
+                        context.kind === "external-client" ? "external_mcp" : "synara_mcp",
                       ...(context.kind === "provider-session"
                         ? {
-                            sourceThreadId: ThreadId.makeUnsafe(
-                              context.callerThreadId,
-                            ),
+                            sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
                             sourceTurnId: TurnId.makeUnsafe(callerTurnId!),
                           }
                         : {}),
@@ -1276,9 +1118,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       createdAt: gatewayIsoNow(),
                     })
                     .pipe(
-                      Effect.tap(() =>
-                        Effect.sync(() => createdThreads.push(entry)),
-                      ),
+                      Effect.tap(() => Effect.sync(() => createdThreads.push(entry))),
                       Effect.uninterruptible,
                     );
 
@@ -1383,8 +1223,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         ),
       Effect.catch((error) =>
         Effect.succeed(
-          error instanceof GatewayToolError ||
-            error instanceof AgentGatewayTargetError
+          error instanceof GatewayToolError || error instanceof AgentGatewayTargetError
             ? gatewayToolErrorResult(error)
             : mcpToolResultError(errorText(error)),
         ),

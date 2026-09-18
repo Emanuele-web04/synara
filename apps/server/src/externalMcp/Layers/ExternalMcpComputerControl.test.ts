@@ -52,9 +52,7 @@ function projectShell(workspaceRoot: string): OrchestrationProjectShell {
   };
 }
 
-function emptyThreadDetail(
-  shell: OrchestrationThreadShell,
-): OrchestrationThread {
+function emptyThreadDetail(shell: OrchestrationThreadShell): OrchestrationThread {
   return {
     ...shell,
     deletedAt: null,
@@ -91,9 +89,7 @@ afterEach(() => {
 
 describe("external MCP computer control scope", () => {
   it("requires the computer:control capability and forwards enableComputerControl to the turn", async () => {
-    const baseDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "synara-external-cc-"),
-    );
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-external-cc-"));
     temporaryDirectories.push(baseDir);
     const workspaceRoot = path.join(baseDir, "project");
     const worktreesDir = path.join(baseDir, "worktrees");
@@ -114,9 +110,7 @@ describe("external MCP computer control scope", () => {
           updatedAt: NOW,
         }),
       getProjectShellById: (projectId: string) =>
-        Effect.succeed(
-          projectId === PROJECT_ID ? Option.some(project) : Option.none(),
-        ),
+        Effect.succeed(projectId === PROJECT_ID ? Option.some(project) : Option.none()),
       getThreadShellById: (threadId: string) =>
         Effect.succeed(Option.fromNullishOr(threads.get(threadId))),
       getThreadDetailById: (threadId: string) =>
@@ -139,8 +133,7 @@ describe("external MCP computer control scope", () => {
               branch: command.branch,
               worktreePath: command.worktreePath,
               associatedWorktreePath: command.associatedWorktreePath ?? null,
-              associatedWorktreeBranch:
-                command.associatedWorktreeBranch ?? null,
+              associatedWorktreeBranch: command.associatedWorktreeBranch ?? null,
               associatedWorktreeRef: command.associatedWorktreeRef ?? null,
               createBranchFlowCompleted: false,
               isPinned: false,
@@ -167,8 +160,7 @@ describe("external MCP computer control scope", () => {
           }
           if (command.type === "thread.turn.start") {
             const prior = threads.get(command.threadId);
-            if (!prior)
-              throw new Error("Turn dispatched before thread creation.");
+            if (!prior) throw new Error("Turn dispatched before thread creation.");
             threads.set(command.threadId, {
               ...prior,
               latestTurn: {
@@ -188,10 +180,7 @@ describe("external MCP computer control scope", () => {
     } as never);
 
     const gitLayer = Layer.succeed(GitCore, {
-      withMutation: (
-        _cwd: string,
-        effect: Effect.Effect<unknown, unknown, unknown>,
-      ) => effect,
+      withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
       execute: () =>
         Effect.succeed({
           code: 0,
@@ -221,10 +210,8 @@ describe("external MCP computer control scope", () => {
           branch: input.branch,
           head: "0123456789abcdef0123456789abcdef01234567",
         }),
-      listBranches: () =>
-        Effect.succeed({ isRepo: true, hasOriginRemote: false, branches: [] }),
-      verifyWorktreeOwnership: () =>
-        Effect.succeed({ verified: true, reason: null }),
+      listBranches: () => Effect.succeed({ isRepo: true, hasOriginRemote: false, branches: [] }),
+      verifyWorktreeOwnership: () => Effect.succeed({ verified: true, reason: null }),
       removeWorktree: () => Effect.void,
       deleteBranchIfUnchanged: () => Effect.void,
     } as never);
@@ -232,8 +219,7 @@ describe("external MCP computer control scope", () => {
     const providerDiscoveryLayer = Layer.succeed(ProviderDiscoveryService, {
       listModels: ({ provider }: { readonly provider: string }) =>
         Effect.succeed({
-          models:
-            provider === "codex" ? [{ slug: "gpt-5.5", name: "GPT-5.5" }] : [],
+          models: provider === "codex" ? [{ slug: "gpt-5.5", name: "GPT-5.5" }] : [],
           source: "test",
         }),
     } as never);
@@ -286,11 +272,7 @@ describe("external MCP computer control scope", () => {
       Layer.provide(operationLayer),
       Layer.provide(configLayer),
     );
-    const testLayer = Layer.mergeAll(
-      gatewayLayer,
-      serviceLayer,
-      SqlitePersistenceMemory,
-    );
+    const testLayer = Layer.mergeAll(gatewayLayer, serviceLayer, SqlitePersistenceMemory);
 
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -309,12 +291,7 @@ describe("external MCP computer control scope", () => {
         const plain = yield* service.createIntegration({
           name: "No computer scope",
           projectIds: [PROJECT_ID],
-          capabilities: [
-            "projects:read",
-            "tasks:create",
-            "tasks:wait",
-            "tasks:read",
-          ],
+          capabilities: ["projects:read", "tasks:create", "tasks:wait", "tasks:read"],
           expiresInDays: 30,
         });
         yield* service.pair(plain.pairingCode, "syn_mcp_v1_cc-plain-secret");
@@ -333,9 +310,7 @@ describe("external MCP computer control scope", () => {
         );
         expect(JSON.stringify(denied.body)).toContain("capability_denied");
         expect(JSON.stringify(denied.body)).toContain("computer:control");
-        expect(
-          dispatched.filter((c) => c.type === "thread.turn.start"),
-        ).toHaveLength(0);
+        expect(dispatched.filter((c) => c.type === "thread.turn.start")).toHaveLength(0);
 
         // Same integration without the field still works.
         const allowedPlain = yield* callTool(
@@ -350,12 +325,8 @@ describe("external MCP computer control scope", () => {
             prompt: "plain task",
           },
         );
-        expect(JSON.stringify(allowedPlain.body)).not.toContain(
-          "capability_denied",
-        );
-        const plainTurn = dispatched.find(
-          (c) => c.type === "thread.turn.start",
-        );
+        expect(JSON.stringify(allowedPlain.body)).not.toContain("capability_denied");
+        const plainTurn = dispatched.find((c) => c.type === "thread.turn.start");
         expect(
           plainTurn && "enableComputerControl" in plainTurn
             ? plainTurn.enableComputerControl

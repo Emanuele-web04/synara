@@ -21,7 +21,7 @@ Agent `type_text` (`delivery_mode:"background"`, element-scoped) fired while
 the human simulator was mid-stream:
 
 - Agent: `delivered_count:27` ("||CONCURRENT-AGENT-STREAM||"), `effect:
-  confirmed`, `route: accessibility`, wall 2539 ms — inside the 6 s human
+confirmed`, `route: accessibility`, wall 2539 ms — inside the 6 s human
   typing window.
 - Human sim: 51 keystrokes completed during the overlap.
 

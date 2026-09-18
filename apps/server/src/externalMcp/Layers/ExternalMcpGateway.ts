@@ -107,22 +107,14 @@ export function filterExternalMcpTools(
   return filterToolsByCapability(tools, capabilities);
 }
 
-const decodeExternalCreateTask = Schema.decodeUnknownEffect(
-  ExternalMcpCreateTaskInput,
-);
-const decodeExternalReadTask = Schema.decodeUnknownEffect(
-  ExternalMcpReadTaskInput,
-);
-const decodeExternalWaitTask = Schema.decodeUnknownEffect(
-  ExternalMcpWaitTaskInput,
-);
+const decodeExternalCreateTask = Schema.decodeUnknownEffect(ExternalMcpCreateTaskInput);
+const decodeExternalReadTask = Schema.decodeUnknownEffect(ExternalMcpReadTaskInput);
+const decodeExternalWaitTask = Schema.decodeUnknownEffect(ExternalMcpWaitTaskInput);
 
 function externalErrorResult(error: unknown) {
   if (error instanceof GatewayToolError) return gatewayToolErrorResult(error);
   if (error instanceof ExternalMcpError) {
-    return gatewayToolErrorResult(
-      new GatewayToolError(error.code, error.message),
-    );
+    return gatewayToolErrorResult(new GatewayToolError(error.code, error.message));
   }
   return mcpToolResultError(errorText(error));
 }
@@ -135,28 +127,21 @@ function readAuditMetadata(tool: string, args: Record<string, unknown>) {
     requestId: stringOrNull("requestId"),
     projectId: stringOrNull("projectId"),
     runtimeMode:
-      stringOrNull("runtimeMode") ??
-      (tool === "synara_create_task" ? "approval-required" : null),
-    environment:
-      stringOrNull("environment") ??
-      (tool === "synara_create_task" ? "worktree" : null),
+      stringOrNull("runtimeMode") ?? (tool === "synara_create_task" ? "approval-required" : null),
+    environment: stringOrNull("environment") ?? (tool === "synara_create_task" ? "worktree" : null),
   };
 }
 
 function createdThreadIds(result: McpToolCallResult) {
   try {
     const content = result.content[0];
-    const payload = JSON.parse(
-      content?.type === "text" ? content.text : "{}",
-    ) as {
+    const payload = JSON.parse(content?.type === "text" ? content.text : "{}") as {
       readonly threadId?: unknown;
       readonly threadIds?: unknown;
     };
     if (typeof payload.threadId === "string") return [payload.threadId];
     if (Array.isArray(payload.threadIds)) {
-      return payload.threadIds.filter(
-        (value): value is string => typeof value === "string",
-      );
+      return payload.threadIds.filter((value): value is string => typeof value === "string");
     }
   } catch {
     // Audit extraction is deliberately best-effort and never stores prompt text.
@@ -181,8 +166,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     operationRepository: {
       listNonTerminal: externalRepository.listNonTerminalOperations,
       markCompensating: externalRepository.markOperationCompensating,
-      recordCompensationFailure:
-        externalRepository.recordOperationCompensationFailure,
+      recordCompensationFailure: externalRepository.recordOperationCompensationFailure,
       fail: externalRepository.failOperationAndTask,
     },
     creationSource: "external_mcp",
@@ -225,10 +209,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       Effect.mapError((cause) => new ToolInputError(errorText(cause))),
       Effect.flatMap(
         Option.match({
-          onNone: () =>
-            Effect.fail(
-              new ToolInputError(`Thread "${threadId}" was not found.`),
-            ),
+          onNone: () => Effect.fail(new ToolInputError(`Thread "${threadId}" was not found.`)),
           onSome: Effect.succeed,
         }),
       ),
@@ -265,10 +246,8 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     },
     handler: (args, context) =>
       Effect.gen(function* () {
-        const projectId =
-          typeof args.projectId === "string" ? args.projectId : "";
-        if (!projectId)
-          throw new ToolInputError('Missing required argument "projectId".');
+        const projectId = typeof args.projectId === "string" ? args.projectId : "";
+        if (!projectId) throw new ToolInputError('Missing required argument "projectId".');
         yield* externalMcp.assertProject(context.client, projectId);
         const project = yield* snapshotQuery
           .getProjectShellById(ProjectId.makeUnsafe(projectId))
@@ -276,9 +255,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             Effect.flatMap(
               Option.match({
                 onNone: () =>
-                  Effect.fail(
-                    new ToolInputError(`Project "${projectId}" was not found.`),
-                  ),
+                  Effect.fail(new ToolInputError(`Project "${projectId}" was not found.`)),
                 onSome: Effect.succeed,
               }),
             ),
@@ -322,17 +299,14 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             concurrentAgentTasks: context.client.integration.concurrencyLimit,
           },
         });
-      }).pipe(
-        Effect.catch((error) => Effect.succeed(externalErrorResult(error))),
-      ),
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
   };
 
   const projectsTool: ExternalTool = {
     requiredCapability: "projects:read",
     definition: {
       name: "synara_list_allowed_projects",
-      description:
-        "List only the Synara projects explicitly granted to this integration.",
+      description: "List only the Synara projects explicitly granted to this integration.",
       inputSchema: {
         type: "object",
         properties: {},
@@ -348,9 +322,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         Effect.map((snapshot) =>
           mcpToolResultJson({
             projects: snapshot.projects
-              .filter((project) =>
-                context.client.allowedProjectIds.has(project.id),
-              )
+              .filter((project) => context.client.allowedProjectIds.has(project.id))
               .map((project) => ({
                 projectId: project.id,
                 title: project.title,
@@ -381,17 +353,14 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         // Thread titles are metadata about tasks the integration did not
         // create, so they stay behind the explicit tasks:read-project scope;
         // counts alone are safe under projects:read.
-        const includeThreadMetadata =
-          context.client.capabilities.has("tasks:read-project");
+        const includeThreadMetadata = context.client.capabilities.has("tasks:read-project");
         const projects = buildExternalMcpOverviewProjects({
           projects: snapshot.projects,
           threads: snapshot.threads,
           allowedProjectIds: context.client.allowedProjectIds,
           includeThreadMetadata,
         });
-        const nextSteps = buildExternalMcpOverviewNextSteps(
-          context.client.capabilities,
-        );
+        const nextSteps = buildExternalMcpOverviewNextSteps(context.client.capabilities);
         return mcpToolResultJson({
           integration: {
             integrationId: context.client.integration.integrationId,
@@ -417,9 +386,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           },
           nextSteps,
         });
-      }).pipe(
-        Effect.catch((error) => Effect.succeed(externalErrorResult(error))),
-      ),
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
   };
 
   const createTaskTool: ExternalTool = {
@@ -470,10 +437,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           Effect.mapError((cause) => new ToolInputError(errorText(cause))),
         );
         yield* externalMcp.assertProject(context.client, input.projectId);
-        if (
-          input.environment === "local" &&
-          !context.client.capabilities.has("runtime:local")
-        ) {
+        if (input.environment === "local" && !context.client.capabilities.has("runtime:local")) {
           return yield* Effect.fail(
             new GatewayToolError(
               "capability_denied",
@@ -516,16 +480,10 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
                   model: input.model,
                   ...(input.options ? { options: input.options } : {}),
                 },
-                ...(input.environment
-                  ? { environment: input.environment }
-                  : {}),
-                ...(input.runtimeMode
-                  ? { runtimeMode: input.runtimeMode }
-                  : {}),
+                ...(input.environment ? { environment: input.environment } : {}),
+                ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
                 ...(input.baseRef ? { baseRef: input.baseRef } : {}),
-                ...(input.enableComputerControl === true
-                  ? { enableComputerControl: true }
-                  : {}),
+                ...(input.enableComputerControl === true ? { enableComputerControl: true } : {}),
               },
             ],
           }),
@@ -537,9 +495,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             assertAuthority: context.assertActive,
           },
         );
-      }).pipe(
-        Effect.catch((error) => Effect.succeed(externalErrorResult(error))),
-      ),
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
   };
 
   const readTaskTool: ExternalTool = {
@@ -597,21 +553,15 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           Effect.mapError((cause) => new ToolInputError(errorText(cause))),
         );
         yield* externalMcp.assertTaskRead(context.client, input.threadId);
-        const detail = yield* snapshotQuery
-          .getThreadDetailById(input.threadId)
-          .pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () =>
-                  Effect.fail(
-                    new ToolInputError(
-                      `Thread "${input.threadId}" was not found.`,
-                    ),
-                  ),
-                onSome: Effect.succeed,
-              }),
-            ),
-          );
+        const detail = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(new ToolInputError(`Thread "${input.threadId}" was not found.`)),
+              onSome: Effect.succeed,
+            }),
+          ),
+        );
         return mcpToolResultJson(
           summarizeThreadDetail({
             thread: detail,
@@ -624,9 +574,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             messageVersion: input.messageVersion,
           }),
         );
-      }).pipe(
-        Effect.catch((error) => Effect.succeed(externalErrorResult(error))),
-      ),
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
   };
 
   const waitTaskTool: ExternalTool = {
@@ -661,21 +609,9 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         );
         yield* externalMcp.assertTaskRead(context.client, input.threadId);
         const initial = yield* requireThreadShell(input.threadId);
-        const runId = requestedExternalMcpRunId(
-          input,
-          initial.latestTurn?.turnId ?? null,
-        );
-        const terminalSessionState = terminalExternalMcpSessionStateForRun(
-          initial,
-          runId,
-        );
-        const initialState:
-          | "idle"
-          | "pending"
-          | "running"
-          | "completed"
-          | "error"
-          | "interrupted" =
+        const runId = requestedExternalMcpRunId(input, initial.latestTurn?.turnId ?? null);
+        const terminalSessionState = terminalExternalMcpSessionStateForRun(initial, runId);
+        const initialState: "idle" | "pending" | "running" | "completed" | "error" | "interrupted" =
           terminalSessionState !== null
             ? terminalSessionState
             : runId === null
@@ -691,43 +627,30 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           assertActive: context.assertActive,
           projectionTurns,
           resolveLatestTurn: () =>
-            requireThreadShell(input.threadId).pipe(
-              Effect.map(latestExternalMcpWaitState),
-            ),
+            requireThreadShell(input.threadId).pipe(Effect.map(latestExternalMcpWaitState)),
         });
         let summary: string | null = null;
         let summaryTruncated = false;
         let failure: string | null = null;
         if (waited.terminal) {
-          const detail = yield* snapshotQuery
-            .getThreadDetailById(input.threadId)
-            .pipe(
-              Effect.flatMap(
-                Option.match({
-                  onNone: () =>
-                    Effect.fail(
-                      new ToolInputError(
-                        `Thread "${input.threadId}" was not found.`,
-                      ),
-                    ),
-                  onSome: Effect.succeed,
-                }),
-              ),
-            );
+          const detail = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(new ToolInputError(`Thread "${input.threadId}" was not found.`)),
+                onSome: Effect.succeed,
+              }),
+            ),
+          );
           const assistant = waited.runId
             ? detail.messages.findLast(
-                (message) =>
-                  message.role === "assistant" &&
-                  message.turnId === waited.runId,
+                (message) => message.role === "assistant" && message.turnId === waited.runId,
               )
             : undefined;
           const summarized = summarizeWaitThreadText(assistant?.text);
           summary = summarized.summary;
           summaryTruncated = summarized.truncated;
-          failure =
-            waited.state === "error"
-              ? (detail.session?.lastError ?? "Turn failed.")
-              : null;
+          failure = waited.state === "error" ? (detail.session?.lastError ?? "Turn failed.") : null;
         }
         yield* context.assertActive();
         return mcpToolResultJson({
@@ -744,9 +667,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             arguments: { threadId: input.threadId },
           },
         });
-      }).pipe(
-        Effect.catch((error) => Effect.succeed(externalErrorResult(error))),
-      ),
+      }).pipe(Effect.catch((error) => Effect.succeed(externalErrorResult(error)))),
   };
 
   const tools: ReadonlyArray<ExternalTool> = [
@@ -757,17 +678,13 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     waitTaskTool,
     readTaskTool,
   ];
-  const toolsByName = new Map(
-    tools.map((tool) => [tool.definition.name, tool]),
-  );
+  const toolsByName = new Map(tools.map((tool) => [tool.definition.name, tool]));
 
   const handleRequest = (
     request: JsonRpcRequest,
     client: ExternalMcpVerifiedClient,
   ): Effect.Effect<Record<string, unknown>> => {
-    const auditCompletion = makeExternalMcpAuditCompletion(
-      externalMcp.finishAudit,
-    );
+    const auditCompletion = makeExternalMcpAuditCompletion(externalMcp.finishAudit);
 
     return Effect.gen(function* () {
       yield* externalMcp.assertActive(client.integration.integrationId);
@@ -784,9 +701,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       if (request.method === "ping") return jsonRpcResult(request.id, {});
       if (request.method === "tools/list") {
         return jsonRpcResult(request.id, {
-          tools: filterExternalMcpTools(tools, client.capabilities).map(
-            (tool) => tool.definition,
-          ),
+          tools: filterExternalMcpTools(tools, client.capabilities).map((tool) => tool.definition),
         });
       }
       if (request.method !== "tools/call") {
@@ -798,17 +713,11 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       }
       const toolName = request.params.name;
       if (typeof toolName !== "string") {
-        return jsonRpcError(
-          request.id,
-          JSON_RPC_INVALID_PARAMS,
-          "Missing tool name.",
-        );
+        return jsonRpcError(request.id, JSON_RPC_INVALID_PARAMS, "Missing tool name.");
       }
       const rawArgs = request.params.arguments;
       const args =
-        typeof rawArgs === "object" &&
-        rawArgs !== null &&
-        !Array.isArray(rawArgs)
+        typeof rawArgs === "object" && rawArgs !== null && !Array.isArray(rawArgs)
           ? (rawArgs as Record<string, unknown>)
           : {};
       const auditId = yield* externalMcp
@@ -821,9 +730,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
                   new GatewayToolError(
                     auditError.code,
                     auditError.message,
-                    auditError.status === 429
-                      ? { retryAfterMs: 1_000 }
-                      : undefined,
+                    auditError.status === 429 ? { retryAfterMs: 1_000 } : undefined,
                   ),
                 ),
               ),
@@ -842,11 +749,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           outcome: "error",
           detail: "Unknown external MCP tool.",
         });
-        return jsonRpcError(
-          request.id,
-          JSON_RPC_INVALID_PARAMS,
-          `Unknown tool "${toolName}".`,
-        );
+        return jsonRpcError(request.id, JSON_RPC_INVALID_PARAMS, `Unknown tool "${toolName}".`);
       }
       if (!client.capabilities.has(tool.requiredCapability)) {
         yield* auditCompletion.complete({
@@ -867,11 +770,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       const assertActive = () =>
         externalMcp
           .assertActive(client.integration.integrationId)
-          .pipe(
-            Effect.mapError(
-              (error) => new GatewayToolError(error.code, error.message),
-            ),
-          );
+          .pipe(Effect.mapError((error) => new GatewayToolError(error.code, error.message)));
       const context: ExternalToolContext = {
         principal: {
           kind: "external-client",
@@ -882,21 +781,14 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
         jsonRpcRequestId: request.id,
         assertActive,
       };
-      const result = yield* Effect.suspend(() =>
-        tool.handler(args, context),
-      ).pipe(
-        Effect.catchDefect((defect) =>
-          Effect.succeed(mcpToolResultError(errorText(defect))),
-        ),
+      const result = yield* Effect.suspend(() => tool.handler(args, context)).pipe(
+        Effect.catchDefect((defect) => Effect.succeed(mcpToolResultError(errorText(defect)))),
       );
       yield* auditCompletion.complete({
         auditId,
         outcome: result.isError ? "error" : "success",
-        createdTaskIds:
-          toolName === "synara_create_task" ? createdThreadIds(result) : [],
-        ...(result.isError
-          ? { detail: "Tool call returned an MCP error." }
-          : {}),
+        createdTaskIds: toolName === "synara_create_task" ? createdThreadIds(result) : [],
+        ...(result.isError ? { detail: "Tool call returned an MCP error." } : {}),
       });
       return jsonRpcResult(request.id, result);
     }).pipe(
@@ -907,17 +799,12 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
     );
   };
 
-  const handleVerifiedPost: ExternalMcpGatewayShape["handleVerifiedPost"] = (
-    requestInput,
-  ) =>
+  const handleVerifiedPost: ExternalMcpGatewayShape["handleVerifiedPost"] = (requestInput) =>
     Effect.gen(function* () {
       const rawMessages = Array.isArray(requestInput.body)
         ? requestInput.body
         : [requestInput.body];
-      if (
-        rawMessages.length === 0 ||
-        rawMessages.length > MCP_MAX_BATCH_MESSAGES
-      ) {
+      if (rawMessages.length === 0 || rawMessages.length > MCP_MAX_BATCH_MESSAGES) {
         return {
           status: 400,
           body: jsonRpcError(
@@ -946,16 +833,10 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
             };
           }
           ids.add(idKey);
-          responses.push(
-            yield* handleRequest(parsed.request, requestInput.client),
-          );
+          responses.push(yield* handleRequest(parsed.request, requestInput.client));
         } else if (parsed.kind === "invalid") {
           responses.push(
-            jsonRpcError(
-              parsed.id,
-              JSON_RPC_INVALID_REQUEST,
-              "Invalid JSON-RPC message.",
-            ),
+            jsonRpcError(parsed.id, JSON_RPC_INVALID_REQUEST, "Invalid JSON-RPC message."),
           );
         }
       }
@@ -979,10 +860,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
           ),
         };
       }
-      const verification = yield* verifyExternalMcpTransportCredential(
-        externalMcp,
-        token,
-      );
+      const verification = yield* verifyExternalMcpTransportCredential(externalMcp, token);
       if (verification.kind === "invalid") {
         return {
           status: 401,
@@ -1012,7 +890,4 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
   return { handlePost, handleVerifiedPost } satisfies ExternalMcpGatewayShape;
 });
 
-export const ExternalMcpGatewayLive = Layer.effect(
-  ExternalMcpGateway,
-  makeExternalMcpGateway,
-);
+export const ExternalMcpGatewayLive = Layer.effect(ExternalMcpGateway, makeExternalMcpGateway);

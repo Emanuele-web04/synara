@@ -12,8 +12,7 @@ export interface ExternalMcpClientConfiguration {
   readonly instruction: string;
 }
 
-export type ExternalMcpSetupAction =
-  "resume-pairing" | "revoke" | "done" | null;
+export type ExternalMcpSetupAction = "resume-pairing" | "revoke" | "done" | null;
 
 export function externalMcpSetupAction(input: {
   readonly revoked: boolean;
@@ -60,22 +59,14 @@ export function buildExternalMcpClientConfiguration(
   platform = "",
 ): ExternalMcpClientConfiguration {
   if (client === "codex") {
-    const environment = Object.entries(stdio.env ?? {}).flatMap(
-      ([key, value]) => ["--env", `${key}=${value}`],
-    );
+    const environment = Object.entries(stdio.env ?? {}).flatMap(([key, value]) => [
+      "--env",
+      `${key}=${value}`,
+    ]);
     return {
       format: "command",
       value: shellCommand(
-        [
-          "codex",
-          "mcp",
-          "add",
-          "synara",
-          ...environment,
-          "--",
-          stdio.command,
-          ...stdio.args,
-        ],
+        ["codex", "mcp", "add", "synara", ...environment, "--", stdio.command, ...stdio.args],
         platform,
       ),
       copyLabel: "Copy Codex command",
@@ -86,9 +77,10 @@ export function buildExternalMcpClientConfiguration(
   }
 
   if (client === "claudeCode") {
-    const environment = Object.entries(stdio.env ?? {}).flatMap(
-      ([key, value]) => ["-e", `${key}=${value}`],
-    );
+    const environment = Object.entries(stdio.env ?? {}).flatMap(([key, value]) => [
+      "-e",
+      `${key}=${value}`,
+    ]);
     return {
       format: "command",
       value: shellCommand(
@@ -124,9 +116,7 @@ export function buildExternalMcpClientConfiguration(
   };
 }
 
-export function buildExternalMcpExamplePrompt(
-  projectTitle: string | null,
-): string {
+export function buildExternalMcpExamplePrompt(projectTitle: string | null): string {
   return [
     projectTitle === null
       ? "Use Synara to create a new task: call synara_overview first, pick the most relevant project, and tell me which one you chose."
@@ -148,16 +138,8 @@ export function buildExternalMcpSetupPrompt(input: {
   readonly platform?: string;
 }): string {
   const platform = input.platform ?? "";
-  const codex = buildExternalMcpClientConfiguration(
-    "codex",
-    input.stdio,
-    platform,
-  );
-  const claude = buildExternalMcpClientConfiguration(
-    "claudeCode",
-    input.stdio,
-    platform,
-  );
+  const codex = buildExternalMcpClientConfiguration("codex", input.stdio, platform);
+  const claude = buildExternalMcpClientConfiguration("claudeCode", input.stdio, platform);
   const sections: string[] = [
     "Connect this coding agent to Synara via MCP. Complete every step yourself, in order, and report what happened.",
   ];
@@ -170,9 +152,7 @@ export function buildExternalMcpSetupPrompt(input: {
       ].join("\n"),
     );
   } else {
-    sections.push(
-      "Step 1 — Pairing is already completed on this computer. Skip it.",
-    );
+    sections.push("Step 1 — Pairing is already completed on this computer. Skip it.");
   }
   sections.push(
     [
@@ -192,8 +172,7 @@ export function describeExternalMcpProjects(input: {
   readonly projectScope?: ExternalMcpProjectScope | undefined;
   readonly allowedProjects: ReadonlyArray<{ readonly title: string }>;
 }): string {
-  if (input.projectScope === "all")
-    return "All projects, including future ones";
+  if (input.projectScope === "all") return "All projects, including future ones";
   const titles = input.allowedProjects.map((project) => project.title);
   return titles.length > 0 ? titles.join(", ") : "No projects";
 }
