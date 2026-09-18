@@ -17,6 +17,10 @@
  *   concurrent-writes       three windows, Promise.all set_value, all confirmed
  *   operator-typing         keystrokes into the front app while agent writes a
  *                           hidden doc — no cross-contamination either way
+ *   hidden-launch-default   ComputerManager.launchApp with no options lands
+ *                           the window off-screen (invisible-workspace seam)
+ *   chromium-semantic       real Chrome: hidden launch + re-hide + driver-
+ *                           enabled AX tree + omnibox set_value + readback
  *   space-roundtrip         SLSManagedDisplaySetCurrentSpace switch→act→back
  *                           (skipped with `skipped-single-desktop` when only
  *                           one managed desktop space exists)
@@ -24,8 +28,12 @@
  *   screenshot-fresh        get_window_state include_screenshot returns fresh
  *                           geometry+PNG bytes
  *   stale-token             forged element_token refuses `stale_element_token`
- *   cancellation            long type_text cancelled mid-flight; honest effect
  *   verify-state            verify_state tri-state on a known value
+ *   masked-activation       shield panel verified via all-layer CGWindowList
+ *                           through a real activation + semantic write
+ *   escape-kill-switch      synthetic-Escape immunity + host latch + refusal
+ *                           + explicit rearm (physical key unverified on VM)
+ *   cancellation            long type_text cancelled mid-flight; honest effect
  *   focus-invariant         probe: zero theft fields off baseline across run
  *
  * Requirements: the runner's terminal (or bun) needs Accessibility + Screen
@@ -807,6 +815,146 @@ end repeat`,
     } finally {
       await manager?.dispose().catch(() => undefined);
       backend?.dispose?.();
+    }
+  }
+
+  // ── chromium-semantic (Electron-class real app) ──
+  // Real Google Chrome: hidden launch → Chromium self-unhides on startup →
+  // set_app_visibility re-asserts hidden → get_window_state must return a
+  // populated AX tree with NO external enablement (the driver flips
+  // AXManualAccessibility/AXEnhancedUserInterface itself, once per process
+  // lifetime) → set_value on the omnibox with value readback → operator
+  // front unchanged throughout.
+  if (wanted("chromium-semantic")) {
+    const t = Date.now();
+    try {
+      const frontBefore = frontmostPid();
+      for (const stray of (
+        spawnSync("pgrep", ["-x", "Google Chrome"], { encoding: "utf8" }).stdout ?? ""
+      )
+        .split("\n")
+        .map(Number)
+        .filter(Boolean))
+        spawnSync("kill", [String(stray)]);
+      await new Promise((r) => setTimeout(r, 800));
+      // Chromium claims AX-focus on its default-focused element (the
+      // omnibox on a new tab) as soon as the driver materializes the AX
+      // tree — which can begin inside launch_app's window-readiness wait —
+      // and again on the written element during set_value. These are
+      // deliberate focusedPid excursions inside the background app while
+      // frontmost/keyWin stay the operator's. Exempt the whole row's
+      // interaction span; the row asserts the real invariants (front
+      // unchanged + exact readback) and records the span as evidence.
+      const span = exemptStart();
+      const launch = await callReply("launch_app", {
+        name: "Google Chrome",
+        hidden: true,
+      });
+      const chromePid = (launch.result?.structuredContent as { pid?: number })?.pid;
+      if (chromePid) spawnedPids.push(chromePid);
+      // Chrome needs real startup time before its window + AX tree exist.
+      let win: WinInfo | undefined;
+      for (let i = 0; i < 24 && !win; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        win = (await listWindows(chromePid)).find((w) => (w.title ?? "").length > 0);
+      }
+      if (!chromePid || !win) {
+        row(
+          "chromium-semantic",
+          "fail",
+          `launch ok=${replyOk(launch)} pid=${chromePid} win=${win?.window_id}`,
+          { launch: JSON.stringify(launch).slice(0, 300) },
+          Date.now() - t,
+        );
+      } else {
+        // Chromium posts unhide when startup completes — re-assert hidden.
+        await callReply("set_app_visibility", { pid: chromePid, hidden: true }).catch(
+          () => undefined,
+        );
+        await new Promise((r) => setTimeout(r, 1000));
+        const rehidden = (await listWindows(chromePid)).find(
+          (w) => w.window_id === win.window_id,
+        );
+        // Elements must appear via the driver's own enablement — nothing
+        // outside the driver touches AXManualAccessibility here.
+        let elements: Array<{
+          role?: string;
+          element_token?: string;
+          label?: string;
+          value?: string;
+        }> = [];
+        for (let i = 0; i < 8 && elements.length === 0; i++) {
+          const st = await callReply("get_window_state", {
+            pid: chromePid,
+            window_id: win.window_id,
+            max_elements: 400,
+          });
+          elements =
+            (st.result?.structuredContent as { elements?: typeof elements })?.elements ?? [];
+          if (elements.length === 0) await new Promise((r) => setTimeout(r, 1500));
+        }
+        const field = elements.find(
+          (e) =>
+            /AXTextField|AXTextArea|AXComboBox/.test(String(e.role)) && e.element_token,
+        );
+        const value = `${SENTINEL}-chromium`;
+        const write = field?.element_token
+          ? await callReply("set_value", {
+              pid: chromePid,
+              window_id: win.window_id,
+              element_token: field.element_token,
+              value,
+            })
+          : undefined;
+        await new Promise((r) => setTimeout(r, 1200));
+        const readState = await callReply("get_window_state", {
+          pid: chromePid,
+          window_id: win.window_id,
+          max_elements: 400,
+        }).catch(() => undefined);
+        exemptEnd(span);
+        const readEls =
+          (readState?.result?.structuredContent as { elements?: typeof elements })
+            ?.elements ?? [];
+        const readback = readEls.find(
+          (e) =>
+            /AXTextField|AXTextArea|AXComboBox/.test(String(e.role)) &&
+            typeof e.value === "string" &&
+            e.value.length > 0,
+        )?.value;
+        const frontAfter = frontmostPid();
+        const ok =
+          replyOk(write) === true &&
+          readback === value &&
+          frontAfter === frontBefore;
+        row(
+          "chromium-semantic",
+          ok ? "pass" : "fail",
+          `pid=${chromePid} on_screen=${rehidden?.is_on_screen} elements=${elements.length} field=${field?.label ?? "none"} readback=${readback === value ? "exact" : JSON.stringify(readback)?.slice(0, 40)} front ${frontBefore}→${frontAfter}`,
+          {
+            chromePid,
+            win: win.window_id,
+            rehiddenOnScreen: rehidden?.is_on_screen,
+            elements: elements.length,
+            field: field?.label,
+            readback,
+            axFocusExcursionExempted: true,
+            exemptSpan: { start: span, end: Date.now() - probeStartWall },
+            frontBefore,
+            frontAfter,
+            write: write ? JSON.stringify(write).slice(0, 300) : undefined,
+          },
+          Date.now() - t,
+        );
+      }
+    } catch (e) {
+      row(
+        "chromium-semantic",
+        "fail",
+        String(e).slice(0, 200),
+        { error: String(e) },
+        Date.now() - t,
+      );
     }
   }
 
