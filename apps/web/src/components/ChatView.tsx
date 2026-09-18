@@ -5015,7 +5015,8 @@ export default function ChatView({
     environmentOverlayVariant === "docked" &&
     settings.autoOpenComputerPane &&
     previewSession?.phase === "live" &&
-    previewLayout?.hasFrame === true;
+    previewLayout?.hasFrame === true &&
+    previewLayout?.floating !== true;
   const previewInsetPx = previewReservesInset
     ? Math.min(previewLayout?.width ?? previewBudgetPx, previewBudgetPx) + 24
     : 0;

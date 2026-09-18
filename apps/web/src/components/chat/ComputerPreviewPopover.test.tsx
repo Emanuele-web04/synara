@@ -31,6 +31,7 @@ const current: {
   tapActive: boolean;
   tapFrameSize: { width: number; height: number } | null;
   stillsStreaming: boolean;
+  floating: { x: number; y: number } | undefined;
 } = vi.hoisted(() => ({
   session: undefined,
   state: undefined,
@@ -38,6 +39,7 @@ const current: {
   tapActive: true,
   tapFrameSize: { width: 960, height: 600 },
   stillsStreaming: false,
+  floating: undefined,
 }));
 
 vi.mock("../../computerPreviewStore", async (importOriginal) => {
@@ -48,8 +50,13 @@ vi.mock("../../computerPreviewStore", async (importOriginal) => {
       selector({
         sessionsByThreadId: current.session ? { [current.session.threadId]: current.session } : {},
         agentActiveByThreadId: {},
+        floatingByThreadId: current.floating
+          ? { [current.session?.threadId ?? THREAD_ID]: current.floating }
+          : {},
         markPreviewLive: vi.fn(),
         hidePreviewForTask: vi.fn(),
+        setPreviewFloating: vi.fn(),
+        movePreviewFloating: vi.fn(),
       }),
   };
 });
@@ -132,6 +139,7 @@ function render(input?: {
   stills?: boolean;
   size?: ComputerPreviewCardSize;
   maxWidthPx?: number;
+  floating?: { x: number; y: number };
 }) {
   current.session = input?.session;
   current.state = input?.state;
@@ -140,6 +148,7 @@ function render(input?: {
   current.tapActive = withFrame;
   current.tapFrameSize = withFrame ? { width: 960, height: 600 } : null;
   current.stillsStreaming = input?.stills ?? false;
+  current.floating = input?.floating;
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
@@ -159,6 +168,7 @@ afterEach(() => {
   current.tapActive = true;
   current.tapFrameSize = { width: 960, height: 600 };
   current.stillsStreaming = false;
+  current.floating = undefined;
 });
 
 describe("ComputerPreviewPopover", () => {
@@ -240,5 +250,22 @@ describe("ComputerPreviewPopover", () => {
       expect(markup).toContain("opacity-0");
       expect(markup).not.toContain(" opacity-100");
     }
+  });
+
+  it("offers pop-out while docked and dock while floating", () => {
+    const docked = render({ session: session("live"), state: threadState() });
+    expect(docked).toContain("Float the computer preview as a draggable window");
+    expect(docked).not.toContain("fixed z-50");
+
+    const floating = render({
+      session: session("live"),
+      state: threadState(),
+      floating: { x: 120, y: 80 },
+    });
+    expect(floating).toContain("Dock the computer preview back into the chat rail");
+    expect(floating).not.toContain("Float the computer preview");
+    expect(floating).toContain("fixed z-50");
+    expect(floating).toContain("left:120px");
+    expect(floating).toContain("top:80px");
   });
 });
