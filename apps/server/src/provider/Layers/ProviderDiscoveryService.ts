@@ -167,6 +167,7 @@ const make = Effect.gen(function* () {
           synaraBaseDir: serverConfig.baseDir,
           provider: parsed.provider,
           ...(parsed.forceReload !== undefined ? { forceReload: parsed.forceReload } : {}),
+          ...(parsed.agentDir !== undefined ? { agentDir: parsed.agentDir } : undefined),
         }),
       ).pipe(
         Effect.catchCause((cause) =>

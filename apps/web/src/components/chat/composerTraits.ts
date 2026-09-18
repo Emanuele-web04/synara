@@ -246,7 +246,7 @@ export function hasVisibleComposerTraitControls(
 // Persisted option key for the primary effort ladder when the descriptor is missing.
 function fallbackEffortOptionId(provider: ProviderKind): string {
   if (provider === "opencode") return "variant";
-  if (provider === "pi") return "thinkingLevel";
+  if (provider === "pi" || provider === "omp") return "thinkingLevel";
   if (provider === "claudeAgent") return "effort";
   return "reasoningEffort";
 }

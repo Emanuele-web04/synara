@@ -1869,6 +1869,7 @@ export default function ChatView({
     providerOptionsForDispatch,
     gitCwd,
     piAgentDir: settings.piAgentDir,
+    ompAgentDir: settings.ompAgentDir,
     discoverNativeCompaction:
       selectedProvider === "claudeAgent" &&
       (isContextWindowMeterOpen || activeThread?.claudeCacheReview != null),

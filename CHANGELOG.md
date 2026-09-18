@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added Oh My Pi (OMP) as an ACP provider, with model discovery via `omp models --json`, per-model reasoning efforts (including `max`), eager catalog pre-warming at startup, and OMP thread/session normalization.
+
+### Fixed
+
+- Fixed OMP threads being mislabeled as Codex when the session-provider normalizer fell through to the Codex default instead of preserving the OMP provider.
+
 ## 0.8.4 - 2026-09-14
 
 108 development commits since v0.8.3, plus release preparation and validation fixes, bring a new browser automation foundation, saved browser sessions, guided setup, workspace editing and autosave, richer Git review, selected-context conversations, provider recovery, and measured reductions in CPU work, temporary memory and streaming write amplification. This inventory describes the final shipped behavior, consolidating intermediate visual revisions.

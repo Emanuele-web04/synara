@@ -927,6 +927,9 @@ export function AutomationModelPicker({
         });
         onChange(buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode));
       }}
+      onProviderModelRoleSelect={(model, options) => {
+        onChange(buildModelSelection("omp", model, options));
+      }}
     />
   );
 }

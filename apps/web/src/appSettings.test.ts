@@ -438,6 +438,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          omp: [],
         },
         "galapagos-alpha",
       ),
@@ -458,6 +459,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          omp: [],
         },
         "",
       ),
@@ -478,6 +480,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          omp: [],
         },
         "GPT-5.3 Codex",
       ),
@@ -498,6 +501,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          omp: [],
         },
         "sonnet",
       ),
@@ -518,6 +522,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          omp: [],
         },
         "custom/selected-model",
       ),
@@ -677,6 +682,8 @@ describe("getProviderStartOptions", () => {
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "/usr/local/bin/devin",
+        ompBinaryPath: "",
+        ompAgentDir: "",
       }),
     ).toEqual({
       claudeAgent: {
@@ -718,6 +725,8 @@ describe("getProviderStartOptions", () => {
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "",
+        ompBinaryPath: "",
+        ompAgentDir: "",
       }),
     ).toBeUndefined();
   });
@@ -739,6 +748,8 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "pi",
+        ompBinaryPath: "",
+        ompAgentDir: "",
       }),
     ).toBeUndefined();
   });
@@ -755,6 +766,7 @@ describe("provider-indexed custom model settings", () => {
     customDevinModels: ["devin/custom-model"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
+    customOmpModels: [],
   } as const;
 
   it("exports one provider config per provider", () => {
@@ -768,6 +780,7 @@ describe("provider-indexed custom model settings", () => {
       "droid",
       "opencode",
       "pi",
+      "omp",
     ]);
   });
 
@@ -786,6 +799,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "devin")).toEqual(["devin/custom-model"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
+    expect(getCustomModelsForProvider(settings, "omp")).toEqual([]);
   });
 
   it("reads default custom models for each provider", () => {
@@ -799,6 +813,7 @@ describe("provider-indexed custom model settings", () => {
       customDevinModels: ["adaptive"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
+      customOmpModels: [],
     } as const;
 
     expect(getDefaultCustomModelsForProvider(defaults, "codex")).toEqual(["default/codex-model"]);
@@ -814,6 +829,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getDefaultCustomModelsForProvider(defaults, "devin")).toEqual(["adaptive"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "omp")).toEqual([]);
   });
 
   it("patches custom models for codex", () => {
@@ -881,6 +897,7 @@ describe("provider-indexed custom model settings", () => {
       devin: ["devin/custom-model"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
+      omp: [],
     });
   });
 
@@ -938,6 +955,7 @@ describe("provider-indexed custom model settings", () => {
         "anthropic/custom-pi",
         "anthropic/custom-pi",
       ],
+      customOmpModels: [],
     });
 
     expect(

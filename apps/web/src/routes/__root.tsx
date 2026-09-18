@@ -150,7 +150,10 @@ import { useRightDockStore } from "../rightDockStore";
 import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
 import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
-import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
+import {
+  providerDiscoveryQueryKeys,
+  providerModelsQueryOptions,
+} from "../lib/providerDiscoveryReactQuery";
 import { didProviderEnablementChange, useAppSettings } from "../appSettings";
 import { getNavigatorPlatform } from "../lib/utils";
 import {
@@ -318,6 +321,7 @@ function RootRouteView() {
           <EventRouter />
           <EditorDirtyRouteGuard />
           <ProviderStatusRefreshCoordinator />
+          <ProviderModelDiscoveryWarmer />
           <GlobalShortcutsDialog />
           <BrowserVaultDialog />
           <GlobalFeedbackDialog />
@@ -442,6 +446,36 @@ function ProviderStatusRefreshCoordinator() {
       liveVersionCheckCompleted={providerUpdateRefreshEnabled && liveVersionCheckCompleted}
     />
   );
+}
+
+function ProviderModelDiscoveryWarmer() {
+  // OMP is the only provider with no static model fallback whose catalog also
+  // takes ~3s to fetch (`omp models --json` cold-start), so it is the lone
+  // provider that doesn't render instantly when the model picker opens. Warm it
+  // at app startup — ahead of the picker opening — so the catalog is ready by
+  // the time the user browses to OMP. React Query dedupes by query key, and
+  // OMP's key is cwd-agnostic, so this prefetch lands on the exact cache entry
+  // the composer reads on mount.
+  const { settings } = useAppSettings();
+  const queryClient = useQueryClient();
+  const ompHidden = settings.hiddenProviders.includes("omp");
+  const ompBinaryPath = settings.ompBinaryPath;
+  const ompAgentDir = settings.ompAgentDir;
+  useEffect(() => {
+    if (ompHidden) return;
+    // Build options from the two primitive fields the omp query reads:
+    // `settings` is rebuilt every render, so depending on it would re-fire the
+    // query (and its retry chain against a failing binary) on every render.
+    void queryClient.prefetchQuery(
+      providerModelsQueryOptions({
+        provider: "omp",
+        binaryPath: ompBinaryPath || null,
+        agentDir: ompAgentDir || null,
+        priority: "background",
+      }),
+    );
+  }, [queryClient, ompHidden, ompBinaryPath, ompAgentDir]);
+  return null;
 }
 
 // Extracted to module scope so its run-always cleanup can stay a try/finally: the

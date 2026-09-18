@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isInitialModelDiscoveryPending,
   prioritizeProviderModelDiscovery,
+  providerDiscoveryQueryKeys,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
 import * as nativeApi from "../nativeApi";
@@ -342,6 +343,16 @@ describe("providerModelsQueryOptions", () => {
     expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();
   });
 
+  it("does not mask OMP's initial fetch with a placeholder", () => {
+    // OMP has no static model fallback, so an empty placeholder would surface a
+    // false "No matches" during its ~3s `omp models` discovery. OMP opts out of
+    // placeholderData to report a genuine `isLoading` pending state; other
+    // providers keep the placeholder to suppress refetch flicker.
+    expect(providerModelsQueryOptions({ provider: "omp" }).placeholderData).toBeUndefined();
+    expect(providerModelsQueryOptions({ provider: "cursor" }).placeholderData).toBeDefined();
+    expect(providerModelsQueryOptions({ provider: "pi" }).placeholderData).toBeDefined();
+  });
+
   it("surfaces real errors instead of masking them as empty catalogs", async () => {
     mockListModels(vi.fn().mockRejectedValue(new Error("discovery exploded")));
     const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });
@@ -436,5 +447,29 @@ describe("providerModelsQueryOptions", () => {
 
     const queryClient = new QueryClient();
     await expect(queryClient.fetchQuery(options)).resolves.toEqual(catalog);
+  });
+
+  it("keeps OMP's model query key cwd-agnostic (its catalog is global)", () => {
+    const options = providerModelsQueryOptions({
+      provider: "omp",
+      binaryPath: "/bin/omp",
+      agentDir: "/agent",
+      cwd: "/some/project",
+    });
+    // cwd is null for OMP so an app-startup warm lands on the composer's cache.
+    expect(options.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/agent", null),
+    );
+  });
+
+  it("scopes non-OMP providers by cwd in their query key", () => {
+    const options = providerModelsQueryOptions({
+      provider: "opencode",
+      binaryPath: "/bin/opencode",
+      cwd: "/some/project",
+    });
+    expect(options.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("opencode", "/bin/opencode", null, null, "/some/project"),
+    );
   });
 });

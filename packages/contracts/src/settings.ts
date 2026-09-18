@@ -70,6 +70,12 @@ export const PiServerProviderSettings = Schema.Struct({
   agentDir: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
 });
 export type PiServerProviderSettings = typeof PiServerProviderSettings.Type;
+export const OmpServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "omp")),
+  agentDir: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+});
+export type OmpServerProviderSettings = typeof OmpServerProviderSettings.Type;
 
 export const DevinServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
@@ -109,6 +115,7 @@ export const ServerSettings = Schema.Struct({
     droid: DroidServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    omp: OmpServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   // When the first-run welcome tour was completed or skipped. Server-backed so a
@@ -185,6 +192,13 @@ export const ServerSettingsPatch = Schema.Struct({
         }),
       ),
       devin: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
+      omp: Schema.optionalKey(
+        Schema.Struct({
+          ...ProviderSettingsBasePatch,
+          binaryPath: Schema.optionalKey(StringSetting),
+          agentDir: Schema.optionalKey(StringSetting),
+        }),
+      ),
     }),
   ),
   skills: Schema.optionalKey(
