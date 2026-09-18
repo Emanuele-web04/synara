@@ -70,13 +70,21 @@ change. Then the same surface on Windows and Linux.
     (`cuaDriverHostStandalone.ts`) against an unpatched driver:
     `nativeRevision:null` skips the patch-only spawn flags and the
     revision handshake, replies carry `driverNativeRevision` (0 =
-    upstream) so the backend narrows `ghostCursor` honestly. macOS
-    behavior is unchanged. **Not verified:** any real Windows/Linux GUI
-    session — no target exists on this VM, so input, capture, AX, focus,
-    and teardown on those platforms are all unproven; upstream
-    `check_permissions` self-report shape and per-platform permission UX
-    are open. macOS-only helpers (Escape monitor, shield, frame tap,
-    AppSnap) have no non-macOS equivalent yet.
+    upstream) so the backend narrows `ghostCursor` and
+    `focusNeutralSemanticText` honestly, and `hostPlatform` drives the
+    agent dialect. macOS behavior is unchanged. **Known degradation:**
+    upstream has no `cancel_input` method (verified in binary strings), so
+    the host's cancel path degrades: a generation that only ran reads is
+    killed and respawned, but a generation that dispatched input gets
+    "admission closed; driver not killed" — the next action respawns
+    cleanly, while an in-flight action's held OS input cannot be released
+    without the (macOS-only) `releaseHeldInput` helper. **Not verified:**
+    any real Windows/Linux GUI session — no target exists on this VM, so
+    input, capture, AX, focus, and teardown on those platforms are all
+    unproven; upstream `check_permissions` self-report shape and
+    per-platform permission UX are open. macOS-only helpers (Escape
+    monitor, shield, frame tap, AppSnap) have no non-macOS equivalent
+    yet.
 11. ComputerManager is 5.4k lines post-merge — six features, parallel seams;
     no refactor pass yet.
 12. Unused private-API inventory: dock-swipe instant switch,

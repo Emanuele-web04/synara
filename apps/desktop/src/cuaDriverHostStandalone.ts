@@ -12,10 +12,14 @@
  *
  * What the standalone host is not: a port of the macOS safety layer. The
  * provisioned driver is the unpatched upstream build (`nativeRevision: null`
- * below), so the native input-cancellation acknowledgement, the compact
- * cursor, and the Synara observation-timing envs do not exist — the host
- * reports `driverNativeRevision: 0` on every reply and the backend narrows
- * advertised capabilities accordingly. There is no AppSnap helper, so no
+ * below), so the compact cursor and the Synara observation-timing envs do
+ * not exist — the host reports `driverNativeRevision: 0` on every reply and
+ * the backend narrows advertised capabilities accordingly. Upstream also
+ * implements no `cancel_input` method: cancels on a reads-only generation
+ * kill and respawn the driver, while a generation that dispatched input
+ * fails closed ("admission closed; driver not killed") — the next action
+ * respawns cleanly, but held OS input cannot be released without the
+ * macOS-only `releaseHeldInput` helper. There is no AppSnap helper, so no
  * masked-activation shield, no frame tap, and no permission setup path;
  * `check_permissions` falls through to the driver's own platform report.
  */
