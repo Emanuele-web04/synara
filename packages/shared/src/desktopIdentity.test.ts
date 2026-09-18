@@ -5,6 +5,9 @@ import {
   SYNARA_CANARY_BUNDLE_ID,
   SYNARA_CANARY_DESKTOP_ENTRY_URL,
   SYNARA_CANARY_DESKTOP_ORIGIN,
+  SYNARA_CUA_BUNDLE_ID,
+  SYNARA_CUA_DESKTOP_ENTRY_URL,
+  SYNARA_CUA_DESKTOP_ORIGIN,
   SYNARA_DESKTOP_ENTRY_URL,
   SYNARA_DESKTOP_ORIGIN,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
@@ -47,6 +50,23 @@ describe("desktopIdentity", () => {
     });
   });
 
+  it("gives Cua a fully separate desktop identity and storage profile", () => {
+    expect(SYNARA_CUA_BUNDLE_ID).toBe("com.emanueledipietro.synara.cua");
+    expect(SYNARA_CUA_DESKTOP_ORIGIN).toBe("synara-cua://app");
+    expect(SYNARA_CUA_DESKTOP_ENTRY_URL).toBe("synara-cua://app/index.html");
+    expect(synaraDesktopIdentity("cua")).toEqual({
+      flavor: "cua",
+      displayName: "Synara Cua",
+      bundleId: SYNARA_CUA_BUNDLE_ID,
+      scheme: "synara-cua",
+      origin: SYNARA_CUA_DESKTOP_ORIGIN,
+      entryUrl: SYNARA_CUA_DESKTOP_ENTRY_URL,
+      userDataDirectoryName: "synara-cua",
+      defaultHomeDirectoryName: ".synara-cua",
+      usesScriptedUpdates: true,
+    });
+  });
+
   it("selects explicit source flavors without changing packaged Stable", () => {
     expect(resolveSynaraDesktopFlavor({ isDevelopment: false })).toBe("production");
     expect(resolveSynaraDesktopFlavor({ isDevelopment: true })).toBe("development");
@@ -66,11 +86,18 @@ describe("desktopIdentity", () => {
     expect(resolveSynaraDesktopFlavor({ isDevelopment: true, requestedFlavor: "canary" })).toBe(
       "canary",
     );
+    expect(resolveSynaraDesktopFlavor({ isDevelopment: false, requestedFlavor: "cua" })).toBe(
+      "cua",
+    );
+    expect(resolveSynaraDesktopFlavor({ isDevelopment: true, requestedFlavor: "CUA" })).toBe(
+      "cua",
+    );
   });
 
   it("isolates development and Canary homes from packaged Stable", () => {
     expect(synaraDesktopIdentity("development").defaultHomeDirectoryName).toBe(".synara-dev");
     expect(synaraDesktopIdentity("canary").defaultHomeDirectoryName).toBe(".synara-canary");
+    expect(synaraDesktopIdentity("cua").defaultHomeDirectoryName).toBe(".synara-cua");
     expect(synaraDesktopIdentity("production").defaultHomeDirectoryName).toBe(".synara");
   });
 });

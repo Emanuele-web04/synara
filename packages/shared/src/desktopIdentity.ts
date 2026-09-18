@@ -13,10 +13,14 @@ export const SYNARA_DESKTOP_BUNDLE_ID_ENV = "SYNARA_DESKTOP_BUNDLE_ID";
 export const SYNARA_CANARY_DESKTOP_SCHEME = "synara-canary";
 export const SYNARA_CANARY_DESKTOP_ORIGIN = `${SYNARA_CANARY_DESKTOP_SCHEME}://app`;
 export const SYNARA_CANARY_DESKTOP_ENTRY_URL = `${SYNARA_CANARY_DESKTOP_ORIGIN}/index.html`;
+export const SYNARA_CUA_BUNDLE_ID = `${SYNARA_PRODUCTION_BUNDLE_ID}.cua`;
+export const SYNARA_CUA_DESKTOP_SCHEME = "synara-cua";
+export const SYNARA_CUA_DESKTOP_ORIGIN = `${SYNARA_CUA_DESKTOP_SCHEME}://app`;
+export const SYNARA_CUA_DESKTOP_ENTRY_URL = `${SYNARA_CUA_DESKTOP_ORIGIN}/index.html`;
 export const SYNARA_SOURCE_DESKTOP_BUILD_MARKER = "synara-source-desktop-build-v2";
 export const SYNARA_DESKTOP_SMOKE_USER_DATA_ENV = "SYNARA_DESKTOP_SMOKE_USER_DATA";
 
-export type SynaraDesktopFlavor = "production" | "development" | "canary";
+export type SynaraDesktopFlavor = "production" | "development" | "canary" | "cua";
 
 export interface SynaraDesktopIdentity {
   readonly flavor: SynaraDesktopFlavor;
@@ -36,6 +40,9 @@ export function resolveSynaraDesktopFlavor(input: {
   readonly allowDevelopmentOverride?: boolean | undefined;
 }): SynaraDesktopFlavor {
   const requestedFlavor = input.requestedFlavor?.trim().toLowerCase();
+  if (requestedFlavor === "cua") {
+    return "cua";
+  }
   if (requestedFlavor === "canary") {
     return "canary";
   }
@@ -49,6 +56,19 @@ export function resolveSynaraDesktopFlavor(input: {
 }
 
 export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDesktopIdentity {
+  if (flavor === "cua") {
+    return {
+      flavor,
+      displayName: "Synara Cua",
+      bundleId: SYNARA_CUA_BUNDLE_ID,
+      scheme: SYNARA_CUA_DESKTOP_SCHEME,
+      origin: SYNARA_CUA_DESKTOP_ORIGIN,
+      entryUrl: SYNARA_CUA_DESKTOP_ENTRY_URL,
+      userDataDirectoryName: "synara-cua",
+      defaultHomeDirectoryName: ".synara-cua",
+      usesScriptedUpdates: true,
+    };
+  }
   if (flavor === "canary") {
     return {
       flavor,
