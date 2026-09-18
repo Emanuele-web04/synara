@@ -1107,9 +1107,11 @@ end repeat`,
       );
     } else {
       let pid: number | undefined;
+      let escWin: WinInfo | undefined;
       try {
         pid = await launchTextEdit(["-g"]);
         const win = pid ? await windowOfPid(pid) : undefined;
+        escWin = win;
         if (!win) throw new Error("no escape-row target window");
         const token = await textAreaToken(win.pid, win.window_id);
         if (!token) throw new Error("no AXTextArea on escape-row target");
@@ -1231,6 +1233,32 @@ end repeat`,
         await cuaRequest(endpoint, { method: "rearm", capability }, { timeoutMs: 10_000 }).catch(
           () => undefined,
         );
+        // Leave the observation gate clear for later rows: rearm sets
+        // desktopObservationRequired, which only a modelObservation clears.
+        if (escWin) {
+          for (let i = 0; i < 10; i++) {
+            await new Promise((r) => setTimeout(r, 400));
+            const obs = await cuaRequest<CuaReply>(
+              endpoint,
+              {
+                method: "call",
+                name: "get_window_state",
+                args: {
+                  pid: escWin.pid,
+                  window_id: escWin.window_id,
+                  max_elements: 8,
+                },
+                capability,
+                modelObservation: true,
+              },
+              { timeoutMs: 10_000, mutation: true },
+            ).catch(() => undefined);
+            const sc = obs?.result?.structuredContent as
+              | { elements?: unknown[] }
+              | undefined;
+            if (obs?.ok && Array.isArray(sc?.elements)) break;
+          }
+        }
       }
     }
   }
