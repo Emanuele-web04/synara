@@ -1104,7 +1104,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   );
 
   const stagePackageJson: StagePackageJson = {
-    name: "synara-desktop",
+    // electron-builder derives the updater cache dir from this name
+    // ("<name>-updater"), so scoping it per flavor gives beta its own
+    // pending-update directory. Production stays "synara-desktop", which
+    // reproduces the existing "synara-desktop-updater" value unchanged.
+    name: `${synaraDesktopIdentity(options.flavor ?? "production").userDataDirectoryName}-desktop`,
     version: appVersion,
     buildVersion: appVersion,
     synaraCommitHash: commitHash,
