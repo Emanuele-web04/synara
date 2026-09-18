@@ -218,21 +218,56 @@ async function call<T = unknown>(
   );
 }
 
+/** Per-tool wall-clock samples — aggregated into the report's speed
+ * table (count/p50/p95/max per driver tool). */
+const callTimings = new Map<string, number[]>();
+
 async function callReply(
   name: string,
   args?: Record<string, unknown>,
   timeoutMs = 30_000,
 ): Promise<CuaReply> {
-  return cuaRequest<CuaReply>(
-    endpoint,
-    {
-      method: "call",
-      name,
-      ...(args ? { args } : {}),
-      capability,
-    },
-    { timeoutMs, mutation: true },
-  );
+  const t0 = performance.now();
+  try {
+    return await cuaRequest<CuaReply>(
+      endpoint,
+      {
+        method: "call",
+        name,
+        ...(args ? { args } : {}),
+        capability,
+      },
+      { timeoutMs, mutation: true },
+    );
+  } finally {
+    const ms = performance.now() - t0;
+    const list = callTimings.get(name) ?? [];
+    list.push(Math.round(ms * 10) / 10);
+    callTimings.set(name, list);
+  }
+}
+
+function speedTable(): Array<{
+  tool: string;
+  n: number;
+  p50: number;
+  p95: number;
+  max: number;
+}> {
+  const pct = (sorted: number[], q: number) =>
+    sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))] ?? 0;
+  return [...callTimings.entries()]
+    .map(([tool, list]) => {
+      const sorted = [...list].sort((a, b) => a - b);
+      return {
+        tool,
+        n: sorted.length,
+        p50: pct(sorted, 0.5),
+        p95: pct(sorted, 0.95),
+        max: sorted[sorted.length - 1] ?? 0,
+      };
+    })
+    .sort((a, b) => a.tool.localeCompare(b.tool));
 }
 
 /** A reply is only OK when it carries no refusal/error surface at all. */
@@ -1725,6 +1760,7 @@ end repeat`,
     endpoint,
     elapsedMs: Date.now() - t0,
     rows,
+    speed: speedTable(),
     summary: {
       total: rows.length,
       pass: rows.filter((r) => r.verdict === "pass").length,
@@ -1735,6 +1771,7 @@ end repeat`,
   };
   await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, JSON.stringify(summary, null, 2), { mode: 0o600 });
+  const speed = summary.speed;
   const md = [
     `# live-cert ${SENTINEL}`,
     ``,
@@ -1745,6 +1782,14 @@ end repeat`,
     `| Row | Verdict | Detail |`,
     `|---|---|---|`,
     ...rows.map((r) => `| ${r.name} | ${r.verdict} | ${(r.detail ?? "").replaceAll("|", "\\|")} |`),
+    ``,
+    `## Speed budget (driver-call wall clock, ms)`,
+    ``,
+    `| Tool | n | p50 | p95 | max |`,
+    `|---|---|---|---|---|`,
+    ...speed.map(
+      (s) => `| ${s.tool} | ${s.n} | ${s.p50} | ${s.p95} | ${s.max} |`,
+    ),
     ``,
     `Skipped rows are honest gaps, not passes. Re-run with a second desktop`,
     `Space for the space-* rows.`,
