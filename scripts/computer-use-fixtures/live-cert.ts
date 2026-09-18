@@ -1012,14 +1012,24 @@ end repeat`,
         );
       } else {
         // Chromium posts unhide when startup completes — re-assert hidden.
-        await callReply("set_app_visibility", {
-          pid: chromePid,
-          hidden: true,
-        }).catch(() => undefined);
-        await new Promise((r) => setTimeout(r, 1000));
-        const rehidden = (await listWindows(chromePid)).find(
-          (w) => w.window_id === win.window_id,
-        );
+        // A single shot is racy: Chrome can unhide again after it (delayed
+        // session restore, second startup beat), which is exactly what the
+        // 2026-09-18 flake showed — the window stayed on screen and the
+        // omnibox write opened a real frontmost window. Re-assert until the
+        // window reports off-screen, bounded so a genuine hide failure
+        // still surfaces.
+        let rehidden: WinInfo | undefined;
+        for (let i = 0; i < 8; i++) {
+          await callReply("set_app_visibility", {
+            pid: chromePid,
+            hidden: true,
+          }).catch(() => undefined);
+          await new Promise((r) => setTimeout(r, 1000));
+          rehidden = (await listWindows(chromePid)).find(
+            (w) => w.window_id === win.window_id,
+          );
+          if (rehidden && !rehidden.is_on_screen) break;
+        }
         // Elements must appear via the driver's own enablement — nothing
         // outside the driver touches AXManualAccessibility here.
         let elements: Array<{
