@@ -33,14 +33,26 @@ import {
   decodeProjectAgentListCursor,
   detectProjectTaskDependencyCycle,
   encodeProjectAgentListCursor,
+  INITIAL_PROJECT_DIGEST_SUMMARY,
   isCoordinatorCuratedDocumentPath,
   isGeneratedDocumentPath,
   isInboxDocumentPath,
   isUserOwnedDocumentPath,
   normalizeProjectDocumentPath,
+  sanitizeProjectDigestSummary,
   truncateToContextBudget,
 } from "@synara/shared/projectAgent";
-import { Cause, Duration, Effect, Layer, Option, PubSub, Queue, Ref, Stream } from "effect";
+import {
+  Cause,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  PubSub,
+  Queue,
+  Ref,
+  Stream,
+} from "effect";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ServerConfig } from "../../config.ts";
@@ -71,11 +83,21 @@ import {
   projectAgentSummariesForPrincipal,
   type ProjectAgentPrincipal,
 } from "../principal.ts";
-import { PROJECT_BOT_PLAYBOOK, PROJECT_BOT_PLAYBOOK_PATH } from "../projectBotPlaybook.ts";
 import {
+  PROJECT_BOT_HEARTBEAT_PROMPT,
+  PROJECT_BOT_PLAYBOOK,
+  PROJECT_BOT_PLAYBOOK_PATH,
+  PROJECT_BOT_WATCH_RULES,
+} from "../projectBotPlaybook.ts";
+import {
+  classifyWorkerSettlement,
+  formatWorkerSettlementReport,
   formatWorkerWatchLine,
   isFailedWorkerSessionStatus,
   isManagedWorkerThread,
+  lastAssistantTextFromMessages,
+  shouldMaterializeWorkerSettlementReport,
+  workerInboxReportPath,
 } from "../workerHealth.ts";
 import {
   ProjectAgentService,
@@ -100,7 +122,10 @@ const branded = {
 };
 
 const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
-  { path: "overview.md", content: "# Overview\n\nCoordinator is not configured.\n" },
+  {
+    path: "overview.md",
+    content: "# Overview\n\nCoordinator is not configured.\n",
+  },
   { path: "instructions.md", content: "# Instructions\n\n" },
   { path: "notes.md", content: "# Notes\n\n" },
   { path: "decisions.md", content: "# Decisions\n\n" },
@@ -143,7 +168,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.mapError(toServiceError("Failed to load project.")),
       Effect.flatMap(
         Option.match({
-          onNone: () => Effect.fail(fail(`Project "${projectId}" was not found.`, "not-found")),
+          onNone: () =>
+            Effect.fail(
+              fail(`Project "${projectId}" was not found.`, "not-found"),
+            ),
           onSome: (project) => {
             const ordinary = isOrdinaryProjectRow({
               projectTitle: project.title,
@@ -157,7 +185,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             return ordinary
               ? Effect.succeed(project)
               : Effect.fail(
-                  fail("Project Coordinator is only available on ordinary projects.", "forbidden"),
+                  fail(
+                    "Project Coordinator is only available on ordinary projects.",
+                    "forbidden",
+                  ),
                 );
           },
         }),
@@ -169,7 +200,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.mapError(toServiceError("Failed to load project coordinator.")),
       Effect.flatMap(
         Option.match({
-          onNone: () => Effect.fail(fail("Project Coordinator is not configured.", "unconfigured")),
+          onNone: () =>
+            Effect.fail(
+              fail("Project Coordinator is not configured.", "unconfigured"),
+            ),
           onSome: Effect.succeed,
         }),
       ),
@@ -179,7 +213,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
     Effect.gen(function* () {
       const sequence = yield* repository
         .nextActivitySequence(input.projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to allocate activity sequence.")));
+        .pipe(
+          Effect.mapError(
+            toServiceError("Failed to allocate activity sequence."),
+          ),
+        );
       const activity: ProjectActivity = {
         ...input,
         id: branded.activity(),
@@ -187,7 +225,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
       };
       const saved = yield* repository
         .appendActivity(activity)
-        .pipe(Effect.mapError(toServiceError("Failed to record project activity.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to record project activity.")),
+        );
       yield* publish({ type: "activity-appended", activity: saved });
       return saved;
     });
@@ -213,45 +253,202 @@ export const makeProjectAgentService = Effect.gen(function* () {
         createdAt: now,
       };
       const saved = yield* repository
-        .writeDocument({ revision, expectedRevision: null, diskHash: revision.contentHash })
-        .pipe(Effect.mapError(toServiceError("Failed to write project document.")));
+        .writeDocument({
+          revision,
+          expectedRevision: null,
+          diskHash: revision.contentHash,
+        })
+        .pipe(
+          Effect.mapError(toServiceError("Failed to write project document.")),
+        );
       yield* writeProjectDocumentMirror({
         stateDir: serverConfig.stateDir,
         projectId,
         logicalPath,
         content,
-      }).pipe(Effect.mapError(toServiceError("Failed to materialize project document.")));
+      }).pipe(
+        Effect.mapError(
+          toServiceError("Failed to materialize project document."),
+        ),
+      );
+      return saved;
+    });
+
+  const upsertSystemDocument = (input: {
+    readonly projectId: ProjectId;
+    readonly logicalPath: string;
+    readonly content: string;
+    readonly sources?: ProjectDocumentRevision["sources"];
+    readonly authorThreadId?: ThreadId | null;
+  }) =>
+    Effect.gen(function* () {
+      const logicalPath = normalizeProjectDocumentPath(input.logicalPath);
+      const head = yield* repository
+        .getDocumentHead(input.projectId, logicalPath)
+        .pipe(Effect.mapError(toServiceError("Failed to load document head.")));
+      const currentRevision = Option.isSome(head) ? head.value.revision : 0;
+      if (
+        Option.isSome(head) &&
+        head.value.contentHash === hashDocumentContent(input.content)
+      ) {
+        return;
+      }
+      const now = isoNow();
+      const revision: ProjectDocumentRevision = {
+        id: branded.document(),
+        projectId: input.projectId,
+        logicalPath,
+        revision: currentRevision + 1,
+        content: input.content,
+        contentHash: hashDocumentContent(input.content),
+        authorKind: "system",
+        authorThreadId: input.authorThreadId ?? null,
+        sources: input.sources ?? [],
+        createdAt: now,
+      };
+      const saved = yield* repository
+        .writeDocument({
+          revision,
+          expectedRevision: currentRevision === 0 ? null : currentRevision,
+          diskHash: revision.contentHash,
+        })
+        .pipe(
+          Effect.mapError(toServiceError("Failed to write project document.")),
+        );
+      yield* writeProjectDocumentMirror({
+        stateDir: serverConfig.stateDir,
+        projectId: input.projectId,
+        logicalPath,
+        content: input.content,
+      }).pipe(
+        Effect.mapError(
+          toServiceError("Failed to materialize project document."),
+        ),
+      );
+      yield* publish({
+        type: "document-head-updated",
+        head: {
+          projectId: input.projectId,
+          logicalPath,
+          revision: saved.revision,
+          contentHash: saved.contentHash,
+          diskHash: saved.contentHash,
+          conflictPending: false,
+          updatedAt: now,
+        },
+      });
       return saved;
     });
 
   const ensureProjectBotPlaybook = (projectId: ProjectId) =>
     Effect.gen(function* () {
       const existingPlaybook = yield* repository
-        .readDocumentRevision({ projectId, logicalPath: PROJECT_BOT_PLAYBOOK_PATH })
-        .pipe(Effect.mapError(toServiceError("Failed to load project bot playbook.")));
-      if (Option.isSome(existingPlaybook)) return;
-      yield* writeSeedDocument(
+        .readDocumentRevision({
+          projectId,
+          logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+        })
+        .pipe(
+          Effect.mapError(
+            toServiceError("Failed to load project bot playbook."),
+          ),
+        );
+      if (Option.isNone(existingPlaybook)) {
+        yield* writeSeedDocument(
+          projectId,
+          PROJECT_BOT_PLAYBOOK_PATH,
+          PROJECT_BOT_PLAYBOOK,
+          "system",
+        );
+        return;
+      }
+      if (
+        existingPlaybook.value.content === PROJECT_BOT_PLAYBOOK ||
+        existingPlaybook.value.authorKind !== "system"
+      ) {
+        return;
+      }
+      const now = isoNow();
+      const revision: ProjectDocumentRevision = {
+        id: branded.document(),
         projectId,
-        PROJECT_BOT_PLAYBOOK_PATH,
-        PROJECT_BOT_PLAYBOOK,
-        "system",
+        logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+        revision: existingPlaybook.value.revision + 1,
+        content: PROJECT_BOT_PLAYBOOK,
+        contentHash: hashDocumentContent(PROJECT_BOT_PLAYBOOK),
+        authorKind: "system",
+        authorThreadId: null,
+        sources: [],
+        createdAt: now,
+      };
+      yield* repository
+        .writeDocument({
+          revision,
+          expectedRevision: existingPlaybook.value.revision,
+          diskHash: revision.contentHash,
+        })
+        .pipe(
+          Effect.mapError(
+            toServiceError("Failed to refresh project bot playbook."),
+          ),
+        );
+      yield* writeProjectDocumentMirror({
+        stateDir: serverConfig.stateDir,
+        projectId,
+        logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+        content: PROJECT_BOT_PLAYBOOK,
+      }).pipe(
+        Effect.mapError(
+          toServiceError("Failed to materialize project bot playbook."),
+        ),
       );
+    });
+
+  const ensureProjectBotHeartbeat = (config: ProjectAgentConfig) =>
+    Effect.gen(function* () {
+      if (!config.automationId) return;
+      const listed = yield* automationService
+        .list({ projectId: config.projectId })
+        .pipe(
+          Effect.mapError(toServiceError("Failed to load project heartbeat.")),
+        );
+      const current = listed.definitions.find(
+        (definition) => definition.id === config.automationId,
+      );
+      if (!current || current.prompt === PROJECT_BOT_HEARTBEAT_PROMPT) return;
+      yield* automationService
+        .update({
+          id: config.automationId,
+          prompt: PROJECT_BOT_HEARTBEAT_PROMPT,
+        })
+        .pipe(
+          Effect.mapError(
+            toServiceError("Failed to refresh project heartbeat."),
+          ),
+        );
     });
 
   const indexProjectThreads = (projectId: ProjectId) =>
     Effect.gen(function* () {
       const threads = yield* projectionThreads
         .listByProjectId({ projectId })
-        .pipe(Effect.mapError(toServiceError("Failed to index project threads.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to index project threads.")),
+        );
       const existing = yield* repository
         .listThreadIndex(projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to load thread coverage.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to load thread coverage.")),
+        );
       const excludedIds = new Set(
-        existing.filter((entry) => entry.excluded).map((entry) => entry.threadId),
+        existing
+          .filter((entry) => entry.excluded)
+          .map((entry) => entry.threadId),
       );
       const coveredIds = new Set(
         existing
-          .filter((entry) => entry.summaryStatus === "covered" && !entry.excluded)
+          .filter(
+            (entry) => entry.summaryStatus === "covered" && !entry.excluded,
+          )
           .map((entry) => entry.threadId),
       );
       const persistent = threads.filter((thread) => thread.deletedAt === null);
@@ -264,7 +461,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const alreadyCovered = coveredIds.has(thread.threadId);
         const covered =
           alreadyCovered ||
-          (!excluded && assignedCoverage < PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT);
+          (!excluded &&
+            assignedCoverage < PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT);
         if (covered && !alreadyCovered && !excluded) assignedCoverage += 1;
         yield* repository
           .upsertThreadIndex({
@@ -272,15 +470,23 @@ export const makeProjectAgentService = Effect.gen(function* () {
             threadId: thread.threadId,
             excluded,
             archived: thread.archivedAt !== null,
-            summaryStatus: excluded ? "skipped" : covered ? "covered" : "pending",
+            summaryStatus: excluded
+              ? "skipped"
+              : covered
+                ? "covered"
+                : "pending",
             lastUpdatedAt: thread.updatedAt,
             lastSummarizedAt: covered && !excluded ? isoNow() : null,
           })
-          .pipe(Effect.mapError(toServiceError("Failed to store thread index.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to store thread index.")),
+          );
       }
       const index = yield* repository
         .listThreadIndex(projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to load thread coverage.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to load thread coverage.")),
+        );
       const summarizedThreadCount = index.filter(
         (entry) => entry.summaryStatus === "covered",
       ).length;
@@ -296,7 +502,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
     Effect.gen(function* () {
       const config = yield* repository
         .getConfig(projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")));
+        .pipe(
+          Effect.mapError(
+            toServiceError("Failed to load project coordinator."),
+          ),
+        );
       if (Option.isNone(config)) {
         return {
           projectId,
@@ -314,13 +524,32 @@ export const makeProjectAgentService = Effect.gen(function* () {
         .pipe(Effect.mapError(toServiceError("Failed to load project goal.")));
       const digest = yield* repository
         .getDigest(projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to load project digest.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to load project digest.")),
+        );
+      let digestValue = Option.getOrNull(digest);
+      if (digestValue) {
+        const sanitized = sanitizeProjectDigestSummary(digestValue.summary);
+        if (sanitized && sanitized !== digestValue.summary) {
+          digestValue = { ...digestValue, summary: sanitized };
+          yield* repository
+            .saveDigest(digestValue)
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to repair project digest."),
+              ),
+            );
+          yield* publish({ type: "digest-upserted", digest: digestValue });
+        }
+      }
       const tasks = yield* repository
         .listTasks({ projectId, includeArchived: false, limit: 100 })
         .pipe(Effect.mapError(toServiceError("Failed to load project tasks.")));
       const activity = yield* repository
         .listActivity({ projectId, limit: 8 })
-        .pipe(Effect.mapError(toServiceError("Failed to load project activity.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to load project activity.")),
+        );
       const blockers = tasks
         .filter((task) => task.status === "blocked")
         .map((task) => ({
@@ -334,17 +563,22 @@ export const makeProjectAgentService = Effect.gen(function* () {
         configured: true,
         config: config.value,
         goal: goalValue,
-        digest: Option.getOrNull(digest),
+        digest: digestValue,
         blockers,
         recentOutcomes: activity,
-        coordinatorStatus: coordinatorStatusFromGoal(true, goalValue?.status ?? null),
+        coordinatorStatus: coordinatorStatusFromGoal(
+          true,
+          goalValue?.status ?? null,
+        ),
       };
     });
 
   const replayReceipt = <A>(requestId: string, decode: (json: string) => A) =>
     repository.getReceipt(requestId).pipe(
       Effect.mapError(toServiceError("Failed to load request receipt.")),
-      Effect.map((option) => (Option.isSome(option) ? decode(option.value.resultJson) : null)),
+      Effect.map((option) =>
+        Option.isSome(option) ? decode(option.value.resultJson) : null,
+      ),
     );
 
   const storeReceipt = (
@@ -361,7 +595,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         resultJson: JSON.stringify(result),
         createdAt: isoNow(),
       })
-      .pipe(Effect.mapError(toServiceError("Failed to persist request receipt.")));
+      .pipe(
+        Effect.mapError(toServiceError("Failed to persist request receipt.")),
+      );
 
   const createCoordinatorThread = (input: {
     readonly projectId: ProjectId;
@@ -386,15 +622,25 @@ export const makeProjectAgentService = Effect.gen(function* () {
       };
       yield* orchestrationEngine
         .dispatch(command)
-        .pipe(Effect.mapError(toServiceError("Failed to create coordinator thread.")));
+        .pipe(
+          Effect.mapError(
+            toServiceError("Failed to create coordinator thread."),
+          ),
+        );
       return threadId;
     });
 
-  const assertSameProject = (principal: ProjectAgentPrincipal, projectId: ProjectId) => {
+  const assertSameProject = (
+    principal: ProjectAgentPrincipal,
+    projectId: ProjectId,
+  ) => {
     if (principal.kind === "user") return Effect.void;
     if (principal.projectId !== projectId) {
       return Effect.fail(
-        fail("This thread cannot access another project's coordinator.", "forbidden"),
+        fail(
+          "This thread cannot access another project's coordinator.",
+          "forbidden",
+        ),
       );
     }
     return Effect.void;
@@ -404,10 +650,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
     Effect.gen(function* () {
       const inflight = yield* Ref.get(digestInflight);
       if (inflight.has(projectId)) {
-        yield* Ref.update(digestPending, (pending) => new Set(pending).add(projectId));
+        yield* Ref.update(digestPending, (pending) =>
+          new Set(pending).add(projectId),
+        );
         return;
       }
-      yield* Ref.update(digestInflight, (current) => new Set(current).add(projectId));
+      yield* Ref.update(digestInflight, (current) =>
+        new Set(current).add(projectId),
+      );
       yield* Ref.update(digestPending, (pending) => {
         const next = new Set(pending);
         next.delete(projectId);
@@ -417,27 +667,37 @@ export const makeProjectAgentService = Effect.gen(function* () {
         .getDigest(projectId)
         .pipe(Effect.mapError(toServiceError("Failed to load digest.")));
       const lastGood = Option.isSome(previous) ? previous.value : null;
+      const previousSummary = sanitizeProjectDigestSummary(lastGood?.summary);
       const coverage = yield* indexProjectThreads(projectId);
       const activity = yield* repository
         .listActivity({ projectId, limit: 40 })
-        .pipe(Effect.mapError(toServiceError("Failed to load digest activity.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to load digest activity.")),
+        );
       const tasks = yield* repository
         .listTasks({ projectId, includeArchived: false, limit: 100 })
         .pipe(Effect.mapError(toServiceError("Failed to load digest tasks.")));
       const documents = yield* repository
         .listDocumentHeads(projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to load digest documents.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to load digest documents.")),
+        );
       const threads = yield* repository
         .listThreadIndex(projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to load digest threads.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to load digest threads.")),
+        );
       const running = {
         projectId,
-        summary: lastGood?.summary ?? "Generating project summary…",
+        summary: previousSummary ?? "Generating project summary…",
         focusItems: lastGood?.focusItems ?? [],
         coverageFromSequence: lastGood?.coverageFromSequence ?? 0,
-        coverageToSequence: activity[0]?.sequence ?? lastGood?.coverageToSequence ?? 0,
+        coverageToSequence:
+          activity[0]?.sequence ?? lastGood?.coverageToSequence ?? 0,
         historicalCoverage:
-          coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
+          coverage.pendingThreadCount > 0
+            ? ("partial" as const)
+            : ("complete" as const),
         summarizedThreadCount: coverage.summarizedThreadCount,
         pendingThreadCount: coverage.pendingThreadCount,
         generationState: "running" as const,
@@ -447,11 +707,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
       };
       yield* repository
         .saveDigest(running)
-        .pipe(Effect.mapError(toServiceError("Failed to mark digest running.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to mark digest running.")),
+        );
       const project = yield* snapshotQuery
         .getProjectShellById(projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to load project for digest.")));
-      const cwd = Option.isSome(project) ? project.value.workspaceRoot : serverConfig.cwd;
+        .pipe(
+          Effect.mapError(toServiceError("Failed to load project for digest.")),
+        );
+      const cwd = Option.isSome(project)
+        ? project.value.workspaceRoot
+        : serverConfig.cwd;
       const allowed = new Set([
         ...activity.map((entry) => entry.id),
         ...tasks.map((task) => task.id),
@@ -461,8 +727,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
       const generated = yield* textGeneration
         .generateProjectDigest({
           cwd,
-          previousSummary: lastGood?.summary,
-          activity: activity.map((entry) => `${entry.id}: ${entry.summary}`).join("\n"),
+          previousSummary: previousSummary ?? undefined,
+          activity: activity
+            .map((entry) => `${entry.id}: ${entry.summary}`)
+            .join("\n"),
           coverage: `summarized=${coverage.summarizedThreadCount} pending=${coverage.pendingThreadCount}`,
           pinnedFocus: (lastGood?.focusItems ?? [])
             .filter((item) => item.pinned)
@@ -471,7 +739,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         })
         .pipe(
           Effect.map((result) => ({
-            summary: result.summary,
+            summary:
+              sanitizeProjectDigestSummary(result.summary) ??
+              INITIAL_PROJECT_DIGEST_SUMMARY,
             focusItems: mergePinnedFocusItems(
               validateDigestFocusItems(result.focusItems, allowed),
               (lastGood?.focusItems ?? []).filter((item) => item.pinned),
@@ -481,10 +751,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
           Effect.catch((error) =>
             Effect.succeed({
               summary:
-                lastGood?.summary ??
+                previousSummary ??
                 "Project summary is unavailable until the next successful refresh.",
               focusItems: lastGood?.focusItems ?? [],
-              error: error instanceof Error ? error.message : "Project digest generation failed.",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Project digest generation failed.",
             }),
           ),
         );
@@ -495,11 +768,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
         coverageFromSequence: lastGood?.coverageFromSequence ?? 0,
         coverageToSequence: activity[0]?.sequence ?? 0,
         historicalCoverage:
-          coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
+          coverage.pendingThreadCount > 0
+            ? ("partial" as const)
+            : ("complete" as const),
         summarizedThreadCount: coverage.summarizedThreadCount,
         pendingThreadCount: coverage.pendingThreadCount,
-        generationState: generated.error ? ("failed" as const) : ("idle" as const),
-        generatedAt: generated.error ? (lastGood?.generatedAt ?? null) : isoNow(),
+        generationState: generated.error
+          ? ("failed" as const)
+          : ("idle" as const),
+        generatedAt: generated.error
+          ? (lastGood?.generatedAt ?? null)
+          : isoNow(),
         lastGoodAt: generated.error ? (lastGood?.lastGoodAt ?? null) : isoNow(),
         lastError: generated.error,
       };
@@ -537,15 +816,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
       repository.listSummaries().pipe(
         Effect.mapError(toServiceError("Failed to list project agents.")),
         Effect.map((rows) => {
-          const summaries: ReadonlyArray<ProjectAgentSummary> = rows.map((row) => ({
-            projectId: row.projectId,
-            configured: true,
-            coordinatorName: row.coordinatorName,
-            coordinatorThreadId: row.coordinatorThreadId,
-            coordinatorStatus: coordinatorStatusFromGoal(true, row.goalStatus),
-            revision: row.revision,
-          }));
-          return { summaries: [...projectAgentSummariesForPrincipal(summaries, principal)] };
+          const summaries: ReadonlyArray<ProjectAgentSummary> = rows.map(
+            (row) => ({
+              projectId: row.projectId,
+              configured: true,
+              coordinatorName: row.coordinatorName,
+              coordinatorThreadId: row.coordinatorThreadId,
+              coordinatorStatus: coordinatorStatusFromGoal(
+                true,
+                row.goalStatus,
+              ),
+              revision: row.revision,
+            }),
+          );
+          return {
+            summaries: [
+              ...projectAgentSummariesForPrincipal(summaries, principal),
+            ],
+          };
         }),
       ),
 
@@ -553,7 +841,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!canConfigureProject(principal)) {
           return yield* Effect.fail(
-            fail("Only the user can configure Project Coordinator.", "forbidden"),
+            fail(
+              "Only the user can configure Project Coordinator.",
+              "forbidden",
+            ),
           );
         }
         const existingReceipt = yield* replayReceipt(
@@ -564,9 +855,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const project = yield* requireOrdinaryProject(input.projectId);
         const existing = yield* repository
           .getConfig(input.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to load project coordinator."),
+            ),
+          );
         const now = isoNow();
-        const coordinatorName = input.coordinatorName ?? `${project.title} Coordinator`;
+        const coordinatorName =
+          input.coordinatorName ?? `${project.title} Coordinator`;
         let coordinatorThreadId: ThreadId;
         let automationId: ProjectAgentConfig["automationId"] = null;
         let revision = 1;
@@ -576,7 +872,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             input.expectedRevision !== existing.value.revision
           ) {
             return yield* Effect.fail(
-              fail("Coordinator settings changed. Reload and retry.", "conflict"),
+              fail(
+                "Coordinator settings changed. Reload and retry.",
+                "conflict",
+              ),
             );
           }
           coordinatorThreadId = existing.value.coordinatorThreadId;
@@ -597,7 +896,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           ...(input.coordinatorProviderOptions
             ? { coordinatorProviderOptions: input.coordinatorProviderOptions }
             : {}),
-          ...(input.workerRouting ? { workerRouting: input.workerRouting } : {}),
+          ...(input.workerRouting
+            ? { workerRouting: input.workerRouting }
+            : {}),
           limits: input.limits ?? { ...DEFAULT_PROJECT_AGENT_LIMITS },
           captureEnabled: input.captureEnabled ?? true,
           enabled: true,
@@ -608,15 +909,28 @@ export const makeProjectAgentService = Effect.gen(function* () {
           disabledAt: null,
         };
         const saved = yield* repository
-          .saveConfig(config, Option.isSome(existing) ? existing.value.revision : null)
-          .pipe(Effect.mapError(toServiceError("Failed to save coordinator configuration.")));
+          .saveConfig(
+            config,
+            Option.isSome(existing) ? existing.value.revision : null,
+          )
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to save coordinator configuration."),
+            ),
+          );
         if (Option.isNone(existing)) {
           for (const seed of SEED_DOCUMENTS) {
             const content =
-              seed.path === "instructions.md" && input.importedInstructions?.trim()
+              seed.path === "instructions.md" &&
+              input.importedInstructions?.trim()
                 ? input.importedInstructions
                 : seed.content;
-            yield* writeSeedDocument(input.projectId, seed.path, content, "system");
+            yield* writeSeedDocument(
+              input.projectId,
+              seed.path,
+              content,
+              "system",
+            );
           }
           if (input.importedInstructions?.trim()) {
             yield* appendActivity({
@@ -636,11 +950,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
           yield* repository
             .saveDigest({
               projectId: input.projectId,
-              summary: "Coordinator is configured.",
+              summary: INITIAL_PROJECT_DIGEST_SUMMARY,
               focusItems: [],
               coverageFromSequence: 0,
               coverageToSequence: 0,
-              historicalCoverage: coverage.pendingThreadCount > 0 ? "partial" : "none",
+              historicalCoverage:
+                coverage.pendingThreadCount > 0 ? "partial" : "none",
               summarizedThreadCount: coverage.summarizedThreadCount,
               pendingThreadCount: coverage.pendingThreadCount,
               generationState: "idle",
@@ -648,14 +963,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
               lastGoodAt: now,
               lastError: null,
             })
-            .pipe(Effect.mapError(toServiceError("Failed to store initial digest.")));
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to store initial digest."),
+              ),
+            );
           const automation = yield* automationService
             .createProjectManaged({
               projectId: input.projectId,
               sourceThreadId: coordinatorThreadId,
               name: `${coordinatorName} events`,
-              prompt:
-                "Watch this project's workers. When a worker finishes, review the outcome and update decisions.md. When a worker dies, errors, hits a quota limit, or is interrupted, do not wait: redelegate the work or choose an alternate path. Do not expand scope.",
+              prompt: PROJECT_BOT_HEARTBEAT_PROMPT,
               schedule: { type: "project-event", projectId: input.projectId },
               enabled: true,
               modelSelection: input.coordinatorModelSelection,
@@ -663,7 +981,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
               targetThreadId: coordinatorThreadId,
               stopOnError: true,
             })
-            .pipe(Effect.mapError(toServiceError("Failed to create project-event automation.")));
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to create project-event automation."),
+              ),
+            );
           const withAutomation: ProjectAgentConfig = {
             ...saved,
             automationId: automation.id,
@@ -672,9 +994,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
           };
           yield* repository
             .saveConfig(withAutomation, saved.revision)
-            .pipe(Effect.mapError(toServiceError("Failed to link project automation.")));
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to link project automation."),
+              ),
+            );
         }
         yield* ensureProjectBotPlaybook(input.projectId);
+        const latestConfig = yield* requireConfig(input.projectId);
+        yield* ensureProjectBotHeartbeat(latestConfig).pipe(
+          Effect.catch(() => Effect.void),
+        );
         yield* publish({ type: "config-upserted", config: saved });
         yield* appendActivity({
           projectId: input.projectId,
@@ -686,11 +1016,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
           source: null,
           summary: Option.isSome(existing)
             ? "Updated Project Coordinator settings."
-            : "Configured Project Coordinator. Assigned work starts only after a goal is started.",
+            : "Configured Project Coordinator.",
           createdAt: now,
         });
         const overview = yield* buildOverview(input.projectId);
-        yield* storeReceipt(input.requestId, input.projectId, "configure", overview);
+        yield* storeReceipt(
+          input.requestId,
+          input.projectId,
+          "configure",
+          overview,
+        );
         return overview;
       }),
 
@@ -698,7 +1033,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!canStartGoal(principal)) {
           return yield* Effect.fail(
-            fail("Goal authorization can originate only from a user action.", "forbidden"),
+            fail(
+              "Goal authorization can originate only from a user action.",
+              "forbidden",
+            ),
           );
         }
         const existingReceipt = yield* replayReceipt(
@@ -710,10 +1048,15 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const config = yield* requireConfig(input.projectId);
         const open = yield* repository
           .getActiveGoal(input.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load project goal.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load project goal.")),
+          );
         if (Option.isSome(open)) {
           return yield* Effect.fail(
-            fail("This project already has an active or paused goal.", "conflict"),
+            fail(
+              "This project already has an active or paused goal.",
+              "conflict",
+            ),
           );
         }
         const now = isoNow();
@@ -724,7 +1067,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
           authorizationSource: "user",
           scopeVersion: 1,
           acceptanceCriteria: input.acceptanceCriteria ?? null,
-          limits: input.limits ?? config.limits ?? { ...DEFAULT_PROJECT_AGENT_LIMITS },
+          limits: input.limits ??
+            config.limits ?? { ...DEFAULT_PROJECT_AGENT_LIMITS },
           status: "active",
           continuationCount: 0,
           workerCreationCount: 0,
@@ -735,7 +1079,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         };
         const saved = yield* repository
           .saveGoal(goal, null)
-          .pipe(Effect.mapError(toServiceError("Failed to start project goal.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to start project goal.")),
+          );
         yield* publish({ type: "goal-upserted", goal: saved });
         yield* appendActivity({
           projectId: input.projectId,
@@ -748,7 +1094,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
           summary: `Started goal: ${saved.objective}`,
           createdAt: now,
         });
-        yield* storeReceipt(input.requestId, input.projectId, "startGoal", saved);
+        yield* storeReceipt(
+          input.requestId,
+          input.projectId,
+          "startGoal",
+          saved,
+        );
         return saved;
       }),
 
@@ -756,7 +1107,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!isUserPrincipal(principal)) {
           return yield* Effect.fail(
-            fail("Changing authorized goal scope is a user action.", "forbidden"),
+            fail(
+              "Changing authorized goal scope is a user action.",
+              "forbidden",
+            ),
           );
         }
         const existingReceipt = yield* replayReceipt(
@@ -768,13 +1122,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
           Effect.mapError(toServiceError("Failed to load project goal.")),
           Effect.flatMap(
             Option.match({
-              onNone: () => Effect.fail(fail("Goal was not found.", "not-found")),
+              onNone: () =>
+                Effect.fail(fail("Goal was not found.", "not-found")),
               onSome: Effect.succeed,
             }),
           ),
         );
         if (current.projectId !== input.projectId) {
-          return yield* Effect.fail(fail("Goal does not belong to this project.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Goal does not belong to this project.", "forbidden"),
+          );
         }
         const updated: ProjectGoal = {
           ...current,
@@ -789,7 +1146,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         };
         const saved = yield* repository
           .saveGoal(updated, input.expectedRevision)
-          .pipe(Effect.mapError(toServiceError("Failed to update project goal.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to update project goal.")),
+          );
         yield* publish({ type: "goal-upserted", goal: saved });
         yield* appendActivity({
           projectId: input.projectId,
@@ -802,7 +1161,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
           summary: "Updated authorized goal scope.",
           createdAt: saved.updatedAt,
         });
-        yield* storeReceipt(input.requestId, input.projectId, "updateGoal", saved);
+        yield* storeReceipt(
+          input.requestId,
+          input.projectId,
+          "updateGoal",
+          saved,
+        );
         return saved;
       }),
 
@@ -815,7 +1179,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
         "Paused the project goal. Current tasks may settle.",
       ),
     resumeGoal: (input, principal) =>
-      updateGoalStatus(input, principal, "active", "goal-resumed", "Resumed the project goal."),
+      updateGoalStatus(
+        input,
+        principal,
+        "active",
+        "goal-resumed",
+        "Resumed the project goal.",
+      ),
     stopGoal: (input, principal) =>
       updateGoalStatus(
         input,
@@ -838,7 +1208,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 ? { cursor: decodeProjectAgentListCursor(input.cursor)! }
                 : {}),
             })
-            .pipe(Effect.mapError(toServiceError("Failed to list project tasks."))),
+            .pipe(
+              Effect.mapError(toServiceError("Failed to list project tasks.")),
+            ),
         ),
         Effect.map((tasks) => ({
           tasks,
@@ -855,8 +1227,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
     createTask: (input, principal) =>
       Effect.gen(function* () {
         yield* assertSameProject(principal, input.projectId);
-        if (!canAcceptTask(principal, input.projectId) && principal.kind !== "coordinator") {
-          return yield* Effect.fail(fail("Workers cannot create tasks.", "forbidden"));
+        if (
+          !canAcceptTask(principal, input.projectId) &&
+          principal.kind !== "coordinator"
+        ) {
+          return yield* Effect.fail(
+            fail("Workers cannot create tasks.", "forbidden"),
+          );
         }
         const existingReceipt = yield* replayReceipt(
           input.requestId,
@@ -867,13 +1244,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
           Effect.mapError(toServiceError("Failed to load project goal.")),
           Effect.flatMap(
             Option.match({
-              onNone: () => Effect.fail(fail("Goal was not found.", "not-found")),
+              onNone: () =>
+                Effect.fail(fail("Goal was not found.", "not-found")),
               onSome: Effect.succeed,
             }),
           ),
         );
         if (goal.projectId !== input.projectId) {
-          return yield* Effect.fail(fail("Goal does not belong to this project.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Goal does not belong to this project.", "forbidden"),
+          );
         }
         if (goal.status !== "active") {
           return yield* Effect.fail(
@@ -882,7 +1262,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         const edges = yield* repository
           .listTaskEdges(input.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load task dependencies.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to load task dependencies."),
+            ),
+          );
         const taskId = branded.task();
         const dependsOnTaskIds = input.dependsOnTaskIds ?? [];
         if (
@@ -892,15 +1276,27 @@ export const makeProjectAgentService = Effect.gen(function* () {
             edges,
           })
         ) {
-          return yield* Effect.fail(fail("Task dependencies cannot form a cycle.", "cycle"));
+          return yield* Effect.fail(
+            fail("Task dependencies cannot form a cycle.", "cycle"),
+          );
         }
         for (const dependencyId of dependsOnTaskIds) {
           const dependency = yield* repository
             .getTask(dependencyId)
-            .pipe(Effect.mapError(toServiceError("Failed to load task dependency.")));
-          if (Option.isNone(dependency) || dependency.value.projectId !== input.projectId) {
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to load task dependency."),
+              ),
+            );
+          if (
+            Option.isNone(dependency) ||
+            dependency.value.projectId !== input.projectId
+          ) {
             return yield* Effect.fail(
-              fail("Task dependencies must belong to the same project.", "invalid"),
+              fail(
+                "Task dependencies must belong to the same project.",
+                "invalid",
+              ),
             );
           }
         }
@@ -909,8 +1305,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
           (yield* Effect.forEach(dependsOnTaskIds, (id) =>
             repository
               .getTask(id)
-              .pipe(Effect.mapError(toServiceError("Failed to load task dependency."))),
-          )).every((option) => Option.isSome(option) && option.value.status === "done");
+              .pipe(
+                Effect.mapError(
+                  toServiceError("Failed to load task dependency."),
+                ),
+              ),
+          )).every(
+            (option) => Option.isSome(option) && option.value.status === "done",
+          );
         const now = isoNow();
         const task: ProjectTask = {
           id: taskId,
@@ -930,7 +1332,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         };
         const saved = yield* repository
           .saveTask(task, null)
-          .pipe(Effect.mapError(toServiceError("Failed to create project task.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to create project task.")),
+          );
         yield* publish({ type: "task-upserted", task: saved });
         yield* appendActivity({
           projectId: input.projectId,
@@ -943,7 +1347,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
           summary: `Created task: ${saved.title}`,
           createdAt: now,
         });
-        yield* storeReceipt(input.requestId, input.projectId, "createTask", saved);
+        yield* storeReceipt(
+          input.requestId,
+          input.projectId,
+          "createTask",
+          saved,
+        );
         return saved;
       }),
 
@@ -959,13 +1368,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
           Effect.mapError(toServiceError("Failed to load project task.")),
           Effect.flatMap(
             Option.match({
-              onNone: () => Effect.fail(fail("Task was not found.", "not-found")),
+              onNone: () =>
+                Effect.fail(fail("Task was not found.", "not-found")),
               onSome: Effect.succeed,
             }),
           ),
         );
         if (current.projectId !== input.projectId) {
-          return yield* Effect.fail(fail("Task does not belong to this project.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Task does not belong to this project.", "forbidden"),
+          );
         }
         if (input.accept) {
           if (!canAcceptTask(principal, input.projectId)) {
@@ -982,14 +1394,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
             current.status !== "running"
           ) {
             return yield* Effect.fail(
-              fail("Only reviewed work can be accepted against recorded evidence.", "invalid"),
+              fail(
+                "Only reviewed work can be accepted against recorded evidence.",
+                "invalid",
+              ),
             );
           }
           const evidence = yield* repository
             .listEvidenceForTask(current.id)
-            .pipe(Effect.mapError(toServiceError("Failed to load task evidence.")));
+            .pipe(
+              Effect.mapError(toServiceError("Failed to load task evidence.")),
+            );
           if (evidence.length === 0) {
-            return yield* Effect.fail(fail("Acceptance requires recorded evidence.", "invalid"));
+            return yield* Effect.fail(
+              fail("Acceptance requires recorded evidence.", "invalid"),
+            );
           }
         }
         if (principal.kind === "worker" && input.status === "done") {
@@ -1000,11 +1419,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
             ),
           );
         }
-        const dependsOnTaskIds = input.dependsOnTaskIds ?? current.dependsOnTaskIds;
+        const dependsOnTaskIds =
+          input.dependsOnTaskIds ?? current.dependsOnTaskIds;
         if (input.dependsOnTaskIds) {
           const edges = yield* repository
             .listTaskEdges(input.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to load task dependencies.")));
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to load task dependencies."),
+              ),
+            );
           if (
             detectProjectTaskDependencyCycle({
               taskId: current.id,
@@ -1012,7 +1436,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
               edges,
             })
           ) {
-            return yield* Effect.fail(fail("Task dependencies cannot form a cycle.", "cycle"));
+            return yield* Effect.fail(
+              fail("Task dependencies cannot form a cycle.", "cycle"),
+            );
           }
         }
         const nextStatus: ProjectTaskStatus = input.accept
@@ -1021,7 +1447,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const updated: ProjectTask = {
           ...current,
           title: input.title ?? current.title,
-          description: input.description === undefined ? current.description : input.description,
+          description:
+            input.description === undefined
+              ? current.description
+              : input.description,
           acceptanceCriteria:
             input.acceptanceCriteria === undefined
               ? current.acceptanceCriteria
@@ -1039,7 +1468,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         };
         const saved = yield* repository
           .saveTask(updated, input.expectedRevision)
-          .pipe(Effect.mapError(toServiceError("Failed to update project task.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to update project task.")),
+          );
         if (input.accept) {
           yield* unblockDependents(saved);
         }
@@ -1057,10 +1488,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
           goalId: saved.goalId,
           taskId: saved.id,
           source: null,
-          summary: input.accept ? `Accepted task: ${saved.title}` : `Updated task: ${saved.title}`,
+          summary: input.accept
+            ? `Accepted task: ${saved.title}`
+            : `Updated task: ${saved.title}`,
           createdAt: saved.updatedAt,
         });
-        yield* storeReceipt(input.requestId, input.projectId, "updateTask", saved);
+        yield* storeReceipt(
+          input.requestId,
+          input.projectId,
+          "updateTask",
+          saved,
+        );
         return saved;
       }),
 
@@ -1075,7 +1513,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 ? { cursor: decodeProjectAgentListCursor(input.cursor)! }
                 : {}),
             })
-            .pipe(Effect.mapError(toServiceError("Failed to list project activity."))),
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to list project activity."),
+              ),
+            ),
         ),
         Effect.map((activity) => ({
           activity,
@@ -1094,11 +1536,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
         Effect.andThen(
           repository
             .listDocumentHeads(input.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to list project documents."))),
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to list project documents."),
+              ),
+            ),
         ),
         Effect.map((documents) => ({
           documents: input.prefix
-            ? documents.filter((doc) => doc.logicalPath.startsWith(input.prefix!))
+            ? documents.filter((doc) =>
+                doc.logicalPath.startsWith(input.prefix!),
+              )
             : documents,
         })),
       ),
@@ -1107,15 +1555,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* assertSameProject(principal, input.projectId);
         const logicalPath = normalizeProjectDocumentPath(input.logicalPath);
-        const head = yield* repository.getDocumentHead(input.projectId, logicalPath).pipe(
-          Effect.mapError(toServiceError("Failed to load document head.")),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(fail("Document was not found.", "not-found")),
-              onSome: Effect.succeed,
-            }),
-          ),
-        );
+        const head = yield* repository
+          .getDocumentHead(input.projectId, logicalPath)
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load document head.")),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(fail("Document was not found.", "not-found")),
+                onSome: Effect.succeed,
+              }),
+            ),
+          );
         const document = yield* repository
           .readDocumentRevision({
             projectId: input.projectId,
@@ -1126,7 +1577,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             Effect.mapError(toServiceError("Failed to read project document.")),
             Effect.flatMap(
               Option.match({
-                onNone: () => Effect.fail(fail("Document revision was not found.", "not-found")),
+                onNone: () =>
+                  Effect.fail(
+                    fail("Document revision was not found.", "not-found"),
+                  ),
                 onSome: Effect.succeed,
               }),
             ),
@@ -1137,10 +1591,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
           logicalPath,
         }).pipe(Effect.catch(() => Effect.succeed(null)));
         const diskHash = disk === null ? null : hashDocumentContent(disk);
-        const conflictPending = diskHash !== null && diskHash !== head.contentHash;
+        const conflictPending =
+          diskHash !== null && diskHash !== head.contentHash;
         const history = yield* repository
           .listDocumentHistory({ projectId: input.projectId, logicalPath })
-          .pipe(Effect.mapError(toServiceError("Failed to load document history.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load document history.")),
+          );
         return {
           head: { ...head, diskHash, conflictPending },
           document,
@@ -1159,34 +1616,60 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const logicalPath = normalizeProjectDocumentPath(input.logicalPath);
         if (isGeneratedDocumentPath(logicalPath) && principal.kind !== "user") {
           return yield* Effect.fail(
-            fail("Generated views cannot be overwritten directly.", "forbidden"),
+            fail(
+              "Generated views cannot be overwritten directly.",
+              "forbidden",
+            ),
           );
         }
-        if (isUserOwnedDocumentPath(logicalPath) && !canWriteUserOwnedDocuments(principal)) {
+        if (
+          isUserOwnedDocumentPath(logicalPath) &&
+          !canWriteUserOwnedDocuments(principal)
+        ) {
           return yield* Effect.fail(
-            fail("Only the user can edit project instructions and notes.", "forbidden"),
+            fail(
+              "Only the user can edit project instructions and notes.",
+              "forbidden",
+            ),
           );
         }
         if (isInboxDocumentPath(logicalPath) && principal.kind === "worker") {
           const expectedPrefix = `inbox/${principal.threadId}/`;
           if (!logicalPath.startsWith(expectedPrefix)) {
             return yield* Effect.fail(
-              fail("Workers can only write their own inbox entries.", "forbidden"),
+              fail(
+                "Workers can only write their own inbox entries.",
+                "forbidden",
+              ),
             );
           }
         }
-        if (isCoordinatorCuratedDocumentPath(logicalPath) && principal.kind === "worker") {
+        if (
+          isCoordinatorCuratedDocumentPath(logicalPath) &&
+          principal.kind === "worker"
+        ) {
           return yield* Effect.fail(
-            fail("Workers cannot rewrite curated project knowledge.", "forbidden"),
+            fail(
+              "Workers cannot rewrite curated project knowledge.",
+              "forbidden",
+            ),
           );
         }
         const head = yield* repository
           .getDocumentHead(input.projectId, logicalPath)
-          .pipe(Effect.mapError(toServiceError("Failed to load document head.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load document head.")),
+          );
         const currentRevision = Option.isSome(head) ? head.value.revision : 0;
-        if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) {
+        if (
+          input.expectedRevision !== undefined &&
+          input.expectedRevision !== currentRevision
+        ) {
           return yield* Effect.fail(
-            fail("Document changed. Reload and retry with the latest revision.", "conflict"),
+            fail(
+              "Document changed. Reload and retry with the latest revision.",
+              "conflict",
+            ),
           );
         }
         const disk = yield* readProjectDocumentMirror({
@@ -1208,7 +1691,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
             ),
           );
         }
-        const content = input.importExternal && disk !== null ? disk : input.content;
+        const content =
+          input.importExternal && disk !== null ? disk : input.content;
         const now = isoNow();
         const revision: ProjectDocumentRevision = {
           id: branded.document(),
@@ -1234,13 +1718,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
             diskHash: revision.contentHash,
             conflictPending: false,
           })
-          .pipe(Effect.mapError(toServiceError("Failed to write project document.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to write project document."),
+            ),
+          );
         yield* writeProjectDocumentMirror({
           stateDir: serverConfig.stateDir,
           projectId: input.projectId,
           logicalPath,
           content,
-        }).pipe(Effect.mapError(toServiceError("Failed to materialize project document.")));
+        }).pipe(
+          Effect.mapError(
+            toServiceError("Failed to materialize project document."),
+          ),
+        );
         yield* publish({
           type: "document-head-updated",
           head: {
@@ -1264,7 +1756,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
           summary: `Wrote ${logicalPath}`,
           createdAt: now,
         });
-        yield* storeReceipt(input.requestId, input.projectId, "writeDocument", saved);
+        yield* storeReceipt(
+          input.requestId,
+          input.projectId,
+          "writeDocument",
+          saved,
+        );
         return saved;
       }),
 
@@ -1276,19 +1773,33 @@ export const makeProjectAgentService = Effect.gen(function* () {
           );
         }
         if (input.logicalPaths.length > 50) {
-          return yield* Effect.fail(fail("Export at most 50 documents at a time.", "invalid"));
+          return yield* Effect.fail(
+            fail("Export at most 50 documents at a time.", "invalid"),
+          );
         }
         const exportedPaths: string[] = [];
         for (const rawPath of input.logicalPaths) {
           const logicalPath = normalizeProjectDocumentPath(rawPath);
           const document = yield* repository
             .readDocumentRevision({ projectId: input.projectId, logicalPath })
-            .pipe(Effect.mapError(toServiceError("Failed to read document for export.")));
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to read document for export."),
+              ),
+            );
           if (Option.isNone(document)) continue;
-          const destination = path.resolve(input.destinationDirectory, logicalPath);
-          if (!destination.startsWith(path.resolve(input.destinationDirectory))) {
+          const destination = path.resolve(
+            input.destinationDirectory,
+            logicalPath,
+          );
+          if (
+            !destination.startsWith(path.resolve(input.destinationDirectory))
+          ) {
             return yield* Effect.fail(
-              fail("Export destination escaped the chosen directory.", "invalid"),
+              fail(
+                "Export destination escaped the chosen directory.",
+                "invalid",
+              ),
             );
           }
           yield* Effect.tryPromise({
@@ -1297,7 +1808,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
               await fs.writeFile(destination, document.value.content, "utf8");
             },
             catch: (cause) => cause,
-          }).pipe(Effect.mapError(toServiceError("Failed to export project document.")));
+          }).pipe(
+            Effect.mapError(
+              toServiceError("Failed to export project document."),
+            ),
+          );
           exportedPaths.push(destination);
         }
         return { exportedPaths };
@@ -1312,11 +1827,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     scheduleDigest: (projectId) =>
       Effect.gen(function* () {
-        yield* Ref.update(digestPending, (pending) => new Set(pending).add(projectId));
+        yield* Ref.update(digestPending, (pending) =>
+          new Set(pending).add(projectId),
+        );
         const timers = yield* Ref.get(digestTimer);
         if (timers.has(projectId)) return;
-        yield* Ref.update(digestTimer, (current) => new Set(current).add(projectId));
-        yield* Effect.sleep(Duration.millis(PROJECT_AGENT_DIGEST_DEBOUNCE_MS)).pipe(
+        yield* Ref.update(digestTimer, (current) =>
+          new Set(current).add(projectId),
+        );
+        yield* Effect.sleep(
+          Duration.millis(PROJECT_AGENT_DIGEST_DEBOUNCE_MS),
+        ).pipe(
           Effect.andThen(generateDigestNow(projectId)),
           Effect.catch(() => Effect.void),
           Effect.ensuring(
@@ -1335,7 +1856,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         Effect.andThen(
           repository
             .listEvidenceForTask(input.taskId)
-            .pipe(Effect.mapError(toServiceError("Failed to list task evidence."))),
+            .pipe(
+              Effect.mapError(toServiceError("Failed to list task evidence.")),
+            ),
         ),
         Effect.map((evidence) => ({ evidence })),
       ),
@@ -1345,7 +1868,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         Effect.andThen(
           repository
             .listThreadIndex(input.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to list project threads."))),
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to list project threads."),
+              ),
+            ),
         ),
         Effect.map((threads) => ({ threads })),
       ),
@@ -1353,13 +1880,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
     excludeThread: (input, principal) =>
       Effect.gen(function* () {
         if (!isUserPrincipal(principal)) {
-          return yield* Effect.fail(fail("Thread coverage is a user action.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Thread coverage is a user action.", "forbidden"),
+          );
         }
         yield* requireConfig(input.projectId);
         const existing = yield* repository
           .listThreadIndex(input.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load thread coverage.")));
-        const current = existing.find((entry) => entry.threadId === input.threadId);
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load thread coverage.")),
+          );
+        const current = existing.find(
+          (entry) => entry.threadId === input.threadId,
+        );
         const entry = {
           projectId: input.projectId,
           threadId: input.threadId,
@@ -1373,7 +1906,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         };
         yield* repository
           .upsertThreadIndex(entry)
-          .pipe(Effect.mapError(toServiceError("Failed to update thread coverage.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to update thread coverage."),
+            ),
+          );
         yield* impl.scheduleDigest(input.projectId);
         return entry;
       }),
@@ -1381,22 +1918,33 @@ export const makeProjectAgentService = Effect.gen(function* () {
     backfillSummaries: (input, principal) =>
       Effect.gen(function* () {
         if (!isUserPrincipal(principal)) {
-          return yield* Effect.fail(fail("Historical backfill is a user action.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Historical backfill is a user action.", "forbidden"),
+          );
         }
         const index = yield* repository
           .listThreadIndex(input.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load pending threads.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load pending threads.")),
+          );
         const pending = index.filter(
           (entry) => !entry.excluded && entry.summaryStatus === "pending",
         );
-        for (const entry of pending.slice(0, PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT)) {
+        for (const entry of pending.slice(
+          0,
+          PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT,
+        )) {
           yield* repository
             .upsertThreadIndex({
               ...entry,
               summaryStatus: "covered",
               lastSummarizedAt: isoNow(),
             })
-            .pipe(Effect.mapError(toServiceError("Failed to backfill thread summary.")));
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to backfill thread summary."),
+              ),
+            );
         }
         yield* generateDigestNow(input.projectId);
         return yield* buildOverview(input.projectId);
@@ -1408,10 +1956,23 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (principal.kind !== "coordinator" && principal.kind !== "worker") {
           return "";
         }
+        const config = yield* repository
+          .getConfig(principal.projectId)
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
         if (principal.kind === "coordinator") {
-          yield* ensureProjectBotPlaybook(principal.projectId);
+          yield* ensureProjectBotPlaybook(principal.projectId).pipe(
+            Effect.catch(() => Effect.void),
+          );
+          if (Option.isSome(config)) {
+            yield* ensureProjectBotHeartbeat(config.value).pipe(
+              Effect.catch(() => Effect.void),
+            );
+          }
         }
-        const packet = yield* impl.buildContextPacket(principal.projectId, threadId);
+        const packet = yield* impl.buildContextPacket(
+          principal.projectId,
+          threadId,
+        );
         const playbook = yield* repository
           .readDocumentRevision({
             projectId: principal.projectId,
@@ -1421,11 +1982,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const index = yield* repository
           .listThreadIndex(principal.projectId)
           .pipe(Effect.catch(() => Effect.succeed([])));
-        const config = yield* repository
-          .getConfig(principal.projectId)
-          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-        const coordinatorThreadId = Option.isSome(config) ? config.value.coordinatorThreadId : null;
+        const coordinatorThreadId = Option.isSome(config)
+          ? config.value.coordinatorThreadId
+          : null;
         const workerLines: string[] = [];
+        const workerReports: string[] = [];
         for (const entry of index) {
           if (
             !coordinatorThreadId ||
@@ -1443,16 +2004,32 @@ export const makeProjectAgentService = Effect.gen(function* () {
           workerLines.push(
             formatWorkerWatchLine({
               title: Option.isSome(shell) ? shell.value.title : "Worker thread",
-              status: Option.isSome(shell) ? shell.value.session?.status : "missing",
-              lastError: Option.isSome(shell) ? shell.value.session?.lastError : "thread is gone",
+              status: Option.isSome(shell)
+                ? shell.value.session?.status
+                : "missing",
+              lastError: Option.isSome(shell)
+                ? shell.value.session?.lastError
+                : "thread is gone",
             }),
           );
+          const report = yield* repository
+            .readDocumentRevision({
+              projectId: principal.projectId,
+              logicalPath: workerInboxReportPath(entry.threadId),
+            })
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(report) && report.value.content.trim().length > 0) {
+            workerReports.push(report.value.content.trim());
+          }
         }
         const budget = truncateToContextBudget([
           {
             label: "Playbook",
-            text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
+            text: Option.isSome(playbook)
+              ? playbook.value.content
+              : PROJECT_BOT_PLAYBOOK,
           },
+          { label: "Watch", text: PROJECT_BOT_WATCH_RULES },
           {
             label: "Workers",
             text:
@@ -1460,12 +2037,26 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 ? `${workerLines.join("\n")}\nIf a worker is error/interrupted/stopped, redelegate or choose an alternate. Do not wait.`
                 : "No workers yet.",
           },
-          { label: "Goal", text: packet.goal?.objective ?? "No active goal." },
+          {
+            label: "Worker reports",
+            text:
+              workerReports.length > 0
+                ? workerReports.join("\n\n")
+                : "None yet. Synara writes inbox/<threadId>/report.md when a worker finishes or dies.",
+          },
+          {
+            label: "Goal",
+            text:
+              packet.goal?.objective ??
+              "None. Only create a goal if the user asked for one.",
+          },
           { label: "Instructions", text: packet.instructions },
           { label: "Decisions", text: packet.relevantDecisions },
           {
             label: "Tasks",
-            text: packet.tasks.map((task) => `- ${task.status} ${task.title}`).join("\n"),
+            text: packet.tasks
+              .map((task) => `- ${task.status} ${task.title}`)
+              .join("\n"),
           },
         ]);
         return [
@@ -1481,7 +2072,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     authorizeManagedGoalCreation: (input) =>
       Effect.gen(function* () {
-        const principal = yield* impl.resolvePrincipalForThread(input.callerThreadId);
+        const principal = yield* impl.resolvePrincipalForThread(
+          input.callerThreadId,
+        );
         if (principal.kind !== "coordinator") return;
         const config = yield* requireConfig(principal.projectId);
         const limits = {
@@ -1496,7 +2089,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         };
         const running = yield* repository
           .countRunningWorkers(principal.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to count running workers.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to count running workers.")),
+          );
         if (input.requestedCount > limits.maxNewWorkersPerTurn) {
           return yield* Effect.fail(
             fail(
@@ -1517,14 +2112,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     recordManagedWorkerThreads: (input) =>
       Effect.gen(function* () {
-        const principal = yield* impl.resolvePrincipalForThread(input.callerThreadId);
+        const principal = yield* impl.resolvePrincipalForThread(
+          input.callerThreadId,
+        );
         if (principal.kind !== "coordinator") return;
         const now = isoNow();
         const goal = yield* repository
           .getActiveGoal(principal.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load authorized goal.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load authorized goal.")),
+          );
         const activeGoal =
-          Option.isSome(goal) && goal.value.status === "active" ? goal.value : null;
+          Option.isSome(goal) && goal.value.status === "active"
+            ? goal.value
+            : null;
         for (const [index, threadId] of input.threadIds.entries()) {
           const title = input.titles[index] ?? `Worker ${index + 1}`;
           yield* repository
@@ -1537,7 +2138,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
               lastUpdatedAt: now,
               lastSummarizedAt: null,
             })
-            .pipe(Effect.mapError(toServiceError("Failed to index worker thread.")));
+            .pipe(
+              Effect.mapError(toServiceError("Failed to index worker thread.")),
+            );
           if (activeGoal) {
             const task = yield* impl.createTask(
               {
@@ -1558,7 +2161,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
             };
             yield* repository
               .saveTask(assigned, task.revision)
-              .pipe(Effect.mapError(toServiceError("Failed to assign worker thread.")));
+              .pipe(
+                Effect.mapError(
+                  toServiceError("Failed to assign worker thread."),
+                ),
+              );
             yield* repository
               .saveAttempt({
                 id: branded.attempt(),
@@ -1573,7 +2180,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 createdAt: now,
                 finishedAt: null,
               })
-              .pipe(Effect.mapError(toServiceError("Failed to record worker attempt.")));
+              .pipe(
+                Effect.mapError(
+                  toServiceError("Failed to record worker attempt."),
+                ),
+              );
           }
           yield* appendActivity({
             projectId: principal.projectId,
@@ -1592,13 +2203,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
             .saveGoal(
               {
                 ...activeGoal,
-                workerCreationCount: activeGoal.workerCreationCount + input.threadIds.length,
+                workerCreationCount:
+                  activeGoal.workerCreationCount + input.threadIds.length,
                 revision: activeGoal.revision + 1,
                 updatedAt: now,
               },
               activeGoal.revision,
             )
-            .pipe(Effect.mapError(toServiceError("Failed to count worker creations.")));
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to count worker creations."),
+              ),
+            );
         }
         yield* impl.scheduleDigest(principal.projectId);
       }),
@@ -1607,12 +2223,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         const configs = yield* repository
           .listConfigs()
-          .pipe(Effect.mapError(toServiceError("Failed to list project coordinators.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to list project coordinators."),
+            ),
+          );
         for (const config of configs) {
           if (!config.enabled) continue;
           const cursor = yield* repository
             .getCursor(config.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to load wake cursor.")));
+            .pipe(
+              Effect.mapError(toServiceError("Failed to load wake cursor.")),
+            );
           if (cursor.coordinatorBusy || cursor.frozenFromInboxId) {
             yield* impl.processPendingWakes(config.projectId);
           }
@@ -1633,13 +2255,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
           Effect.mapError(toServiceError("Failed to load project task.")),
           Effect.flatMap(
             Option.match({
-              onNone: () => Effect.fail(fail("Task was not found.", "not-found")),
+              onNone: () =>
+                Effect.fail(fail("Task was not found.", "not-found")),
               onSome: Effect.succeed,
             }),
           ),
         );
         if (principal.kind === "worker" && principal.taskId !== task.id) {
-          return yield* Effect.fail(fail("Workers can only report their own task.", "forbidden"));
+          return yield* Effect.fail(
+            fail("Workers can only report their own task.", "forbidden"),
+          );
         }
         const now = isoNow();
         yield* repository
@@ -1651,8 +2276,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             kind: input.evidenceKind ?? "message",
             classification: "reported",
             authorKind: principal.kind === "user" ? "user" : principal.kind,
-            authorThreadId: principal.kind === "user" ? null : principal.threadId,
-            sourceThreadId: principal.kind === "user" ? null : principal.threadId,
+            authorThreadId:
+              principal.kind === "user" ? null : principal.threadId,
+            sourceThreadId:
+              principal.kind === "user" ? null : principal.threadId,
             sourceMessageId: null,
             sourceTurnId: null,
             summary: input.summary,
@@ -1668,7 +2295,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           };
           const saved = yield* repository
             .saveTask(reviewed, task.revision)
-            .pipe(Effect.mapError(toServiceError("Failed to move task to review.")));
+            .pipe(
+              Effect.mapError(toServiceError("Failed to move task to review.")),
+            );
           yield* publish({ type: "task-upserted", task: saved });
         }
         return yield* appendActivity({
@@ -1689,24 +2318,47 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const config = yield* requireConfig(projectId);
         const goal = yield* repository
           .getActiveGoal(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load project goal.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load project goal.")),
+          );
         const instructions = yield* repository
           .readDocumentRevision({ projectId, logicalPath: "instructions.md" })
-          .pipe(Effect.mapError(toServiceError("Failed to load instructions.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load instructions.")),
+          );
         const decisions = yield* repository
           .readDocumentRevision({ projectId, logicalPath: "decisions.md" })
           .pipe(Effect.mapError(toServiceError("Failed to load decisions.")));
         const playbook = yield* repository
-          .readDocumentRevision({ projectId, logicalPath: PROJECT_BOT_PLAYBOOK_PATH })
-          .pipe(Effect.mapError(toServiceError("Failed to load project bot playbook.")));
+          .readDocumentRevision({
+            projectId,
+            logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+          })
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to load project bot playbook."),
+            ),
+          );
         const tasks = yield* repository
           .listTasks({ projectId, includeArchived: false, limit: 40 })
-          .pipe(Effect.mapError(toServiceError("Failed to load tasks for context.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to load tasks for context."),
+            ),
+          );
         const digest = yield* repository
           .getDigest(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load digest coverage.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load digest coverage.")),
+          );
         const sections = [
-          { label: "Goal", text: Option.isSome(goal) ? goal.value.objective : "No active goal." },
+          { label: "Watch", text: PROJECT_BOT_WATCH_RULES },
+          {
+            label: "Goal",
+            text: Option.isSome(goal)
+              ? goal.value.objective
+              : "None. Only create a goal if the user asked for one.",
+          },
           {
             label: "Instructions",
             text: Option.isSome(instructions) ? instructions.value.content : "",
@@ -1717,19 +2369,27 @@ export const makeProjectAgentService = Effect.gen(function* () {
           },
           {
             label: "Playbook",
-            text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
+            text: Option.isSome(playbook)
+              ? playbook.value.content
+              : PROJECT_BOT_PLAYBOOK,
           },
           {
             label: "Tasks",
-            text: tasks.map((task) => `- ${task.status} ${task.title}`).join("\n"),
+            text: tasks
+              .map((task) => `- ${task.status} ${task.title}`)
+              .join("\n"),
           },
         ];
         const budget = truncateToContextBudget(sections);
         return {
           projectId,
           goal: Option.getOrNull(goal),
-          instructions: Option.isSome(instructions) ? instructions.value.content : "",
-          relevantDecisions: Option.isSome(decisions) ? decisions.value.content : "",
+          instructions: Option.isSome(instructions)
+            ? instructions.value.content
+            : "",
+          relevantDecisions: Option.isSome(decisions)
+            ? decisions.value.content
+            : "",
           tasks,
           documentReferences: [
             "instructions.md",
@@ -1737,7 +2397,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
             "overview.md",
             PROJECT_BOT_PLAYBOOK_PATH,
           ],
-          historicalCoverage: Option.isSome(digest) ? digest.value.historicalCoverage : "none",
+          historicalCoverage: Option.isSome(digest)
+            ? digest.value.historicalCoverage
+            : "none",
           characterCount: budget.characterCount,
         };
       }),
@@ -1746,13 +2408,25 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         const task = yield* repository
           .findTaskByAssignedThread(input.threadId)
-          .pipe(Effect.mapError(toServiceError("Failed to resolve task for event.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to resolve task for event."),
+            ),
+          );
         const configByCoordinator = yield* repository
           .getConfigByCoordinatorThread(input.threadId)
-          .pipe(Effect.mapError(toServiceError("Failed to resolve coordinator for event.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to resolve coordinator for event."),
+            ),
+          );
         const shell = yield* snapshotQuery
           .getThreadShellById(input.threadId)
-          .pipe(Effect.mapError(toServiceError("Failed to resolve thread for event.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to resolve thread for event."),
+            ),
+          );
         const projectId = Option.isSome(task)
           ? task.value.projectId
           : Option.isSome(configByCoordinator)
@@ -1763,7 +2437,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (projectId === null) return;
         const config = yield* repository
           .getConfig(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load coordinator for event.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to load coordinator for event."),
+            ),
+          );
         if (Option.isNone(config) || !config.value.enabled) return;
         if (Option.isSome(configByCoordinator)) {
           yield* appendActivity({
@@ -1781,7 +2459,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         const index = yield* repository
           .listThreadIndex(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load worker index.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load worker index.")),
+          );
         const managedWorker = isManagedWorkerThread({
           threadId: input.threadId,
           coordinatorThreadId: config.value.coordinatorThreadId,
@@ -1799,8 +2479,102 @@ export const makeProjectAgentService = Effect.gen(function* () {
             eligibleWake,
             createdAt: input.createdAt,
           })
-          .pipe(Effect.mapError(toServiceError("Failed to record project inbox event.")));
-        if (!inserted.inserted) return;
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to record project inbox event."),
+            ),
+          );
+        const shouldReport =
+          managedWorker &&
+          shouldMaterializeWorkerSettlementReport(input.eventType);
+        let reportRewritten = false;
+        if (shouldReport) {
+          const detail = yield* snapshotQuery
+            .getThreadDetailById(input.threadId)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          const title = Option.isSome(detail)
+            ? detail.value.title
+            : Option.isSome(shell)
+              ? shell.value.title
+              : "Worker thread";
+          const lastAssistantText = Option.isSome(detail)
+            ? lastAssistantTextFromMessages(detail.value.messages)
+            : null;
+          const outcome = classifyWorkerSettlement({
+            eventType: input.eventType,
+            sessionStatus: Option.isSome(shell)
+              ? shell.value.session?.status
+              : null,
+          });
+          const report = formatWorkerSettlementReport({
+            title,
+            threadId: input.threadId,
+            eventType: input.eventType,
+            status: Option.isSome(shell) ? shell.value.session?.status : null,
+            lastError: Option.isSome(shell)
+              ? shell.value.session?.lastError
+              : null,
+            lastAssistantText,
+            createdAt: input.createdAt,
+          });
+          const written = yield* upsertSystemDocument({
+            projectId,
+            logicalPath: workerInboxReportPath(input.threadId),
+            content: report,
+            authorThreadId: input.threadId,
+            sources: [
+              {
+                threadId: input.threadId,
+                path: workerInboxReportPath(input.threadId),
+              },
+            ],
+          }).pipe(Effect.catch(() => Effect.succeed(undefined)));
+          reportRewritten = written !== undefined;
+          if (inserted.inserted || reportRewritten) {
+            yield* appendActivity({
+              projectId,
+              kind: "document-written",
+              actorKind: "system",
+              actorThreadId: input.threadId,
+              goalId: Option.isSome(task) ? task.value.goalId : null,
+              taskId: Option.isSome(task) ? task.value.id : null,
+              source: {
+                path: workerInboxReportPath(input.threadId),
+                threadId: input.threadId,
+              },
+              summary: `Worker ${title} reported: ${outcome}.`,
+              createdAt: input.createdAt,
+            }).pipe(Effect.catch(() => Effect.void));
+          }
+          if (Option.isSome(task) && (inserted.inserted || reportRewritten)) {
+            yield* repository
+              .saveEvidence({
+                id: branded.evidence(),
+                projectId,
+                taskId: task.value.id,
+                attemptId: null,
+                kind: "message",
+                classification: "reported",
+                authorKind: "system",
+                authorThreadId: input.threadId,
+                sourceThreadId: input.threadId,
+                sourceMessageId: null,
+                sourceTurnId: Option.isSome(detail)
+                  ? (detail.value.latestTurn?.turnId ?? null)
+                  : null,
+                summary:
+                  report.slice(0, 4_000).trim() || "Worker settlement report.",
+                createdAt: input.createdAt,
+              })
+              .pipe(Effect.catch(() => Effect.void));
+          }
+        }
+        if (!inserted.inserted) {
+          if (reportRewritten) {
+            yield* impl.scheduleDigest(projectId);
+          }
+          return;
+        }
         yield* impl.scheduleDigest(projectId);
         if (eligibleWake) {
           yield* impl.processPendingWakes(projectId);
@@ -1825,12 +2599,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const config = yield* requireConfig(projectId);
         const goal = yield* repository
           .getActiveGoal(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load goal for wake.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load goal for wake.")),
+          );
         const activeGoal =
-          Option.isSome(goal) && goal.value.status === "active" ? goal.value : null;
+          Option.isSome(goal) && goal.value.status === "active"
+            ? goal.value
+            : null;
         if (
           activeGoal &&
-          activeGoal.continuationCount >= activeGoal.limits.maxAutomaticContinuationsPerGoal
+          activeGoal.continuationCount >=
+            activeGoal.limits.maxAutomaticContinuationsPerGoal
         ) {
           yield* repository
             .saveGoal(
@@ -1842,7 +2621,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
               },
               activeGoal.revision,
             )
-            .pipe(Effect.mapError(toServiceError("Failed to pause exhausted goal.")));
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to pause exhausted goal."),
+              ),
+            );
           yield* appendActivity({
             projectId,
             kind: "goal-paused",
@@ -1859,7 +2642,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         const cursor = yield* repository
           .getCursor(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load project event cursor.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to load project event cursor."),
+            ),
+          );
         if (cursor.coordinatorBusy) return;
         const pending = yield* repository
           .listInboxAfter({
@@ -1867,15 +2654,22 @@ export const makeProjectAgentService = Effect.gen(function* () {
             afterId: cursor.processedThroughInboxId,
             limit: 50,
           })
-          .pipe(Effect.mapError(toServiceError("Failed to load project inbox.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load project inbox.")),
+          );
         const eligible = pending.filter((event) => event.eligibleWake);
         if (eligible.length === 0) return;
         const coordinator = yield* snapshotQuery
           .getThreadShellById(config.coordinatorThreadId)
-          .pipe(Effect.mapError(toServiceError("Failed to load coordinator thread.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to load coordinator thread."),
+            ),
+          );
         if (Option.isSome(coordinator)) {
           const liveTurn = coordinator.value.latestTurn?.state === "running";
-          const busy = liveTurn || coordinator.value.hasPendingApprovals === true;
+          const busy =
+            liveTurn || coordinator.value.hasPendingApprovals === true;
           if (busy) return;
         }
         if (!config.automationId) return;
@@ -1888,7 +2682,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         });
         const existingWake = yield* repository
           .getReceipt(receiptId)
-          .pipe(Effect.mapError(toServiceError("Failed to load wake receipt.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load wake receipt.")),
+          );
         yield* repository
           .saveCursor({
             projectId,
@@ -1898,14 +2694,23 @@ export const makeProjectAgentService = Effect.gen(function* () {
             coordinatorBusy: true,
             updatedAt: isoNow(),
           })
-          .pipe(Effect.mapError(toServiceError("Failed to freeze project event range.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to freeze project event range."),
+            ),
+          );
         let runId = Option.isSome(existingWake)
-          ? (JSON.parse(existingWake.value.resultJson) as { runId?: string }).runId
+          ? (JSON.parse(existingWake.value.resultJson) as { runId?: string })
+              .runId
           : undefined;
         if (!runId) {
           const run = yield* automationService
             .runNow({ automationId: config.automationId })
-            .pipe(Effect.mapError(toServiceError("Failed to dispatch coordinator continuation.")));
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to dispatch coordinator continuation."),
+              ),
+            );
           runId = run.run.id;
           yield* storeReceipt(receiptId, projectId, "wake", { runId });
           if (activeGoal) {
@@ -1919,7 +2724,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 },
                 activeGoal.revision,
               )
-              .pipe(Effect.mapError(toServiceError("Failed to count coordinator continuation.")));
+              .pipe(
+                Effect.mapError(
+                  toServiceError("Failed to count coordinator continuation."),
+                ),
+              );
           }
         }
         yield* repository
@@ -1931,7 +2740,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
             coordinatorBusy: false,
             updatedAt: isoNow(),
           })
-          .pipe(Effect.mapError(toServiceError("Failed to advance project event cursor.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to advance project event cursor."),
+            ),
+          );
         yield* appendActivity({
           projectId,
           kind: "wake-enqueued",
@@ -1950,12 +2763,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         const configs = yield* repository
           .listConfigs()
-          .pipe(Effect.mapError(toServiceError("Failed to list project coordinators.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to list project coordinators."),
+            ),
+          );
         for (const config of configs) {
           if (!config.enabled) continue;
           const index = yield* repository
             .listThreadIndex(config.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to load worker index.")));
+            .pipe(
+              Effect.mapError(toServiceError("Failed to load worker index.")),
+            );
           for (const entry of index) {
             if (
               !isManagedWorkerThread({
@@ -1968,7 +2787,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
             }
             const shell = yield* snapshotQuery
               .getThreadShellById(entry.threadId)
-              .pipe(Effect.mapError(toServiceError("Failed to inspect worker thread.")));
+              .pipe(
+                Effect.mapError(
+                  toServiceError("Failed to inspect worker thread."),
+                ),
+              );
             if (Option.isNone(shell)) {
               yield* impl.ingestSettledThreadEvent({
                 threadId: entry.threadId,
@@ -1980,7 +2803,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
             }
             const status = shell.value.session?.status ?? null;
             if (!isFailedWorkerSessionStatus(status)) continue;
-            const updatedAt = shell.value.session?.updatedAt ?? shell.value.updatedAt;
+            const updatedAt =
+              shell.value.session?.updatedAt ?? shell.value.updatedAt;
             yield* impl.ingestSettledThreadEvent({
               threadId: entry.threadId,
               sourceEventId: `worker-health:${entry.threadId}:${status}:${updatedAt}`,
@@ -1995,7 +2819,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         const coordinator = yield* repository
           .getConfigByCoordinatorThread(threadId)
-          .pipe(Effect.mapError(toServiceError("Failed to resolve coordinator principal.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to resolve coordinator principal."),
+            ),
+          );
         if (Option.isSome(coordinator)) {
           return {
             kind: "coordinator" as const,
@@ -2005,7 +2833,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         const task = yield* repository
           .findTaskByAssignedThread(threadId)
-          .pipe(Effect.mapError(toServiceError("Failed to resolve worker principal.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to resolve worker principal."),
+            ),
+          );
         if (Option.isSome(task)) {
           return {
             kind: "worker" as const,
@@ -2016,7 +2848,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         const shell = yield* snapshotQuery
           .getThreadShellById(threadId)
-          .pipe(Effect.mapError(toServiceError("Failed to resolve thread project.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to resolve thread project."),
+            ),
+          );
         if (Option.isNone(shell)) {
           return yield* Effect.fail(fail("Thread was not found.", "not-found"));
         }
@@ -2029,24 +2865,36 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     assertCallerMayDriveManagedThread: (input) =>
       Effect.gen(function* () {
-        const caller = yield* impl.resolvePrincipalForThread(input.callerThreadId);
-        const targetShell = yield* snapshotQuery.getThreadShellById(input.targetThreadId).pipe(
-          Effect.mapError(toServiceError("Failed to load target thread.")),
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.fail(fail("Target thread was not found.", "not-found")),
-              onSome: Effect.succeed,
-            }),
-          ),
+        const caller = yield* impl.resolvePrincipalForThread(
+          input.callerThreadId,
         );
+        const targetShell = yield* snapshotQuery
+          .getThreadShellById(input.targetThreadId)
+          .pipe(
+            Effect.mapError(toServiceError("Failed to load target thread.")),
+            Effect.flatMap(
+              Option.match({
+                onNone: () =>
+                  Effect.fail(
+                    fail("Target thread was not found.", "not-found"),
+                  ),
+                onSome: Effect.succeed,
+              }),
+            ),
+          );
         if (caller.kind === "worker") {
           return yield* Effect.fail(
-            fail("Workers cannot create further workers by default.", "forbidden"),
+            fail(
+              "Workers cannot create further workers by default.",
+              "forbidden",
+            ),
           );
         }
         if (caller.kind === "coordinator") {
           if (targetShell.projectId !== caller.projectId) {
-            return yield* Effect.fail(fail("Cross-project control is blocked.", "forbidden"));
+            return yield* Effect.fail(
+              fail("Cross-project control is blocked.", "forbidden"),
+            );
           }
         }
       }),
@@ -2055,7 +2903,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         const config = yield* repository
           .getConfig(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load coordinator for deletion.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to load coordinator for deletion."),
+            ),
+          );
         if (Option.isNone(config)) return;
         const disabled: ProjectAgentConfig = {
           ...config.value,
@@ -2068,12 +2920,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .saveConfig(disabled, config.value.revision)
           .pipe(
             Effect.mapError(
-              toServiceError("Failed to disable coordinator after project deletion."),
+              toServiceError(
+                "Failed to disable coordinator after project deletion.",
+              ),
             ),
           );
         const goal = yield* repository
           .getActiveGoal(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load goal for deletion.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to load goal for deletion."),
+            ),
+          );
         if (Option.isSome(goal)) {
           yield* repository
             .saveGoal(
@@ -2085,7 +2943,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
               },
               goal.value.revision,
             )
-            .pipe(Effect.mapError(toServiceError("Failed to stop goal after project deletion.")));
+            .pipe(
+              Effect.mapError(
+                toServiceError("Failed to stop goal after project deletion."),
+              ),
+            );
         }
       }),
 
@@ -2093,16 +2955,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Stream.unwrap(
         Effect.gen(function* () {
           const matchesProject = (event: ProjectAgentStreamEvent) => {
-            if (event.type === "snapshot") return event.overview.projectId === input.projectId;
-            if (event.type === "config-upserted") return event.config.projectId === input.projectId;
-            if (event.type === "goal-upserted") return event.goal.projectId === input.projectId;
-            if (event.type === "task-upserted") return event.task.projectId === input.projectId;
+            if (event.type === "snapshot")
+              return event.overview.projectId === input.projectId;
+            if (event.type === "config-upserted")
+              return event.config.projectId === input.projectId;
+            if (event.type === "goal-upserted")
+              return event.goal.projectId === input.projectId;
+            if (event.type === "task-upserted")
+              return event.task.projectId === input.projectId;
             if (event.type === "activity-appended")
               return event.activity.projectId === input.projectId;
-            if (event.type === "digest-upserted") return event.digest.projectId === input.projectId;
+            if (event.type === "digest-upserted")
+              return event.digest.projectId === input.projectId;
             return event.head.projectId === input.projectId;
           };
-          const liveQueue = yield* Queue.bounded<ProjectAgentStreamEvent, Cause.Done>(64);
+          const liveQueue = yield* Queue.bounded<
+            ProjectAgentStreamEvent,
+            Cause.Done
+          >(64);
           yield* Stream.fromPubSub(events).pipe(
             Stream.filter(matchesProject),
             Stream.runIntoQueue(liveQueue),
@@ -2120,15 +2990,27 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const unblockDependents = (accepted: ProjectTask) =>
     Effect.gen(function* () {
       const tasks = yield* repository
-        .listTasks({ projectId: accepted.projectId, includeArchived: false, limit: 100 })
-        .pipe(Effect.mapError(toServiceError("Failed to load dependent tasks.")));
+        .listTasks({
+          projectId: accepted.projectId,
+          includeArchived: false,
+          limit: 100,
+        })
+        .pipe(
+          Effect.mapError(toServiceError("Failed to load dependent tasks.")),
+        );
       for (const task of tasks) {
         if (task.status !== "planned" && task.status !== "blocked") continue;
         if (!task.dependsOnTaskIds.includes(accepted.id)) continue;
-        const prerequisites = yield* Effect.forEach(task.dependsOnTaskIds, (id) =>
-          repository
-            .getTask(id)
-            .pipe(Effect.mapError(toServiceError("Failed to load prerequisite task."))),
+        const prerequisites = yield* Effect.forEach(
+          task.dependsOnTaskIds,
+          (id) =>
+            repository
+              .getTask(id)
+              .pipe(
+                Effect.mapError(
+                  toServiceError("Failed to load prerequisite task."),
+                ),
+              ),
         );
         const ready = prerequisites.every(
           (option) => Option.isSome(option) && option.value.status === "done",
@@ -2142,7 +3024,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         };
         const saved = yield* repository
           .saveTask(updated, task.revision)
-          .pipe(Effect.mapError(toServiceError("Failed to unblock dependent task.")));
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to unblock dependent task."),
+            ),
+          );
         yield* publish({ type: "task-upserted", task: saved });
       }
     });
@@ -2155,13 +3041,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
     summary: string,
   ) =>
     Effect.gen(function* () {
-      if (!isUserPrincipal(principal) && !isCoordinatorPrincipal(principal, input.projectId)) {
+      if (
+        !isUserPrincipal(principal) &&
+        !isCoordinatorPrincipal(principal, input.projectId)
+      ) {
         return yield* Effect.fail(
           fail("Goal controls require the user or coordinator.", "forbidden"),
         );
       }
       if (status === "stopped" && !isUserPrincipal(principal)) {
-        return yield* Effect.fail(fail("Stopping a goal is a user action.", "forbidden"));
+        return yield* Effect.fail(
+          fail("Stopping a goal is a user action.", "forbidden"),
+        );
       }
       const current = yield* repository.getGoal(input.goalId).pipe(
         Effect.mapError(toServiceError("Failed to load project goal.")),
@@ -2173,7 +3064,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         ),
       );
       if (current.projectId !== input.projectId) {
-        return yield* Effect.fail(fail("Goal does not belong to this project.", "forbidden"));
+        return yield* Effect.fail(
+          fail("Goal does not belong to this project.", "forbidden"),
+        );
       }
       const updated: ProjectGoal = {
         ...current,
@@ -2183,7 +3076,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
       };
       const saved = yield* repository
         .saveGoal(updated, input.expectedRevision)
-        .pipe(Effect.mapError(toServiceError("Failed to update project goal.")));
+        .pipe(
+          Effect.mapError(toServiceError("Failed to update project goal.")),
+        );
       if (status === "stopped" && current.status !== "stopped") {
         const config = yield* requireConfig(input.projectId);
         yield* orchestrationEngine
@@ -2201,9 +3096,15 @@ export const makeProjectAgentService = Effect.gen(function* () {
             includeArchived: false,
             limit: 100,
           })
-          .pipe(Effect.mapError(toServiceError("Failed to list managed workers.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to list managed workers.")),
+          );
         for (const task of tasks) {
-          if (!task.assignedThreadId || task.status === "done" || task.status === "cancelled")
+          if (
+            !task.assignedThreadId ||
+            task.status === "done" ||
+            task.status === "cancelled"
+          )
             continue;
           yield* orchestrationEngine
             .dispatch({
@@ -2241,7 +3142,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
         "Paused the project goal. Current tasks may settle.",
       ),
     resumeGoal: (input, principal) =>
-      updateGoalStatus(input, principal, "active", "goal-resumed", "Resumed the project goal."),
+      updateGoalStatus(
+        input,
+        principal,
+        "active",
+        "goal-resumed",
+        "Resumed the project goal.",
+      ),
     stopGoal: (input, principal) =>
       updateGoalStatus(
         input,
@@ -2253,4 +3160,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
   } satisfies ProjectAgentServiceShape;
 });
 
-export const ProjectAgentServiceLive = Layer.effect(ProjectAgentService, makeProjectAgentService);
+export const ProjectAgentServiceLive = Layer.effect(
+  ProjectAgentService,
+  makeProjectAgentService,
+);

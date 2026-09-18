@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   detectProjectTaskDependencyCycle,
+  INITIAL_PROJECT_DIGEST_SUMMARY,
   isProjectContextPreviewPath,
   normalizeProjectDocumentPath,
   PROJECT_CONTEXT_PREVIEW_DOCUMENTS,
   ProjectAgentPathError,
+  sanitizeProjectDigestSummary,
   truncateToContextBudget,
 } from "./projectAgent";
 
@@ -66,6 +68,22 @@ describe("project context preview", () => {
     expect(isProjectContextPreviewPath("internal/manifest.json")).toBe(false);
     expect(isProjectContextPreviewPath("archived.md")).toBe(false);
     expect(isProjectContextPreviewPath("artifacts/index.md")).toBe(false);
+  });
+});
+
+describe("sanitizeProjectDigestSummary", () => {
+  it("drops leftover start-a-goal copy from Focus", () => {
+    expect(
+      sanitizeProjectDigestSummary(
+        "Coordinator is configured. Start a goal to begin bounded coordination.",
+      ),
+    ).toBe(INITIAL_PROJECT_DIGEST_SUMMARY);
+    expect(sanitizeProjectDigestSummary("Assigned work starts only after a goal is started.")).toBe(
+      INITIAL_PROJECT_DIGEST_SUMMARY,
+    );
+    expect(sanitizeProjectDigestSummary("Sample workers are running.")).toBe(
+      "Sample workers are running.",
+    );
   });
 });
 

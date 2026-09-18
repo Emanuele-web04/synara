@@ -1,6 +1,8 @@
 export const PROJECT_AGENT_WORKER_HEALTH_INTERVAL_MS = 60_000;
 
-export function isFailedWorkerSessionStatus(status: string | null | undefined): boolean {
+export function isFailedWorkerSessionStatus(
+  status: string | null | undefined,
+): boolean {
   return status === "error" || status === "interrupted" || status === "stopped";
 }
 
@@ -15,7 +17,8 @@ export function isManagedWorkerThread(input: {
 }): boolean {
   if (input.threadId === input.coordinatorThreadId) return false;
   return input.index.some(
-    (entry) => entry.threadId === input.threadId && !entry.excluded && !entry.archived,
+    (entry) =>
+      entry.threadId === input.threadId && !entry.excluded && !entry.archived,
   );
 }
 
@@ -29,4 +32,110 @@ export function formatWorkerWatchLine(input: {
     return `- ${input.title}: ${status} — ${input.lastError.trim()}`;
   }
   return `- ${input.title}: ${status}`;
+}
+
+export const WORKER_INBOX_REPORT_FILE = "report.md";
+const WORKER_REPORT_ASSISTANT_TEXT_MAX_CHARS = 4_000;
+
+const WORKER_SETTLEMENT_REPORT_EVENTS = new Set([
+  "thread.turn-diff-completed",
+  "thread.turn-interrupt-requested",
+  "thread.session-stop-requested",
+]);
+
+export type WorkerSettlementOutcome =
+  "completed" | "failed" | "interrupted" | "updated";
+
+export function workerInboxReportPath(threadId: string): string {
+  return `inbox/${threadId}/${WORKER_INBOX_REPORT_FILE}`;
+}
+
+export function shouldMaterializeWorkerSettlementReport(
+  eventType: string,
+): boolean {
+  return (
+    WORKER_SETTLEMENT_REPORT_EVENTS.has(eventType) ||
+    eventType.startsWith("worker.")
+  );
+}
+
+export function classifyWorkerSettlement(input: {
+  readonly eventType: string;
+  readonly sessionStatus: string | null | undefined;
+}): WorkerSettlementOutcome {
+  const status = input.sessionStatus ?? "";
+  const eventType = input.eventType;
+  if (
+    eventType.includes("interrupt") ||
+    status === "interrupted" ||
+    eventType === "worker.interrupted"
+  ) {
+    return "interrupted";
+  }
+  if (
+    status === "error" ||
+    eventType === "worker.error" ||
+    eventType === "worker.missing"
+  ) {
+    return "failed";
+  }
+  if (
+    eventType === "thread.turn-diff-completed" ||
+    eventType === "worker.stopped" ||
+    eventType.includes("session-stop")
+  ) {
+    return "completed";
+  }
+  return "updated";
+}
+
+export function lastAssistantTextFromMessages(
+  messages: ReadonlyArray<{ readonly role: string; readonly text: string }>,
+): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    const text = message.text.trim();
+    if (text.length === 0) continue;
+    return text.length > WORKER_REPORT_ASSISTANT_TEXT_MAX_CHARS
+      ? `${text.slice(0, WORKER_REPORT_ASSISTANT_TEXT_MAX_CHARS)}\n\n[truncated]`
+      : text;
+  }
+  return null;
+}
+
+export function formatWorkerSettlementReport(input: {
+  readonly title: string;
+  readonly threadId: string;
+  readonly eventType: string;
+  readonly status: string | null | undefined;
+  readonly lastError: string | null | undefined;
+  readonly lastAssistantText: string | null | undefined;
+  readonly createdAt: string;
+}): string {
+  const outcome = classifyWorkerSettlement({
+    eventType: input.eventType,
+    sessionStatus: input.status,
+  });
+  const error = input.lastError?.trim() || "none";
+  const lastReply = input.lastAssistantText?.trim() || "(none)";
+  return [
+    "# Worker report",
+    "",
+    `- Thread: ${input.title}`,
+    `- Thread id: ${input.threadId}`,
+    `- Event: ${input.eventType}`,
+    `- Status: ${input.status ?? "unknown"}`,
+    `- Outcome: ${outcome}`,
+    `- At: ${input.createdAt}`,
+    "",
+    "## Error",
+    "",
+    error,
+    "",
+    "## Last reply",
+    "",
+    lastReply,
+    "",
+  ].join("\n");
 }

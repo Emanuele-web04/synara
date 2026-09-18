@@ -416,6 +416,8 @@ export function buildProjectDigestPrompt(input: {
       "- do not invent completed work or accepted tasks",
       "- preserve pinned focus items",
       "- if sources are missing, return fewer focus items rather than unsourced ones",
+      "- do not mention goals or tell the user to start a goal; goals are optional",
+      "- summarize current work and workers, not setup status",
       "",
       "Previous summary:",
       limitSection(input.previousSummary?.trim() || "(none)", 800),

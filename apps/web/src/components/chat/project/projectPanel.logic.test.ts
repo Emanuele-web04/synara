@@ -1,11 +1,14 @@
 import { ProjectTaskId, ThreadId, type ProjectTask } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
+import { INITIAL_PROJECT_DIGEST_SUMMARY } from "@synara/shared/projectAgent";
+
 import {
   mergeProjectFocusRows,
   partitionProjectFocusRows,
   projectThreadIndexFocusRows,
   rewriteThreadIdsAsMarkdownLinks,
+  sanitizeProjectDigestSummary,
 } from "./projectPanel.logic";
 
 function task(input: {
@@ -33,6 +36,16 @@ function task(input: {
     updatedAt: "2026-09-17T00:00:00.000Z",
   } as ProjectTask;
 }
+
+describe("sanitizeProjectDigestSummary", () => {
+  it("hides leftover start-a-goal copy in Focus", () => {
+    expect(
+      sanitizeProjectDigestSummary(
+        "Coordinator is configured. Start a goal to begin bounded coordination.",
+      ),
+    ).toBe(INITIAL_PROJECT_DIGEST_SUMMARY);
+  });
+});
 
 describe("partitionProjectFocusRows", () => {
   it("splits open, done, and archived work", () => {

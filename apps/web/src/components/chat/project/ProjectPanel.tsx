@@ -29,6 +29,7 @@ import {
   partitionProjectFocusRows,
   projectDigestFocusRows,
   projectThreadIndexFocusRows,
+  sanitizeProjectDigestSummary,
   type ProjectFocusRow,
 } from "./projectPanel.logic";
 import { useProjectAgent } from "./useProjectAgent";
@@ -61,7 +62,10 @@ export function ProjectPanel({
   onOpenThread,
 }: ProjectPanelProps) {
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
-  const agent = useProjectAgent({ projectId, enabled: open && projectId !== null });
+  const agent = useProjectAgent({
+    projectId,
+    enabled: open && projectId !== null,
+  });
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
   const focusRows = useMemo(() => {
@@ -162,7 +166,7 @@ export function ProjectPanel({
         <>
           <EnvironmentSectionDivider />
           <ProjectFocusCard
-            summary={agent.overview?.digest?.summary ?? null}
+            summary={sanitizeProjectDigestSummary(agent.overview?.digest?.summary ?? null)}
             updating={
               agent.overview?.digest?.generationState === "pending" ||
               agent.overview?.digest?.generationState === "running"

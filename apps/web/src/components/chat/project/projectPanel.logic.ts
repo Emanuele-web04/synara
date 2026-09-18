@@ -4,6 +4,9 @@ import type {
   ProjectThreadIndexEntry,
   ThreadId,
 } from "@synara/contracts";
+import { sanitizeProjectDigestSummary } from "@synara/shared/projectAgent";
+
+export { sanitizeProjectDigestSummary };
 
 export type ProjectFocusRowState = "open" | "done" | "archived";
 

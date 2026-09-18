@@ -66,6 +66,30 @@ export function isProjectContextPreviewPath(logicalPath: string): boolean {
   return PROJECT_CONTEXT_PREVIEW_DOCUMENTS.some((document) => document.logicalPath === logicalPath);
 }
 
+export const INITIAL_PROJECT_DIGEST_SUMMARY = "Coordinator is ready.";
+
+const GOAL_GATE_DIGEST_SENTENCES = [
+  /Start a goal to begin bounded coordination\.?/gi,
+  /Assigned work starts only after a goal is started\.?/gi,
+];
+
+export function sanitizeProjectDigestSummary(summary: string | null | undefined): string | null {
+  if (summary == null) return null;
+  let next = summary.trim();
+  if (next.length === 0) return null;
+  for (const pattern of GOAL_GATE_DIGEST_SENTENCES) {
+    next = next.replace(pattern, "");
+  }
+  next = next
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+\./g, ".")
+    .trim();
+  if (next === "Coordinator is configured." || next === "Coordinator is configured") {
+    return INITIAL_PROJECT_DIGEST_SUMMARY;
+  }
+  return next.length > 0 ? next : INITIAL_PROJECT_DIGEST_SUMMARY;
+}
+
 export function detectProjectTaskDependencyCycle(input: {
   readonly taskId: ProjectTaskId;
   readonly dependsOnTaskIds: ReadonlyArray<ProjectTaskId>;
@@ -92,7 +116,11 @@ export function detectProjectTaskDependencyCycle(input: {
 export function truncateToContextBudget(
   sections: ReadonlyArray<{ readonly label: string; readonly text: string }>,
   budget = PROJECT_AGENT_CONTEXT_BUDGET_CHARS,
-): { readonly packet: string; readonly characterCount: number; readonly truncated: boolean } {
+): {
+  readonly packet: string;
+  readonly characterCount: number;
+  readonly truncated: boolean;
+} {
   const full = sections.map((section) => `## ${section.label}\n${section.text}`).join("\n\n");
   if (full.length <= budget) {
     return { packet: full, characterCount: full.length, truncated: false };
