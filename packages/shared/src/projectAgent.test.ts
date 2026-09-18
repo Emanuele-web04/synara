@@ -8,6 +8,7 @@ import {
   normalizeProjectDocumentPath,
   PROJECT_CONTEXT_PREVIEW_DOCUMENTS,
   ProjectAgentPathError,
+  sanitizeProjectDigestFocusTitle,
   sanitizeProjectDigestSummary,
   truncateToContextBudget,
 } from "./projectAgent";
@@ -19,8 +20,12 @@ describe("normalizeProjectDocumentPath", () => {
   });
 
   it("rejects traversal and absolute paths", () => {
-    expect(() => normalizeProjectDocumentPath("../secret.md")).toThrow(ProjectAgentPathError);
-    expect(() => normalizeProjectDocumentPath("/etc/passwd")).toThrow(ProjectAgentPathError);
+    expect(() => normalizeProjectDocumentPath("../secret.md")).toThrow(
+      ProjectAgentPathError,
+    );
+    expect(() => normalizeProjectDocumentPath("/etc/passwd")).toThrow(
+      ProjectAgentPathError,
+    );
     expect(() => normalizeProjectDocumentPath("docs/../../escape.md")).toThrow(
       ProjectAgentPathError,
     );
@@ -58,7 +63,9 @@ describe("detectProjectTaskDependencyCycle", () => {
 
 describe("project context preview", () => {
   it("shows only the shared files a person would open", () => {
-    expect(PROJECT_CONTEXT_PREVIEW_DOCUMENTS.map((document) => document.logicalPath)).toEqual([
+    expect(
+      PROJECT_CONTEXT_PREVIEW_DOCUMENTS.map((document) => document.logicalPath),
+    ).toEqual([
       "instructions.md",
       "notes.md",
       "decisions.md",
@@ -78,12 +85,24 @@ describe("sanitizeProjectDigestSummary", () => {
         "Coordinator is configured. Start a goal to begin bounded coordination.",
       ),
     ).toBe(INITIAL_PROJECT_DIGEST_SUMMARY);
-    expect(sanitizeProjectDigestSummary("Assigned work starts only after a goal is started.")).toBe(
-      INITIAL_PROJECT_DIGEST_SUMMARY,
-    );
+    expect(
+      sanitizeProjectDigestSummary(
+        "Assigned work starts only after a goal is started.",
+      ),
+    ).toBe(INITIAL_PROJECT_DIGEST_SUMMARY);
     expect(sanitizeProjectDigestSummary("Sample workers are running.")).toBe(
       "Sample workers are running.",
     );
+    expect(
+      sanitizeProjectDigestSummary(
+        "Coordinator continuation runs are queued. Sample playbook maintenance and Sample local worker both reported failure, while decisions.md was written. No worker completion is confirmed.",
+      ),
+    ).toBe("Coordinator continuation runs are queued.");
+    expect(
+      sanitizeProjectDigestFocusTitle(
+        "Sample playbook maintenance reported failed",
+      ),
+    ).toBe("Sample playbook maintenance");
   });
 });
 

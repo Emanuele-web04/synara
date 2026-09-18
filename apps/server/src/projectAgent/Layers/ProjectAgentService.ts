@@ -2776,16 +2776,15 @@ export const makeProjectAgentService = Effect.gen(function* () {
               Effect.mapError(toServiceError("Failed to load worker index.")),
             );
           for (const entry of index) {
-            if (entry.excluded || entry.threadId === config.coordinatorThreadId) {
+            if (
+              entry.excluded ||
+              entry.threadId === config.coordinatorThreadId
+            ) {
               continue;
             }
             const shell = yield* snapshotQuery
               .getThreadShellById(entry.threadId)
-              .pipe(
-                Effect.mapError(
-                  toServiceError("Failed to inspect worker thread."),
-                ),
-              );
+              .pipe(Effect.catch(() => Effect.succeed(Option.none())));
             if (Option.isNone(shell)) {
               yield* impl.ingestSettledThreadEvent({
                 threadId: entry.threadId,
