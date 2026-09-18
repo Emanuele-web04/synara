@@ -25,10 +25,7 @@ function subscribeLiveActivityClock(listener: () => void): () => void {
   liveActivityClockListeners.add(listener);
   if (liveActivityClockListeners.size === 1) {
     liveActivityClockNowMs = Date.now();
-    stopLiveActivityClock = startVisibleInterval(
-      emitLiveActivityClockTick,
-      LIVE_ACTIVITY_TICK_MS,
-    );
+    stopLiveActivityClock = startVisibleInterval(emitLiveActivityClockTick, LIVE_ACTIVITY_TICK_MS);
   }
 
   return () => {
