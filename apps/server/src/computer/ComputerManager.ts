@@ -86,11 +86,7 @@ import {
   topmostWindowAtPoint,
   windowsCoveringPoint,
 } from "./computerGeometry.ts";
-import {
-  decodePngLuma,
-  estimateVerticalTravel,
-  ScrollGearingStore,
-} from "./scrollCalibration.ts";
+import { decodePngLuma, estimateVerticalTravel, ScrollGearingStore } from "./scrollCalibration.ts";
 import { ScrollGearingFile } from "./scrollGearingFile.ts";
 import {
   ComputerTargetError,
@@ -100,14 +96,8 @@ import {
   resolveComputerUniqueTextTarget,
   resolveComputerWindowTarget,
 } from "./uiTreeTargeting.ts";
-import {
-  ComputerAuditLog,
-  type ComputerAuditEntry,
-} from "./computerAuditLog.ts";
-import {
-  ComputerDenylistError,
-  computerDenylistMatch,
-} from "./computerDenylist.ts";
+import { ComputerAuditLog, type ComputerAuditEntry } from "./computerAuditLog.ts";
+import { ComputerDenylistError, computerDenylistMatch } from "./computerDenylist.ts";
 import {
   ComputerGrantStore,
   computerGrantIdentityForApp,
@@ -358,7 +348,8 @@ export interface ComputerCapturedWindow {
 
 /** The action's captured window, or confirmation that it closed. */
 export type ComputerActionObservation =
-  ComputerCapturedWindow | { readonly targetWindowClosed: true };
+  | ComputerCapturedWindow
+  | { readonly targetWindowClosed: true };
 
 /**
  * Refusal raised when another thread owns the desktop. It extends
@@ -405,10 +396,7 @@ export class ComputerManager {
   private readonly publishChains = new Map<string, Promise<unknown>>();
   private errorRepublishTimer: ReturnType<typeof setTimeout> | undefined;
   private nextStateVersion = -1;
-  private readonly screenshotBytes = new WeakMap<
-    ComputerScreenshot,
-    Uint8Array
-  >();
+  private readonly screenshotBytes = new WeakMap<ComputerScreenshot, Uint8Array>();
   private readonly threads = new Map<string, ThreadComputerRuntimeState>();
   /**
    * Agent calls in flight, per thread. Deliberately not a field on the thread
@@ -543,7 +531,8 @@ export class ComputerManager {
    * `COMPUTER_DENYLIST_APP_CACHE_MS` for the bound.
    */
   private deniedAppsCache:
-    { readonly at: number; readonly apps: readonly ComputerApp[] } | undefined;
+    | { readonly at: number; readonly apps: readonly ComputerApp[] }
+    | undefined;
   private readonly pendingControlWrites = new Map<string, Promise<void>>();
   private readonly suspendedThreads = new Set<string>();
   private readonly authorityRevocations = new Map<string, AbortController>();
@@ -624,10 +613,7 @@ export class ComputerManager {
   }
 
   private controlDisabled(threadId: string): boolean {
-    return (
-      this.disabledThreads.has(threadId) ||
-      this.controlState.get(threadId).disabled
-    );
+    return this.disabledThreads.has(threadId) || this.controlState.get(threadId).disabled;
   }
 
   canActivateControl(threadId: string, generation = 0): boolean {
@@ -682,9 +668,7 @@ export class ComputerManager {
       // "always allow" for exactly this. Denylist ran above; nothing here
       // can mint or widen one.
       const classes = options.grantClasses ?? [];
-      const identity = await this.grantIdentityForAppKey(app).catch(
-        () => undefined,
-      );
+      const identity = await this.grantIdentityForAppKey(app).catch(() => undefined);
       const coveredByGrant =
         identity !== undefined && classes.length > 0
           ? this.grantStore.covers({
@@ -728,10 +712,7 @@ export class ComputerManager {
    * caller with no admission step still records its first app free, matching
    * the admission path.
    */
-  private assertDrivenAppAdmitted(
-    threadId: string | undefined,
-    app: string,
-  ): void {
+  private assertDrivenAppAdmitted(threadId: string | undefined, app: string): void {
     const owner = agentThreadId(threadId);
     if (owner === undefined) return;
     const normalized = app.trim().toLowerCase();
@@ -760,8 +741,7 @@ export class ComputerManager {
    * never produce evidence rows the feature was already refusing to act on.
    */
   recordComputerAudit(entry: Omit<ComputerAuditEntry, "ts">): void {
-    if (entry.threadId !== undefined && this.controlDisabled(entry.threadId))
-      return;
+    if (entry.threadId !== undefined && this.controlDisabled(entry.threadId)) return;
     this.auditLog.record(entry);
   }
 
@@ -775,24 +755,18 @@ export class ComputerManager {
    * identity. Best-effort like the rest of the pre-queue consent path: an
    * enumeration failure answers undefined rather than a guess.
    */
-  async grantIdentityForAppKey(
-    app: string,
-  ): Promise<ComputerGrantAppIdentity | undefined> {
+  async grantIdentityForAppKey(app: string): Promise<ComputerGrantAppIdentity | undefined> {
     const trimmed = app.trim();
     if (trimmed.length === 0) return undefined;
     const pidMatch = /^pid ([1-9]\d*)$/.exec(trimmed.toLowerCase());
     if (pidMatch !== null) {
-      return computerGrantIdentityForPid(
-        Number(pidMatch[1]),
-        await this.runningAppsForDenylist(),
-      );
+      return computerGrantIdentityForPid(Number(pidMatch[1]), await this.runningAppsForDenylist());
     }
     const apps = await this.runningAppsForDenylist();
     const window = (await this.readWindows().catch(() => undefined))?.find(
       (candidate) => candidate.id === trimmed,
     );
-    if (window !== undefined)
-      return computerGrantIdentityForWindow(window, apps);
+    if (window !== undefined) return computerGrantIdentityForWindow(window, apps);
     const listed = apps.find(
       (candidate) =>
         candidate.name.trim().toLowerCase() === trimmed.toLowerCase() ||
@@ -842,9 +816,7 @@ export class ComputerManager {
    * ever be covered by an `any-app` grant. Undefined when the call exercises
    * no grantable class, so no durable choice exists to offer.
    */
-  computerGrantOfferFor(
-    context: ComputerGrantCallContext,
-  ): ComputerApprovalGrantOffer | undefined {
+  computerGrantOfferFor(context: ComputerGrantCallContext): ComputerApprovalGrantOffer | undefined {
     if (context.classes.length === 0) return undefined;
     const apps = context.apps
       .filter(
@@ -856,9 +828,7 @@ export class ComputerManager {
       )
       .slice(0, 16);
     const scopes: Array<"app" | "any-app"> =
-      apps.length > 0 && !context.includesUnattributedTarget
-        ? ["app", "any-app"]
-        : ["any-app"];
+      apps.length > 0 && !context.includesUnattributedTarget ? ["app", "any-app"] : ["any-app"];
     return {
       apps,
       classes: [...context.classes],
@@ -954,18 +924,14 @@ export class ComputerManager {
     reason: ComputerRecordingEndReason = "stopped",
   ): Promise<ComputerRecordingSummary | undefined> {
     const owner = agentThreadId(threadId);
-    return owner === undefined
-      ? undefined
-      : this.recordings.stopForThread(owner, reason);
+    return owner === undefined ? undefined : this.recordings.stopForThread(owner, reason);
   }
 
   async listComputerRecordings(): Promise<ComputerRecordingSummary[]> {
     return this.recordings.list();
   }
 
-  async readComputerRecording(
-    recordingId: string,
-  ): Promise<ComputerRecordingDocument> {
+  async readComputerRecording(recordingId: string): Promise<ComputerRecordingDocument> {
     return this.recordings.read(recordingId);
   }
 
@@ -982,9 +948,7 @@ export class ComputerManager {
    * thread has an open session. Undefined otherwise — unrecorded threads
    * keep the old hot path with no allocation and no reads.
    */
-  recordingCaptureFor(
-    threadId: string | undefined,
-  ): ComputerRecordingCapture | undefined {
+  recordingCaptureFor(threadId: string | undefined): ComputerRecordingCapture | undefined {
     const owner = agentThreadId(threadId);
     if (owner === undefined) return undefined;
     if (this.recordings.activeForThread(owner) === undefined) return undefined;
@@ -992,13 +956,9 @@ export class ComputerManager {
   }
 
   /** The session's fidelity — the tool layer's lookup when redacting a record. */
-  recordingFidelityFor(
-    threadId: string | undefined,
-  ): ComputerRecordingFidelity | undefined {
+  recordingFidelityFor(threadId: string | undefined): ComputerRecordingFidelity | undefined {
     const owner = agentThreadId(threadId);
-    return owner === undefined
-      ? undefined
-      : this.recordings.activeForThread(owner)?.fidelity;
+    return owner === undefined ? undefined : this.recordings.activeForThread(owner)?.fidelity;
   }
 
   /**
@@ -1007,10 +967,7 @@ export class ComputerManager {
    * thread whose control is off records nothing — not even the refusal that
    * stopped it.
    */
-  recordComputerStep(
-    threadId: string | undefined,
-    step: ComputerRecordingStepInput,
-  ): void {
+  recordComputerStep(threadId: string | undefined, step: ComputerRecordingStepInput): void {
     const owner = agentThreadId(threadId);
     if (owner === undefined) return;
     if (this.controlDisabled(owner)) return;
@@ -1068,8 +1025,7 @@ export class ComputerManager {
     );
     return {
       ...computerEnvironmentBase(),
-      ...(availability?.kind === "available" &&
-      availability.backend !== undefined
+      ...(availability?.kind === "available" && availability.backend !== undefined
         ? { backend: availability.backend }
         : {}),
       dialect: this.agentDialect,
@@ -1079,9 +1035,7 @@ export class ComputerManager {
             display: {
               width: screenSize.width,
               height: screenSize.height,
-              ...(screenSize.scale !== undefined
-                ? { scale: screenSize.scale }
-                : {}),
+              ...(screenSize.scale !== undefined ? { scale: screenSize.scale } : {}),
             },
             displayHash: sha256Hex(
               `${screenSize.width}x${screenSize.height}@${screenSize.scale ?? 1}`,
@@ -1102,8 +1056,7 @@ export class ComputerManager {
     const key = app.launchPath ?? app.name;
     if (this.appVersionCache.has(key)) return this.appVersionCache.get(key);
     const version =
-      (await readMacAppBundleVersion(app.launchPath).catch(() => undefined)) ??
-      app.lastUsed;
+      (await readMacAppBundleVersion(app.launchPath).catch(() => undefined)) ?? app.lastUsed;
     if (this.appVersionCache.size < 256) this.appVersionCache.set(key, version);
     return version;
   }
@@ -1137,24 +1090,15 @@ export class ComputerManager {
   ): Promise<
     Pick<
       ComputerRecordedResolution,
-      | "windowId"
-      | "pid"
-      | "app"
-      | "bundleId"
-      | "appVersion"
-      | "windowTitleHash"
-      | "windowBounds"
+      "windowId" | "pid" | "app" | "bundleId" | "appVersion" | "windowTitleHash" | "windowBounds"
     >
   > {
     if (window === undefined) return {};
     const owner =
       window.pid === undefined
         ? undefined
-        : (await this.runningAppsForDenylist()).find(
-            (app) => app.pid === window.pid,
-          );
-    const appVersion =
-      owner === undefined ? undefined : await this.appVersionFor(owner);
+        : (await this.runningAppsForDenylist()).find((app) => app.pid === window.pid);
+    const appVersion = owner === undefined ? undefined : await this.appVersionFor(owner);
     return {
       windowId: window.id,
       ...(window.pid !== undefined ? { pid: window.pid } : {}),
@@ -1177,10 +1121,7 @@ export class ComputerManager {
   ): Promise<void> {
     try {
       const node = resolved.node;
-      const window =
-        node.windowId === null
-          ? undefined
-          : this.lastKnownWindows.get(node.windowId);
+      const window = node.windowId === null ? undefined : this.lastKnownWindows.get(node.windowId);
       const nodePath = uiTreeNodePath(root, node);
       this.noteResolution({
         via: "semantic",
@@ -1232,16 +1173,13 @@ export class ComputerManager {
     const pidMatch = /^pid ([1-9]\d*)$/.exec(app.trim().toLowerCase());
     if (pidMatch === null) return;
     const pid = Number(pidMatch[1]);
-    const owner = this.deniedAppsCache?.apps.find(
-      (candidate) => candidate.pid === pid,
-    );
+    const owner = this.deniedAppsCache?.apps.find((candidate) => candidate.pid === pid);
     if (owner === undefined) return;
     const resolved = computerDenylistMatch({
       name: owner.name,
       bundleId: owner.bundleId,
     });
-    if (resolved)
-      throw new ComputerDenylistError(resolved.app, resolved.matched);
+    if (resolved) throw new ComputerDenylistError(resolved.app, resolved.matched);
   }
 
   /**
@@ -1257,10 +1195,7 @@ export class ComputerManager {
     if (listApps === undefined) return this.deniedAppsCache?.apps ?? [];
     const now = this.now();
     const cached = this.deniedAppsCache;
-    if (
-      cached !== undefined &&
-      now - cached.at < COMPUTER_DENYLIST_APP_CACHE_MS
-    ) {
+    if (cached !== undefined && now - cached.at < COMPUTER_DENYLIST_APP_CACHE_MS) {
       return cached.apps;
     }
     const apps = await listApps().catch(() => undefined);
@@ -1293,9 +1228,7 @@ export class ComputerManager {
   ): Promise<ReturnType<typeof computerDenylistMatch>> {
     const direct = computerDenylistMatch({ name });
     if (direct) return direct;
-    const owner = (await this.runningAppsForDenylist()).find(
-      (candidate) => candidate.pid === pid,
-    );
+    const owner = (await this.runningAppsForDenylist()).find((candidate) => candidate.pid === pid);
     if (owner === undefined) return undefined;
     return computerDenylistMatch({
       name: owner.name,
@@ -1315,9 +1248,7 @@ export class ComputerManager {
     windowId: string,
   ): Promise<void> {
     if (agentThreadId(threadId) === undefined) return;
-    const window = (await this.readWindows()).find(
-      (candidate) => candidate.id === windowId,
-    );
+    const window = (await this.readWindows()).find((candidate) => candidate.id === windowId);
     if (window === undefined) return;
     await this.assertWindowInputAllowedWindow(threadId, window);
   }
@@ -1343,9 +1274,7 @@ export class ComputerManager {
    * refused outright; presence stays visible through `list_windows`.
    */
   private async assertWindowContentAllowed(windowId: string): Promise<void> {
-    const window = (await this.readWindows()).find(
-      (candidate) => candidate.id === windowId,
-    );
+    const window = (await this.readWindows()).find((candidate) => candidate.id === windowId);
     if (window === undefined) return;
     const match = await this.deniedMatchForWindow(window);
     if (match) throw new ComputerDenylistError(match.app, match.matched);
@@ -1387,13 +1316,8 @@ export class ComputerManager {
 
   /** Whether a window id names a denylisted surface; for best-effort observation skips. */
   private async windowIsDenied(windowId: string): Promise<boolean> {
-    const window = (await this.readWindows()).find(
-      (candidate) => candidate.id === windowId,
-    );
-    return (
-      window !== undefined &&
-      (await this.deniedMatchForWindow(window)) !== undefined
-    );
+    const window = (await this.readWindows()).find((candidate) => candidate.id === windowId);
+    return window !== undefined && (await this.deniedMatchForWindow(window)) !== undefined;
   }
 
   async admitControl(
@@ -1413,8 +1337,7 @@ export class ComputerManager {
     ) {
       await this.setControlEnabled(threadId, true);
     }
-    const enabled =
-      mode !== "off" && this.canActivateControl(threadId, generation);
+    const enabled = mode !== "off" && this.canActivateControl(threadId, generation);
     // An admitted one-shot request promotes to durable chat: the turn it opens
     // spans tool calls and approval waits, and a goal continuation must still
     // find it afterwards. It persists until an explicit off (or a disable,
@@ -1423,8 +1346,7 @@ export class ComputerManager {
     try {
       await this.controlState.recordChatIntent(
         threadId,
-        enabled &&
-          (mode === "chat" || (mode === "request" && explicitInvocation)),
+        enabled && (mode === "chat" || (mode === "request" && explicitInvocation)),
         generation,
       );
     } catch (error) {
@@ -1483,10 +1405,7 @@ export class ComputerManager {
       // queued requests never regain authority when this thread is re-enabled.
       const write = this.controlState.set(threadId, true);
       this.pendingControlWrites.set(threadId, write);
-      const outcomes = await Promise.allSettled([
-        write,
-        this.revokeControl(threadId),
-      ]);
+      const outcomes = await Promise.allSettled([write, this.revokeControl(threadId)]);
       const failed = outcomes.find((outcome) => outcome.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
     }
@@ -1497,8 +1416,7 @@ export class ComputerManager {
     this.threadRuntime(threadId);
     this.publishCached(threadId);
     return {
-      enabled:
-        !this.controlDisabled(threadId) && !this.suspendedThreads.has(threadId),
+      enabled: !this.controlDisabled(threadId) && !this.suspendedThreads.has(threadId),
       generation: this.controlState.get(threadId).generation,
     };
   }
@@ -1510,9 +1428,7 @@ export class ComputerManager {
     // An open session ends with the control it recorded — fire-and-forget
     // like every other evidence write, and idempotent against the
     // `thread-removed` stop that may already have claimed the close.
-    void this.recordings
-      .stopForThread(threadId, "control-revoked")
-      .catch(() => undefined);
+    void this.recordings.stopForThread(threadId, "control-revoked").catch(() => undefined);
     this.authorityRevocations
       .get(threadId)
       ?.abort(
@@ -1521,8 +1437,7 @@ export class ComputerManager {
           { controlRevoked: true },
         ),
       );
-    for (const controller of this.activeAuthorities.get(threadId) ?? [])
-      controller.abort();
+    for (const controller of this.activeAuthorities.get(threadId) ?? []) controller.abort();
     const pending = this.pendingStops.get(threadId);
     if (pending) return pending;
     const stop = (async () => {
@@ -1564,8 +1479,7 @@ export class ComputerManager {
    */
   private assertControlAuthority(owner: string | undefined): void {
     if (owner === undefined) return;
-    if (!this.controlDisabled(owner) && !this.suspendedThreads.has(owner))
-      return;
+    if (!this.controlDisabled(owner) && !this.suspendedThreads.has(owner)) return;
     throw new ComputerBackendError(
       "Computer control was revoked for this conversation; no input was dispatched.",
       { controlRevoked: true },
@@ -1680,10 +1594,7 @@ export class ComputerManager {
     this.scrollGearingFile = new ScrollGearingFile(
       options.controlStatePath === undefined
         ? undefined
-        : join(
-            dirname(options.controlStatePath),
-            "computer-scroll-gearing.json",
-          ),
+        : join(dirname(options.controlStatePath), "computer-scroll-gearing.json"),
     );
     this.cursorActivity = new CursorActivity((text) => {
       this.activity = text;
@@ -1694,13 +1605,10 @@ export class ComputerManager {
     this.now = options.now ?? Date.now;
     this.leaseIdleMs = options.leaseIdleMs ?? COMPUTER_LEASE_IDLE_MS;
     this.actionSettleMs =
-      options.actionSettleMs ??
-      cuaActionSettleMsOverride() ??
-      COMPUTER_ACTION_SETTLE_MS;
+      options.actionSettleMs ?? cuaActionSettleMsOverride() ?? COMPUTER_ACTION_SETTLE_MS;
     this.windowsPublishDebounceMs =
       options.windowsPublishDebounceMs ?? COMPUTER_WINDOWS_PUBLISH_DEBOUNCE_MS;
-    this.measureScrollTravel =
-      options.measureScrollTravel ?? measureScrollTravelFromPng;
+    this.measureScrollTravel = options.measureScrollTravel ?? measureScrollTravelFromPng;
     // Beside the control state and audit log: same directory, same
     // atomicity expectations. Grant lifecycle rows go through
     // `recordComputerAudit` so a disabled thread records nothing.
@@ -1736,11 +1644,8 @@ export class ComputerManager {
       this.backendUnsubscribe = options.backend.onEvent((event) => {
         if (event.type === "windows-changed") {
           this.lastKnownWindowIds = windowIdSet(event.windows);
-          this.lastKnownWindows = new Map(
-            event.windows.map((window) => [window.id, window]),
-          );
-          for (const state of this.threads.values())
-            state.windows = event.windows;
+          this.lastKnownWindows = new Map(event.windows.map((window) => [window.id, window]));
+          for (const state of this.threads.values()) state.windows = event.windows;
           this.emit({
             type: "computer.windows-changed",
             windows: event.windows,
@@ -1844,10 +1749,7 @@ export class ComputerManager {
     } catch (error) {
       availability = {
         kind: "backend-unavailable",
-        message: clampComputerMessage(
-          errorMessage(error),
-          "The computer backend failed.",
-        ),
+        message: clampComputerMessage(errorMessage(error), "The computer backend failed."),
       };
     }
     return {
@@ -1894,9 +1796,7 @@ export class ComputerManager {
   private async readWindows(): Promise<readonly ComputerWindow[]> {
     const windows = await this.backend.listWindows();
     this.lastKnownWindowIds = windowIdSet(windows);
-    this.lastKnownWindows = new Map(
-      windows.map((window) => [window.id, window]),
-    );
+    this.lastKnownWindows = new Map(windows.map((window) => [window.id, window]));
     return windows;
   }
 
@@ -1946,8 +1846,7 @@ export class ComputerManager {
         this.agentDialect !== "macos")
     ) {
       const denied = await this.deniedVisibleWindow();
-      if (denied)
-        throw new ComputerDenylistError(denied.match.app, denied.match.matched);
+      if (denied) throw new ComputerDenylistError(denied.match.app, denied.match.matched);
     }
     // Availability rides alongside, as it already does on the window-list and
     // screen-size reads. Without it the primary perception tool was the one
@@ -1965,12 +1864,9 @@ export class ComputerManager {
     ]);
     // A fresh, scoped observation is the recovery boundary. Merely capturing
     // pixels or waiting does not establish that input is possible again.
-    if (options.windowId)
-      await this.refreshInputPause(options.windowId, state.windows);
+    if (options.windowId) await this.refreshInputPause(options.windowId, state.windows);
     const inputPause =
-      (this.lease
-        ? this.threads.get(this.lease.threadId)?.inputPause
-        : undefined) ??
+      (this.lease ? this.threads.get(this.lease.threadId)?.inputPause : undefined) ??
       (options.windowId
         ? [...this.threads.values()].find(
             (thread) => thread.inputPause?.windowId === options.windowId,
@@ -1981,8 +1877,7 @@ export class ComputerManager {
       availability: this.correctedAvailability(availability),
       ...(inputPause ? { inputPause } : {}),
     };
-    if (options.includeText !== true || !withAvailability.root)
-      return withAvailability;
+    if (options.includeText !== true || !withAvailability.root) return withAvailability;
     return {
       ...withAvailability,
       text: describeComputerUiTree(withAvailability.root),
@@ -1990,9 +1885,7 @@ export class ComputerManager {
   }
 
   /** Zoomed capture of one window or desktop region, with its pixel mapping. */
-  async captureScreenshot(
-    request: ComputerCaptureRequest,
-  ): Promise<ComputerScreenshot> {
+  async captureScreenshot(request: ComputerCaptureRequest): Promise<ComputerScreenshot> {
     this.engageBackend();
     if (request.kind === "window") {
       await this.assertWindowContentAllowed(request.windowId);
@@ -2001,11 +1894,9 @@ export class ComputerManager {
       // where a visible denied window's bounds actually intersect it.
       const denied = (await this.deniedVisibleWindows()).find(
         (entry) =>
-          entry.window.bounds !== undefined &&
-          rectsOverlap(entry.window.bounds, request.region),
+          entry.window.bounds !== undefined && rectsOverlap(entry.window.bounds, request.region),
       );
-      if (denied)
-        throw new ComputerDenylistError(denied.match.app, denied.match.matched);
+      if (denied) throw new ComputerDenylistError(denied.match.app, denied.match.matched);
     }
     return await this.backend.captureScreenshot(request);
   }
@@ -2030,21 +1921,13 @@ export class ComputerManager {
     this.engageBackend();
     return this.withComputerCall(async () => {
       markComputerCall("computer_wait_settle");
-      const window = (await this.readWindows()).find(
-        (entry) => entry.id === windowId,
-      );
+      const window = (await this.readWindows()).find((entry) => entry.id === windowId);
       if (!window) throw windowNotFoundError(windowId);
       const timeout = Math.max(
         0,
-        Math.min(
-          COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS * 6,
-          Math.floor(timeoutMs),
-        ),
+        Math.min(COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS * 6, Math.floor(timeoutMs)),
       );
-      if (
-        this.observerSettle !== "unsupported" &&
-        this.backend.waitForSettle !== undefined
-      ) {
+      if (this.observerSettle !== "unsupported" && this.backend.waitForSettle !== undefined) {
         try {
           const outcome = await this.backend.waitForSettle({
             windowId,
@@ -2053,14 +1936,11 @@ export class ComputerManager {
           });
           this.observerSettle = "supported";
           currentComputerCall()?.timing?.count(
-            outcome.settled
-              ? "settle_observer_settled"
-              : "settle_observer_timeout",
+            outcome.settled ? "settle_observer_settled" : "settle_observer_timeout",
           );
           return { ...outcome, mode: "observer" as const };
         } catch (error) {
-          if (settlePermanentlyUnsupported(error))
-            this.observerSettle = "unsupported";
+          if (settlePermanentlyUnsupported(error)) this.observerSettle = "unsupported";
           else throw error;
           // A permanent refusal falls through to the fixed wait; a transient
           // one propagates — the caller asked for observed settle, and a
@@ -2088,9 +1968,7 @@ export class ComputerManager {
   ): Promise<ComputerCapturedWindow> {
     this.engageBackend();
     const limit = maxDimension === undefined ? {} : { maxDimension };
-    const window = await this.focusedCapturableWindow(
-      options.agentFocusOnly === true,
-    );
+    const window = await this.focusedCapturableWindow(options.agentFocusOnly === true);
     if (window) {
       const denied = await this.deniedMatchForWindow(window);
       if (denied) throw new ComputerDenylistError(denied.app, denied.matched);
@@ -2107,10 +1985,7 @@ export class ComputerManager {
     // denied one on screen refuses the capture entirely.
     const deniedVisible = await this.deniedVisibleWindow();
     if (deniedVisible)
-      throw new ComputerDenylistError(
-        deniedVisible.match.app,
-        deniedVisible.match.matched,
-      );
+      throw new ComputerDenylistError(deniedVisible.match.app, deniedVisible.match.matched);
     const screenSize = await this.backend.getScreenSize();
     return {
       screenshot: await this.backend.captureScreenshot({
@@ -2165,9 +2040,7 @@ export class ComputerManager {
         if (this.actionEffectAlreadyProven()) {
           currentComputerCall()?.timing?.count("settle_skipped");
         } else {
-          await timedComputerLeg("settle", () =>
-            this.settleAfterAction(windowIdHint),
-          );
+          await timedComputerLeg("settle", () => this.settleAfterAction(windowIdHint));
         }
       }
       return timedComputerLeg("observe", () =>
@@ -2215,14 +2088,11 @@ export class ComputerManager {
         });
         this.observerSettle = "supported";
         currentComputerCall()?.timing?.count(
-          outcome.settled
-            ? "settle_observer_settled"
-            : "settle_observer_timeout",
+          outcome.settled ? "settle_observer_settled" : "settle_observer_timeout",
         );
         return;
       } catch (error) {
-        if (settlePermanentlyUnsupported(error))
-          this.observerSettle = "unsupported";
+        if (settlePermanentlyUnsupported(error)) this.observerSettle = "unsupported";
         currentComputerCall()?.timing?.count("settle_observer_unavailable");
         // Fall through to the fixed wait — the action still needs its pause.
       }
@@ -2291,12 +2161,9 @@ export class ComputerManager {
     }
     try {
       return await this.observeActionCapture(
-        await this.captureFocusedWindow(
-          COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
-          {
-            agentFocusOnly: true,
-          },
-        ),
+        await this.captureFocusedWindow(COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION, {
+          agentFocusOnly: true,
+        }),
         threadId,
       );
     } catch {
@@ -2331,8 +2198,7 @@ export class ComputerManager {
     if (appeared === undefined) return observation;
     // A denied window the action opened — a password prompt, a security
     // dialog — is never photographed either; the original capture stands.
-    if ((await this.deniedMatchForWindow(appeared)) !== undefined)
-      return observation;
+    if ((await this.deniedMatchForWindow(appeared)) !== undefined) return observation;
     try {
       return {
         screenshot: await this.backend.captureScreenshot({
@@ -2378,8 +2244,7 @@ export class ComputerManager {
           window.id !== excludeWindowId &&
           (owner.pid !== undefined
             ? window.pid === owner.pid
-            : owner.appName !== undefined &&
-              window.appName === owner.appName) &&
+            : owner.appName !== undefined && window.appName === owner.appName) &&
           window.bounds !== undefined &&
           window.visible &&
           !window.minimized,
@@ -2398,9 +2263,7 @@ export class ComputerManager {
    * already rely on. Unresolvable stacking returns nothing rather than a
    * guess; a listing failure does too, because this only feeds perception.
    */
-  private async windowIdAtActionPoint(
-    point: ComputerPoint,
-  ): Promise<string | undefined> {
+  private async windowIdAtActionPoint(point: ComputerPoint): Promise<string | undefined> {
     try {
       return topmostWindowAtPoint(await this.readWindows(), point)?.id;
     } catch {
@@ -2421,8 +2284,7 @@ export class ComputerManager {
     agentFocusOnly = false,
   ): Promise<ComputerWindow | undefined> {
     const candidates = (await this.readWindows()).filter(
-      (window) =>
-        window.bounds !== undefined && window.visible && !window.minimized,
+      (window) => window.bounds !== undefined && window.visible && !window.minimized,
     );
     const agentFocused = candidates.find((window) => window.focused);
     if (agentFocused !== undefined || agentFocusOnly) return agentFocused;
@@ -2501,14 +2363,8 @@ export class ComputerManager {
   async listApps(): Promise<ComputerListAppsResult> {
     this.engageBackend();
     const listApps = this.backend.listApps?.bind(this.backend);
-    if (!listApps)
-      throw new ComputerBackendError(
-        "This backend cannot enumerate applications.",
-      );
-    const [availability, apps] = await Promise.all([
-      this.backend.availability(),
-      listApps(),
-    ]);
+    if (!listApps) throw new ComputerBackendError("This backend cannot enumerate applications.");
+    const [availability, apps] = await Promise.all([this.backend.availability(), listApps()]);
     return { computerId: this.computerId, apps, availability };
   }
 
@@ -2552,21 +2408,10 @@ export class ComputerManager {
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
       const setter = this.backend.setWindowFrame?.bind(this.backend);
-      if (!setter)
-        throw new ComputerBackendError(
-          "This backend cannot move or resize windows.",
-        );
+      if (!setter) throw new ComputerBackendError("This backend cannot move or resize windows.");
       await this.resolveWindowTarget(threadId, windowId);
-      const result = await timedComputerLeg("dispatch", () =>
-        setter(windowId, frame),
-      );
-      return this.actionResult(
-        threadId,
-        "computer_set_window_frame",
-        undefined,
-        result,
-        windowId,
-      );
+      const result = await timedComputerLeg("dispatch", () => setter(windowId, frame));
+      return this.actionResult(threadId, "computer_set_window_frame", undefined, result, windowId);
     });
   }
 
@@ -2577,21 +2422,10 @@ export class ComputerManager {
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
       const invoke = this.backend.invokeMenu?.bind(this.backend);
-      if (!invoke)
-        throw new ComputerBackendError(
-          "This backend cannot invoke menu items.",
-        );
+      if (!invoke) throw new ComputerBackendError("This backend cannot invoke menu items.");
       await this.resolveWindowTarget(threadId, windowId);
-      const result = await timedComputerLeg("dispatch", () =>
-        invoke(windowId, path),
-      );
-      return this.actionResult(
-        threadId,
-        "computer_invoke_menu",
-        undefined,
-        result,
-        windowId,
-      );
+      const result = await timedComputerLeg("dispatch", () => invoke(windowId, path));
+      return this.actionResult(threadId, "computer_invoke_menu", undefined, result, windowId);
     });
   }
 
@@ -2609,13 +2443,9 @@ export class ComputerManager {
     return this.withDesktopControl(threadId, async () => {
       const setter = this.backend.setWindowMinimized?.bind(this.backend);
       if (!setter)
-        throw new ComputerBackendError(
-          "This backend cannot minimize or restore windows.",
-        );
+        throw new ComputerBackendError("This backend cannot minimize or restore windows.");
       await this.resolveWindowTarget(threadId, windowId);
-      const result = await timedComputerLeg("dispatch", () =>
-        setter(windowId, minimized),
-      );
+      const result = await timedComputerLeg("dispatch", () => setter(windowId, minimized));
       return this.actionResult(
         threadId,
         "computer_set_window_minimized",
@@ -2641,9 +2471,7 @@ export class ComputerManager {
     return this.withDesktopControl(threadId, async () => {
       const setter = this.backend.setAppVisibility?.bind(this.backend);
       if (!setter)
-        throw new ComputerBackendError(
-          "This backend cannot hide or unhide applications.",
-        );
+        throw new ComputerBackendError("This backend cannot hide or unhide applications.");
       const named = await timedComputerLeg("resolve", async () => {
         const listApps = this.backend.listApps?.bind(this.backend);
         if (!listApps) return undefined;
@@ -2660,15 +2488,8 @@ export class ComputerManager {
         const denied = await this.deniedMatchForPid(pid, named);
         if (denied) throw new ComputerDenylistError(denied.app, denied.matched);
       }
-      const result = await timedComputerLeg("dispatch", () =>
-        setter(pid, hidden),
-      );
-      return this.actionResult(
-        threadId,
-        "computer_set_app_visibility",
-        undefined,
-        result,
-      );
+      const result = await timedComputerLeg("dispatch", () => setter(pid, hidden));
+      return this.actionResult(threadId, "computer_set_app_visibility", undefined, result);
     });
   }
 
@@ -2690,56 +2511,31 @@ export class ComputerManager {
   ): Promise<ComputerVerifyStateResult> {
     this.engageBackend();
     const verify = this.backend.verifyState?.bind(this.backend);
-    if (!verify)
-      throw new ComputerBackendError(
-        "This backend cannot verify window state.",
-      );
+    if (!verify) throw new ComputerBackendError("This backend cannot verify window state.");
     await this.assertScopedWindowReadable(windowId);
     return verify(windowId, expect);
   }
 
-  async zoomWindow(
-    windowId: string,
-    region: ComputerRect,
-  ): Promise<ComputerZoomResult> {
+  async zoomWindow(windowId: string, region: ComputerRect): Promise<ComputerZoomResult> {
     this.engageBackend();
     const zoom = this.backend.zoomWindow?.bind(this.backend);
-    if (!zoom)
-      throw new ComputerBackendError(
-        "This backend cannot capture zoomed regions.",
-      );
+    if (!zoom) throw new ComputerBackendError("This backend cannot capture zoomed regions.");
     await this.assertScopedWindowReadable(windowId);
     return zoom(windowId, region);
   }
 
-  async killApp(
-    threadId: string | undefined,
-    windowId: string,
-  ): Promise<ComputerActionResult> {
+  async killApp(threadId: string | undefined, windowId: string): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
       const kill = this.backend.killApp?.bind(this.backend);
-      if (!kill)
-        throw new ComputerBackendError(
-          "This backend cannot terminate applications.",
-        );
+      if (!kill) throw new ComputerBackendError("This backend cannot terminate applications.");
       // The pid gate runs ahead of admission, as it always has: a window
       // without one reports not-found rather than prompting consent first.
-      const windows = await timedComputerLeg("resolve", () =>
-        this.readWindows(),
-      );
+      const windows = await timedComputerLeg("resolve", () => this.readWindows());
       const target = windows.find((candidate) => candidate.id === windowId);
       if (!target?.pid) throw windowNotFoundError(windowId);
       await this.admitWindowTarget(threadId, target);
-      const result = await timedComputerLeg("dispatch", () =>
-        kill(target.pid!),
-      );
-      return this.actionResult(
-        threadId,
-        "computer_kill_app",
-        undefined,
-        result,
-        windowId,
-      );
+      const result = await timedComputerLeg("dispatch", () => kill(target.pid!));
+      return this.actionResult(threadId, "computer_kill_app", undefined, result, windowId);
     });
   }
 
@@ -2749,15 +2545,10 @@ export class ComputerManager {
    * that owns that exact window, so it is validated against a fresh window
    * read the same way a targeted perception call is.
    */
-  async getAccessibilityTree(
-    windowId?: string,
-  ): Promise<ComputerAccessibilityTreeResult> {
+  async getAccessibilityTree(windowId?: string): Promise<ComputerAccessibilityTreeResult> {
     this.engageBackend();
     const read = this.backend.getAccessibilityTree?.bind(this.backend);
-    if (!read)
-      throw new ComputerBackendError(
-        "This backend cannot read the desktop inventory.",
-      );
+    if (!read) throw new ComputerBackendError("This backend cannot read the desktop inventory.");
     if (windowId !== undefined) await this.assertScopedWindowReadable(windowId);
     const [availability, snapshot] = await Promise.all([
       this.backend.availability(),
@@ -2781,24 +2572,16 @@ export class ComputerManager {
   async getCursorPosition(windowId?: string): Promise<ComputerCursorPosition> {
     this.engageBackend();
     const read = this.backend.getCursorPosition?.bind(this.backend);
-    if (!read)
-      throw new ComputerBackendError(
-        "This backend cannot read the cursor position.",
-      );
+    if (!read) throw new ComputerBackendError("This backend cannot read the cursor position.");
     if (windowId !== undefined) await this.assertScopedWindowReadable(windowId);
-    const [availability, point] = await Promise.all([
-      this.backend.availability(),
-      read(windowId),
-    ]);
+    const [availability, point] = await Promise.all([this.backend.availability(), read(windowId)]);
     return { computerId: this.computerId, ...point, availability };
   }
 
   async getThreadState(threadId: string): Promise<ThreadComputerState> {
     const state = this.threadRuntime(threadId);
     await this.refreshPhysicalState();
-    return (
-      (await this.publish(threadId)) ?? this.threadSnapshot(threadId, state)
-    );
+    return (await this.publish(threadId)) ?? this.threadSnapshot(threadId, state);
   }
 
   /** A human clicks the live pane in desktop coordinates. Resolve its current
@@ -2834,12 +2617,7 @@ export class ComputerManager {
     target: ComputerTarget,
     modifiers?: readonly ComputerInputModifier[],
   ): Promise<ComputerActionResult> {
-    return await this.pointerClick(
-      "computer_click",
-      threadId,
-      target,
-      modifiers,
-    );
+    return await this.pointerClick("computer_click", threadId, target, modifiers);
   }
 
   async doubleClick(
@@ -2847,12 +2625,7 @@ export class ComputerManager {
     target: ComputerTarget,
     modifiers?: readonly ComputerInputModifier[],
   ): Promise<ComputerActionResult> {
-    return await this.pointerClick(
-      "computer_double_click",
-      threadId,
-      target,
-      modifiers,
-    );
+    return await this.pointerClick("computer_double_click", threadId, target, modifiers);
   }
 
   async tripleClick(
@@ -2860,12 +2633,7 @@ export class ComputerManager {
     target: ComputerTarget,
     modifiers?: readonly ComputerInputModifier[],
   ): Promise<ComputerActionResult> {
-    return await this.pointerClick(
-      "computer_triple_click",
-      threadId,
-      target,
-      modifiers,
-    );
+    return await this.pointerClick("computer_triple_click", threadId, target, modifiers);
   }
 
   async rightClick(
@@ -2873,12 +2641,7 @@ export class ComputerManager {
     target: ComputerTarget,
     modifiers?: readonly ComputerInputModifier[],
   ): Promise<ComputerActionResult> {
-    return await this.pointerClick(
-      "computer_right_click",
-      threadId,
-      target,
-      modifiers,
-    );
+    return await this.pointerClick("computer_right_click", threadId, target, modifiers);
   }
 
   /**
@@ -2902,9 +2665,7 @@ export class ComputerManager {
       const resolved = await timedComputerLeg("resolve", () =>
         this.resolvePointTarget(target, threadId),
       );
-      await timedComputerLeg("resolve", () =>
-        this.prepareResolvedTarget(resolved, threadId),
-      );
+      await timedComputerLeg("resolve", () => this.prepareResolvedTarget(resolved, threadId));
       const semantic = resolved.semantic;
       if (
         action === "computer_click" &&
@@ -2918,29 +2679,16 @@ export class ComputerManager {
         assertDesktopOperationActive();
         // Select one actuator before dispatch. An uncertain AX press must never
         // fall through to a coordinate click (toggles could run twice).
-        const nativeAction =
-          this.backend.agentDialect === "macos" ? "AXPress" : "press";
+        const nativeAction = this.backend.agentDialect === "macos" ? "AXPress" : "press";
         const result = await timedComputerLeg("dispatch", () =>
           this.backend.performAction(semantic, nativeAction),
         );
-        return this.actionResult(
-          threadId,
-          action,
-          resolved.point,
-          result,
-          resolved.windowId,
-        );
+        return this.actionResult(threadId, action, resolved.point, result, resolved.windowId);
       }
       const result = await this.injectScoped(action, resolved, () =>
         inject(resolved.point, resolved.windowId, modifiers),
       );
-      return this.actionResult(
-        threadId,
-        action,
-        resolved.point,
-        result,
-        resolved.windowId,
-      );
+      return this.actionResult(threadId, action, resolved.point, result, resolved.windowId);
     });
   }
 
@@ -2964,20 +2712,16 @@ export class ComputerManager {
   ) => Promise<ComputerBackendActionResult | void> {
     switch (action) {
       case "computer_double_click":
-        return (point, windowId, modifiers) =>
-          this.backend.doubleClick(point, windowId, modifiers);
+        return (point, windowId, modifiers) => this.backend.doubleClick(point, windowId, modifiers);
       case "computer_right_click":
-        return (point, windowId, modifiers) =>
-          this.backend.rightClick(point, windowId, modifiers);
+        return (point, windowId, modifiers) => this.backend.rightClick(point, windowId, modifiers);
       case "computer_triple_click": {
         const tripleClick = this.backend.tripleClick?.bind(this.backend);
         if (!tripleClick) throw tripleClickUnsupportedError();
-        return (point, windowId, modifiers) =>
-          tripleClick(point, windowId, modifiers);
+        return (point, windowId, modifiers) => tripleClick(point, windowId, modifiers);
       }
       default:
-        return (point, windowId, modifiers) =>
-          this.backend.click(point, windowId, modifiers);
+        return (point, windowId, modifiers) => this.backend.click(point, windowId, modifiers);
     }
   }
 
@@ -3037,16 +2781,13 @@ export class ComputerManager {
       if (!raise || !this.backendCapabilities.raise) {
         throw activationUnsupportedError();
       }
-      const windows = await timedComputerLeg("resolve", () =>
-        this.readWindows(),
-      );
+      const windows = await timedComputerLeg("resolve", () => this.readWindows());
       const target = windows.find((candidate) => candidate.id === windowId);
       if (!target) {
         throw windowNotFoundError(windowId);
       }
       const previousId =
-        windows.find((candidate) => candidate.visible && !candidate.minimized)
-          ?.id ?? null;
+        windows.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
       this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
       await this.assertWindowInputAllowedWindow(threadId, target);
       // The masked-activation shield arms after admission and before the
@@ -3070,9 +2811,7 @@ export class ComputerManager {
             // rearranged: restore best-effort, then report the input failure.
             if (previousId !== null && previousId !== windowId) {
               await raise(previousId).catch(() => undefined);
-              await this.backend
-                .focusWindow?.(previousId)
-                ?.catch(() => undefined);
+              await this.backend.focusWindow?.(previousId)?.catch(() => undefined);
             }
             throw error;
           }
@@ -3084,8 +2823,7 @@ export class ComputerManager {
             restoredWindowId: null,
             restoreStatus: "frontmost-unobservable",
           };
-          note =
-            "No frontmost window was observable before activation, so nothing was restored.";
+          note = "No frontmost window was observable before activation, so nothing was restored.";
         } else if (previousId === windowId) {
           restore = {
             restoredWindowId: null,
@@ -3119,27 +2857,16 @@ export class ComputerManager {
         } catch {
           // Keep the successful result.
         }
-        const merged = computerBackendActionResult(
-          this.computerId,
-          "computer_activate_window",
-          {
-            windowId,
-          },
-        );
-        this.emitForegroundRestoreAction(
-          threadId,
-          merged,
-          restore,
-          note,
-          shieldId !== undefined,
-        );
+        const merged = computerBackendActionResult(this.computerId, "computer_activate_window", {
+          windowId,
+        });
+        this.emitForegroundRestoreAction(threadId, merged, restore, note, shieldId !== undefined);
         return note !== undefined ? { ...merged, note } : merged;
       } finally {
         // The shield is the last piece of the excursion to come down: the
         // restore has already landed, so dropping the mask reveals the
         // desktop the way it was left rather than mid-raise.
-        if (shieldId !== undefined)
-          await this.releaseActivationShield(shieldId);
+        if (shieldId !== undefined) await this.releaseActivationShield(shieldId);
       }
     });
   }
@@ -3164,12 +2891,9 @@ export class ComputerManager {
     action: () => Promise<T>,
   ): Promise<T> {
     return this.withDesktopControl(threadId, async () => {
-      const before = await timedComputerLeg("resolve", () =>
-        this.readWindows(),
-      );
+      const before = await timedComputerLeg("resolve", () => this.readWindows());
       const previousId =
-        before.find((candidate) => candidate.visible && !candidate.minimized)
-          ?.id ?? null;
+        before.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
       let outcome:
         | { readonly ok: true; readonly value: T }
         | { readonly ok: false; readonly error: unknown };
@@ -3183,21 +2907,13 @@ export class ComputerManager {
         if (raise && this.backendCapabilities.raise) {
           let frontmost: string | null | undefined;
           try {
-            const after = await timedComputerLeg("resolve", () =>
-              this.readWindows(),
-            );
+            const after = await timedComputerLeg("resolve", () => this.readWindows());
             frontmost =
-              after.find(
-                (candidate) => candidate.visible && !candidate.minimized,
-              )?.id ?? null;
+              after.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
           } catch {
             frontmost = undefined;
           }
-          if (
-            frontmost !== undefined &&
-            frontmost !== null &&
-            frontmost !== previousId
-          ) {
+          if (frontmost !== undefined && frontmost !== null && frontmost !== previousId) {
             try {
               assertDesktopOperationActive();
               await raise(previousId);
@@ -3241,17 +2957,12 @@ export class ComputerManager {
       action: "computer_activate_window",
       ok: true,
       ...(attributed ? { threadId: ThreadId.makeUnsafe(attributed) } : {}),
-      ...(restore.restoredWindowId !== null
-        ? { restoredWindowId: restore.restoredWindowId }
-        : {}),
+      ...(restore.restoredWindowId !== null ? { restoredWindowId: restore.restoredWindowId } : {}),
       restoreStatus: restore.restoreStatus,
       ...(masked ? { masked: true } : {}),
       ...(note !== undefined
         ? {
-            message: clampComputerMessage(
-              note,
-              "The foreground window could not be restored.",
-            ),
+            message: clampComputerMessage(note, "The foreground window could not be restored."),
           }
         : {}),
     } as ComputerEvent);
@@ -3280,9 +2991,7 @@ export class ComputerManager {
     if (optIn.size === 0) return undefined;
     const owner =
       target.pid !== undefined
-        ? (await this.runningAppsForDenylist()).find(
-            (candidate) => candidate.pid === target.pid,
-          )
+        ? (await this.runningAppsForDenylist()).find((candidate) => candidate.pid === target.pid)
         : undefined;
     if (!maskedActivationOptedIn(optIn, owner?.bundleId)) return undefined;
     const engage = this.backend.engageShield?.bind(this.backend);
@@ -3338,10 +3047,8 @@ export class ComputerManager {
         this.resolvePointTarget(target, threadId),
       );
       await timedComputerLeg("resolve", () => this.revealTarget(resolved));
-      const result = await this.injectScoped(
-        "computer_move_cursor",
-        resolved,
-        () => this.backend.moveCursor(resolved.point, resolved.windowId),
+      const result = await this.injectScoped("computer_move_cursor", resolved, () =>
+        this.backend.moveCursor(resolved.point, resolved.windowId),
       );
       return this.actionResult(
         threadId,
@@ -3370,16 +3077,9 @@ export class ComputerManager {
       // raised and focused; the destination only scopes it when the origin names
       // no window at all.
       const grabbed = resolvedFrom.windowId ? resolvedFrom : resolvedTo;
-      await timedComputerLeg("resolve", () =>
-        this.prepareResolvedTarget(grabbed, threadId),
-      );
+      await timedComputerLeg("resolve", () => this.prepareResolvedTarget(grabbed, threadId));
       const result = await this.injectScoped("computer_drag", grabbed, () =>
-        this.backend.drag(
-          resolvedFrom.point,
-          resolvedTo.point,
-          durationMs,
-          resolvedFrom.windowId,
-        ),
+        this.backend.drag(resolvedFrom.point, resolvedTo.point, durationMs, resolvedFrom.windowId),
       );
       return this.actionResult(
         threadId,
@@ -3409,12 +3109,7 @@ export class ComputerManager {
       const resolved = await timedComputerLeg("resolve", () =>
         this.prepareScrollTarget(target, threadId),
       );
-      const result = await this.injectScroll(
-        resolved,
-        deltaX,
-        deltaY,
-        undefined,
-      );
+      const result = await this.injectScroll(resolved, deltaX, deltaY, undefined);
       return this.actionResult(
         threadId,
         "computer_scroll",
@@ -3474,13 +3169,8 @@ export class ComputerManager {
       // this thread last drove to, and the focus about to be dropped.
       const attributed = agentThreadId(threadId);
       const cursorPoint =
-        target !== null
-          ? undefined
-          : attributed
-            ? this.threads.get(attributed)?.cursor
-            : undefined;
-      const preClearFocusId =
-        target !== null ? undefined : await this.agentFocusWindowId();
+        target !== null ? undefined : attributed ? this.threads.get(attributed)?.cursor : undefined;
+      const preClearFocusId = target !== null ? undefined : await this.agentFocusWindowId();
       const resolved = await timedComputerLeg("resolve", () =>
         this.prepareScrollTarget(target, threadId),
       );
@@ -3491,12 +3181,8 @@ export class ComputerManager {
       // window nothing, which is the right outcome for a guess.
       const observedWindowId =
         resolved?.windowId ??
-        (resolved?.point
-          ? await this.windowIdAtActionPoint(resolved.point)
-          : undefined) ??
-        (cursorPoint
-          ? await this.windowIdAtActionPoint(cursorPoint)
-          : undefined) ??
+        (resolved?.point ? await this.windowIdAtActionPoint(resolved.point) : undefined) ??
+        (cursorPoint ? await this.windowIdAtActionPoint(cursorPoint) : undefined) ??
         preClearFocusId ??
         (await this.agentFocusWindowId());
       const before = !options.observe
@@ -3511,33 +3197,22 @@ export class ComputerManager {
       const observedWindow =
         observedWindowId === undefined
           ? undefined
-          : (await this.readWindows()).find(
-              (window) => window.id === observedWindowId,
-            );
+          : (await this.readWindows()).find((window) => window.id === observedWindowId);
       const appKey =
         observedWindow?.appName ??
-        (observedWindow?.pid !== undefined
-          ? `pid:${observedWindow.pid}`
-          : undefined);
+        (observedWindow?.pid !== undefined ? `pid:${observedWindow.pid}` : undefined);
       const windowKey = (route: string) =>
-        observedWindowId === undefined
-          ? undefined
-          : `${observedWindowId}|${route}`;
+        observedWindowId === undefined ? undefined : `${observedWindowId}|${route}`;
       const durableKey = (route: string) =>
         appKey === undefined ? undefined : `${appKey}|${route}`;
       // The AX rung only runs for an unmodified vertical scroll at an element
       // target; every other request is a wheel gesture.
       const plannedRoute = (legDeltaX: number) =>
-        resolved?.semantic !== undefined &&
-        legDeltaX === 0 &&
-        !options.modifiers?.length
+        resolved?.semantic !== undefined && legDeltaX === 0 && !options.modifiers?.length
           ? "ax"
           : "wheel";
       // The backend reports which rung actually ran; trust it over the plan.
-      const legRoute = (
-        leg: ComputerBackendActionResult | void,
-        planned: string,
-      ) =>
+      const legRoute = (leg: ComputerBackendActionResult | void, planned: string) =>
         leg?.deliveryPath?.startsWith("cua-ax") === true
           ? "ax"
           : leg?.deliveryPath !== undefined
@@ -3568,12 +3243,7 @@ export class ComputerManager {
         Math.abs(deltaY) > SCROLL_PROBE_TRIGGER_PX
       ) {
         const probe = Math.sign(deltaY) * SCROLL_PROBE_PX;
-        const probeResult = await this.injectScroll(
-          resolved,
-          0,
-          probe,
-          options.modifiers,
-        );
+        const probeResult = await this.injectScroll(resolved, 0, probe, options.modifiers);
         result = probeResult;
         // The backend's own account of what went in — macOS quantizes the leg
         // to whole notches — is what the correlation learned from, not the
@@ -3594,31 +3264,21 @@ export class ComputerManager {
         // wrong-way measurement deducts only the probe's own request, which is
         // the strongest claim it can still make.
         const covered =
-          probeLeg.traveled !== undefined &&
-          Math.sign(probeLeg.traveled) === Math.sign(deltaY)
+          probeLeg.traveled !== undefined && Math.sign(probeLeg.traveled) === Math.sign(deltaY)
             ? probeLeg.traveled
             : probeInjected;
-        const remainder =
-          Math.abs(covered) >= Math.abs(deltaY) ? 0 : deltaY - covered;
+        const remainder = Math.abs(covered) >= Math.abs(deltaY) ? 0 : deltaY - covered;
         // One gearing per window drives both axes: a toolkit's unit conversion is
         // a property of how it reads scroll events, not of which axis they carry,
         // and only the vertical travel is measurable from a row correlation.
         const legX = plan(plannedRoute(deltaX), deltaX);
         const legY = plan(plannedRoute(deltaX), remainder);
         if (legX !== 0 || legY !== 0) {
-          const remainderResult = await this.injectScroll(
-            resolved,
-            legX,
-            legY,
-            options.modifiers,
-          );
+          const remainderResult = await this.injectScroll(resolved, legX, legY, options.modifiers);
           result = remainderResult;
           injectedX += remainderResult?.scrollDelta?.deltaX ?? legX;
           injectedY += remainderResult?.scrollDelta?.deltaY ?? legY;
-          const remainderRoute = legRoute(
-            remainderResult,
-            plannedRoute(deltaX),
-          );
+          const remainderRoute = legRoute(remainderResult, plannedRoute(deltaX));
           routes.push(remainderRoute);
           if (after) {
             const remainderLeg = await this.settleAndMeasure(
@@ -3630,8 +3290,7 @@ export class ComputerManager {
             );
             after = remainderLeg.capture ?? after;
             traveledY =
-              probeLeg.traveled !== undefined &&
-              remainderLeg.traveled !== undefined
+              probeLeg.traveled !== undefined && remainderLeg.traveled !== undefined
                 ? probeLeg.traveled + remainderLeg.traveled
                 : undefined;
           }
@@ -3642,12 +3301,7 @@ export class ComputerManager {
         const route = plannedRoute(deltaX);
         injectedX = plan(route, deltaX);
         injectedY = plan(route, deltaY);
-        result = await this.injectScroll(
-          resolved,
-          injectedX,
-          injectedY,
-          options.modifiers,
-        );
+        result = await this.injectScroll(resolved, injectedX, injectedY, options.modifiers);
         injectedX = result?.scrollDelta?.deltaX ?? injectedX;
         injectedY = result?.scrollDelta?.deltaY ?? injectedY;
         const actualRoute = legRoute(result, route);
@@ -3688,12 +3342,8 @@ export class ComputerManager {
           scroll: {
             requested: { deltaX, deltaY },
             injected: { deltaX: round2(injectedX), deltaY: round2(injectedY) },
-            ...(traveledY === undefined
-              ? {}
-              : { traveledY: round2(traveledY) }),
-            ...(reportedGearing === undefined
-              ? {}
-              : { gearing: round2(reportedGearing) }),
+            ...(traveledY === undefined ? {} : { traveledY: round2(traveledY) }),
+            ...(reportedGearing === undefined ? {} : { gearing: round2(reportedGearing) }),
             ...(routes.length === 0 ? {} : { routes }),
           },
         },
@@ -3706,9 +3356,7 @@ export class ComputerManager {
     target: ComputerTarget | null,
     threadId: string | undefined,
   ): Promise<ResolvedPointTarget | null> {
-    const resolved = target
-      ? await this.resolveScrollPointTarget(target, threadId)
-      : null;
+    const resolved = target ? await this.resolveScrollPointTarget(target, threadId) : null;
     await this.prepareResolvedTarget(resolved ?? undefined, threadId);
     return resolved;
   }
@@ -3735,9 +3383,7 @@ export class ComputerManager {
     }
     await this.assertWindowInputAllowed(threadId, windowId);
     const state = await this.backend.getState({ includeTree: false });
-    const match = state.root
-      ? resolveComputerWindowTarget(state.root, windowId)
-      : undefined;
+    const match = state.root ? resolveComputerWindowTarget(state.root, windowId) : undefined;
     const windows = match ? undefined : await this.readWindows();
     const window =
       windows?.find((candidate) => candidate.id === windowId) ??
@@ -3812,11 +3458,7 @@ export class ComputerManager {
     readonly capture?: ComputerCapturedWindow;
     readonly traveled?: number;
   }> {
-    if (
-      this.actionSettleMs > 0 &&
-      injectedY !== 0 &&
-      cuaConditionalSettleEnabled()
-    ) {
+    if (this.actionSettleMs > 0 && injectedY !== 0 && cuaConditionalSettleEnabled()) {
       const predictedGearing = this.scrollGearing.has(windowKey)
         ? this.scrollGearing.gearing(windowKey)
         : this.scrollGearingFile.get(appKey);
@@ -3837,12 +3479,7 @@ export class ComputerManager {
                 Math.abs(expectedY) * SCROLL_SETTLE_ARRIVAL_TOLERANCE,
               )
           ) {
-            this.learnLegTravel(
-              windowKey ?? windowId,
-              appKey,
-              injectedY,
-              traveled,
-            );
+            this.learnLegTravel(windowKey ?? windowId, appKey, injectedY, traveled);
             currentComputerCall()?.timing?.count("settle_skipped");
             return { capture: early, traveled };
           }
@@ -3854,11 +3491,7 @@ export class ComputerManager {
     }
     const capture = await this.captureForMeasurement(windowId);
     if (!capture) return {};
-    const traveled = await this.measureLegTravel(
-      from.screenshot,
-      capture.screenshot,
-      injectedY,
-    );
+    const traveled = await this.measureLegTravel(from.screenshot, capture.screenshot, injectedY);
     this.learnLegTravel(windowKey ?? windowId, appKey, injectedY, traveled);
     return { capture, ...(traveled === undefined ? {} : { traveled }) };
   }
@@ -3929,12 +3562,9 @@ export class ComputerManager {
     try {
       return await timedComputerLeg("observe", async () => {
         if (windowId === undefined) {
-          return await this.captureFocusedWindow(
-            COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
-            {
-              agentFocusOnly: true,
-            },
-          );
+          return await this.captureFocusedWindow(COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION, {
+            agentFocusOnly: true,
+          });
         }
         return {
           screenshot: await this.backend.captureScreenshot({
@@ -3973,8 +3603,7 @@ export class ComputerManager {
     // pixels to the logical pixels the request was made in, and two different
     // scales are two different pictures of the window.
     const scale = before.scale;
-    if (scale === undefined || scale !== after.scale || scale <= 0)
-      return undefined;
+    if (scale === undefined || scale !== after.scale || scale <= 0) return undefined;
     const traveled = await this.measureScrollTravel(
       this.measurementBytes(before),
       this.measurementBytes(after),
@@ -3994,13 +3623,7 @@ export class ComputerManager {
       const result = await this.runKeyboardDispatch(threadId, windowId, () =>
         this.backend.typeText(text, windowId),
       );
-      return this.actionResult(
-        threadId,
-        "computer_type_text",
-        undefined,
-        result,
-        windowId,
-      );
+      return this.actionResult(threadId, "computer_type_text", undefined, result, windowId);
     });
   }
 
@@ -4015,9 +3638,7 @@ export class ComputerManager {
       );
     }
     if (!target.windowId) {
-      throw new ComputerBackendError(
-        "Focus-neutral text input requires an exact target window.",
-      );
+      throw new ComputerBackendError("Focus-neutral text input requires an exact target window.");
     }
     const windowId = target.windowId;
     return this.withBackgroundWindowControl(threadId, windowId, async () => {
@@ -4028,13 +3649,7 @@ export class ComputerManager {
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.typeText(text, windowId, resolved),
       );
-      return this.actionResult(
-        threadId,
-        "computer_type_text",
-        resolved.point,
-        result,
-        windowId,
-      );
+      return this.actionResult(threadId, "computer_type_text", resolved.point, result, windowId);
     });
   }
 
@@ -4047,13 +3662,7 @@ export class ComputerManager {
       const result = await this.runKeyboardDispatch(threadId, windowId, () =>
         this.backend.pressKey(key, windowId),
       );
-      return this.actionResult(
-        threadId,
-        "computer_press_key",
-        undefined,
-        result,
-        windowId,
-      );
+      return this.actionResult(threadId, "computer_press_key", undefined, result, windowId);
     });
   }
 
@@ -4066,13 +3675,7 @@ export class ComputerManager {
       const result = await this.runKeyboardDispatch(threadId, windowId, () =>
         this.backend.hotkey(keys, windowId),
       );
-      return this.actionResult(
-        threadId,
-        "computer_hotkey",
-        undefined,
-        result,
-        windowId,
-      );
+      return this.actionResult(threadId, "computer_hotkey", undefined, result, windowId);
     });
   }
 
@@ -4087,9 +3690,7 @@ export class ComputerManager {
    * payload. Uniformity also keeps the rule the model must learn simple —
    * perception of the screen is free, everything clipboard is not.
    */
-  async readClipboard(
-    threadId: string | undefined,
-  ): Promise<ComputerActionResult> {
+  async readClipboard(threadId: string | undefined): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
       const read = this.backend.readClipboard?.bind(this.backend);
       if (!read) throw clipboardUnsupportedError();
@@ -4108,22 +3709,14 @@ export class ComputerManager {
     });
   }
 
-  async writeClipboard(
-    threadId: string | undefined,
-    text: string,
-  ): Promise<ComputerActionResult> {
+  async writeClipboard(threadId: string | undefined, text: string): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
       const write = this.backend.writeClipboard?.bind(this.backend);
       if (!write) throw clipboardUnsupportedError();
       await timedComputerLeg("dispatch", () => write(text));
       // The text is not echoed back on `value`: the caller already has it, and it
       // may be far larger than the contract bound on that field.
-      return this.actionResult(
-        threadId,
-        "computer_write_clipboard",
-        undefined,
-        undefined,
-      );
+      return this.actionResult(threadId, "computer_write_clipboard", undefined, undefined);
     });
   }
 
@@ -4148,9 +3741,7 @@ export class ComputerManager {
       const read = this.backend.readClipboard?.bind(this.backend);
       const write = this.backend.writeClipboard?.bind(this.backend);
       if (!read || !write) throw clipboardUnsupportedError();
-      const previous = await timedComputerLeg("dispatch", () =>
-        read().catch(() => undefined),
-      );
+      const previous = await timedComputerLeg("dispatch", () => read().catch(() => undefined));
       await timedComputerLeg("dispatch", () => write(text));
       let restored = false;
       let result: ComputerBackendActionResult | void;
@@ -4180,13 +3771,7 @@ export class ComputerManager {
         }
       }
       return {
-        ...this.actionResult(
-          threadId,
-          "computer_paste",
-          undefined,
-          result,
-          windowId,
-        ),
+        ...this.actionResult(threadId, "computer_paste", undefined, result, windowId),
         // True only when what the user copied is back in place: a clipboard
         // with no text had nothing to restore, and a failed restore reports
         // false rather than claim their contents are safe.
@@ -4252,11 +3837,7 @@ export class ComputerManager {
     range: ComputerTextRange,
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
-      const resolved = await this.prepareSemanticDispatch(
-        target,
-        threadId,
-        true,
-      );
+      const resolved = await this.prepareSemanticDispatch(target, threadId, true);
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.selectText(resolved, range),
       );
@@ -4299,9 +3880,7 @@ export class ComputerManager {
       authority = new AbortController();
       this.authorityRevocations.set(threadId, authority);
     }
-    const admissionSignal = signal
-      ? AbortSignal.any([signal, authority.signal])
-      : authority.signal;
+    const admissionSignal = signal ? AbortSignal.any([signal, authority.signal]) : authority.signal;
     const execute = async (): Promise<A> => {
       // The raw id, not the pane-normalized one: a whitespace thread still
       // gets its revoked-or-suspended check, the same gate the input
@@ -4332,10 +3911,7 @@ export class ComputerManager {
       } finally {
         live.delete(controller);
         if (live.size === 0) this.activeAuthorities.delete(threadId);
-        const remaining = Math.max(
-          0,
-          (this.agentCallsInFlight.get(owner) ?? 1) - 1,
-        );
+        const remaining = Math.max(0, (this.agentCallsInFlight.get(owner) ?? 1) - 1);
         if (remaining === 0) {
           this.agentCallsInFlight.delete(owner);
           if (this.lease?.threadId === owner && this.lease.releaseRequested) {
@@ -4402,12 +3978,9 @@ export class ComputerManager {
   ): Promise<ComputerBrowserCallResult> {
     const browser = this.backend.browser;
     if (!browser)
-      throw new ComputerBackendError(
-        "This computer backend does not provide browser automation.",
-        {
-          retryable: false,
-        },
-      );
+      throw new ComputerBackendError("This computer backend does not provide browser automation.", {
+        retryable: false,
+      });
     return this.withAgentActivity(
       threadId,
       () => {
@@ -4555,8 +4128,7 @@ export class ComputerManager {
     }
     assertDesktopOperationActive();
     for (const { threadId, state, pause, generation } of snapshots) {
-      if (this.threads.get(threadId) !== state || state.inputPause !== pause)
-        continue;
+      if (this.threads.get(threadId) !== state || state.inputPause !== pause) continue;
       // The window is ready, but only a still-authorized thread may resume on
       // that news: a thread revoked (or re-armed to a new generation) while
       // the readiness probe was in flight keeps its pause.
@@ -4567,9 +4139,7 @@ export class ComputerManager {
     }
   }
 
-  private async claimDesktopControl(
-    threadId: string | undefined,
-  ): Promise<void> {
+  private async claimDesktopControl(threadId: string | undefined): Promise<void> {
     // Before the early return, not after it: pane input belongs to no thread and
     // takes no lease, but it is still the human asking this backend to drive
     // their desktop, which is exactly what engagement means.
@@ -4582,8 +4152,7 @@ export class ComputerManager {
     // refreshes the cache, and only a process that has never listed windows pays
     // for a read here.
     this.preActionWindowIds =
-      this.lastKnownWindowIds ??
-      (await this.readWindows().then(windowIdSet, () => undefined));
+      this.lastKnownWindowIds ?? (await this.readWindows().then(windowIdSet, () => undefined));
     const now = this.now();
     const held = this.lease;
     const heldStale = held !== null && this.isLeaseStale(held, now);
@@ -4640,8 +4209,7 @@ export class ComputerManager {
   private async announceDrivingAgent(threadId: string | null): Promise<void> {
     this.cursorActivity.setOwner(threadId);
     if (!this.backend.setDrivingAgent) return;
-    const label =
-      threadId === null ? null : (this.threadLabels.get(threadId) ?? null);
+    const label = threadId === null ? null : (this.threadLabels.get(threadId) ?? null);
     await this.backend.setDrivingAgent(label).catch(() => undefined);
   }
 
@@ -4662,11 +4230,7 @@ export class ComputerManager {
       this.threadLabels.set(owner, trimmed);
       for (const id of this.threadLabels.keys()) {
         if (this.threadLabels.size <= 256) break;
-        if (
-          id === owner ||
-          id === this.lease?.threadId ||
-          this.agentCallsInFlight.has(id)
-        )
+        if (id === owner || id === this.lease?.threadId || this.agentCallsInFlight.has(id))
           continue;
         this.threadLabels.delete(id);
       }
@@ -4688,10 +4252,7 @@ export class ComputerManager {
    * already renewed by a newer turn. Session teardown may release the whole
    * thread by omitting the turn id.
    */
-  async releaseDesktopControl(
-    threadId: string,
-    turnId?: string,
-  ): Promise<void> {
+  async releaseDesktopControl(threadId: string, turnId?: string): Promise<void> {
     const owner = agentThreadId(threadId);
     if (owner === undefined) return;
     const previewStopped = this.backend.endTask?.(owner, turnId);
@@ -4766,11 +4327,7 @@ export class ComputerManager {
   }
 
   async requestKeyframe(): Promise<void> {
-    if (
-      !this.streamAttached ||
-      this.transport.streamSubscriberCount(this.computerId) === 0
-    )
-      return;
+    if (!this.streamAttached || this.transport.streamSubscriberCount(this.computerId) === 0) return;
     const epoch = this.streamEpoch;
     await this.enqueueStreamTransition(async () => {
       if (!this.isStreamWanted(epoch) || !this.streamAttached) return;
@@ -4811,9 +4368,7 @@ export class ComputerManager {
     // not skip removal — a removed thread that keeps its lease can reappear
     // as the desktop's owner until the idle backstop fires. The recording
     // closes first so its end reason is `thread-removed`, not the revocation's.
-    await this.recordings
-      .stopForThread(threadId, "thread-removed")
-      .catch(() => undefined);
+    await this.recordings.stopForThread(threadId, "thread-removed").catch(() => undefined);
     await this.revokeControl(threadId).catch(() => undefined);
     this.publishChains.delete(threadId);
     this.threads.delete(threadId);
@@ -4850,12 +4405,10 @@ export class ComputerManager {
     // endpoint means the input path it owned is already gone.
     await this.backend.stopInput?.().catch(() => undefined);
     await this.operations.close();
-    if (this.windowsPublishTimer !== undefined)
-      clearTimeout(this.windowsPublishTimer);
+    if (this.windowsPublishTimer !== undefined) clearTimeout(this.windowsPublishTimer);
     this.windowsPublishTimer = undefined;
     this.windowsPublishPending = false;
-    if (this.errorRepublishTimer !== undefined)
-      clearTimeout(this.errorRepublishTimer);
+    if (this.errorRepublishTimer !== undefined) clearTimeout(this.errorRepublishTimer);
     this.errorRepublishTimer = undefined;
     this.streamDesired = false;
     this.streamEpoch += 1;
@@ -4996,17 +4549,12 @@ export class ComputerManager {
     });
   }
 
-  private async resolveCoordinatePoint(
-    target: ComputerTarget,
-  ): Promise<ComputerPoint> {
+  private async resolveCoordinatePoint(target: ComputerTarget): Promise<ComputerPoint> {
     if (target.windowId && hasCoordinates(target)) {
-      const window = (await this.readWindows()).find(
-        (window) => window.id === target.windowId,
-      );
+      const window = (await this.readWindows()).find((window) => window.id === target.windowId);
       const bounds = window?.bounds;
-      const observed = (
-        target as ComputerTarget & { observedWindowBounds?: ComputerRect }
-      ).observedWindowBounds;
+      const observed = (target as ComputerTarget & { observedWindowBounds?: ComputerRect })
+        .observedWindowBounds;
       if (window && !bounds)
         throw new ComputerTargetError({
           code: "computer_target_offscreen",
@@ -5040,10 +4588,7 @@ export class ComputerManager {
     try {
       return resolveComputerPoint(target, await this.backend.getScreenSize());
     } catch (error) {
-      if (
-        !(error instanceof ComputerTargetError) ||
-        error.code !== "computer_target_offscreen"
-      ) {
+      if (!(error instanceof ComputerTargetError) || error.code !== "computer_target_offscreen") {
         throw error;
       }
       const state = await this.backend
@@ -5129,8 +4674,7 @@ export class ComputerManager {
     threadId: string | undefined,
   ): Promise<void> {
     const windowId = target?.windowId;
-    if (windowId !== undefined)
-      await this.assertWindowInputAllowed(threadId, windowId);
+    if (windowId !== undefined) await this.assertWindowInputAllowed(threadId, windowId);
     if (windowId === undefined) {
       assertDesktopOperationActive();
       await this.backend.clearFocusWindow?.();
@@ -5142,9 +4686,7 @@ export class ComputerManager {
   }
 
   /** Restack without changing keyboard aim, including on a hover. */
-  private async revealTarget(
-    target: PreparedTarget | undefined,
-  ): Promise<void> {
+  private async revealTarget(target: PreparedTarget | undefined): Promise<void> {
     // Cua decides whether exact background delivery is possible. Merely
     // selecting a target never authorizes persistent foreground promotion.
     if (this.backend.agentDialect === "macos") return;
@@ -5153,16 +4695,9 @@ export class ComputerManager {
     assertDesktopOperationActive();
     const raiseFailure = await this.raiseTargetWindow(windowId);
     if (raiseFailure !== undefined && target?.point) {
-      const covering =
-        target.covering ??
-        (await this.coveringWindowsAt(target.point, windowId));
+      const covering = target.covering ?? (await this.coveringWindowsAt(target.point, windowId));
       if (covering.length > 0) {
-        throw occludedTargetError(
-          windowId,
-          target.point,
-          covering,
-          raiseFailure,
-        );
+        throw occludedTargetError(windowId, target.point, covering, raiseFailure);
       }
     }
   }
@@ -5203,9 +4738,7 @@ export class ComputerManager {
     windowId: string | undefined,
     dispatch: () => Promise<ComputerBackendActionResult | void>,
   ): Promise<ComputerBackendActionResult | void> {
-    await timedComputerLeg("resolve", () =>
-      this.prepareKeyboardTarget(windowId, threadId),
-    );
+    await timedComputerLeg("resolve", () => this.prepareKeyboardTarget(windowId, threadId));
     assertDesktopOperationActive();
     return timedComputerLeg("dispatch", dispatch);
   }
@@ -5235,9 +4768,7 @@ export class ComputerManager {
   }
 
   /** The restack, or the reason this desktop did not perform one. */
-  private async raiseTargetWindow(
-    windowId: string,
-  ): Promise<string | undefined> {
+  private async raiseTargetWindow(windowId: string): Promise<string | undefined> {
     const raise = this.backend.raiseWindow?.bind(this.backend);
     if (!raise) return "this backend exposes no stacking control";
     try {
@@ -5277,10 +4808,7 @@ export class ComputerManager {
       const windowId = target.windowId;
       const point = target.point;
       if (windowId === undefined || !point) throw error;
-      if (
-        !(error instanceof ComputerBackendError) ||
-        error.rejectedOperation === undefined
-      ) {
+      if (!(error instanceof ComputerBackendError) || error.rejectedOperation === undefined) {
         throw error;
       }
       throw refusedInjectionError(action, windowId, point);
@@ -5299,8 +4827,7 @@ export class ComputerManager {
     target: ComputerTarget,
     allowUniqueTextTarget = false,
   ): Promise<ComputerResolvedTarget> {
-    const unnamedTarget =
-      target.label === undefined && target.role === undefined;
+    const unnamedTarget = target.label === undefined && target.role === undefined;
     // Without a label or role the query matches every control in scope, and
     // the ambiguity refusal that follows would dump the whole tree at the
     // caller. Refuse up front, before paying for the accessibility walk, with
@@ -5324,8 +4851,7 @@ export class ComputerManager {
       await this.assertWindowContentAllowed(target.windowId);
     } else if (this.agentDialect !== "macos") {
       const denied = await this.deniedVisibleWindow();
-      if (denied)
-        throw new ComputerDenylistError(denied.match.app, denied.match.matched);
+      if (denied) throw new ComputerDenylistError(denied.match.app, denied.match.matched);
     }
     let state = await this.backend.getState({
       includeTree: true,
@@ -5339,17 +4865,11 @@ export class ComputerManager {
         notFound: true,
       });
     }
-    const resolve = (
-      root: NonNullable<ComputerState["root"]>,
-    ): ComputerResolvedTarget => {
+    const resolve = (root: NonNullable<ComputerState["root"]>): ComputerResolvedTarget => {
       const resolved: ComputerResolvedTarget = {
         target,
         ...(unnamedTarget
-          ? resolveComputerUniqueTextTarget(
-              root,
-              target.windowId!,
-              allowUniqueTextTarget,
-            )
+          ? resolveComputerUniqueTextTarget(root, target.windowId!, allowUniqueTextTarget)
           : resolveComputerSemanticTarget(root, target, allowUniqueTextTarget)),
       };
       void this.noteSemanticResolution(resolved, root);
@@ -5362,10 +4882,7 @@ export class ComputerManager {
       // appeared. Pay for one fresh walk before declaring it absent; on a
       // genuinely-missing target the extra walk is a rare error-path cost.
       // Other failure shapes (ambiguity, bad target) retrying cannot fix.
-      if (
-        error instanceof ComputerTargetError &&
-        error.code === "computer_target_not_found"
-      ) {
+      if (error instanceof ComputerTargetError && error.code === "computer_target_not_found") {
         state = await this.backend.getState({
           includeTree: true,
           ...(target.windowId ? { windowId: target.windowId } : {}),
@@ -5433,15 +4950,11 @@ export class ComputerManager {
         ...(merged.delivery !== undefined
           ? {
               delivery: {
-                ...(merged.delivery.path !== undefined
-                  ? { path: merged.delivery.path }
-                  : {}),
+                ...(merged.delivery.path !== undefined ? { path: merged.delivery.path } : {}),
                 ...(merged.delivery.verified !== undefined
                   ? { verified: merged.delivery.verified }
                   : {}),
-                ...(merged.delivery.effect !== undefined
-                  ? { effect: merged.delivery.effect }
-                  : {}),
+                ...(merged.delivery.effect !== undefined ? { effect: merged.delivery.effect } : {}),
               },
             }
           : {}),
@@ -5525,9 +5038,7 @@ export class ComputerManager {
     return snapshot;
   }
 
-  private async publish(
-    threadId: string,
-  ): Promise<ThreadComputerState | undefined> {
+  private async publish(threadId: string): Promise<ThreadComputerState | undefined> {
     const previous = this.publishChains.get(threadId) ?? Promise.resolve();
     const next = previous.then(() => this.publishNow(threadId));
     const settled = next.catch(() => undefined);
@@ -5535,19 +5046,15 @@ export class ComputerManager {
     try {
       return await next;
     } finally {
-      if (this.publishChains.get(threadId) === settled)
-        this.publishChains.delete(threadId);
+      if (this.publishChains.get(threadId) === settled) this.publishChains.delete(threadId);
     }
   }
 
-  private async publishNow(
-    threadId: string,
-  ): Promise<ThreadComputerState | undefined> {
+  private async publishNow(threadId: string): Promise<ThreadComputerState | undefined> {
     const state = this.threads.get(threadId);
     if (!state) return undefined;
     try {
-      if (!this.physicalState && !this.physicalFailure)
-        await this.refreshPhysicalState();
+      if (!this.physicalState && !this.physicalFailure) await this.refreshPhysicalState();
       if (this.physicalFailure) throw new Error(this.physicalFailure);
       const physical = this.physicalState;
       if (physical) {
@@ -5660,10 +5167,7 @@ export class ComputerManager {
     return state;
   }
 
-  private threadSnapshot(
-    threadId: string,
-    state: ThreadComputerRuntimeState,
-  ): ThreadComputerState {
+  private threadSnapshot(threadId: string, state: ThreadComputerRuntimeState): ThreadComputerState {
     return {
       threadId: ThreadId.makeUnsafe(threadId),
       controlGeneration: this.controlState.get(threadId).generation,
@@ -5673,18 +5177,16 @@ export class ComputerManager {
       screenSize: state.screenSize,
       ...(state.cursor ? { cursor: state.cursor } : {}),
       agentActive: (this.agentCallsInFlight.get(threadId) ?? 0) > 0,
-      ...(this.activity && this.lease?.threadId === threadId
-        ? { activity: this.activity }
-        : {}),
+      ...(this.activity && this.lease?.threadId === threadId ? { activity: this.activity } : {}),
       ...(state.inputPause ? { inputPause: state.inputPause } : {}),
-      controlledByOtherThread:
-        this.lease !== null && this.lease.threadId !== threadId,
+      controlledByOtherThread: this.lease !== null && this.lease.threadId !== threadId,
       ...(this.lease
         ? {
             controlOwnerThreadId: ThreadId.makeUnsafe(this.lease.threadId),
-            controlOwnerLabel: (
-              this.threadLabels.get(this.lease.threadId) ?? "Agent"
-            ).slice(0, 512),
+            controlOwnerLabel: (this.threadLabels.get(this.lease.threadId) ?? "Agent").slice(
+              0,
+              512,
+            ),
           }
         : {}),
       availability: this.correctedAvailability(state.availability),
@@ -5703,18 +5205,13 @@ export class ComputerManager {
    * anything already blocked carries its own, better explanation — the platform
    * it is running on, or the plugin it could not load.
    */
-  private correctedAvailability(
-    availability: ComputerAvailability,
-  ): ComputerAvailability {
+  private correctedAvailability(availability: ComputerAvailability): ComputerAvailability {
     // A backend nobody has asked to connect is not disconnected, it is idle, and
     // health says "unavailable" for both. Correcting against it before the first
     // real use would report every KDE desktop as broken until someone clicked
     // something — the exact opposite of what the probe is there to say.
     if (!this.backendEngaged) return availability;
-    if (
-      this.backendHealth.status === "connected" ||
-      availability.kind !== "available"
-    ) {
+    if (this.backendHealth.status === "connected" || availability.kind !== "available") {
       return availability;
     }
     return {
@@ -5796,10 +5293,7 @@ function round2(value: number): number {
  */
 function settlePermanentlyUnsupported(error: unknown): boolean {
   const message = error instanceof Error ? error.message : "";
-  return (
-    message.startsWith("Unknown tool:") ||
-    message === "Unsupported computer host request."
-  );
+  return message.startsWith("Unknown tool:") || message === "Unsupported computer host request.";
 }
 
 /**
@@ -5837,9 +5331,7 @@ function healthUnavailableMessage(health: ComputerHealth): string {
       ? "Reconnecting to the desktop."
       : "The desktop backend is not connected.";
   return clampComputerMessage(
-    health.lastFailure
-      ? `${reason} Last failure: ${health.lastFailure.message}`
-      : reason,
+    health.lastFailure ? `${reason} Last failure: ${health.lastFailure.message}` : reason,
     reason,
   );
 }
@@ -5885,9 +5377,7 @@ function occludedTargetError(
 ): ComputerTargetError {
   const blockers = covering
     .slice(0, 4)
-    .map(
-      (window) => `${JSON.stringify(window.title || window.id)} (${window.id})`,
-    )
+    .map((window) => `${JSON.stringify(window.title || window.id)} (${window.id})`)
     .join(", ");
   return new ComputerTargetError({
     code: "computer_target_occluded",
@@ -5940,14 +5430,10 @@ function activationUnsupportedError(): ComputerBackendError {
 }
 
 function clipboardUnsupportedError(): ComputerBackendError {
-  return new ComputerBackendError(
-    "This computer backend does not support clipboard access.",
-  );
+  return new ComputerBackendError("This computer backend does not support clipboard access.");
 }
 
-function hasCoordinates(
-  target: ComputerTarget,
-): target is ComputerTarget & ComputerPoint {
+function hasCoordinates(target: ComputerTarget): target is ComputerTarget & ComputerPoint {
   return typeof target.x === "number" && typeof target.y === "number";
 }
 
@@ -5961,10 +5447,7 @@ function hasSemanticFields(target: ComputerTarget): boolean {
 }
 
 export function errorMessage(error: unknown): string {
-  if (
-    error instanceof ComputerBackendError ||
-    error instanceof ComputerTargetError
-  ) {
+  if (error instanceof ComputerBackendError || error instanceof ComputerTargetError) {
     return error.message;
   }
   return error instanceof Error ? error.message : String(error);
@@ -5975,9 +5458,7 @@ export function errorMessage(error: unknown): string {
  * raced promise alone: the caller throws with the in-memory gate still held,
  * which is the fail-closed outcome the enable path depends on.
  */
-function withControlEnableTimeout<A>(
-  action: Promise<A> | undefined,
-): Promise<A | undefined> {
+function withControlEnableTimeout<A>(action: Promise<A> | undefined): Promise<A | undefined> {
   if (action === undefined) return Promise.resolve(undefined);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {

@@ -70,19 +70,13 @@ async function clearStaleSocket(endpoint: string): Promise<void> {
 }
 
 const driverOption = option("--driver") ?? process.env.SYNARA_CUA_DRIVER;
-if (!driverOption)
-  usage("--driver is required (provisioned cua-driver binary or bundle dir).");
+if (!driverOption) usage("--driver is required (provisioned cua-driver binary or bundle dir).");
 
 let binaryPath = driverOption;
 if ((await stat(driverOption).catch(() => undefined))?.isDirectory()) {
-  binaryPath = join(
-    driverOption,
-    process.platform === "win32" ? "cua-driver.exe" : "cua-driver",
-  );
+  binaryPath = join(driverOption, process.platform === "win32" ? "cua-driver.exe" : "cua-driver");
 }
-await access(binaryPath).catch(() =>
-  usage(`driver not found or not readable: ${binaryPath}`),
-);
+await access(binaryPath).catch(() => usage(`driver not found or not readable: ${binaryPath}`));
 
 // The capability is the authority boundary on this socket — it must never
 // travel through argv, which every process on the machine can read.
@@ -103,9 +97,7 @@ if (!capability) {
   }
 }
 if (Buffer.byteLength(capability, "utf8") < 32)
-  usage(
-    "capability must be at least 32 bytes (SYNARA_CUA_HOST_CAPABILITY or --capability-file).",
-  );
+  usage("capability must be at least 32 bytes (SYNARA_CUA_HOST_CAPABILITY or --capability-file).");
 
 const endpoint = option("--socket");
 if (endpoint) await clearStaleSocket(endpoint);
@@ -154,6 +146,4 @@ console.info(
     bound +
     " SYNARA_BROWSER_HOST_CAPABILITY=<capability>",
 );
-console.info(
-  `[cua-driver-host] driver: ${basename(binaryPath)} (unpatched upstream)`,
-);
+console.info(`[cua-driver-host] driver: ${basename(binaryPath)} (unpatched upstream)`);

@@ -144,20 +144,12 @@ process.stdin.resume(); process.stdin.on('end',retire);
     bundleId: "fixture",
     capability: authority,
     setup: async () => {},
-    ...(options.checkPermissions
-      ? { checkPermissions: options.checkPermissions }
-      : {}),
-    ...(options.releaseHeldInput
-      ? { releaseHeldInput: options.releaseHeldInput }
-      : {}),
+    ...(options.checkPermissions ? { checkPermissions: options.checkPermissions } : {}),
+    ...(options.releaseHeldInput ? { releaseHeldInput: options.releaseHeldInput } : {}),
     ...(options.frameTap ? { frameTap: options.frameTap } : {}),
     ...(options.shield ? { shield: options.shield } : {}),
-    ...(options.startupTimeoutMs
-      ? { startupTimeoutMs: options.startupTimeoutMs }
-      : {}),
-    ...(options.nativeRevision !== undefined
-      ? { nativeRevision: options.nativeRevision }
-      : {}),
+    ...(options.startupTimeoutMs ? { startupTimeoutMs: options.startupTimeoutMs } : {}),
+    ...(options.nativeRevision !== undefined ? { nativeRevision: options.nativeRevision } : {}),
   });
   const events = async () =>
     (await readFile(log, "utf8"))
@@ -198,9 +190,7 @@ describe("Cua GUI host retirement", () => {
     }
     const events = (await f.events()).map((row) => row.event);
     expect(events.filter((event) => event === "motion-100-0")).toHaveLength(1);
-    expect(
-      events.filter((event) => event === "observation-budget-100"),
-    ).toHaveLength(2);
+    expect(events.filter((event) => event === "observation-budget-100")).toHaveLength(2);
   });
 
   it.each(["stop", "suspend", "pauseDesktop"] as const)(
@@ -256,19 +246,13 @@ describe("Cua GUI host retirement", () => {
     controller.abort();
     await check;
     await expect(
-      cuaRequest(
-        f.endpoint,
-        { method: "call", name: "get_screen_size" },
-        { timeoutMs: 2_000 },
-      ),
+      cuaRequest(f.endpoint, { method: "call", name: "get_screen_size" }, { timeoutMs: 2_000 }),
     ).resolves.toMatchObject({ ok: true });
     pending.resolve({ accessibility: true, screenRecording: true });
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
     ).resolves.toMatchObject({ ok: true });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
   });
 
   it("checks permissions through the fresh shared helper without starting Cua or requesting grants", async () => {
@@ -312,8 +296,7 @@ describe("Cua GUI host retirement", () => {
         screenRecording: granted,
       }),
     });
-    const check = () =>
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    const check = () => cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
     await check();
     await cuaRequest(f.endpoint, { method: "call", name: "get_screen_size" });
     granted = false;
@@ -321,13 +304,9 @@ describe("Cua GUI host retirement", () => {
       desktopEpoch: 1,
       result: { structuredContent: { accessibility: false } },
     });
-    expect(
-      (await f.events()).filter((event) => event.event === "cleanup-ack"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "cleanup-ack")).toHaveLength(1);
     await check();
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     granted = true;
     await check();
     await expect(
@@ -341,9 +320,7 @@ describe("Cua GUI host retirement", () => {
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
     ).resolves.toMatchObject({ ok: true });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(2);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
   });
 
   it("does not bypass failed cleanup when refreshed permissions change", async () => {
@@ -375,17 +352,14 @@ describe("Cua GUI host retirement", () => {
         modelObservation: true,
       }),
     ).resolves.toMatchObject({ ok: false });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
   });
   it("does not start while locked and requires fresh state after all desktop pauses end", async () => {
     const f = await fixture();
     await f.host.pauseDesktop("screen-lock");
     await f.host.pauseDesktop("system-sleep");
     f.host.resume(); // A backend restart cannot unlock the desktop.
-    const press = () =>
-      cuaRequest(f.endpoint, { method: "call", name: "press_key" });
+    const press = () => cuaRequest(f.endpoint, { method: "call", name: "press_key" });
     await expect(press()).resolves.toMatchObject({
       result: {
         isError: true,
@@ -405,9 +379,7 @@ describe("Cua GUI host retirement", () => {
       args: { pid: 1, window_id: 2 },
     });
     await expect(press()).resolves.toMatchObject({ ok: true });
-    expect(
-      (await f.events()).filter((event) => event.event === "key"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "key")).toHaveLength(1);
   });
 
   it("piggybacks sorted pauses and the never-reset interruption count on every reply", async () => {
@@ -490,17 +462,10 @@ describe("Cua GUI host retirement", () => {
       args: { text: "fixture" },
     });
     for (let attempt = 0; attempt < 200; attempt++) {
-      if (
-        (await f.events().catch(() => [])).some(
-          (event) => event.event === "dispatch",
-        )
-      )
-        break;
+      if ((await f.events().catch(() => [])).some((event) => event.event === "dispatch")) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    expect((await f.events()).some((event) => event.event === "dispatch")).toBe(
-      true,
-    );
+    expect((await f.events()).some((event) => event.event === "dispatch")).toBe(true);
     const queued = cuaRequest<CuaReply>(f.endpoint, {
       method: "call",
       name: "press_key",
@@ -508,14 +473,10 @@ describe("Cua GUI host retirement", () => {
     await f.host.pauseDesktop("screen-lock");
     expect(await active).toMatchObject({ ok: false });
     const queuedReply = await queued;
-    expect(
-      queuedReply.ok === false || queuedReply.result?.isError === true,
-    ).toBe(true);
+    expect(queuedReply.ok === false || queuedReply.result?.isError === true).toBe(true);
     const events = await f.events();
     expect(events.some((event) => event.event === "cleanup-ack")).toBe(true);
-    expect(
-      events.some((event) => event.event === "effect" || event.event === "key"),
-    ).toBe(false);
+    expect(events.some((event) => event.event === "effect" || event.event === "key")).toBe(false);
   });
 
   it("unlock does not bypass an unacknowledged cleanup barrier", async () => {
@@ -533,17 +494,14 @@ describe("Cua GUI host retirement", () => {
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "get_window_state" }),
     ).resolves.toMatchObject({ ok: false });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
   });
 
   it("preview and readiness reads cannot release the post-unlock model observation gate", async () => {
     const f = await fixture();
     await f.host.pauseDesktop("screen-lock");
     f.host.resumeDesktop("screen-lock");
-    const press = () =>
-      cuaRequest(f.endpoint, { method: "call", name: "press_key" });
+    const press = () => cuaRequest(f.endpoint, { method: "call", name: "press_key" });
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "get_desktop_state" }),
     ).resolves.toMatchObject({ ok: true, desktopEpoch: 1 });
@@ -564,9 +522,7 @@ describe("Cua GUI host retirement", () => {
       modelObservation: true,
     });
     await expect(press()).resolves.toMatchObject({ ok: true });
-    expect(
-      (await f.events()).filter((event) => event.event === "key"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "key")).toHaveLength(1);
   });
 
   it("a disconnected observation cannot release the post-unlock gate", async () => {
@@ -584,26 +540,17 @@ describe("Cua GUI host retirement", () => {
       { signal: controller.signal },
     ).catch((error: unknown) => error);
     for (let attempt = 0; attempt < 200; attempt++) {
-      if (
-        (await f.events().catch(() => [])).some(
-          (event) => event.event === "observe",
-        )
-      )
-        break;
+      if ((await f.events().catch(() => [])).some((event) => event.event === "observe")) break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    expect((await f.events()).some((event) => event.event === "observe")).toBe(
-      true,
-    );
+    expect((await f.events()).some((event) => event.event === "observe")).toBe(true);
     controller.abort();
     expect(await observation).toBeInstanceOf(Error);
     await new Promise((resolve) => setTimeout(resolve, 100));
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
     ).resolves.toMatchObject({ result: { isError: true } });
-    expect((await f.events()).some((event) => event.event === "key")).toBe(
-      false,
-    );
+    expect((await f.events()).some((event) => event.event === "key")).toBe(false);
   });
 
   it("ignores a permission probe that reverts on the confirming re-read", async () => {
@@ -618,8 +565,7 @@ describe("Cua GUI host retirement", () => {
         return { accessibility: true, screenRecording: probes !== 2 };
       },
     });
-    const check = () =>
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    const check = () => cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
     await expect(check()).resolves.toMatchObject({ desktopEpoch: 0 });
     await expect(check()).resolves.toMatchObject({
       desktopEpoch: 0,
@@ -639,8 +585,7 @@ describe("Cua GUI host retirement", () => {
         return { accessibility: true, screenRecording: probes % 2 === 1 };
       },
     });
-    const check = () =>
-      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    const check = () => cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
     const observe = () =>
       cuaRequest(f.endpoint, {
         method: "call",
@@ -673,12 +618,7 @@ describe("Cua GUI host retirement", () => {
       });
     const interrupted = observe();
     for (let attempt = 0; attempt < 200; attempt++) {
-      if (
-        (await f.events().catch(() => [])).some(
-          (event) => event.event === "observe",
-        )
-      )
-        break;
+      if ((await f.events().catch(() => [])).some((event) => event.event === "observe")) break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     // stopInput (turn Stop/revokeControl) used to bump only the input epoch:
@@ -699,16 +639,12 @@ describe("Cua GUI host retirement", () => {
   it("preserves multibyte UTF-8 across incoming socket chunks", async () => {
     const authority = capability + "-è🧪";
     const f = await fixture(authority);
-    const request = Buffer.from(
-      JSON.stringify({ method: "probe", capability: authority }) + "\n",
-    );
+    const request = Buffer.from(JSON.stringify({ method: "probe", capability: authority }) + "\n");
     const split = request.indexOf(Buffer.from("🧪")) + 1;
     const reply = await new Promise<string>((resolve, reject) => {
       const socket = createConnection(f.endpoint);
       let result = "";
-      socket.setTimeout(2_000, () =>
-        socket.destroy(new Error("Fixture socket timed out.")),
-      );
+      socket.setTimeout(2_000, () => socket.destroy(new Error("Fixture socket timed out.")));
       socket.once("error", reject);
       socket.on("data", (chunk) => {
         result += chunk.toString("utf8");
@@ -754,16 +690,12 @@ describe("Cua GUI host retirement", () => {
     const events = await f.events();
     const starts = events.filter((e) => e.event === "start");
     expect(starts).toHaveLength(2);
-    const exit = events.find(
-      (e) => e.event === "exit" && e.pid === starts[0].pid,
-    );
+    const exit = events.find((e) => e.event === "exit" && e.pid === starts[0].pid);
     expect(exit).toBeDefined();
     expect(starts[1].time).toBeGreaterThanOrEqual(exit.time);
     expect(events.some((e) => e.event === "effect")).toBe(false);
     expect(events.filter((e) => e.event === "dispatch")).toHaveLength(1);
-    const first = events
-      .filter((e) => e.pid === starts[0].pid)
-      .map((e) => e.event);
+    const first = events.filter((e) => e.pid === starts[0].pid).map((e) => e.event);
     expect(first).toEqual([
       "start",
       "motion-100-0",
@@ -801,9 +733,7 @@ describe("Cua GUI host retirement", () => {
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
     ).resolves.toMatchObject({ ok: true });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(2);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
   });
   it("keeps admission closed for the host's lifetime when held-input release fails", async () => {
     const f = await fixture(capability, {
@@ -822,9 +752,7 @@ describe("Cua GUI host retirement", () => {
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     await expect(f.host.stop()).rejects.toThrow("admission is closed");
   });
   it("replaces a driver that wedges during startup instead of closing admission", async () => {
@@ -851,9 +779,13 @@ describe("Cua GUI host retirement", () => {
     const events = await f.events();
     const starts = events.filter((event) => event.event === "start");
     expect(starts).toHaveLength(2);
-    expect(
-      events.filter((e) => e.pid === starts[0].pid).map((e) => e.event),
-    ).toEqual(["start", "session-hang", "cancel", "retiring", "exit"]);
+    expect(events.filter((e) => e.pid === starts[0].pid).map((e) => e.event)).toEqual([
+      "start",
+      "session-hang",
+      "cancel",
+      "retiring",
+      "exit",
+    ]);
   });
   it("rejects later backend requests throughout suspension and resumes only on explicit restart", async () => {
     const f = await fixture();
@@ -874,12 +806,8 @@ describe("Cua GUI host retirement", () => {
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(1);
-    expect((await f.events()).some((event) => event.event === "dispatch")).toBe(
-      false,
-    );
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
+    expect((await f.events()).some((event) => event.event === "dispatch")).toBe(false);
     f.host.resume();
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
@@ -888,9 +816,7 @@ describe("Cua GUI host retirement", () => {
     const starts = events.filter((event) => event.event === "start");
     expect(starts).toHaveLength(2);
     expect(starts[1].time).toBeGreaterThanOrEqual(
-      events.find(
-        (event) => event.event === "exit" && event.pid === starts[0].pid,
-      ).time,
+      events.find((event) => event.event === "exit" && event.pid === starts[0].pid).time,
     );
   });
   it("does not let resume bypass failed cleanup during backend suspension", async () => {
@@ -901,9 +827,7 @@ describe("Cua GUI host retirement", () => {
       name: "press_key",
       args: { key: "enter" },
     });
-    await expect(f.host.suspend()).rejects.toThrow(
-      "did not confirm native input cleanup",
-    );
+    await expect(f.host.suspend()).rejects.toThrow("did not confirm native input cleanup");
     f.host.resume();
     await expect(
       cuaRequest(f.endpoint, {
@@ -912,12 +836,8 @@ describe("Cua GUI host retirement", () => {
         args: { text: "must not arrive" },
       }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(1);
-    expect((await f.events()).some((event) => event.event === "dispatch")).toBe(
-      false,
-    );
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
+    expect((await f.events()).some((event) => event.event === "dispatch")).toBe(false);
   });
   it.each(["incomplete", "wrong-pid", "missing-admission"] as const)(
     "keeps the process alive and blocks replacement after %s cleanup",
@@ -934,9 +854,7 @@ describe("Cua GUI host retirement", () => {
         name: "press_key",
         args: { key: "enter" },
       });
-      await expect(f.host.stop()).rejects.toThrow(
-        "did not confirm native input cleanup",
-      );
+      await expect(f.host.stop()).rejects.toThrow("did not confirm native input cleanup");
       await expect(
         cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
       ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
@@ -982,9 +900,7 @@ describe("Cua GUI host retirement", () => {
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
-    expect((await f.events()).filter((e) => e.event === "start")).toHaveLength(
-      1,
-    );
+    expect((await f.events()).filter((e) => e.event === "start")).toHaveLength(1);
   });
   it("rejects an upstream binary before native input is admitted", async () => {
     const f = await fixture(capability, { unpatched: true });
@@ -1045,9 +961,7 @@ describe("Cua GUI host retirement", () => {
         args: { pid: 42, window_id: 10, timeout_ms: 5_000, quiet_ms: 1_000 },
       }),
     ).resolves.toMatchObject({ ok: true });
-    expect((await f.events()).some((event) => event.event === "start")).toBe(
-      true,
-    );
+    expect((await f.events()).some((event) => event.event === "start")).toBe(true);
   });
 });
 
@@ -1055,9 +969,7 @@ describe("task-owned user stop", () => {
   const task = { threadId: "thread", turnId: "turn" };
   it("end_task succeeds without a native preview", async () => {
     const f = await fixture();
-    await expect(
-      cuaRequest(f.endpoint, { method: "end_task", task }),
-    ).resolves.toMatchObject({
+    await expect(cuaRequest(f.endpoint, { method: "end_task", task })).resolves.toMatchObject({
       ok: true,
     });
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
@@ -1209,39 +1121,30 @@ describe("driver warm-up on first touch", () => {
       if (events.some((row) => row.event === event)) return events;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    return f
-      .events()
-      .catch(() => [] as Array<{ event: string; pid: number; time: number }>);
+    return f.events().catch(() => [] as Array<{ event: string; pid: number; time: number }>);
   };
 
-  it.each([undefined, "0", "off"])(
-    "leaves the driver cold when the flag is %s",
-    async (value) => {
-      setFlag(value);
-      const f = await fixture(capability, {
-        checkPermissions: async () => ({
-          accessibility: true,
-          screenRecording: true,
-        }),
-      });
-      await expect(
-        cuaRequest(f.endpoint, { method: "probe" }),
-      ).resolves.toMatchObject({
-        ok: true,
-      });
-      await expect(
-        cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
-      ).resolves.toMatchObject({ ok: true });
-      await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+  it.each([undefined, "0", "off"])("leaves the driver cold when the flag is %s", async (value) => {
+    setFlag(value);
+    const f = await fixture(capability, {
+      checkPermissions: async () => ({
+        accessibility: true,
+        screenRecording: true,
+      }),
+    });
+    await expect(cuaRequest(f.endpoint, { method: "probe" })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it("warms spawn and handshake on the first probe without opening a session", async () => {
     setFlag("1");
     const f = await fixture();
-    await expect(
-      cuaRequest(f.endpoint, { method: "probe" }),
-    ).resolves.toMatchObject({
+    await expect(cuaRequest(f.endpoint, { method: "probe" })).resolves.toMatchObject({
       ok: true,
     });
     const warmed = await waitForEvent(f, "start");
@@ -1249,9 +1152,7 @@ describe("driver warm-up on first touch", () => {
     // Warm stops at the validated handshake on purpose: session setup — the
     // fixture's motion event — never reaches the driver before real work.
     await new Promise((resolve) => setTimeout(resolve, 150));
-    expect(
-      (await f.events()).some((event) => event.event === "motion-100-0"),
-    ).toBe(false);
+    expect((await f.events()).some((event) => event.event === "motion-100-0")).toBe(false);
     // The first real call reuses the warmed generation: no second spawn, and
     // the once-per-generation cursor setup runs exactly once now.
     await expect(
@@ -1263,9 +1164,7 @@ describe("driver warm-up on first touch", () => {
     ).resolves.toMatchObject({ ok: true });
     const events = await f.events();
     expect(events.filter((event) => event.event === "start")).toHaveLength(1);
-    expect(
-      events.filter((event) => event.event === "motion-100-0"),
-    ).toHaveLength(1);
+    expect(events.filter((event) => event.event === "motion-100-0")).toHaveLength(1);
     expect(events.filter((event) => event.event === "key")).toHaveLength(1);
   });
 
@@ -1284,24 +1183,18 @@ describe("driver warm-up on first touch", () => {
     await cuaRequest(f.endpoint, { method: "probe" });
     await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     // A stop retires the warmed generation; the next probe must not conjure a
     // replacement — warm ran its once.
     await f.host.stop();
     await cuaRequest(f.endpoint, { method: "probe" });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
     // Real work still starts a driver on demand, paying the cold start then.
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
     ).resolves.toMatchObject({ ok: true });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(2);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
   });
 
   it("does not treat housekeeping requests as first touches", async () => {
@@ -1319,17 +1212,13 @@ describe("driver warm-up on first touch", () => {
     setFlag("1");
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const f = await fixture(capability, { unpatched: true });
-    await expect(
-      cuaRequest(f.endpoint, { method: "probe" }),
-    ).resolves.toMatchObject({
+    await expect(cuaRequest(f.endpoint, { method: "probe" })).resolves.toMatchObject({
       ok: true,
     });
     await waitForEvent(f, "exit");
     await vi.waitFor(() =>
       expect(
-        info.mock.calls.some((call) =>
-          String(call[0]).includes("driver warm-up failed"),
-        ),
+        info.mock.calls.some((call) => String(call[0]).includes("driver warm-up failed")),
       ).toBe(true),
     );
     // The warm failure retired its generation cleanly; the real call spawns
@@ -1341,9 +1230,7 @@ describe("driver warm-up on first touch", () => {
         args: { key: "enter" },
       }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(2);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(2);
   });
 });
 
@@ -1363,11 +1250,11 @@ describe("per-agent cursor identity", () => {
     ).resolves.toMatchObject({
       ok: true,
     });
-    await expect(
-      press(f.endpoint, { threadId: "t-2", label: "Docs pass" }),
-    ).resolves.toMatchObject({
-      ok: true,
-    });
+    await expect(press(f.endpoint, { threadId: "t-2", label: "Docs pass" })).resolves.toMatchObject(
+      {
+        ok: true,
+      },
+    );
     await expect(
       press(f.endpoint, { threadId: "t-1", label: "Research run" }),
     ).resolves.toMatchObject({ ok: true });
@@ -1378,16 +1265,11 @@ describe("per-agent cursor identity", () => {
     expect(names).toContain("session:agent·Docs pass·t-2:press_key");
     // The shared generation session still backs unattributed calls.
     expect(
-      names.some(
-        (event) =>
-          event.startsWith("session:synara-") && event.endsWith(":press_key"),
-      ),
+      names.some((event) => event.startsWith("session:synara-") && event.endsWith(":press_key")),
     ).toBe(true);
     // Task sessions mint lazily on dispatch: the only explicit start_session
     // is the generation's own bootstrap one — no extra round trip per label.
-    expect(
-      names.filter((event) => event.startsWith("open_session:start_session:")),
-    ).toEqual([
+    expect(names.filter((event) => event.startsWith("open_session:start_session:"))).toEqual([
       expect.stringMatching(/^open_session:start_session:synara-[0-9a-f-]+$/),
     ]);
   });
@@ -1410,12 +1292,8 @@ describe("per-agent cursor identity", () => {
 
   it("falls back to the thread id when a task carries no display label", async () => {
     const f = await fixture(capability, { logSessions: true });
-    await expect(press(f.endpoint, { threadId: "t-9" })).resolves.toMatchObject(
-      { ok: true },
-    );
-    expect((await f.events()).map((row) => row.event)).toContain(
-      "session:agent·t-9:press_key",
-    );
+    await expect(press(f.endpoint, { threadId: "t-9" })).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).map((row) => row.event)).toContain("session:agent·t-9:press_key");
   });
 
   it("sanitizes badge-breaking characters out of the minted label", async () => {
@@ -1442,9 +1320,7 @@ describe("per-agent cursor identity", () => {
       }),
     ).resolves.toMatchObject({ ok: true });
     const names = (await f.events()).map((row) => row.event);
-    expect(names.some((event) => event.startsWith("session:forged"))).toBe(
-      false,
-    );
+    expect(names.some((event) => event.startsWith("session:forged"))).toBe(false);
     expect(names).toContain("session:agent·Research run·t-1:press_key");
   });
 
@@ -1462,9 +1338,7 @@ describe("per-agent cursor identity", () => {
     expect(reply.result?.isError).not.toBe(true);
     const events = (await f.events()).map((row) => row.event);
     expect(events.filter((event) => event === "start")).toHaveLength(1);
-    expect(events).toContain(
-      "open_session:start_session:agent·Research run·t-1",
-    );
+    expect(events).toContain("open_session:start_session:agent·Research run·t-1");
     expect(events.filter((event) => event === "key")).toHaveLength(1);
     expect(events).toContain("session:agent·Research run·t-1:press_key");
   });
@@ -1484,16 +1358,10 @@ describe("browser surface", () => {
     const events = (await f.events()).map((row) => row.event);
     // The first browser call opened the persistent control connection; the
     // dispatch then rode the thread's lifecycle label under that transport id.
+    expect(events.some((event) => event.startsWith("session-begin:synara-transport-"))).toBe(true);
     expect(
       events.some((event) =>
-        event.startsWith("session-begin:synara-transport-"),
-      ),
-    ).toBe(true);
-    expect(
-      events.some((event) =>
-        event.startsWith(
-          "browser:browser_navigate:synara-browser-thread:synara-transport-",
-        ),
+        event.startsWith("browser:browser_navigate:synara-browser-thread:synara-transport-"),
       ),
     ).toBe(true);
     // A caller-supplied session can never override the minted label.
@@ -1552,12 +1420,8 @@ describe("browser surface", () => {
       );
     expect(lifecycle).toEqual([
       expect.stringMatching(/^browser:browser_click:synara-browser-thread:/),
-      expect.stringMatching(
-        /^end_session:synara-browser-thread:synara-transport-/,
-      ),
-      expect.stringMatching(
-        /^start_session:synara-browser-thread:synara-transport-/,
-      ),
+      expect.stringMatching(/^end_session:synara-browser-thread:synara-transport-/),
+      expect.stringMatching(/^start_session:synara-browser-thread:synara-transport-/),
       expect.stringMatching(/^browser:browser_click:synara-browser-thread:/),
     ]);
   });
@@ -1596,9 +1460,7 @@ describe("physical Escape kill switch", () => {
       if (events.some((row) => row.event === event)) return events;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    return f
-      .events()
-      .catch(() => [] as Array<{ event: string; pid: number; time: number }>);
+    return f.events().catch(() => [] as Array<{ event: string; pid: number; time: number }>);
   };
 
   it("ignores the press when nothing is driving, so Escape stays an ordinary key", async () => {
@@ -1641,14 +1503,10 @@ describe("physical Escape kill switch", () => {
       cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
     ).resolves.toMatchObject({ ok: true });
     await expect(pressKey(f.endpoint)).resolves.toMatchObject(escapeRefusal);
-    expect((await f.events()).some((event) => event.event === "dispatch")).toBe(
-      false,
-    );
+    expect((await f.events()).some((event) => event.event === "dispatch")).toBe(false);
 
     // The only way back is the capability-authenticated rearm.
-    await expect(
-      cuaRequest(f.endpoint, { method: "rearm" }),
-    ).resolves.toMatchObject({
+    await expect(cuaRequest(f.endpoint, { method: "rearm" })).resolves.toMatchObject({
       ok: true,
       result: { rearmed: true, wasStopped: true },
     });
@@ -1672,9 +1530,7 @@ describe("physical Escape kill switch", () => {
     ).resolves.toMatchObject({ ok: true });
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
     // And a second re-arm with nothing stopped is a no-op, not an error.
-    await expect(
-      cuaRequest(f.endpoint, { method: "rearm" }),
-    ).resolves.toMatchObject({
+    await expect(cuaRequest(f.endpoint, { method: "rearm" })).resolves.toMatchObject({
       ok: true,
       result: { rearmed: true, wasStopped: false },
     });
@@ -1738,9 +1594,7 @@ describe("physical Escape kill switch", () => {
     // generation cleared rather than merely having had time to.
     await f.host.stop();
     await expect(pressKey(f.endpoint)).resolves.toMatchObject(escapeRefusal);
-    await expect(
-      cuaRequest(f.endpoint, { method: "rearm" }),
-    ).resolves.toMatchObject({
+    await expect(cuaRequest(f.endpoint, { method: "rearm" })).resolves.toMatchObject({
       ok: true,
       result: { rearmed: true, wasStopped: true },
     });
@@ -1774,18 +1628,14 @@ describe("physical Escape kill switch", () => {
     await expect(pressKey(f.endpoint)).resolves.toMatchObject(escapeRefusal);
     // Re-arming clears only the Escape latch; the unprovable held-input state
     // keeps admission closed on its own authority.
-    await expect(
-      cuaRequest(f.endpoint, { method: "rearm" }),
-    ).resolves.toMatchObject({
+    await expect(cuaRequest(f.endpoint, { method: "rearm" })).resolves.toMatchObject({
       ok: true,
       result: { rearmed: true, wasStopped: true },
     });
     await expect(
       cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
     ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
-    expect(
-      (await f.events()).filter((event) => event.event === "start"),
-    ).toHaveLength(1);
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
   });
 });
 
@@ -1884,10 +1734,7 @@ describe("activation shield host method", () => {
           args: { action: "release", shield_id: "shield-abc123" },
         }),
       ).resolves.toMatchObject({ ok: true });
-      expect(shield.calls.map((call) => call.method)).toEqual([
-        "stop",
-        "release",
-      ]);
+      expect(shield.calls.map((call) => call.method)).toEqual(["stop", "release"]);
     } finally {
       f.host.resumeDesktop("screen-lock");
     }
@@ -1941,10 +1788,7 @@ describe("activation shield host method", () => {
     });
     expect(reply.ok).toBe(true);
     expect(reply.result).toMatchObject({ released: 1 });
-    expect(shield.calls.map((call) => call.method)).toEqual([
-      "engage",
-      "releaseAll",
-    ]);
+    expect(shield.calls.map((call) => call.method)).toEqual(["engage", "releaseAll"]);
   });
 
   it("end_task releases the task's shields", async () => {
@@ -1968,26 +1812,24 @@ describe("activation shield host method", () => {
   it("shield requests still require host authority", async () => {
     const f = await fixture();
     const socket = createConnection(f.endpoint);
-    const reply = await new Promise<Record<string, unknown>>(
-      (resolve, reject) => {
-        socket.once("connect", () => {
-          socket.write(
-            JSON.stringify({
-              method: "shield",
-              args: { action: "release_all" },
-            }) + "\n",
-          );
-        });
-        socket.once("data", (chunk) => {
-          try {
-            resolve(JSON.parse(chunk.toString()));
-          } catch (error) {
-            reject(error);
-          }
-        });
-        socket.once("error", reject);
-      },
-    );
+    const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      socket.once("connect", () => {
+        socket.write(
+          JSON.stringify({
+            method: "shield",
+            args: { action: "release_all" },
+          }) + "\n",
+        );
+      });
+      socket.once("data", (chunk) => {
+        try {
+          resolve(JSON.parse(chunk.toString()));
+        } catch (error) {
+          reject(error);
+        }
+      });
+      socket.once("error", reject);
+    });
     socket.destroy();
     expect(reply.ok).toBe(false);
     expect(String(reply.error)).toContain("authority");

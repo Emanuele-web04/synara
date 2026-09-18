@@ -2,10 +2,7 @@ import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
-import {
-  ComputerService,
-  type ComputerServiceShape,
-} from "../Services/ComputerService.ts";
+import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
 import { makeComputerServiceLayer } from "./ComputerService.ts";
 
 /** Builds the service exactly as the server does, then runs `body` against it. */
@@ -40,9 +37,7 @@ describe("ComputerServiceLive", () => {
         kind: "available",
         backend: "fake",
       });
-      expect(backend.calls.map((call) => call.method)).toEqual([
-        "probeAvailability",
-      ]);
+      expect(backend.calls.map((call) => call.method)).toEqual(["probeAvailability"]);
 
       const seeded = await service.manager.getThreadState("thread-boot");
       expect(seeded.availability).toEqual({
@@ -94,11 +89,7 @@ describe("ComputerServiceLive", () => {
           // An operator switching the feature off is not a question for the
           // desktop, so neither read runs at all.
           expect(backend.calls).toEqual([]);
-        }).pipe(
-          Effect.provide(
-            makeComputerServiceLayer({ backend, supported: false }),
-          ),
-        ),
+        }).pipe(Effect.provide(makeComputerServiceLayer({ backend, supported: false }))),
       ),
     );
   });
@@ -127,9 +118,7 @@ describe("ComputerServiceLive", () => {
             kind: "unsupported-platform",
             platform: "win32",
           });
-        }).pipe(
-          Effect.provide(makeComputerServiceLayer({ platform: "win32" })),
-        ),
+        }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "win32" }))),
       ),
     );
   });
@@ -153,9 +142,7 @@ describe("ComputerServiceLive", () => {
             expect(service.availability).not.toMatchObject({
               kind: "unsupported-platform",
             });
-          }).pipe(
-            Effect.provide(makeComputerServiceLayer({ platform: "win32" })),
-          ),
+          }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "win32" }))),
         ),
       );
     } finally {
@@ -175,9 +162,7 @@ describe("ComputerServiceLive", () => {
               kind: "available",
               backend: "fake",
             });
-          }).pipe(
-            Effect.provide(makeComputerServiceLayer({ platform: "darwin" })),
-          ),
+          }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "darwin" }))),
         ),
       );
     } finally {

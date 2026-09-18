@@ -141,10 +141,7 @@ const shieldCoordinate = (value: unknown): number | undefined =>
     : undefined;
 
 const shieldExtent = (value: unknown): number | undefined =>
-  typeof value === "number" &&
-  Number.isFinite(value) &&
-  value > 0 &&
-  value <= CUA_SHIELD_MAX_EXTENT
+  typeof value === "number" && Number.isFinite(value) && value > 0 && value <= CUA_SHIELD_MAX_EXTENT
     ? value
     : undefined;
 
@@ -159,8 +156,7 @@ export function parseCuaShieldArgs(value: unknown): CuaShieldArgs | undefined {
   const args = value as Record<string, unknown>;
   if (args.action === "release_all") return { action: "release_all" };
   const shieldId = args.shield_id;
-  if (typeof shieldId !== "string" || !CUA_SHIELD_ID_PATTERN.test(shieldId))
-    return undefined;
+  if (typeof shieldId !== "string" || !CUA_SHIELD_ID_PATTERN.test(shieldId)) return undefined;
   if (args.action === "release") return { action: "release", shieldId };
   if (args.action !== "engage") return undefined;
   const frame = args.frame as Record<string, unknown> | undefined;
@@ -205,24 +201,17 @@ export function parseCuaShieldArgs(value: unknown): CuaShieldArgs | undefined {
   };
 }
 
-export function parseCuaComputerTask(
-  value: unknown,
-): CuaComputerTask | undefined {
+export function parseCuaComputerTask(value: unknown): CuaComputerTask | undefined {
   if (!value || typeof value !== "object") return undefined;
   const task = value as Record<string, unknown>;
   const identifier = (v: unknown): v is string =>
     typeof v === "string" && v.length > 0 && v.length <= 256;
-  if (
-    !identifier(task.threadId) ||
-    (task.turnId !== undefined && !identifier(task.turnId))
-  )
+  if (!identifier(task.threadId) || (task.turnId !== undefined && !identifier(task.turnId)))
     return undefined;
   return {
     threadId: task.threadId,
     ...(task.turnId === undefined ? {} : { turnId: task.turnId }),
-    ...(typeof task.label === "string"
-      ? { label: task.label.slice(0, 160) }
-      : {}),
+    ...(typeof task.label === "string" ? { label: task.label.slice(0, 160) } : {}),
   };
 }
 /**
@@ -264,9 +253,7 @@ export function cuaRequest<T = unknown>(
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {
-      reject(
-        new CuaTransportError("Cancelled before dispatch.", "not-dispatched"),
-      );
+      reject(new CuaTransportError("Cancelled before dispatch.", "not-dispatched"));
       return;
     }
     let encoded: string;
@@ -275,12 +262,7 @@ export function cuaRequest<T = unknown>(
       if (Buffer.byteLength(encoded) > 1024 * 1024)
         throw new Error("Request exceeds its byte budget.");
     } catch {
-      reject(
-        new CuaTransportError(
-          "Invalid or oversized computer request.",
-          "not-dispatched",
-        ),
-      );
+      reject(new CuaTransportError("Invalid or oversized computer request.", "not-dispatched"));
       return;
     }
     const socket = createConnection(socketPath);
@@ -301,9 +283,7 @@ export function cuaRequest<T = unknown>(
       finish(
         new CuaTransportError(
           message,
-          options.mutation && dispatched
-            ? "dispatched-unknown"
-            : "not-dispatched",
+          options.mutation && dispatched ? "dispatched-unknown" : "not-dispatched",
         ),
       );
     const abort = () =>
@@ -311,8 +291,7 @@ export function cuaRequest<T = unknown>(
         "Computer operation cancelled. Input already dispatched may have taken effect; do not replay.",
       );
     const timer = setTimeout(
-      () =>
-        fail("Computer request timed out; do not replay an uncertain action."),
+      () => fail("Computer request timed out; do not replay an uncertain action."),
       options.timeoutMs ?? 15_000,
     );
     timer.unref?.();
@@ -335,10 +314,7 @@ export function cuaRequest<T = unknown>(
       chunks.push(end < 0 ? chunk : chunk.subarray(0, end));
       if (end < 0) return;
       try {
-        finish(
-          undefined,
-          JSON.parse(Buffer.concat(chunks).toString("utf8")) as T,
-        );
+        finish(undefined, JSON.parse(Buffer.concat(chunks).toString("utf8")) as T);
       } catch {
         fail("Invalid computer response.");
       }

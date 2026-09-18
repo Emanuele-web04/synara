@@ -8,10 +8,7 @@ import { ComputerManager } from "../ComputerManager.ts";
 import { CuaComputerBackend } from "../CuaComputerBackend.ts";
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
 import { UnavailableComputerBackend } from "../UnavailableComputerBackend.ts";
-import {
-  ComputerService,
-  type ComputerServiceShape,
-} from "../Services/ComputerService.ts";
+import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
 import type { ComputerBackend } from "../ComputerBackend.ts";
 import { resolveBrowserHostCapability } from "../../browserAutomation/browserHostRpcClient.ts";
 
@@ -26,15 +23,12 @@ export interface ComputerServiceLiveOptions {
 
 let warnedMissingControlStatePath = false;
 
-export function makeComputerServiceLayer(
-  options: ComputerServiceLiveOptions = {},
-) {
+export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {}) {
   return Layer.effect(
     ComputerService,
     Effect.gen(function* () {
       const platform = options.platform ?? process.platform;
-      const requestedBackend =
-        process.env.SYNARA_COMPUTER_BACKEND?.trim().toLowerCase();
+      const requestedBackend = process.env.SYNARA_COMPUTER_BACKEND?.trim().toLowerCase();
       const unavailableAvailability: ComputerAvailability =
         platform === "linux"
           ? {
@@ -71,10 +65,7 @@ export function makeComputerServiceLayer(
         backend,
         ...(Option.isSome(config)
           ? {
-              controlStatePath: join(
-                config.value.stateDir,
-                "computer-control.json",
-              ),
+              controlStatePath: join(config.value.stateDir, "computer-control.json"),
               // Beside the control state: the bounded mutating-call audit log,
               // local-only and dropped-oldest past its caps.
               auditLogPath: join(config.value.stateDir, "computer-audit.jsonl"),
@@ -100,8 +91,7 @@ export function makeComputerServiceLayer(
       }
       return {
         // Supported backends remain routable even before setup grants access.
-        supported:
-          options.supported ?? !(backend instanceof UnavailableComputerBackend),
+        supported: options.supported ?? !(backend instanceof UnavailableComputerBackend),
         availability,
         manager,
       } satisfies ComputerServiceShape;

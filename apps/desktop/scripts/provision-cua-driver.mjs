@@ -1,15 +1,6 @@
 // Build the exact upstream commit plus the native patch required by the host.
 // The upstream binary archive is baseline provenance, never a patched artifact.
-import {
-  mkdir,
-  readFile,
-  writeFile,
-  chmod,
-  mkdtemp,
-  rm,
-  copyFile,
-  cp,
-} from "node:fs/promises";
+import { mkdir, readFile, writeFile, chmod, mkdtemp, rm, copyFile, cp } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -17,10 +8,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 const release = JSON.parse(
   await readFile(
-    new URL(
-      "../../../packages/shared/src/cuaDriverRelease.json",
-      import.meta.url,
-    ),
+    new URL("../../../packages/shared/src/cuaDriverRelease.json", import.meta.url),
     "utf8",
   ),
 );
@@ -29,8 +17,7 @@ const option = (name) => {
   return index < 0 ? undefined : process.argv[index + 1];
 };
 const destination = resolve(
-  option("--destination") ??
-    fileURLToPath(new URL("../resources/cua-driver/", import.meta.url)),
+  option("--destination") ?? fileURLToPath(new URL("../resources/cua-driver/", import.meta.url)),
 );
 const platform = option("--platform") ?? process.platform;
 const arch = option("--arch") ?? process.arch;
@@ -47,8 +34,7 @@ const upstreamAsset = {
   linux: { binary: "cua-driver", suffix: "tar.gz" },
 }[platform];
 const architectures = arch === "universal" ? ["arm64", "x64"] : [arch];
-const artifact =
-  option("--artifact-dir") ?? process.env.SYNARA_CUA_ARTIFACT_DIR;
+const artifact = option("--artifact-dir") ?? process.env.SYNARA_CUA_ARTIFACT_DIR;
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const patchPath = fileURLToPath(
   new URL("../patches/cua-driver/0001-synara-native.patch", import.meta.url),
@@ -69,8 +55,7 @@ if (option("--archive"))
   throw new Error(
     "The upstream binary lacks Synara's native patch. Use --source-checkout or --artifact-dir instead.",
   );
-if (digest(patch) !== release.patchSha256)
-  throw new Error("Cua native patch checksum mismatch.");
+if (digest(patch) !== release.patchSha256) throw new Error("Cua native patch checksum mismatch.");
 const temporary = await mkdtemp(join(tmpdir(), "synara-cua-package-"));
 const environment = {
   ...process.env,
@@ -90,9 +75,7 @@ try {
   let provenance;
   if (artifact) {
     binary = join(resolve(artifact), upstreamAsset?.binary ?? "cua-driver");
-    provenance = JSON.parse(
-      await readFile(join(resolve(artifact), "provenance.json"), "utf8"),
-    );
+    provenance = JSON.parse(await readFile(join(resolve(artifact), "provenance.json"), "utf8"));
     if (
       provenance.version !== release.version ||
       provenance.source !== release.source ||
@@ -103,42 +86,31 @@ try {
         ? platform === "darwin"
         : provenance.patchSha256 !== release.patchSha256) ||
       provenance.rustVersion !== release.rustVersion ||
-      architectures.some(
-        (value) => !provenance.architectures?.includes(value),
-      ) ||
+      architectures.some((value) => !provenance.architectures?.includes(value)) ||
       digest(await readFile(binary)) !== provenance.binarySha256
     ) {
-      throw new Error(
-        "Cua artifact identity, architecture or binary checksum mismatch.",
-      );
+      throw new Error("Cua artifact identity, architecture or binary checksum mismatch.");
     }
   } else if (upstreamAsset) {
     // Windows/Linux: stage the upstream release binary for the pinned
     // version. The authoritative checksum comes from the release's own
     // checksums.txt, verified before anything reaches the destination.
     const releaseBase = `https://github.com/trycua/cua/releases/download/cua-driver-rs-v${release.version}`;
-    const checksums = await (
-      await fetch(`${releaseBase}/checksums.txt`)
-    ).text();
+    const checksums = await (await fetch(`${releaseBase}/checksums.txt`)).text();
     const expected = new Map(
-      [...checksums.matchAll(/^([0-9a-f]{64})\s+(\S+)$/gm)].map((m) => [
-        m[2],
-        m[1],
-      ]),
+      [...checksums.matchAll(/^([0-9a-f]{64})\s+(\S+)$/gm)].map((m) => [m[2], m[1]]),
     );
     const staged = join(temporary, "upstream");
     await mkdir(staged);
     const bundleArch = architectures[0];
     const assetName = `cua-driver-rs-${release.version}-${targets[platform][bundleArch]}-binary.${upstreamAsset.suffix}`;
     const wantSha = expected.get(assetName);
-    if (!wantSha)
-      throw new Error(`Upstream release has no checksum for ${assetName}.`);
+    if (!wantSha) throw new Error(`Upstream release has no checksum for ${assetName}.`);
     const archivePath = join(temporary, assetName);
     const downloaded = Buffer.from(
       await (await fetch(`${releaseBase}/${assetName}`)).arrayBuffer(),
     );
-    if (digest(downloaded) !== wantSha)
-      throw new Error(`Upstream ${assetName} checksum mismatch.`);
+    if (digest(downloaded) !== wantSha) throw new Error(`Upstream ${assetName} checksum mismatch.`);
     await writeFile(archivePath, downloaded);
     // bsdtar (macOS, Windows) reads zip and tar.gz; GNU tar does not read
     // zip, so fall back to unzip for the Windows asset on Linux hosts.
@@ -175,24 +147,11 @@ try {
         release.source,
       ]);
     }
-    const commit = output("git", [
-      "-C",
-      source,
-      "rev-parse",
-      `${release.source}^{commit}`,
-    ]);
-    if (commit !== release.source)
-      throw new Error("Cua source commit mismatch.");
+    const commit = output("git", ["-C", source, "rev-parse", `${release.source}^{commit}`]);
+    if (commit !== release.source) throw new Error("Cua source commit mismatch.");
     const archive = join(temporary, "source.tar");
     // Ignore local checkout edits; only the pinned commit enters the build.
-    run("git", [
-      "-C",
-      source,
-      "archive",
-      `--output=${archive}`,
-      release.source,
-      "libs/cua-driver",
-    ]);
+    run("git", ["-C", source, "archive", `--output=${archive}`, release.source, "libs/cua-driver"]);
     const build = join(temporary, "build");
     await mkdir(build);
     run("tar", ["-xf", archive, "-C", build]);
@@ -206,9 +165,7 @@ try {
     const workspace = await readFile(join(rust, "Cargo.toml"), "utf8");
     if (!workspace.includes(`version = "${release.version}"`))
       throw new Error("Cua source package version mismatch.");
-    const targetDir = resolve(
-      process.env.CARGO_TARGET_DIR || join(temporary, "target"),
-    );
+    const targetDir = resolve(process.env.CARGO_TARGET_DIR || join(temporary, "target"));
     const binaries = [];
     for (const architecture of architectures) {
       const target = targets[platform][architecture];
@@ -231,8 +188,7 @@ try {
       binaries.push(join(targetDir, target, "release/cua-driver"));
     }
     binary = join(temporary, "cua-driver");
-    if (binaries.length > 1)
-      run("lipo", ["-create", ...binaries, "-output", binary]);
+    if (binaries.length > 1) run("lipo", ["-create", ...binaries, "-output", binary]);
     else await copyFile(binaries[0], binary);
     provenance = {
       version: release.version,
@@ -250,11 +206,7 @@ try {
     // Validate a foreign architecture without requiring Rosetta. The GUI also
     // verifies version, native revision, embedded mode and PID before dispatch.
     const present = output("lipo", ["-archs", binary]).split(/\s+/);
-    if (
-      architectures.some(
-        (value) => !present.includes(value === "x64" ? "x86_64" : "arm64"),
-      )
-    )
+    if (architectures.some((value) => !present.includes(value === "x64" ? "x86_64" : "arm64")))
       throw new Error("Cua Mach-O is missing a requested architecture.");
   }
   await mkdir(destination, { recursive: true });
@@ -262,15 +214,10 @@ try {
     // The upstream archive is a bundle — driver plus its sidecars (cursor
     // theme, SDK, node runtime, UIA/Wayland helpers). Stage them all — from
     // the verified artifact dir when one was supplied, else the download.
-    await cp(
-      artifact ? resolve(artifact) : join(temporary, "upstream"),
-      destination,
-      {
-        recursive: true,
-      },
-    );
-    if (platform !== "win32")
-      await chmod(join(destination, upstreamAsset.binary), 0o755);
+    await cp(artifact ? resolve(artifact) : join(temporary, "upstream"), destination, {
+      recursive: true,
+    });
+    if (platform !== "win32") await chmod(join(destination, upstreamAsset.binary), 0o755);
   } else {
     // Stage via a content write, not copyFile: macOS clonefile carries the
     // protected com.apple.provenance xattr, and Gatekeeper kills the staged
@@ -280,24 +227,11 @@ try {
     // Re-stamp the adhoc signature: the linker's embedded `linker-signed`
     // flag signature is also killed at exec on recent macOS (the staged
     // binary must present a plain adhoc signature).
-    run("codesign", [
-      "--force",
-      "--sign",
-      "-",
-      join(destination, "cua-driver"),
-    ]);
+    run("codesign", ["--force", "--sign", "-", join(destination, "cua-driver")]);
   }
-  await writeFile(
-    join(destination, "provenance.json"),
-    JSON.stringify(provenance, null, 2) + "\n",
-  );
+  await writeFile(join(destination, "provenance.json"), JSON.stringify(provenance, null, 2) + "\n");
   await copyFile(
-    fileURLToPath(
-      new URL(
-        "../../../docs/computer-use-cua/CUA-LICENSE.txt",
-        import.meta.url,
-      ),
-    ),
+    fileURLToPath(new URL("../../../docs/computer-use-cua/CUA-LICENSE.txt", import.meta.url)),
     join(destination, "LICENSE.txt"),
   );
   console.log(

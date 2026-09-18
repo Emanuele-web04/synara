@@ -207,7 +207,7 @@ Work items:
    The gate is now endpoint presence: darwin uses the bundled host, any
    platform with `SYNARA_CUA_HOST_SOCKET` routes `CuaComputerBackend`,
    and no endpoint fails closed (`unsupported-platform`/`backend-
-   unavailable`). Unit-covered for win32+endpoint, win32 without, and
+unavailable`). Unit-covered for win32+endpoint, win32 without, and
    the fake override.
 4. Per-platform native helpers (appsnap equivalents): Escape monitor
    (Win low-level keyboard hook; X11/evdev), shield (always-on-top
