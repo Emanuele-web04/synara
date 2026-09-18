@@ -575,7 +575,7 @@ jobs:
   publish_cli:
     name: Publish CLI to npm
     # Prereleases (beta lane) never touch the npm `latest` dist-tag.
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.preflight.outputs.is_prerelease == 'false' && vars.SYNARA_PUBLISH_CLI == '1' }}
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' && needs.preflight.outputs.is_prerelease == 'false' }}
     needs: [preflight, build, build_portable]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -851,7 +851,7 @@ jobs:
   finalize:
     name: Finalize release
     # Prereleases (beta lane) never bump package versions on main.
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && needs.preflight.outputs.is_prerelease == 'false' && vars.SYNARA_FINALIZE_RELEASE == '1' }}
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_FINALIZE_RELEASE == '1' && needs.preflight.outputs.is_prerelease == 'false' }}
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10

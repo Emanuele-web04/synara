@@ -239,6 +239,41 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     workflow,
+    "vars.SYNARA_PUBLISH_CLI == '1' && needs.preflight.outputs.is_prerelease == 'false'",
+    "Expected prereleases to be fenced out of the npm latest publish job.",
+  );
+  assertContains(
+    workflow,
+    "vars.SYNARA_FINALIZE_RELEASE == '1' && needs.preflight.outputs.is_prerelease == 'false'",
+    "Expected prereleases to be fenced out of the version-bump finalize job.",
+  );
+  assertContains(
+    workflow,
+    "desktop_flavor: ${{ steps.release_meta.outputs.desktop_flavor }}",
+    "Expected preflight to expose the resolved desktop flavor.",
+  );
+  assertContains(
+    workflow,
+    '--flavor "${{ needs.preflight.outputs.desktop_flavor }}"',
+    "Expected the desktop matrix to build the resolved flavor.",
+  );
+  assertContains(
+    workflow,
+    '--channel "$UPDATE_CHANNEL"',
+    "Expected feed prep to emit manifests for the resolved update channel.",
+  );
+  assertContains(
+    workflow,
+    "UPDATE_CHANNEL: ${{ needs.preflight.outputs.update_channel }}",
+    "Expected feed prep to receive the resolved update channel.",
+  );
+  assertContains(
+    workflow,
+    "--executable-name",
+    "Expected packaged startup verification to resolve the flavor's executable name.",
+  );
+  assertContains(
+    workflow,
     "SYNARA_PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}",
     "Expected artifact signing admission to know whether artifacts will be published.",
   );
