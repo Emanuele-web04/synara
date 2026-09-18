@@ -1,0 +1,255 @@
+{
+  "run": "livecert-mu6k7grb",
+  "date": "2026-09-18T06:10:53.710Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-4K7FWd/host.sock",
+  "elapsedMs": 35831,
+  "rows": [
+    {
+      "name": "launch-isolation",
+      "verdict": "pass",
+      "detail": "open -g TextEdit pid 96021; front stayed TextEdit",
+      "evidence": {
+        "pid": 96021,
+        "window": 1848,
+        "front": "TextEdit"
+      },
+      "elapsedMs": 657
+    },
+    {
+      "name": "visible-nonkey-write",
+      "verdict": "pass",
+      "detail": "effect=confirmed readback=exact",
+      "evidence": {
+        "effect": "confirmed",
+        "readback": "livecert-mu6k7grb-visible"
+      },
+      "elapsedMs": 1476
+    },
+    {
+      "name": "hidden-write",
+      "verdict": "pass",
+      "detail": "is_on_screen=false readback=exact",
+      "evidence": {
+        "visible": false,
+        "elements": 37,
+        "readback": "livecert-mu6k7grb-hidden"
+      },
+      "elapsedMs": 2263
+    },
+    {
+      "name": "minimized-write",
+      "verdict": "pass",
+      "detail": "minimized=off-screen readback=exact",
+      "evidence": {
+        "isOnScreen": false,
+        "readback": "livecert-mu6k7grb-minimized"
+      },
+      "elapsedMs": 4148
+    },
+    {
+      "name": "concurrent-writes",
+      "verdict": "pass",
+      "detail": "3 targets, readbacks 3/3 exact",
+      "evidence": {
+        "readbacks": [
+          "livecert-mu6k7grb-conc-0",
+          "livecert-mu6k7grb-conc-1",
+          "livecert-mu6k7grb-conc-2"
+        ]
+      },
+      "elapsedMs": 6056
+    },
+    {
+      "name": "operator-typing",
+      "verdict": "pass",
+      "detail": "front doc got human-only=true; hidden doc exact=true",
+      "evidence": {
+        "opValue": "HUMAN-OPERATOR-TYPING",
+        "agentValue": "livecert-mu6k7grb-bgagent"
+      },
+      "elapsedMs": 4941
+    },
+    {
+      "name": "space-roundtrip",
+      "verdict": "pass",
+      "detail": "switch 1→62: true; write: true; back: true",
+      "evidence": {
+        "sw1": "set-current rc=0 active=62 verified=1",
+        "writeOk": true,
+        "sw2": "set-current rc=0 active=1 verified=1",
+        "win": 1898
+      },
+      "elapsedMs": 2745
+    },
+    {
+      "name": "off-space-refusal",
+      "verdict": "pass",
+      "detail": "off-space window: elements=50, write=verified, readback=exact",
+      "evidence": {
+        "win": 1908,
+        "elements": 50,
+        "outcome": "verified, readback=exact"
+      },
+      "elapsedMs": 2846
+    },
+    {
+      "name": "screenshot-fresh",
+      "verdict": "pass",
+      "detail": "png=true valid=true freshness=captured_current_space",
+      "evidence": {
+        "hasPng": true,
+        "valid": true,
+        "freshness": "captured_current_space",
+        "bounds": {
+          "height": 488,
+          "width": 586,
+          "x": 165,
+          "y": 86
+        },
+        "pngBytes": 37176
+      },
+      "elapsedMs": 169
+    },
+    {
+      "name": "stale-token",
+      "verdict": "pass",
+      "detail": "forged token → {\"ok\":true,\"result\":{\"content\":[{\"text\":\"element_token is stale; call get_window_state again to refresh\",\"type\":\"text\"}],\"isError\":true,\"structuredContent\":{\"re",
+      "evidence": {
+        "reply": {
+          "ok": true,
+          "result": {
+            "content": [
+              {
+                "text": "element_token is stale; call get_window_state again to refresh",
+                "type": "text"
+              }
+            ],
+            "isError": true,
+            "structuredContent": {
+              "refusal": {
+                "code": "stale_element_token",
+                "message": "element_token is stale; call get_window_state again to refresh"
+              },
+              "status": "refused"
+            }
+          },
+          "desktopEpoch": 0,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        }
+      },
+      "elapsedMs": 24
+    },
+    {
+      "name": "verify-state",
+      "verdict": "pass",
+      "detail": "{\"elapsed_ms\":277,\"predicates\":[{\"index\":0,\"observed_json\":\"{\\\"element_index\\\":1,\\\"frame\\\":{\\\"h\\\":382.0,\\\"w\\\":586.0,\\\"x\\\":165.0,\\\"y\\\":186.0},\\\"label\\\":\\\"livecert-mu6k7grb-conc-0\\\",\\\"role\\\":\\\"AXTextAre",
+      "evidence": {
+        "reply": {
+          "ok": true,
+          "result": {
+            "content": [
+              {
+                "text": "verify_state: satisfied after 2 sample(s) in 277 ms",
+                "type": "text"
+              }
+            ],
+            "structuredContent": {
+              "elapsed_ms": 277,
+              "predicates": [
+                {
+                  "index": 0,
+                  "observed_json": "{\"element_index\":1,\"frame\":{\"h\":382.0,\"w\":586.0,\"x\":165.0,\"y\":186.0},\"label\":\"livecert-mu6k7grb-conc-0\",\"role\":\"AXTextArea\",\"value\":\"livecert-mu6k7grb-conc-0\"}",
+                  "status": "satisfied",
+                  "unknown_reason": null
+                }
+              ],
+              "samples": 2,
+              "stable": true,
+              "status": "satisfied"
+            }
+          },
+          "desktopEpoch": 0,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        }
+      },
+      "elapsedMs": 293
+    },
+    {
+      "name": "masked-activation",
+      "verdict": "pass",
+      "detail": "panel=1 front=96392 (want 96392) masked=1 wrote=true released=true",
+      "evidence": {
+        "engage": {
+          "ok": true,
+          "result": {
+            "engaged": true,
+            "shield_id": "lc18996053d3bf"
+          },
+          "desktopEpoch": 0,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        },
+        "panels": [
+          {
+            "id": 1922,
+            "bounds": {
+              "x": 165,
+              "y": 86,
+              "width": 586,
+              "height": 488
+            },
+            "layer": 25
+          }
+        ],
+        "raise": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"Brought exact window 1917 for pid 96392 to the foreground.\",\"type\":\"text\"}],\"structuredContent\":{\"activated\":true,\"code\":\"bring_to_front_exact_window_verified\"",
+        "frontPid": 96392,
+        "targetPid": 96392,
+        "write": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readback\"}],\"route\":\"accessibility\"}},\"desktopE",
+        "value": "livecert-mu6k7grb-masked",
+        "release": {
+          "ok": true,
+          "desktopEpoch": 0,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        },
+        "panelsAfter": []
+      },
+      "elapsedMs": 5448
+    },
+    {
+      "name": "cancellation",
+      "verdict": "pass",
+      "detail": "cancelled=true effect=undefined delivered=18/2518 chars",
+      "evidence": {
+        "delivered": 18,
+        "afterLen": 40,
+        "reply": "{\"ok\":false,\"error\":\"Error: Computer operation cancelled. Input already dispatched may have taken effect; do not replay.\"}"
+      },
+      "elapsedMs": 2723
+    },
+    {
+      "name": "focus-invariant",
+      "verdict": "pass",
+      "detail": "theft-free across 1214 samples (0 topWin blips tolerated)",
+      "evidence": {
+        "theft": [],
+        "persistent": [],
+        "warnings": [],
+        "drift": [],
+        "sampleCount": 1214,
+        "issues": []
+      },
+      "elapsedMs": 0
+    }
+  ],
+  "summary": {
+    "total": 14,
+    "pass": 14,
+    "fail": 0,
+    "skipped": 0,
+    "verdict": "pass"
+  }
+}

@@ -44,6 +44,7 @@ import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { cuaRequest, type CuaReply } from "@synara/shared/cuaDriverProtocol";
 import { CuaDriverHost } from "../../apps/desktop/src/cuaDriverHost";
+import { ComputerShield } from "../../apps/desktop/src/computerShield";
 import {
   analyzeFocusSamples,
   parseFocusProbeLine,
@@ -56,6 +57,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const DRIVER = join(root, "apps/desktop/resources/cua-driver/cua-driver");
 const PROBE_BIN = "/private/tmp/synara-cua-implementation/focus-probe";
 const SPACE_CTL = "/private/tmp/synara-cua-implementation/space-ctl";
+const APPSNAP = join(root, "apps/desktop/.electron-runtime/appsnap/synara-appsnap-helper");
 const SENTINEL = `livecert-${Date.now().toString(36)}`;
 
 type Verdict = "pass" | "fail" | "skipped";
@@ -304,6 +306,65 @@ function frontmostName(): string {
   );
 }
 
+function frontmostPid(): number | undefined {
+  const out = osa(
+    'tell application "System Events" to get unix id of first process whose frontmost is true',
+  );
+  const pid = Number(out);
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+function boundsNear(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): boolean {
+  return (
+    Math.abs(a.x - b.x) <= 8 &&
+    Math.abs(a.y - b.y) <= 8 &&
+    Math.abs(a.width - b.width) <= 8 &&
+    Math.abs(a.height - b.height) <= 8
+  );
+}
+
+interface ShieldPanel {
+  id: number;
+  layer: number;
+  bounds: { x: number; y: number; width: number; height: number };
+}
+
+/** Shield panels via CGWindowList (all layers) — the driver's list_windows
+ * only reports layer-0 windows, so the statusBar-level mask needs space-ctl. */
+async function shieldPanels(): Promise<ShieldPanel[]> {
+  if (!existsSync(SPACE_CTL)) return [];
+  const out = spawnSync("pgrep", ["-f", "appsnap-helper --shield"], {
+    encoding: "utf8",
+  }).stdout;
+  const pids = out?.split("\n").map(Number).filter(Boolean) ?? [];
+  const panels: ShieldPanel[] = [];
+  for (const pid of pids) {
+    const list =
+      spawnSync(SPACE_CTL, ["windows", "--pid", String(pid)], { encoding: "utf8" }).stdout ??
+      "";
+    for (const line of list.split("\n")) {
+      const m = line.match(
+        /^window (\d+) pid=\d+ layer=(-?\d+) x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)/,
+      );
+      if (m)
+        panels.push({
+          id: Number(m[1]),
+          layer: Number(m[2]),
+          bounds: {
+            x: Number(m[3]),
+            y: Number(m[4]),
+            width: Number(m[5]),
+            height: Number(m[6]),
+          },
+        });
+    }
+  }
+  return panels;
+}
+
 async function launchTextEdit(extra: string[] = []): Promise<number | undefined> {
   const before = new Set(
     spawnSync("pgrep", ["-x", "TextEdit"], { encoding: "utf8" })
@@ -350,11 +411,13 @@ async function windowOfPid(pid: number): Promise<WinInfo | undefined> {
 // ── main ─────────────────────────────────────────────────────────────────
 
 capability = randomBytes(32).toString("base64url");
+const shieldHost = existsSync(APPSNAP) ? new ComputerShield({ helperPath: APPSNAP }) : undefined;
 const host = new CuaDriverHost({
   binaryPath: DRIVER,
   bundleId: "com.synara.cua-canary",
   capability,
   setup: async () => {},
+  ...(shieldHost ? { shield: shieldHost } : {}),
 });
 
 let failures = 0;
@@ -378,6 +441,11 @@ try {
       `tell application "System Events" to tell (first process whose unix id is ${opWin.pid}) to set frontmost to true`,
     );
     await new Promise((r) => setTimeout(r, 900));
+  }
+  if (!existsSync(SPACE_CTL)) {
+    spawnSync("sh", [join(root, "scripts/computer-use-fixtures/build-space-ctl.sh")], {
+      stdio: quiet ? "pipe" : "inherit",
+    });
   }
   const probeStarted = startProbe(SENTINEL);
   log(
@@ -868,6 +936,142 @@ end repeat`,
     } else row("verify-state", "skipped", "no visible window", undefined, Date.now() - t);
   }
 
+  // ── masked-activation (own-window shield over a real activation excursion) ──
+  if (wanted("masked-activation")) {
+    const t = Date.now();
+    if (!shieldHost) {
+      row(
+        "masked-activation",
+        "skipped",
+        "appsnap helper not built — shield host unavailable",
+        undefined,
+        Date.now() - t,
+      );
+    } else if (!opWin) {
+      row("masked-activation", "skipped", "no operator baseline", undefined, Date.now() - t);
+    } else {
+      const shieldId = `lc${randomBytes(6).toString("hex")}`;
+      let pid: number | undefined;
+      let exemptStartMark: number | undefined;
+      try {
+        pid = await launchTextEdit(["-g"]);
+        const win = pid ? await windowOfPid(pid) : undefined;
+        if (!win) throw new Error("no masked-activation target window");
+
+        // 1. Engage the mask over the target's frame before any activation.
+        const eng = await cuaRequest<CuaReply>(
+          endpoint,
+          {
+            method: "shield",
+            args: {
+              action: "engage",
+              shield_id: shieldId,
+              frame: win.bounds,
+              window_id: win.window_id,
+              pid: win.pid,
+              label: "live-cert",
+            },
+            capability,
+          },
+          { timeoutMs: 15_000, mutation: true },
+        );
+        if (!replyOk(eng))
+          throw new Error(`engage refused: ${JSON.stringify(eng).slice(0, 200)}`);
+        await new Promise((r) => setTimeout(r, 500));
+        const panels = (await shieldPanels()).filter((p) => boundsNear(p.bounds, win.bounds));
+
+        // 2. Activate the real window under the mask. Deliberate excursion —
+        //    exempt the probe span; the row asserts the end-state itself.
+        exemptStartMark = exemptStart();
+        const raise = await callReply("bring_to_front", {
+          pid: win.pid,
+          window_id: win.window_id,
+        });
+        await new Promise((r) => setTimeout(r, 800));
+        const frontPid = frontmostPid();
+        const panelsDuring = (await shieldPanels()).filter((p) =>
+          boundsNear(p.bounds, win.bounds),
+        );
+
+        // 3. Semantic write while masked+frontmost.
+        const token = await textAreaToken(win.pid, win.window_id);
+        const write = token
+          ? await callReply("set_value", {
+              pid: win.pid,
+              window_id: win.window_id,
+              element_token: token.token,
+              value: `${SENTINEL}-masked`,
+            })
+          : undefined;
+        const value = await textAreaValue(win.pid, win.window_id);
+
+        // 4. Release: panels must physically disappear.
+        const rel = await cuaRequest<CuaReply>(
+          endpoint,
+          { method: "shield", args: { action: "release", shield_id: shieldId }, capability },
+          { timeoutMs: 10_000, mutation: true },
+        );
+        await new Promise((r) => setTimeout(r, 600));
+        const panelsAfter = (await shieldPanels()).filter((p) =>
+          boundsNear(p.bounds, win.bounds),
+        );
+        exemptEnd(exemptStartMark);
+        exemptStartMark = undefined;
+        osa(
+          `tell application "System Events" to tell (first process whose unix id is ${opWin.pid}) to set frontmost to true`,
+        );
+
+        const wrote = value === `${SENTINEL}-masked`;
+        const ok =
+          panels.length > 0 &&
+          replyOk(raise) &&
+          frontPid === win.pid &&
+          panelsDuring.length > 0 &&
+          write !== undefined &&
+          replyOk(write) &&
+          wrote &&
+          replyOk(rel) &&
+          panelsAfter.length === 0;
+        row(
+          "masked-activation",
+          ok ? "pass" : "fail",
+          `panel=${panels.length} front=${frontPid} (want ${win.pid}) masked=${panelsDuring.length} wrote=${wrote} released=${panelsAfter.length === 0}`,
+          {
+            engage: eng,
+            panels: panels.map((p) => ({ id: p.id, bounds: p.bounds, layer: p.layer })),
+            raise: JSON.stringify(raise).slice(0, 200),
+            frontPid,
+            targetPid: win.pid,
+            write: JSON.stringify(write).slice(0, 240),
+            value,
+            release: rel,
+            panelsAfter: panelsAfter.map((p) => p.id),
+          },
+          Date.now() - t,
+        );
+      } catch (e) {
+        if (exemptStartMark !== undefined) exemptEnd(exemptStartMark);
+        row(
+          "masked-activation",
+          "fail",
+          String(e).slice(0, 200),
+          { error: String(e), pid },
+          Date.now() - t,
+        );
+      } finally {
+        await cuaRequest(
+          endpoint,
+          { method: "shield", args: { action: "release_all" }, capability },
+          { timeoutMs: 10_000 },
+        ).catch(() => undefined);
+        if (opWin)
+          osa(
+            `tell application "System Events" to tell (first process whose unix id is ${opWin.pid}) to set frontmost to true`,
+          );
+      }
+    }
+  }
+
   // ── cancellation (force_synthetic key_events into the front doc, abort mid-flight) ──
   if (wanted("cancellation")) {
     const t = Date.now();
@@ -991,6 +1195,7 @@ end repeat`,
   } catch {
     /* host already down */
   }
+  await shieldHost?.dispose().catch(() => undefined);
 
   const failed = rows.filter((r) => r.verdict === "fail");
   const skipped = rows.filter((r) => r.verdict === "skipped");

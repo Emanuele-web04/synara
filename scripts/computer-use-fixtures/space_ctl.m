@@ -226,10 +226,27 @@ int main(int argc, char **argv) {
       int pidv = -1, numv = -1;
       if (pidRef) CFNumberGetValue(pidRef, kCFNumberIntType, &pidv);
       if (numRef) CFNumberGetValue(numRef, kCFNumberIntType, &numv);
+      CFNumberRef layerRef = (CFNumberRef)CFDictionaryGetValue(w, CFSTR("kCGWindowLayer"));
+      int layerv = -1;
+      if (layerRef) CFNumberGetValue(layerRef, kCFNumberIntType, &layerv);
+      CFDictionaryRef boundsRef = (CFDictionaryRef)CFDictionaryGetValue(w, CFSTR("kCGWindowBounds"));
+      double bx = 0, by = 0, bw = 0, bh = 0;
+      if (boundsRef) {
+        CFNumberRef v;
+        if ((v = (CFNumberRef)CFDictionaryGetValue(boundsRef, CFSTR("X"))))
+          CFNumberGetValue(v, kCFNumberDoubleType, &bx);
+        if ((v = (CFNumberRef)CFDictionaryGetValue(boundsRef, CFSTR("Y"))))
+          CFNumberGetValue(v, kCFNumberDoubleType, &by);
+        if ((v = (CFNumberRef)CFDictionaryGetValue(boundsRef, CFSTR("Width"))))
+          CFNumberGetValue(v, kCFNumberDoubleType, &bw);
+        if ((v = (CFNumberRef)CFDictionaryGetValue(boundsRef, CFSTR("Height"))))
+          CFNumberGetValue(v, kCFNumberDoubleType, &bh);
+      }
       if (filterPid && pidv != filterPid) continue;
       char title[256] = {0};
       if (titleRef) CFStringGetCString(titleRef, title, sizeof(title), kCFStringEncodingUTF8);
-      printf("window %d pid=%d title=%s\n", numv, pidv, title);
+      printf("window %d pid=%d layer=%d x=%.0f y=%.0f w=%.0f h=%.0f title=%s\n",
+             numv, pidv, layerv, bx, by, bw, bh, title);
     }
     CFRelease(list);
     return 0;
