@@ -3,6 +3,9 @@
  *
  * @module OmpAdapterLive
  */
+import * as nodeOs from "node:os";
+import * as nodePath from "node:path";
+
 import {
   ApprovalRequestId,
   EventId,
@@ -11,6 +14,7 @@ import {
   type ProviderInteractionMode,
   type ProviderListCommandsResult,
   type ProviderListModelsResult,
+  type OmpRoleDescriptor,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -109,6 +113,7 @@ import {
   applyOmpAcpInteractionMode,
   applyOmpAcpModelSelection,
   makeOmpAcpRuntime,
+  parseOmpAgentConfigModelRoles,
   parseOmpCliModelList,
   resolveOmpCliBinaryPath,
   type OmpAcpRuntimeSettings,
@@ -2156,11 +2161,30 @@ export function makeOmpAdapter(
             modelCount: result.models.length,
             source: result.source,
           });
+          // OMP roles are file-backed (`<agentDir>/config.yml` modelRoles), not
+          // part of the CLI catalog — read them from the resolved agent dir,
+          // which defaults to `~/.omp/agent` when no override is configured.
+          const rolesAgentDir = agentDir ?? nodePath.join(nodeOs.homedir(), ".omp", "agent");
+          const roles = yield* fileSystem
+            .readFileString(nodePath.join(rolesAgentDir, "config.yml"))
+            .pipe(
+              Effect.map((text) => parseOmpAgentConfigModelRoles(text)),
+              Effect.catch((error) =>
+                Effect.sync((): ReadonlyArray<OmpRoleDescriptor> => {
+                  log.warn("model/list roles read failed", {
+                    agentDir: rolesAgentDir,
+                    detail: error instanceof Error ? error.message : String(error),
+                  });
+                  return [];
+                }),
+              ),
+            );
+          const resultWithRoles: ProviderListModelsResult = { ...result, roles };
           setOmpDiscoveryCacheEntry(modelDiscoveryCache, cacheKey, {
             expiresAt: Date.now() + OMP_MODEL_DISCOVERY_CACHE_MS,
-            result,
+            result: resultWithRoles,
           });
-          return result;
+          return resultWithRoles;
         }),
       );
 

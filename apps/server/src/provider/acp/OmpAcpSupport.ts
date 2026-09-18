@@ -12,9 +12,11 @@ import { supportsPosixPermissions } from "@synara/shared/filesystemPlatform";
 import {
   type ProviderInteractionMode,
   type ProviderModelDescriptor,
+  type OmpRoleDescriptor,
   OMP_THINKING_LEVEL_OPTIONS,
 } from "@synara/contracts";
-import { Effect, Layer, Scope, ServiceMap } from "effect";
+import { Effect, Layer, Option, Schema, Scope, ServiceMap } from "effect";
+import YAML from "yaml";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -264,6 +266,61 @@ function readStringArrayField(record: Record<string, unknown>, key: string): Rea
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "")
     : [];
+}
+
+/** Raw `YAML.parse` output — the trust boundary for `~/.omp` config reads. */
+type OmpConfigYamlValue = ReturnType<typeof YAML.parse>;
+
+const OmpConfigRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
+const toOmpConfigRecordOption = Schema.decodeUnknownOption(OmpConfigRecordSchema);
+
+/**
+ * Parses OMP `modelRoles` entries (from `~/.omp/agent/config.yml`) into role
+ * descriptors. Each value is `<provider/id>[:<thinking-level>]`; a trailing
+ * segment is split off as the thinking level only when it matches a known OMP
+ * thinking level. Entries whose value is not a non-empty trimmed string are
+ * skipped. Insertion order is preserved so the picker lists roles in config order.
+ */
+export function parseOmpModelRoles(
+  modelRoles: OmpConfigYamlValue,
+): ReadonlyArray<OmpRoleDescriptor> {
+  const record = Option.getOrUndefined(toOmpConfigRecordOption(modelRoles));
+  if (record === undefined) return [];
+  const roles: OmpRoleDescriptor[] = [];
+  for (const [name, rawValue] of Object.entries(record)) {
+    if (!Schema.is(Schema.String)(rawValue)) continue;
+    const value = rawValue.trim();
+    if (!value) continue;
+    const lastColon = value.lastIndexOf(":");
+    if (lastColon > 0) {
+      const maybeLevel = value.slice(lastColon + 1);
+      const model = value.slice(0, lastColon);
+      const level = OMP_THINKING_LEVEL_OPTIONS.find((candidate) => candidate === maybeLevel);
+      if (level !== undefined && model) {
+        roles.push({ name, model, thinkingLevel: level });
+        continue;
+      }
+    }
+    roles.push({ name, model: value });
+  }
+  return roles;
+}
+
+const OmpAgentConfigSchema = Schema.Struct({
+  modelRoles: Schema.optional(OmpConfigRecordSchema),
+});
+const toOmpAgentConfigOption = Schema.decodeUnknownOption(OmpAgentConfigSchema);
+
+/**
+ * Reads the `modelRoles` map out of `~/.omp/agent/config.yml` text. An
+ * unparseable YAML document throws to the caller; a document whose
+ * `modelRoles` subtree is absent or malformed yields no roles.
+ */
+export function parseOmpAgentConfigModelRoles(
+  configYaml: string,
+): ReadonlyArray<OmpRoleDescriptor> {
+  const config = Option.getOrUndefined(toOmpAgentConfigOption(YAML.parse(configYaml)));
+  return parseOmpModelRoles(config?.modelRoles);
 }
 
 export function parseOmpCliModelList(stdout: string): ReadonlyArray<ProviderModelDescriptor> {
