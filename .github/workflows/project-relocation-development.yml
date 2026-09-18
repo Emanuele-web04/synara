@@ -14,9 +14,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
+      - name: Check out exact source without initializing submodules
+        run: |
+          git init
+          git remote add origin https://github.com/Emanuele-web04/synara.git
+          git fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - name: Prepare source-only verification archive
         run: tar --exclude=.git -czf "$RUNNER_TEMP/synara-relocation-source.tar.gz" .
       - uses: actions/upload-artifact@v4
