@@ -49,7 +49,7 @@ representation until its space is active.
 | `destroy` (`SLSSpaceDestroy`)                                 | works for orphans; refuses managed ids                                                  |
 | `show` (`SLSShowSpaces`)                                      | **no-op** — orphan never becomes managed (`verified=0`)                                 |
 | `move` / `add` / `remove`                                     | **no-op** — membership read-back never changes                                          |
-| `set-current` (`SLSManagedDisplaySetCurrentSpace`)            | **no-op** — returns `rc=0` while `SLSGetActiveSpace` is unchanged; read-back catches it |
+| `set-current` (`SLSManagedDisplaySetCurrentSpace`)            | **works on managed desktops** — 2026-10-02: switched active Space 1→62→1 with `SLSGetActiveSpace` read-back proving each hop; only no-ops on orphan/unmanaged ids (the earlier row measured the orphan path) |
 
 ## Exact ABIs used (SkyLight, resolved via `dlopen`/`dlsym`)
 
@@ -120,7 +120,7 @@ Dock performs these operations because it holds
 | `open -j`/`AXHidden` hidden app    | **works at rev 20** — same fallback path; live-verified: hidden TextEdit pid returned the full 37-element tree and accepted `set_value` → `confirmed`, `is_on_screen:false`.                                                                                                                                                                                                                        |
 | Off-screen coordinates             | unreachable — macOS clamps AX window positions; CGS moves crash on foreign windows                                                                                                                                                                                                                                                                                                                  |
 | Zero alpha                         | `SLSSetWindowAlpha` returns 0, alpha stays 1 — silent no-op                                                                                                                                                                                                                                                                                                                                         |
-| Windows on another real user Space | **verified 2026-10-02: impossible** — off-Space windows are absent from the app's AX hierarchy (`AXWindows: []` for pid 20432 while its wid 745 sat on inactive space 1; active space was 53). Driver refuses `ax_window_unresolved`/`off_space_or_ax_unresolved` and returns an empty tree deliberately. Cross-space requires activating/switching first (MC AX or app activation — both verified) |
+| Windows on another real user Space | **verified 2026-10-02: AX-empty but enumerable** — off-Space windows DO appear in `CGWindowListCopyWindowInfo` and the driver's `list_windows` (real bounds, `visible:false`; verified with TextEdit pid 59260 wids 909/910 on Space 62 while active=1), but the app's AX hierarchy omits them (`get_state` returns window metadata only, no elements). Driver refuses `ax_window_unresolved`/`off_space_or_ax_unresolved` for element ops — correct. Cross-space requires switching first (`set-current` now verified on managed desktops) |
 
 ## Recommended agent-Space isolation architecture
 
@@ -136,10 +136,17 @@ Dock performs these operations because it holds
    returned `-25206` after the pause, and neither CGEvent nor System-Events
    Ctrl+Up reopened it on this VM, so MC-open is state-dependent, not a
    guaranteed primitive.
-2. **Primary isolation model:** the agent works _on its own space_ — launch
-   targets there, full input surface while it's active. Cross-space operation
-   is `activate → act → switch back`, with the operator-view caveat that
-   switching moves the display the operator may be watching.
+2. **Primary isolation model (verified 2026-10-02):** the agent works _on its
+   own space_ — `set-current <agent-space>` → launch targets there (windows
+   land on the active space with **no move API needed**; verified: TextEdit
+   pid 59260 launched on Space 62, `window-spaces` reported `62`) →
+   `set-current` back to the operator space. `SLSManagedDisplaySetCurrentSpace`
+   is the fast programmatic switch (sub-second, no Mission Control UI, verified
+   1→62→1), replacing the fragile MC-button path. Cross-space operation is
+   `switch → act → switch back`, with the operator-view caveat that each hop
+   flips the watched display for a moment — the masked-activation shield could
+   cover the transition. The remaining gap is _unattended_ operation: any act
+   requires the agent's space to be active at that instant.
 3. **Off-Space input is impossible:** windows on inactive Spaces are absent
    from the app's AX hierarchy (`AXWindows: []`), so no semantic or event
    route exists. The driver's `ax_window_unresolved` refusal is correct —
