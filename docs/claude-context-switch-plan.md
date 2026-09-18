@@ -14,11 +14,11 @@ Treat normalized auto-compact overrides as spawn-fixed, reusing the existing res
 - Add regression tests before production changes and an opt-in isolated native summary probe. Finish with focused tests, formatting, lint, typecheck and the workspace test suite. Lifecycle preparation changes retirement ordering; include `bun run windows-runtime:check`. Packaged Windows execution remains unverified.
 - Update provider documentation; leave all work local in this worktree, without commits or publication.
 
-## Comparison and sources
+## Sources
 
-The parent audit compared local t3code (April 6 snapshot, SDK 0.2.77) with upstream main `675869d2b0f9e059d5950b80390c0cad1cb1590e` (September 17, SDK 0.3.260). Upstream uses bare models for 200k and a suffix for 1M, has a separate autoCompactWindow setting and restarts model selections. Both delegate cache ownership to Claude. This patch reuses Synara's narrower spawn-profile boundary instead of importing upstream model/env workarounds.
+This patch reuses Synara's existing spawn-profile boundary and leaves cache ownership with Claude.
 
-Related reports from that audit: [t3code #8405](https://github.com/pingdotgg/t3code/issues/8405), [#8594](https://github.com/pingdotgg/t3code/issues/8594), [#10955](https://github.com/pingdotgg/t3code/issues/10955); Claude [#78318](https://github.com/anthropics/claude-code/issues/78318) is related but its stale closure is not a fix, [#93901](https://github.com/anthropics/claude-code/issues/93901) concerns the ring, and [#78720](https://github.com/anthropics/claude-code/issues/78720) concerns resume cache misses on 2.1.263. No exact live-setting fix was found through 2.1.274. These are parent-audit observations, not newly verified upstream status.
+Related Claude reports from the parent audit: [#78318](https://github.com/anthropics/claude-code/issues/78318) is related but its stale closure is not a fix, [#93901](https://github.com/anthropics/claude-code/issues/93901) concerns the ring, and [#78720](https://github.com/anthropics/claude-code/issues/78720) concerns resume cache misses on 2.1.263. No exact live-setting fix was found through 2.1.274. These are parent-audit observations, not newly verified upstream status.
 
 Reference contracts: [context and auto-compaction](https://code.claude.com/docs/en/model-config#context-window-and-auto-compaction), [prompt caching](https://code.claude.com/docs/en/prompt-caching), [SDK configuration](https://code.claude.com/docs/en/agent-sdk/configuration).
 
