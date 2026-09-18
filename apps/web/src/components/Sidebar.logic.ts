@@ -203,18 +203,15 @@ function differentDisplayValue(
   return existing !== null && normalized === existing ? null : normalized;
 }
 
-/**
- * Display label for the container a thread lives in: real projects show their
- * user-facing name, while project-less containers (home chats, studio) read as
- * the app itself. Single rule shared by the Activity rows, pinned-row
- * suffixes, and thread hover cards, so a chat's auto-generated slug folder
- * never leaks into the UI as a fake "project name".
- */
+export const SIDEBAR_NO_PROJECT_LABEL = "No project";
+
+/** Shared by Activity rows, groups, filters, pinned suffixes, and hover cards.
+ * Hidden chat/studio containers must not look like user-selected projects. */
 export function resolveThreadProjectLabel(
   project: Pick<Project, "kind" | "name" | "folderName"> | null | undefined,
 ): string {
   if (!project || project.kind !== "project") {
-    return "Synara";
+    return SIDEBAR_NO_PROJECT_LABEL;
   }
   return nonEmptyDisplayValue(project.name) ?? project.folderName;
 }
