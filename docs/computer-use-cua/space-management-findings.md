@@ -29,12 +29,14 @@ elements performs real space management on Dock's entitlement:
 | Create a fullscreen Space             | `AXFullScreen` write on a resizable window                                                                     | works — `space 53 type=4` (Calculator refused silently; TextEdit accepted)                                                                                                                                                                                             |
 | Switch via posted Ctrl+Arrow CGEvent  | `cghidEventTap` key events                                                                                     | **no-op** — WindowServer ignores synthetic keys for space switching                                                                                                                                                                                                    |
 | Move a window between Spaces          | CGEvent drag on MC window thumbnails                                                                           | unproven — drop not accepted in our run                                                                                                                                                                                                                                |
-| Direct input into an off-Space window | any                                                                                                            | **impossible** — verified at AX level: an app whose windows are all on inactive Spaces exposes `AXWindows: []` and `AXChildren = [AXMenuBar]`; the driver correctly refuses `ax_window_unresolved`/`off_space_or_ax_unresolved`. Raw AX can't reach what isn't vended. |
+| Direct input into an off-Space window | element-token `set_value` via driver                                                                                | **state-dependent — verified working when warm** — a window launched onto Space 62 while it was briefly active keeps a live AX tree after deactivation: `get_window_state` returned 50+ elements and `set_value` delivered `confirmed`/`value_readback` with independent read-back exact (live-cert `off-space-refusal`, rev 20). A long-idle app whose windows are ALL off-Space goes AX-empty (`AXWindows: []`) and the driver correctly refuses `ax_window_unresolved`. Warmth, not space-membership alone, decides reachability. |
 
-Consequence: the viable cross-Space workflow is **create → switch → act on the
-now-active space → switch back**, all without entitlements. True background
-input into an inactive Space does not exist — the window has no AX
-representation until its space is active.
+Consequence: two tiers of cross-Space operation exist without entitlements.
+**Warm off-Space writes work**: a window whose space was recently active keeps
+its AX representation, and element-token semantic writes verify-deliver —
+System Events cannot enumerate the same window, so the driver's own tree +
+independent read-back is the evidence channel. **Cold off-Space targets** go
+AX-empty; the workflow there is **switch → act → switch back**, also verified.
 
 ## Verified command matrix (space-ctl)
 

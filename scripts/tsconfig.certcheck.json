@@ -7,5 +7,8 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true
   },
-  "include": ["computer-use-fixtures/multi-display-cert.ts"]
+  "include": [
+    "computer-use-fixtures/multi-display-cert.ts",
+    "computer-use-fixtures/live-cert.ts"
+  ]
 }
