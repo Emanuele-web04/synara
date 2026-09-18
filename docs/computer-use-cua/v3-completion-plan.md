@@ -150,7 +150,9 @@ must pass it before and after.
    "invisible workspace" mode — agent targets launch `open -j`-style on the
    operator's Space. Hidden apps keep AX alive (verified) while rendering
    nothing. This is strictly better than a second Space for semantic work:
-   off-Space kills AX; hidden keeps it. Dedicated Space stays the fallback
+   off-Space AX stays warm only briefly (verified writes work while warm;
+   cold off-Space targets go AX-empty — see space-management-findings);
+   hidden keeps it live indefinitely. Dedicated Space stays the fallback
    for pixel-visible work needing real activation.
    Accept: live-cert row — hidden-launched TextEdit write confirmed,
    nothing rendered, frontmost untouched.
