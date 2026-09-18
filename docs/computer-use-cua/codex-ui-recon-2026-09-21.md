@@ -189,13 +189,14 @@ indices), `computer_run` v2 (conditionals, observation steps, absent waits),
 honest delivery verdicts, richer approval grants (per-class + TTL + scope),
 the native frame tap, the ambient popover session machine.
 
-Gaps worth closing (in priority order):
+Gaps worth closing (in priority order; 1–3 landed 2026-09-18):
 
-1. Cursor motion — Codex's agent cursor visibly travels and scoots; ours
-   teleports. A visual-only glide + press pulse costs zero input latency
-   (overlay is independent of dispatch).
-2. Working indicator — their lens orb vs our pulsing dot + text pill.
-3. Preview placement — their PiP docks to rail/floating/pet; ours is rail-only.
+1. ~~Cursor motion~~ — done: the compact cursor glides between dispatches and
+   pulses on press, visual-only (native rev 21).
+2. ~~Working indicator~~ — done: sonar-ping status orb while the agent is
+   active, plus the cursor halo glide in the preview.
+3. ~~Preview placement~~ — done: the card detaches into a draggable floating
+   window with per-thread positions and re-dock.
 4. Preview interactivity — their PiP forwards input; ours is view-only.
    Click-to-activate-the-window is the safe first interaction.
 5. Per-app playbooks — their `AppInstructions` bundle; `computer_help` already
