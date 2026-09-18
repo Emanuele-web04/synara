@@ -3,7 +3,7 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 
 const characters = (...codes: number[]): string => String.fromCharCode(...codes);
 const retiredShortName = characters(116, 51);
@@ -195,7 +195,17 @@ function readTrackedFiles(): BrandIdentityBinaryFile[] {
   const paths = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" })
     .split("\0")
     .filter(Boolean);
-  return paths.map((path) => ({ path, contents: readFileSync(path) }));
+  // Gitlinks (mode-160000 worktree/submodule entries) appear in ls-files but
+  // materialize as directories; staged deletions can vanish entirely. Only
+  // regular files have readable contents.
+  return paths.flatMap((path) => {
+    try {
+      if (!lstatSync(path).isFile()) return [];
+      return [{ path, contents: readFileSync(path) }];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function main(): void {
