@@ -3576,6 +3576,32 @@ describe("ComputerManager withForegroundRestore", () => {
       await manager.dispose();
     }
   });
+
+  it("warns when the post-call read fails and the restore cannot run blind", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let actionDone = false;
+    backend.listWindows = async () => {
+      if (!actionDone) return terminalFirst;
+      throw new Error("listing wedged");
+    };
+    try {
+      await manager.withForegroundRestore("thread-1", async () => {
+        actionDone = true;
+        return "typed";
+      });
+      // Whether the excursion stole the frontmost is unknown — that is the
+      // warn, not silence.
+      expect(warn).toHaveBeenCalledWith("[computer] foreground call left focus unverified", {
+        previousWindowId: "fake-terminal",
+      });
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+    } finally {
+      warn.mockRestore();
+      await manager.dispose();
+    }
+  });
 });
 
 describe("ComputerManager masked activation", () => {

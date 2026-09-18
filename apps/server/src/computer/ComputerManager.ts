@@ -461,9 +461,9 @@ export class ComputerManager {
    * The host-wide kill latch behind the physical Escape monitor. Unlike
    * `controlDisabled` it is not thread-scoped and no generation bump can age
    * it out: every mutating admission on every thread — pane input included —
-   * refuses until `rearmInput` runs the user's explicit re-arm. Set by the
-   * desktop's emergency-stop relay and cleared nowhere else, so a backend
-   * swapped in after the press still finds input closed.
+   * refuses until `rearmInput` runs the user's explicit re-arm. The epoch
+   * versions it so a press landing mid-rearm supersedes the re-arm instead
+   * of being cleared by it.
    */
   private escapeStopped = false;
   private escapeStopEpoch = 0;
@@ -2962,7 +2962,14 @@ export class ComputerManager {
           } catch {
             frontmost = undefined;
           }
-          if (frontmost !== undefined && frontmost !== null && frontmost !== previousId) {
+          if (frontmost === undefined) {
+            // The post-call read failed, so whether the excursion left the
+            // target raised is unknown — the restore cannot run blind, and
+            // a possibly stolen frontmost must not pass without a trace.
+            console.warn("[computer] foreground call left focus unverified", {
+              previousWindowId: previousId,
+            });
+          } else if (frontmost !== null && frontmost !== previousId) {
             try {
               assertDesktopOperationActive();
               await raise(previousId);
