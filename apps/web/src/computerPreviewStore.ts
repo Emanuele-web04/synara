@@ -32,6 +32,12 @@ interface ComputerPreviewStore {
    * card) and the fitted card width (so the content inset matches it).
    */
   previewLayoutByThreadId: Record<string, ComputerPreviewLayout | undefined>;
+  /**
+   * Detached card position per thread, in viewport CSS pixels. A thread with
+   * an entry renders the preview as a draggable floating card instead of in
+   * the rail; the rail then reserves no gutter for it.
+   */
+  floatingByThreadId: Record<string, ComputerPreviewFloatingPosition | undefined>;
   /** `computer.open-pane-requested` arrived for this thread's own lease. */
   requestPreviewSurface: (threadId: ThreadId) => void;
   /** Any thread-state write (push or seed); edges are detected inside. */
@@ -44,6 +50,16 @@ interface ComputerPreviewStore {
   hidePreviewForTask: (threadId: ThreadId) => void;
   /** The mounted card's live footprint; identity-stable when unchanged. */
   notePreviewLayout: (threadId: ThreadId, layout: ComputerPreviewLayout) => void;
+  /**
+   * Detach the card at `position` (viewport px), or re-dock it in the rail
+   * when `position` is null. Clearing also happens on session removal.
+   */
+  setPreviewFloating: (
+    threadId: ThreadId,
+    position: ComputerPreviewFloatingPosition | null,
+  ) => void;
+  /** Drag update for a detached card; a no-op while the thread is docked. */
+  movePreviewFloating: (threadId: ThreadId, position: ComputerPreviewFloatingPosition) => void;
   removePreviewSession: (threadId: ThreadId) => void;
   clear: () => void;
 }
@@ -51,6 +67,14 @@ interface ComputerPreviewStore {
 export interface ComputerPreviewLayout {
   readonly hasFrame: boolean;
   readonly width: number;
+  /** True while the card floats detached; the rail reserves no inset for it. */
+  readonly floating?: boolean | undefined;
+}
+
+/** Top-left of a detached card in viewport CSS pixels. */
+export interface ComputerPreviewFloatingPosition {
+  readonly x: number;
+  readonly y: number;
 }
 
 function sessionWithPhase(
@@ -87,6 +111,7 @@ export const useComputerPreviewStore = create<ComputerPreviewStore>()((set) => (
   sessionsByThreadId: {},
   agentActiveByThreadId: {},
   previewLayoutByThreadId: {},
+  floatingByThreadId: {},
   requestPreviewSurface: (threadId) =>
     set((current) => updateSessionPhase(current, threadId, computerPreviewPhaseOnSurfaceRequest)),
   noteThreadComputerState: (state) =>
@@ -128,7 +153,11 @@ export const useComputerPreviewStore = create<ComputerPreviewStore>()((set) => (
   notePreviewLayout: (threadId, layout) =>
     set((current) => {
       const previous = current.previewLayoutByThreadId[threadId];
-      if (previous?.hasFrame === layout.hasFrame && previous?.width === layout.width) {
+      if (
+        previous?.hasFrame === layout.hasFrame &&
+        previous?.width === layout.width &&
+        previous?.floating === layout.floating
+      ) {
         return current;
       }
       return {
@@ -136,12 +165,43 @@ export const useComputerPreviewStore = create<ComputerPreviewStore>()((set) => (
         previewLayoutByThreadId: { ...current.previewLayoutByThreadId, [threadId]: layout },
       };
     }),
+  setPreviewFloating: (threadId, position) =>
+    set((current) => {
+      if (position === null) {
+        if (!Object.hasOwn(current.floatingByThreadId, threadId)) {
+          return current;
+        }
+        const floatingByThreadId = { ...current.floatingByThreadId };
+        delete floatingByThreadId[threadId];
+        return { ...current, floatingByThreadId };
+      }
+      const previous = current.floatingByThreadId[threadId];
+      if (previous?.x === position.x && previous?.y === position.y) {
+        return current;
+      }
+      return {
+        ...current,
+        floatingByThreadId: { ...current.floatingByThreadId, [threadId]: position },
+      };
+    }),
+  movePreviewFloating: (threadId, position) =>
+    set((current) => {
+      const previous = current.floatingByThreadId[threadId];
+      if (previous === undefined || (previous.x === position.x && previous.y === position.y)) {
+        return current;
+      }
+      return {
+        ...current,
+        floatingByThreadId: { ...current.floatingByThreadId, [threadId]: position },
+      };
+    }),
   removePreviewSession: (threadId) =>
     set((current) => {
       const hasSession = Object.hasOwn(current.sessionsByThreadId, threadId);
       const hasActive = Object.hasOwn(current.agentActiveByThreadId, threadId);
       const hasLayout = Object.hasOwn(current.previewLayoutByThreadId, threadId);
-      if (!hasSession && !hasActive && !hasLayout) {
+      const hasFloating = Object.hasOwn(current.floatingByThreadId, threadId);
+      if (!hasSession && !hasActive && !hasLayout && !hasFloating) {
         return current;
       }
       const sessionsByThreadId = { ...current.sessionsByThreadId };
@@ -150,10 +210,23 @@ export const useComputerPreviewStore = create<ComputerPreviewStore>()((set) => (
       delete agentActiveByThreadId[threadId];
       const previewLayoutByThreadId = { ...current.previewLayoutByThreadId };
       delete previewLayoutByThreadId[threadId];
-      return { ...current, sessionsByThreadId, agentActiveByThreadId, previewLayoutByThreadId };
+      const floatingByThreadId = { ...current.floatingByThreadId };
+      delete floatingByThreadId[threadId];
+      return {
+        ...current,
+        sessionsByThreadId,
+        agentActiveByThreadId,
+        previewLayoutByThreadId,
+        floatingByThreadId,
+      };
     }),
   clear: () =>
-    set({ sessionsByThreadId: {}, agentActiveByThreadId: {}, previewLayoutByThreadId: {} }),
+    set({
+      sessionsByThreadId: {},
+      agentActiveByThreadId: {},
+      previewLayoutByThreadId: {},
+      floatingByThreadId: {},
+    }),
 }));
 
 export function selectThreadComputerPreviewSession(
@@ -166,4 +239,10 @@ export function selectThreadComputerPreviewLayout(
   threadId: ThreadId,
 ): (store: ComputerPreviewStore) => ComputerPreviewLayout | undefined {
   return (store) => store.previewLayoutByThreadId[threadId];
+}
+
+export function selectThreadComputerPreviewFloating(
+  threadId: ThreadId,
+): (store: ComputerPreviewStore) => ComputerPreviewFloatingPosition | undefined {
+  return (store) => store.floatingByThreadId[threadId];
 }

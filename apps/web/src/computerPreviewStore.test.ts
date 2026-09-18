@@ -186,3 +186,46 @@ describe("notePreviewLayout", () => {
     expect(useComputerPreviewStore.getState().previewLayoutByThreadId).toEqual({});
   });
 });
+
+describe("preview floating", () => {
+  const floatingOf = (threadId: ThreadId) =>
+    useComputerPreviewStore.getState().floatingByThreadId[threadId];
+
+  it("detaches, drags, and re-docks per thread", () => {
+    const store = useComputerPreviewStore.getState();
+    store.setPreviewFloating(THREAD_A, { x: 100, y: 60 });
+    store.setPreviewFloating(THREAD_B, { x: 700, y: 40 });
+    expect(floatingOf(THREAD_A)).toEqual({ x: 100, y: 60 });
+    store.movePreviewFloating(THREAD_A, { x: 140, y: 92 });
+    expect(floatingOf(THREAD_A)).toEqual({ x: 140, y: 92 });
+    expect(floatingOf(THREAD_B)).toEqual({ x: 700, y: 40 });
+    store.setPreviewFloating(THREAD_A, null);
+    expect(floatingOf(THREAD_A)).toBeUndefined();
+    expect(floatingOf(THREAD_B)).toEqual({ x: 700, y: 40 });
+  });
+
+  it("preserves identity on no-op writes and ignores docked drags", () => {
+    const store = useComputerPreviewStore.getState();
+    store.movePreviewFloating(THREAD_A, { x: 10, y: 10 });
+    expect(floatingOf(THREAD_A)).toBeUndefined();
+    store.setPreviewFloating(THREAD_A, { x: 100, y: 60 });
+    const first = floatingOf(THREAD_A);
+    store.setPreviewFloating(THREAD_A, { x: 100, y: 60 });
+    store.movePreviewFloating(THREAD_A, { x: 100, y: 60 });
+    expect(floatingOf(THREAD_A)).toBe(first);
+    store.setPreviewFloating(THREAD_A, null);
+    store.setPreviewFloating(THREAD_A, null);
+    expect(floatingOf(THREAD_A)).toBeUndefined();
+  });
+
+  it("drops the floating position with the session and on clear", () => {
+    const store = useComputerPreviewStore.getState();
+    store.setPreviewFloating(THREAD_A, { x: 1, y: 2 });
+    store.setPreviewFloating(THREAD_B, { x: 3, y: 4 });
+    store.removePreviewSession(THREAD_A);
+    expect(floatingOf(THREAD_A)).toBeUndefined();
+    expect(floatingOf(THREAD_B)).toEqual({ x: 3, y: 4 });
+    store.clear();
+    expect(useComputerPreviewStore.getState().floatingByThreadId).toEqual({});
+  });
+});
