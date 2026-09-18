@@ -224,6 +224,7 @@ import {
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
 import { RenameDialog } from "./RenameDialog";
+import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
@@ -492,6 +493,7 @@ type ProjectContextMenuId =
   | "open-in-finder"
   | "open-in-kanban"
   | "copy-path"
+  | "relocate"
   | "start-dev"
   | "stop-dev"
   | "open-dev-server"
@@ -1600,6 +1602,7 @@ export default function Sidebar() {
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
+  const [relocateProjectDialogId, setRelocateProjectDialogId] = useState<ProjectId | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
   // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
@@ -3578,6 +3581,10 @@ export default function Sidebar() {
       }
       if (clicked === "open-dev-server") {
         await handleOpenProjectRunServer(projectId);
+        return;
+      }
+      if (clicked === "relocate") {
+        setRelocateProjectDialogId(projectId);
         return;
       }
       if (clicked === "rename") {
@@ -5903,6 +5910,9 @@ export default function Sidebar() {
       {headerControls}
     </div>
   );
+  const relocateProjectDialogProject = relocateProjectDialogId
+    ? (projectById.get(relocateProjectDialogId) ?? null)
+    : null;
   const renameProjectDialogProject = renameProjectDialogId
     ? (projectById.get(renameProjectDialogId) ?? null)
     : null;
@@ -6718,6 +6728,15 @@ export default function Sidebar() {
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                 onClick={() =>
+                  void handleProjectContextMenuAction(projectContextMenuState.projectId, "relocate")
+                }
+              >
+                <ProjectContextMenuIcon icon={FolderOpenIcon} />
+                <span>Change project path…</span>
+              </MenuItem>
+              <MenuItem
+                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() =>
                   void handleProjectContextMenuAction(
                     projectContextMenuState.projectId,
                     "toggle-pin",
@@ -6884,6 +6903,16 @@ export default function Sidebar() {
           void commitRename(target.id, newTitle, target.title);
         }}
       />
+
+      {relocateProjectDialogProject ? (
+        <RelocateProjectDialog
+          projectId={relocateProjectDialogProject.id}
+          workspaceRoot={relocateProjectDialogProject.cwd}
+          onOpenChange={(open) => {
+            if (!open) setRelocateProjectDialogId(null);
+          }}
+        />
+      ) : null}
 
       <RenameDialog
         open={renameProjectDialogId !== null && renameProjectDialogProject !== null}

@@ -35,6 +35,7 @@ import {
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { withProjectRelocationEvents } from "./projectRelocation.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
@@ -974,7 +975,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         wasPinned: existingProject.isPinned === true,
       });
       const occurredAt = nowIso();
-      return {
+      const event = {
         ...withEventBase({
           aggregateKind: "project",
           aggregateId: command.projectId,
@@ -995,7 +996,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
           updatedAt: occurredAt,
         },
-      };
+      } satisfies Omit<Extract<OrchestrationEvent, { type: "project.meta-updated" }>, "sequence">;
+      return yield* withProjectRelocationEvents({
+        event,
+        previousProject: existingProject,
+        readModel,
+      });
     }
 
     case "project.delete": {

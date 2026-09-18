@@ -1,3 +1,4 @@
+import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
 // FILE: ProviderCommandReactor.ts
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
@@ -1795,6 +1796,23 @@ const make = Effect.gen(function* () {
 
     // Only reuse projected session state when the runtime still has a live session to attach to.
     const activeSessionBeforeEnsure = yield* resolveActiveSession(threadId);
+    const workspaceChanged =
+      activeSessionBeforeEnsure !== undefined &&
+      providerWorkspaceChanged(activeSessionBeforeEnsure.cwd, effectiveCwd);
+    // Background tasks may share the old process. Never kill them merely to
+    // apply a project relocation, including when metadata cleared the projection.
+    if (
+      workspaceChanged &&
+      providerService.hasLiveRuntimeTasks &&
+      (yield* providerService.hasLiveRuntimeTasks({ threadId }))
+    ) {
+      return yield* new ProviderAdapterValidationError({
+        provider: preferredProvider,
+        operation: "thread.turn.start",
+        issue:
+          "Finish or stop this thread's background tasks before resuming in the new project path.",
+      });
+    }
     const reusableSession =
       thread.session && thread.session.status !== "stopped" ? activeSessionBeforeEnsure : undefined;
     if (reusableSession) {
@@ -1834,6 +1852,7 @@ const make = Effect.gen(function* () {
       if (
         !runtimeModeChanged &&
         !providerChanged &&
+        !workspaceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange
       ) {
@@ -1859,12 +1878,19 @@ const make = Effect.gen(function* () {
         desiredRuntimeMode,
         runtimeModeChanged,
         providerChanged,
+        workspaceChanged,
         modelChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
-      const restartedOutcome = yield* startProviderSessionWithOutcome(resumeCursor);
+      // Keep the provider cursor when only cwd changes. The existing lifecycle
+      // proves teardown before replacement and persists transcript fallback when
+      // a provider cannot restore its native context at the new location.
+      const restartedOutcome = yield* startProviderSessionWithOutcome(
+        resumeCursor,
+        workspaceChanged && shouldRegisterContextBootstrap,
+      );
       const restartedSession = restartedOutcome.session;
       if (
         shouldRegisterContextBootstrap &&

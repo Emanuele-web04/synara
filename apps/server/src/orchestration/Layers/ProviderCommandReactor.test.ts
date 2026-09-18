@@ -335,6 +335,7 @@ describe("ProviderCommandReactor", () => {
           ? { model: sessionModelSelection.model }
           : {}),
         threadId,
+        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         resumeCursor: resumeCursor ?? { opaque: `resume-${sessionIndex}` },
         createdAt: now,
         updatedAt: now,
@@ -407,6 +408,7 @@ describe("ProviderCommandReactor", () => {
         runtimeMode: "full-access",
         threadId,
         resumeCursor: { opaque: "resume-synthetic" },
+        cwd: "/tmp/provider-project",
         createdAt: now,
         updatedAt: now,
       };
@@ -11461,6 +11463,90 @@ describe("ProviderCommandReactor", () => {
       },
     });
   });
+
+  it.each([false, true])(
+    "preserves the native cursor when relocating a project (background tasks: %s)",
+    async (backgroundTasks) => {
+      const modelSelection: ModelSelection = {
+        provider: "claudeAgent",
+        model: "claude-sonnet-4-6",
+      };
+      const harness = await createHarness({ threadModelSelection: modelSelection });
+      const threadId = ThreadId.makeUnsafe("thread-1");
+      const now = new Date().toISOString();
+      const original = await Effect.runPromise(
+        harness.startSession(threadId, {
+          threadId,
+          provider: "claudeAgent",
+          modelSelection,
+          runtimeMode: "approval-required",
+          cwd: "/tmp/provider-project",
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("seed-relocation-session"),
+          threadId,
+          createdAt: now,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("relocate-project"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          workspaceRoot: "/tmp/restored-provider-project",
+        }),
+      );
+      harness.hasLiveRuntimeTasks.mockImplementation(() => Effect.succeed(backgroundTasks));
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("resume-relocated-thread"),
+          threadId,
+          message: {
+            messageId: asMessageId("message-relocated"),
+            role: "user",
+            text: "Continue our existing work",
+            attachments: [],
+          },
+          runtimeMode: "approval-required",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          createdAt: now,
+        }),
+      );
+      if (backgroundTasks) {
+        await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+        expect((await readHarnessThread(harness))?.session?.lastError).toContain(
+          "background tasks",
+        );
+        expect(harness.startSession).toHaveBeenCalledTimes(1);
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        expect(harness.startSession).toHaveBeenCalledTimes(2);
+        expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+          threadId,
+          cwd: "/tmp/restored-provider-project",
+          resumeCursor: original.resumeCursor,
+        });
+        expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({ threadId });
+        expect((await readHarnessThread(harness))?.id).toBe(threadId);
+      }
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+    },
+  );
 
   it("restarts an idle Claude session only for spawn-fixed model selection changes", async () => {
     const harness = await createHarness({
