@@ -26,6 +26,7 @@ import {
   ComputerBackendError,
   DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION,
   intersectComputerRects,
+  type ComputerAgentDialect,
   type ComputerBackend,
   type ComputerBackendActionResult,
   type ComputerBackendEvent,
@@ -36,6 +37,7 @@ import {
   type ComputerCaptureRequest,
   type ComputerFrameListener,
   type ComputerResolvedTarget,
+  type ComputerShieldTarget,
   type ComputerStreamFrame,
   type ComputerTextRange,
 } from "./ComputerBackend.ts";
@@ -135,6 +137,21 @@ export interface FakeComputerBackendOptions {
             readonly waitedMs: number;
             readonly eventsSeen?: number;
           }>);
+  /**
+   * Opts the fake into the activation-shield surface. `true` answers every
+   * `engageShield` with the caller's id; a function answers engages itself,
+   * so a test can refuse or wedge the way a real host can. Absent or `false`
+   * means the backend has no shield surface — the methods stay undefined,
+   * which is what makes an armed masked-activation flag fail closed.
+   */
+  readonly shield?: boolean | ((target: ComputerShieldTarget) => void | Promise<void>);
+  /**
+   * What the fake reports as its input dialect. The real CUA backend reports
+   * `"macos"`; the fake defaults to absent (the manager reads that as
+   * `"linux"`) so existing fixtures keep their dialect-gated behavior, and a
+   * test that needs the macOS paths — masked activation among them — opts in.
+   */
+  readonly agentDialect?: ComputerAgentDialect;
 }
 
 export class FakeComputerBackend implements ComputerBackend {
@@ -177,6 +194,18 @@ export class FakeComputerBackend implements ComputerBackend {
    * present-or-absent, never undefined.
    */
   readonly waitForSettle?: NonNullable<ComputerBackend["waitForSettle"]>;
+  /**
+   * Present only when `options.shield` opted the fake into the shield
+   * surface — exactly like a real backend that either exposes the host's
+   * shield command or does not. Engage still echoes the caller's id back:
+   * the manager mints it, so a fake that "lost the reply" is simulated with
+   * `failNext("engageShield")`, not by withholding the id.
+   */
+  readonly engageShield?: NonNullable<ComputerBackend["engageShield"]>;
+  readonly releaseShield?: NonNullable<ComputerBackend["releaseShield"]>;
+  readonly releaseAllShields?: NonNullable<ComputerBackend["releaseAllShields"]>;
+  private liveShields = new Set<string>();
+  readonly agentDialect?: ComputerAgentDialect;
 
   constructor(options: FakeComputerBackendOptions = {}) {
     this.computerId = (options.computerId ?? "desktop") as ComputerId;
@@ -196,6 +225,7 @@ export class FakeComputerBackend implements ComputerBackend {
     this.currentApps = [...(options.apps ?? defaultApps(this.currentWindows))];
     this.currentRoot = options.root ?? defaultRoot(this.currentScreenSize, this.currentWindows);
     this.now = options.now ?? (() => new Date().toISOString());
+    if (options.agentDialect) this.agentDialect = options.agentDialect;
     if (options.browser) {
       const handler = typeof options.browser === "function" ? options.browser : undefined;
       this.browser = {
@@ -229,6 +259,25 @@ export class FakeComputerBackend implements ComputerBackend {
             message: `No desktop window has id ${JSON.stringify(settleOptions.windowId)}.`,
           });
         return (await handler?.(settleOptions)) ?? { settled: true, waitedMs: 0 };
+      };
+    }
+    if (options.shield) {
+      const handler = typeof options.shield === "function" ? options.shield : undefined;
+      this.engageShield = async (target) => {
+        this.record("engageShield", target);
+        this.throwIfFailed("engageShield");
+        await handler?.(target);
+        this.liveShields.add(target.shieldId);
+        return target.shieldId;
+      };
+      this.releaseShield = async (shieldId) => {
+        this.record("releaseShield", shieldId);
+        this.throwIfFailed("releaseShield");
+        this.liveShields.delete(shieldId);
+      };
+      this.releaseAllShields = async () => {
+        this.record("releaseAllShields");
+        this.liveShields.clear();
       };
     }
   }
@@ -904,6 +953,15 @@ export class FakeComputerBackend implements ComputerBackend {
 
   callsFor(method: string): readonly FakeComputerCall[] {
     return this.calls.filter((call) => call.method === method);
+  }
+
+  /**
+   * The shield ids the fake still considers up: engage adds, release removes.
+   * Lets a test prove a stranded shield was actually cleaned rather than
+   * trusting the call log alone.
+   */
+  activeShields(): readonly string[] {
+    return [...this.liveShields];
   }
 
   private captureRect(request: ComputerCaptureRequest): ComputerRect {

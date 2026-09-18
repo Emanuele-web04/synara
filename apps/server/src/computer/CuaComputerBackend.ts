@@ -48,6 +48,7 @@ import {
   type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
   type ComputerFrameListener,
+  type ComputerShieldTarget,
   type ComputerResolvedTarget,
   type ComputerTextRange,
   type ComputerBackendEventListener,
@@ -2204,6 +2205,115 @@ export class CuaComputerBackend implements ComputerBackend {
     // Task-owned grounding ends with the task: a revoked task's window pixels
     // must not ground a later claim, so the next input re-observes first.
     this.observedGeometry.clear();
+  }
+  /**
+   * The masked-activation shield, answered by the GUI host itself — the
+   * driver never sees these requests. Engage deliberately bypasses
+   * {@link host}: it runs inside the activation call's serialized slot
+   * already, and its failure must refuse that call rather than be queued
+   * behind it. The request is bounded tighter than an ordinary host call —
+   * a shield that cannot confirm in five seconds is a wedged helper, and the
+   * activation it gates must refuse.
+   *
+   * `mutation: true` because a lost engage reply is dispatched-unknown: the
+   * shield may be up. The server-minted `shield_id` survives exactly that
+   * case — the caller releases by id even when the reply never arrived.
+   */
+  async engageShield(target: ComputerShieldTarget): Promise<string> {
+    if (this.disposed || !this.endpoint)
+      throw new CuaActionError(
+        "Open this session in the Synara macOS desktop app to use Computer.",
+        "not-dispatched",
+        "gui_host_required",
+      );
+    assertDesktopOperationActive();
+    const match = /^cua:([1-9]\d*):([1-9]\d*)$/.exec(target.windowId);
+    if (!match)
+      throw new CuaActionError(
+        `The activation shield cannot cover window ${target.windowId}: it is not a native window id.`,
+        "not-dispatched",
+        "invalid_target",
+      );
+    const task = currentComputerTask();
+    if (task) {
+      // Same attribution the `call` path records: the host's end_task reply
+      // releases shields by it, so a task ending mid-engage still cleans up.
+      const key = cuaComputerTaskKey(task);
+      if (this.previewTasks.has(key)) this.previewTasks.delete(key);
+      this.previewTasks.set(key, task);
+    }
+    try {
+      const reply = await timedComputerLeg("host", () =>
+        this.request<CuaReply>(
+          this.endpoint!,
+          {
+            method: "shield",
+            ...(task ? { task } : {}),
+            args: {
+              action: "engage",
+              shield_id: target.shieldId,
+              frame: target.frame,
+              window_id: Number(match[2]),
+              pid: Number(match[1]),
+              label: target.label,
+            },
+            capability: this.capability,
+          },
+          { signal: desktopOperationSignal(), mutation: true, timeoutMs: 5_000 },
+        ),
+      );
+      if (!reply.ok)
+        throw new CuaActionError(
+          reply.error ?? "The activation shield was refused.",
+          "not-dispatched",
+          "mask_unavailable",
+        );
+      return target.shieldId;
+    } catch (error) {
+      if (error instanceof CuaTransportError)
+        throw new CuaActionError(error.message, error.effect, "mask_unavailable");
+      throw error;
+    }
+  }
+  /**
+   * Release paths ride `request` directly — never the operation signal — so
+   * they still land while their own operation is being cancelled. That is
+   * the whole point: a shield outlives nothing.
+   */
+  async releaseShield(shieldId: string): Promise<void> {
+    if (!this.endpoint || this.disposed) return;
+    const reply = await this.request<CuaReply>(
+      this.endpoint,
+      {
+        method: "shield",
+        args: { action: "release", shield_id: shieldId },
+        capability: this.capability,
+      },
+      { timeoutMs: 5_000 },
+    );
+    if (!reply.ok)
+      throw new CuaActionError(
+        reply.error ?? "The activation shield did not release.",
+        "not-dispatched",
+      );
+  }
+  /** The forced-release escape hatch; safe in every host state. */
+  async releaseAllShields(): Promise<void> {
+    if (!this.endpoint || this.disposed) return;
+    const reply = await this.request<CuaReply>(
+      this.endpoint,
+      {
+        method: "shield",
+        args: { action: "release_all" },
+        capability: this.capability,
+      },
+      { timeoutMs: 5_000 },
+    );
+    if (!reply.ok)
+      throw new CuaActionError(
+        reply.error ?? "The activation shields did not release.",
+        "not-dispatched",
+      );
   }
   /**
    * The CDP browser surface. Present whenever this backend exists — the GUI

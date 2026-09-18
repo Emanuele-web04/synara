@@ -50,6 +50,14 @@ async function fixture(
       stop: () => Promise<void>;
       dispose: () => Promise<void>;
     };
+    shield?: {
+      engage: (request: unknown, task?: unknown) => Promise<void>;
+      release: (shieldId: string) => Promise<void>;
+      releaseAll: () => Promise<number>;
+      endTask: (task: unknown) => Promise<void>;
+      stop: () => Promise<void>;
+      dispose: () => Promise<void>;
+    };
     listWindows?: Array<Record<string, unknown>>;
   } = {},
 ) {
@@ -132,6 +140,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
     ...(options.checkPermissions ? { checkPermissions: options.checkPermissions } : {}),
     ...(options.releaseHeldInput ? { releaseHeldInput: options.releaseHeldInput } : {}),
     ...(options.frameTap ? { frameTap: options.frameTap } : {}),
+    ...(options.shield ? { shield: options.shield } : {}),
     ...(options.startupTimeoutMs ? { startupTimeoutMs: options.startupTimeoutMs } : {}),
   });
   const events = async () =>
@@ -1254,5 +1263,186 @@ describe("browser surface", () => {
       cuaRequest(f.endpoint, { method: "end_browser_thread", task }),
     ).resolves.toMatchObject({ ok: true });
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("activation shield host method", () => {
+  const task = { threadId: "thread", turnId: "turn" };
+  const engageArgs = {
+    action: "engage",
+    shield_id: "shield-abc123",
+    frame: { x: 100, y: 50, width: 400, height: 300 },
+    window_id: 4242,
+    pid: 777,
+    label: "Synara activating Calculator",
+  };
+  const recordingShield = () => {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    return {
+      calls,
+      engage: async (request: unknown, shieldTask?: unknown) => {
+        calls.push({ method: "engage", args: [request, shieldTask] });
+      },
+      release: async (shieldId: string) => {
+        calls.push({ method: "release", args: [shieldId] });
+      },
+      releaseAll: async () => {
+        calls.push({ method: "releaseAll", args: [] });
+        return calls.filter((call) => call.method === "engage").length;
+      },
+      endTask: async (ended: unknown) => {
+        calls.push({ method: "endTask", args: [ended] });
+      },
+      stop: async () => {
+        calls.push({ method: "stop", args: [] });
+      },
+      dispose: async () => {
+        calls.push({ method: "dispose", args: [] });
+      },
+    };
+  };
+
+  it("routes engage to the shield host with parsed args and task attribution", async () => {
+    const shield = recordingShield();
+    const f = await fixture(capability, { shield });
+    const reply = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "shield",
+      task,
+      args: engageArgs,
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.result).toMatchObject({ engaged: true, shield_id: "shield-abc123" });
+    expect(shield.calls).toHaveLength(1);
+    const call = shield.calls[0]!;
+    expect(call.method).toBe("engage");
+    expect(call.args[0]).toEqual({
+      shieldId: "shield-abc123",
+      frame: { x: 100, y: 50, width: 400, height: 300 },
+      windowId: 4242,
+      pid: 777,
+      label: "Synara activating Calculator",
+    });
+    expect(call.args[1]).toEqual(task);
+    // A shield engage is host-local: no driver generation was ever started.
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses engage when no shield surface is configured", async () => {
+    const f = await fixture();
+    const reply = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "shield",
+      task,
+      args: engageArgs,
+    });
+    expect(reply.ok).toBe(false);
+    expect(reply.error).toContain("not available");
+    expect(reply.effect).toBe("not-dispatched");
+  });
+
+  it("refuses engage while the desktop is paused but still accepts release", async () => {
+    const shield = recordingShield();
+    const f = await fixture(capability, { shield });
+    await f.host.pauseDesktop("screen-lock");
+    try {
+      const reply = await cuaRequest<CuaReply>(f.endpoint, {
+        method: "shield",
+        task,
+        args: engageArgs,
+      });
+      expect(reply.ok).toBe(false);
+      expect(reply.error).toContain("paused");
+      // Teardown is never gated on the pause.
+      await expect(
+        cuaRequest<CuaReply>(f.endpoint, {
+          method: "shield",
+          args: { action: "release", shield_id: "shield-abc123" },
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(shield.calls.map((call) => call.method)).toEqual(["stop", "release"]);
+    } finally {
+      f.host.resumeDesktop("screen-lock");
+    }
+  });
+
+  it("rejects malformed shield args before touching the surface", async () => {
+    const shield = recordingShield();
+    const f = await fixture(capability, { shield });
+    for (const args of [
+      { action: "engage", shield_id: "bad id with spaces" },
+      {
+        action: "engage",
+        shield_id: "shield-1",
+        frame: { x: 0, y: 0, width: -4, height: 4 },
+        window_id: 1,
+        pid: 1,
+      },
+      {
+        action: "engage",
+        shield_id: "shield-1",
+        frame: { x: 0, y: 0, width: 4, height: 4 },
+        window_id: 0,
+        pid: 1,
+      },
+      { action: "release" },
+      { action: "detonate" },
+      "engage",
+    ]) {
+      const reply = await cuaRequest<CuaReply>(f.endpoint, { method: "shield", task, args });
+      expect(reply.ok).toBe(false);
+      expect(reply.effect).toBe("not-dispatched");
+    }
+    expect(shield.calls).toHaveLength(0);
+  });
+
+  it("release_all is the forced-release path and reports the live count", async () => {
+    const shield = recordingShield();
+    const f = await fixture(capability, { shield });
+    await cuaRequest<CuaReply>(f.endpoint, { method: "shield", task, args: engageArgs });
+    const reply = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "shield",
+      args: { action: "release_all" },
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.result).toMatchObject({ released: 1 });
+    expect(shield.calls.map((call) => call.method)).toEqual(["engage", "releaseAll"]);
+  });
+
+  it("end_task releases the task's shields", async () => {
+    const shield = recordingShield();
+    const f = await fixture(capability, { shield });
+    await cuaRequest<CuaReply>(f.endpoint, {
+      method: "end_task",
+      task,
+    });
+    expect(shield.calls.map((call) => call.method)).toEqual(["endTask"]);
+    expect(shield.calls[0]!.args[0]).toEqual(task);
+  });
+
+  it("stop and dispose release the whole shield surface", async () => {
+    const shield = recordingShield();
+    const f = await fixture(capability, { shield });
+    await f.host.stop();
+    expect(shield.calls.map((call) => call.method)).toContain("stop");
+  });
+
+  it("shield requests still require host authority", async () => {
+    const f = await fixture();
+    const socket = createConnection(f.endpoint);
+    const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      socket.once("connect", () => {
+        socket.write(JSON.stringify({ method: "shield", args: { action: "release_all" } }) + "\n");
+      });
+      socket.once("data", (chunk) => {
+        try {
+          resolve(JSON.parse(chunk.toString()));
+        } catch (error) {
+          reject(error);
+        }
+      });
+      socket.once("error", reject);
+    });
+    socket.destroy();
+    expect(reply.ok).toBe(false);
+    expect(String(reply.error)).toContain("authority");
   });
 });

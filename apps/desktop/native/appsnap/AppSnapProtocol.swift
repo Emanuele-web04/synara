@@ -21,6 +21,9 @@ enum AppSnapMode {
         ownerPID: pid_t?,
         socketPath: String
     )
+    /// Masked-activation shield host: reads engage/release commands on stdin
+    /// and owns the Synara-side overlay panels for their lease's lifetime.
+    case shield
 }
 
 struct AppSnapOptions {
@@ -66,7 +69,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--release-held-input", "--watch", "--permission-guide", "--computer-frames":
+            case "--check-permissions", "--request-permissions", "--release-held-input", "--watch", "--permission-guide", "--computer-frames", "--shield":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -216,10 +219,19 @@ struct AppSnapOptions {
                     socketPath: socketPath
                 )
             )
+        case "--shield":
+            try rejectWatchArguments("The activation shield does not accept watch arguments.")
+            guard permissions.isEmpty else {
+                throw AppSnapFailure(
+                    code: "invalid_arguments",
+                    message: "--shield does not accept permission selectors."
+                )
+            }
+            return AppSnapOptions(mode: .shield)
         default:
             throw AppSnapFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, --release-held-input, --watch, --permission-guide, or --computer-frames."
+                message: "Expected --check-permissions, --request-permissions, --release-held-input, --watch, --permission-guide, --computer-frames, or --shield."
             )
         }
     }

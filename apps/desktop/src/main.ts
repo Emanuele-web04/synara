@@ -1,5 +1,6 @@
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
 import { ComputerFrameTap } from "./computerFrameTap";
+import { ComputerShield } from "./computerShield";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
@@ -3656,6 +3657,15 @@ async function startCuaHost(): Promise<void> {
         }
       },
       onError: (error) => safeConsoleError("[desktop] computer frame tap failed", error),
+    }),
+    // The masked-activation shield host: same AppSnap helper binary, its own
+    // long-lived process, lazily spawned on the first engage. Always wired —
+    // the server decides per call whether the armed flag + per-app opt-in
+    // name a masked activation, and a missing surface must fail closed there
+    // rather than degrade to an unmasked raise.
+    shield: new ComputerShield({
+      helperPath: resolveAppSnapHelperPath(),
+      onError: (error) => safeConsoleError("[desktop] computer shield failed", error),
     }),
     normalizeOverview: (result) => {
       const image = result.content?.find((part) => part.type === "image" && part.data);

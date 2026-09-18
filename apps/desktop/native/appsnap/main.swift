@@ -52,6 +52,30 @@ do {
         withExtendedLifetime((coordinator, gestureSource, requestListener, parentProcessMonitor)) {
             RunLoop.main.run()
         }
+    case .shield:
+        _ = NSApplication.shared.setActivationPolicy(.accessory)
+
+        let (controller, requestListener, parentProcessMonitor): (
+            ActivationShieldController, ShieldCommandListener, ParentProcessMonitor
+        ) = MainActor.assumeIsolated {
+            let controller = ActivationShieldController(emitter: emitter)
+            controller.start()
+            let requestListener = ShieldCommandListener(
+                emitter: emitter,
+                controller: controller
+            )
+            let parentProcessMonitor = ParentProcessMonitor()
+            parentProcessMonitor.start()
+            requestListener.start()
+            return (controller, requestListener, parentProcessMonitor)
+        }
+
+        // NSApplication.run() pumps the run loop the shield's timers, the
+        // workspace/screen observers, and the best-effort Escape monitor all
+        // ride — the same reason the permission guide uses it.
+        withExtendedLifetime((controller, requestListener, parentProcessMonitor)) {
+            NSApplication.shared.run()
+        }
     case let .computerFrames(windowID, ownerPID, socketPath):
         _ = NSApplication.shared.setActivationPolicy(.accessory)
 
