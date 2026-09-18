@@ -15,6 +15,8 @@
 //   space-ctl add <spaceId> <wid> [...]    probe: add windows to a Space
 //   space-ctl remove <spaceId> <wid> [...] probe: remove windows from a Space
 //   space-ctl set-current <spaceId>        probe: switch the active Space
+//   space-ctl set-current-instant <id>     switch without the slide animation
+//                                        (SLSDisableUpdate/SLSReenableUpdate)
 //
 // Exit codes: 0 ok, 1 usage/arg error, 2 call returned an error or the
 // post-call read-back did not confirm the requested state.
@@ -51,6 +53,7 @@ typedef uint64_t (*SpaceCreate)(int, uint32_t, uint32_t);
 typedef int (*SpaceDestroy)(int, uint64_t);
 typedef int (*SpaceGetType)(int, uint64_t);
 typedef void (*ShowSpaces)(int, CFArrayRef);
+typedef void (*UpdateGate)(int);
 
 static IntVoid cgs_cid;
 static CopyManaged copy_managed;
@@ -67,6 +70,8 @@ static SpaceCreate space_create;
 static SpaceDestroy space_destroy;
 static SpaceGetType space_get_type;
 static ShowSpaces show_spaces;
+static UpdateGate disable_update;
+static UpdateGate reenable_update;
 
 static int load(void *sky) {
   cgs_cid = (IntVoid)dlsym(sky, "CGSMainConnectionID");
@@ -83,6 +88,8 @@ static int load(void *sky) {
   space_destroy = (SpaceDestroy)dlsym(sky, "SLSSpaceDestroy");
   space_get_type = (SpaceGetType)dlsym(sky, "SLSSpaceGetType");
   show_spaces = (ShowSpaces)dlsym(sky, "SLSShowSpaces");
+  disable_update = (UpdateGate)dlsym(sky, "SLSDisableUpdate");
+  reenable_update = (UpdateGate)dlsym(sky, "SLSReenableUpdate");
   copy_window_info = (CopyWindowInfo)dlsym(RTLD_DEFAULT, "CGWindowListCopyWindowInfo");
   return cgs_cid && copy_managed && spaces_for_windows;
 }
@@ -160,7 +167,7 @@ static void pump_events(void) {
 
 int main(int argc, char **argv) {
   setbuf(stdout, NULL);
-  if (argc < 2) { printf("usage: space-ctl list|all-spaces|active-space|windows|window-spaces|create-orphan|destroy|show|move|add|remove|set-current ...\n"); return 1; }
+  if (argc < 2) { printf("usage: space-ctl list|all-spaces|active-space|windows|window-spaces|create-orphan|destroy|show|move|add|remove|set-current|set-current-instant ...\n"); return 1; }
   void *sky = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW | RTLD_GLOBAL);
   if (!sky) { printf("SkyLight dlopen failed: %s\n", dlerror()); return 2; }
   if (!load(sky)) { printf("required symbols missing\n"); return 2; }
@@ -318,19 +325,26 @@ int main(int argc, char **argv) {
     return ok ? 0 : 2;
   }
 
-  if (!strcmp(cmd, "set-current")) {
+  if (!strcmp(cmd, "set-current") || !strcmp(cmd, "set-current-instant")) {
     if (argc < 3) return 1;
+    int instant = !strcmp(cmd, "set-current-instant");
     uint64_t target = strtoull(argv[2], NULL, 10);
     if (!target) return 1;
     if (!set_current || !copy_display_for_space || !get_active_space) { printf("set-current symbols missing\n"); return 2; }
+    if (instant && (!disable_update || !reenable_update)) { printf("instant symbols missing\n"); return 2; }
     CFStringRef uuid = copy_display_for_space(cid, target);
     if (!uuid) { printf("no display for space %llu\n", (unsigned long long)target); return 2; }
+    // SLSDisableUpdate suppresses the compositor's slide animation: the
+    // space change lands in a few ms instead of the ~0.3s animated sweep.
+    // Reenable must always run, or every later window update stalls.
+    if (instant) disable_update(cid);
     int rc = set_current(cid, uuid, target);
+    if (instant) reenable_update(cid);
     CFRelease(uuid);
     pump_events();
     uint64_t now = get_active_space(cid);
     int ok = rc == 0 && now == target;
-    printf("set-current rc=%d active=%llu verified=%d\n", rc, (unsigned long long)now, ok);
+    printf("set-current%s rc=%d active=%llu verified=%d\n", instant ? "-instant" : "", rc, (unsigned long long)now, ok);
     return ok ? 0 : 2;
   }
 

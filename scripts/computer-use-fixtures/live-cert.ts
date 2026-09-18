@@ -454,6 +454,19 @@ async function shieldPanels(): Promise<ShieldPanel[]> {
   return panels;
 }
 
+/** Switch the active Space — prefer the instant (animation-free) path, fall
+ * back to the animated `set-current` when the SLS update-gate symbols are
+ * absent. Returns the command's stdout for the `verified=1` check. */
+function switchSpace(spaceId: number | string): string {
+  for (const cmd of ["set-current-instant", "set-current"]) {
+    const out =
+      spawnSync(SPACE_CTL, [cmd, String(spaceId)], { encoding: "utf8" })
+        .stdout ?? "";
+    if (/verified=1/.test(out)) return out;
+  }
+  return "";
+}
+
 async function launchTextEdit(
   extra: string[] = [],
 ): Promise<number | undefined> {
@@ -1704,10 +1717,7 @@ end repeat`,
       } else {
         // Switch to the other desktop, launch there (window lands on it), act, switch back.
         const span = exemptStart();
-        const sw1 =
-          spawnSync(SPACE_CTL, ["set-current", String(other)], {
-            encoding: "utf8",
-          }).stdout ?? "";
+        const sw1 = switchSpace(other);
         let win: WinInfo | undefined;
         let writeOk = false;
         if (/verified=1/.test(sw1)) {
@@ -1729,10 +1739,7 @@ end repeat`,
                 `${SENTINEL}-space`;
           }
         }
-        const sw2 =
-          spawnSync(SPACE_CTL, ["set-current", String(active)], {
-            encoding: "utf8",
-          }).stdout ?? "";
+        const sw2 = switchSpace(active);
         exemptEnd(span);
         const back = /verified=1/.test(sw2);
         const ok = /verified=1/.test(sw1) && writeOk && back;
@@ -1784,9 +1791,9 @@ end repeat`,
         // either refused (stale/off-space) or verifiably delivered — never
         // a silent success claim that read-back contradicts.
         const span = exemptStart();
-        spawnSync(SPACE_CTL, ["set-current", String(other)]);
+        switchSpace(other);
         const pid = await launchTextEdit(["-g"]);
-        spawnSync(SPACE_CTL, ["set-current", String(active)]);
+        switchSpace(active);
         exemptEnd(span);
         const win = pid ? await windowOfPid(pid) : undefined;
         const res = win
@@ -1824,10 +1831,10 @@ end repeat`,
             // is inconclusive, switch to the window's Space and read there.
             if (replyOk(wr) && rb !== value) {
               const span2 = exemptStart();
-              spawnSync(SPACE_CTL, ["set-current", String(other)]);
+              switchSpace(other);
               await new Promise((r) => setTimeout(r, 1200));
               const rbOnSpace = await textAreaValue(win.pid, win.window_id);
-              spawnSync(SPACE_CTL, ["set-current", String(active)]);
+              switchSpace(active);
               await new Promise((r) => setTimeout(r, 800));
               exemptEnd(span2);
               honest = rbOnSpace === value;
