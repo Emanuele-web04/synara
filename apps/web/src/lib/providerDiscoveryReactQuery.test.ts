@@ -11,6 +11,7 @@ import {
   isInitialModelDiscoveryPending,
   prioritizeProviderModelDiscovery,
   providerModelsQueryOptions,
+  withProviderModelDiscoveryClientDeadline,
 } from "./providerDiscoveryReactQuery";
 import * as nativeApi from "../nativeApi";
 
@@ -59,6 +60,18 @@ describe("isInitialModelDiscoveryPending", () => {
   });
 });
 
+describe("withProviderModelDiscoveryClientDeadline", () => {
+  it("settles a stalled desktop bridge request after the client fence", async () => {
+    const stalled = new Promise<never>(() => undefined);
+
+    await expect(withProviderModelDiscoveryClientDeadline(stalled, 5)).resolves.toEqual({
+      models: [],
+      source: "timeout",
+      cached: false,
+    });
+  });
+});
+
 describe("providerModelsQueryOptions", () => {
   it("fails fast for Cursor so a missing CLI settles instead of spinning (#103)", async () => {
     const listModels = mockListModels(
@@ -73,6 +86,21 @@ describe("providerModelsQueryOptions", () => {
     );
     expect(listModels).toHaveBeenCalledTimes(1);
     expect(queryClient.getQueryState(options.queryKey)?.status).toBe("error");
+  });
+
+  it("accepts an initial timeout result so static fallback models remain usable", async () => {
+    const timeoutResult = {
+      models: [],
+      source: "timeout",
+      cached: false,
+    };
+    const listModels = mockListModels(vi.fn().mockResolvedValue(timeoutResult));
+    const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });
+    const queryClient = new QueryClient();
+
+    await expect(queryClient.fetchQuery(options)).resolves.toEqual(timeoutResult);
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData(options.queryKey)).toEqual(timeoutResult);
   });
 
   it("fails fast only for Cursor and retries transient Droid discovery", () => {
@@ -368,6 +396,33 @@ describe("providerModelsQueryOptions", () => {
 
     expect(listModels).toHaveBeenCalledTimes(2);
     expect(queryClient.getQueryData(options.queryKey)).toEqual(catalog);
+  });
+
+  it("preserves a cached dynamic catalog when a background refetch times out", async () => {
+    const catalog = {
+      models: [{ slug: "cursor/new-model", name: "Cursor New Model" }],
+      source: "cursor.cli",
+      cached: false,
+    };
+    const timeoutResult = {
+      models: [],
+      source: "timeout",
+      cached: false,
+    };
+    const listModels = mockListModels(
+      vi.fn().mockResolvedValueOnce(catalog).mockResolvedValueOnce(timeoutResult),
+    );
+    const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });
+    const queryClient = new QueryClient();
+
+    await expect(queryClient.fetchQuery(options)).resolves.toEqual(catalog);
+    await queryClient.refetchQueries({ queryKey: options.queryKey });
+
+    expect(listModels).toHaveBeenCalledTimes(2);
+    expect(queryClient.getQueryData(options.queryKey)).toEqual(catalog);
+    expect(queryClient.getQueryState(options.queryKey)?.error).toEqual(
+      new Error("cursor model discovery timed out."),
+    );
   });
 
   it("preserves a cached dynamic catalog when refresh returns a degraded fallback", async () => {
