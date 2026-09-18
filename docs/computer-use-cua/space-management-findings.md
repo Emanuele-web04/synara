@@ -128,6 +128,14 @@ Dock performs these operations because it holds
    managed desktop Space by driving Mission Control over AX (open MC → AXPress
    Dock's `add desktop` button → AXPress the new space's Spaces-Bar cell to
    enter it). No entitlement needed; Dock performs the mutation.
+   **Caveat:** empty managed desktops are transient — the MC-created space `62`
+   was reaped after the VM paused (only space `1` and fullscreen space `53`
+   survived). Provision a Space only when a window will live on it, and
+   re-check `space-ctl list` after any interruption; also note Dock exposes
+   the Spaces Bar reliably only while MC is open — `AXShowMissionControl`
+   returned `-25206` after the pause, and neither CGEvent nor System-Events
+   Ctrl+Up reopened it on this VM, so MC-open is state-dependent, not a
+   guaranteed primitive.
 2. **Primary isolation model:** the agent works _on its own space_ — launch
    targets there, full input surface while it's active. Cross-space operation
    is `activate → act → switch back`, with the operator-view caveat that
