@@ -171,6 +171,17 @@ describe("isUpdateVersionNewer", () => {
     expect(isUpdateVersionNewer("0.1.1", "0.1.0")).toBe(false);
     expect(isUpdateVersionNewer("1.0.0", "0.9.9")).toBe(false);
   });
+
+  it("orders prereleases within the same base version", () => {
+    expect(isUpdateVersionNewer("0.1.0-beta.1", "0.1.0-beta.2")).toBe(true);
+    expect(isUpdateVersionNewer("0.1.0-beta.2", "0.1.0-beta.1")).toBe(false);
+    expect(isUpdateVersionNewer("0.1.0-beta.1", "0.1.0-beta.1")).toBe(false);
+    expect(isUpdateVersionNewer("0.1.0-beta.1", "0.1.0-beta.1.1")).toBe(true);
+    // Numeric identifiers compare numerically, not lexically.
+    expect(isUpdateVersionNewer("0.1.0-beta.2", "0.1.0-beta.10")).toBe(true);
+    // A different prerelease channel does not count as newer.
+    expect(isUpdateVersionNewer("0.1.0-beta.1", "0.1.0-alpha.9")).toBe(false);
+  });
 });
 
 describe("getAutoUpdateDisabledReason", () => {
