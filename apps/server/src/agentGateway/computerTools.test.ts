@@ -152,12 +152,11 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const definitions = tools.map((tool) => tool.definition);
-    // The catalog grew again — computer_select_text on top of the named AX
-    // action enum, the widened press_key/hotkey vocabulary, and the
-    // hidden-workspace lifecycle pair measures 61,386 chars of schema; the
+    // The catalog grew again — the recording/replay family added seven tools
+    // on top of the lifecycle pair, measuring 66,339 chars of schema; the
     // bound still trips on accidental bloat, so raise it only with the new
     // surface measured.
-    expect(JSON.stringify(definitions).length).toBeLessThan(66_000);
+    expect(JSON.stringify(definitions).length).toBeLessThan(70_000);
     const notes = computerToolInstructions();
     expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
     expect(notes).toContain("discover only the small set of tools needed next by exact names");
@@ -324,6 +323,13 @@ describe("agent gateway computer tools", () => {
       "computer_perform_action",
       "computer_select_text",
       "computer_run",
+      "computer_recording_start",
+      "computer_recording_stop",
+      "computer_recording_list",
+      "computer_recording_read",
+      "computer_recording_export",
+      "computer_recording_delete",
+      "computer_replay",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "computer:control")).toBe(true);
     expect(tools.every((tool) => tool.requiresActiveTurn === true)).toBe(true);
@@ -353,6 +359,9 @@ describe("agent gateway computer tools", () => {
         "computer_kill_app",
         "computer_set_window_minimized",
         "computer_set_app_visibility",
+        "computer_recording_start",
+        "computer_recording_delete",
+        "computer_replay",
       ]),
     );
     // A hover posts no event, presses nothing, and no longer aims the keyboard,

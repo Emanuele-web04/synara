@@ -100,6 +100,19 @@ default. Verification notes record what was checked in the tree on branch
   completeness run still needs a live desktop. Raw recording and history
   surfaces stay internal until a privacy policy exists
   (`v2-parity-matrix.md:31`).
+- Update (`wt/record`, unmerged): a structured session-history sibling landed
+  on the same posture — `apps/server/src/computer/computerRecording.ts`
+  writes one bounded NDJSON session under `computer-recordings/` in the
+  server state dir (2,000 steps / 4 MiB per session; 64 files / 32 MiB /
+  7 days aggregate; 0600 in 0700; serialized writes, failures swallowed,
+  disabled control records nothing). `redacted` fidelity keeps payload args
+  as `{chars, sha256}`; `full` is an approval-gated opt-in that still keeps
+  protected-field payloads hashed. `computer_replay` is dry-run by default,
+  approval-gated, and re-resolves targets plus driven-app consent fresh per
+  step — the "no silent replay of mutations" line holds. Raw driver
+  recording stays internal; the privacy-policy gate applies to merge, same
+  as it did to this audit log. Full contract:
+  `docs/computer-use-cua/session-recording.md`.
 
 ## 8. Kill switch form
 

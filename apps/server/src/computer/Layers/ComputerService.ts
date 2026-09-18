@@ -60,6 +60,9 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
               // Beside the control state: the bounded mutating-call audit log,
               // local-only and dropped-oldest past its caps.
               auditLogPath: join(config.value.stateDir, "computer-audit.jsonl"),
+              // And beside that: the recording sessions — one bounded NDJSON
+              // file each, swept oldest-first past their caps.
+              recordingDir: join(config.value.stateDir, "computer-recordings"),
             }
           : {}),
       });
