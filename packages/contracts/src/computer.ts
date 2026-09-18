@@ -1110,6 +1110,22 @@ const ComputerTargetFields = {
   ),
   role: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
   windowId: Schema.optional(ComputerWindowId),
+  /**
+   * An element's position in the thread's most recent `computer_get_state`
+   * elements listing — the compact targeting form. A ref resolves to the
+   * listed element's identity and occurrence ordinal, so it survives label
+   * truncation and names duplicates a bare label cannot. Refs belong to the
+   * last listing the thread saw; after a new listing they point at its
+   * positions instead.
+   */
+  ref: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  /**
+   * Occurrence index among controls sharing the resolved identity, in
+   * accessibility-tree order — what makes a ref-targeted duplicate unique.
+   * Derived from `ref` during argument resolution; a caller that sets it
+   * directly asks for the Nth exact label match.
+   */
+  refOrdinal: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 } as const;
 
 export const ComputerTarget = Schema.Struct(ComputerTargetFields);
