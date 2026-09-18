@@ -46,15 +46,24 @@ change. Then the same surface on Windows and Linux.
    host→server→driver chain.
 6. Grants/locked-use: no live UX runs.
 7. Second display: harness ready, hardware-pending (needs a 2-display Mac).
-8. Speed: no measured latency budget (handoff workstream C never ran).
-9. Screenshot freshness refusals: uncertified.
+8. Speed: baseline measured (live-cert now emits a per-tool p50/p95/max
+   table every run — set_value p95 ~3.6s is the heaviest op).
+9. Screenshot freshness: certified — `screenshot-fresh` (visible) +
+   `hidden-screenshot` (hidden windows track live content).
 10. Cross-platform: driver supports it upstream; Synara gates on darwin.
 11. ComputerManager is 5.4k lines post-merge — six features, parallel seams;
     no refactor pass yet.
-12. Unused private-API inventory: `SLSHWCaptureWindowList` fast capture,
-    dock-swipe instant switch, `CGSSetWindowLevel` masking variant,
-    focus-theft suppression taps, CPS type-21 notifications (dead for
-    key-window manufacture — proven).
+12. Unused private-API inventory: dock-swipe instant switch,
+    `CGSSetWindowLevel` masking variant, focus-theft suppression taps,
+    CPS type-21 notifications (dead for key-window manufacture — proven).
+    `SLSHWCaptureWindowList` — **evaluated and rejected 2026-09-18**:
+    present on Darwin 25.5 (`CGSHWCaptureWindowList` too), signature
+    validated, returns CFArray<CGImage> — but it serves the same
+    retained last-composited buffer the existing `screencapture -l`/SCK
+    path already returns for off-Space windows (verified: driver emits
+    real 586×488 PNG marked `unverified_off_space`). No liveness gain,
+    no new capability. Hidden windows remain strictly better: live
+    backing store (certified `hidden-screenshot`).
 
 ---
 
