@@ -97,6 +97,8 @@ describe("project relocation", () => {
       threadId: "thread-1",
       createdAt: now,
     });
+    const archivedAt = before.threads[0]!.archivedAt;
+    expect(archivedAt).not.toBeNull();
     const result = await Effect.runPromise(
       decideOrchestrationCommand({ readModel: before, command: decodeCommand(relocation) }),
     );
@@ -116,7 +118,7 @@ describe("project relocation", () => {
       id: "thread-1",
       projectId: "project-1",
       workingDirectory: "/restored/repo/packages/app",
-      archivedAt: now,
+      archivedAt,
     });
     expect(after.threads[0]!.messages).toEqual(before.threads[0]!.messages);
   });
