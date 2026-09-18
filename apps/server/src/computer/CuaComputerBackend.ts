@@ -713,9 +713,15 @@ export class CuaComputerBackend implements ComputerBackend {
     // screen_recording grant clears it, in refresh() below, so a setup that
     // did not actually restore capture cannot launder the health away.
     await this.refresh(true);
-    return this.permissions.length
-      ? `Allow ${listComputerPermissions(this.permissions)} for this copy of Synara in System Settings. Return here to check again; if macOS asks you to quit and reopen the app, do so.`
-      : "Computer permissions are ready. Send a message to continue; no action is retried automatically.";
+    if (!this.permissions.length)
+      return "Computer permissions are ready. Send a message to continue; no action is retried automatically.";
+    const missing = listComputerPermissions(this.permissions);
+    // The setup surface is macOS TCC; other platforms report through the
+    // driver's own probe, and the guidance names what the platform uses
+    // rather than a settings pane that does not exist there.
+    return (this.hostPlatform ?? process.platform) === "darwin"
+      ? `Allow ${missing} for this copy of Synara in System Settings. Return here to check again; if macOS asks you to quit and reopen the app, do so.`
+      : `The driver host reports missing ${missing} access. Grant it at the OS level the platform uses (display-server access on Linux, integrity/UIAccess on Windows), then check again; no action is retried automatically.`;
   }
   private refresh(force = false): Promise<void> {
     if (this.snapshot) return this.snapshot;
