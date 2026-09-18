@@ -226,7 +226,9 @@ import {
 import { ProjectAgentDialog } from "./chat/project/ProjectAgentDialog";
 import {
   defaultProjectAgentName,
+  isProjectAgentRowVisible,
   resolveProjectAgentRowLabel,
+  saveProjectAgentDialog,
 } from "./chat/project/projectAgentDialog.logic";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { RenameDialog } from "./RenameDialog";
@@ -404,6 +406,7 @@ import {
   useSidebarProjectRunController,
 } from "../hooks/useSidebarProjectRunController";
 import { useSidebarThreadActions } from "../hooks/useSidebarThreadActions";
+import { usePinnedProjectAgentsStore } from "../pinnedProjectAgentsStore";
 import { usePinnedProjectsStore } from "../pinnedProjectsStore";
 import { reconcileOptimisticPinState } from "../pinning.logic";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
@@ -504,6 +507,7 @@ type ProjectContextMenuId =
   | "open-dev-server"
   | "rename"
   | "edit-project-agent"
+  | "toggle-pin-project-agent"
   | "toggle-pin"
   | "archive-threads"
   | "delete-threads"
@@ -1404,6 +1408,13 @@ export default function Sidebar() {
   const pinProjectLocally = usePinnedProjectsStore((store) => store.pinProject);
   const unpinProject = usePinnedProjectsStore((store) => store.unpinProject);
   const prunePinnedProjects = usePinnedProjectsStore((store) => store.prunePinnedProjects);
+  const pinnedProjectAgentIds = usePinnedProjectAgentsStore((store) => store.pinnedProjectAgentIds);
+  const toggleProjectAgentPinned = usePinnedProjectAgentsStore(
+    (store) => store.toggleProjectAgentPinned,
+  );
+  const prunePinnedProjectAgents = usePinnedProjectAgentsStore(
+    (store) => store.prunePinnedProjectAgents,
+  );
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
@@ -3620,6 +3631,10 @@ export default function Sidebar() {
         toggleProjectPinned(projectId);
         return;
       }
+      if (clicked === "toggle-pin-project-agent") {
+        toggleProjectAgentPinned(projectId);
+        return;
+      }
       if (clicked === "archive-threads") {
         await archiveAllThreadsInProject(projectId);
         return;
@@ -3708,6 +3723,7 @@ export default function Sidebar() {
       removeDeletedProjectFromClientState,
       sidebarThreads,
       summaryFor,
+      toggleProjectAgentPinned,
       toggleProjectPinned,
     ],
   );
@@ -4084,6 +4100,10 @@ export default function Sidebar() {
     [optimisticPinnedStateByProjectId, persistedPinnedProjectIds, standardProjectsBase],
   );
   const pinnedProjectIdSet = useMemo(() => new Set(pinnedProjectIds), [pinnedProjectIds]);
+  const pinnedProjectAgentIdSet = useMemo(
+    () => new Set(pinnedProjectAgentIds),
+    [pinnedProjectAgentIds],
+  );
   const standardProjects = useMemo(
     () => orderPinnedProjectsForSidebar(standardProjectsBase, pinnedProjectIds),
     [pinnedProjectIds, standardProjectsBase],
@@ -4173,7 +4193,8 @@ export default function Sidebar() {
       return;
     }
     prunePinnedProjects(allStandardProjectsBase.map((project) => project.id));
-  }, [allStandardProjectsBase, prunePinnedProjects, threadsHydrated]);
+    prunePinnedProjectAgents(allStandardProjectsBase.map((project) => project.id));
+  }, [allStandardProjectsBase, prunePinnedProjectAgents, prunePinnedProjects, threadsHydrated]);
 
   useEffect(() => {
     const retainedThreadIds = new Set(sidebarThreads.map((thread) => thread.id));
@@ -4971,6 +4992,80 @@ export default function Sidebar() {
     const isProjectRunning = projectRun !== null || projectRunServer !== null;
     const projectAgentSummary = summariesByProjectId.get(project.id) ?? null;
     const projectAgentConfigured = projectAgentSummary?.configured === true;
+    const projectAgentPinned = projectAgentConfigured && pinnedProjectAgentIdSet.has(project.id);
+    const projectAgentRowLabel = resolveProjectAgentRowLabel({
+      configured: projectAgentConfigured,
+      coordinatorName: projectAgentSummary?.coordinatorName,
+    });
+    const projectAgentRow = (
+      <SidebarMenuSubItem className="group/project-agent-row relative w-full">
+        <SidebarMenuSubButton
+          render={<div role="button" tabIndex={0} />}
+          data-thread-selection-safe
+          size="sm"
+          isActive={
+            projectAgentConfigured &&
+            projectAgentSummary?.coordinatorThreadId === visualActiveSidebarThreadId
+          }
+          className={cn(
+            resolveThreadRowClassName({
+              isActive:
+                projectAgentConfigured &&
+                projectAgentSummary?.coordinatorThreadId === visualActiveSidebarThreadId,
+              isSelected: false,
+            }),
+            SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+            projectAgentConfigured ? "pr-7" : null,
+          )}
+          aria-label={
+            projectAgentConfigured
+              ? `Open ${projectAgentRowLabel}`
+              : `Set up project agent for ${project.name}`
+          }
+          onMouseDown={preventFocusOnMouseDown}
+          onClick={() => {
+            if (projectAgentConfigured && projectAgentSummary?.coordinatorThreadId) {
+              activateThreadFromSidebarIntent(projectAgentSummary.coordinatorThreadId);
+              return;
+            }
+            setProjectAgentDialogError(null);
+            setProjectAgentDialogState({
+              projectId: project.id,
+              mode: projectAgentConfigured ? "edit" : "setup",
+            });
+          }}
+        >
+          <BotIcon className="size-3.5 shrink-0" />
+          <span className="min-w-0 truncate">{projectAgentRowLabel}</span>
+        </SidebarMenuSubButton>
+        {projectAgentConfigured ? (
+          <button
+            type="button"
+            aria-label={pinActionLabel("project agent", projectAgentPinned)}
+            aria-pressed={projectAgentPinned}
+            title={pinActionLabel("project agent", projectAgentPinned)}
+            className={cn(
+              "sidebar-icon-button absolute right-1.5 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+              SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+              projectAgentPinned
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0 md:group-hover/project-agent-row:pointer-events-auto md:group-hover/project-agent-row:opacity-100 md:group-has-[:focus-visible]/project-agent-row:pointer-events-auto md:group-has-[:focus-visible]/project-agent-row:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+            )}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              toggleProjectAgentPinned(project.id);
+            }}
+          >
+            <PinStatusIcon pinned={projectAgentPinned} className="size-3.5" />
+          </button>
+        ) : null}
+      </SidebarMenuSubItem>
+    );
     const collapsedProjectStatus = project.expanded ? null : projectStatus;
     // The "open dev server" affordance now lives in the project context menu, so
     // the hover toolbar always reserves space for the three thread actions. The
@@ -5159,11 +5254,26 @@ export default function Sidebar() {
 
         <div
           className={cn(
-            disclosureShellClassName(project.expanded),
+            disclosureShellClassName(
+              isProjectAgentRowVisible({
+                projectExpanded: project.expanded,
+                pinned: projectAgentPinned,
+              }),
+            ),
             SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME,
           )}
         >
           <div className={DISCLOSURE_INNER_CLASS}>
+            {projectAgentPinned ? (
+              <SidebarMenuSub
+                className={cn(
+                  "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0",
+                  SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
+                )}
+              >
+                {projectAgentRow}
+              </SidebarMenuSub>
+            ) : null}
             <SidebarMenuSub
               className={cn(
                 "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0",
@@ -5171,54 +5281,7 @@ export default function Sidebar() {
                 disclosureContentClassName(project.expanded),
               )}
             >
-              <SidebarMenuSubItem className="w-full">
-                <SidebarMenuSubButton
-                  render={<div role="button" tabIndex={0} />}
-                  data-thread-selection-safe
-                  size="sm"
-                  isActive={
-                    projectAgentConfigured &&
-                    projectAgentSummary?.coordinatorThreadId === visualActiveSidebarThreadId
-                  }
-                  className={cn(
-                    resolveThreadRowClassName({
-                      isActive:
-                        projectAgentConfigured &&
-                        projectAgentSummary?.coordinatorThreadId === visualActiveSidebarThreadId,
-                      isSelected: false,
-                    }),
-                    SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                  )}
-                  aria-label={
-                    projectAgentConfigured
-                      ? `Open ${resolveProjectAgentRowLabel({
-                          configured: true,
-                          coordinatorName: projectAgentSummary?.coordinatorName,
-                        })}`
-                      : `Set up project agent for ${project.name}`
-                  }
-                  onMouseDown={preventFocusOnMouseDown}
-                  onClick={() => {
-                    if (projectAgentConfigured && projectAgentSummary?.coordinatorThreadId) {
-                      activateThreadFromSidebarIntent(projectAgentSummary.coordinatorThreadId);
-                      return;
-                    }
-                    setProjectAgentDialogError(null);
-                    setProjectAgentDialogState({
-                      projectId: project.id,
-                      mode: projectAgentConfigured ? "edit" : "setup",
-                    });
-                  }}
-                >
-                  <BotIcon className="size-3.5 shrink-0" />
-                  <span className="min-w-0 truncate">
-                    {resolveProjectAgentRowLabel({
-                      configured: projectAgentConfigured,
-                      coordinatorName: projectAgentSummary?.coordinatorName,
-                    })}
-                  </span>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
+              {!projectAgentPinned ? projectAgentRow : null}
               {visibleEntries.map((entry) =>
                 renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth),
               )}
@@ -6813,18 +6876,37 @@ export default function Sidebar() {
                 <span>Edit name</span>
               </MenuItem>
               {summaryFor(projectContextMenuState.projectId)?.configured ? (
-                <MenuItem
-                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                  onClick={() =>
-                    void handleProjectContextMenuAction(
-                      projectContextMenuState.projectId,
-                      "edit-project-agent",
-                    )
-                  }
-                >
-                  <ProjectContextMenuIcon icon={BotIcon} />
-                  <span>Edit project agent</span>
-                </MenuItem>
+                <>
+                  <MenuItem
+                    className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                    onClick={() =>
+                      void handleProjectContextMenuAction(
+                        projectContextMenuState.projectId,
+                        "edit-project-agent",
+                      )
+                    }
+                  >
+                    <ProjectContextMenuIcon icon={BotIcon} />
+                    <span>Edit project agent</span>
+                  </MenuItem>
+                  <MenuItem
+                    className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                    onClick={() =>
+                      void handleProjectContextMenuAction(
+                        projectContextMenuState.projectId,
+                        "toggle-pin-project-agent",
+                      )
+                    }
+                  >
+                    <ProjectContextMenuIcon icon={PinIcon} />
+                    <span>
+                      {pinActionLabel(
+                        "project agent",
+                        pinnedProjectAgentIdSet.has(projectContextMenuState.projectId),
+                      )}
+                    </span>
+                  </MenuItem>
+                </>
               ) : null}
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
@@ -7052,34 +7134,24 @@ export default function Sidebar() {
         }}
         onSave={async ({ coordinatorName, modelSelection, expectedRevision }) => {
           const project = projectAgentDialogProject;
-          if (!project) {
-            setProjectAgentDialogError("Select a project before setting up the agent.");
-            return;
-          }
           const api = readNativeApi();
-          if (!api?.projectAgent) {
-            setProjectAgentDialogError("Project agent is unavailable.");
-            return;
-          }
           setProjectAgentDialogBusy(true);
           setProjectAgentDialogError(null);
-          try {
-            const overview = await api.projectAgent.configure({
-              requestId: crypto.randomUUID(),
-              projectId: project.id,
-              coordinatorName,
-              coordinatorModelSelection: modelSelection,
-              ...(expectedRevision !== undefined ? { expectedRevision } : {}),
-            });
-            applyOverview(overview);
+          const result = await saveProjectAgentDialog({
+            projectId: project?.id ?? null,
+            coordinatorName,
+            modelSelection,
+            expectedRevision,
+            configure: api?.projectAgent ? (payload) => api.projectAgent!.configure(payload) : null,
+          });
+          if (result.ok) {
+            applyOverview(result.overview);
             setProjectAgentDialogState(null);
-          } catch (error) {
-            setProjectAgentDialogError(
-              error instanceof Error ? error.message : "Could not save the project agent.",
-            );
-          } finally {
             setProjectAgentDialogBusy(false);
+            return;
           }
+          setProjectAgentDialogError(result.error);
+          setProjectAgentDialogBusy(false);
         }}
       />
 

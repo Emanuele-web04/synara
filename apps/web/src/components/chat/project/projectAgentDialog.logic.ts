@@ -1,4 +1,9 @@
-import type { ModelSelection, ProjectAgentConfigureInput, ProjectId } from "@synara/contracts";
+import type {
+  ModelSelection,
+  ProjectAgentConfigureInput,
+  ProjectAgentOverview,
+  ProjectId,
+} from "@synara/contracts";
 
 export const FALLBACK_PROJECT_AGENT_MODEL_SELECTION: ModelSelection = {
   provider: "codex",
@@ -35,6 +40,13 @@ export function resolveProjectAgentRowLabel(input: {
   return "Set up project agent";
 }
 
+export function isProjectAgentRowVisible(input: {
+  readonly projectExpanded: boolean;
+  readonly pinned: boolean;
+}): boolean {
+  return input.pinned || input.projectExpanded;
+}
+
 export function buildProjectAgentConfigureInput(input: {
   readonly projectId: ProjectId;
   readonly coordinatorName: string;
@@ -52,4 +64,42 @@ export function buildProjectAgentConfigureInput(input: {
       ? { importedInstructions: input.importedInstructions }
       : {}),
   };
+}
+
+export type SaveProjectAgentDialogResult =
+  | { readonly ok: true; readonly overview: ProjectAgentOverview }
+  | { readonly ok: false; readonly error: string };
+
+export async function saveProjectAgentDialog(input: {
+  readonly projectId: ProjectId | null;
+  readonly coordinatorName: string;
+  readonly modelSelection: ModelSelection;
+  readonly expectedRevision?: number | undefined;
+  readonly configure:
+    | ((payload: ProjectAgentConfigureInput) => Promise<ProjectAgentOverview>)
+    | null
+    | undefined;
+}): Promise<SaveProjectAgentDialogResult> {
+  if (!input.projectId) {
+    return { ok: false, error: "Select a project before setting up the agent." };
+  }
+  if (!input.configure) {
+    return { ok: false, error: "Project agent is unavailable." };
+  }
+  try {
+    const overview = await input.configure(
+      buildProjectAgentConfigureInput({
+        projectId: input.projectId,
+        coordinatorName: input.coordinatorName,
+        modelSelection: input.modelSelection,
+        expectedRevision: input.expectedRevision,
+      }),
+    );
+    return { ok: true, overview };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Could not save the project agent.",
+    };
+  }
 }
