@@ -6,7 +6,9 @@ Read-only inspection of the installed stack: `/Applications/ChatGPT.app`
 23 MB arm64, full ObjC/Swift symbol table preserved). Nothing was modified or
 executed beyond `nm`, `strings`, `otool`, `sips`, and private `CUICatalog`
 reads. This document records the architecture Codex ships so Synara parity
-work is designed from evidence, not guesses.
+work is designed from evidence, not guesses. Every Synara-side implementation
+referenced here is independently written; no Codex source, assets, artwork, or
+prompt text is copied into this repository.
 
 ## Process layout
 
@@ -28,13 +30,13 @@ work is designed from evidence, not guesses.
 
 ## Tool vocabulary (service-side MCP)
 
-Exactly ten tools, described verbatim in the binary:
+Exactly ten tools:
 
 | Tool | Contract highlights |
 |---|---|
 | `list_apps` | Running apps + anything used in last 14 days, with usage frequency |
-| `get_app_state` | Starts an app session if needed; returns key-window screenshot + AX tree. "Must be called once per assistant turn before interacting" |
-| `click` | "Click an element by index or pixel coordinates from screenshot"; button defaults left |
+| `get_app_state` | Starts an app session if needed; returns key-window screenshot + AX tree; the contract requires calling it once per assistant turn before interacting |
+| `click` | Click by element index or by pixel coordinates from the screenshot; button defaults left |
 | `perform_secondary_action` | Invokes a secondary AX action an element exposes |
 | `set_value` | Set value on a settable AX element |
 | `select_text` | Select text or place cursor before/after it; exact AX text incl. Markdown; prefix/suffix disambiguation |
@@ -52,8 +54,8 @@ as the deferred-discovery escape hatch, and turn metrics
 Approvals: `AppApprovalStore` keeps `sessionApprovedBundleIdentifiers`,
 `persistentApprovals`, `approvedBundleIdentifiers`; an org-policy cache gates
 `allowComputerUse`, `allowPersistentApproval`, `defaultAppAccess`, and
-per-bundle allow/deny lists; denial can arrive via MCP elicitation
-("Computer Use approval denied via MCP elicitation for app '…'").
+per-bundle allow/deny lists; denial can arrive via MCP elicitation naming the
+denied app.
 
 ## Agent cursor (`ComputerUse` module)
 
@@ -65,8 +67,9 @@ per-bundle allow/deny lists; denial can arrive via MCP elicitation
 Two render styles behind `SoftwareCursorStyle`:
 
 - PNG arrow (`SoftwareCursor` in `Assets.car`: 200×230 black arrow, white
-  outline, floppy-disk badge — already ported as our compact arrow minus the
-  badge in the rev-5 patch).
+  outline, floppy-disk badge). Our compact cursor is an independent vector
+  arrow — same generic pointer shape, hand-drawn path, no badge, none of the
+  source artwork.
 - `FogCursorStyle` — a SwiftUI `CursorView`/`FogCursorViewModel` drawing the
   pointer procedurally (`cursorRadius`, `fogRadius`, `cursorScaleAnchorPoint`,
   `fogScaleAnchorPoint`, `animatedAngleOffsetDegrees`, `loadingAnimationToken`).
@@ -85,8 +88,8 @@ Motion is a real animation system, not a teleport:
   `scootDistanceThreshold`, `scootStretchMin`, `scootStretchXAmount`,
   `scootRotationMax`, `scootTiltAngle`, `terminalTangentBlendStart`).
 - Early-ack: `CursorNextInteractionTiming` +
-  `cursorMotionDidSatisfyNextInteractionTiming` — the next input fires when
-  motion is "committed enough" (`progressThreshold`, `distanceThreshold`,
+  `cursorMotionDidSatisfyNextInteractionTiming` — the next input fires once
+  motion is committed far enough (`progressThreshold`, `distanceThreshold`,
   `closeEnough`), not when the animation finishes.
 - States: `activityState` (`idle`/`loading`/`paused`), `isMoving`, `isPressed`,
   `isAttached`, `shouldFadeOut`, `wantsToBeVisible`, `velocityX/Y`,
@@ -99,15 +102,15 @@ Motion is a real animation system, not a teleport:
   `computerUseCursorLocationDidChange`, `computerUseCursorDidFinishMove`;
   XPC `setComputerUseCursorLocationWithX:y:isActive:withReply:`.
 - Feature flags: `feature/computerUseCursor`,
-  `feature/detachComputerUseCursor` ("detach the computer use cursor from the
-  command palette").
+  `feature/detachComputerUseCursor` (detaches the cursor from the command
+  palette).
 
 User-interrupt detection: `userInteractionMonitor`,
 `userInteractionDebounceDuration`, `userInterruptedControlledApp`,
 `stoppedByUser`, `interventionReasonByTargetIdentifier`,
-`userInterruptionDebounceTaskByTargetIdentifier` → `requiresRequery`
-("Re-query the latest state with `get_app_state` before sending more
-actions"). Synara's input-stop path covers the same contract.
+`userInterruptionDebounceTaskByTargetIdentifier` → `requiresRequery` (the
+agent must refresh state via `get_app_state` before sending more actions).
+Synara's input-stop path covers the same contract.
 
 ## Working indicator
 
