@@ -32,7 +32,7 @@ import messageTextChunkSchema from "./100_MessageTextChunks.ts";
 import asyncUserInputSchema from "./105_AsyncUserInput.ts";
 import messageTurnBoundarySchema from "./102_ProjectionThreadMessagesTurnBoundary.ts";
 import claudeCacheReviewSchema from "./104_ProjectionThreadsClaudeCacheReview.ts";
-import humanMessageSchema from "./106_ProjectionThreadsHumanMessage.ts";
+import humanMessageSchema from "./107_ProjectionThreadsHumanMessage.ts";
 
 const testLayer = OrchestrationProjectionPipelineLive.pipe(
   Layer.provideMerge(OrchestrationEventStoreLive),

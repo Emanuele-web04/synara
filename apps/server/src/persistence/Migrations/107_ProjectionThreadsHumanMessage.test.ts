@@ -4,7 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
-import migration from "./106_ProjectionThreadsHumanMessage.ts";
+import migration from "./107_ProjectionThreadsHumanMessage.ts";
 
 it.layer(NodeSqliteClient.layerMemory())("human-message summary migration", (it) => {
   it.effect(
@@ -38,7 +38,17 @@ it.layer(NodeSqliteClient.layerMemory())("human-message summary migration", (it)
         `;
         }
         yield* sql`UPDATE projection_thread_messages SET updated_at = ${at(6)} WHERE message_id = 'message-0'`;
-        yield* runMigrations({ toMigrationInclusive: 106 });
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 106 }), [
+          [106, "ProjectImportOrigins"],
+        ]);
+        yield* sql`INSERT INTO project_import_origins
+          (source_key, provider, source_home, external_id, project_id, thread_id, status, created_at)
+          VALUES ('source', 'codex', '/home', 'external', 'project', 'mixed', 'completed', ${at(0)})`;
+        assert.deepStrictEqual(yield* runMigrations(), [[107, "ProjectionThreadsHumanMessage"]]);
+        assert.deepStrictEqual(yield* sql`SELECT source_key, status FROM project_import_origins`, [
+          { source_key: "source", status: "completed" },
+        ]);
+        assert.deepStrictEqual(yield* runMigrations(), []);
         assert.deepStrictEqual(
           yield* sql`
         SELECT thread_id, latest_human_message_at FROM projection_threads ORDER BY thread_id
