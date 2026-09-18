@@ -33,7 +33,7 @@ export function providerWorkspaceChanged(
   requestedCwd: string | undefined,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  if (requestedCwd === undefined) return false;
-  if (currentCwd === undefined) return true;
+  // ProviderSession.cwd is optional; missing metadata is not proof of a move.
+  if (requestedCwd === undefined || currentCwd === undefined) return false;
   return !workspaceRootsEqual(currentCwd, requestedCwd, { platform });
 }

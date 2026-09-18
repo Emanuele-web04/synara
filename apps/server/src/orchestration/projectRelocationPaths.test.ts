@@ -60,9 +60,9 @@ describe("relocateProjectPath", () => {
 });
 
 describe("providerWorkspaceChanged", () => {
-  it("restarts for a different workspace, including an unknown old cwd", () => {
+  it("restarts only for a known different workspace", () => {
     expect(providerWorkspaceChanged("/old/repo", "/new/repo", "linux")).toBe(true);
-    expect(providerWorkspaceChanged(undefined, "/new/repo", "linux")).toBe(true);
+    expect(providerWorkspaceChanged(undefined, "/new/repo", "linux")).toBe(false);
   });
 
   it("does not restart for the same normalized workspace or an unspecified target", () => {
