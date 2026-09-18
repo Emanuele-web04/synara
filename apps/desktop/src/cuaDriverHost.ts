@@ -1,5 +1,10 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { createConnection, createServer, type Server, type Socket } from "node:net";
+import {
+  createConnection,
+  createServer,
+  type Server,
+  type Socket,
+} from "node:net";
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { access, chmod, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -110,7 +115,8 @@ function browserSessionLabel(threadId: string): string {
  */
 const AGENT_SESSION_LABEL_PREFIX = "agent·";
 const AGENT_SESSION_LABEL_MAX_CHARS = 120;
-const agentBadgeComponent = (value: string) => value.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
+const agentBadgeComponent = (value: string) =>
+  value.replace(/[\p{Cc}\p{Cf}]/gu, "").trim();
 function agentSessionLabel(task: CuaComputerTask): string {
   const threadId = agentBadgeComponent(task.threadId) || "task";
   const label = [...agentBadgeComponent(task.label ?? "")]
@@ -126,7 +132,10 @@ interface HostPermissions {
 }
 
 function permissionsChanged(a: HostPermissions, b: HostPermissions): boolean {
-  return a.accessibility !== b.accessibility || a.screenRecording !== b.screenRecording;
+  return (
+    a.accessibility !== b.accessibility ||
+    a.screenRecording !== b.screenRecording
+  );
 }
 
 const log = (message: string) => console.info(`[desktop-cua] ${message}`);
@@ -141,7 +150,8 @@ function launchAppMatchNames(input: unknown): string[] {
   if (!input || typeof input !== "object") return [];
   const args = input as Record<string, unknown>;
   const names: string[] = [];
-  if (typeof args.name === "string" && args.name.length > 0) names.push(args.name.toLowerCase());
+  if (typeof args.name === "string" && args.name.length > 0)
+    names.push(args.name.toLowerCase());
   if (typeof args.bundle_id === "string" && args.bundle_id.length > 0) {
     names.push(args.bundle_id.toLowerCase());
     const tail = args.bundle_id.split(".").pop();
@@ -158,7 +168,9 @@ function launchAppMatchNames(input: unknown): string[] {
  * A recycled pid reads as alive and is left alone — safe direction.
  */
 export function sweepOrphanedCuaDrivers(): void {
-  if (process.platform !== "darwin") return;
+  // ps/env scanning exists on every unix the standalone host can run on;
+  // Windows orphan reaping is a different mechanism entirely.
+  if (process.platform === "win32") return;
   let listing: string;
   try {
     listing = execFileSync("ps", ["-axo", "pid,args"], { encoding: "utf8" });
@@ -184,7 +196,9 @@ export function sweepOrphanedCuaDrivers(): void {
     } catch {
       continue;
     }
-    const hostPid = Number(env.match(/CUA_DRIVER_EMBEDDED_HOST_PID=(\d+)/)?.[1]);
+    const hostPid = Number(
+      env.match(/CUA_DRIVER_EMBEDDED_HOST_PID=(\d+)/)?.[1],
+    );
     if (!hostPid) continue;
     try {
       process.kill(hostPid, 0);
@@ -253,7 +267,8 @@ function isDriverSessionDeath(reply: CuaReply): boolean {
   const result = reply.result;
   if (!result?.isError) return false;
   const code = result.structuredContent?.code;
-  if (typeof code === "string" && DRIVER_SESSION_DEATH_CODES.has(code)) return true;
+  if (typeof code === "string" && DRIVER_SESSION_DEATH_CODES.has(code))
+    return true;
   const texts: string[] = [];
   for (const part of result.content ?? []) {
     if (part && typeof part.text === "string") texts.push(part.text);
@@ -264,8 +279,10 @@ function isDriverSessionDeath(reply: CuaReply): boolean {
   return joined.includes("has ended") && joined.includes("start_session");
 }
 
-/** Lives in Electron's main process. Only this GUI process spawns the native
- * daemon: a bundle-id string sent by a standalone server cannot confer TCC. */
+/** Lives in Electron's main process on macOS — only that GUI process spawns
+ * the native daemon: a bundle-id string sent by a standalone server cannot
+ * confer TCC. The standalone host entry (`cuaDriverHostStandalone`) runs the
+ * same class on platforms where no such grant model exists. */
 export class CuaDriverHost {
   private directory = "";
   private server: Server | undefined;
@@ -293,6 +310,13 @@ export class CuaDriverHost {
    * a lock/resume cycle netted back to "not paused" between two replies.
    */
   private desktopInterruptionCount = 0;
+  /**
+   * The `synara_native_revision` the live driver reported at handshake —
+   * `undefined` until the first spawn answers, `0` when the driver is an
+   * unpatched upstream build. Rides every reply so the backend can shape
+   * advertised capabilities to the driver actually running.
+   */
+  private observedNativeRevision: number | undefined;
   private operations: Promise<void> = Promise.resolve();
   private stopping: Promise<void> = Promise.resolve();
   private epoch = 0;
@@ -326,20 +350,42 @@ export class CuaDriverHost {
        * unmasked excursion under an armed flag.
        */
       shield?: ComputerShieldHost;
+      /**
+       * The `synara_native_revision` the spawned driver must report at
+       * handshake. Defaults to {@link CUA_NATIVE_REVISION} — the patched
+       * build the macOS desktop provisions. `null` expects a provisioned
+       * upstream driver: its metadata carries no Synara revision, so the
+       * revision check and the patch-only spawn flags are skipped, and the
+       * driver runs with the safety set upstream ships.
+       */
+      nativeRevision?: number | null;
+      /**
+       * Where the host socket listens. Defaults to a unix socket in the
+       * private session directory — on Windows, a `\\.\pipe\` name, which
+       * Node maps to a named pipe. The standalone host passes an explicit
+       * endpoint so the server can be configured to reach it.
+       */
+      hostEndpoint?: string;
     },
   ) {}
 
   async listen(): Promise<string> {
     this.directory = await mkdtemp(join(tmpdir(), "synara-cua-"));
     await chmod(this.directory, 0o700);
-    const endpoint = join(this.directory, "host.sock");
+    // Named pipes are already private to the creating user on Windows; the
+    // 0o600 owner check is a unix-socket protection, applied where it exists.
+    const endpoint =
+      this.options.hostEndpoint ??
+      (process.platform === "win32"
+        ? `\\\\.\\pipe\\synara-cua-host-${randomUUID().slice(0, 8)}`
+        : join(this.directory, "host.sock"));
     const server = createServer((socket) => this.accept(socket));
     this.server = server;
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(endpoint, resolve);
     });
-    await chmod(endpoint, 0o600);
+    if (process.platform !== "win32") await chmod(endpoint, 0o600);
     return endpoint;
   }
 
@@ -369,7 +415,10 @@ export class CuaDriverHost {
         return;
       }
       void this.handle(request, socket).then(
-        (result) => socket.end(JSON.stringify({ ...result, ...this.desktopState() }) + "\n"),
+        (result) =>
+          socket.end(
+            JSON.stringify({ ...result, ...this.desktopState() }) + "\n",
+          ),
         (error) =>
           socket.end(
             JSON.stringify({
@@ -384,9 +433,14 @@ export class CuaDriverHost {
     socket.setTimeout(60_000, () => socket.destroy());
   }
 
-  private async handle(request: Record<string, unknown>, connection: Socket): Promise<CuaReply> {
+  private async handle(
+    request: Record<string, unknown>,
+    connection: Socket,
+  ): Promise<CuaReply> {
     const supplied =
-      typeof request.capability === "string" ? Buffer.from(request.capability) : Buffer.alloc(0);
+      typeof request.capability === "string"
+        ? Buffer.from(request.capability)
+        : Buffer.alloc(0);
     const expected = Buffer.from(this.options.capability);
     if (
       expected.length < 32 ||
@@ -408,11 +462,13 @@ export class CuaDriverHost {
       // require a fresh one before the next action, same as a resume.
       if (!this.closed) this.desktopObservationRequired = true;
       this.updateInputMonitorArmed();
-      if (wasStopped) log("computer input re-armed after the Escape kill switch");
+      if (wasStopped)
+        log("computer input re-armed after the Escape kill switch");
       return { ok: true, result: { rearmed: true, wasStopped } };
     }
     const task = parseCuaComputerTask(request.task);
-    if (request.task !== undefined && !task) throw new Error("Invalid computer task attribution.");
+    if (request.task !== undefined && !task)
+      throw new Error("Invalid computer task attribution.");
     if (request.method === "end_task") {
       if (!task) throw new Error("Computer task attribution is required.");
       this.rememberTask(this.endedFrameTasks, task);
@@ -494,7 +550,9 @@ export class CuaDriverHost {
     }
     if (this.closed) throw new Error("Computer host is closed.");
     if (this.suspended)
-      throw new Error("Computer host is suspended while the backend is stopping.");
+      throw new Error(
+        "Computer host is suspended while the backend is stopping.",
+      );
     // A probe or a permission check is the host's first touch: both answer
     // without the driver, which is exactly what makes them the cheap moment
     // to warm its spawn plus handshake in the background.
@@ -513,13 +571,20 @@ export class CuaDriverHost {
             "Cua Driver is not bundled. Run the local provisioning script and relaunch Synara.",
         };
       }
-      return { ok: true, result: { version: CUA_DRIVER_VERSION, running: !!this.generation } };
+      return {
+        ok: true,
+        result: { version: CUA_DRIVER_VERSION, running: !!this.generation },
+      };
     }
     if (request.method === "setup") {
       connection.setTimeout(CUA_SETUP_TIMEOUT_MS);
       await this.stop();
       if (connection.destroyed || this.closed || this.suspended)
-        return { ok: false, error: "Cancelled before permission setup.", effect: "not-dispatched" };
+        return {
+          ok: false,
+          error: "Cancelled before permission setup.",
+          effect: "not-dispatched",
+        };
       await this.options.setup();
       return { ok: true };
     }
@@ -527,7 +592,9 @@ export class CuaDriverHost {
     if (
       request.method !== "call" ||
       typeof name !== "string" ||
-      (!CUA_READ_TOOLS.has(name) && !CUA_ACTION_TOOLS.has(name) && !CUA_BROWSER_TOOLS.has(name))
+      (!CUA_READ_TOOLS.has(name) &&
+        !CUA_ACTION_TOOLS.has(name) &&
+        !CUA_BROWSER_TOOLS.has(name))
     )
       throw new Error("Unsupported computer host request.");
     // Browser calls mint session-scoped capabilities. Without task attribution
@@ -536,7 +603,8 @@ export class CuaDriverHost {
     if (CUA_BROWSER_TOOLS.has(name) && !task)
       throw new Error("Computer browser calls require task attribution.");
     if (this.desktopPauses.size > 0) return this.desktopPauseReply();
-    const mutating = CUA_ACTION_TOOLS.has(name) || CUA_BROWSER_MUTATION_TOOLS.has(name);
+    const mutating =
+      CUA_ACTION_TOOLS.has(name) || CUA_BROWSER_MUTATION_TOOLS.has(name);
     if (this.emergencyStopped && mutating) return this.escapeStoppedReply();
     // Observations and input share one native session. A pane capture must not
     // race input or turn a harmless concurrent read into a driver restart.
@@ -546,7 +614,12 @@ export class CuaDriverHost {
     const operation = (async () => {
       await previous;
       await stopping;
-      if (this.closed || this.suspended || connection.destroyed || epoch !== this.epoch)
+      if (
+        this.closed ||
+        this.suspended ||
+        connection.destroyed ||
+        epoch !== this.epoch
+      )
         return {
           ok: false,
           error: "Cancelled before dispatch.",
@@ -557,7 +630,8 @@ export class CuaDriverHost {
       if (task && this.userStoppedTasks.has(cuaComputerTaskKey(task))) {
         return {
           ok: false,
-          error: "The user stopped computer use for this turn. Do not retry actions.",
+          error:
+            "The user stopped computer use for this turn. Do not retry actions.",
           effect: "not-dispatched" as const,
         };
       }
@@ -567,7 +641,10 @@ export class CuaDriverHost {
         // from tools never reach the permission request path.
         const check = this.options.checkPermissions;
         const cancelled = () =>
-          this.closed || this.suspended || connection.destroyed || epoch !== this.epoch;
+          this.closed ||
+          this.suspended ||
+          connection.destroyed ||
+          epoch !== this.epoch;
         let permissions = await this.checkPermissions(connection, check);
         if (!permissions || cancelled())
           return {
@@ -575,7 +652,10 @@ export class CuaDriverHost {
             error: "Cancelled before permission check completed.",
             effect: "not-dispatched",
           } as const;
-        if (this.permissions && permissionsChanged(this.permissions, permissions)) {
+        if (
+          this.permissions &&
+          permissionsChanged(this.permissions, permissions)
+        ) {
           // A single helper probe can read TCC mid-transition and report a
           // phantom change the next probe reverts. Arming on it deadlocks the
           // desktop: every action runs check_permissions first, so a flapping
@@ -590,7 +670,10 @@ export class CuaDriverHost {
             } as const;
           permissions = confirmed;
         }
-        if (this.permissions && permissionsChanged(this.permissions, permissions)) {
+        if (
+          this.permissions &&
+          permissionsChanged(this.permissions, permissions)
+        ) {
           this.epoch += 1;
           this.desktopEpoch += 1;
           this.desktopObservationRequired = true;
@@ -625,7 +708,10 @@ export class CuaDriverHost {
         log(`refused ${name}: fresh desktop observation still required`);
         return this.desktopPauseReply();
       }
-      if (task && (request.modelObservation === true || CUA_ACTION_TOOLS.has(name)))
+      if (
+        task &&
+        (request.modelObservation === true || CUA_ACTION_TOOLS.has(name))
+      )
         this.frameTapTask = task;
       const reply = await this.call(
         name,
@@ -658,8 +744,13 @@ export class CuaDriverHost {
           // otherwise sit out the whole cold start until the first
           // window-attributed call. Resolve the launched app's main window
           // off the reply path: the agent's launch already returned.
-          void this.primeTapAfterLaunch(task, request.args, connection, epoch).catch(
-            (error: unknown) => log(`computer frame tap launch prime failed: ${String(error)}`),
+          void this.primeTapAfterLaunch(
+            task,
+            request.args,
+            connection,
+            epoch,
+          ).catch((error: unknown) =>
+            log(`computer frame tap launch prime failed: ${String(error)}`),
           );
         }
       }
@@ -691,7 +782,8 @@ export class CuaDriverHost {
       if (this.closed || this.suspended) {
         return {
           ok: false,
-          error: "The activation shield is unavailable while the computer host is stopped.",
+          error:
+            "The activation shield is unavailable while the computer host is stopped.",
           effect: "not-dispatched",
         };
       }
@@ -786,11 +878,14 @@ export class CuaDriverHost {
     const admittedEpoch = this.epoch;
     const admittedDesktopEpoch = this.desktopEpoch;
     const isBrowser = CUA_BROWSER_TOOLS.has(name);
-    const mutation = isBrowser ? CUA_BROWSER_MUTATION_TOOLS.has(name) : CUA_ACTION_TOOLS.has(name);
+    const mutation = isBrowser
+      ? CUA_BROWSER_MUTATION_TOOLS.has(name)
+      : CUA_ACTION_TOOLS.has(name);
     // Browser labels are minted from the task's thread: one capability
     // namespace per thread, surviving turn boundaries, ended only by
     // `end_browser_thread` or transport teardown.
-    const label = isBrowser && task ? browserSessionLabel(task.threadId) : undefined;
+    const label =
+      isBrowser && task ? browserSessionLabel(task.threadId) : undefined;
     // Desktop calls get a per-task cursor session: the overlay keys cursors —
     // and the badge each one carries — by session label, so each attributed
     // thread animates under its own color and name instead of the shared
@@ -813,7 +908,10 @@ export class CuaDriverHost {
           this.desktopPauses.size > 0
         )
           throw new Error("Cancelled before dispatch.");
-        const args = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+        const args =
+          input && typeof input === "object" && !Array.isArray(input)
+            ? input
+            : {};
         let browserSessionId: string | undefined;
         if (isBrowser && label) {
           // The transport owner must be a live proxy session for the driver's
@@ -867,7 +965,10 @@ export class CuaDriverHost {
             // is the real guard: the label overwrites any caller `session`,
             // and `_session_id`/`_transport_session_id` are injected by the
             // daemon from this request's envelope, never trusted from args.
-            args: { ...args, session: label ?? agentLabel ?? generation.session },
+            args: {
+              ...args,
+              session: label ?? agentLabel ?? generation.session,
+            },
             ...(browserSessionId ? { session_id: browserSessionId } : {}),
           },
           { timeoutMs: 30_000, mutation },
@@ -903,7 +1004,10 @@ export class CuaDriverHost {
         break;
       }
       if (!reply || !generation) throw new Error("Cancelled before dispatch.");
-      if (admittedDesktopEpoch !== this.desktopEpoch && CUA_READ_TOOLS.has(name)) {
+      if (
+        admittedDesktopEpoch !== this.desktopEpoch &&
+        CUA_READ_TOOLS.has(name)
+      ) {
         log(
           `refused stale ${name} read (desktop epoch ${admittedDesktopEpoch} -> ${this.desktopEpoch})`,
         );
@@ -921,13 +1025,19 @@ export class CuaDriverHost {
         !reply.result?.isError &&
         reply.result !== undefined &&
         reply.result.structuredContent?.screenshot_frame_valid !== false &&
-        (reply.result.content?.some((part) => part.type === "image" && !!part.data) ||
+        (reply.result.content?.some(
+          (part) => part.type === "image" && !!part.data,
+        ) ||
           Array.isArray(reply.result.structuredContent?.elements))
       ) {
         this.desktopObservationRequired = false;
         log(`fresh desktop observation via ${name}; input gate cleared`);
       }
-      if (name === "get_desktop_state" && reply.result && this.options.normalizeOverview)
+      if (
+        name === "get_desktop_state" &&
+        reply.result &&
+        this.options.normalizeOverview
+      )
         this.options.normalizeOverview(reply.result);
       return reply;
     } catch (error) {
@@ -942,7 +1052,8 @@ export class CuaDriverHost {
       return {
         ok: false,
         error: detail,
-        effect: dispatched && mutation ? "dispatched-unknown" : "not-dispatched",
+        effect:
+          dispatched && mutation ? "dispatched-unknown" : "not-dispatched",
       };
     } finally {
       connection.removeListener("close", abort);
@@ -962,7 +1073,8 @@ export class CuaDriverHost {
 
   private warm(): void {
     if (this.warmAttempted || this.closed || this.suspended) return;
-    const raw = process.env.SYNARA_CUA_WARM_ON_FIRST_TOUCH?.trim().toLowerCase();
+    const raw =
+      process.env.SYNARA_CUA_WARM_ON_FIRST_TOUCH?.trim().toLowerCase();
     if (raw !== "1" && raw !== "true" && raw !== "on" && raw !== "yes") return;
     this.warmAttempted = true;
     void this.ensureSpawned().catch((error: unknown) => {
@@ -996,7 +1108,10 @@ export class CuaDriverHost {
     try {
       const reply = await new Promise<CuaReply>((resolve, reject) => {
         const chunks: Buffer[] = [];
-        const timeout = setTimeout(() => reject(new Error("session_begin timed out")), 10_000);
+        const timeout = setTimeout(
+          () => reject(new Error("session_begin timed out")),
+          10_000,
+        );
         const fail = () => {
           clearTimeout(timeout);
           reject(new Error("session_begin connection closed"));
@@ -1010,7 +1125,11 @@ export class CuaDriverHost {
           socket.removeListener("close", fail);
           socket.removeAllListeners("data");
           try {
-            resolve(JSON.parse(Buffer.concat(chunks).subarray(0, end).toString("utf8")));
+            resolve(
+              JSON.parse(
+                Buffer.concat(chunks).subarray(0, end).toString("utf8"),
+              ),
+            );
           } catch (error) {
             reject(error instanceof Error ? error : new Error(String(error)));
           }
@@ -1025,7 +1144,8 @@ export class CuaDriverHost {
       if (!reply.ok) throw new Error(reply.error ?? "session_begin refused.");
     } catch (error) {
       socket.destroy();
-      if (generation.controlSocket === socket) generation.controlSocket = undefined;
+      if (generation.controlSocket === socket)
+        generation.controlSocket = undefined;
       throw error;
     }
     // Late EOF after a successful begin still means the sessions are gone —
@@ -1042,14 +1162,32 @@ export class CuaDriverHost {
     const start = async () => {
       await this.retiring;
       if (this.closed) throw new Error("Computer host is closed.");
-      if (this.generation && !this.generation.retired && !this.generation.didExit)
+      if (
+        this.generation &&
+        !this.generation.retired &&
+        !this.generation.didExit
+      )
         return this.generation;
       if (this.generation) await this.retire(this.generation);
       await access(this.options.binaryPath);
-      const endpoint = join(this.directory, `driver-${randomUUID().slice(0, 8)}.sock`);
+      const endpoint =
+        process.platform === "win32"
+          ? `\\\\.\\pipe\\synara-cua-driver-${randomUUID().slice(0, 8)}`
+          : join(this.directory, `driver-${randomUUID().slice(0, 8)}.sock`);
+      // The compact cursor and its idle-hide tuning are patch additions —
+      // an unpatched upstream driver rejects flags it does not know.
+      const expectsPatched = this.options.nativeRevision !== null;
       const child = spawn(
         this.options.binaryPath,
-        ["serve", "--embedded", "--socket", endpoint, "--compact-cursor", "--idle-hide-ms", "900"],
+        [
+          "serve",
+          "--embedded",
+          "--socket",
+          endpoint,
+          ...(expectsPatched
+            ? ["--compact-cursor", "--idle-hide-ms", "900"]
+            : []),
+        ],
         {
           stdio: ["pipe", "ignore", "pipe"],
           env: {
@@ -1093,7 +1231,8 @@ export class CuaDriverHost {
         child.once("error", () => resolve());
       });
       void exited.then(() => {
-        if (stderrTail.length) log(`driver stderr tail: ${stderrTail.join(" | ")}`);
+        if (stderrTail.length)
+          log(`driver stderr tail: ${stderrTail.join(" | ")}`);
       });
       const generation: Generation = {
         child,
@@ -1132,18 +1271,35 @@ export class CuaDriverHost {
             await delay(50);
           }
         }
+        // `nativeRevision: null` expects an unpatched upstream driver — its
+        // metadata carries no Synara revision and the field must not be
+        // required. A patched build is still accepted there: a superset of
+        // the expected identity is never a downgrade.
+        const expectedNativeRevision =
+          this.options.nativeRevision === undefined
+            ? CUA_NATIVE_REVISION
+            : this.options.nativeRevision;
+        const reportedRevision = metadata?.result?.synara_native_revision;
         if (
           !metadata?.ok ||
           metadata.result?.driver_version !== CUA_DRIVER_VERSION ||
-          metadata.result?.synara_native_revision !== CUA_NATIVE_REVISION ||
+          (expectedNativeRevision !== null &&
+            reportedRevision !== expectedNativeRevision) ||
           metadata.result?.embedded !== true ||
           metadata.result?.pid !== child.pid
         )
-          throw new Error("Cua Driver identity/version/native revision handshake failed.");
+          throw new Error(
+            "Cua Driver identity/version/native revision handshake failed.",
+          );
+        this.observedNativeRevision =
+          typeof reportedRevision === "number" &&
+          Number.isSafeInteger(reportedRevision)
+            ? reportedRevision
+            : 0;
         if (generation.retired || generation.didExit)
           throw new Error("Cua Driver stopped during startup.");
         generation.cancellationReady = true;
-        await chmod(endpoint, 0o600);
+        if (process.platform !== "win32") await chmod(endpoint, 0o600);
         if (generation.retired || generation.didExit)
           throw new Error("Cua Driver stopped during startup.");
         return generation;
@@ -1291,7 +1447,8 @@ export class CuaDriverHost {
             { timeoutMs: 5_000 },
           );
           cleanupConfirmed =
-            reply.ok === true && cuaCleanupAcknowledged(reply.result, generation.child.pid);
+            reply.ok === true &&
+            cuaCleanupAcknowledged(reply.result, generation.child.pid);
         } catch {
           cleanupConfirmed = false;
         }
@@ -1299,12 +1456,14 @@ export class CuaDriverHost {
           // A dead socket can outrun the exit event: the process may already
           // be gone, in which case this is the crash path, not a live driver
           // withholding its acknowledgement. Give the exit a short grace.
-          if (!generation.didExit) await Promise.race([generation.exited, delay(500)]);
+          if (!generation.didExit)
+            await Promise.race([generation.exited, delay(500)]);
           if (generation.didExit) {
             // No input in flight means nothing is uncertain — the dead
             // generation clears outright. With input in flight, only a
             // confirmed release clears it.
-            const cleared = !generation.inputInFlight || (await releaseHeldInput());
+            const cleared =
+              !generation.inputInFlight || (await releaseHeldInput());
             if (cleared) {
               if (this.generation === generation) this.generation = undefined;
               await rm(generation.socket, { force: true });
@@ -1405,7 +1564,9 @@ export class CuaDriverHost {
   emergencyStopInput(): boolean {
     if (this.closed) return false;
     const engaged =
-      this.emergencyStopped || this.generation !== undefined || this.starting !== undefined;
+      this.emergencyStopped ||
+      this.generation !== undefined ||
+      this.starting !== undefined;
     if (!engaged) return false;
     if (!this.emergencyStopped) {
       this.emergencyStopped = true;
@@ -1448,7 +1609,11 @@ export class CuaDriverHost {
       result: {
         isError: true,
         content: [{ type: "text", text: message }],
-        structuredContent: { effect: "refused", code: "escape_emergency_stop", message },
+        structuredContent: {
+          effect: "refused",
+          code: "escape_emergency_stop",
+          message,
+        },
       },
     };
   }
@@ -1466,7 +1631,10 @@ export class CuaDriverHost {
 
   /** The native call args carry the agent's window target; task attribution
    * alone does not say which window the tap should stream. */
-  private frameTapTarget(task: CuaComputerTask, input: unknown): CuaPreviewTarget | undefined {
+  private frameTapTarget(
+    task: CuaComputerTask,
+    input: unknown,
+  ): CuaPreviewTarget | undefined {
     if (!input || typeof input !== "object") return undefined;
     const args = input as Record<string, unknown>;
     if (
@@ -1509,7 +1677,9 @@ export class CuaDriverHost {
       reply.result?.isError
     )
       return;
-    const windows = (reply.result?.structuredContent as { windows?: unknown } | undefined)?.windows;
+    const windows = (
+      reply.result?.structuredContent as { windows?: unknown } | undefined
+    )?.windows;
     if (!Array.isArray(windows)) return;
     let best: { pid: number; windowId: number; area: number } | undefined;
     for (const row of windows) {
@@ -1517,7 +1687,8 @@ export class CuaDriverHost {
       const record = row as Record<string, unknown>;
       const pid = record.pid;
       const windowId = record.window_id;
-      const bounds = record.bounds as { width?: unknown; height?: unknown } | undefined;
+      const bounds = record.bounds as
+        { width?: unknown; height?: unknown } | undefined;
       const width = typeof bounds?.width === "number" ? bounds.width : 0;
       const height = typeof bounds?.height === "number" ? bounds.height : 0;
       if (
@@ -1532,14 +1703,23 @@ export class CuaDriverHost {
         height <= 0
       )
         continue;
-      const appName = typeof record.app_name === "string" ? record.app_name.toLowerCase() : "";
-      if (!candidates.some((candidate) => appName === candidate || appName.includes(candidate)))
+      const appName =
+        typeof record.app_name === "string"
+          ? record.app_name.toLowerCase()
+          : "";
+      if (
+        !candidates.some(
+          (candidate) => appName === candidate || appName.includes(candidate),
+        )
+      )
         continue;
       const area = width * height;
       if (!best || area > best.area) best = { pid, windowId, area };
     }
     if (!best) {
-      log("computer frame tap launch prime: no on-screen window matched the launched app");
+      log(
+        "computer frame tap launch prime: no on-screen window matched the launched app",
+      );
       return;
     }
     if (
@@ -1548,8 +1728,14 @@ export class CuaDriverHost {
       this.userStoppedTasks.has(cuaComputerTaskKey(task))
     )
       return;
-    log(`computer frame tap launch prime: streaming pid ${best.pid} window ${best.windowId}`);
-    this.options.frameTap.update({ task, pid: best.pid, windowId: best.windowId });
+    log(
+      `computer frame tap launch prime: streaming pid ${best.pid} window ${best.windowId}`,
+    );
+    this.options.frameTap.update({
+      task,
+      pid: best.pid,
+      windowId: best.windowId,
+    });
   }
 
   /** Backend shutdown must reject later requests as well as cancel admitted
@@ -1572,12 +1758,18 @@ export class CuaDriverHost {
    */
   private desktopState(): Pick<
     CuaReply,
-    "desktopEpoch" | "desktopPauses" | "desktopInterruptions"
+    | "desktopEpoch"
+    | "desktopPauses"
+    | "desktopInterruptions"
+    | "driverNativeRevision"
   > {
     return {
       desktopEpoch: this.desktopEpoch,
       desktopPauses: [...this.desktopPauses].toSorted(),
       desktopInterruptions: this.desktopInterruptionCount,
+      ...(this.observedNativeRevision !== undefined
+        ? { driverNativeRevision: this.observedNativeRevision }
+        : {}),
     };
   }
 
@@ -1587,13 +1779,17 @@ export class CuaDriverHost {
     this.desktopPauses.add(reason);
     this.desktopInterruptionCount += 1;
     this.desktopObservationRequired = true;
-    log(`desktop input paused (${reason}); requiring fresh desktop observation`);
+    log(
+      `desktop input paused (${reason}); requiring fresh desktop observation`,
+    );
     return this.stop();
   }
 
   resumeDesktop(reason: string): void {
     if (this.desktopPauses.delete(reason))
-      log(`desktop pause "${reason}" lifted; ${this.desktopPauses.size} pause(s) remain`);
+      log(
+        `desktop pause "${reason}" lifted; ${this.desktopPauses.size} pause(s) remain`,
+      );
   }
 
   private desktopPauseReply(): CuaReply {
@@ -1606,7 +1802,11 @@ export class CuaDriverHost {
       result: {
         isError: true,
         content: [{ type: "text", text: message }],
-        structuredContent: { effect: "refused", code: "desktop_input_paused", message },
+        structuredContent: {
+          effect: "refused",
+          code: "desktop_input_paused",
+          message,
+        },
       },
     };
   }

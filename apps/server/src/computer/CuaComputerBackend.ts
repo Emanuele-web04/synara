@@ -58,7 +58,10 @@ import {
   assertDesktopOperationActive,
   desktopDeliveryMode,
 } from "./DesktopOperationQueue.ts";
-import { StillFramePublisher, resolveStillIntervalMs } from "./stillFramePublisher.ts";
+import {
+  StillFramePublisher,
+  resolveStillIntervalMs,
+} from "./stillFramePublisher.ts";
 import { isModelDesktopObservationActive } from "./modelDesktopObservation.ts";
 import { currentComputerTask } from "./computerTaskContext.ts";
 import {
@@ -97,7 +100,9 @@ function optionalRect(value: unknown): ComputerRect | undefined {
     width: number(r.width ?? r.w),
     height: number(r.height ?? r.h),
   };
-  return Object.values(out).every(Number.isFinite) && out.width > 0 && out.height > 0
+  return Object.values(out).every(Number.isFinite) &&
+    out.width > 0 &&
+    out.height > 0
     ? out
     : undefined;
 }
@@ -228,7 +233,10 @@ function cuaKey(value: string): string {
  * raced write alone: the lane still drains in order, and the error reports
  * possible partial dispatch so no caller may replay it.
  */
-function withSemanticTextLaneTimeout<A>(write: Promise<A>, holdMs: number): Promise<A> {
+function withSemanticTextLaneTimeout<A>(
+  write: Promise<A>,
+  holdMs: number,
+): Promise<A> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
@@ -280,7 +288,10 @@ export class CuaComputerBackend implements ComputerBackend {
    * it — the same `actions` list the driver's own dispatch checks. Nodes are
    * recreated on every observation, so this is always the freshest claim.
    */
-  private readonly elementActions = new WeakMap<ComputerUiNode, ReadonlySet<string>>();
+  private readonly elementActions = new WeakMap<
+    ComputerUiNode,
+    ReadonlySet<string>
+  >();
   /**
    * Elements living inside Chromium-family web content. AXSelectedText
    * inserts never reach their DOM (verified against Electron 43), so text
@@ -295,7 +306,10 @@ export class CuaComputerBackend implements ComputerBackend {
    * rather than pressing the wrong control. Retaining the root keeps every
    * child node alive for the WeakMap token lookups.
    */
-  private readonly recentTrees = new Map<string, { at: number; root: ComputerUiNode }>();
+  private readonly recentTrees = new Map<
+    string,
+    { at: number; root: ComputerUiNode }
+  >();
   private readonly observedGeometry = new Map<string, ComputerRect>();
   private readonly stills: StillFramePublisher;
   private cachedImage: ComputerScreenshot | undefined;
@@ -308,6 +322,13 @@ export class CuaComputerBackend implements ComputerBackend {
    * last granted, and what drives the `desktop-interrupted` event.
    */
   private desktopInterruptions: number | undefined;
+  /**
+   * The Synara native revision the live driver reported through host
+   * replies — `undefined` until the first reply carrying it, `0` on an
+   * unpatched upstream driver. Capabilities that exist only in the Synara
+   * patch are advertised only while this is nonzero or unknown.
+   */
+  private driverNativeRevision: number | undefined;
   private imageGeneration = 0;
   private readonly previewTasks = new Map<string, CuaComputerTask>();
   private clearCachedImage(): void {
@@ -335,14 +356,17 @@ export class CuaComputerBackend implements ComputerBackend {
     this.endpoint = options.endpoint ?? process.env[CUA_HOST_SOCKET_ENV];
     this.capability = options.capability;
     this.request = options.request ?? cuaRequest;
-    this.semanticTextLaneHoldMs = options.semanticTextLaneHoldMs ?? CUA_SEMANTIC_TEXT_LANE_HOLD_MS;
-    this.semanticTextLaneGapMs = options.semanticTextLaneGapMs ?? CUA_SEMANTIC_TEXT_LANE_GAP_MS;
+    this.semanticTextLaneHoldMs =
+      options.semanticTextLaneHoldMs ?? CUA_SEMANTIC_TEXT_LANE_HOLD_MS;
+    this.semanticTextLaneGapMs =
+      options.semanticTextLaneGapMs ?? CUA_SEMANTIC_TEXT_LANE_GAP_MS;
     this.stills = new StillFramePublisher({
       capture: async () => {
         // Reuse a recent tool observation; idle panes spend at most one capture
         // every two seconds and detached panes spend none.
         const image =
-          this.cachedImage && Date.now() - Date.parse(this.cachedImage.capturedAt) < 1_500
+          this.cachedImage &&
+          Date.now() - Date.parse(this.cachedImage.capturedAt) < 1_500
             ? this.cachedImage
             : await this.captureOverview(false);
         return Buffer.from(image.bytesBase64, "base64");
@@ -350,14 +374,17 @@ export class CuaComputerBackend implements ComputerBackend {
       prepare: async () => {
         await this.availability();
       },
-      isCaptureAvailable: () => !this.disposed && !this.permissions.includes("screenRecording"),
+      isCaptureAvailable: () =>
+        !this.disposed && !this.permissions.includes("screenRecording"),
       emit: () => undefined,
       now: Date.now,
       // Still cadence is 2 s unless SYNARA_CUA_PREVIEW_STILL_MS overrides it;
       // the publisher floor keeps an aggressive value from queueing captures
       // faster than one encode can finish.
       intervalMs: resolveStillIntervalMs(
-        options.stillIntervalMs ?? cuaPreviewStillMsOverride() ?? CUA_STILL_FRAME_INTERVAL_MS,
+        options.stillIntervalMs ??
+          cuaPreviewStillMsOverride() ??
+          CUA_STILL_FRAME_INTERVAL_MS,
       ),
     });
   }
@@ -377,7 +404,8 @@ export class CuaComputerBackend implements ComputerBackend {
   private setHealth(health: ComputerHealth): void {
     if (JSON.stringify(health) === JSON.stringify(this.currentHealth)) return;
     this.currentHealth = health;
-    for (const listener of this.listeners) listener({ type: "health-changed", health });
+    for (const listener of this.listeners)
+      listener({ type: "health-changed", health });
   }
   /**
    * One unusable capture flips health unavailable. The action verdict stands —
@@ -392,7 +420,10 @@ export class CuaComputerBackend implements ComputerBackend {
       status: "unavailable",
       captureAvailable: false,
       consecutiveFailures: this.currentHealth.consecutiveFailures + 1,
-      lastFailure: { at: new Date().toISOString(), message: message.slice(0, 2048) },
+      lastFailure: {
+        at: new Date().toISOString(),
+        message: message.slice(0, 2048),
+      },
     });
   }
   private async host(
@@ -412,13 +443,16 @@ export class CuaComputerBackend implements ComputerBackend {
       const currentKey = cuaComputerTaskKey(task);
       // Refresh recency: Map.set alone does not reorder, so a task that
       // keeps dispatching would otherwise age out while live. Delete first.
-      if (this.previewTasks.has(currentKey)) this.previewTasks.delete(currentKey);
+      if (this.previewTasks.has(currentKey))
+        this.previewTasks.delete(currentKey);
       this.previewTasks.set(currentKey, task);
       // Evict oldest first, but never the task dispatching right now:
       // evicting it would break the taskKey lock the preview helper relies on
       // and silently drop its later endTask (preview leak).
       while (this.previewTasks.size > 256) {
-        const oldest = [...this.previewTasks.keys()].find((key) => key !== currentKey);
+        const oldest = [...this.previewTasks.keys()].find(
+          (key) => key !== currentKey,
+        );
         if (oldest === undefined) break;
         this.previewTasks.delete(oldest);
       }
@@ -441,19 +475,30 @@ export class CuaComputerBackend implements ComputerBackend {
             ...request,
             ...(task ? { task } : {}),
             ...(request.method === "call" &&
-            (request.name === "get_window_state" || request.name === "get_desktop_state")
-              ? { modelObservation: allowModelObservation && isModelDesktopObservationActive() }
+            (request.name === "get_window_state" ||
+              request.name === "get_desktop_state")
+              ? {
+                  modelObservation:
+                    allowModelObservation && isModelDesktopObservationActive(),
+                }
               : {}),
             capability: this.capability,
           },
           {
             signal: desktopOperationSignal(),
             mutation,
-            timeoutMs: request.method === "setup" ? CUA_SETUP_TIMEOUT_MS : 35_000,
+            timeoutMs:
+              request.method === "setup" ? CUA_SETUP_TIMEOUT_MS : 35_000,
           },
         ),
       );
       this.observeDesktopInterruption(reply);
+      if (
+        typeof reply.driverNativeRevision === "number" &&
+        Number.isSafeInteger(reply.driverNativeRevision) &&
+        reply.driverNativeRevision >= 0
+      )
+        this.driverNativeRevision = reply.driverNativeRevision;
       const epoch = reply.desktopEpoch;
       if (epoch !== undefined && Number.isSafeInteger(epoch) && epoch >= 0) {
         if (
@@ -486,7 +531,8 @@ export class CuaComputerBackend implements ComputerBackend {
         );
       return reply;
     } catch (error) {
-      if (error instanceof CuaTransportError) throw new CuaActionError(error.message, error.effect);
+      if (error instanceof CuaTransportError)
+        throw new CuaActionError(error.message, error.effect);
       throw error;
     }
   }
@@ -508,11 +554,17 @@ export class CuaComputerBackend implements ComputerBackend {
       interruptions < 0
     )
       return;
-    if (this.desktopInterruptions !== undefined && interruptions !== this.desktopInterruptions) {
+    if (
+      this.desktopInterruptions !== undefined &&
+      interruptions !== this.desktopInterruptions
+    ) {
       const pauses = Array.isArray(reply.desktopPauses)
-        ? reply.desktopPauses.filter((reason): reason is string => typeof reason === "string")
+        ? reply.desktopPauses.filter(
+            (reason): reason is string => typeof reason === "string",
+          )
         : [];
-      for (const listener of this.listeners) listener({ type: "desktop-interrupted", pauses });
+      for (const listener of this.listeners)
+        listener({ type: "desktop-interrupted", pauses });
     }
     this.desktopInterruptions = interruptions;
   }
@@ -526,7 +578,11 @@ export class CuaComputerBackend implements ComputerBackend {
     // a fixed driver vocabulary, and nothing from `args` is recorded.
     currentComputerCall()?.timing?.count("native_calls");
     const reply = await timedComputerLeg("call", () =>
-      this.host({ method: "call", name, args }, mutation, allowModelObservation),
+      this.host(
+        { method: "call", name, args },
+        mutation,
+        allowModelObservation,
+      ),
     );
     const result = reply.result ?? {};
     if (result.isError || result.structuredContent?.effect === "refused") {
@@ -536,7 +592,8 @@ export class CuaComputerBackend implements ComputerBackend {
       // driver publishes two refusal dialects: action tools carry
       // `effect:"refused"`, while tools like invoke_menu/kill_app carry
       // `status:"refused"` plus a `refusal.code` object.
-      const refused = structured.effect === "refused" || structured.status === "refused";
+      const refused =
+        structured.effect === "refused" || structured.status === "refused";
       const refusal = record(structured.refusal);
       const message =
         (result.content ?? [])
@@ -583,7 +640,10 @@ export class CuaComputerBackend implements ComputerBackend {
         ? { kind: "available", backend: "cua" }
         : this.currentAvailability;
     } catch (error) {
-      return { kind: "backend-unavailable", message: String(error).slice(0, 2048) };
+      return {
+        kind: "backend-unavailable",
+        message: String(error).slice(0, 2048),
+      };
     }
   }
   async availability(): Promise<ComputerAvailability> {
@@ -604,7 +664,10 @@ export class CuaComputerBackend implements ComputerBackend {
       clipboard: true,
       focus: true,
       raise: true,
-      ghostCursor: true,
+      // The compact agent cursor is a Synara-patch rendering path. Unknown
+      // (no handshake yet) reads as the patched default; `0` is the
+      // unpatched upstream driver's honest answer.
+      ghostCursor: this.driverNativeRevision !== 0,
       visibleDesktop: true,
     };
   }
@@ -636,10 +699,12 @@ export class CuaComputerBackend implements ComputerBackend {
   }
   private refresh(force = false): Promise<void> {
     if (this.snapshot) return this.snapshot;
-    if (!force && Date.now() - this.snapshotAt < 1_000) return Promise.resolve();
+    if (!force && Date.now() - this.snapshotAt < 1_000)
+      return Promise.resolve();
     this.snapshot = (async () => {
       let permission =
-        (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
+        (await this.call("check_permissions", { prompt: false }))
+          .structuredContent ?? {};
       // tccd can report a transient negative for a freshly spawned session
       // while it maps the running app to its grants — observed to outlive a
       // single 400ms re-probe at turn start. A missing report that follows a
@@ -647,19 +712,27 @@ export class CuaComputerBackend implements ComputerBackend {
       // is published; a steady missing state converges on the last call and a
       // granted answer short-circuits the remaining probes.
       if (
-        (permission.accessibility !== true || permission.screen_recording !== true) &&
+        (permission.accessibility !== true ||
+          permission.screen_recording !== true) &&
         !this.hadMissingPermissions
       ) {
         for (let attempt = 0; attempt < 4; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 600));
           permission =
-            (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
-          if (permission.accessibility === true && permission.screen_recording === true) break;
+            (await this.call("check_permissions", { prompt: false }))
+              .structuredContent ?? {};
+          if (
+            permission.accessibility === true &&
+            permission.screen_recording === true
+          )
+            break;
         }
       }
       this.permissions = [];
-      if (permission.accessibility !== true) this.permissions.push("accessibility");
-      if (permission.screen_recording !== true) this.permissions.push("screenRecording");
+      if (permission.accessibility !== true)
+        this.permissions.push("accessibility");
+      if (permission.screen_recording !== true)
+        this.permissions.push("screenRecording");
       this.hadMissingPermissions = this.permissions.length > 0;
       // A capture failure clears only on an observed Screen Recording grant:
       // neither a previous-missing transition nor an explicit setup proves
@@ -670,8 +743,11 @@ export class CuaComputerBackend implements ComputerBackend {
       this.setHealth({
         ...this.currentHealth,
         status: this.captureFailed ? "unavailable" : "connected",
-        captureAvailable: permission.screen_recording === true && !this.captureFailed,
-        consecutiveFailures: this.captureFailed ? this.currentHealth.consecutiveFailures : 0,
+        captureAvailable:
+          permission.screen_recording === true && !this.captureFailed,
+        consecutiveFailures: this.captureFailed
+          ? this.currentHealth.consecutiveFailures
+          : 0,
       });
       this.currentAvailability = this.permissions.length
         ? {
@@ -688,7 +764,8 @@ export class CuaComputerBackend implements ComputerBackend {
         : { kind: "available", backend: "cua" };
       if (!this.permissions.length) {
         await this.readWindows();
-        const geometry = (await this.call("get_screen_size")).structuredContent ?? {};
+        const geometry =
+          (await this.call("get_screen_size")).structuredContent ?? {};
         const width = number(geometry.width),
           height = number(geometry.height);
         if (!(width > 0 && height > 0))
@@ -703,7 +780,10 @@ export class CuaComputerBackend implements ComputerBackend {
           status: "unavailable",
           captureAvailable: false,
           consecutiveFailures: this.currentHealth.consecutiveFailures + 1,
-          lastFailure: { at: new Date().toISOString(), message: String(error).slice(0, 2048) },
+          lastFailure: {
+            at: new Date().toISOString(),
+            message: String(error).slice(0, 2048),
+          },
         });
         throw error;
       })
@@ -714,7 +794,8 @@ export class CuaComputerBackend implements ComputerBackend {
   }
   private async readWindows(): Promise<readonly ComputerWindow[]> {
     const data = (await this.call("list_windows")).structuredContent ?? {};
-    if (!Array.isArray(data.windows)) throw new Error("Invalid Cua window list.");
+    if (!Array.isArray(data.windows))
+      throw new Error("Invalid Cua window list.");
     const rows = data.windows
       .map(record)
       .sort((a, b) => (number(b.z_index) || 0) - (number(a.z_index) || 0));
@@ -801,14 +882,21 @@ export class CuaComputerBackend implements ComputerBackend {
   async focusWindow(windowId: string): Promise<void> {
     // Selection sends no input. The actual actuator revalidates the exact
     // window immediately before dispatch; reuse the just-observed identity here.
-    await this.target(windowId, !this.windows.some((window) => window.id === windowId));
+    await this.target(
+      windowId,
+      !this.windows.some((window) => window.id === windowId),
+    );
     this.selectedWindow = windowId;
   }
   async checkInputReady(windowId: string): Promise<void> {
     const { pid, window_id } = await this.target(windowId);
     const result = await this.call("check_input_ready", { pid, window_id });
     const data = result.structuredContent ?? {};
-    if (data.ready !== true || number(data.pid) !== pid || number(data.window_id) !== window_id) {
+    if (
+      data.ready !== true ||
+      number(data.pid) !== pid ||
+      number(data.window_id) !== window_id
+    ) {
       throw new CuaActionError(
         "Cua did not confirm input readiness for the exact target window.",
         "not-dispatched",
@@ -852,7 +940,9 @@ export class CuaComputerBackend implements ComputerBackend {
     return {
       settled: data.settled,
       waitedMs: Number.isFinite(waited) ? waited : 0,
-      ...(typeof data.events_seen === "number" ? { eventsSeen: data.events_seen } : {}),
+      ...(typeof data.events_seen === "number"
+        ? { eventsSeen: data.events_seen }
+        : {}),
     };
   }
   async raiseWindow(windowId: string): Promise<void> {
@@ -874,7 +964,10 @@ export class CuaComputerBackend implements ComputerBackend {
   async clearFocusWindow(): Promise<void> {
     this.selectedWindow = undefined;
   }
-  private screenshot(result: CuaToolResult, fallback?: ComputerRect): ComputerScreenshot {
+  private screenshot(
+    result: CuaToolResult,
+    fallback?: ComputerRect,
+  ): ComputerScreenshot {
     const data = result.structuredContent ?? {};
     if (data.screenshot_frame_freshness === "unverified_off_space")
       throw new CuaActionError(
@@ -893,9 +986,12 @@ export class CuaComputerBackend implements ComputerBackend {
       );
     // The PNG header contains the dimensions; do not decode the full image
     // until its bytes are needed by the preview transport.
-    const dimensions = pngDimensions(Buffer.from(image.data.slice(0, 32), "base64"));
+    const dimensions = pngDimensions(
+      Buffer.from(image.data.slice(0, 32), "base64"),
+    );
     const region = data.window_bounds ? rect(data.window_bounds) : fallback;
-    if (!dimensions || !region) throw new Error("Cua screenshot is missing its coordinate frame.");
+    if (!dimensions || !region)
+      throw new Error("Cua screenshot is missing its coordinate frame.");
     const scale = dimensions.width / region.width;
     if (Math.abs(dimensions.height / region.height - scale) > 0.01)
       throw new Error("Cua screenshot dimensions disagree with its geometry.");
@@ -909,10 +1005,17 @@ export class CuaComputerBackend implements ComputerBackend {
       capturedAt: new Date().toISOString(),
     };
   }
-  private async captureOverview(allowModelObservation = true): Promise<ComputerScreenshot> {
+  private async captureOverview(
+    allowModelObservation = true,
+  ): Promise<ComputerScreenshot> {
     const generation = this.imageGeneration;
     try {
-      const result = await this.call("get_desktop_state", {}, false, allowModelObservation);
+      const result = await this.call(
+        "get_desktop_state",
+        {},
+        false,
+        allowModelObservation,
+      );
       const data = result.structuredContent ?? {};
       const image = this.screenshot(result, {
         x: 0,
@@ -920,7 +1023,11 @@ export class CuaComputerBackend implements ComputerBackend {
         width: number(data.screen_width),
         height: number(data.screen_height),
       });
-      if (generation === this.imageGeneration && this.stills.attached && !this.disposed) {
+      if (
+        generation === this.imageGeneration &&
+        this.stills.attached &&
+        !this.disposed
+      ) {
         this.cachedImage = image;
       }
       // No capture-failure reset here: only an observed Screen Recording grant
@@ -937,7 +1044,9 @@ export class CuaComputerBackend implements ComputerBackend {
       throw error;
     }
   }
-  async captureScreenshot(request: ComputerCaptureRequest): Promise<ComputerScreenshot> {
+  async captureScreenshot(
+    request: ComputerCaptureRequest,
+  ): Promise<ComputerScreenshot> {
     if (request.kind === "region")
       throw new CuaActionError(
         "Region capture is not supported by this pinned Cua backend. Capture an exact window; the overview covers the primary display only.",
@@ -961,15 +1070,25 @@ export class CuaComputerBackend implements ComputerBackend {
       // Targeting failures above never reach here; anything failing past the
       // target produced no usable pixels, so health flips while the throw —
       // and any input verdict — stands exactly as before.
-      if (!(error instanceof CuaActionError) || error.code !== "off_space_capture_unverified")
+      if (
+        !(error instanceof CuaActionError) ||
+        error.code !== "off_space_capture_unverified"
+      )
         this.markCaptureFailed(error);
       throw error;
     }
   }
-  private assertObservedWindow(result: CuaToolResult, pid: number, windowId: number): void {
+  private assertObservedWindow(
+    result: CuaToolResult,
+    pid: number,
+    windowId: number,
+  ): void {
     const data = result.structuredContent ?? {};
     if (number(data.pid) !== pid || number(data.window_id) !== windowId)
-      throw new CuaActionError("Cua observation belongs to a different window.", "not-dispatched");
+      throw new CuaActionError(
+        "Cua observation belongs to a different window.",
+        "not-dispatched",
+      );
   }
   async getState(options: {
     includeScreenshot?: boolean;
@@ -989,15 +1108,27 @@ export class CuaComputerBackend implements ComputerBackend {
     if (!options.windowId)
       return {
         ...state,
-        ...(options.includeScreenshot ? { screenshot: await this.captureOverview() } : {}),
-        accessibility: { status: "partial", unavailableWindowIds: this.windows.map((w) => w.id) },
+        ...(options.includeScreenshot
+          ? { screenshot: await this.captureOverview() }
+          : {}),
+        accessibility: {
+          status: "partial",
+          unavailableWindowIds: this.windows.map((w) => w.id),
+        },
       };
     // refresh() already enumerated the windows. Native observation also
     // verifies PID/window ownership, so a second desktop enumeration buys nothing.
-    const { pid, window_id, window } = await this.target(options.windowId, false);
+    const { pid, window_id, window } = await this.target(
+      options.windowId,
+      false,
+    );
     state = { ...state, windows: [window] };
     if (!options.includeTree && !options.includeScreenshot) return state;
-    if (options.includeTree && options.reuseRecentTree && !options.includeScreenshot) {
+    if (
+      options.includeTree &&
+      options.reuseRecentTree &&
+      !options.includeScreenshot
+    ) {
       const cached = this.recentTrees.get(options.windowId);
       if (cached && Date.now() - cached.at < RECENT_TREE_TTL_MS)
         return {
@@ -1045,22 +1176,31 @@ export class CuaComputerBackend implements ComputerBackend {
         const node: ComputerUiNode = {
           role: text(element.role, 128),
           label: text(element.label) || null,
-          value: typeof element.value === "string" ? text(element.value, 16384) : null,
+          value:
+            typeof element.value === "string"
+              ? text(element.value, 16384)
+              : null,
           description: text(element.value_description) || null,
           frame,
-          activationPoint: { x: frame.x + frame.width / 2, y: frame.y + frame.height / 2 },
+          activationPoint: {
+            x: frame.x + frame.width / 2,
+            y: frame.y + frame.height / 2,
+          },
           onScreen: window.visible,
           windowId: window.id,
           children: [],
         };
         if (typeof element.element_token === "string") {
           this.elementTokens.set(node, element.element_token);
-          if (element.in_web_content === true) this.webContentElements.add(node);
+          if (element.in_web_content === true)
+            this.webContentElements.add(node);
           if (Array.isArray(element.actions))
             this.elementActions.set(
               node,
               new Set(
-                element.actions.filter((action): action is string => typeof action === "string"),
+                element.actions.filter(
+                  (action): action is string => typeof action === "string",
+                ),
               ),
             );
         }
@@ -1082,16 +1222,23 @@ export class CuaComputerBackend implements ComputerBackend {
     this.recentTrees.set(options.windowId, { at: Date.now(), root });
     while (this.recentTrees.size > 8)
       this.recentTrees.delete(this.recentTrees.keys().next().value!);
-    const image = options.includeScreenshot ? this.previewImage(result, window.id) : undefined;
+    const image = options.includeScreenshot
+      ? this.previewImage(result, window.id)
+      : undefined;
     if (image && "screenshot" in image) {
-      if (image.screenshot.region) this.observedGeometry.set(window.id, image.screenshot.region);
+      if (image.screenshot.region)
+        this.observedGeometry.set(window.id, image.screenshot.region);
     }
     return {
       ...state,
       root,
       accessibility: { status: "partial", unavailableWindowIds: [] },
-      ...(image && "screenshot" in image ? { screenshot: image.screenshot } : {}),
-      ...(image && "previewNote" in image ? { previewNote: image.previewNote } : {}),
+      ...(image && "screenshot" in image
+        ? { screenshot: image.screenshot }
+        : {}),
+      ...(image && "previewNote" in image
+        ? { previewNote: image.previewNote }
+        : {}),
     };
   }
   /**
@@ -1103,13 +1250,17 @@ export class CuaComputerBackend implements ComputerBackend {
   private previewImage(
     result: CuaToolResult,
     windowId: string,
-  ): { readonly screenshot: ComputerScreenshot } | { readonly previewNote: string } {
+  ):
+    | { readonly screenshot: ComputerScreenshot }
+    | { readonly previewNote: string } {
     try {
       return { screenshot: { ...this.screenshot(result), windowId } };
     } catch (error) {
       if (
         !(error instanceof CuaActionError) ||
-        !["capture_unavailable", "off_space_capture_unverified"].includes(error.code ?? "")
+        !["capture_unavailable", "off_space_capture_unverified"].includes(
+          error.code ?? "",
+        )
       )
         throw error;
       if (error.code === "off_space_capture_unverified")
@@ -1150,7 +1301,8 @@ export class CuaComputerBackend implements ComputerBackend {
       // refuses without a token), so the lane condition mirrors the driver's
       // own uses_stable_space_membership check.
       (name === "set_value" &&
-        (args.element_token !== undefined || args.element_index !== undefined)) ||
+        (args.element_token !== undefined ||
+          args.element_index !== undefined)) ||
       (name === "type_text" &&
         args.semantic_only === true &&
         desktopDeliveryMode() !== "foreground" &&
@@ -1165,12 +1317,20 @@ export class CuaComputerBackend implements ComputerBackend {
         }),
       );
     }
-    return this.inputDispatch(name, args, windowId, point, preparedBounds, false, {
-      pid,
-      window_id,
-      window,
-      baseline,
-    });
+    return this.inputDispatch(
+      name,
+      args,
+      windowId,
+      point,
+      preparedBounds,
+      false,
+      {
+        pid,
+        window_id,
+        window,
+        baseline,
+      },
+    );
   }
 
   /**
@@ -1202,7 +1362,10 @@ export class CuaComputerBackend implements ComputerBackend {
       const laneWaitMs = Date.now() - laneWaitStarted;
       const deliveryStarted = Date.now();
       try {
-        const result = await withSemanticTextLaneTimeout(write(), this.semanticTextLaneHoldMs);
+        const result = await withSemanticTextLaneTimeout(
+          write(),
+          this.semanticTextLaneHoldMs,
+        );
         console.debug("[computer] semantic text lane write", {
           pid,
           windowId: `cua:${pid}:${window_id}`,
@@ -1213,11 +1376,14 @@ export class CuaComputerBackend implements ComputerBackend {
         });
         return result;
       } finally {
-        await new Promise((resolve) => setTimeout(resolve, this.semanticTextLaneGapMs));
+        await new Promise((resolve) =>
+          setTimeout(resolve, this.semanticTextLaneGapMs),
+        );
       }
     } finally {
       releaseLane();
-      if (this.semanticTextLanes.get(key) === laneHeld) this.semanticTextLanes.delete(key);
+      if (this.semanticTextLanes.get(key) === laneHeld)
+        this.semanticTextLanes.delete(key);
     }
   }
 
@@ -1239,10 +1405,15 @@ export class CuaComputerBackend implements ComputerBackend {
     if (!window.visible && !exactSemanticText) {
       const message =
         "The target window is not on the current Space or not on screen. Only an exact retained semantic text element may be mutated without activation; pointer, synthetic keyboard, and generic window actions require computer_activate_window followed by fresh state.";
-      throw new CuaActionError(message, "not-dispatched", "target_not_on_active_space", {
-        windowId: window.id,
+      throw new CuaActionError(
         message,
-      });
+        "not-dispatched",
+        "target_not_on_active_space",
+        {
+          windowId: window.id,
+          message,
+        },
+      );
     }
     const bounds = window.bounds!;
     if (preparedBounds && !sameRect(preparedBounds, bounds))
@@ -1262,7 +1433,11 @@ export class CuaComputerBackend implements ComputerBackend {
     // The span above is synchronous today, so the operative guard for a
     // generation that moves mid-flight lives in host(); this refuses before
     // dispatch whenever resolution and injection ever straddle an await.
-    if (baseline !== undefined && this.desktopEpoch !== undefined && this.desktopEpoch !== baseline)
+    if (
+      baseline !== undefined &&
+      this.desktopEpoch !== undefined &&
+      this.desktopEpoch !== baseline
+    )
       throw new CuaActionError(
         "The desktop changed after this target was resolved. Observe again before continuing.",
         "not-dispatched",
@@ -1283,7 +1458,10 @@ export class CuaComputerBackend implements ComputerBackend {
         x >= bounds.width ||
         y >= bounds.height
       )
-        throw new CuaActionError("Point is outside the target window.", "not-dispatched");
+        throw new CuaActionError(
+          "Point is outside the target window.",
+          "not-dispatched",
+        );
       pixel = { x, y, coordinate_space: "window_points" };
     }
     assertDesktopOperationActive();
@@ -1301,7 +1479,9 @@ export class CuaComputerBackend implements ComputerBackend {
             : {}),
           ...args,
           ...pixel,
-          ...(point || preparedBounds ? { expected_window_bounds: preparedBounds ?? bounds } : {}),
+          ...(point || preparedBounds
+            ? { expected_window_bounds: preparedBounds ?? bounds }
+            : {}),
         },
         true,
       );
@@ -1312,7 +1492,8 @@ export class CuaComputerBackend implements ComputerBackend {
       // for a recapture it does not need.
       if (
         desktopOperationSignal()?.aborted ||
-        (error instanceof CuaActionError && error.effect === "dispatched-unknown")
+        (error instanceof CuaActionError &&
+          error.effect === "dispatched-unknown")
       )
         this.observedGeometry.clear();
       throw error;
@@ -1345,7 +1526,11 @@ export class CuaComputerBackend implements ComputerBackend {
       effect: confirmed ? "verified" : "dispatched-unknown",
     };
   }
-  click(p: ComputerPoint, w?: string, modifiers?: readonly ComputerInputModifier[]) {
+  click(
+    p: ComputerPoint,
+    w?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ) {
     return this.input(
       "click",
       {
@@ -1357,7 +1542,11 @@ export class CuaComputerBackend implements ComputerBackend {
       p,
     );
   }
-  doubleClick(p: ComputerPoint, w?: string, modifiers?: readonly ComputerInputModifier[]) {
+  doubleClick(
+    p: ComputerPoint,
+    w?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ) {
     return this.input(
       "click",
       {
@@ -1369,7 +1558,11 @@ export class CuaComputerBackend implements ComputerBackend {
       p,
     );
   }
-  tripleClick(p: ComputerPoint, w?: string, modifiers?: readonly ComputerInputModifier[]) {
+  tripleClick(
+    p: ComputerPoint,
+    w?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ) {
     return this.input(
       "click",
       {
@@ -1381,7 +1574,11 @@ export class CuaComputerBackend implements ComputerBackend {
       p,
     );
   }
-  rightClick(p: ComputerPoint, w?: string, modifiers?: readonly ComputerInputModifier[]) {
+  rightClick(
+    p: ComputerPoint,
+    w?: string,
+    modifiers?: readonly ComputerInputModifier[],
+  ) {
     return this.input(
       "click",
       {
@@ -1393,10 +1590,17 @@ export class CuaComputerBackend implements ComputerBackend {
       p,
     );
   }
-  async moveCursor(p: ComputerPoint, w?: string): Promise<ComputerBackendActionResult> {
+  async moveCursor(
+    p: ComputerPoint,
+    w?: string,
+  ): Promise<ComputerBackendActionResult> {
     if (w) await this.target(w);
     await this.call("move_cursor", { x: p.x, y: p.y }, true);
-    return { point: p, deliveryPath: "cua-overlay-only", verified: "unverifiable" };
+    return {
+      point: p,
+      deliveryPath: "cua-overlay-only",
+      verified: "unverifiable",
+    };
   }
   async drag(
     from: ComputerPoint,
@@ -1439,7 +1643,10 @@ export class CuaComputerBackend implements ComputerBackend {
         x >= bounds.width ||
         y >= bounds.height
       )
-        throw new CuaActionError("Drag crosses outside its target window.", "not-dispatched");
+        throw new CuaActionError(
+          "Drag crosses outside its target window.",
+          "not-dispatched",
+        );
       return { x, y };
     };
     const start = local(from),
@@ -1481,7 +1688,10 @@ export class CuaComputerBackend implements ComputerBackend {
     target?: ComputerResolvedTarget,
   ) {
     if (!p)
-      throw new CuaActionError("Scroll requires a screenshot target point.", "not-dispatched");
+      throw new CuaActionError(
+        "Scroll requires a screenshot target point.",
+        "not-dispatched",
+      );
     if (!dx && !dy)
       return {
         ...(w ? { windowId: w } : {}),
@@ -1517,7 +1727,13 @@ export class CuaComputerBackend implements ComputerBackend {
             // Wheel gesture: `direction` stays the schema-required dominant
             // axis while the signed ticks carry the real per-axis amounts —
             // including a two-axis diagonal in one dispatch.
-            direction: ticksY ? (dy > 0 ? "down" : "up") : dx > 0 ? "right" : "left",
+            direction: ticksY
+              ? dy > 0
+                ? "down"
+                : "up"
+              : dx > 0
+                ? "right"
+                : "left",
             delta_x: ticksX ? Math.sign(dx) * ticksX : 0,
             delta_y: ticksY ? Math.sign(dy) * ticksY : 0,
             ...(mods ? { modifiers: mods } : {}),
@@ -1545,7 +1761,9 @@ export class CuaComputerBackend implements ComputerBackend {
       "type_text",
       {
         text: value,
-        ...(token ? { element_token: token, semantic_only: true } : { force_synthetic: true }),
+        ...(token
+          ? { element_token: token, semantic_only: true }
+          : { force_synthetic: true }),
       },
       target?.node.windowId ?? w,
     );
@@ -1600,7 +1818,8 @@ export class CuaComputerBackend implements ComputerBackend {
     );
     assertDesktopOperationActive();
     const after = await this.resolveWebField(windowId, node);
-    if (after?.value === value) return { ...result, verified: "confirmed", effect: "verified" };
+    if (after?.value === value)
+      return { ...result, verified: "confirmed", effect: "verified" };
     return { ...result, verified: "unconfirmed", effect: "dispatched-unknown" };
   }
   /**
@@ -1611,7 +1830,9 @@ export class CuaComputerBackend implements ComputerBackend {
   private async resolveWebField(
     windowId: string,
     node: ComputerUiNode,
-  ): Promise<{ token: string; index: number; value: string | null } | undefined> {
+  ): Promise<
+    { token: string; index: number; value: string | null } | undefined
+  > {
     const { pid, window_id } = await this.target(windowId);
     const result = await this.call("get_window_state", {
       pid,
@@ -1654,7 +1875,10 @@ export class CuaComputerBackend implements ComputerBackend {
       "control",
       "fn",
     ]);
-    if (native.length < 2 || native.filter((key) => !modifiers.has(key)).length !== 1)
+    if (
+      native.length < 2 ||
+      native.filter((key) => !modifiers.has(key)).length !== 1
+    )
       throw new CuaActionError(
         "A shortcut requires modifiers and exactly one other key.",
         "not-dispatched",
@@ -1687,11 +1911,18 @@ export class CuaComputerBackend implements ComputerBackend {
         return this.webSetValue(target.node, windowId, field, value);
       });
     }
-    return this.input("set_value", { element_token: token, value }, target.node.windowId);
+    return this.input(
+      "set_value",
+      { element_token: token, value },
+      target.node.windowId,
+    );
   }
   supportsAction(target: ComputerResolvedTarget, action: string): boolean {
     const spec = cuaElementAction(action);
-    return spec !== undefined && this.elementActions.get(target.node)?.has(spec.axAction) === true;
+    return (
+      spec !== undefined &&
+      this.elementActions.get(target.node)?.has(spec.axAction) === true
+    );
   }
   async performAction(target: ComputerResolvedTarget, action: string) {
     const spec = cuaElementAction(action);
@@ -1751,17 +1982,23 @@ export class CuaComputerBackend implements ComputerBackend {
   }
   async readClipboard(): Promise<string> {
     const data =
-      (await this.call("clipboard_read", { include_text: true }, true)).structuredContent ?? {};
+      (await this.call("clipboard_read", { include_text: true }, true))
+        .structuredContent ?? {};
     if (typeof data.text !== "string")
       throw new Error("The clipboard does not contain readable text.");
-    if (data.text.length > 16384) throw new Error("Clipboard exceeds the tool's text limit.");
+    if (data.text.length > 16384)
+      throw new Error("Clipboard exceeds the tool's text limit.");
     return data.text;
   }
   async writeClipboard(value: string) {
     assertComputerClipboardWriteFits(value);
     await this.call("clipboard_write", { text: value }, true);
   }
-  async launchApp(app: string, args?: readonly string[], options?: { readonly hidden?: boolean }) {
+  async launchApp(
+    app: string,
+    args?: readonly string[],
+    options?: { readonly hidden?: boolean },
+  ) {
     if (app.startsWith("/"))
       throw new CuaActionError(
         "Use an installed app's name or bundle identifier with Cua.",
@@ -1771,7 +2008,9 @@ export class CuaComputerBackend implements ComputerBackend {
     await this.call(
       "launch_app",
       {
-        ...(/^[a-zA-Z][\w-]*(\.[\w-]+)+$/.test(app) ? { bundle_id: app } : { name: app }),
+        ...(/^[a-zA-Z][\w-]*(\.[\w-]+)+$/.test(app)
+          ? { bundle_id: app }
+          : { name: app }),
         ...(args?.length ? { additional_arguments: args } : {}),
         // The open -j posture: windows are created but never rendered, and
         // nothing activates. Only sent when asked — an absent flag is the
@@ -1814,7 +2053,9 @@ export class CuaComputerBackend implements ComputerBackend {
         ...(bundleId ? { bundleId } : {}),
         ...(teamId ? { teamId } : {}),
         ...(launchPath ? { launchPath } : {}),
-        ...(Array.isArray(row.windows) ? { windowCount: row.windows.length } : {}),
+        ...(Array.isArray(row.windows)
+          ? { windowCount: row.windows.length }
+          : {}),
         ...(lastUsed ? { lastUsed } : {}),
       });
     }
@@ -1824,7 +2065,11 @@ export class CuaComputerBackend implements ComputerBackend {
     windowId: string,
     frame: ComputerRect,
   ): Promise<ComputerBackendActionResult> {
-    if (!Object.values(frame).every(Number.isFinite) || frame.width <= 0 || frame.height <= 0)
+    if (
+      !Object.values(frame).every(Number.isFinite) ||
+      frame.width <= 0 ||
+      frame.height <= 0
+    )
       throw new CuaActionError(
         "A window frame needs finite coordinates and a positive size.",
         "not-dispatched",
@@ -1851,7 +2096,9 @@ export class CuaComputerBackend implements ComputerBackend {
     // the outcome unknown — never a silent success.
     let observed: ComputerRect | undefined;
     try {
-      observed = (await this.readWindows()).find((candidate) => candidate.id === window.id)?.bounds;
+      observed = (await this.readWindows()).find(
+        (candidate) => candidate.id === window.id,
+      )?.bounds;
     } catch {
       observed = undefined;
     }
@@ -1876,14 +2123,22 @@ export class CuaComputerBackend implements ComputerBackend {
   ): Promise<ComputerBackendActionResult> {
     // Fail closed rather than truncate: a sliced path can resolve to a
     // different menu item than the caller named, which is worse than a refusal.
-    if (path.length === 0 || path.length > 6 || path.some((segment) => segment.trim().length === 0))
+    if (
+      path.length === 0 ||
+      path.length > 6 ||
+      path.some((segment) => segment.trim().length === 0)
+    )
       throw new CuaActionError(
         "A menu path needs one to six non-empty titles.",
         "not-dispatched",
         "invalid_arguments",
       );
     const { pid, window_id, window } = await this.target(windowId);
-    const result = await this.call("invoke_menu", { pid, window_id, path: [...path] }, true);
+    const result = await this.call(
+      "invoke_menu",
+      { pid, window_id, path: [...path] },
+      true,
+    );
     const data = result.structuredContent ?? {};
     const confirmed = data.effect === "confirmed";
     // A menu command can open or close windows (a Save dialog, a Quit): the
@@ -1914,7 +2169,11 @@ export class CuaComputerBackend implements ComputerBackend {
         "invalid_arguments",
       );
     const { pid, window_id, window } = await this.target(windowId);
-    const result = await this.call("set_window_minimized", { pid, window_id, minimized }, true);
+    const result = await this.call(
+      "set_window_minimized",
+      { pid, window_id, minimized },
+      true,
+    );
     const data = result.structuredContent ?? {};
     const confirmed = confirmedValueReadback(data);
     // A minimize or restore changes what is on screen; the cached snapshot
@@ -1932,7 +2191,10 @@ export class CuaComputerBackend implements ComputerBackend {
       effect: confirmed ? "verified" : "dispatched-unknown",
     };
   }
-  async setAppVisibility(pid: number, hidden: boolean): Promise<ComputerBackendActionResult> {
+  async setAppVisibility(
+    pid: number,
+    hidden: boolean,
+  ): Promise<ComputerBackendActionResult> {
     if (!Number.isSafeInteger(pid) || pid <= 0 || typeof hidden !== "boolean")
       throw new CuaActionError(
         "set_app_visibility needs a positive integer pid and a boolean hidden flag.",
@@ -1963,7 +2225,9 @@ export class CuaComputerBackend implements ComputerBackend {
     if (
       expect.length === 0 ||
       expect.length > 8 ||
-      expect.some((item) => !item || typeof item !== "object" || Array.isArray(item))
+      expect.some(
+        (item) => !item || typeof item !== "object" || Array.isArray(item),
+      )
     )
       throw new CuaActionError(
         "verify_state needs one to eight object predicates.",
@@ -1980,7 +2244,9 @@ export class CuaComputerBackend implements ComputerBackend {
     // `unknown` is a verdict, not a failure shape: the driver could not prove
     // the predicate either way, which must never collapse into `unsatisfied`.
     const status =
-      data.status === "satisfied" || data.status === "unsatisfied" || data.status === "unknown"
+      data.status === "satisfied" ||
+      data.status === "unsatisfied" ||
+      data.status === "unknown"
         ? data.status
         : "unknown";
     return {
@@ -1988,7 +2254,9 @@ export class CuaComputerBackend implements ComputerBackend {
       stable: data.stable === true,
       samples: Math.max(0, Math.trunc(number(data.samples) || 0)),
       elapsedMs: Math.max(0, Math.trunc(number(data.elapsed_ms) || 0)),
-      predicates: Array.isArray(data.predicates) ? data.predicates.slice(0, 8) : [],
+      predicates: Array.isArray(data.predicates)
+        ? data.predicates.slice(0, 8)
+        : [],
     };
   }
   async killApp(pid: number): Promise<ComputerBackendActionResult> {
@@ -2017,7 +2285,9 @@ export class CuaComputerBackend implements ComputerBackend {
     let gone = false;
     for (let attempt = 0; attempt < 4 && !gone; attempt += 1) {
       if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 250));
-      gone = !(await this.listApps()).some((app) => app.pid === pid && app.running);
+      gone = !(await this.listApps()).some(
+        (app) => app.pid === pid && app.running,
+      );
     }
     return {
       deliveryPath: "cua-process_signal-background",
@@ -2025,8 +2295,15 @@ export class CuaComputerBackend implements ComputerBackend {
       effect: gone ? "verified" : "dispatched-unknown",
     };
   }
-  async zoomWindow(windowId: string, region: ComputerRect): Promise<ComputerZoomResult> {
-    if (!Object.values(region).every(Number.isFinite) || region.width <= 0 || region.height <= 0)
+  async zoomWindow(
+    windowId: string,
+    region: ComputerRect,
+  ): Promise<ComputerZoomResult> {
+    if (
+      !Object.values(region).every(Number.isFinite) ||
+      region.width <= 0 ||
+      region.height <= 0
+    )
       throw new CuaActionError(
         "The zoom region needs finite geometry and positive size.",
         "not-dispatched",
@@ -2061,12 +2338,17 @@ export class CuaComputerBackend implements ComputerBackend {
       });
       this.assertObservedWindow(state, pid, window_id);
     } catch (error) {
-      if (!(error instanceof CuaActionError) || error.code !== "off_space_capture_unverified")
+      if (
+        !(error instanceof CuaActionError) ||
+        error.code !== "off_space_capture_unverified"
+      )
         this.markCaptureFailed(error);
       throw error;
     }
     const stateData = state.structuredContent ?? {};
-    const freshBounds = stateData.window_bounds ? optionalRect(stateData.window_bounds) : undefined;
+    const freshBounds = stateData.window_bounds
+      ? optionalRect(stateData.window_bounds)
+      : undefined;
     if (!freshBounds || !sameRect(freshBounds, bounds))
       throw new CuaActionError(
         "The target window moved before the zoom capture.",
@@ -2076,7 +2358,9 @@ export class CuaComputerBackend implements ComputerBackend {
     const reportedScale = number(stateData.screenshot_scale);
     const fallback = this.screenshot(state, freshBounds);
     const scale =
-      Number.isFinite(reportedScale) && reportedScale > 0 ? reportedScale : (fallback.scale ?? 0);
+      Number.isFinite(reportedScale) && reportedScale > 0
+        ? reportedScale
+        : (fallback.scale ?? 0);
     if (!(scale > 0))
       throw new CuaActionError(
         "Cua could not establish the window's screenshot scale.",
@@ -2135,7 +2419,8 @@ export class CuaComputerBackend implements ComputerBackend {
     // walk. `window_id` scoping is therefore a Synara-side filter to the app
     // that owns the exact window, resolved through the same fresh target()
     // every window read uses.
-    const scopedPid = windowId === undefined ? undefined : (await this.target(windowId)).pid;
+    const scopedPid =
+      windowId === undefined ? undefined : (await this.target(windowId)).pid;
     const result = await this.call("get_accessibility_tree");
     const data = result.structuredContent ?? {};
     if (!Array.isArray(data.apps) || !Array.isArray(data.windows))
@@ -2163,7 +2448,12 @@ export class CuaComputerBackend implements ComputerBackend {
       const wid = number(row.window_id);
       // Without the driver id pair no Synara window id can be formed, so the
       // row is unresolvable rather than merely thin.
-      if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isSafeInteger(wid) || wid <= 0)
+      if (
+        !Number.isSafeInteger(pid) ||
+        pid <= 0 ||
+        !Number.isSafeInteger(wid) ||
+        wid <= 0
+      )
         continue;
       if (scopedPid !== undefined && pid !== scopedPid) continue;
       const appName = text(row.app_name);
@@ -2175,11 +2465,14 @@ export class CuaComputerBackend implements ComputerBackend {
         ...(appName ? { appName } : {}),
         title: text(row.title),
         ...(bounds ? { bounds } : {}),
-        ...(typeof row.is_on_screen === "boolean" ? { onScreen: row.is_on_screen } : {}),
+        ...(typeof row.is_on_screen === "boolean"
+          ? { onScreen: row.is_on_screen }
+          : {}),
         ...(Number.isInteger(zIndex) && zIndex >= 0 ? { zIndex } : {}),
       });
     }
-    const truncated = apps.length > 1_024 || windows.length > COMPUTER_WINDOW_LIST_MAX_LENGTH;
+    const truncated =
+      apps.length > 1_024 || windows.length > COMPUTER_WINDOW_LIST_MAX_LENGTH;
     return {
       apps: apps.slice(0, 1_024),
       windows: windows.slice(0, COMPUTER_WINDOW_LIST_MAX_LENGTH),
@@ -2192,7 +2485,8 @@ export class CuaComputerBackend implements ComputerBackend {
     // A scoped read also answers "is the cursor inside this window": the
     // position itself is desktop-global either way, so scoping resolves the
     // window's current bounds rather than changing what the driver returns.
-    const window = windowId === undefined ? undefined : (await this.target(windowId)).window;
+    const window =
+      windowId === undefined ? undefined : (await this.target(windowId)).window;
     const result = await this.call("get_cursor_position");
     const data = result.structuredContent ?? {};
     const x = number(data.x);
@@ -2275,7 +2569,9 @@ export class CuaComputerBackend implements ComputerBackend {
   async endTask(threadId: string, turnId?: string): Promise<void> {
     if (!this.endpoint || this.disposed) return;
     const matches = [...this.previewTasks].filter(
-      ([, task]) => task.threadId === threadId && (turnId === undefined || task.turnId === turnId),
+      ([, task]) =>
+        task.threadId === threadId &&
+        (turnId === undefined || task.turnId === turnId),
     );
     if (matches.length === 0) return;
     const reply = await this.request<CuaReply>(this.endpoint, {
@@ -2284,7 +2580,8 @@ export class CuaComputerBackend implements ComputerBackend {
       capability: this.capability,
     });
     this.observeDesktopInterruption(reply);
-    if (!reply.ok) throw new Error(reply.error ?? "Computer preview did not stop.");
+    if (!reply.ok)
+      throw new Error(reply.error ?? "Computer preview did not stop.");
     for (const [key] of matches) this.previewTasks.delete(key);
     // Task-owned grounding ends with the task: a revoked task's window pixels
     // must not ground a later claim, so the next input re-observes first.
@@ -2343,7 +2640,11 @@ export class CuaComputerBackend implements ComputerBackend {
             },
             capability: this.capability,
           },
-          { signal: desktopOperationSignal(), mutation: true, timeoutMs: 5_000 },
+          {
+            signal: desktopOperationSignal(),
+            mutation: true,
+            timeoutMs: 5_000,
+          },
         ),
       );
       if (!reply.ok)
@@ -2355,7 +2656,11 @@ export class CuaComputerBackend implements ComputerBackend {
       return target.shieldId;
     } catch (error) {
       if (error instanceof CuaTransportError)
-        throw new CuaActionError(error.message, error.effect, "mask_unavailable");
+        throw new CuaActionError(
+          error.message,
+          error.effect,
+          "mask_unavailable",
+        );
       throw error;
     }
   }
@@ -2414,7 +2719,9 @@ export class CuaComputerBackend implements ComputerBackend {
     call: (call) => this.browserCall(call),
     endThread: (threadId) => this.endBrowserThread(threadId),
   };
-  private async browserCall(call: ComputerBrowserCall): Promise<ComputerBrowserCallResult> {
+  private async browserCall(
+    call: ComputerBrowserCall,
+  ): Promise<ComputerBrowserCallResult> {
     if (this.disposed || !this.endpoint)
       throw new CuaActionError(
         "Open this session in the Synara macOS desktop app to use Computer.",
@@ -2452,7 +2759,8 @@ export class CuaComputerBackend implements ComputerBackend {
         );
       return reply.result ?? {};
     } catch (error) {
-      if (error instanceof CuaTransportError) throw new CuaActionError(error.message, error.effect);
+      if (error instanceof CuaTransportError)
+        throw new CuaActionError(error.message, error.effect);
       throw error;
     }
   }
@@ -2470,12 +2778,18 @@ export class CuaComputerBackend implements ComputerBackend {
       capability: this.capability,
     });
     this.observeDesktopInterruption(reply);
-    if (!reply.ok) throw new Error(reply.error ?? "Browser session teardown was not acknowledged.");
+    if (!reply.ok)
+      throw new Error(
+        reply.error ?? "Browser session teardown was not acknowledged.",
+      );
   }
   async dispose() {
     this.clearCachedImage();
     await this.stills.detach();
-    await this.stopInput();
+    // Teardown cannot depend on the host still answering: an unreachable
+    // endpoint means the input path it owned is already gone, so a transport
+    // failure here confirms rather than defeats the stop.
+    await this.stopInput().catch(() => undefined);
     this.disposed = true;
     this.listeners.clear();
   }

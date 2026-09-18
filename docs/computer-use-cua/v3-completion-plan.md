@@ -62,7 +62,21 @@ change. Then the same surface on Windows and Linux.
    table every run — set_value p95 ~3.6s is the heaviest op).
 9. Screenshot freshness: certified — `screenshot-fresh` (visible) +
    `hidden-screenshot` (hidden windows track live content).
-10. Cross-platform: driver supports it upstream; Synara gates on darwin.
+10. Cross-platform: **partially unblocked 2026-10-02** — the provisioner
+    stages checksum-verified upstream win32/linux bundles (`--platform`,
+    `patched:false` provenance), `ComputerService` routes a configured
+    `SYNARA_CUA_HOST_SOCKET` endpoint on any platform instead of refusing
+    by platform identity, and `CuaDriverHost` runs standalone
+    (`cuaDriverHostStandalone.ts`) against an unpatched driver:
+    `nativeRevision:null` skips the patch-only spawn flags and the
+    revision handshake, replies carry `driverNativeRevision` (0 =
+    upstream) so the backend narrows `ghostCursor` honestly. macOS
+    behavior is unchanged. **Not verified:** any real Windows/Linux GUI
+    session — no target exists on this VM, so input, capture, AX, focus,
+    and teardown on those platforms are all unproven; upstream
+    `check_permissions` self-report shape and per-platform permission UX
+    are open. macOS-only helpers (Escape monitor, shield, frame tap,
+    AppSnap) have no non-macOS equivalent yet.
 11. ComputerManager is 5.4k lines post-merge — six features, parallel seams;
     no refactor pass yet.
 12. Unused private-API inventory: dock-swipe instant switch,
@@ -175,17 +189,41 @@ darwin gate plus provisioning/transport/native helpers.
 
 Work items:
 
-1. Per-platform driver provisioning (manifest per platform+arch).
-2. Host transport: unix socket works on Linux; Windows needs the
-   driver's transport of choice (check upstream `serve` surface).
-3. `ComputerService` darwin gate → platform detection + per-platform
-   availability reporting (honest `unsupported-platform` where true).
+1. ~~Per-platform driver provisioning (manifest per platform+arch).~~
+   **Done 2026-10-02** — `--platform win32|linux` stages the pinned
+   upstream bundle (driver + UIA helper / Wayland helper + sidecars +
+   LICENSE) with `checksums.txt` verification and `patched:false`
+   provenance; `--artifact-dir` round-trips. macOS keeps the
+   source+patch build.
+2. ~~Host transport: unix socket works on Linux; Windows needs the
+   driver's transport of choice~~ — **done pending target verification.**
+   `CuaDriverHost.listen()` binds a `\\.\pipe\` named pipe on win32 and a
+   unix socket elsewhere (the driver socket likewise); chmod is skipped
+   on pipes. `cuaDriverHostStandalone.ts` is the non-macOS entry: it
+   resolves the provisioned binary, takes the capability from
+   `SYNARA_CUA_HOST_CAPABILITY` or `--capability-file` (never argv),
+   clears stale sockets, and runs the host with `nativeRevision:null`.
+3. ~~`ComputerService` darwin gate → platform detection~~ — **done.**
+   The gate is now endpoint presence: darwin uses the bundled host, any
+   platform with `SYNARA_CUA_HOST_SOCKET` routes `CuaComputerBackend`,
+   and no endpoint fails closed (`unsupported-platform`/`backend-
+   unavailable`). Unit-covered for win32+endpoint, win32 without, and
+   the fake override.
 4. Per-platform native helpers (appsnap equivalents): Escape monitor
    (Win low-level keyboard hook; X11/evdev), shield (always-on-top
    transparent window), frame tap (platform capture), permission UX
    (no TCC — Windows integrity/UIAccess, Linux compositor variance).
+   **Open** — the standalone host runs without them; `check_permissions`
+   falls through to the driver's self-report and upstream
+   `cancel_input` acknowledgement shape is unverified (fail-closed
+   path handles a missing ack conservatively).
 5. Space→virtual-desktop mapping (Windows VD APIs; Linux per-DE).
+   **Open.**
 6. Cert matrix per platform — same live-cert runner, platform rows.
+   **Open, needs real targets.** What this VM verified: standalone host
+   boot + probe + driver spawn (unpatched-mode args) + `check_permissions`
+   fallthrough + `list_apps` + `driverNativeRevision:20` on replies —
+   all against the local patched driver, not a real win32/linux GUI.
    Caveat: SkyLight background guarantees don't port; Windows
    background input is often easier (PostMessage/UIA unfocused);
    Wayland is the hard case — document per-compositor.

@@ -2,7 +2,10 @@ import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
-import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
+import {
+  ComputerService,
+  type ComputerServiceShape,
+} from "../Services/ComputerService.ts";
 import { makeComputerServiceLayer } from "./ComputerService.ts";
 
 /** Builds the service exactly as the server does, then runs `body` against it. */
@@ -33,11 +36,19 @@ describe("ComputerServiceLive", () => {
 
     await withComputerService(backend, async (service) => {
       expect(service.supported).toBe(true);
-      expect(service.availability).toEqual({ kind: "available", backend: "fake" });
-      expect(backend.calls.map((call) => call.method)).toEqual(["probeAvailability"]);
+      expect(service.availability).toEqual({
+        kind: "available",
+        backend: "fake",
+      });
+      expect(backend.calls.map((call) => call.method)).toEqual([
+        "probeAvailability",
+      ]);
 
       const seeded = await service.manager.getThreadState("thread-boot");
-      expect(seeded.availability).toEqual({ kind: "available", backend: "fake" });
+      expect(seeded.availability).toEqual({
+        kind: "available",
+        backend: "fake",
+      });
       expect(seeded.windows).toEqual([]);
       expect(backend.calls.map((call) => call.method)).toEqual([
         "probeAvailability",
@@ -63,7 +74,9 @@ describe("ComputerServiceLive", () => {
 
     await withComputerService(backend, async (service) => {
       expect(service.supported).toBe(true);
-      expect(service.availability).toMatchObject({ kind: "backend-unavailable" });
+      expect(service.availability).toMatchObject({
+        kind: "backend-unavailable",
+      });
     });
   });
 
@@ -75,11 +88,17 @@ describe("ComputerServiceLive", () => {
         Effect.gen(function* () {
           const service = yield* ComputerService;
           expect(service.supported).toBe(false);
-          expect(service.availability).toMatchObject({ kind: "backend-unavailable" });
+          expect(service.availability).toMatchObject({
+            kind: "backend-unavailable",
+          });
           // An operator switching the feature off is not a question for the
           // desktop, so neither read runs at all.
           expect(backend.calls).toEqual([]);
-        }).pipe(Effect.provide(makeComputerServiceLayer({ backend, supported: false }))),
+        }).pipe(
+          Effect.provide(
+            makeComputerServiceLayer({ backend, supported: false }),
+          ),
+        ),
       ),
     );
   });
@@ -104,10 +123,44 @@ describe("ComputerServiceLive", () => {
           const state = yield* Effect.promise(() =>
             service.manager.getThreadState("thread-windows"),
           );
-          expect(state.availability).toEqual({ kind: "unsupported-platform", platform: "win32" });
-        }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "win32" }))),
+          expect(state.availability).toEqual({
+            kind: "unsupported-platform",
+            platform: "win32",
+          });
+        }).pipe(
+          Effect.provide(makeComputerServiceLayer({ platform: "win32" })),
+        ),
       ),
     );
+  });
+
+  /**
+   * Off-darwin the gate is endpoint presence, not platform identity: a
+   * configured host socket means a real driver host exists to reach, so the
+   * surface routes a live backend instead of the unsupported-platform
+   * refusal. The probe — not the platform — reports whether it answers.
+   */
+  it("routes a real backend on Windows when a host endpoint is configured", async () => {
+    vi.stubEnv("SYNARA_CUA_HOST_SOCKET", "\\\\.\\pipe\\synara-cua-test");
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const service = yield* ComputerService;
+            expect(service.supported).toBe(true);
+            // The endpoint is unreachable from the test host, so the probe
+            // reports the backend unavailable — never unsupported-platform.
+            expect(service.availability).not.toMatchObject({
+              kind: "unsupported-platform",
+            });
+          }).pipe(
+            Effect.provide(makeComputerServiceLayer({ platform: "win32" })),
+          ),
+        ),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("selects the fake backend only when explicitly requested", async () => {
@@ -118,8 +171,13 @@ describe("ComputerServiceLive", () => {
           Effect.gen(function* () {
             const service = yield* ComputerService;
             expect(service.supported).toBe(true);
-            expect(service.availability).toEqual({ kind: "available", backend: "fake" });
-          }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "darwin" }))),
+            expect(service.availability).toEqual({
+              kind: "available",
+              backend: "fake",
+            });
+          }).pipe(
+            Effect.provide(makeComputerServiceLayer({ platform: "darwin" })),
+          ),
         ),
       );
     } finally {

@@ -3,11 +3,15 @@ import { ServerConfig } from "../../config.ts";
 import { Effect, Layer, Option } from "effect";
 import type { ComputerAvailability } from "@synara/contracts";
 
+import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
 import { ComputerManager } from "../ComputerManager.ts";
 import { CuaComputerBackend } from "../CuaComputerBackend.ts";
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
 import { UnavailableComputerBackend } from "../UnavailableComputerBackend.ts";
-import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
+import {
+  ComputerService,
+  type ComputerServiceShape,
+} from "../Services/ComputerService.ts";
 import type { ComputerBackend } from "../ComputerBackend.ts";
 import { resolveBrowserHostCapability } from "../../browserAutomation/browserHostRpcClient.ts";
 
@@ -22,12 +26,15 @@ export interface ComputerServiceLiveOptions {
 
 let warnedMissingControlStatePath = false;
 
-export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {}) {
+export function makeComputerServiceLayer(
+  options: ComputerServiceLiveOptions = {},
+) {
   return Layer.effect(
     ComputerService,
     Effect.gen(function* () {
       const platform = options.platform ?? process.platform;
-      const requestedBackend = process.env.SYNARA_COMPUTER_BACKEND?.trim().toLowerCase();
+      const requestedBackend =
+        process.env.SYNARA_COMPUTER_BACKEND?.trim().toLowerCase();
       const unavailableAvailability: ComputerAvailability =
         platform === "linux"
           ? {
@@ -35,11 +42,19 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
               message: "No computer backend is available on this server.",
             }
           : { kind: "unsupported-platform", platform };
+      // macOS runs the bundled host the desktop app provisions; on other
+      // platforms the same backend is routable when a host endpoint is
+      // configured explicitly (the provisioned upstream driver serving the
+      // same socket protocol). No endpoint means no backend — the gate is
+      // reachability, never platform optimism.
+      const hostEndpoint = process.env[CUA_HOST_SOCKET_ENV]?.trim();
       const backend =
         options.backend ??
         (requestedBackend === "fake" ? new FakeComputerBackend() : undefined) ??
-        (platform === "darwin"
-          ? new CuaComputerBackend({ capability: resolveBrowserHostCapability() ?? undefined })
+        (platform === "darwin" || hostEndpoint
+          ? new CuaComputerBackend({
+              capability: resolveBrowserHostCapability() ?? undefined,
+            })
           : undefined) ??
         new UnavailableComputerBackend(
           `No computer backend is configured for this server running on ${platform}.`,
@@ -56,7 +71,10 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
         backend,
         ...(Option.isSome(config)
           ? {
-              controlStatePath: join(config.value.stateDir, "computer-control.json"),
+              controlStatePath: join(
+                config.value.stateDir,
+                "computer-control.json",
+              ),
               // Beside the control state: the bounded mutating-call audit log,
               // local-only and dropped-oldest past its caps.
               auditLogPath: join(config.value.stateDir, "computer-audit.jsonl"),
@@ -82,7 +100,8 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
       }
       return {
         // Supported backends remain routable even before setup grants access.
-        supported: options.supported ?? !(backend instanceof UnavailableComputerBackend),
+        supported:
+          options.supported ?? !(backend instanceof UnavailableComputerBackend),
         availability,
         manager,
       } satisfies ComputerServiceShape;
