@@ -34,6 +34,9 @@ published by the same release workflow as stable, and it updates through
   install, and a stable release never carries beta manifests.
 - `allowDowngrade` stays `false` on both trains; moving back to stable means
   reinstalling stable.
+- Pending-update caches are scoped per flavor (`~/Library/Caches/synara-beta-desktop-updater`
+  on macOS), so a downloaded beta update never collides with stable's pending
+  update state.
 
 ## Cutting a beta release
 
