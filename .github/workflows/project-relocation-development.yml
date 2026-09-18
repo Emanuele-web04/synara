@@ -1,0 +1,26 @@
+name: Project relocation development
+
+on:
+  push:
+    branches: [fix/project-relocation-recovery]
+    paths: [.github/workflows/project-relocation-development.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    if: github.ref == 'refs/heads/fix/project-relocation-recovery'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Prepare source-only verification archive
+        run: tar --exclude=.git -czf "$RUNNER_TEMP/synara-relocation-source.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synara-relocation-source
+          path: ${{ runner.temp }}/synara-relocation-source.tar.gz
+          retention-days: 1
