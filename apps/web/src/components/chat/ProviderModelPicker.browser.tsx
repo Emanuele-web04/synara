@@ -173,6 +173,7 @@ async function mountPicker(props: {
   providers?: ReadonlyArray<ServerProviderStatus>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   onSelectionCommitted?: () => void;
+  withRoleSelect?: boolean;
   modelOptionsByProvider?: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
@@ -181,6 +182,7 @@ async function mountPicker(props: {
   const host = document.createElement("div");
   document.body.append(host);
   const onProviderModelChange = vi.fn();
+  const onProviderModelRoleSelect = vi.fn();
   const screen = await render(
     <ProviderModelPicker
       provider={props.provider}
@@ -192,6 +194,7 @@ async function mountPicker(props: {
         : {})}
       {...(props.providers ? { providers: props.providers } : {})}
       {...(props.onSelectionCommitted ? { onSelectionCommitted: props.onSelectionCommitted } : {})}
+      {...(props.withRoleSelect ? { onProviderModelRoleSelect } : undefined)}
       onProviderModelChange={onProviderModelChange}
     />,
     { container: host },
@@ -199,6 +202,7 @@ async function mountPicker(props: {
 
   return {
     onProviderModelChange,
+    onProviderModelRoleSelect,
     cleanup: async () => {
       await screen.unmount();
       host.remove();
@@ -290,19 +294,25 @@ describe("ProviderModelPicker", () => {
     }
   });
 
-  it("commits a plain OMP model via onProviderModelChange", async () => {
+  it("dispatches the role model and thinking level through onProviderModelRoleSelect", async () => {
     const mounted = await mountPicker({
       provider: "omp",
       model: "deepseek/deepseek-v4-flash",
       lockedProvider: "omp",
+      withRoleSelect: true,
       modelOptionsByProvider: {
         ...MODEL_OPTIONS_BY_PROVIDER,
         omp: [
           {
-            slug: "anthropic/claude-opus-4-6",
-            name: "Claude Opus 4.6",
-            upstreamProviderId: "anthropic",
-            upstreamProviderName: "Anthropic",
+            slug: "role:dreaming-proposer",
+            name: "Dreaming Proposer",
+            upstreamProviderId: "roles",
+            upstreamProviderName: "Roles",
+            role: {
+              name: "Dreaming Proposer",
+              model: "anthropic/claude-opus-4-6",
+              thinkingLevel: "high",
+            },
           },
           {
             slug: "deepseek/deepseek-v4-flash",
@@ -316,7 +326,49 @@ describe("ProviderModelPicker", () => {
 
     try {
       await page.getByRole("button").click();
-      await page.getByRole("menuitemradio", { name: "Claude Opus 4.6" }).click();
+      await page.getByRole("menuitemradio", { name: "Dreaming Proposer" }).click();
+
+      expect(mounted.onProviderModelRoleSelect).toHaveBeenCalledWith("anthropic/claude-opus-4-6", {
+        thinkingLevel: "high",
+      });
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("commits the role's model via onProviderModelChange when no role callback exists", async () => {
+    const mounted = await mountPicker({
+      provider: "omp",
+      model: "deepseek/deepseek-v4-flash",
+      lockedProvider: "omp",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        omp: [
+          {
+            slug: "role:dreaming-proposer",
+            name: "Dreaming Proposer",
+            upstreamProviderId: "roles",
+            upstreamProviderName: "Roles",
+            role: {
+              name: "Dreaming Proposer",
+              model: "anthropic/claude-opus-4-6",
+              thinkingLevel: "high",
+            },
+          },
+          {
+            slug: "deepseek/deepseek-v4-flash",
+            name: "DeepSeek V4 Flash",
+            upstreamProviderId: "deepseek",
+            upstreamProviderName: "DeepSeek",
+          },
+        ],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitemradio", { name: "Dreaming Proposer" }).click();
 
       expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
         "omp",

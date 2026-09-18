@@ -303,6 +303,16 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 
   const selectRow = (row: PickerRow) => {
     if (props.disabled) return;
+    // OMP role rows resolve to a concrete model + options, committed through the
+    // same patch path as a starred preset.
+    if (row.role) {
+      commitRow(
+        row,
+        row.role.model as ModelSlug,
+        row.role.thinkingLevel ? { thinkingLevel: row.role.thinkingLevel } : {},
+      );
+      return;
+    }
     const resolvedModel = resolveSelectableModel(
       row.provider,
       row.model,
