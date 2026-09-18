@@ -54,6 +54,18 @@ export const CUA_MAX_RESPONSE_BYTES = 96 * 1024 * 1024;
  * `desktopEpoch` — the host's interruption generation — so a stale reply
  * from before a Space change or revocation cannot be mistaken for a live
  * one.
+ *
+ * Host replies additionally piggyback two desktop-availability fields so
+ * the backend learns lock/session interruptions without an event channel:
+ * `desktopPauses`, the sorted pause reasons active at reply time
+ * (`"screen-lock"`, `"system-sleep"`, `"user-session"`), and
+ * `desktopInterruptions`, a never-reset count of the host's `pauseDesktop`
+ * transitions. The count is the signal that survives an unobserved cycle:
+ * a lock that engages and releases between two replies nets `desktopPauses`
+ * back to `[]`, so only the advancing count proves the interruption ran —
+ * which is what the server uses to invalidate pre-interruption task
+ * consent. Unlike `desktopEpoch`, which also advances on ordinary stops,
+ * the counter moves only on real OS interruptions.
  */
 export interface CuaComputerTask {
   threadId: string;
@@ -206,6 +218,24 @@ export interface CuaReply {
   ok: boolean;
   /** GUI-host desktop interruption generation; absent on direct native replies. */
   desktopEpoch?: number;
+  /**
+   * Sorted list of the host's currently-active desktop pause reasons
+   * (`"screen-lock"`, `"system-sleep"`, `"user-session"`), piggybacked on
+   * every reply so the backend learns lock/session interruptions even when no
+   * event channel exists between them. Absent on direct native replies; an
+   * empty or absent list never proves the desktop was never paused — use
+   * {@link CuaReply.desktopInterruptions} to detect unobserved cycles.
+   */
+  desktopPauses?: string[];
+  /**
+   * Monotonic count of desktop pauses the host has observed since startup —
+   * incremented once per `pauseDesktop` transition, never reset. Advancing
+   * between two replies proves an interruption cycle (lock/sleep/session
+   * switch) ran even when `desktopPauses` netted back to empty between them,
+   * which is the signal the server uses to invalidate pre-interruption
+   * approvals.
+   */
+  desktopInterruptions?: number;
   /**
    * The tool's MCP-shaped result — and, for `cancel_input`, the cleanup
    * acknowledgement object (`pid`, `input_admission_closed`,

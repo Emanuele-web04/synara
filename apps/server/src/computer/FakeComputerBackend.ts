@@ -880,6 +880,16 @@ export class FakeComputerBackend implements ComputerBackend {
     this.emit({ type: "health-changed", health });
   }
 
+  /**
+   * Reports a desktop lock/sleep/session interruption the way the real
+   * backend does when a reply's `desktopInterruptions` count advances —
+   * `pauses` are the reasons still active at observation time, empty when
+   * the cycle already ended.
+   */
+  emitDesktopInterrupted(pauses: readonly string[] = []): void {
+    this.emit({ type: "desktop-interrupted", pauses });
+  }
+
   setAvailability(availability: ComputerAvailability): void {
     this.currentAvailability = availability;
   }

@@ -274,6 +274,15 @@ export class CuaDriverHost {
   private readonly desktopPauses = new Set<string>();
   private desktopObservationRequired = false;
   private desktopEpoch = 0;
+  /**
+   * Monotonic count of OS desktop interruptions this host has observed —
+   * one per `pauseDesktop` signal (lock, sleep, session resign, or the
+   * startup-locked probe), never reset. Unlike {@link desktopEpoch}, which
+   * also advances on ordinary stops, this counts only real interruptions,
+   * which is what lets the backend invalidate pre-interruption consent when
+   * a lock/resume cycle netted back to "not paused" between two replies.
+   */
+  private desktopInterruptionCount = 0;
   private operations: Promise<void> = Promise.resolve();
   private stopping: Promise<void> = Promise.resolve();
   private epoch = 0;
@@ -338,15 +347,14 @@ export class CuaDriverHost {
         return;
       }
       void this.handle(request, socket).then(
-        (result) =>
-          socket.end(JSON.stringify({ ...result, desktopEpoch: this.desktopEpoch }) + "\n"),
+        (result) => socket.end(JSON.stringify({ ...result, ...this.desktopState() }) + "\n"),
         (error) =>
           socket.end(
             JSON.stringify({
               ok: false,
               error: String(error),
               effect: "not-dispatched",
-              desktopEpoch: this.desktopEpoch,
+              ...this.desktopState(),
             }) + "\n",
           ),
       );
@@ -1373,10 +1381,29 @@ export class CuaDriverHost {
     if (!this.closed) this.suspended = false;
   }
 
+  /**
+   * The interruption state every host reply piggybacks: the sorted pause
+   * reasons active right now, and the never-reset interruption count. The
+   * count is the load-bearing half — a lock that engages and releases between
+   * two replies nets `desktopPauses` back to `[]`, so only the advancing
+   * counter proves the interruption cycle ran at all.
+   */
+  private desktopState(): Pick<
+    CuaReply,
+    "desktopEpoch" | "desktopPauses" | "desktopInterruptions"
+  > {
+    return {
+      desktopEpoch: this.desktopEpoch,
+      desktopPauses: [...this.desktopPauses].toSorted(),
+      desktopInterruptions: this.desktopInterruptionCount,
+    };
+  }
+
   /** OS desktop state is independent of backend restarts. A backend resume
    * cannot reopen input while the screen is locked or another user is active. */
   pauseDesktop(reason: string): Promise<void> {
     this.desktopPauses.add(reason);
+    this.desktopInterruptionCount += 1;
     this.desktopObservationRequired = true;
     log(`desktop input paused (${reason}); requiring fresh desktop observation`);
     return this.stop();

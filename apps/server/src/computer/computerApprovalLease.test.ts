@@ -1,7 +1,7 @@
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { ComputerApprovalGate } from "./ComputerApprovalGate.ts";
+import { ComputerApprovalGate, computerApprovalGate } from "./ComputerApprovalGate.ts";
 import { ComputerManager } from "./ComputerManager.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import { makeAgentGatewayComputerTools } from "../agentGateway/computerTools.ts";
@@ -157,6 +157,54 @@ describe("computer approval lease", () => {
       expect(accepted.isError).not.toBe(true);
       expect(backend.callsFor("typeText")).toHaveLength(1);
     } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("a desktop interruption revokes standing consent before the next mutating call", async () => {
+    // The manager wires the backend's interruption report into the shared
+    // gate, so this runs through the real authorize path: the answer that
+    // carried the pre-lock turn does not authorize the post-lock call.
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const threadId = "interruption-consent-thread";
+    const prompts: string[] = [];
+    const tools = makeAgentGatewayComputerTools({
+      manager,
+      authorizeAction: (_name, _args, ctx, signal) =>
+        computerApprovalGate.requestTask({
+          threadId: ctx.callerThreadId,
+          turnId: ctx.callerTurnId ?? "",
+          signal,
+          publish: async (id, decision) => {
+            if (decision === undefined) prompts.push(id);
+          },
+        }),
+    });
+    const tool = tools.find((entry) => entry.definition.name === "computer_type_text")!;
+    const ctx = context(threadId, "turn-1");
+    try {
+      const first = Effect.runPromise(
+        tool.handler({ text: "before", include_screenshot: false }, ctx),
+      );
+      await vi.waitFor(() => expect(prompts).toHaveLength(1));
+      computerApprovalGate.respond(threadId, prompts[0]!, "accept");
+      await first;
+      expect(backend.callsFor("typeText")).toHaveLength(1);
+      // The screen locked and unlocked between calls: the host's
+      // interruption count advanced, the backend announced it, and the
+      // standing grant is gone — the same tool republishes its prompt
+      // instead of riding the pre-interruption answer.
+      backend.emitDesktopInterrupted(["screen-lock"]);
+      const second = Effect.runPromise(
+        tool.handler({ text: "after", include_screenshot: false }, ctx),
+      );
+      await vi.waitFor(() => expect(prompts).toHaveLength(2));
+      computerApprovalGate.respond(threadId, prompts[1]!, "accept");
+      await second;
+      expect(backend.callsFor("typeText")).toHaveLength(2);
+    } finally {
+      computerApprovalGate.cancelThread(threadId);
       await manager.dispose();
     }
   });
