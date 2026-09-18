@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const characters = (...codes: number[]): string => String.fromCharCode(...codes);
 const retiredShortName = characters(116, 51);
@@ -191,11 +192,16 @@ export function findVisualBrandAssetViolations(
   return violations;
 }
 
-function readTrackedFiles(): BrandIdentityBinaryFile[] {
-  const paths = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" })
+export function readTrackedFiles(cwd = process.cwd()): BrandIdentityBinaryFile[] {
+  const entries = execFileSync("git", ["ls-files", "--stage", "-z"], { cwd, encoding: "utf8" })
     .split("\0")
     .filter(Boolean);
-  return paths.map((path) => ({ path, contents: readFileSync(path) }));
+  // Gitlinks name another repository, not a file owned by this checkout. They may
+  // exist as directories or be absent when submodules have not been initialized.
+  const paths = entries
+    .filter((entry) => !entry.startsWith("160000 "))
+    .map((entry) => entry.slice(entry.indexOf("\t") + 1));
+  return paths.map((path) => ({ path, contents: readFileSync(resolve(cwd, path)) }));
 }
 
 function main(): void {
