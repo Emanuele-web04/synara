@@ -21,6 +21,15 @@
  *                           the window off-screen (invisible-workspace seam)
  *   chromium-semantic       real Chrome: hidden launch + re-hide + driver-
  *                           enabled AX tree + omnibox set_value + readback
+ *   grant-lifecycle         per-app always-allow: prompt→mint→silent cover
+ *                           →revoke→re-prompt through manager.admitDrivenApp
+ *   recording-privacy       real session over a live op: redacted default
+ *                           hashes payloads, secure fields stay hashed under
+ *                           full, full opt-in captures; replay dry-run classifies
+ *   locked-use-reauth       host.pauseDesktop→resume through the real
+ *                           desktop-interrupted chain: standing task consent
+ *                           revoked (re-prompt), declines held, pending
+ *                           prompts survive, input paused→observation→resumed
  *   space-roundtrip         SLSManagedDisplaySetCurrentSpace switch→act→back
  *                           (skipped with `skipped-single-desktop` when only
  *                           one managed desktop space exists)
@@ -58,6 +67,8 @@ import { ComputerShield } from "../../apps/desktop/src/computerShield";
 import { EscapeKillSwitchMonitor } from "../../apps/desktop/src/escapeKillSwitchMonitor";
 import { CuaComputerBackend } from "../../apps/server/src/computer/CuaComputerBackend";
 import { ComputerManager } from "../../apps/server/src/computer/ComputerManager";
+import { redactComputerRecordingArgs } from "../../apps/server/src/computer/computerRecording";
+import { computerApprovalGate } from "../../apps/server/src/computer/ComputerApprovalGate";
 import {
   analyzeFocusSamples,
   parseFocusProbeLine,
@@ -992,6 +1003,495 @@ end repeat`,
         { error: String(e) },
         Date.now() - t,
       );
+    }
+  }
+
+  // ── grant-lifecycle (durable per-app always-allow) ──
+  // The real product seam: manager.admitDrivenApp — the same call
+  // computerTools.ts:1881 makes — hits the second-app boundary. First app
+  // records free; the second fires the wired approval handler, which mints
+  // a durable grant via grantIdentityForAppKey → computerGrantOfferFor →
+  // createComputerGrants (the same path the approval card's respond uses).
+  // A fresh thread then drives the granted app silently; revoke re-arms
+  // the prompt. Grant store is isolated in a temp dir — never the user's.
+  if (wanted("grant-lifecycle")) {
+    const t = Date.now();
+    let backend: CuaComputerBackend | undefined;
+    let manager: ComputerManager | undefined;
+    let calcPid: number | undefined;
+    try {
+      const stateDir = join(
+        process.env.TMPDIR ?? "/tmp",
+        `live-cert-grants-${SENTINEL.toLowerCase()}`,
+      );
+      await mkdir(stateDir, { recursive: true });
+      for (const stray of (
+        spawnSync("pgrep", ["-x", "Calculator"], { encoding: "utf8" }).stdout ?? ""
+      )
+        .split("\n")
+        .map(Number)
+        .filter(Boolean))
+        spawnSync("kill", [String(stray)]);
+      await new Promise((r) => setTimeout(r, 600));
+      spawnSync("open", ["-j", "-a", "Calculator"]);
+      for (let i = 0; i < 20 && calcPid === undefined; i++) {
+        await new Promise((r) => setTimeout(r, 400));
+        calcPid = Number(
+          (spawnSync("pgrep", ["-nx", "Calculator"], { encoding: "utf8" }).stdout ?? "").trim(),
+        ) || undefined;
+      }
+      if (calcPid) spawnedPids.push(calcPid);
+
+      backend = new CuaComputerBackend({ endpoint, capability });
+      manager = new ComputerManager({
+        backend,
+        controlStatePath: join(stateDir, "control-state.json"),
+      });
+      const prompts: string[] = [];
+      const grantFor: string[] = [];
+      manager.setSecondAppApprovalHandler(async (input) => {
+        prompts.push(`${input.threadId}:${input.app}`);
+        // Mint inside the answer — the same grant.create path the approval
+        // card's respond() runs when the user picks always-allow.
+        const identity = await manager!.grantIdentityForAppKey(input.app);
+        const classes = ["lifecycle"] as const;
+        if (identity) {
+          const offer = manager!.computerGrantOfferFor({
+            apps: [identity],
+            classes: [...classes],
+            includesUnattributedTarget: false,
+          });
+          if (offer) {
+            manager!.createComputerGrants({
+              offer: { apps: offer.apps, classes: offer.classes, scopes: offer.scopes },
+              choice: { classes: [...classes], scope: "app" },
+              threadId: input.threadId,
+              ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
+            });
+            grantFor.push(input.app);
+          }
+        }
+        return true;
+      });
+
+      const admit = (thread: string, app: string) =>
+        manager!.admitDrivenApp(thread, app, {
+          grantClasses: ["lifecycle"],
+          toolName: "computer_launch_app",
+          signal: AbortSignal.timeout(10_000),
+        });
+      // Thread A: first app free, second app prompts.
+      await admit("live-cert-grants-a", "TextEdit");
+      await admit("live-cert-grants-a", "Calculator");
+      // Thread B: durable grant covers the same app — silent.
+      await admit("live-cert-grants-b", "Calculator");
+      const listed = manager.listComputerGrants().grants;
+      const calcGrant = listed.find((g) =>
+        `${g.app?.name ?? ""}${g.app?.bundleId ?? ""}`.toLowerCase().includes("calculator"),
+      );
+      // Revoke → a fresh thread prompts again. Thread C drives a first app
+      // first (the first app per thread always records free) so Calculator
+      // is its second-app boundary.
+      if (calcGrant) manager.revokeComputerGrant(calcGrant.id);
+      await admit("live-cert-grants-c", "TextEdit");
+      await admit("live-cert-grants-c", "Calculator");
+
+      const ok =
+        prompts.length === 2 &&
+        prompts[0] === "live-cert-grants-a:Calculator" &&
+        prompts[1] === "live-cert-grants-c:Calculator" &&
+        grantFor.length === 2 &&
+        calcGrant !== undefined;
+      row(
+        "grant-lifecycle",
+        ok ? "pass" : "fail",
+        `prompts=${JSON.stringify(prompts)} minted=${grantFor.length} listed=${listed.length} revoked=${calcGrant !== undefined}`,
+        {
+          prompts,
+          grantFor,
+          grant: calcGrant,
+          listedCount: listed.length,
+          identityBundleId: calcGrant?.app?.bundleId,
+        },
+        Date.now() - t,
+      );
+    } catch (e) {
+      row(
+        "grant-lifecycle",
+        "fail",
+        String(e).slice(0, 200),
+        { error: String(e) },
+        Date.now() - t,
+      );
+    } finally {
+      await manager?.dispose().catch(() => undefined);
+      backend?.dispose?.();
+      if (calcPid) spawnSync("kill", [String(calcPid)]);
+    }
+  }
+
+  // ── recording-privacy: real session over a live op; redacted default, secure floor ──
+  if (wanted("recording-privacy")) {
+    const t = Date.now();
+    let backend: CuaComputerBackend | undefined;
+    let manager: ComputerManager | undefined;
+    const pid = await launchTextEdit(["-j"]);
+    try {
+      const stateDir = join(
+        process.env.TMPDIR ?? "/tmp",
+        `live-cert-rec-${SENTINEL.toLowerCase()}`,
+      );
+      await mkdir(stateDir, { recursive: true });
+      backend = new CuaComputerBackend({ endpoint, capability });
+      manager = new ComputerManager({
+        backend,
+        controlStatePath: join(stateDir, "control-state.json"),
+        recordingDir: join(stateDir, "recordings"),
+      });
+      const SECRET = `${SENTINEL}-secret`;
+      const win = pid ? await windowOfPid(pid) : undefined;
+      const target = win ? await textAreaToken(win.pid, win.window_id) : undefined;
+      const windowRef = win ? `cua:${win.pid}:${win.window_id}` : undefined;
+
+      // Session A — the default redacted fidelity, recording a real op: the
+      // step mirrors writeSessionStep in computerTools (session fidelity +
+      // secure resolution decide the projection; the store never sees raw args).
+      const sA = await manager.startComputerRecording({ threadId: "live-cert-rec-a" });
+      const toolArgs = {
+        ...(win ? { pid: win.pid, window_id: win.window_id } : {}),
+        ...(target ? { element_token: target.token } : {}),
+        value: SECRET,
+      };
+      const res = win && target ? await callReply("set_value", toolArgs) : undefined;
+      const readback = win ? await textAreaValue(win.pid, win.window_id) : undefined;
+      const record = (
+        threadId: string,
+        args: Record<string, unknown>,
+        options: { protected: boolean; resolutions: object[]; effect?: string },
+      ) => {
+        const fidelity = manager!.recordingFidelityFor(threadId);
+        const redacted = redactComputerRecordingArgs(args, {
+          fidelity: fidelity ?? "redacted",
+          protected: options.protected,
+        });
+        manager!.recordComputerStep(threadId, {
+          tool: "computer_set_value",
+          actionClass: "semantic",
+          threadId,
+          approval: { required: true, decision: "granted" },
+          resolutions: options.resolutions as never,
+          args: redacted.args,
+          ...(redacted.payload !== undefined ? { payload: redacted.payload } : {}),
+          dispatches: [{ action: "set_value", ...(windowRef ? { windowId: windowRef } : {}) }],
+          effect: (options.effect ?? "verified") as never,
+          latencyMs: 9,
+        });
+      };
+      record("live-cert-rec-a", toolArgs, {
+        protected: false,
+        resolutions: [
+          { via: "semantic", ...(windowRef ? { windowId: windowRef } : {}), pid: win?.pid, role: "AXTextArea" },
+        ],
+        effect: res !== undefined && replyOk(res) ? "verified" : "error",
+      });
+      await manager.stopComputerRecording(sA.recordingId);
+      const docA = await manager.readComputerRecording(sA.recordingId);
+      const exportA = await manager.exportComputerRecording(sA.recordingId);
+      const stepA = docA.steps[0];
+      const leakedA = `${JSON.stringify(docA)}\n${exportA}`.includes(SECRET);
+      const hashedA =
+        stepA?.payload?.sha256 !== undefined && typeof stepA.payload.chars === "number";
+
+      // Session B — full fidelity on a protected resolution: plaintext barred anyway.
+      const sB = await manager.startComputerRecording({
+        threadId: "live-cert-rec-b",
+        fidelity: "full",
+      });
+      record("live-cert-rec-b", { value: SECRET }, {
+        protected: true,
+        resolutions: [{ via: "semantic", secure: true }],
+      });
+      await manager.stopComputerRecording(sB.recordingId);
+      const docB = await manager.readComputerRecording(sB.recordingId);
+      const stepB = docB.steps[0];
+      const leakedB = JSON.stringify(docB).includes(SECRET);
+      const protectedB = stepB?.payload?.protected === true;
+
+      // Session C — full fidelity unprotected: the opt-in really captures, so
+      // B's floor is a floor and not a broken recorder.
+      const sC = await manager.startComputerRecording({
+        threadId: "live-cert-rec-c",
+        fidelity: "full",
+      });
+      record("live-cert-rec-c", { value: SECRET }, {
+        protected: false,
+        resolutions: [{ via: "semantic" }],
+      });
+      await manager.stopComputerRecording(sC.recordingId);
+      const docC = await manager.readComputerRecording(sC.recordingId);
+      const stepC = docC.steps[0];
+      const capturedC =
+        JSON.stringify(docC).includes(SECRET) && stepC?.payload?.captured === true;
+
+      // Replay — dry-run classification; mutating steps never re-dispatch
+      // without execute.
+      const rep = await manager.replayComputerRecording("live-cert-rec-replay", sA.recordingId, {
+        execute: false,
+      });
+      const listed = await manager.listComputerRecordings();
+      const deleted = await manager.deleteComputerRecording(sC.recordingId);
+
+      const ok =
+        res !== undefined &&
+        replyOk(res) &&
+        readback === SECRET &&
+        !leakedA &&
+        hashedA &&
+        !leakedB &&
+        protectedB &&
+        capturedC &&
+        rep.executed === false &&
+        rep.summary.total >= 1 &&
+        listed.length >= 3 &&
+        deleted === true;
+      row(
+        "recording-privacy",
+        ok ? "pass" : "fail",
+        `redacted=${!leakedA && hashedA} secureFloor=${!leakedB && protectedB} fullOptIn=${capturedC} replay=${rep.summary.total}steps listed=${listed.length}`,
+        {
+          realOp: { dispatched: res !== undefined, confirmed: res !== undefined && replyOk(res), readbackExact: readback === SECRET },
+          sessionA: { leaked: leakedA, payload: stepA?.payload },
+          sessionB: { leaked: leakedB, payload: stepB?.payload },
+          sessionC: { captured: capturedC, payload: stepC?.payload },
+          replay: { executed: rep.executed, summary: rep.summary },
+          listed: listed.length,
+          deleted,
+        },
+        Date.now() - t,
+      );
+    } catch (e) {
+      row(
+        "recording-privacy",
+        "fail",
+        String(e).slice(0, 200),
+        { error: String(e) },
+        Date.now() - t,
+      );
+    } finally {
+      await manager?.dispose().catch(() => undefined);
+      backend?.dispose?.();
+    }
+  }
+
+  // ── locked-use-reauth: lock/sleep interruption revokes standing consent ──
+  if (wanted("locked-use-reauth")) {
+    const t = Date.now();
+    let backend: CuaComputerBackend | undefined;
+    let manager: ComputerManager | undefined;
+    const pid = await launchTextEdit(["-j"]);
+    const lockThreads = ["live-cert-lock-a", "live-cert-lock-b", "live-cert-lock-c"];
+    try {
+      const stateDir = join(
+        process.env.TMPDIR ?? "/tmp",
+        `live-cert-lock-${SENTINEL.toLowerCase()}`,
+      );
+      await mkdir(stateDir, { recursive: true });
+      backend = new CuaComputerBackend({ endpoint, capability });
+      manager = new ComputerManager({
+        backend,
+        controlStatePath: join(stateDir, "control-state.json"),
+      });
+      const win = pid ? await windowOfPid(pid) : undefined;
+      const target = win ? await textAreaToken(win.pid, win.window_id) : undefined;
+
+      // The first reply only sets the backend's interruption baseline — an
+      // advance is the proof a lock/resume cycle ran, so observe pre-pause.
+      // listApps hits call()→host() unconditionally; availability/listWindows
+      // cache their snapshot for a second and would not observe the counter.
+      await backend.listApps().catch(() => undefined);
+
+      const prompts: string[] = [];
+      const ask = (
+        threadId: string,
+        decision: "accept" | "decline",
+        pendingId?: { id?: string },
+      ) =>
+        computerApprovalGate.requestTask({
+          threadId,
+          turnId: "turn-1",
+          signal: AbortSignal.timeout(15_000),
+          publish: async (requestId, dismissal) => {
+            // request() publishes a second time with the settled decision as
+            // a best-effort dismissal — only the undefined-decision call is
+            // the prompt.
+            if (dismissal !== undefined) return;
+            prompts.push(`${threadId}:${decision}`);
+            if (pendingId) pendingId.id = requestId;
+            else computerApprovalGate.respond(threadId, requestId, decision);
+          },
+        });
+
+      // Thread A: accept → standing task grant; a second call in the same
+      // turn rides it silently.
+      const aGranted = await ask("live-cert-lock-a", "accept");
+      const aCached = await ask("live-cert-lock-a", "accept");
+      const aSilent = prompts.filter((p) => p.startsWith("live-cert-lock-a")).length === 1;
+
+      // Thread B: decline — a refusal is not authority a lock must break.
+      const bDeclined = (await ask("live-cert-lock-b", "decline")) === false;
+
+      // Thread C: a prompt left pending across the interruption — the answer
+      // that arrives afterward already postdates it, so it IS the re-auth.
+      const pendingId: { id?: string } = {};
+      const cPending = ask("live-cert-lock-c", "accept", pendingId);
+      for (let i = 0; i < 40 && pendingId.id === undefined; i++)
+        await new Promise((r) => setTimeout(r, 50));
+
+      // The interruption itself: the exact entry points the desktop
+      // lifecycle monitor calls on lock/sleep/session switch.
+      await host.pauseDesktop("screen-lock");
+      // The input half of locked-use: mutations refuse while paused.
+      const pausedReply =
+        win && target
+          ? await callReply("set_value", {
+              pid: win.pid,
+              window_id: win.window_id,
+              element_token: target.token,
+              value: `${SENTINEL}-while-locked`,
+            }).catch((e) => ({ ok: false, error: String(e) }) as CuaReply)
+          : undefined;
+      const pausedRefused = JSON.stringify(pausedReply).includes("desktop_input_paused");
+      host.resumeDesktop("screen-lock");
+
+      // Any reply now carries the advanced counter → the backend fires
+      // desktop-interrupted → the manager revokes standing task grants.
+      await backend.listApps().catch(() => undefined);
+
+      // Post-interruption: thread A's same-turn call must re-publish (the
+      // re-auth half); answering it restores operation.
+      const aReauth = await ask("live-cert-lock-a", "accept");
+      const aReprompted =
+        prompts.filter((p) => p.startsWith("live-cert-lock-a")).length === 2;
+
+      // Thread B stays declined with no new prompt — no nag on unlock.
+      const bAfter = await computerApprovalGate.requestTask({
+        threadId: "live-cert-lock-b",
+        turnId: "turn-1",
+        signal: AbortSignal.timeout(15_000),
+        publish: async (requestId, dismissal) => {
+          if (dismissal !== undefined) return;
+          prompts.push("live-cert-lock-b:unexpected");
+          computerApprovalGate.respond("live-cert-lock-b", requestId, "decline");
+        },
+      });
+      const bNoReprompt =
+        bAfter === false &&
+        prompts.filter((p) => p.startsWith("live-cert-lock-b")).length === 1;
+
+      // Thread C's surviving prompt settles the post-interruption consent.
+      if (pendingId.id !== undefined)
+        computerApprovalGate.respond("live-cert-lock-c", pendingId.id, "accept");
+      const cGranted = (await cPending) === true;
+
+      // And the resume half: after a fresh model observation the desktop
+      // takes input again — the full unlock path end to end.
+      let resumedOk = false;
+      if (win && target) {
+        for (let i = 0; i < 10 && !resumedOk; i++) {
+          const obs = await cuaRequest<CuaReply>(
+            endpoint,
+            {
+              method: "call",
+              name: "get_window_state",
+              args: { pid: win.pid, window_id: win.window_id, max_elements: 8 },
+              capability,
+              modelObservation: true,
+            },
+            { timeoutMs: 10_000, mutation: true },
+          ).catch(() => undefined);
+          const sc = obs?.result?.structuredContent as { elements?: unknown[] } | undefined;
+          if (!obs?.ok || !Array.isArray(sc?.elements)) {
+            await new Promise((r) => setTimeout(r, 400));
+            continue;
+          }
+          const after = await callReply("set_value", {
+            pid: win.pid,
+            window_id: win.window_id,
+            element_token: target.token,
+            value: `${SENTINEL}-post-unlock`,
+          });
+          resumedOk = replyOk(after) && (await textAreaValue(win.pid, win.window_id)) === `${SENTINEL}-post-unlock`;
+          if (!resumedOk) await new Promise((r) => setTimeout(r, 400));
+        }
+      }
+
+      const ok =
+        aGranted === true &&
+        aCached === true &&
+        aSilent &&
+        bDeclined &&
+        pausedRefused &&
+        aReauth === true &&
+        aReprompted &&
+        bNoReprompt &&
+        cGranted &&
+        resumedOk;
+      row(
+        "locked-use-reauth",
+        ok ? "pass" : "fail",
+        `grant=${aGranted && aCached && aSilent} pausedRefused=${pausedRefused} reauth=${aReprompted && aReauth} declineHeld=${bNoReprompt} pendingSurvived=${cGranted} resumed=${resumedOk}`,
+        {
+          prompts,
+          aGranted,
+          aCached,
+          aSilent,
+          bDeclined,
+          pausedReply: JSON.stringify(pausedReply).slice(0, 240),
+          aReauth,
+          aReprompted,
+          bAfter,
+          bNoReprompt,
+          cGranted,
+          resumedOk,
+        },
+        Date.now() - t,
+      );
+    } catch (e) {
+      row(
+        "locked-use-reauth",
+        "fail",
+        String(e).slice(0, 200),
+        { error: String(e) },
+        Date.now() - t,
+      );
+    } finally {
+      for (const thread of lockThreads) computerApprovalGate.cancelThread(thread);
+      host.resumeDesktop("screen-lock");
+      // Leave the observation gate clear for later rows: pauseDesktop sets
+      // desktopObservationRequired, which only a modelObservation clears.
+      if (pid) {
+        const win = await windowOfPid(pid).catch(() => undefined);
+        if (win) {
+          for (let i = 0; i < 10; i++) {
+            await new Promise((r) => setTimeout(r, 400));
+            const obs = await cuaRequest<CuaReply>(
+              endpoint,
+              {
+                method: "call",
+                name: "get_window_state",
+                args: { pid: win.pid, window_id: win.window_id, max_elements: 8 },
+                capability,
+                modelObservation: true,
+              },
+              { timeoutMs: 10_000, mutation: true },
+            ).catch(() => undefined);
+            const sc = obs?.result?.structuredContent as { elements?: unknown[] } | undefined;
+            if (obs?.ok && Array.isArray(sc?.elements)) break;
+          }
+        }
+      }
+      await manager?.dispose().catch(() => undefined);
+      backend?.dispose?.();
     }
   }
 
