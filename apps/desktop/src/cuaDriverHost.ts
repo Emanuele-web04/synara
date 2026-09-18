@@ -21,9 +21,11 @@ import {
   type CuaComputerTask,
   type CuaPreviewTarget,
   parseCuaComputerTask,
+  parseCuaShieldArgs,
   cuaComputerTaskKey,
 } from "@synara/shared/cuaDriverProtocol";
 import type { ComputerFrameTapHost } from "./computerFrameTap";
+import type { ComputerShieldHost } from "./computerShield";
 
 interface Generation {
   child: ChildProcess;
@@ -318,6 +320,12 @@ export class CuaDriverHost {
        * The desktop wires this to the helper's `arm`/`disarm` commands.
        */
       onInputMonitorArmedChange?: (armed: boolean) => void;
+      /**
+       * The masked-activation shield surface. Absent means `engage` requests
+       * are refused as unavailable — the caller must never fall back to an
+       * unmasked excursion under an armed flag.
+       */
+      shield?: ComputerShieldHost;
     },
   ) {}
 
@@ -416,7 +424,17 @@ export class CuaDriverHost {
         this.frameTapTask = undefined;
       }
       await this.options.frameTap?.endTask(task);
+      // The same task boundary ends its shield lease: an activation whose
+      // task is gone has no remaining authority to keep a mask up.
+      await this.options.shield?.endTask(task);
       return { ok: true };
+    }
+    if (request.method === "shield") {
+      // Answered before the closed/suspended gate on purpose: engage checks
+      // those itself, while release must land in every host state — a shield
+      // left up because teardown was gated is exactly the failure this
+      // surface exists to prevent.
+      return this.handleShield(request, task);
     }
     if (request.method === "end_browser_thread") {
       // Explicit browser teardown for a removed thread: end the thread's
@@ -652,6 +670,75 @@ export class CuaDriverHost {
       () => undefined,
     );
     return operation;
+  }
+
+  /**
+   * The `shield` host method: engage is admission-gated (closed, suspended,
+   * or desktop-paused hosts refuse so a mask never arms under an interrupted
+   * desktop), while release and release_all are teardown — accepted in every
+   * state and always safe to repeat. Shield commands never reach the driver
+   * or the operation queue: the helper owns the panels, and a queued shield
+   * request would deadlock an excursion whose cleanup waits on it.
+   */
+  private async handleShield(
+    request: Record<string, unknown>,
+    task: CuaComputerTask | undefined,
+  ): Promise<CuaReply> {
+    const args = parseCuaShieldArgs(request.args);
+    if (!args) throw new Error("Invalid computer shield request.");
+    const shield = this.options.shield;
+    if (args.action === "engage") {
+      if (this.closed || this.suspended) {
+        return {
+          ok: false,
+          error: "The activation shield is unavailable while the computer host is stopped.",
+          effect: "not-dispatched",
+        };
+      }
+      if (this.desktopPauses.size > 0) {
+        return {
+          ok: false,
+          error:
+            "The activation shield is unavailable while the desktop is paused. " +
+            "Observe the desktop again before activating windows.",
+          effect: "not-dispatched",
+        };
+      }
+      if (!shield) {
+        return {
+          ok: false,
+          error: "The activation shield is not available in this build.",
+          effect: "not-dispatched",
+        };
+      }
+      try {
+        await shield.engage(
+          {
+            shieldId: args.shieldId,
+            frame: args.frame,
+            windowId: args.windowId,
+            pid: args.pid,
+            ...(args.label !== undefined ? { label: args.label } : {}),
+          },
+          task,
+        );
+      } catch (error) {
+        return {
+          ok: false,
+          error: `The activation shield could not be shown: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          effect: "not-dispatched",
+        };
+      }
+      return { ok: true, result: { engaged: true, shield_id: args.shieldId } };
+    }
+    if (args.action === "release") {
+      await shield?.release(args.shieldId);
+      return { ok: true };
+    }
+    const released = (await shield?.releaseAll()) ?? 0;
+    return { ok: true, result: { released } };
   }
 
   private checkPermissions(
@@ -1277,9 +1364,13 @@ export class CuaDriverHost {
     for (const cancel of this.pendingPermissionChecks) cancel();
     const admitted = this.operations;
     const frameTapStopped = this.options.frameTap?.stop();
+    // Any shield still up belongs to an excursion this stop interrupts: drop
+    // it (and its helper) in parallel with the driver retire, same discipline.
+    const shieldStopped = this.options.shield?.stop();
     // Same discipline as `stopping` below: the stop caller sees the failure
     // through the returned promise, never through an unhandled rejection.
     void frameTapStopped?.catch(() => undefined);
+    void shieldStopped?.catch(() => undefined);
     const stopping = this.stopping.then(async () => {
       if (this.generation) await this.retire(this.generation);
       await this.starting?.catch(() => undefined);
@@ -1287,6 +1378,7 @@ export class CuaDriverHost {
       await admitted;
       await this.retiring;
       await frameTapStopped;
+      await shieldStopped;
     });
     // Same discipline as `retiring`: the caller sees the failure but the
     // chain must not — one admission-closed stop must not refuse every
@@ -1526,6 +1618,7 @@ export class CuaDriverHost {
       await this.stop();
     } finally {
       await this.options.frameTap?.dispose().catch(() => undefined);
+      await this.options.shield?.dispose().catch(() => undefined);
       for (const socket of this.connections) socket.destroy();
       await new Promise<void>((resolve) => {
         if (this.server) this.server.close(() => resolve());

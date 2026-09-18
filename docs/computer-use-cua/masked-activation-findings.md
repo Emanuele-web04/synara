@@ -96,3 +96,39 @@ certification. Alternatives already shipping: `computer_browser_*` CDP for
 Chromium-family and agent-launched Electron (the SIGUSR1 inspector path
 does not enumerate renderer page targets on pre-existing Electron apps —
 those remain masking's constituency).
+
+## Implementation status (2026-09-23)
+
+Recipe B shipped, canary-gated exactly as the decision above required:
+
+- **Canary gate** — `SYNARA_CUA_MASKED_ACTIVATION` (off by default) plus
+  `SYNARA_CUA_MASKED_APPS`, a per-app opt-in list of bundle identifiers
+  (`apps/server/src/computer/computerShield.ts`). All three conditions —
+  flag armed, macOS dialect, owning app's bundle id opted in — must hold
+  before `foregroundWithRestore` arms a shield; anything less takes the
+  ordinary visible path (`ComputerManager.engageActivationShield`).
+- **Fail closed** — once the opt-in names the app, a shield that cannot
+  engage refuses the activation rather than degrading to an unmasked raise.
+  The manager mints the `shield_id`, so a lost engage reply still leaves a
+  releasable handle; release runs inside `withoutDesktopCancellation` and
+  the `finally` of the excursion, after the restore has landed.
+- **Visible indication** — the shield is a Synara-owned non-activating
+  `NSPanel` at `kCGStatusWindowLevel` (25), accent-bordered with a
+  "Synara is activating \<app\>" pill, click-through on purpose: it
+  discloses the excursion, it does not isolate input. `masked: true` rides
+  the `computer.action` event as the durable disclosure record.
+- **Self-cleaning** — the panels live in a dedicated `appsnap --shield`
+  helper (`apps/desktop/native/appsnap/ActivationShield.swift`): parent-pid
+  watch, stdin-EOF drop, 30 s per-shield TTL, Space/display-change release,
+  and WindowServer removes its windows outright if the process dies. The
+  desktop host (`apps/desktop/src/computerShield.ts`) adds engage
+  confirmation, per-task attribution so `end_task` releases shields, and
+  `stop`/`dispose` teardown; `release_all` is the ungated escape hatch in
+  every host state.
+- **Transport** — `{method:"shield"}` host requests are answered by the GUI
+  host itself, never the driver, validated by `parseCuaShieldArgs` in
+  `packages/shared/src/cuaDriverProtocol.ts`; the server side rides
+  `ComputerBackend.engageShield`/`releaseShield`/`releaseAllShields`.
+
+Recipe A (foreign level-raise) remains unbuilt: its entitlement gate is
+unproven on this box and its stuck-window cleanup story is strictly worse.

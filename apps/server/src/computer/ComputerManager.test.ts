@@ -3258,7 +3258,7 @@ it("keeps a pause when the thread is re-armed while its readiness probe is in fl
 
 it("measures a macOS scroll inside the two-leg, three-capture budget", async () => {
   class MacosFake extends FakeComputerBackend {
-    readonly agentDialect = "macos" as const;
+    override readonly agentDialect = "macos" as const;
   }
   const backend = new MacosFake();
   const manager = new ComputerManager({ backend, actionSettleMs: 0 });
@@ -3547,6 +3547,227 @@ describe("ComputerManager withForegroundRestore", () => {
     try {
       await manager.withForegroundRestore("thread-1", async () => "typed");
       expect(foregroundRaisedIds(backend)).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
+describe("ComputerManager masked activation", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** The canary's two flags, both required before any shield may arm. */
+  function armMaskedActivation(apps = "org.kde.kcalc"): void {
+    vi.stubEnv("SYNARA_CUA_MASKED_ACTIVATION", "1");
+    vi.stubEnv("SYNARA_CUA_MASKED_APPS", apps);
+  }
+
+  /** A macOS-dialect fake with the shield surface present — the CUA shape. */
+  function shieldedMacBackend(
+    options: ConstructorParameters<typeof FakeComputerBackend>[0] = {},
+  ): FakeComputerBackend {
+    return new FakeComputerBackend({ agentDialect: "macos", shield: true, ...options });
+  }
+
+  /** The engage→raise→restore→release order, as one recorded method list. */
+  function shieldExcursionOrder(backend: FakeComputerBackend): readonly string[] {
+    return backend.calls
+      .filter((call) => ["engageShield", "raiseWindow", "releaseShield"].includes(call.method))
+      .map((call) =>
+        call.method === "raiseWindow" ? `${call.method}:${String(call.args[0])}` : call.method,
+      );
+  }
+
+  it("shields the opted-in window's raise and releases the mask after the restore", async () => {
+    armMaskedActivation();
+    const backend = shieldedMacBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const actions = foregroundRestoreActions(manager);
+    try {
+      const result = await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      expect(result.windowId).toBe("fake-calculator");
+      // The mask goes up before the target moves and comes down only after
+      // the previous window is back — the excursion is never visible.
+      expect(shieldExcursionOrder(backend)).toEqual([
+        "engageShield",
+        "raiseWindow:fake-calculator",
+        "raiseWindow:fake-terminal",
+        "releaseShield",
+      ]);
+      const engage = backend.callsFor("engageShield")[0]!;
+      expect(engage.args[0]).toMatchObject({
+        windowId: "fake-calculator",
+        frame: { x: 1_050, y: 120, width: 420, height: 620 },
+        label: "Synara is activating Calculator",
+      });
+      const shieldId = (engage.args[0] as { shieldId: string }).shieldId;
+      expect(shieldId).toMatch(/^shield-[0-9a-f]{8}$/);
+      // The manager minted the id, so release names the same one.
+      expect(backend.callsFor("releaseShield").map((call) => call.args[0])).toEqual([shieldId]);
+      expect(backend.activeShields()).toEqual([]);
+      expect(actions).toHaveLength(1);
+      expect(actions[0]).toMatchObject({
+        action: "computer_activate_window",
+        masked: true,
+        restoreStatus: "restored",
+      });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("masks nothing while the canary flag is unset, even with a shield surface", async () => {
+    const backend = shieldedMacBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const actions = foregroundRestoreActions(manager);
+    try {
+      await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      expect(backend.callsFor("engageShield")).toEqual([]);
+      expect(actions[0]).not.toHaveProperty("masked");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("masks nothing when the opt-in list names a different app", async () => {
+    armMaskedActivation("com.example.other");
+    const backend = shieldedMacBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      expect(backend.callsFor("engageShield")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("masks nothing on a non-macOS dialect even when armed and opted in", async () => {
+    armMaskedActivation();
+    // The default fake reports no dialect, which the manager reads as linux.
+    const backend = new FakeComputerBackend({ shield: true });
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      expect(backend.callsFor("engageShield")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("resolves the opt-in through the owning app's bundle id, not the window title", async () => {
+    armMaskedActivation("org.kde.kcalc");
+    const windows: readonly ComputerWindow[] = [
+      {
+        id: "fake-terminal",
+        title: "Terminal",
+        appName: "Terminal",
+        pid: 1_001,
+        bounds: { x: 40, y: 40, width: 960, height: 720 },
+        focused: true,
+        minimized: false,
+        visible: true,
+      },
+      {
+        id: "fake-calculator",
+        title: "Calculator",
+        // A display name, not the bundle id the opt-in list carries.
+        appName: "Calculator",
+        pid: 1_002,
+        bounds: { x: 1_050, y: 120, width: 420, height: 620 },
+        focused: false,
+        minimized: false,
+        visible: true,
+      },
+    ];
+    const backend = shieldedMacBackend({
+      windows,
+      apps: [
+        {
+          pid: 1_001,
+          name: "Terminal",
+          bundleId: "org.kde.konsole",
+          running: true,
+          active: true,
+          windowCount: 1,
+        },
+        {
+          pid: 1_002,
+          name: "Calculator",
+          bundleId: "org.kde.kcalc",
+          running: true,
+          active: false,
+          windowCount: 1,
+        },
+      ],
+    });
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      expect(backend.callsFor("engageShield")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses the activation when the opt-in is armed but no shield surface exists", async () => {
+    armMaskedActivation();
+    // A macOS backend whose host build lacks the shield command: the armed
+    // opt-in must fail closed rather than degrade to a visible raise.
+    const backend = new FakeComputerBackend({ agentDialect: "macos" });
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      await expect(manager.foregroundWithRestore("thread-1", "fake-calculator")).rejects.toThrow(
+        "activation shield is unavailable",
+      );
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses the activation when the shield cannot engage, and releases the minted id", async () => {
+    armMaskedActivation();
+    const backend = shieldedMacBackend();
+    backend.failNext("engageShield", new ComputerBackendError("mask_unavailable"));
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      // A typed backend refusal surfaces as-is; only an untyped failure is
+      // wrapped in the "could not be shown" message.
+      await expect(manager.foregroundWithRestore("thread-1", "fake-calculator")).rejects.toThrow(
+        "mask_unavailable",
+      );
+      // A lost engage reply can still leave a shield up: the minted id is
+      // released before the refusal is reported, and no raise ever ran.
+      const engages = backend.callsFor("engageShield");
+      const releases = backend.callsFor("releaseShield");
+      expect(engages).toHaveLength(1);
+      expect(releases.map((call) => call.args[0])).toEqual([
+        (engages[0]!.args[0] as { shieldId: string }).shieldId,
+      ]);
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+      expect(backend.activeShields()).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("drops the shield when the masked excursion itself fails", async () => {
+    armMaskedActivation();
+    const backend = shieldedMacBackend();
+    backend.raiseWindow = async () => {
+      throw new ComputerBackendError("The window closed.");
+    };
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      await expect(manager.foregroundWithRestore("thread-1", "fake-calculator")).rejects.toThrow(
+        "window closed",
+      );
+      // The raise failed under an up mask: the finally path still released
+      // it — a shield outlives nothing, not even a dead excursion.
+      expect(backend.callsFor("releaseShield")).toHaveLength(1);
+      expect(backend.activeShields()).toEqual([]);
     } finally {
       await manager.dispose();
     }

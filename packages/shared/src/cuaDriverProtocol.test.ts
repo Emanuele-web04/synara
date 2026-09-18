@@ -6,6 +6,7 @@ import {
   CUA_BROWSER_TOOLS,
   CUA_READ_TOOLS,
   cuaCleanupAcknowledged,
+  parseCuaShieldArgs,
 } from "./cuaDriverProtocol";
 
 /**
@@ -266,5 +267,86 @@ describe("cuaCleanupAcknowledged", () => {
 
   it("rejects an unknown child pid", () => {
     expect(cuaCleanupAcknowledged(complete, undefined)).toBe(false);
+  });
+});
+
+describe("parseCuaShieldArgs", () => {
+  const engage = {
+    action: "engage",
+    shield_id: "shield-a1b2c3d4",
+    frame: { x: 1050.5, y: 120, width: 420, height: 620 },
+    window_id: 4242,
+    pid: 777,
+    label: "Synara activating Calculator",
+  };
+
+  it("parses an engage with its full target shape", () => {
+    expect(parseCuaShieldArgs(engage)).toEqual({
+      action: "engage",
+      shieldId: "shield-a1b2c3d4",
+      frame: { x: 1050.5, y: 120, width: 420, height: 620 },
+      windowId: 4242,
+      pid: 777,
+      label: "Synara activating Calculator",
+    });
+  });
+
+  it("tolerates a missing label and an off-screen frame origin", () => {
+    const { label: _label, ...withoutLabel } = engage;
+    const parsed = parseCuaShieldArgs(withoutLabel);
+    expect(parsed).toMatchObject({ action: "engage", shieldId: "shield-a1b2c3d4" });
+    expect(parsed && "label" in parsed ? parsed.label : undefined).toBeUndefined();
+    expect(
+      parseCuaShieldArgs({ ...engage, frame: { x: -4600, y: -30, width: 800, height: 600 } }),
+    ).toMatchObject({ frame: { x: -4600, y: -30, width: 800, height: 600 } });
+  });
+
+  it("sanitizes the painted label", () => {
+    const parsed = parseCuaShieldArgs({
+      ...engage,
+      label: " line\nbreak\u001b " + "x".repeat(300),
+    });
+    expect(parsed).toMatchObject({ action: "engage" });
+    const label = parsed && parsed.action === "engage" ? parsed.label : undefined;
+    expect(label).not.toContain("\n");
+    expect(label).not.toContain("\u001b");
+    expect(label!.length).toBeLessThanOrEqual(160);
+  });
+
+  it.each([
+    ["missing args", undefined],
+    ["non-object args", "engage"],
+    ["unknown action", { action: "expand" }],
+    ["bad shield id characters", { ...engage, shield_id: "shield has spaces" }],
+    ["empty shield id", { ...engage, shield_id: "" }],
+    ["oversized shield id", { ...engage, shield_id: "s".repeat(65) }],
+    ["missing frame", { ...engage, frame: undefined }],
+    ["zero-area frame", { ...engage, frame: { x: 0, y: 0, width: 0, height: 600 } }],
+    ["absurd extent", { ...engage, frame: { x: 0, y: 0, width: 100_000, height: 600 } }],
+    ["non-finite origin", { ...engage, frame: { x: Number.NaN, y: 0, width: 800, height: 600 } }],
+    ["zero window id", { ...engage, window_id: 0 }],
+    ["fractional window id", { ...engage, window_id: 1.5 }],
+    ["zero pid", { ...engage, pid: 0 }],
+    ["negative pid", { ...engage, pid: -4 }],
+  ])("refuses %s", (_name, args) => {
+    expect(parseCuaShieldArgs(args)).toBeUndefined();
+  });
+
+  it("parses release and release_all", () => {
+    expect(parseCuaShieldArgs({ action: "release", shield_id: "shield-1" })).toEqual({
+      action: "release",
+      shieldId: "shield-1",
+    });
+    expect(parseCuaShieldArgs({ action: "release_all" })).toEqual({ action: "release_all" });
+    // release_all stays minimal: it must work even for a caller that cannot
+    // name the shields it is dropping.
+    expect(parseCuaShieldArgs({ action: "release_all", shield_id: 42 })).toEqual({
+      action: "release_all",
+    });
+  });
+
+  it("refuses release without a valid shield id", () => {
+    expect(parseCuaShieldArgs({ action: "release" })).toBeUndefined();
+    expect(parseCuaShieldArgs({ action: "release", shield_id: "" })).toBeUndefined();
   });
 });

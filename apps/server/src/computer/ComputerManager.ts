@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { ComputerControlState } from "./ComputerControlState.ts";
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
 import { currentComputerTask } from "./computerTaskContext.ts";
@@ -103,6 +104,11 @@ import {
   computerGrantIdentityForWindow,
   type ComputerGrantCallContext,
 } from "./computerGrants.ts";
+import {
+  cuaMaskedActivationEnabled,
+  cuaMaskedActivationOptIn,
+  maskedActivationOptedIn,
+} from "./computerShield.ts";
 import { describeComputerUiTree } from "./uiTreeText.ts";
 import { clampTextToLength } from "./utf8Truncation.ts";
 
@@ -2350,70 +2356,81 @@ export class ComputerManager {
         windows.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
       this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
       await this.assertWindowInputAllowedWindow(threadId, target);
-      await timedComputerLeg("dispatch", async () => {
-        await raise(windowId);
-        // Aiming after the raise, never before: a raise that refuses must not leave
-        // the keyboard pointed at a window this call just declined to move.
-        assertDesktopOperationActive();
-        await this.backend.focusWindow?.(windowId);
-      });
-      if (input) {
-        try {
-          assertDesktopOperationActive();
-          await input();
-        } catch (error) {
-          // Input that failed after the raise must not leave the desktop
-          // rearranged: restore best-effort, then report the input failure.
-          if (previousId !== null && previousId !== windowId) {
-            await raise(previousId).catch(() => undefined);
-            await this.backend.focusWindow?.(previousId)?.catch(() => undefined);
-          }
-          throw error;
-        }
-      }
-      let restore: ForegroundRestoreInfo;
-      let note: string | undefined;
-      if (previousId === null) {
-        restore = {
-          restoredWindowId: null,
-          restoreStatus: "frontmost-unobservable",
-        };
-        note = "No frontmost window was observable before activation, so nothing was restored.";
-      } else if (previousId === windowId) {
-        restore = {
-          restoredWindowId: null,
-          restoreStatus: "already-frontmost",
-        };
-      } else {
-        try {
-          assertDesktopOperationActive();
-          await raise(previousId);
-          await this.backend.focusWindow?.(previousId);
-          restore = { restoredWindowId: previousId, restoreStatus: "restored" };
-        } catch {
-          restore = {
-            restoredWindowId: previousId,
-            restoreStatus: "restore-missed",
-          };
-          note =
-            `Activated window ${JSON.stringify(windowId)} but could not restore the previously ` +
-            `frontmost window ${JSON.stringify(previousId)} to the foreground; the desktop was ` +
-            `left with ${JSON.stringify(windowId)} raised.`;
-        }
-      }
-      // A fresh listing so the next read sees the desktop as it was left. Best
-      // effort: the activation already succeeded, and a stale listing must not
-      // fail it.
+      // The masked-activation shield arms after admission and before the
+      // raise: an opt-in that cannot shield refuses here rather than
+      // degrading to an unmasked excursion.
+      const shieldId = await this.engageActivationShield(threadId, target);
       try {
-        await this.readWindows();
-      } catch {
-        // Keep the successful result.
+        await timedComputerLeg("dispatch", async () => {
+          await raise(windowId);
+          // Aiming after the raise, never before: a raise that refuses must not leave
+          // the keyboard pointed at a window this call just declined to move.
+          assertDesktopOperationActive();
+          await this.backend.focusWindow?.(windowId);
+        });
+        if (input) {
+          try {
+            assertDesktopOperationActive();
+            await input();
+          } catch (error) {
+            // Input that failed after the raise must not leave the desktop
+            // rearranged: restore best-effort, then report the input failure.
+            if (previousId !== null && previousId !== windowId) {
+              await raise(previousId).catch(() => undefined);
+              await this.backend.focusWindow?.(previousId)?.catch(() => undefined);
+            }
+            throw error;
+          }
+        }
+        let restore: ForegroundRestoreInfo;
+        let note: string | undefined;
+        if (previousId === null) {
+          restore = {
+            restoredWindowId: null,
+            restoreStatus: "frontmost-unobservable",
+          };
+          note = "No frontmost window was observable before activation, so nothing was restored.";
+        } else if (previousId === windowId) {
+          restore = {
+            restoredWindowId: null,
+            restoreStatus: "already-frontmost",
+          };
+        } else {
+          try {
+            assertDesktopOperationActive();
+            await raise(previousId);
+            await this.backend.focusWindow?.(previousId);
+            restore = { restoredWindowId: previousId, restoreStatus: "restored" };
+          } catch {
+            restore = {
+              restoredWindowId: previousId,
+              restoreStatus: "restore-missed",
+            };
+            note =
+              `Activated window ${JSON.stringify(windowId)} but could not restore the previously ` +
+              `frontmost window ${JSON.stringify(previousId)} to the foreground; the desktop was ` +
+              `left with ${JSON.stringify(windowId)} raised.`;
+          }
+        }
+        // A fresh listing so the next read sees the desktop as it was left. Best
+        // effort: the activation already succeeded, and a stale listing must not
+        // fail it.
+        try {
+          await this.readWindows();
+        } catch {
+          // Keep the successful result.
+        }
+        const merged = computerBackendActionResult(this.computerId, "computer_activate_window", {
+          windowId,
+        });
+        this.emitForegroundRestoreAction(threadId, merged, restore, note, shieldId !== undefined);
+        return note !== undefined ? { ...merged, note } : merged;
+      } finally {
+        // The shield is the last piece of the excursion to come down: the
+        // restore has already landed, so dropping the mask reveals the
+        // desktop the way it was left rather than mid-raise.
+        if (shieldId !== undefined) await this.releaseActivationShield(shieldId);
       }
-      const merged = computerBackendActionResult(this.computerId, "computer_activate_window", {
-        windowId,
-      });
-      this.emitForegroundRestoreAction(threadId, merged, restore, note);
-      return note !== undefined ? { ...merged, note } : merged;
     });
   }
 
@@ -2483,13 +2500,16 @@ export class ComputerManager {
    * plus which window was put back and whether that succeeded. Kept separate
    * from emitAction so the existing action path is untouched; the two new
    * fields ride as extras (with the note in the schema's message) because the
-   * contract's event shape does not name them yet.
+   * contract's event shape does not name them yet. `masked` records whether
+   * the excursion ran under the activation shield — the disclosure trail for
+   * a delivery the operator could not watch directly.
    */
   private emitForegroundRestoreAction(
     threadId: string | undefined,
     result: ComputerActionResult,
     restore: ForegroundRestoreInfo,
     note: string | undefined,
+    masked: boolean,
   ): void {
     const attributed = agentThreadId(threadId);
     if (attributed) this.surfacePaneForAgent(attributed);
@@ -2502,12 +2522,83 @@ export class ComputerManager {
       ...(attributed ? { threadId: ThreadId.makeUnsafe(attributed) } : {}),
       ...(restore.restoredWindowId !== null ? { restoredWindowId: restore.restoredWindowId } : {}),
       restoreStatus: restore.restoreStatus,
+      ...(masked ? { masked: true } : {}),
       ...(note !== undefined
         ? {
             message: clampComputerMessage(note, "The foreground window could not be restored."),
           }
         : {}),
     } as ComputerEvent);
+  }
+
+  /**
+   * The masked-activation decision for one resolved target. Engages the
+   * Synara-owned shield only when the canary flag is armed, the backend
+   * speaks the macOS dialect, and the target's owning app is on the
+   * `SYNARA_CUA_MASKED_APPS` opt-in list — all three, always. Anything less
+   * returns `undefined` and the call takes the ordinary visible path.
+   *
+   * When the opt-in does name the app, the shield becomes mandatory: a
+   * backend that cannot show it (missing surface, refused engage, lost
+   * reply) fails the activation rather than degrading to an unmasked raise.
+   * The shield id is minted here — not by the backend — so a lost engage
+   * reply still leaves this side holding the release handle.
+   */
+  private async engageActivationShield(
+    threadId: string | undefined,
+    target: ComputerWindow,
+  ): Promise<string | undefined> {
+    if (!cuaMaskedActivationEnabled()) return undefined;
+    if (this.agentDialect !== "macos") return undefined;
+    const optIn = cuaMaskedActivationOptIn();
+    if (optIn.size === 0) return undefined;
+    const owner =
+      target.pid !== undefined
+        ? (await this.runningAppsForDenylist()).find((candidate) => candidate.pid === target.pid)
+        : undefined;
+    if (!maskedActivationOptedIn(optIn, owner?.bundleId)) return undefined;
+    const engage = this.backend.engageShield?.bind(this.backend);
+    if (!engage || !target.bounds) {
+      throw new ComputerBackendError(
+        "Masked activation is armed for this app but the activation shield is unavailable; the window was not raised.",
+      );
+    }
+    const appName = target.title?.trim() || target.appName || "this window";
+    const label = `Synara is activating ${appName}`;
+    const shieldId = `shield-${randomUUID().slice(0, 8)}`;
+    try {
+      return await timedComputerLeg("shield", () =>
+        engage({ shieldId, windowId: target.id, frame: target.bounds!, label }),
+      );
+    } catch (error) {
+      // The reply may be the only thing lost — the shield could still be up.
+      // The minted id makes that reachable: release it before refusing.
+      await this.releaseActivationShield(shieldId);
+      if (error instanceof ComputerBackendError) throw error;
+      throw new ComputerBackendError(
+        `The activation shield could not be shown, so the window was not raised: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Drop one shield, best-effort and cancellation-immune: releasing is how
+   * the excursion ends, so it must still land while the operation that
+   * engaged it is being torn down.
+   */
+  private async releaseActivationShield(shieldId: string): Promise<void> {
+    const release = this.backend.releaseShield?.bind(this.backend);
+    if (!release) return;
+    try {
+      await withoutDesktopCancellation(() => release(shieldId));
+    } catch (error) {
+      console.warn("[computer] activation shield release failed", {
+        shieldId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async moveCursor(

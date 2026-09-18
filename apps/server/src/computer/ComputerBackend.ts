@@ -187,6 +187,23 @@ export type ComputerBackendEvent =
   | { readonly type: "frame"; readonly frame: ComputerStreamFrame };
 
 /**
+ * What one masked-activation shield should cover. `windowId` is the public
+ * window id (e.g. `cua:<pid>:<windowId>`); the backend splits the native ids
+ * out of it. `frame` is the window's bounds in screen coordinates at engage
+ * time — the caller passes the same listing's rect it validated the window
+ * against, rather than letting the backend re-read a moved window.
+ * `shieldId` is caller-minted so a lost engage reply still leaves a
+ * releasable handle; `label` is painted on the shield as the operator-facing
+ * disclosure.
+ */
+export interface ComputerShieldTarget {
+  readonly shieldId: string;
+  readonly windowId: string;
+  readonly frame: ComputerRect;
+  readonly label: string;
+}
+
+/**
  * One call into the driver's CDP browser surface. `name` is a driver tool
  * name (see `CUA_BROWSER_TOOLS`), not a gateway name; `args` are the
  * sanitized model arguments — the backend/host layer owns every session,
@@ -705,6 +722,24 @@ export interface ComputerBackend {
   attachStream(listener: ComputerFrameListener): Promise<void>;
   detachStream(): Promise<void>;
   requestKeyframe?(): Promise<void>;
+  /**
+   * The masked-activation shield: a Synara-owned overlay that veils the
+   * target window's frame for the length of one approval-gated foreground
+   * excursion. Present only on backends that own a shield surface (the macOS
+   * CUA path through the AppSnap helper).
+   *
+   * `engage` resolves once the shield is confirmed on screen and returns its
+   * id. It must fail rather than degrade: a caller that armed masked
+   * activation for a window refuses the activation outright when the shield
+   * cannot be shown — never a silent unmasked excursion.
+   *
+   * `release` drops one shield by id and `releaseAll` drops every live
+   * shield; both are idempotent teardown, safe to call from any cleanup path
+   * in any host state.
+   */
+  engageShield?(target: ComputerShieldTarget): Promise<string>;
+  releaseShield?(shieldId: string): Promise<void>;
+  releaseAllShields?(): Promise<void>;
   stopInput?(): Promise<void>;
   /**
    * Clear the host's physical-kill latch after the user's explicit re-arm.

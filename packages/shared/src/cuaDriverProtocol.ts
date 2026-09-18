@@ -68,6 +68,29 @@ export const CUA_MAX_RESPONSE_BYTES = 96 * 1024 * 1024;
  * which is what the server uses to invalidate pre-interruption task
  * consent. Unlike `desktopEpoch`, which also advances on ordinary stops,
  * the counter moves only on real OS interruptions.
+ *
+ * `shield` — the masked-activation overlay method, answered by the GUI host
+ * itself (never forwarded to the driver). Its args are validated by
+ * {@link parseCuaShieldArgs}:
+ *
+ * - `{action:"engage", shield_id, frame, window_id, pid, label?}` shows the
+ *   Synara-owned shield panel over `frame` (screen coordinates, top-left
+ *   origin, points) and confirms once it is on screen. The host refuses
+ *   while closed, suspended, or desktop-paused so a shield never arms under
+ *   an interrupted desktop. `shield_id` is minted by the caller — a lost
+ *   reply still leaves the caller holding the cleanup handle.
+ * - `{action:"release", shield_id}` drops exactly that shield. Missing ids
+ *   are acknowledged as already gone — release is idempotent.
+ * - `{action:"release_all"}` is the forced-release escape hatch: it drops
+ *   every live shield regardless of attribution and answers
+ *   `{released: <count>}` so the caller can tell "nothing was up" from
+ *   "shields were dropped".
+ *
+ * Release paths are accepted in every host state — teardown must never be
+ * gated on admission health. The helper itself is the deeper backstop: it
+ * watches its parent process, its stdin EOF, a per-shield TTL, and the
+ * Space/display notifications, and WindowServer removes its windows outright
+ * when the process dies.
  */
 export interface CuaComputerTask {
   threadId: string;
@@ -84,6 +107,98 @@ export interface CuaPreviewTarget {
 
 export function cuaComputerTaskKey(task: CuaComputerTask): string {
   return JSON.stringify([task.threadId, task.turnId ?? null]);
+}
+
+/**
+ * Shield ids travel both directions of the `shield` request — the caller
+ * mints them so a lost engage reply still leaves a releasable handle, and
+ * the helper echoes them in its events. A conservative printable-ASCII shape
+ * keeps the id safe to carry on the helper's whitespace-delimited stdin
+ * command lines.
+ */
+export const CUA_SHIELD_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+/** Geometry bounds a shield may cover: display-scale points, never absurd. */
+export const CUA_SHIELD_MAX_EXTENT = 32_768;
+export const CUA_SHIELD_MAX_COORDINATE = 1_000_000;
+
+export type CuaShieldArgs =
+  | {
+      readonly action: "engage";
+      readonly shieldId: string;
+      readonly frame: { x: number; y: number; width: number; height: number };
+      readonly windowId: number;
+      readonly pid: number;
+      readonly label?: string;
+    }
+  | { readonly action: "release"; readonly shieldId: string }
+  | { readonly action: "release_all" };
+
+const shieldCoordinate = (value: unknown): number | undefined =>
+  typeof value === "number" &&
+  Number.isFinite(value) &&
+  Math.abs(value) <= CUA_SHIELD_MAX_COORDINATE
+    ? value
+    : undefined;
+
+const shieldExtent = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 && value <= CUA_SHIELD_MAX_EXTENT
+    ? value
+    : undefined;
+
+/**
+ * Validates `args` on a `{method:"shield"}` host request. Returns the
+ * discriminated action or `undefined` for anything malformed — the host
+ * turns that into a `not-dispatched` refusal rather than dispatching on
+ * half-parsed geometry.
+ */
+export function parseCuaShieldArgs(value: unknown): CuaShieldArgs | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const args = value as Record<string, unknown>;
+  if (args.action === "release_all") return { action: "release_all" };
+  const shieldId = args.shield_id;
+  if (typeof shieldId !== "string" || !CUA_SHIELD_ID_PATTERN.test(shieldId)) return undefined;
+  if (args.action === "release") return { action: "release", shieldId };
+  if (args.action !== "engage") return undefined;
+  const frame = args.frame as Record<string, unknown> | undefined;
+  const x = shieldCoordinate(frame?.x);
+  const y = shieldCoordinate(frame?.y);
+  const width = shieldExtent(frame?.width);
+  const height = shieldExtent(frame?.height);
+  const windowId = args.window_id;
+  const pid = args.pid;
+  if (
+    x === undefined ||
+    y === undefined ||
+    width === undefined ||
+    height === undefined ||
+    typeof windowId !== "number" ||
+    !Number.isSafeInteger(windowId) ||
+    windowId <= 0 ||
+    windowId > 0xffffffff ||
+    typeof pid !== "number" ||
+    !Number.isSafeInteger(pid) ||
+    pid <= 0 ||
+    pid > 0x7fffffff
+  )
+    return undefined;
+  const label =
+    typeof args.label === "string"
+      ? // The helper paints the label verbatim: strip control/format
+        // characters and cap it so a malicious or broken caller cannot smuggle
+        // escape sequences or an unbounded string onto the operator's screen.
+        args.label
+          .replace(/[\p{Cc}\p{Cf}]/gu, "")
+          .trim()
+          .slice(0, 160) || undefined
+      : undefined;
+  return {
+    action: "engage",
+    shieldId,
+    frame: { x, y, width, height },
+    windowId,
+    pid,
+    ...(label !== undefined ? { label } : {}),
+  };
 }
 
 export function parseCuaComputerTask(value: unknown): CuaComputerTask | undefined {
