@@ -363,6 +363,8 @@ export interface SidebarThreadSummary {
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
   hasLiveTailWork: boolean;
+  /** Sidebar-only activity rollup; never changes the parent session or turn. */
+  hasWorkingSubagents?: boolean;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
   sidechatLastActivityAt?: string | null;
