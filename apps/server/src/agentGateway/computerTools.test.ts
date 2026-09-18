@@ -6,6 +6,7 @@ import {
   COMPUTER_TEXT_MAX_LENGTH,
   COMPUTER_WAIT_MAX_MS,
   type ComputerPermission,
+  type ComputerUiNode,
   type ProviderKind,
 } from "@synara/contracts";
 
@@ -152,11 +153,11 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const definitions = tools.map((tool) => tool.definition);
-    // The catalog grew again — the recording/replay family added seven tools
-    // on top of the lifecycle pair, measuring 66,339 chars of schema; the
-    // bound still trips on accidental bloat, so raise it only with the new
-    // surface measured.
-    expect(JSON.stringify(definitions).length).toBeLessThan(70_000);
+    // The catalog grew again — element refs added ref/ref_ordinal fields to
+    // the target schemas on top of the recording family, measuring 72,927
+    // chars of schema; the bound still trips on accidental bloat, so raise it
+    // only with the new surface measured.
+    expect(JSON.stringify(definitions).length).toBeLessThan(75_000);
     const notes = computerToolInstructions();
     expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
     expect(notes).toContain("discover only the small set of tools needed next by exact names");
@@ -3464,6 +3465,7 @@ describe("computer_get_state diff", () => {
         removed: [],
         changed: [
           {
+            ref: 1,
             role: "text-field",
             label: "Display",
             windowId: "fake-calculator",
@@ -4002,5 +4004,243 @@ describe("second-app consent", () => {
         await manager.dispose();
       }
     });
+  });
+});
+
+describe("element refs", () => {
+  type ListedElement = {
+    ref: number;
+    role: string;
+    label: string;
+    windowId: string | null;
+    value?: string;
+  };
+  const elementsOf = (result: McpToolCallResult): ListedElement[] =>
+    (resultJson(result) as { elements?: ListedElement[] }).elements ?? [];
+
+  it("lists a stable ref per element and clicks it without a label", async () => {
+    const { backend, call, manager } = await setup();
+    try {
+      const elements = elementsOf(await call("computer_get_state", {}));
+      const calculate = elements.find((element) => element.label === "Calculate");
+      expect(calculate).toBeDefined();
+
+      const result = await call("computer_click", { ref: calculate!.ref });
+      expect(result.isError).not.toBe(true);
+      // The button's frame centre — the same point label targeting resolves.
+      expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 1180, y: 228 });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("keeps a ref bound to the same element across listings", async () => {
+    const { backend, call, manager } = await setup();
+    try {
+      const first = elementsOf(await call("computer_get_state", {}));
+      const calculate = first.find((element) => element.label === "Calculate")!;
+
+      // A scoped second listing still shows the same number for it — refs do
+      // not re-seat when the model narrows or widens its view.
+      const second = elementsOf(await call("computer_get_state", { window_id: "fake-calculator" }));
+      expect(second.find((element) => element.label === "Calculate")?.ref).toBe(calculate.ref);
+
+      const result = await call("computer_click", { ref: calculate.ref });
+      expect(result.isError).not.toBe(true);
+      expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 1180, y: 228 });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("mints different refs for duplicate labels and clicks the right one", async () => {
+    const button = (x: number): ComputerUiNode => ({
+      role: "button",
+      label: "Save",
+      value: null,
+      description: null,
+      frame: { x, y: 100, width: 60, height: 30 },
+      activationPoint: null,
+      onScreen: true,
+      windowId: "w1",
+      children: [],
+    });
+    const root: ComputerUiNode = {
+      role: "desktop",
+      label: null,
+      value: null,
+      description: null,
+      frame: { x: 0, y: 0, width: 1920, height: 1080 },
+      activationPoint: null,
+      onScreen: true,
+      windowId: null,
+      children: [
+        {
+          role: "window",
+          label: "Editor",
+          value: null,
+          description: null,
+          frame: { x: 0, y: 0, width: 800, height: 600 },
+          activationPoint: null,
+          onScreen: true,
+          windowId: "w1",
+          children: [button(20), button(200)],
+        },
+      ],
+    };
+    const { backend, call, manager } = await setup(new FakeComputerBackend({ root }));
+    try {
+      const saves = elementsOf(await call("computer_get_state", {})).filter(
+        (element) => element.label === "Save",
+      );
+      expect(saves).toHaveLength(2);
+      expect(saves[0]!.ref).not.toBe(saves[1]!.ref);
+
+      const result = await call("computer_click", { ref: saves[1]!.ref });
+      expect(result.isError).not.toBe(true);
+      // The second Save's centre: ordinal 1, not the first match a label search finds.
+      expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 230, y: 115 });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("targets a duplicate by ref_ordinal without a ref", async () => {
+    const button = (x: number): ComputerUiNode => ({
+      role: "button",
+      label: "Save",
+      value: null,
+      description: null,
+      frame: { x, y: 100, width: 60, height: 30 },
+      activationPoint: null,
+      onScreen: true,
+      windowId: "w1",
+      children: [],
+    });
+    const root: ComputerUiNode = {
+      role: "desktop",
+      label: null,
+      value: null,
+      description: null,
+      frame: { x: 0, y: 0, width: 1920, height: 1080 },
+      activationPoint: null,
+      onScreen: true,
+      windowId: null,
+      children: [
+        {
+          role: "window",
+          label: "Editor",
+          value: null,
+          description: null,
+          frame: { x: 0, y: 0, width: 800, height: 600 },
+          activationPoint: null,
+          onScreen: true,
+          windowId: "w1",
+          children: [button(20), button(200)],
+        },
+      ],
+    };
+    const { backend, call, manager } = await setup(new FakeComputerBackend({ root }));
+    try {
+      await call("computer_get_state", {});
+      const result = await call("computer_click", { label: "Save", ref_ordinal: 1 });
+      expect(result.isError).not.toBe(true);
+      expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 230, y: 115 });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses a ref no listing ever minted, and a ref mixed with coordinates", async () => {
+    const { call, manager } = await setup();
+    try {
+      const before = await call("computer_click", { ref: 0 });
+      expect(before.isError).toBe(true);
+      const beforeText = before.content.find((entry) => entry.type === "text");
+      expect(beforeText?.type === "text" ? beforeText.text : "").toContain("computer_get_state");
+
+      await call("computer_get_state", {});
+      const outOfRange = await call("computer_click", { ref: 999 });
+      expect(outOfRange.isError).toBe(true);
+      const outText = outOfRange.content.find((entry) => entry.type === "text");
+      expect(outText?.type === "text" ? outText.text : "").toContain("999");
+
+      const mixed = await call("computer_click", { ref: 0, x: 10, y: 10 });
+      expect(mixed.isError).toBe(true);
+      const mixedText = mixed.content.find((entry) => entry.type === "text");
+      expect(mixedText?.type === "text" ? mixedText.text : "").toContain("x/y");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses when a claim beside the ref names a different element", async () => {
+    const { call, manager } = await setup();
+    try {
+      const elements = elementsOf(await call("computer_get_state", {}));
+      const calculate = elements.find((element) => element.label === "Calculate")!;
+
+      const wrongLabel = await call("computer_click", {
+        ref: calculate.ref,
+        label: "Definitely not this",
+      });
+      expect(wrongLabel.isError).toBe(true);
+      const labelText = wrongLabel.content.find((entry) => entry.type === "text");
+      expect(labelText?.type === "text" ? labelText.text : "").toContain("Calculate");
+
+      const wrongRole = await call("computer_click", {
+        ref: calculate.ref,
+        role: "text-field",
+      });
+      expect(wrongRole.isError).toBe(true);
+
+      // A claim that agrees with the listing is accepted.
+      const right = await call("computer_click", {
+        ref: calculate.ref,
+        label: "Calculate",
+      });
+      expect(right.isError).not.toBe(true);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("keeps refs thread-scoped", async () => {
+    const { call, manager } = await setup();
+    try {
+      const elements = elementsOf(await call("computer_get_state", {}));
+      const ref = elements[0]!.ref;
+      const other = await call("computer_click", { ref }, undefined, "other-thread");
+      expect(other.isError).toBe(true);
+      const text = other.content.find((entry) => entry.type === "text");
+      expect(text?.type === "text" ? text.text : "").toContain("computer_get_state");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("targets text and run steps by ref", async () => {
+    const { backend, call, manager } = await setup();
+    try {
+      const elements = elementsOf(await call("computer_get_state", {}));
+      const display = elements.find((element) => element.label === "Display")!;
+
+      const selected = await call("computer_select_text", {
+        ref: display.ref,
+        start: 0,
+        length: 1,
+      });
+      expect(selected.isError).not.toBe(true);
+      expect(backend.callsFor("selectText").at(-1)?.args[1]).toEqual({ start: 0, length: 1 });
+
+      const calculate = elements.find((element) => element.label === "Calculate")!;
+      const run = await call("computer_run", {
+        steps: [{ type: "click", ref: calculate.ref }],
+      });
+      expect(run.isError).not.toBe(true);
+      expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 1180, y: 228 });
+    } finally {
+      await manager.dispose();
+    }
   });
 });

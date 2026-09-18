@@ -34,7 +34,9 @@ import {
 import {
   actionableElements,
   diffActionableElements,
+  normalizeLabelSpaces,
   ComputerTargetError,
+  type ComputerActionableElementRef,
   type ComputerActionableElements,
 } from "../computer/uiTreeTargeting.ts";
 import {
@@ -505,6 +507,18 @@ function textTargetProperty(): Record<string, unknown> {
       type: "string",
       description: "Optional accessible role used to disambiguate the text control label.",
     },
+    ref: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "Element ref from a computer_get_state elements listing — names the text control without quoting its label.",
+    },
+    ref_ordinal: {
+      type: "integer",
+      minimum: 0,
+      description:
+        "With label: which same-labelled text control to target — 0 for the first, 1 for the second. Only needed to name a duplicate without a ref.",
+    },
   };
 }
 
@@ -565,6 +579,18 @@ const TARGET_PROPERTIES = {
   role: {
     type: "string",
     description: "Optional accessible role used to disambiguate a label.",
+  },
+  ref: {
+    type: "integer",
+    minimum: 0,
+    description:
+      "Element ref from a computer_get_state elements listing — the compact form, cheaper than re-quoting label and role and able to name a duplicate a bare label cannot. A ref stays bound to the same element across observations while it is present; it never moves to a different element.",
+  },
+  ref_ordinal: {
+    type: "integer",
+    minimum: 0,
+    description:
+      "With label: which same-labelled control to target — 0 for the first, 1 for the second. Only needed to name a duplicate without a ref.",
   },
 } as const;
 
@@ -695,6 +721,14 @@ function readScreenshotTarget(args: Record<string, unknown>): ScreenshotTarget {
   const label = readVerbatimStringArg(args, "label");
   const role = readStringArg(args, "role");
   const windowId = readWindowIdArg(args);
+  const ref = readNumberArg(args, "ref");
+  if (ref !== undefined && (!Number.isSafeInteger(ref) || ref < 0)) {
+    throw new ToolInputError('Argument "ref" must be a non-negative integer.');
+  }
+  const refOrdinal = readNumberArg(args, "ref_ordinal") ?? readNumberArg(args, "refOrdinal");
+  if (refOrdinal !== undefined && (!Number.isSafeInteger(refOrdinal) || refOrdinal < 0)) {
+    throw new ToolInputError('Argument "ref_ordinal" must be a non-negative integer.');
+  }
   return {
     ...(x !== undefined ? { x } : {}),
     ...(y !== undefined ? { y } : {}),
@@ -702,6 +736,8 @@ function readScreenshotTarget(args: Record<string, unknown>): ScreenshotTarget {
     ...(label !== undefined ? { label } : {}),
     ...(role !== undefined ? { role } : {}),
     ...(windowId !== undefined ? { windowId } : {}),
+    ...(ref !== undefined ? { ref } : {}),
+    ...(refOrdinal !== undefined ? { refOrdinal } : {}),
   };
 }
 
@@ -802,6 +838,8 @@ function readSelectTextTarget(args: Record<string, unknown>): ComputerTarget {
     ...(target.label !== undefined ? { label: target.label } : {}),
     ...(target.role !== undefined ? { role: target.role } : {}),
     ...(target.windowId !== undefined ? { windowId: target.windowId } : {}),
+    ...(target.ref !== undefined ? { ref: target.ref } : {}),
+    ...(target.refOrdinal !== undefined ? { refOrdinal: target.refOrdinal } : {}),
   };
 }
 
@@ -1174,15 +1212,79 @@ export function makeAgentGatewayComputerTools(
   const elementDigests = new Map<string, ComputerActionableElements>();
 
   /**
+   * Element refs are stable handles, not listing positions. A thread's table
+   * binds a number to an actionable identity — window, role, full label and
+   * which same-labelled control it is — the first time a listing shows it;
+   * later listings remap their elements onto the same numbers. Ref 7 keeps
+   * meaning "that Save button" across observations and window-scoped reads,
+   * so a diff does not silently move the handles a model is holding.
+   *
+   * Nothing prunes a live binding: resolution goes back to the real tree, so
+   * a control that vanished fails there as not-found with candidates rather
+   * than being second-guessed here. The cap resets the whole table rather
+   * than recycling numbers a model could still be holding — old refs then
+   * fail loudly instead of retargeting.
+   */
+  interface ElementRefTable {
+    next: number;
+    readonly byKey: Map<string, number>;
+    readonly entries: Map<number, ComputerActionableElementRef>;
+  }
+  const elementRefTables = new Map<string, ElementRefTable>();
+  const MAX_ELEMENT_REFS = 512;
+
+  /**
+   * Stamp a digest's items with the thread's stable refs, minting new numbers
+   * for first-seen identities. Returns a new digest; the input is untouched.
+   */
+  const syncElementRefs = (
+    threadId: string,
+    elements: ComputerActionableElements,
+  ): ComputerActionableElements => {
+    let table = elementRefTables.get(threadId);
+    if (table === undefined) {
+      table = { next: 0, byKey: new Map(), entries: new Map() };
+      elementRefTables.set(threadId, table);
+    }
+    const items = elements.items.map((item, index) => {
+      const id = elements.refIndex[index]!;
+      const key = JSON.stringify([id.windowId, id.role, id.label, id.ordinal]);
+      let ref = table.byKey.get(key);
+      if (ref === undefined) {
+        if (table.next >= MAX_ELEMENT_REFS) {
+          table.next = 0;
+          table.byKey.clear();
+          table.entries.clear();
+        }
+        ref = table.next++;
+        table.byKey.set(key, ref);
+      }
+      table.entries.set(ref, id);
+      return { ...item, ref };
+    });
+    return { ...elements, items };
+  };
+
+  /**
    * Digests key on thread × window × filter, and nothing purges them when a
    * thread ends — over a long session they would grow without bound. The cap
    * is far above the scopes one session realistically diffs; eviction loses
    * only diff granularity, never a read the model is holding.
+   *
+   * Storing is also stamping: the digest that lands here carries the thread's
+   * stable refs, and the same copy is what the caller serializes, so the
+   * numbers a model reads always resolve through the table written here.
    */
-  const rememberDigest = (key: string, elements: ComputerActionableElements) => {
+  const rememberDigest = (
+    threadId: string,
+    key: string,
+    elements: ComputerActionableElements,
+  ): ComputerActionableElements => {
+    const stable = syncElementRefs(threadId, elements);
     elementDigests.delete(key);
-    elementDigests.set(key, elements);
+    elementDigests.set(key, stable);
     while (elementDigests.size > 64) elementDigests.delete(elementDigests.keys().next().value!);
+    return stable;
   };
 
   /** Apps whose guidance note a thread has already been shown. */
@@ -1284,6 +1386,61 @@ export function makeAgentGatewayComputerTools(
    */
   const resolveTarget = (target: ScreenshotTarget, threadId: string): ComputerTarget => {
     const { screenshotId, ...rest } = target;
+    // A ref names the element the thread's listings first showed under that
+    // number: it resolves to the recorded identity — full label, role,
+    // window — plus the ordinal that tells same-labelled controls apart.
+    // Label, role or window_id sent beside a ref are read as a claim about
+    // which element the ref meant; a mismatch means caller and server are
+    // looking at different listings, and guessing is worse than refusing.
+    if (typeof target.ref === "number") {
+      if (target.x !== undefined || target.y !== undefined) {
+        throw new ToolInputError(
+          "A ref target takes no x/y; it names an element from the elements listing.",
+        );
+      }
+      const table = elementRefTables.get(threadId);
+      const entry = table?.entries.get(target.ref);
+      if (entry === undefined) {
+        throw new ToolInputError(
+          table === undefined
+            ? "No elements listing exists yet in this thread; ref targets need a computer_get_state first."
+            : `ref ${target.ref} does not match any element this thread has observed. Observe again with computer_get_state.`,
+        );
+      }
+      // Long labels reach the model truncated at the ellipsis, so a claim
+      // only has to match what the listing actually showed.
+      const claim = normalizeLabelSpaces(target.label ?? "").replace(/…$/, "");
+      if (target.label !== undefined && !normalizeLabelSpaces(entry.label).startsWith(claim)) {
+        throw new ToolInputError(
+          `ref ${target.ref} is the ${entry.role} ${JSON.stringify(entry.label)}, not ${JSON.stringify(target.label)}. Observe again with computer_get_state.`,
+        );
+      }
+      if (target.role !== undefined && target.role !== entry.role) {
+        throw new ToolInputError(
+          `ref ${target.ref} is a ${entry.role}, not ${JSON.stringify(target.role)}. Observe again with computer_get_state.`,
+        );
+      }
+      if (
+        target.windowId !== undefined &&
+        entry.windowId !== null &&
+        target.windowId !== entry.windowId
+      ) {
+        throw new ToolInputError(
+          `ref ${target.ref} is in window ${JSON.stringify(entry.windowId)}, not ${JSON.stringify(target.windowId)}. Observe again with computer_get_state.`,
+        );
+      }
+      if (target.refOrdinal !== undefined && target.refOrdinal !== entry.ordinal) {
+        throw new ToolInputError(
+          `ref ${target.ref} is duplicate ${entry.ordinal + 1} of its label, not ${target.refOrdinal + 1}. Observe again with computer_get_state.`,
+        );
+      }
+      return {
+        label: entry.label,
+        role: entry.role,
+        ...(entry.windowId !== null ? { windowId: entry.windowId } : {}),
+        refOrdinal: entry.ordinal,
+      };
+    }
     if (typeof target.x !== "number" || typeof target.y !== "number") return rest;
     const frame = frames.resolve(threadId, screenshotId);
     if (frame.windowId && rest.windowId && frame.windowId !== rest.windowId)
@@ -1493,6 +1650,21 @@ export function makeAgentGatewayComputerTools(
      */
     const addInputTarget = async (targetArgs: Record<string, unknown>): Promise<void> => {
       const raw = readScreenshotTarget(targetArgs);
+      if (raw.ref !== undefined) {
+        // A ref names a listed element — its window is the attribution, the
+        // same one dispatch resolves. A ref that does not resolve leaves the
+        // call unattributed rather than crediting the focused window.
+        let resolved: ComputerTarget;
+        try {
+          resolved = resolveTarget(raw, threadId);
+        } catch {
+          unattributed = true;
+          return;
+        }
+        if (resolved.windowId !== undefined && (await addWindow(resolved.windowId))) return;
+        unattributed = true;
+        return;
+      }
       if (raw.windowId !== undefined) {
         if (!(await addWindow(raw.windowId))) unattributed = true;
         return;
@@ -2301,6 +2473,9 @@ export function makeAgentGatewayComputerTools(
     "screenshotId",
     "label",
     "role",
+    "ref",
+    "ref_ordinal",
+    "refOrdinal",
     "window_id",
     "windowId",
   ] as const;
@@ -2312,14 +2487,33 @@ export function makeAgentGatewayComputerTools(
     move_cursor: RUN_TARGET_FIELDS,
     drag: ["from", "to", "duration_ms"],
     scroll: [...RUN_TARGET_FIELDS, "delta_x", "delta_y", "modifiers"],
-    type_text: ["text", "label", "role", "window_id", "windowId"],
+    type_text: [
+      "text",
+      "label",
+      "role",
+      "ref",
+      "ref_ordinal",
+      "refOrdinal",
+      "window_id",
+      "windowId",
+    ],
     press_key: ["key", "window_id", "windowId"],
     hotkey: ["keys", "window_id", "windowId"],
     set_value: [...RUN_TARGET_FIELDS, "value"],
     perform_action: [...RUN_TARGET_FIELDS, "action"],
     // Semantic-only like its standalone tool: a range cannot be aimed at a
     // pixel, so x/y/screenshot_id are not accepted fields.
-    select_text: ["label", "role", "window_id", "windowId", "start", "length"],
+    select_text: [
+      "label",
+      "role",
+      "ref",
+      "ref_ordinal",
+      "refOrdinal",
+      "window_id",
+      "windowId",
+      "start",
+      "length",
+    ],
     wait: ["duration_ms", "label", "role", "window_id", "windowId"],
     activate_window: ["window_id", "windowId"],
     launch_app: ["app", "arguments", "wait_for_window", "hidden"],
@@ -2453,7 +2647,7 @@ export function makeAgentGatewayComputerTools(
         return () => manager.performAction(threadId, target, action);
       }
       case "select_text": {
-        const target = readSelectTextTarget(step);
+        const target = resolveTarget(readSelectTextTarget(step), threadId);
         const range = readSelectTextRange(step);
         return () => manager.selectText(threadId, target, range);
       }
@@ -2771,21 +2965,22 @@ export function makeAgentGatewayComputerTools(
         const elements = root
           ? actionableElements(root, lastWindowId === undefined ? {} : { windowId: lastWindowId })
           : undefined;
-        if (elements) {
-          rememberDigest(digestScopeKey(threadId, lastWindowId, undefined), elements);
-        }
+        const stable =
+          elements === undefined
+            ? undefined
+            : rememberDigest(threadId, digestScopeKey(threadId, lastWindowId, undefined), elements);
         return {
           state: {
             ...rest,
-            ...(elements
+            ...(stable
               ? {
-                  elements: elements.items,
-                  ...(elements.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
-                  ...(elements.complete
+                  elements: stable.items,
+                  ...(stable.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
+                  ...(stable.complete
                     ? {}
                     : {
                         elementsTruncated: true,
-                        elementsOmitted: elements.omitted,
+                        elementsOmitted: stable.omitted,
                       }),
                 }
               : {}),
@@ -2862,7 +3057,7 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_get_state",
-        description: `Read labeled controls and values before acting; prefer label targeting. ${WINDOW_FOCUS_NOTE} By default returns elements without an image or duplicate text. window_id scopes inspection; include_screenshot adds ${overviewScope} (or the selected window). ${SCREENSHOT_FRAME_NOTE} include_text adds full AX text only when elements are insufficient. Use window_id or label_contains to narrow a truncated result; elementsTruncated/elementsOmitted report the remainder.`,
+        description: `Read labeled controls and values before acting; prefer label targeting. ${WINDOW_FOCUS_NOTE} By default returns elements without an image or duplicate text. Each element carries a stable ref you can pass as the ref argument on later actions — cheaper than re-quoting label and role, names duplicates a label cannot, and stays bound to the same element while it is present. window_id scopes inspection; include_screenshot adds ${overviewScope} (or the selected window). ${SCREENSHOT_FRAME_NOTE} include_text adds full AX text only when elements are insufficient. Use window_id or label_contains to narrow a truncated result; elementsTruncated/elementsOmitted report the remainder.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -2929,7 +3124,10 @@ export function makeAgentGatewayComputerTools(
         // comparison is always against what this thread last saw in the scope.
         const digestKey = digestScopeKey(context.callerThreadId, windowId, labelContains);
         const before = elementDigests.get(digestKey);
-        if (elements) rememberDigest(digestKey, elements);
+        const stable =
+          elements === undefined
+            ? undefined
+            : rememberDigest(context.callerThreadId, digestKey, elements);
         const appHint = (() => {
           if (windowId === undefined) return undefined;
           const appName = rest.windows
@@ -2947,27 +3145,35 @@ export function makeAgentGatewayComputerTools(
         const payload = {
           ...rest,
           ...(wantText && text !== undefined ? { text } : {}),
-          ...(elements
+          ...(stable
             ? wantDiff
               ? {
-                  elementChanges: diffActionableElements(before?.items ?? [], elements.items),
+                  elementChanges: (() => {
+                    const changes = diffActionableElements(before?.items ?? [], stable.items);
+                    return {
+                      ...changes,
+                      // A removed entry's ref is a dead handle — the element
+                      // is gone — so showing it would make it look citable.
+                      removed: changes.removed.map(({ ref: _ref, ...entry }) => entry),
+                    };
+                  })(),
                   // Either side reporting less than the full tree makes the
                   // diff itself partial — removals beyond a cap are invisible.
-                  ...((before !== undefined && !before.complete) || !elements.complete
+                  ...((before !== undefined && !before.complete) || !stable.complete
                     ? { elementChangesIncomplete: true }
                     : {}),
                 }
               : {
-                  elements: elements.items,
-                  ...(elements.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
+                  elements: stable.items,
+                  ...(stable.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
                   // Both halves together: "there is more" is only actionable
                   // alongside how much more, which is what decides between
                   // looking again and narrowing the query.
-                  ...(elements.complete
+                  ...(stable.complete
                     ? {}
                     : {
                         elementsTruncated: true,
-                        elementsOmitted: elements.omitted,
+                        elementsOmitted: stable.omitted,
                       }),
                 }
             : {}),
@@ -3963,14 +4169,14 @@ export function makeAgentGatewayComputerTools(
       async (args, context) =>
         manager.selectText(
           context.callerThreadId,
-          readSelectTextTarget(args),
+          resolveTarget(readSelectTextTarget(args), context.callerThreadId),
           readSelectTextRange(args),
         ),
     ),
     actionEntry(
       "computer_run",
       "Run computer actions",
-      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional label + window_id), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden — launches are hidden by default; hidden:false shows the app), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
+      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional label + window_id), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden — launches are hidden by default; hidden:false shows the app), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution, and ref targets name elements from the thread's earlier listings. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
@@ -3989,6 +4195,9 @@ export function makeAgentGatewayComputerTools(
                 screenshot_id: { type: "string" },
                 label: { type: "string" },
                 role: { type: "string" },
+                ref: { type: "integer", minimum: 0 },
+                ref_ordinal: { type: "integer", minimum: 0 },
+                refOrdinal: { type: "integer", minimum: 0 },
                 window_id: { type: "string" },
                 modifiers: MODIFIERS_PROPERTY.modifiers,
                 from: {
