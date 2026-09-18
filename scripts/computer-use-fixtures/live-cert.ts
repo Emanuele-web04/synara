@@ -27,6 +27,8 @@
  *   off-space-refusal       element ops on an off-Space window refuse cleanly
  *   screenshot-fresh        get_window_state include_screenshot returns fresh
  *                           geometry+PNG bytes
+ *   hidden-screenshot       hidden-window backing store tracks live content
+ *                           (shot-A != shot-B across a semantic write)
  *   stale-token             forged element_token refuses `stale_element_token`
  *   verify-state            verify_state tri-state on a known value
  *   masked-activation       shield panel verified via all-layer CGWindowList
@@ -1140,6 +1142,95 @@ end repeat`,
         Date.now() - t,
       );
     } else row("screenshot-fresh", "skipped", "no visible window", undefined, Date.now() - t);
+  }
+
+  // ── hidden-screenshot ──
+  // A never-rendered (hidden) window has a live backing store: screenshots
+  // must track content. Assert shot-A ≠ shot-B across a large semantic
+  // write — byte-level change detection, no decoder needed — plus
+  // frame_valid and dims matching the reported bounds.
+  if (wanted("hidden-screenshot")) {
+    const t = Date.now();
+    const pid = await launchTextEdit(["-j"]);
+    const win = pid ? await windowOfPid(pid) : undefined;
+    const shot = async () => {
+      const res = await callReply("get_window_state", {
+        pid: win!.pid,
+        window_id: win!.window_id,
+        max_elements: 60,
+        include_screenshot: true,
+      });
+      const image = res.result?.content?.find(
+        (c) => c.type === "image" && typeof c.data === "string",
+      );
+      return {
+        img: image?.data ?? "",
+        sc: res.result?.structuredContent as
+          | {
+              screenshot_frame_valid?: boolean;
+              screenshot_width?: number;
+              screenshot_height?: number;
+              window_bounds?: { width?: number; height?: number };
+              elements?: Array<{ role?: string; element_token?: string }>;
+            }
+          | undefined,
+      };
+    };
+    if (win) {
+      const a = await shot();
+      const tok = a.sc?.elements?.find(
+        (e) => e.role === "AXTextArea" && e.element_token,
+      )?.element_token;
+      if (tok) {
+        await callReply("set_value", {
+          pid: win.pid,
+          window_id: win.window_id,
+          element_token: tok,
+          value: `${SENTINEL}-shot `.repeat(40),
+        });
+        await new Promise((r) => setTimeout(r, 800));
+        const b = await shot();
+        const dimsMatch =
+          !!b.sc?.window_bounds?.width &&
+          b.sc.screenshot_width === b.sc.window_bounds.width &&
+          b.sc.screenshot_height === b.sc.window_bounds.height;
+        const ok =
+          a.img.length > 500 &&
+          b.img.length > 500 &&
+          a.img !== b.img &&
+          b.sc?.screenshot_frame_valid !== false &&
+          dimsMatch;
+        row(
+          "hidden-screenshot",
+          ok ? "pass" : "fail",
+          `on_screen=${win.is_on_screen} A=${a.img.length}b B=${b.img.length}b changed=${a.img !== b.img} valid=${b.sc?.screenshot_frame_valid} dimsMatch=${dimsMatch}`,
+          {
+            onScreen: win.is_on_screen,
+            aBytes: a.img.length,
+            bBytes: b.img.length,
+            changed: a.img !== b.img,
+            frameValid: b.sc?.screenshot_frame_valid,
+            dims: [b.sc?.screenshot_width, b.sc?.screenshot_height],
+            bounds: b.sc?.window_bounds,
+          },
+          Date.now() - t,
+        );
+      } else
+        row(
+          "hidden-screenshot",
+          "fail",
+          "hidden window has no AXTextArea token",
+          { win: win.window_id },
+          Date.now() - t,
+        );
+    } else
+      row(
+        "hidden-screenshot",
+        "skipped",
+        "open -j produced no listable window",
+        { pid },
+        Date.now() - t,
+      );
   }
 
   // ── stale-token ──
