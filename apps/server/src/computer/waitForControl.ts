@@ -13,7 +13,9 @@ export async function waitForControl(
   target: ComputerTarget,
   timeoutMs: number,
   signal?: AbortSignal,
+  options?: { readonly absent?: boolean },
 ): Promise<ComputerControlReadiness> {
+  const absent = options?.absent === true;
   const started = performance.now();
   const result = (status: ComputerControlReadiness["status"]): ComputerControlReadiness => ({
     status,
@@ -24,7 +26,9 @@ export async function waitForControl(
     const state = await read();
     signal?.throwIfAborted();
     if (target.windowId && !state.windows.some((window) => window.id === target.windowId)) {
-      return result("closed");
+      // The window going away removes its controls with it — "gone" for an
+      // absent wait, "closed" for a presence wait.
+      return result(absent ? "ready" : "closed");
     }
     if (
       !state.root ||
@@ -34,11 +38,18 @@ export async function waitForControl(
       return result("unavailable");
     try {
       resolveComputerSemanticTarget(state.root, target);
-      return result("ready");
+      if (!absent) return result("ready");
     } catch (error) {
       if (!(error instanceof ComputerTargetError)) throw error;
-      if (error.code === "computer_target_ambiguous") return result("ambiguous");
-      if (error.code !== "computer_target_not_found") throw error;
+      if (error.code === "computer_target_ambiguous") {
+        // An ambiguous match still proves presence — for a presence wait that
+        // is a verdict to report; for an absent wait it means keep waiting.
+        if (!absent) return result("ambiguous");
+      } else if (error.code !== "computer_target_not_found") {
+        throw error;
+      } else if (absent) {
+        return result("ready");
+      }
     }
     // A truncated walk cannot establish absence; repeating it burns time
     // without establishing readiness. Let the caller use a scoped screenshot.

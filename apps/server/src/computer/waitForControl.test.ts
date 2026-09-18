@@ -73,3 +73,54 @@ describe("waiting for a control", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("waiting for a control to disappear", () => {
+  it("is ready immediately when the control is already absent", async () => {
+    const backend = new FakeComputerBackend();
+    const read = vi.fn(() => backend.getState({ includeTree: true }));
+    expect(
+      await waitForControl(read, { ...target, label: "Missing" }, 10_000, undefined, {
+        absent: true,
+      }),
+    ).toMatchObject({ status: "ready" });
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps polling while the control is still present, then readies after it vanishes", async () => {
+    const state = await new FakeComputerBackend().getState({ includeTree: true });
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(state)
+      .mockResolvedValue({ ...state, root: { ...state.root!, children: [] } });
+    expect(await waitForControl(read, target, 10_000, undefined, { absent: true })).toMatchObject({
+      status: "ready",
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("is ready when the target window closes", async () => {
+    const state = await new FakeComputerBackend().getState({});
+    const read = vi.fn().mockResolvedValue({ ...state, windows: [] });
+    expect(await waitForControl(read, target, 10_000, undefined, { absent: true })).toMatchObject({
+      status: "ready",
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call disappearance while duplicates remain or the tree is incomplete", async () => {
+    const state = await new FakeComputerBackend().getState({ includeTree: true });
+    const duplicated = vi.fn().mockResolvedValue({
+      ...state,
+      root: { ...state.root!, children: [...state.root!.children, ...state.root!.children] },
+    });
+    expect(await waitForControl(duplicated, target, 0, undefined, { absent: true })).toMatchObject({
+      status: "timeout",
+    });
+    const truncated = vi
+      .fn()
+      .mockResolvedValue({ ...state, root: { ...state.root!, truncated: true } });
+    expect(
+      await waitForControl(truncated, target, 10_000, undefined, { absent: true }),
+    ).toMatchObject({ status: "unavailable" });
+  });
+});
