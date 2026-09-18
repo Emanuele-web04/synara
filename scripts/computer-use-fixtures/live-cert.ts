@@ -45,6 +45,7 @@ import { randomBytes } from "node:crypto";
 import { cuaRequest, type CuaReply } from "@synara/shared/cuaDriverProtocol";
 import { CuaDriverHost } from "../../apps/desktop/src/cuaDriverHost";
 import { ComputerShield } from "../../apps/desktop/src/computerShield";
+import { EscapeKillSwitchMonitor } from "../../apps/desktop/src/escapeKillSwitchMonitor";
 import {
   analyzeFocusSamples,
   parseFocusProbeLine,
@@ -412,13 +413,29 @@ async function windowOfPid(pid: number): Promise<WinInfo | undefined> {
 
 capability = randomBytes(32).toString("base64url");
 const shieldHost = existsSync(APPSNAP) ? new ComputerShield({ helperPath: APPSNAP }) : undefined;
+const escArmEvents: boolean[] = [];
+let escMonitor: EscapeKillSwitchMonitor | undefined;
 const host = new CuaDriverHost({
   binaryPath: DRIVER,
   bundleId: "com.synara.cua-canary",
   capability,
   setup: async () => {},
   ...(shieldHost ? { shield: shieldHost } : {}),
+  onInputMonitorArmedChange: (armed: boolean) => {
+    escArmEvents.push(armed);
+    escMonitor?.setArmed(armed);
+  },
 });
+if (existsSync(APPSNAP)) {
+  escMonitor = new EscapeKillSwitchMonitor({
+    helperPath: APPSNAP,
+    onEscape: () => {
+      host.emergencyStopInput();
+    },
+    onError: (m) => log(`esc-monitor: ${m}`),
+  });
+  escMonitor.start();
+}
 
 let failures = 0;
 let skips = 0;
@@ -1072,6 +1089,152 @@ end repeat`,
     }
   }
 
+  // ── escape-kill-switch (synthetic immunity + latch/refuse/rearm) ──
+  // Physical hardware Escape cannot be produced from user space on this VM —
+  // the monitor's pid==0 filter rejects every postable event by design. What
+  // IS certifiable live: (a) synthetic Escape does NOT latch (anti-self-kill),
+  // (b) the same emergencyStopInput() entry point onEscape invokes latches,
+  //    refuses mutations with escape_emergency_stop, and clears on rearm.
+  if (wanted("escape-kill-switch")) {
+    const t = Date.now();
+    if (!escMonitor) {
+      row(
+        "escape-kill-switch",
+        "skipped",
+        "appsnap helper not built — no escape monitor",
+        undefined,
+        Date.now() - t,
+      );
+    } else {
+      let pid: number | undefined;
+      try {
+        pid = await launchTextEdit(["-g"]);
+        const win = pid ? await windowOfPid(pid) : undefined;
+        if (!win) throw new Error("no escape-row target window");
+        const token = await textAreaToken(win.pid, win.window_id);
+        if (!token) throw new Error("no AXTextArea on escape-row target");
+
+        // Baseline mutation works; the generation is live so the host should
+        // have armed the monitor via onInputMonitorArmedChange.
+        const baseline = await callReply("set_value", {
+          pid: win.pid,
+          window_id: win.window_id,
+          element_token: token.token,
+          value: `${SENTINEL}-esc-base`,
+        });
+        const armedByHost = escArmEvents.includes(true);
+
+        // (a) Synthetic immunity: an osascript Escape carries the posting pid
+        //     and must be ignored — the very next mutation still lands.
+        osa('tell application "System Events" to key code 53');
+        await new Promise((r) => setTimeout(r, 900));
+        const afterSynthetic = await callReply("set_value", {
+          pid: win.pid,
+          window_id: win.window_id,
+          element_token: token.token,
+          value: `${SENTINEL}-esc-after-syn`,
+        });
+        const immuneOk = replyOk(afterSynthetic);
+
+        // (b) The exact callback the monitor's onEscape wires to.
+        const engaged = host.emergencyStopInput();
+        const refused = await callReply("set_value", {
+          pid: win.pid,
+          window_id: win.window_id,
+          element_token: token.token,
+          value: `${SENTINEL}-esc-refused`,
+        }).catch((e) => ({ ok: false, error: String(e) }) as CuaReply);
+        const refusalText = JSON.stringify(refused);
+        const refusedOk =
+          refusalText.includes("escape_emergency_stop") || /escape|stopped/i.test(refusalText);
+
+        const rearm = await cuaRequest<CuaReply>(
+          endpoint,
+          { method: "rearm", capability },
+          { timeoutMs: 10_000 },
+        ).catch((e) => ({ ok: false, error: String(e) }) as CuaReply);
+        // Rearm requires a fresh desktop observation before the next action;
+        // poll it — the generation killed by the stop needs a moment to
+        // respawn, and a successful get_window_state clears the gate.
+        let token2: { token: string; elements: number } | undefined;
+        let afterRearm: CuaReply | undefined;
+        let value: string | undefined;
+        for (let i = 0; i < 20; i++) {
+          await new Promise((r) => setTimeout(r, 500));
+          // The gate only clears on a *model* observation — the flag the
+          // server sets when the agent (not the host) reads the desktop.
+          const obs = await cuaRequest<CuaReply>(
+            endpoint,
+            {
+              method: "call",
+              name: "get_window_state",
+              args: { pid: win.pid, window_id: win.window_id, max_elements: 512 },
+              capability,
+              modelObservation: true,
+            },
+            { timeoutMs: 15_000, mutation: true },
+          ).catch((e) => ({ ok: false, error: String(e) }) as CuaReply);
+          const obsSc = obs.result?.structuredContent as
+            | { elements?: unknown[] }
+            | undefined;
+          token2 = (obsSc?.elements ?? [])
+            .map((e) => e as { role?: string; element_token?: string })
+            .find((e) => e.role === "AXTextArea" && typeof e.element_token === "string")
+            ?.element_token
+            ? { token: "", elements: obsSc?.elements?.length ?? 0 }
+            : undefined;
+          if (!token2) continue;
+          const elTok = (obsSc?.elements ?? [])
+            .map((e) => e as { role?: string; element_token?: string })
+            .find((e) => e.role === "AXTextArea" && typeof e.element_token === "string")
+            ?.element_token;
+          if (!elTok) continue;
+          afterRearm = await callReply("set_value", {
+            pid: win.pid,
+            window_id: win.window_id,
+            element_token: elTok,
+            value: `${SENTINEL}-esc-rearmed`,
+          });
+          value = await textAreaValue(win.pid, win.window_id);
+          if (replyOk(afterRearm) && value === `${SENTINEL}-esc-rearmed`) break;
+        }
+        const rearmedOk = replyOk(afterRearm) && value === `${SENTINEL}-esc-rearmed`;
+
+        const ok =
+          replyOk(baseline) && immuneOk && engaged === true && refusedOk && rearmedOk;
+        row(
+          "escape-kill-switch",
+          ok ? "pass" : "fail",
+          `baseline=${replyOk(baseline)} hostArmed=${armedByHost} immune=${immuneOk} engaged=${engaged} refused=${refusedOk} rearmed=${rearmedOk} (physical key unverified — VM)`,
+          {
+            armedByHost,
+            escArmEvents,
+            baseline: JSON.stringify(baseline).slice(0, 160),
+            afterSynthetic: JSON.stringify(afterSynthetic).slice(0, 200),
+            engaged,
+            refused: refusalText.slice(0, 240),
+            rearm: JSON.stringify(rearm).slice(0, 160),
+            afterRearm: JSON.stringify(afterRearm).slice(0, 200),
+            value,
+          },
+          Date.now() - t,
+        );
+      } catch (e) {
+        row(
+          "escape-kill-switch",
+          "fail",
+          String(e).slice(0, 200),
+          { error: String(e), pid },
+          Date.now() - t,
+        );
+      } finally {
+        await cuaRequest(endpoint, { method: "rearm", capability }, { timeoutMs: 10_000 }).catch(
+          () => undefined,
+        );
+      }
+    }
+  }
+
   // ── cancellation (force_synthetic key_events into the front doc, abort mid-flight) ──
   if (wanted("cancellation")) {
     const t = Date.now();
@@ -1196,6 +1359,7 @@ end repeat`,
     /* host already down */
   }
   await shieldHost?.dispose().catch(() => undefined);
+  escMonitor?.dispose();
 
   const failed = rows.filter((r) => r.verdict === "fail");
   const skipped = rows.filter((r) => r.verdict === "skipped");
