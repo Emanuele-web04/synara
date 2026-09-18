@@ -323,6 +323,9 @@ export interface DesktopUpdateState {
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
   installFailureCount: number;
+  // Build flavor of the running desktop app ("production" | "beta" | "canary").
+  // The web UI uses it for beta-only branding; production builds never see it.
+  flavor: "production" | "beta" | "canary";
   // Public URL where the user can manually download the release when the
   // in-app updater cannot apply it (silent installer failure, unsigned build,
   // read-only install location, unsupported platform). Null when no GitHub

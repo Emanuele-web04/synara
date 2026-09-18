@@ -103,6 +103,30 @@ export function isUpdateVersionNewer(currentVersion: string, candidateVersion: s
   if (candidate.minor !== current.minor) return candidate.minor > current.minor;
   if (candidate.patch !== current.patch) return candidate.patch > current.patch;
 
+  // Both prereleases of the same core: compare semver identifiers so a
+  // prerelease train can advance within one base version (beta.2 > beta.1).
+  if (current.prerelease !== null && candidate.prerelease !== null) {
+    const candidateParts = candidate.prerelease.split(".");
+    const currentParts = current.prerelease.split(".");
+    for (let index = 0; index < Math.max(candidateParts.length, currentParts.length); index += 1) {
+      const candidatePart = candidateParts[index];
+      const currentPart = currentParts[index];
+      if (candidatePart === undefined) return false;
+      if (currentPart === undefined) return true;
+      const candidateNumeric = /^\d+$/.test(candidatePart);
+      const currentNumeric = /^\d+$/.test(currentPart);
+      if (candidateNumeric && currentNumeric) {
+        if (Number(candidatePart) !== Number(currentPart)) {
+          return Number(candidatePart) > Number(currentPart);
+        }
+        continue;
+      }
+      if (candidateNumeric !== currentNumeric) return !candidateNumeric;
+      if (candidatePart !== currentPart) return candidatePart > currentPart;
+    }
+    return false;
+  }
+
   // Treat stable as newer than the same prerelease, but never reinstall the
   // exact same stable version from a stale updater cache.
   return current.prerelease !== null && candidate.prerelease === null;

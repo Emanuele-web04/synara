@@ -469,6 +469,14 @@
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
   --claude: #d97757;
+  /* Beta brand: vivid Xcode-blue tile, black Synara mark, white BETA pill.
+     The update pill uses the gradient with white text; the Beta badge
+     uses the white pill with blue ink, mirroring the pill baked into
+     the desktop icon. Production builds never reference these tokens. */
+  --beta-gradient: linear-gradient(135deg, #63b3ff 0%, #2e7ff2 55%, #0f5cd6 100%);
+  --beta-accent: #2e7ff2;
+  --beta-pill: #ffffff;
+  --beta-pill-ink: #2e7ff2;
 
   @variant dark {
     color-scheme: dark;

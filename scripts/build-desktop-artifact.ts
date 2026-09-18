@@ -14,7 +14,7 @@ import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
-import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+import { desktopIconAssetPaths, publishIconOverrides } from "./lib/brand-assets.ts";
 import {
   createDesktopPlatformBuildConfig,
   MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -22,7 +22,7 @@ import {
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
-import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
+import { synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
 import { finalizeSignedMacDmg } from "./lib/mac-dmg-finalize.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
@@ -41,31 +41,16 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
+const BuildFlavor = Schema.Literals(["production", "canary", "beta"]);
 const requireFromScriptsWorkspace = createRequire(new URL("./package.json", import.meta.url));
 
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
 );
-const ProductionMacIconSource = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconPng),
-);
-const ProductionMacLegacyIconSource = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacLegacyIconPng),
-);
-const ProductionLinuxIconSource = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionLinuxIconPng),
-);
-const ProductionWindowsIconSource = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionWindowsIconIco),
-);
+const iconSourceFor = (assetPath: string) =>
+  Effect.zipWith(RepoRoot, Effect.service(Path.Path), (repoRoot, path) =>
+    path.join(repoRoot, assetPath),
+  );
 const NodePtySmokeScript = Effect.zipWith(RepoRoot, Effect.service(Path.Path), (repoRoot, path) =>
   path.join(repoRoot, "scripts/node-pty-smoke.mjs"),
 );
@@ -104,6 +89,7 @@ interface BuildCliInput {
   readonly platform: Option.Option<typeof BuildPlatform.Type>;
   readonly target: Option.Option<string>;
   readonly arch: Option.Option<typeof BuildArch.Type>;
+  readonly flavor: Option.Option<typeof BuildFlavor.Type>;
   readonly buildVersion: Option.Option<string>;
   readonly sourceCommit: Option.Option<string>;
   readonly sourceTag: Option.Option<string>;
@@ -203,6 +189,7 @@ interface ResolvedBuildOptions {
   readonly platform: typeof BuildPlatform.Type;
   readonly target: string;
   readonly arch: typeof BuildArch.Type;
+  readonly flavor: typeof BuildFlavor.Type;
   readonly version: string | undefined;
   readonly sourceCommit: string | undefined;
   readonly sourceTag: string | undefined;
@@ -224,6 +211,7 @@ interface StagePackageJson {
   readonly synaraLockfileSha256: string;
   readonly synaraSourceTag: string | null;
   readonly synaraWindowsPublisherSubject: string | null;
+  readonly synaraFlavor: string;
   readonly private: true;
   readonly description: string;
   readonly author: string;
@@ -255,6 +243,7 @@ const BuildEnvConfig = Config.all({
   platform: Config.schema(BuildPlatform, "SYNARA_DESKTOP_PLATFORM").pipe(Config.option),
   target: Config.string("SYNARA_DESKTOP_TARGET").pipe(Config.option),
   arch: Config.schema(BuildArch, "SYNARA_DESKTOP_ARCH").pipe(Config.option),
+  flavor: Config.schema(BuildFlavor, "SYNARA_DESKTOP_FLAVOR").pipe(Config.option),
   version: Config.string("SYNARA_DESKTOP_VERSION").pipe(Config.option),
   sourceCommit: Config.string("SYNARA_SOURCE_COMMIT").pipe(Config.option),
   sourceTag: Config.string("SYNARA_SOURCE_TAG").pipe(Config.option),
@@ -305,6 +294,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     });
   }
 
+  const flavor = mergeOptions(input.flavor, env.flavor, "production");
   const target = mergeOptions(input.target, env.target, PLATFORM_CONFIG[platform].defaultTarget);
   const arch = mergeOptions(input.arch, env.arch, getDefaultArch(platform));
   const version = mergeOptions(input.buildVersion, env.version, undefined);
@@ -339,6 +329,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     platform,
     target,
     arch,
+    flavor,
     version,
     sourceCommit,
     sourceTag,
@@ -407,20 +398,25 @@ function generateMacIconSet(
   });
 }
 
-function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
+function stageMacIcons(
+  stageResourcesDir: string,
+  verbose: boolean,
+  flavor: typeof BuildFlavor.Type,
+) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const modernIconSource = yield* ProductionMacIconSource;
+    const iconPaths = desktopIconAssetPaths(flavor);
+    const modernIconSource = yield* iconSourceFor(iconPaths.macIconPng);
     if (!(yield* fs.exists(modernIconSource))) {
       return yield* new BuildScriptError({
-        message: `Production macOS icon source is missing at ${modernIconSource}`,
+        message: `${flavor} macOS icon source is missing at ${modernIconSource}`,
       });
     }
-    const legacyIconSource = yield* ProductionMacLegacyIconSource;
+    const legacyIconSource = yield* iconSourceFor(iconPaths.macLegacyIconPng);
     if (!(yield* fs.exists(legacyIconSource))) {
       return yield* new BuildScriptError({
-        message: `Production legacy macOS icon source is missing at ${legacyIconSource}`,
+        message: `${flavor} legacy macOS icon source is missing at ${legacyIconSource}`,
       });
     }
 
@@ -431,6 +427,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     const iconPngPath = path.join(stageResourcesDir, "icon.png");
     const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
     const dockIconPngPath = path.join(stageResourcesDir, "dock-icon.png");
+    const dockIconDarkPngPath = path.join(stageResourcesDir, "dock-icon-dark.png");
 
     yield* runCommand(
       ChildProcess.make({
@@ -445,18 +442,36 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 1024 1024 ${legacyIconSource} --out ${dockIconPngPath}`,
     );
 
+    // Flavors with a dedicated dark appearance icon replace the inherited
+    // production dock-icon-dark.png, which the runtime prefers when the OS
+    // appearance is dark.
+    const darkIconAssetPath = iconPaths.macLegacyDarkIconPng;
+    if (darkIconAssetPath !== undefined) {
+      const darkIconSource = yield* iconSourceFor(darkIconAssetPath);
+      if (!(yield* fs.exists(darkIconSource))) {
+        return yield* new BuildScriptError({
+          message: `${flavor} macOS dark icon source is missing at ${darkIconSource}`,
+        });
+      }
+      yield* runCommand(
+        ChildProcess.make({
+          ...commandOutputOptions(verbose),
+        })`sips -z 1024 1024 ${darkIconSource} --out ${dockIconDarkPngPath}`,
+      );
+    }
+
     yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
   });
 }
 
-function stageLinuxIcons(stageResourcesDir: string) {
+function stageLinuxIcons(stageResourcesDir: string, flavor: typeof BuildFlavor.Type) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const iconSource = yield* ProductionLinuxIconSource;
+    const iconSource = yield* iconSourceFor(desktopIconAssetPaths(flavor).linuxIconPng);
     if (!(yield* fs.exists(iconSource))) {
       return yield* new BuildScriptError({
-        message: `Production icon source is missing at ${iconSource}`,
+        message: `${flavor} icon source is missing at ${iconSource}`,
       });
     }
 
@@ -465,14 +480,38 @@ function stageLinuxIcons(stageResourcesDir: string) {
   });
 }
 
-function stageWindowsIcons(stageResourcesDir: string) {
+// The web build emits production favicons; a beta package must ship the beta
+// set inside its bundled client, so swap them after the server dist is staged.
+function stageClientFavicons(stageAppDir: string, flavor: typeof BuildFlavor.Type) {
+  return Effect.gen(function* () {
+    if (flavor !== "beta") return;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+
+    for (const override of publishIconOverrides(flavor)) {
+      const sourcePath = yield* iconSourceFor(override.sourceRelativePath);
+      const targetPath = path.join(stageAppDir, "apps/server", override.targetRelativePath);
+      if (!(yield* fs.exists(targetPath))) {
+        return yield* new BuildScriptError({
+          message: `Missing staged client favicon target: ${targetPath}`,
+        });
+      }
+      yield* fs.copyFile(sourcePath, targetPath);
+    }
+    yield* Effect.log(
+      `[desktop-artifact] Applied beta favicon overrides in ${path.join(stageAppDir, "apps/server/dist/client")}`,
+    );
+  });
+}
+
+function stageWindowsIcons(stageResourcesDir: string, flavor: typeof BuildFlavor.Type) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const iconSource = yield* ProductionWindowsIconSource;
+    const iconSource = yield* iconSourceFor(desktopIconAssetPaths(flavor).windowsIconIco);
     if (!(yield* fs.exists(iconSource))) {
       return yield* new BuildScriptError({
-        message: `Production Windows icon source is missing at ${iconSource}`,
+        message: `${flavor} Windows icon source is missing at ${iconSource}`,
       });
     }
 
@@ -720,14 +759,16 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
-  productName: string,
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: string | undefined,
+  flavor?: typeof BuildFlavor.Type,
 ) {
+  // Shared identity is the single source for bundle id + display name.
+  const identity = synaraDesktopIdentity(flavor ?? "production");
   const buildConfig: Record<string, unknown> = {
-    appId: SYNARA_PRODUCTION_BUNDLE_ID,
-    productName,
+    appId: identity.bundleId,
+    productName: identity.displayName,
     artifactName: "Synara-${version}-${arch}.${ext}",
     directories: {
       buildResources: "apps/desktop/resources",
@@ -764,6 +805,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     platform,
     target,
     signed,
+    flavor,
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
 
@@ -779,19 +821,20 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   platform: typeof BuildPlatform.Type,
   stageResourcesDir: string,
   verbose: boolean,
+  flavor: typeof BuildFlavor.Type,
 ) {
   if (platform === "mac") {
-    yield* stageMacIcons(stageResourcesDir, verbose);
+    yield* stageMacIcons(stageResourcesDir, verbose, flavor);
     return;
   }
 
   if (platform === "linux") {
-    yield* stageLinuxIcons(stageResourcesDir);
+    yield* stageLinuxIcons(stageResourcesDir, flavor);
     return;
   }
 
   if (platform === "win") {
-    yield* stageWindowsIcons(stageResourcesDir);
+    yield* stageWindowsIcons(stageResourcesDir, flavor);
     return;
   }
 });
@@ -1033,8 +1076,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  yield* stageClientFavicons(stageAppDir, options.flavor);
 
-  yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
+  yield* assertPlatformBuildResources(
+    options.platform,
+    stageResourcesDir,
+    options.verbose,
+    options.flavor,
+  );
 
   if (options.platform === "mac") {
     yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
@@ -1048,20 +1097,25 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const resolvedBuildConfig = yield* createBuildConfig(
     options.platform,
     options.target,
-    desktopPackageJson.productName ?? "Synara",
     options.signed,
     options.mockUpdates,
     options.mockUpdateServerPort,
+    options.flavor,
   );
 
   const stagePackageJson: StagePackageJson = {
-    name: "synara-desktop",
+    // electron-builder derives the updater cache dir from this name
+    // ("<name>-updater"), so scoping it per flavor gives beta its own
+    // pending-update directory. Production stays "synara-desktop", which
+    // reproduces the existing "synara-desktop-updater" value unchanged.
+    name: `${synaraDesktopIdentity(options.flavor ?? "production").userDataDirectoryName}-desktop`,
     version: appVersion,
     buildVersion: appVersion,
     synaraCommitHash: commitHash,
     synaraLockfileSha256: resolvedLockfileSha256,
     synaraSourceTag: options.sourceTag ?? null,
     synaraWindowsPublisherSubject: resolvedBuildConfig.windowsPublisherSubject,
+    synaraFlavor: options.flavor,
     private: true,
     description: "Synara desktop build",
     author: "Emanuele Di Pietro",
@@ -1135,7 +1189,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   if (options.platform === "mac") {
-    yield* assertPackagedMacDeviceHelper(stageDistDir, desktopPackageJson.productName ?? "Synara");
+    yield* assertPackagedMacDeviceHelper(
+      stageDistDir,
+      String(resolvedBuildConfig.buildConfig.productName),
+    );
   }
 
   if (options.platform === "mac" && options.target === "dmg" && options.signed) {
@@ -1224,6 +1281,10 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   arch: Flag.choice("arch", BuildArch.literals).pipe(
     Flag.withDescription("Build arch, for example arm64/x64/universal (env: SYNARA_DESKTOP_ARCH)."),
+    Flag.optional,
+  ),
+  flavor: Flag.choice("flavor", BuildFlavor.literals).pipe(
+    Flag.withDescription("Build flavor (production, canary, beta) (env: SYNARA_DESKTOP_FLAVOR)."),
     Flag.optional,
   ),
   buildVersion: Flag.string("build-version").pipe(

@@ -20,6 +20,7 @@ export const MAC_APPSNAP_HELPER_BUNDLE_PATH = "Contents/Helpers/synara-appsnap-h
 export const MAC_DEVICE_HELPER_STAGE_PATH = "apps/server/dist/device-helper";
 export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
 export const WINDOWS_INSTALLER_GUID = "368107a8-afe6-5db5-ab3b-d4f331684868";
+export const WINDOWS_BETA_INSTALLER_GUID = "a8e63b48-d4f3-4db5-9e12-368107afe65d";
 const MAC_DMG_ICON_PATH = "icon.icns";
 export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
@@ -39,6 +40,7 @@ export interface CreateDesktopPlatformBuildConfigInput {
   readonly target: string;
   readonly signed?: boolean;
   readonly windowsAzureSignOptions?: Record<string, string>;
+  readonly flavor?: "production" | "canary" | "beta" | undefined;
 }
 
 export interface DesktopNativeBuildHostInput {
@@ -133,16 +135,17 @@ export function createDesktopPlatformBuildConfig(
   }
 
   if (input.platform === "linux") {
+    const isBeta = input.flavor === "beta";
     return {
       ...nativePackaging,
       linux: {
         target: [input.target],
-        executableName: "synara",
+        executableName: isBeta ? "synara-beta" : "synara",
         icon: "icon.png",
         category: "Development",
         desktop: {
           entry: {
-            StartupWMClass: "synara",
+            StartupWMClass: isBeta ? "synara-beta" : "synara",
           },
         },
       },
@@ -154,7 +157,7 @@ export function createDesktopPlatformBuildConfig(
     // Keep the Windows product registration stable while the public app ID changes.
     // This lets NSIS updates replace the existing installation and own its uninstaller.
     nsis: {
-      guid: WINDOWS_INSTALLER_GUID,
+      guid: input.flavor === "beta" ? WINDOWS_BETA_INSTALLER_GUID : WINDOWS_INSTALLER_GUID,
     },
     win: {
       target: [input.target],

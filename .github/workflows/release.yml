@@ -39,6 +39,7 @@ jobs:
       release_lane: ${{ steps.release_meta.outputs.release_lane }}
       bridge_tag: ${{ steps.release_meta.outputs.bridge_tag }}
       update_channel: ${{ steps.release_meta.outputs.update_channel }}
+      desktop_flavor: ${{ steps.release_meta.outputs.desktop_flavor }}
       source_commit: ${{ steps.source_provenance.outputs.source_commit }}
       source_tag: ${{ steps.source_provenance.outputs.source_tag }}
       lockfile_sha256: ${{ steps.source_provenance.outputs.lockfile_sha256 }}
@@ -236,6 +237,7 @@ jobs:
             --platform "${{ matrix.platform }}"
             --target "${{ matrix.target }}"
             --arch "${{ matrix.arch }}"
+            --flavor "${{ needs.preflight.outputs.desktop_flavor }}"
             --build-version "${{ needs.preflight.outputs.version }}"
             --source-commit "$SOURCE_COMMIT"
             --lockfile-sha256 "$LOCKFILE_SHA256"
@@ -377,7 +379,8 @@ jobs:
             --assets-dir release-publish \
             --platform "${{ matrix.platform }}" \
             --arch "${{ matrix.arch }}" \
-            --version "${{ needs.preflight.outputs.version }}"
+            --version "${{ needs.preflight.outputs.version }}" \
+            --executable-name "${{ needs.preflight.outputs.desktop_flavor == 'beta' && 'synara-beta' || 'synara' }}"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -388,7 +391,8 @@ jobs:
 
   publish_cli:
     name: Publish CLI to npm
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' }}
+    # Prereleases (beta lane) never touch the npm `latest` dist-tag.
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' && needs.preflight.outputs.is_prerelease == 'false' }}
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -505,7 +509,9 @@ jobs:
           rm -f release-assets/latest-mac-x64.yml
 
       - name: Prepare updater feed metadata
-        run: node scripts/prepare-release-update-feed.ts release-assets
+        env:
+          UPDATE_CHANNEL: ${{ needs.preflight.outputs.update_channel }}
+        run: node scripts/prepare-release-update-feed.ts release-assets --channel "$UPDATE_CHANNEL"
 
       - name: Prevent compatibility channel rollback
         if: ${{ needs.preflight.outputs.release_lane == 'bridge' }}
@@ -657,7 +663,8 @@ jobs:
 
   finalize:
     name: Finalize release
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_FINALIZE_RELEASE == '1' }}
+    # Prereleases (beta lane) never bump package versions on main.
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_FINALIZE_RELEASE == '1' && needs.preflight.outputs.is_prerelease == 'false' }}
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
