@@ -580,14 +580,45 @@ function targetProperties(): Record<string, unknown> {
   };
 }
 
+/**
+ * The refusal payload a session without an approval gate reports — shared
+ * with the browser surface so both families name the same code and say the
+ * same words. Each side serializes it its own way: the desktop family
+ * pretty-prints through `mcpToolResultJson`, the browser family compact.
+ */
+export function computerApprovalRequiredError(name: string): {
+  readonly code: "ComputerApprovalRequired";
+  readonly message: string;
+} {
+  return {
+    code: "ComputerApprovalRequired",
+    message: `${name} requires explicit user approval, and this provider session has no approval gate. The action was refused before it ran.`,
+  };
+}
+
+/**
+ * The failure payload a typed driver refusal reports — `error` is the
+ * refusal code, not a message, because the model branches on it. Shared
+ * with the browser surface, which serializes it compact rather than
+ * through `mcpToolResultJson`.
+ */
+export function cuaActionErrorPayload(error: CuaActionError): {
+  readonly error: string;
+  readonly effect: string;
+  readonly message: string;
+  readonly retryAllowed: false;
+} {
+  return {
+    error: error.code,
+    effect: error.effect,
+    message: error.message,
+    retryAllowed: false,
+  };
+}
+
 function approvalUnavailableResult(name: string): McpToolCallResult {
   return {
-    ...mcpToolResultJson({
-      error: {
-        code: "ComputerApprovalRequired",
-        message: `${name} requires explicit user approval, and this provider session has no approval gate. The action was refused before it ran.`,
-      },
-    }),
+    ...mcpToolResultJson({ error: computerApprovalRequiredError(name) }),
     isError: true,
   };
 }
@@ -1661,6 +1692,59 @@ export function makeAgentGatewayComputerTools(
     }).pipe(Effect.as(result));
   };
 
+  /**
+   * Write one session-recording step line — the seam the outer call record
+   * and every `computer_run` inner step share. The fidelity gate, the
+   * secure-window protection flag, arg redaction, declared-target
+   * derivation and the approval/resolutions/dispatches/effect/latency
+   * fields are identical in both; only what the step ran under, what it
+   * captured and the caller's final effect differ. `outcome.resultValue`
+   * carries the one read-back payload a session summarizes (the clipboard
+   * text stays out either way — `result` is chars + hash), for the calls
+   * that return one.
+   */
+  const writeSessionStep = (input: {
+    readonly threadId: string;
+    readonly turnId: string | null;
+    readonly tool: string;
+    readonly args: Record<string, unknown>;
+    readonly approval: ComputerRecordingApproval;
+    readonly capture: ComputerRecordingCapture | undefined;
+    readonly outcome: {
+      readonly effect: ComputerRecordingStepInput["effect"];
+      readonly code?: string;
+      /** A read-back payload the call returned (clipboard contents), summarized. */
+      readonly resultValue?: string;
+    };
+    readonly startedAt: number;
+  }): void => {
+    const fidelity = manager.recordingFidelityFor(input.threadId);
+    if (fidelity === undefined) return;
+    const secure = (input.capture?.resolutions ?? []).some(
+      (resolution) => resolution.secure === true,
+    );
+    const redacted = redactComputerRecordingArgs(input.args, { fidelity, protected: secure });
+    const declaredTarget = computerRecordingDeclaredTarget(input.args);
+    manager.recordComputerStep(input.threadId, {
+      tool: input.tool,
+      actionClass: computerRecordingActionClass(input.tool),
+      threadId: input.threadId,
+      ...(input.turnId ? { turnId: input.turnId } : {}),
+      approval: input.approval,
+      ...(declaredTarget !== undefined ? { declaredTarget } : {}),
+      resolutions: input.capture?.resolutions ?? [],
+      args: redacted.args,
+      ...(redacted.payload !== undefined ? { payload: redacted.payload } : {}),
+      ...(input.outcome.resultValue !== undefined
+        ? { result: redactComputerRecordingResult(input.outcome.resultValue) }
+        : {}),
+      dispatches: input.capture?.dispatches ?? [],
+      effect: input.outcome.effect,
+      ...(input.outcome.code !== undefined ? { code: input.outcome.code } : {}),
+      latencyMs: Math.max(0, Date.now() - input.startedAt),
+    });
+  };
+
   const handle =
     (
       name: string,
@@ -1707,42 +1791,29 @@ export function makeAgentGatewayComputerTools(
         readonly code?: string;
         /** A read-back payload the call returned (clipboard contents), summarized. */
         readonly resultValue?: string;
-      }): void => {
-        const fidelity = manager.recordingFidelityFor(context.callerThreadId);
-        if (fidelity === undefined) return;
-        const secure = (capture?.resolutions ?? []).some(
-          (resolution) => resolution.secure === true,
-        );
-        const redacted = redactComputerRecordingArgs(args, { fidelity, protected: secure });
-        const declaredTarget = computerRecordingDeclaredTarget(args);
-        manager.recordComputerStep(context.callerThreadId, {
-          tool: name,
-          actionClass: computerRecordingActionClass(name),
+      }): void =>
+        writeSessionStep({
           threadId: context.callerThreadId,
-          ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+          turnId: context.callerTurnId,
+          tool: name,
+          args,
           approval: recordingApproval,
-          ...(declaredTarget !== undefined ? { declaredTarget } : {}),
-          resolutions: capture?.resolutions ?? [],
-          args: redacted.args,
-          ...(redacted.payload !== undefined ? { payload: redacted.payload } : {}),
-          ...(outcome.resultValue !== undefined
-            ? { result: redactComputerRecordingResult(outcome.resultValue) }
-            : {}),
-          dispatches: capture?.dispatches ?? [],
-          // `dispatched-unknown` means "the backend accepted it" — a call
-          // whose capture holds no dispatch (a perception read, a
-          // recording-family call, a file read) must not claim one. The
-          // run container is exempt: its dispatches live on the inner steps.
-          effect:
-            outcome.effect === "dispatched-unknown" &&
-            name !== "computer_run" &&
-            (capture?.dispatches.length ?? 0) === 0
-              ? "not-dispatched"
-              : outcome.effect,
-          ...(outcome.code !== undefined ? { code: outcome.code } : {}),
-          latencyMs: Math.max(0, Date.now() - callStartedAt),
+          capture,
+          outcome: {
+            ...outcome,
+            // `dispatched-unknown` means "the backend accepted it" — a call
+            // whose capture holds no dispatch (a perception read, a
+            // recording-family call, a file read) must not claim one. The
+            // run container is exempt: its dispatches live on the inner steps.
+            effect:
+              outcome.effect === "dispatched-unknown" &&
+              name !== "computer_run" &&
+              (capture?.dispatches.length ?? 0) === 0
+                ? "not-dispatched"
+                : outcome.effect,
+          },
+          startedAt: callStartedAt,
         });
-      };
       return Effect.tryPromise({
         try: async (abortSignal) => {
           if (
@@ -1979,12 +2050,7 @@ export function makeAgentGatewayComputerTools(
                 }
               : error instanceof CuaActionError
                 ? {
-                    ...mcpToolResultJson({
-                      error: error.code,
-                      effect: error.effect,
-                      message: error.message,
-                      retryAllowed: false,
-                    }),
+                    ...mcpToolResultJson(cuaActionErrorPayload(error)),
                     isError: true,
                   }
                 : error instanceof ComputerTargetError
@@ -2605,34 +2671,17 @@ export function makeAgentGatewayComputerTools(
       stepCapture: ComputerRecordingCapture | undefined,
       outcome: { readonly effect: ComputerRecordingStepInput["effect"]; readonly code?: string },
       startedAt: number,
-    ): void => {
-      const fidelity = manager.recordingFidelityFor(threadId);
-      if (fidelity === undefined) return;
-      const secure = (stepCapture?.resolutions ?? []).some(
-        (resolution) => resolution.secure === true,
-      );
-      const redacted = redactComputerRecordingArgs(preparedStep.step, {
-        fidelity,
-        protected: secure,
-      });
-      const declaredTarget = computerRecordingDeclaredTarget(preparedStep.step);
-      const tool = `computer_${preparedStep.type}`;
-      manager.recordComputerStep(threadId, {
-        tool,
-        actionClass: computerRecordingActionClass(tool),
+    ): void =>
+      writeSessionStep({
         threadId,
-        ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+        turnId: context.callerTurnId,
+        tool: `computer_${preparedStep.type}`,
+        args: preparedStep.step,
         approval: runApproval,
-        ...(declaredTarget !== undefined ? { declaredTarget } : {}),
-        resolutions: stepCapture?.resolutions ?? [],
-        args: redacted.args,
-        ...(redacted.payload !== undefined ? { payload: redacted.payload } : {}),
-        dispatches: stepCapture?.dispatches ?? [],
-        effect: outcome.effect,
-        ...(outcome.code !== undefined ? { code: outcome.code } : {}),
-        latencyMs: Math.max(0, Date.now() - startedAt),
+        capture: stepCapture,
+        outcome,
+        startedAt,
       });
-    };
     for (const [index, preparedStep] of prepared.entries()) {
       // Between steps, not just around the batch: a revocation or a dead turn
       // stops the run before the next dispatch, not after it.

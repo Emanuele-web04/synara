@@ -1453,6 +1453,54 @@ export class ComputerManager {
   }
 
   /**
+   * The refusal every admitted input path shares for a thread whose control
+   * was switched off or suspended: it hears it before the lease, the window
+   * gate, or any dispatch. `undefined` is pane input, which belongs to no
+   * thread and is exempt — the human's own kill switch does not lock the
+   * human out.
+   */
+  private assertControlAuthority(owner: string | undefined): void {
+    if (owner === undefined) return;
+    if (!this.controlDisabled(owner) && !this.suspendedThreads.has(owner)) return;
+    throw new ComputerBackendError(
+      "Computer control was revoked for this conversation; no input was dispatched.",
+      { controlRevoked: true },
+    );
+  }
+
+  /**
+   * The pause refusal both control wrappers make before the lease or the
+   * backend can engage: a thread the host paused is refused before it can
+   * claim the desktop or dispatch anything.
+   */
+  private assertInputNotPaused(owner: string | undefined): void {
+    const pausedState = owner ? this.threads.get(owner) : undefined;
+    if (pausedState?.inputPause) {
+      throw new ComputerBackendError(pausedState.inputPause.message, {
+        inputPause: pausedState.inputPause,
+      });
+    }
+  }
+
+  /**
+   * Record an input pause a dispatch reported: the state publishes so panels
+   * show the gate, but only a still-authorized thread's own record is
+   * written — a revoked or disposed thread has nothing to update.
+   */
+  private recordInputPause(owner: string | undefined, error: unknown): void {
+    if (
+      owner &&
+      !this.disposed &&
+      !this.suspendedThreads.has(owner) &&
+      error instanceof ComputerBackendError &&
+      error.inputPause
+    ) {
+      this.threadRuntime(owner).inputPause = error.inputPause;
+      this.publishCached(owner);
+    }
+  }
+
+  /**
    * The manager side of the physical Escape kill switch, relayed from the
    * desktop's monitor route (or invoked directly by tests).
    *
@@ -2290,6 +2338,39 @@ export class ComputerManager {
     return { computerId: this.computerId, apps, availability };
   }
 
+  /**
+   * The admission half every window-grain mutation shares once the exact
+   * window row is in hand: owning-app consent backstop, denylist input
+   * check, then the recording note — in that order, before any dispatch.
+   * `target.appName ?? windowId` is the consent key a nameless window falls
+   * back to, matching the pre-queue resolution the tool layer makes.
+   */
+  private async admitWindowTarget(
+    threadId: string | undefined,
+    target: ComputerWindow,
+  ): Promise<void> {
+    this.assertDrivenAppAdmitted(threadId, target.appName ?? target.id);
+    await this.assertWindowInputAllowedWindow(threadId, target);
+    await this.noteTargetResolution("window", target);
+  }
+
+  /**
+   * The exact-window resolution the window-grain mutations run identically:
+   * a fresh listing proves the id still names a live window, then the shared
+   * admission gate runs. The raise/focus excursion resolves the same row but
+   * keeps its own listing — it diffs the frontmost entry for the restore.
+   */
+  private async resolveWindowTarget(
+    threadId: string | undefined,
+    windowId: string,
+  ): Promise<ComputerWindow> {
+    const windows = await timedComputerLeg("resolve", () => this.readWindows());
+    const target = windows.find((candidate) => candidate.id === windowId);
+    if (!target) throw windowNotFoundError(windowId);
+    await this.admitWindowTarget(threadId, target);
+    return target;
+  }
+
   async setWindowFrame(
     threadId: string | undefined,
     windowId: string,
@@ -2298,12 +2379,7 @@ export class ComputerManager {
     return this.withDesktopControl(threadId, async () => {
       const setter = this.backend.setWindowFrame?.bind(this.backend);
       if (!setter) throw new ComputerBackendError("This backend cannot move or resize windows.");
-      const windows = await timedComputerLeg("resolve", () => this.readWindows());
-      const target = windows.find((candidate) => candidate.id === windowId);
-      if (!target) throw windowNotFoundError(windowId);
-      this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
-      await this.assertWindowInputAllowedWindow(threadId, target);
-      await this.noteTargetResolution("window", target);
+      await this.resolveWindowTarget(threadId, windowId);
       const result = await timedComputerLeg("dispatch", () => setter(windowId, frame));
       return this.actionResult(threadId, "computer_set_window_frame", undefined, result, windowId);
     });
@@ -2317,12 +2393,7 @@ export class ComputerManager {
     return this.withDesktopControl(threadId, async () => {
       const invoke = this.backend.invokeMenu?.bind(this.backend);
       if (!invoke) throw new ComputerBackendError("This backend cannot invoke menu items.");
-      const windows = await timedComputerLeg("resolve", () => this.readWindows());
-      const target = windows.find((candidate) => candidate.id === windowId);
-      if (!target) throw windowNotFoundError(windowId);
-      this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
-      await this.assertWindowInputAllowedWindow(threadId, target);
-      await this.noteTargetResolution("window", target);
+      await this.resolveWindowTarget(threadId, windowId);
       const result = await timedComputerLeg("dispatch", () => invoke(windowId, path));
       return this.actionResult(threadId, "computer_invoke_menu", undefined, result, windowId);
     });
@@ -2343,12 +2414,7 @@ export class ComputerManager {
       const setter = this.backend.setWindowMinimized?.bind(this.backend);
       if (!setter)
         throw new ComputerBackendError("This backend cannot minimize or restore windows.");
-      const windows = await timedComputerLeg("resolve", () => this.readWindows());
-      const target = windows.find((candidate) => candidate.id === windowId);
-      if (!target) throw windowNotFoundError(windowId);
-      this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
-      await this.assertWindowInputAllowedWindow(threadId, target);
-      await this.noteTargetResolution("window", target);
+      await this.resolveWindowTarget(threadId, windowId);
       const result = await timedComputerLeg("dispatch", () => setter(windowId, minimized));
       return this.actionResult(
         threadId,
@@ -2397,6 +2463,18 @@ export class ComputerManager {
     });
   }
 
+  /**
+   * The gate every window-scoped read passes identically: the exact id must
+   * still name a live window, and a denylisted surface refuses before any of
+   * its content is read — state, tree, zoom or cursor alike.
+   */
+  private async assertScopedWindowReadable(windowId: string): Promise<void> {
+    const windows = await this.readWindows();
+    if (!windows.some((candidate) => candidate.id === windowId))
+      throw windowNotFoundError(windowId);
+    await this.assertWindowContentAllowed(windowId);
+  }
+
   async verifyState(
     windowId: string,
     expect: readonly Record<string, unknown>[],
@@ -2404,10 +2482,7 @@ export class ComputerManager {
     this.engageBackend();
     const verify = this.backend.verifyState?.bind(this.backend);
     if (!verify) throw new ComputerBackendError("This backend cannot verify window state.");
-    const windows = await this.readWindows();
-    if (!windows.some((candidate) => candidate.id === windowId))
-      throw windowNotFoundError(windowId);
-    await this.assertWindowContentAllowed(windowId);
+    await this.assertScopedWindowReadable(windowId);
     return verify(windowId, expect);
   }
 
@@ -2415,10 +2490,7 @@ export class ComputerManager {
     this.engageBackend();
     const zoom = this.backend.zoomWindow?.bind(this.backend);
     if (!zoom) throw new ComputerBackendError("This backend cannot capture zoomed regions.");
-    const windows = await this.readWindows();
-    if (!windows.some((candidate) => candidate.id === windowId))
-      throw windowNotFoundError(windowId);
-    await this.assertWindowContentAllowed(windowId);
+    await this.assertScopedWindowReadable(windowId);
     return zoom(windowId, region);
   }
 
@@ -2426,12 +2498,12 @@ export class ComputerManager {
     return this.withDesktopControl(threadId, async () => {
       const kill = this.backend.killApp?.bind(this.backend);
       if (!kill) throw new ComputerBackendError("This backend cannot terminate applications.");
+      // The pid gate runs ahead of admission, as it always has: a window
+      // without one reports not-found rather than prompting consent first.
       const windows = await timedComputerLeg("resolve", () => this.readWindows());
       const target = windows.find((candidate) => candidate.id === windowId);
       if (!target?.pid) throw windowNotFoundError(windowId);
-      this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
-      await this.assertWindowInputAllowedWindow(threadId, target);
-      await this.noteTargetResolution("window", target);
+      await this.admitWindowTarget(threadId, target);
       const result = await timedComputerLeg("dispatch", () => kill(target.pid!));
       return this.actionResult(threadId, "computer_kill_app", undefined, result, windowId);
     });
@@ -2447,12 +2519,7 @@ export class ComputerManager {
     this.engageBackend();
     const read = this.backend.getAccessibilityTree?.bind(this.backend);
     if (!read) throw new ComputerBackendError("This backend cannot read the desktop inventory.");
-    if (windowId !== undefined) {
-      const windows = await this.readWindows();
-      if (!windows.some((candidate) => candidate.id === windowId))
-        throw windowNotFoundError(windowId);
-      await this.assertWindowContentAllowed(windowId);
-    }
+    if (windowId !== undefined) await this.assertScopedWindowReadable(windowId);
     const [availability, snapshot] = await Promise.all([
       this.backend.availability(),
       read(windowId),
@@ -2476,12 +2543,7 @@ export class ComputerManager {
     this.engageBackend();
     const read = this.backend.getCursorPosition?.bind(this.backend);
     if (!read) throw new ComputerBackendError("This backend cannot read the cursor position.");
-    if (windowId !== undefined) {
-      const windows = await this.readWindows();
-      if (!windows.some((candidate) => candidate.id === windowId))
-        throw windowNotFoundError(windowId);
-      await this.assertWindowContentAllowed(windowId);
-    }
+    if (windowId !== undefined) await this.assertScopedWindowReadable(windowId);
     const [availability, point] = await Promise.all([this.backend.availability(), read(windowId)]);
     return { computerId: this.computerId, ...point, availability };
   }
@@ -2644,14 +2706,7 @@ export class ComputerManager {
       if (!raise || !this.backendCapabilities.raise) {
         throw activationUnsupportedError();
       }
-      const windows = await timedComputerLeg("resolve", () => this.readWindows());
-      const target = windows.find((candidate) => candidate.id === windowId);
-      if (!target) {
-        throw windowNotFoundError(windowId);
-      }
-      this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
-      await this.assertWindowInputAllowedWindow(threadId, target);
-      await this.noteTargetResolution("window", target);
+      await this.resolveWindowTarget(threadId, windowId);
       await timedComputerLeg("dispatch", async () => {
         await raise(windowId);
         // Aiming after the raise, never before: a raise that refuses must not leave
@@ -3532,9 +3587,7 @@ export class ComputerManager {
       return this.typeTextAt(threadId, text, { windowId });
     }
     return this.withDesktopControl(threadId, async () => {
-      await timedComputerLeg("resolve", () => this.prepareKeyboardTarget(windowId, threadId));
-      assertDesktopOperationActive();
-      const result = await timedComputerLeg("dispatch", () =>
+      const result = await this.runKeyboardDispatch(threadId, windowId, () =>
         this.backend.typeText(text, windowId),
       );
       return this.actionResult(threadId, "computer_type_text", undefined, result, windowId);
@@ -3573,9 +3626,9 @@ export class ComputerManager {
     windowId?: string,
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
-      await timedComputerLeg("resolve", () => this.prepareKeyboardTarget(windowId, threadId));
-      assertDesktopOperationActive();
-      const result = await timedComputerLeg("dispatch", () => this.backend.pressKey(key, windowId));
+      const result = await this.runKeyboardDispatch(threadId, windowId, () =>
+        this.backend.pressKey(key, windowId),
+      );
       return this.actionResult(threadId, "computer_press_key", undefined, result, windowId);
     });
   }
@@ -3586,9 +3639,9 @@ export class ComputerManager {
     windowId?: string,
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
-      await timedComputerLeg("resolve", () => this.prepareKeyboardTarget(windowId, threadId));
-      assertDesktopOperationActive();
-      const result = await timedComputerLeg("dispatch", () => this.backend.hotkey(keys, windowId));
+      const result = await this.runKeyboardDispatch(threadId, windowId, () =>
+        this.backend.hotkey(keys, windowId),
+      );
       return this.actionResult(threadId, "computer_hotkey", undefined, result, windowId);
     });
   }
@@ -3660,9 +3713,7 @@ export class ComputerManager {
       let restored = false;
       let result: ComputerBackendActionResult | void;
       try {
-        await timedComputerLeg("resolve", () => this.prepareKeyboardTarget(windowId, threadId));
-        assertDesktopOperationActive();
-        result = await timedComputerLeg("dispatch", () =>
+        result = await this.runKeyboardDispatch(threadId, windowId, () =>
           this.backend.hotkey(
             this.agentDialect === "macos" ? ["meta", "v"] : ["ctrl", "v"],
             windowId,
@@ -3704,11 +3755,7 @@ export class ComputerManager {
     return this.withDesktopControl(threadId, async () => {
       // Preferred over click-then-type when the target carries a live element
       // token: one atomic write instead of focus plus keystrokes.
-      const resolved = await timedComputerLeg("resolve", () => this.resolveSemanticTarget(target));
-      await timedComputerLeg("resolve", () =>
-        this.prepareResolvedTarget(semanticPointTarget(resolved), threadId),
-      );
-      assertDesktopOperationActive();
+      const resolved = await this.prepareSemanticDispatch(target, threadId);
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.setValue(resolved, value),
       );
@@ -3728,11 +3775,7 @@ export class ComputerManager {
     action: string,
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
-      const resolved = await timedComputerLeg("resolve", () => this.resolveSemanticTarget(target));
-      await timedComputerLeg("resolve", () =>
-        this.prepareResolvedTarget(semanticPointTarget(resolved), threadId),
-      );
-      assertDesktopOperationActive();
+      const resolved = await this.prepareSemanticDispatch(target, threadId);
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.performAction(resolved, action),
       );
@@ -3761,13 +3804,7 @@ export class ComputerManager {
     range: ComputerTextRange,
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
-      const resolved = await timedComputerLeg("resolve", () =>
-        this.resolveSemanticTarget(target, true),
-      );
-      await timedComputerLeg("resolve", () =>
-        this.prepareResolvedTarget(semanticPointTarget(resolved), threadId),
-      );
-      assertDesktopOperationActive();
+      const resolved = await this.prepareSemanticDispatch(target, threadId, true);
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.selectText(resolved, range),
       );
@@ -3812,11 +3849,10 @@ export class ComputerManager {
     }
     const admissionSignal = signal ? AbortSignal.any([signal, authority.signal]) : authority.signal;
     const execute = async (): Promise<A> => {
-      if (this.controlDisabled(threadId) || this.suspendedThreads.has(threadId))
-        throw new ComputerBackendError(
-          "Computer control was revoked for this conversation; no input was dispatched.",
-          { controlRevoked: true },
-        );
+      // The raw id, not the pane-normalized one: a whitespace thread still
+      // gets its revoked-or-suspended check, the same gate the input
+      // wrappers apply to their resolved owner.
+      this.assertControlAuthority(threadId);
       const controller = new AbortController();
       let live = this.activeAuthorities.get(threadId);
       if (!live) {
@@ -3970,34 +4006,15 @@ export class ComputerManager {
     assertDesktopOperationAdmission();
     const owner = agentThreadId(threadId);
     return this.operations.runScoped(windowId, async () => {
-      if (owner && (this.controlDisabled(owner) || this.suspendedThreads.has(owner))) {
-        throw new ComputerBackendError(
-          "Computer control was revoked for this conversation; no input was dispatched.",
-          { controlRevoked: true },
-        );
-      }
+      this.assertControlAuthority(owner);
       this.assertInputNotEscapeStopped();
       await this.assertWindowInputAllowed(threadId, windowId);
-      const pausedState = owner ? this.threads.get(owner) : undefined;
-      if (pausedState?.inputPause) {
-        throw new ComputerBackendError(pausedState.inputPause.message, {
-          inputPause: pausedState.inputPause,
-        });
-      }
+      this.assertInputNotPaused(owner);
       this.engageBackend();
       try {
         return await this.withComputerCall(action);
       } catch (error) {
-        if (
-          owner &&
-          !this.disposed &&
-          !this.suspendedThreads.has(owner) &&
-          error instanceof ComputerBackendError &&
-          error.inputPause
-        ) {
-          this.threadRuntime(owner).inputPause = error.inputPause;
-          this.publishCached(owner);
-        }
+        this.recordInputPause(owner, error);
         throw error;
       }
     });
@@ -4033,37 +4050,18 @@ export class ComputerManager {
       return Promise.reject(new ComputerLeaseError());
     }
     return this.operations.run(async () => {
-      if (owner && (this.controlDisabled(owner) || this.suspendedThreads.has(owner))) {
-        throw new ComputerBackendError(
-          "Computer control was revoked for this conversation; no input was dispatched.",
-          { controlRevoked: true },
-        );
-      }
+      this.assertControlAuthority(owner);
       this.assertInputNotEscapeStopped();
       // Readiness first: a paused thread is refused before it can take the
       // lease, clear focus, or announce itself — all of which claimDesktopControl
       // would otherwise do ahead of a refusal that sends nothing.
-      const pausedState = owner ? this.threads.get(owner) : undefined;
-      if (pausedState?.inputPause) {
-        throw new ComputerBackendError(pausedState.inputPause.message, {
-          inputPause: pausedState.inputPause,
-        });
-      }
+      this.assertInputNotPaused(owner);
       await this.claimDesktopControl(threadId);
       assertDesktopOperationActive();
       try {
         return await this.withComputerCall(action);
       } catch (error) {
-        if (
-          owner &&
-          !this.disposed &&
-          !this.suspendedThreads.has(owner) &&
-          error instanceof ComputerBackendError &&
-          error.inputPause
-        ) {
-          this.threadRuntime(owner).inputPause = error.inputPause;
-          this.publishCached(owner);
-        }
+        this.recordInputPause(owner, error);
         throw error;
       }
     });
@@ -4691,6 +4689,47 @@ export class ComputerManager {
     }
     await this.noteTargetResolution("keyboard", window);
     await this.prepareResolvedTarget({ windowId }, threadId);
+  }
+
+  /**
+   * The dispatch every focused-window keyboard action shares: aim the agent
+   * seat's keyboard at the named window (or leave it where the last action
+   * put it), prove the operation is still live, then inject and hand back
+   * the backend's own result. Type, key press, hotkey and paste differ only
+   * in the call each carries.
+   */
+  private async runKeyboardDispatch(
+    threadId: string | undefined,
+    windowId: string | undefined,
+    dispatch: () => Promise<ComputerBackendActionResult | void>,
+  ): Promise<ComputerBackendActionResult | void> {
+    await timedComputerLeg("resolve", () => this.prepareKeyboardTarget(windowId, threadId));
+    assertDesktopOperationActive();
+    return timedComputerLeg("dispatch", dispatch);
+  }
+
+  /**
+   * The resolve-and-aim every element-grain mutation shares: the target is
+   * resolved from fresh state so the backend dispatches on a live element
+   * token, the resolved point gets the same focus aim a click would, and the
+   * operation must still be live before anything dispatches. Set-value,
+   * perform-action and select-text differ only in the call each carries
+   * afterward — and in whether a window-only target may name the sole
+   * writable control.
+   */
+  private async prepareSemanticDispatch(
+    target: ComputerTarget,
+    threadId: string | undefined,
+    allowUniqueTextTarget = false,
+  ): Promise<ComputerResolvedTarget> {
+    const resolved = await timedComputerLeg("resolve", () =>
+      this.resolveSemanticTarget(target, allowUniqueTextTarget),
+    );
+    await timedComputerLeg("resolve", () =>
+      this.prepareResolvedTarget(semanticPointTarget(resolved), threadId),
+    );
+    assertDesktopOperationActive();
+    return resolved;
   }
 
   /** The restack, or the reason this desktop did not perform one. */
