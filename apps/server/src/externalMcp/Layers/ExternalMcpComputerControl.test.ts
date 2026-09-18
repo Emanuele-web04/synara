@@ -24,7 +24,10 @@ import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionT
 import { ProviderDiscoveryService } from "../../provider/Services/ProviderDiscoveryService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { ExternalMcpGateway } from "../Services/ExternalMcpGateway.ts";
+import {
+  ExternalMcpGateway,
+  type ExternalMcpGatewayShape,
+} from "../Services/ExternalMcpGateway.ts";
 import { ExternalMcpService } from "../Services/ExternalMcpService.ts";
 import { ExternalMcpRepositoryLive } from "./ExternalMcpRepository.ts";
 import { ExternalMcpGatewayLive } from "./ExternalMcpGateway.ts";
@@ -64,12 +67,7 @@ function emptyThreadDetail(
 }
 
 function callTool(
-  gateway: {
-    handlePost: (input: {
-      authorizationHeader?: string;
-      body: unknown;
-    }) => Effect.Effect<{ body: unknown; status: number }, unknown>;
-  },
+  gateway: Pick<ExternalMcpGatewayShape, "handlePost">,
   credential: string,
   name: string,
   args: Record<string, unknown>,

@@ -32,6 +32,14 @@ export const COMPUTER_WS_METHODS = {
   getThreadState: "computer.getThreadState",
   setControlEnabled: "computer.setControlEnabled",
   subscribeEvents: "computer.subscribeEvents",
+  /**
+   * Durable per-app consent management: the grants a user created by
+   * answering a computer approval with an explicit "always allow" choice.
+   * Read and revoke only — grants are created exclusively through the
+   * approval-response path so a bare RPC can never mint one.
+   */
+  listGrants: "computer.listGrants",
+  revokeGrant: "computer.revokeGrant",
   // User-driven input from the computer dock pane. Separate from the tool
   // surface above because it must work with no agent turn in flight, and
   // because a pane only ever sends resolved desktop coordinates — never the
@@ -684,6 +692,13 @@ export const ComputerApp = Schema.Struct({
   pid: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   name: Schema.String.check(Schema.isMaxLength(COMPUTER_LABEL_MAX_LENGTH)),
   bundleId: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
+  /**
+   * The code-signing team identifier the backend read off the app's signature,
+   * when it could. Absent for unsigned and ad-hoc builds and on backends that
+   * never inspect signatures — treat it as strengthening evidence, never as
+   * proof an app is signed when missing.
+   */
+  teamId: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
   /** A live process owns this app; false rows are installed-only launch targets. */
   running: Schema.Boolean,
   /** The system-frontmost app — implies running. */
@@ -855,6 +870,155 @@ export const ComputerControlEnabledResult = Schema.Struct({
 export type ComputerControlEnabledResult = typeof ComputerControlEnabledResult.Type;
 export const ComputerThreadInput = Schema.Struct({ threadId: ThreadId });
 export type ComputerThreadInput = typeof ComputerThreadInput.Type;
+
+// ── Per-app consent grants ───────────────────────────────────────────
+//
+// A computer approval answer may carry an explicit "always allow" choice
+// (`ComputerApprovalGrant` on the response). The choice creates a durable,
+// expiring grant keyed on a stable app identity — bundle id plus the
+// code-signing team identifier when the backend reports one — scoped to a
+// fixed set of action classes. Grants only ever waive the approval prompt:
+// the denylist, the per-thread control state, and the second-app admission
+// bookkeeping still run on every call, and a pid is never part of a grant's
+// identity because pids recycle.
+
+/**
+ * The action families a grant may cover, named after the existing tool
+ * taxonomy rather than individual tools so the grant survives tool renames:
+ * `observe` for scoped reads (get_state, list_windows, screenshots),
+ * `input` for pointer and keyboard mutation (click, type, scroll, drag,
+ * select_text, set_value, hotkey…), `lifecycle` for window/app control
+ * (activate_window, invoke_menu, kill_app, launch_app, frame/visibility),
+ * `clipboard` for reads and writes of the shared clipboard, and `browser`
+ * for the `computer_browser_*` CDP family. A composite call such as
+ * `computer_run` requires every class its declared steps exercise.
+ */
+export const ComputerGrantActionClass = Schema.Literals([
+  "observe",
+  "input",
+  "lifecycle",
+  "clipboard",
+  "browser",
+]);
+export type ComputerGrantActionClass = typeof ComputerGrantActionClass.Type;
+
+/** Every action class, for offer surfaces that enumerate the taxonomy. */
+export const COMPUTER_GRANT_ACTION_CLASSES = ComputerGrantActionClass.literals;
+
+/**
+ * The stable identity a grant pins to one desktop app: bundle id plus
+ * code-signing team identifier when known, with the display name kept for
+ * prompts and audit rows. A pid is deliberately absent — it is the recycled
+ * handle a durable grant must not key on. A grant recorded with a bundle id
+ * never matches a call whose target resolves without one.
+ */
+export const ComputerGrantAppIdentity = Schema.Struct({
+  name: Schema.optional(Schema.String.check(Schema.isMaxLength(COMPUTER_LABEL_MAX_LENGTH))),
+  bundleId: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
+  teamId: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
+});
+export type ComputerGrantAppIdentity = typeof ComputerGrantAppIdentity.Type;
+
+/** Who a grant covers: one resolved app, or every app on the desktop. */
+export const ComputerGrantScope = Schema.Literals(["app", "any-app"]);
+export type ComputerGrantScope = typeof ComputerGrantScope.Type;
+
+/** The default lifetime of a fresh grant: one day. */
+export const COMPUTER_GRANT_DEFAULT_TTL_MS = 24 * 60 * 60 * 1_000;
+/** Bounds on a caller-requested lifetime: one minute to one week. */
+export const COMPUTER_GRANT_MIN_TTL_MS = 60_000;
+export const COMPUTER_GRANT_MAX_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+/** How many live grants the store retains; beyond it creation is refused. */
+export const COMPUTER_GRANT_MAX_COUNT = 256;
+/** Bound on the management surface's grant list. */
+export const COMPUTER_GRANT_LIST_MAX_LENGTH = 256;
+/** Bound on the app list a single approval offer may carry. */
+export const COMPUTER_GRANT_OFFER_APPS_MAX_LENGTH = 16;
+
+/**
+ * What a computer approval card may offer to pin durably. `apps` names the
+ * resolved targets of the call that prompted; it is empty when the target
+ * has no stable app identity (the shared clipboard, an opaque browser
+ * target), in which case `scopes` offers only `any-app`. `classes` is the
+ * exact set the answered call needs — a grant created from the choice never
+ * covers more.
+ */
+export const ComputerApprovalGrantOffer = Schema.Struct({
+  apps: Schema.Array(ComputerGrantAppIdentity).check(
+    Schema.isMaxLength(COMPUTER_GRANT_OFFER_APPS_MAX_LENGTH),
+  ),
+  classes: Schema.Array(ComputerGrantActionClass).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(COMPUTER_GRANT_ACTION_CLASSES.length),
+  ),
+  scopes: Schema.Array(ComputerGrantScope).check(Schema.isMinLength(1), Schema.isMaxLength(2)),
+  defaultTtlMs: Schema.Int.check(
+    Schema.isBetween({ minimum: COMPUTER_GRANT_MIN_TTL_MS, maximum: COMPUTER_GRANT_MAX_TTL_MS }),
+  ),
+});
+export type ComputerApprovalGrantOffer = typeof ComputerApprovalGrantOffer.Type;
+
+/**
+ * The explicit always-allow choice riding an approval response. Present only
+ * when the user picked it — an absent field is a one-time answer and must
+ * never mint a grant. `classes` is clamped to the offer the prompt carried,
+ * so a response cannot widen what the prompt proposed.
+ */
+export const ComputerApprovalGrant = Schema.Struct({
+  classes: Schema.Array(ComputerGrantActionClass).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(COMPUTER_GRANT_ACTION_CLASSES.length),
+  ),
+  scope: Schema.optional(ComputerGrantScope),
+  ttlMs: Schema.optional(
+    Schema.Int.check(
+      Schema.isBetween({ minimum: COMPUTER_GRANT_MIN_TTL_MS, maximum: COMPUTER_GRANT_MAX_TTL_MS }),
+    ),
+  ),
+});
+export type ComputerApprovalGrant = typeof ComputerApprovalGrant.Type;
+
+/**
+ * One live grant as the management surface reports it. `app` is null on an
+ * `any-app` grant — the explicit "always allow for any app" choice, the only
+ * scope that can cover targets with no stable app identity.
+ */
+export const ComputerGrant = Schema.Struct({
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  app: Schema.NullOr(ComputerGrantAppIdentity),
+  classes: Schema.Array(ComputerGrantActionClass).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(COMPUTER_GRANT_ACTION_CLASSES.length),
+  ),
+  createdAt: IsoDateTime,
+  expiresAt: IsoDateTime,
+  lastUsedAt: Schema.optional(IsoDateTime),
+  createdByThreadId: Schema.optional(ThreadId),
+});
+export type ComputerGrant = typeof ComputerGrant.Type;
+
+export const ComputerListGrantsInput = Schema.Struct({});
+export type ComputerListGrantsInput = typeof ComputerListGrantsInput.Type;
+
+export const ComputerListGrantsResult = Schema.Struct({
+  grants: Schema.Array(ComputerGrant).check(Schema.isMaxLength(COMPUTER_GRANT_LIST_MAX_LENGTH)),
+  defaultTtlMs: Schema.Int,
+  minTtlMs: Schema.Int,
+  maxTtlMs: Schema.Int,
+});
+export type ComputerListGrantsResult = typeof ComputerListGrantsResult.Type;
+
+export const ComputerRevokeGrantInput = Schema.Struct({
+  grantId: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+});
+export type ComputerRevokeGrantInput = typeof ComputerRevokeGrantInput.Type;
+
+export const ComputerRevokeGrantResult = Schema.Struct({
+  /** False when the id named no live grant — an already-expired row counts as gone. */
+  revoked: Schema.Boolean,
+  grants: Schema.Array(ComputerGrant).check(Schema.isMaxLength(COMPUTER_GRANT_LIST_MAX_LENGTH)),
+});
+export type ComputerRevokeGrantResult = typeof ComputerRevokeGrantResult.Type;
 
 export const ComputerLaunchAppInput = Schema.Struct({
   app: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),

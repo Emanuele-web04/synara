@@ -2,6 +2,9 @@ import type { AgentGatewaySessionRegistryShape } from "../agentGateway/Services/
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
 /** WebSocket handlers for the computer RPC group. */
 import {
+  COMPUTER_GRANT_DEFAULT_TTL_MS,
+  COMPUTER_GRANT_MAX_TTL_MS,
+  COMPUTER_GRANT_MIN_TTL_MS,
   COMPUTER_WS_METHODS,
   type ComputerActionResult,
   type ComputerClickInput,
@@ -17,6 +20,8 @@ import {
   type ComputerInputScrollInput,
   type ComputerLaunchAppInput,
   type ComputerLaunchAppResult,
+  type ComputerListGrantsInput,
+  type ComputerListGrantsResult,
   type ComputerListWindowsInput,
   type ComputerListWindowsResult,
   type ComputerMoveCursorInput,
@@ -24,6 +29,8 @@ import {
   type ComputerPressKeyInput,
   type ComputerProvisionInput,
   type ComputerProvisionResult,
+  type ComputerRevokeGrantInput,
+  type ComputerRevokeGrantResult,
   type ComputerRightClickInput,
   type ComputerScrollInput,
   type ComputerSelectTextInput,
@@ -130,6 +137,17 @@ export interface WsComputerHandlers {
   readonly [COMPUTER_WS_METHODS.getThreadState]: (
     input: ComputerThreadInput,
   ) => Effect.Effect<ThreadComputerState, WsRpcError>;
+  /**
+   * Durable per-app consent grants, minted only through an approval
+   * response's explicit always-allow choice. Read and revoke here; nothing
+   * on this surface can create one.
+   */
+  readonly [COMPUTER_WS_METHODS.listGrants]: (
+    input: ComputerListGrantsInput,
+  ) => Effect.Effect<ComputerListGrantsResult, WsRpcError>;
+  readonly [COMPUTER_WS_METHODS.revokeGrant]: (
+    input: ComputerRevokeGrantInput,
+  ) => Effect.Effect<ComputerRevokeGrantResult, WsRpcError>;
   readonly [COMPUTER_WS_METHODS.inputClick]: (
     input: ComputerInputClickInput,
   ) => Effect.Effect<ComputerActionResult, WsRpcError>;
@@ -200,6 +218,18 @@ export function makeWsComputerHandlers(
       [COMPUTER_WS_METHODS.performAction]: () => unsupported(),
       [COMPUTER_WS_METHODS.selectText]: () => unsupported(),
       [COMPUTER_WS_METHODS.getThreadState]: unsupportedState,
+      // Grants belong to the manager, which is absent here — but an empty
+      // list is still the honest answer: with no backend no grant can ever
+      // waive a prompt, so surfacing "nothing granted" beats an error card.
+      [COMPUTER_WS_METHODS.listGrants]: () =>
+        Effect.succeed({
+          grants: [],
+          defaultTtlMs: COMPUTER_GRANT_DEFAULT_TTL_MS,
+          minTtlMs: COMPUTER_GRANT_MIN_TTL_MS,
+          maxTtlMs: COMPUTER_GRANT_MAX_TTL_MS,
+        } satisfies ComputerListGrantsResult),
+      [COMPUTER_WS_METHODS.revokeGrant]: () =>
+        Effect.succeed({ revoked: false, grants: [] } satisfies ComputerRevokeGrantResult),
       [COMPUTER_WS_METHODS.inputClick]: () => unsupported(),
       [COMPUTER_WS_METHODS.inputScroll]: () => unsupported(),
       [COMPUTER_WS_METHODS.inputKey]: () => unsupported(),
@@ -284,6 +314,15 @@ export function makeWsComputerHandlers(
       ),
     [COMPUTER_WS_METHODS.getThreadState]: (input) =>
       attempt(() => manager.getThreadState(input.threadId), "Failed to read computer state"),
+    // Local-store reads, not desktop operations: they answer from the grant
+    // file's in-memory view and must not queue behind a screen scrape.
+    [COMPUTER_WS_METHODS.listGrants]: () =>
+      attempt(async () => manager.listComputerGrants(), "Failed to list computer grants"),
+    [COMPUTER_WS_METHODS.revokeGrant]: (input) =>
+      attempt(
+        async () => manager.revokeComputerGrant(input.grantId),
+        "Failed to revoke computer grant",
+      ),
     [COMPUTER_WS_METHODS.inputClick]: (input) =>
       attempt(() => userInputClick(manager, input), "Failed to click on computer"),
     [COMPUTER_WS_METHODS.inputScroll]: (input) =>
