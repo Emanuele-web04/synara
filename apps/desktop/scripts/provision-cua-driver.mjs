@@ -143,6 +143,10 @@ try {
   // binary (SIGKILL at exec) when that marker survives onto a new path.
   await writeFile(join(destination, "cua-driver"), await readFile(binary));
   await chmod(join(destination, "cua-driver"), 0o755);
+  // Re-stamp the adhoc signature: the linker's embedded `linker-signed`
+  // flag signature is also killed at exec on recent macOS (the staged
+  // binary must present a plain adhoc signature).
+  run("codesign", ["--force", "--sign", "-", join(destination, "cua-driver")]);
   await writeFile(join(destination, "provenance.json"), JSON.stringify(provenance, null, 2) + "\n");
   await copyFile(
     fileURLToPath(new URL("../../../docs/computer-use-cua/CUA-LICENSE.txt", import.meta.url)),

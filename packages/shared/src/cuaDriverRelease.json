@@ -1,8 +1,8 @@
 {
   "version": "0.28.2",
-  "source": "fc188250b4ca8549b8e61f937fdb1fb560770e86",
-  "sha256": "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa",
+  "source": "7fe7c33f741ee2dd5961ba80044d59f93b48ba47",
+  "sha256": "d0c276a933465e70765d60e1c244d803276b5b5805e6b9e4311841169620470e",
   "nativeRevision": 20,
-  "patchSha256": "a53aca2e440161a2776a255fa8a9c856ddb4dada69927fd5bab08fc6b936623b",
+  "patchSha256": "7a2698bbd3b2cf49dd07e1fe0f06db84c4d7a5009d82469f9f24b10887f88919",
   "rustVersion": "1.97.1"
 }

@@ -5,7 +5,7 @@ layers live in this repository (contracts, manager, gateway, WebSocket); the
 actual range write lives in the native Cua driver, whose source checkout is
 not edited by Synara workstreams. This note documents the ready-to-apply
 native diff at
-[`apps/desktop/patches/cua-driver/0002-select-text.patch`](../../apps/desktop/patches/cua-driver/0002-select-text.patch)
+the `select_text` hunks inside [`apps/desktop/patches/cua-driver/0001-synara-native.patch`](../../apps/desktop/patches/cua-driver/0001-synara-native.patch)
 and the invariants it preserves.
 
 ## Supported operation
@@ -129,7 +129,7 @@ regenerated only when a portable contract is added.
   Synara checkout). Hunks anchor on rev-18 symbols (`mod wait_for_settle;`,
   `InputGeneration` call sites) and fail loudly on a revision 17 tree
   rather than silently misapplying.
-- Apply: `git apply -p1 apps/desktop/patches/cua-driver/0002-select-text.patch`
+- Apply: the `select_text.rs` new-file hunk plus registration hunks are carried inside `apps/desktop/patches/cua-driver/0001-synara-native.patch` (folded during the `7fe7c33f` rebase — the former standalone `0002-select-text.patch` was retired)
   at the driver source root.
 - **As applied 2026-09-23**: the rev-19 keymap stream had already landed
   by the time this patch was staged, so it was applied on top of the
@@ -137,10 +137,10 @@ regenerated only when a portable contract is added.
   literal applied clean, and the literal was bumped `19 → 20` by hand
   (exactly the concurrency case `native-keymap-notes.md` documents). The
   change is folded into `0001-synara-native.patch` (sha
-  `a53aca2e440161a2776a255fa8a9c856ddb4dada69927fd5bab08fc6b936623b`);
+  `7a2698bbd3b2cf49dd07e1fe0f06db84c4d7a5009d82469f9f24b10887f88919`);
   `cuaDriverRelease.json` pins `nativeRevision: 20` and the packaged
   binary is the rev-20 arm64 build. This file remains the authored record;
-  `0002-select-text.patch` is kept beside `0001` as the readable delta the
+  the `select_text` portion of `0001` is the readable delta the
   same way `native-keymap.diff` records the rev-19 change.
 
 ## Verified

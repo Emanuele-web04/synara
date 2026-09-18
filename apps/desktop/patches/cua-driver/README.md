@@ -163,15 +163,16 @@ seconds after spawn. Bump the literal in the same edit that bumps the manifest,
 then confirm the staged binary reports it (`metadata` over a live socket, or
 `strings` on the binary) before packaging.
 
-`0002-select-text.patch` is the authored delta record of the `select_text`
-tool, kept beside `0001-synara-native.patch` the same way
-`native-keymap.diff` records the rev-19 keymap change. It was written against
-the revision 18 tree (`wait_for_settle` / input-generation base) but applied
-on top of the staged rev-19 keymap tree — every hunk except the
-`synara_native_revision` literal applied clean, and the literal was bumped
-19 → 20 by hand, exactly the concurrency case `native-keymap-notes.md`
-documents. The folded `0001-synara-native.patch` regenerates at sha
-`a53aca2e440161a2776a255fa8a9c856ddb4dada69927fd5bab08fc6b936623b` and
+`0001-synara-native.patch` is self-contained: it carries the `select_text`
+tool file itself, not just the registry wiring. Earlier revisions kept the
+tool's new-file hunk in a separate `0002-select-text.patch` record, but a
+`git diff` of tracked files cannot capture an untracked source file, so the
+file's creation lived only in 0002 while its registry wiring was duplicated
+inside 0001. During the `7fe7c33f` rebase the file hunk was folded into
+0001 and 0002 retired — applying 0001 to either base now reproduces the
+complete patched tree (verified byte-identical against the patch-work
+checkout on the `fc188250` base). The folded patch regenerates at sha
+`7a2698bbd3b2cf49dd07e1fe0f06db84c4d7a5009d82469f9f24b10887f88919` and
 `cuaDriverRelease.json` pins `nativeRevision: 20`. The tool writes an
 exact-range `AXSelectedTextRange` on a resolved element token with attribute
 read-back as the only confirmation path. Registration spans the platform-macos
@@ -179,6 +180,18 @@ tool registry, `ACTION_RESULT_TOOLS`, the legacy action-record normalization
 lists, authorization/capture-scope/session-manifest tool inventories, the SDK
 adapter's stable-Space-membership and input-lease lists, and the cursor
 classifier. `docs/computer-use-cua/native-select-text.md` records the design.
+
+Revision 20 rebases the patch onto upstream `7fe7c33f` (nightly
+`v0.28.3-20260918`) without a protocol bump — the upstream delta inherits the
+agent cursor-shape observation and system-cursor-shape reporting (#3883), the
+foreground-escalation hint for unavailable UIA clicks (#3888), Hyprland
+agent-input stabilization, X11 click-identity preservation (#3864) and the
+local-install uninstall reporting (#3021). The patch applied with zero
+conflicts; the only structural repair was folding `select_text.rs` into 0001
+as described above. On current macOS the staged binary must additionally be
+re-signed with `codesign --force --sign -` — the linker's embedded
+`linker-signed` adhoc signature is killed at exec (SIGKILL), which the
+provisioning script now performs after staging.
 
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).

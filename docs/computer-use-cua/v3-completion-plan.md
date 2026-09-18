@@ -67,7 +67,7 @@ one command, ~60–90 s, zero operator interaction.
 - Spawn targets: `open -g` visible, `open -j` hidden, minimized, second
   TextEdit instance — never steal frontmost.
 - Invariant monitor (~50 Hz): frontmost pid, key window, active Space,
-  focused element, cursor position — sampled *during* every op, not just
+  focused element, cursor position — sampled _during_ every op, not just
   before/after. Any unexpected transition = assertion failure.
 - Named-assertion matrix (each emits pass/fail + evidence):
   launch isolation · hidden write+readback · minimized write · visible
@@ -145,6 +145,7 @@ The engine is cross-platform; Synara's wall is `ComputerService.ts`'s
 darwin gate plus provisioning/transport/native helpers.
 
 Work items:
+
 1. Per-platform driver provisioning (manifest per platform+arch).
 2. Host transport: unix socket works on Linux; Windows needs the
    driver's transport of choice (check upstream `serve` surface).
