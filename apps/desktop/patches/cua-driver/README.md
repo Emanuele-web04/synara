@@ -193,6 +193,18 @@ re-signed with `codesign --force --sign -` — the linker's embedded
 `linker-signed` adhoc signature is killed at exec (SIGKILL), which the
 provisioning script now performs after staging.
 
+Revision 21 restores bounded visual motion to the compact cursor without
+touching input latency. `MoveTo`/`ClickPulse`/`SnapTo` still collapse to an
+immediate logical position — registry, visibility and dispatch all see the
+hotspot at once — but the render state records a paint-only glide
+(48px minimum travel, ~70–190ms ease-out, chained retargets continue from the
+currently painted spot) and a 260ms expanding violet click ring drawn under
+the arrow. Held-button drags, sub-threshold hops, first on-screen placement
+and `reduced_motion: on` all snap silently with no ring. Idle-hide becomes a
+180ms fade instead of a pop, and `needs_frame_tick` reports compact animation
+activity so the render loop wakes only while a glide, ring or fade is in
+flight — a settled compact cursor still costs zero repaints.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records
