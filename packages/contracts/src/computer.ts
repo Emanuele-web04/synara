@@ -1111,12 +1111,12 @@ const ComputerTargetFields = {
   role: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
   windowId: Schema.optional(ComputerWindowId),
   /**
-   * An element's position in the thread's most recent `computer_get_state`
-   * elements listing — the compact targeting form. A ref resolves to the
-   * listed element's identity and occurrence ordinal, so it survives label
-   * truncation and names duplicates a bare label cannot. Refs belong to the
-   * last listing the thread saw; after a new listing they point at its
-   * positions instead.
+   * An element's stable handle from a `computer_get_state` elements listing
+   * — the compact targeting form. A ref resolves to the listed element's
+   * identity and occurrence ordinal, so it survives label truncation and
+   * names duplicates a bare label cannot. The binding holds across
+   * observations while the element is present; it never moves to a
+   * different element.
    */
   ref: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   /**
