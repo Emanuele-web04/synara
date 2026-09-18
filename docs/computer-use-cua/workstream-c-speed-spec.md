@@ -41,7 +41,7 @@ Step 1 is the budget table. Every number below is a proposed warm target. Warm m
 | turn start, warm host, first tool call             | 800 ms     | 2000 ms    | No spawn cost; measured ≈ warm get_state 219–811 ms, trivial call 0.7 ms — meets uncontended                                     |
 | host cold start, spawn plus handshake plus session | 2000 ms    | 5000 ms    | Bounded by the 5 s startup calls; measured p50 55 ms, p95 108 ms (n=23) — meets both; first-exec spawn can outlast the handshake |
 
-Wire note (rev 17, measured): `get_window_state` replies are near-unitary — the driver attaches its cached frame whenever `screenshot_frame_freshness` is `captured_current_space`, so an AX-only read still ships the embedded PNG (~150–190 KB reply) and `include_screenshot` gates capture work rather than attachment. The AX-only saving in step 6 therefore needs a native attach-suppression change, not only the request-shape flag.
+Wire note (rev 17, measured): `get_window_state` replies are near-unitary — the driver attaches its cached frame whenever `screenshot_frame_freshness` is `captured_current_space`, so an AX-only read still ships the embedded PNG (~150–190 KB reply) and `include_screenshot` gates capture work rather than attachment. Resolved in the `7fe7c33f` pin without a native change: `should_capture` now gates both capture and attachment, so a tree-only read ships no image. The request-shape flag (`SYNARA_CUA_AX_ONLY_GET_STATE`) was retired rather than graduated — omitting the field selects the driver's default-capture path, so explicit `include_screenshot:false` is the pinned contract and is sent unconditionally.
 
 Step 2 is instrumentation. Add per operation timing from tool entry to result delivery, split into resolve, dispatch, settle, capture, and encode legs. Log the legs on every computer tool call behind a flag. Promote the first failing operation, not the average, because the p95 row is what Kartik feels.
 
@@ -66,7 +66,7 @@ New environment flags, all optional, all defaulting to current behavior:
 | SYNARA_CUA_WARM_ON_FIRST_TOUCH | 0       | Start the driver generation at first computer touch instead of first input |
 | SYNARA_CUA_ACTION_SETTLE_MS    | 300     | Override the fixed action settle sleep                                     |
 | SYNARA_CUA_CONDITIONAL_SETTLE  | 0       | Skip settle only when read back proves the effect                          |
-| SYNARA_CUA_AX_ONLY_GET_STATE   | 0       | Prefer tree only reads on perception calls that do not need pixels         |
+| SYNARA_CUA_AX_ONLY_GET_STATE   | removed | Retired: omitting the field selects the driver default-capture path      |
 | SYNARA_CUA_CAPTURE_REUSE       | 0       | Reuse byte identical delivered frames instead of recapturing               |
 | SYNARA_CUA_PREVIEW_STILL_MS    | 2000    | Override the still capture cadence                                         |
 | SYNARA_CUA_TIMING_LOG          | 0       | Emit per leg resolve, dispatch, settle, capture, encode timings            |
@@ -118,7 +118,7 @@ Build in this order. Stop after any step that regresses reliability and fix it b
 1. Add the timing log behind SYNARA_CUA_TIMING_LOG. Measure the budget table on a warm host. Publish the before numbers.
 2. Add SYNARA_CUA_ACTION_SETTLE_MS as an override with default 300. Confirm default behavior is bit identical.
 3. Add conditional settle behind SYNARA_CUA_CONDITIONAL_SETTLE. Skip only on positive effect proof. Add the disagreeing read back test.
-4. Add the AX only get_state path behind SYNARA_CUA_AX_ONLY_GET_STATE. Add the no capture test.
+4. Tree-only get_state reads skip capture by sending explicit include_screenshot:false unconditionally (the AX_ONLY flag was retired — see the wire note). Covered by the no-capture wire-shape tests.
 5. Add frame registry reuse behind SYNARA_CUA_CAPTURE_REUSE. Add the identical frame and vanished window tests.
 6. Add warm on first touch behind SYNARA_CUA_WARM_ON_FIRST_TOUCH. Measure cold start versus warm turn start separately.
 7. Review JPEG quality and sizes last, with the aim precision check gating any cut.

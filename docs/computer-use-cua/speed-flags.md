@@ -16,7 +16,7 @@ This file is the flag reference. The rationale and budget targets live in
 | `SYNARA_CUA_TIMING_LOG`          | off     | Emits one `[computer-timing]` line per computer call: per-leg ms, counters, total.                                                                                               | `apps/server/src/computer/computerCallContext.ts` |
 | `SYNARA_CUA_ACTION_SETTLE_MS`    | `300`   | Overrides the fixed post-action settle sleep; `0` removes it. Invalid values fall back to `300`.                                                                                 | `apps/server/src/computer/ComputerManager.ts`     |
 | `SYNARA_CUA_CONDITIONAL_SETTLE`  | on      | Skips the settle sleep only when the action's delivery verdict already proves its effect — or a scroll leg's measured travel proves arrival. `0`/`off` restores the always-wait. | `apps/server/src/computer/ComputerManager.ts`     |
-| `SYNARA_CUA_AX_ONLY_GET_STATE`   | off     | Omits `include_screenshot`/`max_dimension` from `get_window_state` on tree-only reads.                                                                                           | `apps/server/src/computer/CuaComputerBackend.ts`  |
+| `SYNARA_CUA_AX_ONLY_GET_STATE`   | removed | Retired: omitting `include_screenshot` selects the driver's default-capture path; the request now always sends explicit `false` on tree-only reads.                                  | —                                               |
 | `SYNARA_CUA_CAPTURE_REUSE`       | on      | Explicit reads return the previous `screenshotId` when the fresh capture is byte-identical. `0`/`off` ships every frame.                                                         | `apps/server/src/agentGateway/computerTools.ts`   |
 | `SYNARA_CUA_PREVIEW_STILL_MS`    | `2000`  | Overrides the pane still-capture cadence; clamped to the publisher's 100 ms floor.                                                                                               | `apps/server/src/computer/CuaComputerBackend.ts`  |
 | `SYNARA_CUA_WARM_ON_FIRST_TOUCH` | off     | Spawns the driver and runs the validated handshake on the first probe or permission check.                                                                                       | `apps/desktop/src/cuaDriverHost.ts`               |
@@ -76,14 +76,18 @@ leg's own before-frame. Worst case the flag costs one extra capture per leg —
 exactly when the speculation fails — while the best case removes the settle
 from every leg after a window's first.
 
-### `SYNARA_CUA_AX_ONLY_GET_STATE` (added with this change)
+### `SYNARA_CUA_AX_ONLY_GET_STATE` (retired)
 
-A tree-only `get_state` already skips capture, encode, and image delivery
-unconditionally. The flag changes only the request shape: `include_screenshot`
-and `max_dimension` are omitted entirely, so the driver never even sizes a
-frame for a read that discards it, and the AX-only contract is pinned on the
-wire where an A/B run can isolate it. A read that asked for pixels sends both
-arguments exactly as before.
+The flag omitted `include_screenshot`/`max_dimension` from tree-only
+`get_window_state` calls, intending to pin a no-capture contract on the wire.
+The driver's semantics cut the other way: an **absent** `include_screenshot`
+defaults to capturing — at the full session ceiling, not even the 1536 px
+cap — so the flag's wire shape asked for the largest possible frame on every
+tree-only read. Removed: the request now always sends explicit
+`include_screenshot:false` (plus `max_dimension:1536`), which is the real
+pinned contract. Separately, the pinned upstream `7fe7c33f` already gates
+both capture and attachment on `should_capture`, so the rev-17 "cached frame
+attaches regardless" finding no longer needs a native change.
 
 ### `SYNARA_CUA_CAPTURE_REUSE` (added with this change; graduated to default-on)
 
@@ -164,8 +168,10 @@ Landed evidence:
   budget at p50 and p95; get_state meets p50 but not p95 under desktop
   contention; the type row misses p50 on the AX-insert path. Wire-level
   finding recorded there: the rev-17 driver attaches its cached frame to
-  every `get_window_state` reply, so `SYNARA_CUA_AX_ONLY_GET_STATE` cannot
-  realize the step-6 saving by request shape alone.
+  every `get_window_state` reply. Resolved without a native change — the
+  pinned upstream `7fe7c33f` gates attach on `should_capture`, and the
+  request-shape flag was retired (omitting the field selects the driver's
+  default-capture path; explicit `include_screenshot:false` is sent always).
 
 Still open per the spec's acceptance criteria:
 
