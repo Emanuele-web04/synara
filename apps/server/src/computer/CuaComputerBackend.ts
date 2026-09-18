@@ -62,7 +62,6 @@ import { StillFramePublisher, resolveStillIntervalMs } from "./stillFramePublish
 import { isModelDesktopObservationActive } from "./modelDesktopObservation.ts";
 import { currentComputerTask } from "./computerTaskContext.ts";
 import {
-  cuaAxOnlyGetStateEnabled,
   cuaPreviewStillMsOverride,
   currentComputerCall,
   timedComputerLeg,
@@ -1063,21 +1062,17 @@ export class CuaComputerBackend implements ComputerBackend {
     }
     let result: CuaToolResult;
     try {
-      // A read that did not ask for pixels already skips capture, encode, and
-      // image delivery. SYNARA_CUA_AX_ONLY_GET_STATE goes one step further and
-      // omits the capture arguments entirely, so the driver never even sizes
-      // a frame for a tree-only read; unset, the request stays bit-identical
-      // to what it has always been.
+      // A read that did not ask for pixels skips capture, encode, and image
+      // delivery — but only because the flag travels on the wire: the driver
+      // treats an ABSENT include_screenshot as true, so explicit false is the
+      // pinned no-capture contract. (The retired AX_ONLY flag omitted the
+      // field to "pin" the same contract and got a full-size frame instead.)
       const wantsPixels = options.includeScreenshot === true;
       result = await this.call("get_window_state", {
         pid,
         window_id,
-        ...(wantsPixels || !cuaAxOnlyGetStateEnabled()
-          ? {
-              include_screenshot: wantsPixels,
-              max_dimension: 1536,
-            }
-          : {}),
+        include_screenshot: wantsPixels,
+        max_dimension: 1536,
         include_accessibility_tree: options.includeTree === true,
         max_elements: 1024,
         max_depth: 25,

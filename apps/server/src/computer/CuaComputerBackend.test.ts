@@ -3031,7 +3031,7 @@ describe("native preview task lifetime", () => {
 });
 
 describe("Cua workstream-C speed flags", () => {
-  const ENV = ["SYNARA_CUA_AX_ONLY_GET_STATE", "SYNARA_CUA_PREVIEW_STILL_MS"] as const;
+  const ENV = ["SYNARA_CUA_PREVIEW_STILL_MS"] as const;
   const savedEnv = new Map<string, string | undefined>();
 
   afterEach(() => {
@@ -3055,36 +3055,21 @@ describe("Cua workstream-C speed flags", () => {
   const windowStateArgs = (f: ReturnType<typeof fixture>) =>
     f.calls.find((call) => call.name === "get_window_state")?.args ?? {};
 
-  it("keeps the capture arguments on a tree-only get_state by default", async () => {
-    setEnv("SYNARA_CUA_AX_ONLY_GET_STATE", undefined);
+  it("sends explicit include_screenshot:false on a tree-only get_state", async () => {
+    // The driver treats an absent include_screenshot as true, so the
+    // no-capture contract has to be pinned explicitly on the wire.
     const f = fixture();
-    await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
     expect(windowStateArgs(f)).toMatchObject({
       include_screenshot: false,
       max_dimension: 1536,
       include_accessibility_tree: true,
     });
-    await f.backend.dispose();
-  });
-
-  it("SYNARA_CUA_AX_ONLY_GET_STATE omits the capture arguments on a tree-only read", async () => {
-    setEnv("SYNARA_CUA_AX_ONLY_GET_STATE", "1");
-    const f = fixture();
-    const state = await f.backend.getState({
-      windowId: "cua:10:20",
-      includeTree: true,
-    });
-    const args = windowStateArgs(f);
-    expect(args).not.toHaveProperty("include_screenshot");
-    expect(args).not.toHaveProperty("max_dimension");
-    expect(args).toMatchObject({ include_accessibility_tree: true });
-    // The read still asks for the tree and returns no image either way.
     expect(state.screenshot).toBeUndefined();
     await f.backend.dispose();
   });
 
-  it("SYNARA_CUA_AX_ONLY_GET_STATE never strips the arguments a pixel read needs", async () => {
-    setEnv("SYNARA_CUA_AX_ONLY_GET_STATE", "1");
+  it("keeps the capture arguments a pixel read needs", async () => {
     const f = fixture();
     await f.backend.getState({
       windowId: "cua:10:20",

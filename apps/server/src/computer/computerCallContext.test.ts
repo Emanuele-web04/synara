@@ -4,7 +4,6 @@ import {
   ComputerCallTiming,
   createComputerCallContext,
   cuaActionSettleMsOverride,
-  cuaAxOnlyGetStateEnabled,
   cuaCaptureReuseEnabled,
   cuaConditionalSettleEnabled,
   cuaPreviewStillMsOverride,
@@ -19,7 +18,6 @@ const FLAGS = [
   "SYNARA_CUA_TIMING_LOG",
   "SYNARA_CUA_CONDITIONAL_SETTLE",
   "SYNARA_CUA_ACTION_SETTLE_MS",
-  "SYNARA_CUA_AX_ONLY_GET_STATE",
   "SYNARA_CUA_CAPTURE_REUSE",
   "SYNARA_CUA_PREVIEW_STILL_MS",
 ] as const;
@@ -42,7 +40,6 @@ describe("computer call env flags", () => {
     expect(cuaTimingLogEnabled()).toBe(false);
     // Graduated flags ship on; the env var is now only a kill switch.
     expect(cuaConditionalSettleEnabled()).toBe(true);
-    expect(cuaAxOnlyGetStateEnabled()).toBe(false);
     expect(cuaCaptureReuseEnabled()).toBe(true);
     expect(cuaActionSettleMsOverride()).toBeUndefined();
     expect(cuaPreviewStillMsOverride()).toBeUndefined();
@@ -53,11 +50,9 @@ describe("computer call env flags", () => {
     (value) => {
       process.env.SYNARA_CUA_TIMING_LOG = value;
       process.env.SYNARA_CUA_CONDITIONAL_SETTLE = value;
-      process.env.SYNARA_CUA_AX_ONLY_GET_STATE = value;
       process.env.SYNARA_CUA_CAPTURE_REUSE = value;
       expect(cuaTimingLogEnabled()).toBe(true);
       expect(cuaConditionalSettleEnabled()).toBe(true);
-      expect(cuaAxOnlyGetStateEnabled()).toBe(true);
       expect(cuaCaptureReuseEnabled()).toBe(true);
     },
   );
@@ -76,10 +71,8 @@ describe("computer call env flags", () => {
     "treats %s as disabled for the opt-in boolean flags",
     (value) => {
       process.env.SYNARA_CUA_TIMING_LOG = value;
-      process.env.SYNARA_CUA_AX_ONLY_GET_STATE = value;
       expect(cuaTimingLogEnabled()).toBe(false);
-      expect(cuaAxOnlyGetStateEnabled()).toBe(false);
-    },
+      },
   );
 
   it.each(["2", "enabled", "anything"])(

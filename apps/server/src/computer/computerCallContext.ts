@@ -76,19 +76,6 @@ export function cuaActionSettleMsOverride(): number | undefined {
 }
 
 /**
- * `SYNARA_CUA_AX_ONLY_GET_STATE=1` declares that tree-only `get_state` reads
- * carry no capture interest at all: the driver request omits
- * `include_screenshot` and `max_dimension` entirely rather than sending a
- * disabled capture. Tree-only reads already skip capture, encode, and image
- * delivery unconditionally — this flag pins that contract on the wire so a
- * driver change cannot quietly start sizing a frame for a read that never
- * uses one, and so an A/B run can isolate the AX-only path explicitly.
- */
-export function cuaAxOnlyGetStateEnabled(): boolean {
-  return envFlagEnabled(process.env.SYNARA_CUA_AX_ONLY_GET_STATE);
-}
-
-/**
  * Explicit perception reads reuse the latest delivered frame's
  * `screenshotId` when the fresh capture is byte-for-byte identical with the
  * same coordinate frame, instead of shipping the same pixels again. The
