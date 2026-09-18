@@ -4244,6 +4244,59 @@ describe("element refs", () => {
     }
   });
 });
+
+describe("computer_run observation steps", () => {
+  it("lists elements mid-run with get_state and mints refs the model can use after", async () => {
+    const { backend, call, manager } = await setup();
+    try {
+      const run = resultJson(
+        await call("computer_run", {
+          steps: [
+            { type: "get_state", window_id: "fake-calculator" },
+            { type: "click", label: "Calculate", window_id: "fake-calculator" },
+          ],
+        }),
+      ) as {
+        steps: { type: string; result?: { elements?: { ref: number; label: string }[] } }[];
+      };
+      const listed = run.steps[0]!.result?.elements ?? [];
+      expect(listed.map((element) => element.label)).toContain("Calculate");
+      // The listing's refs are real bindings: citing one right after the run resolves it.
+      const calculate = listed.find((element) => element.label === "Calculate")!;
+      const followup = await call("computer_click", { ref: calculate.ref });
+      expect(followup.isError).not.toBe(true);
+      expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 1180, y: 228 });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("runs verify_state predicates mid-run", async () => {
+    const { backend, call, manager } = await setup();
+    try {
+      await call("computer_get_state", {});
+      const run = resultJson(
+        await call("computer_run", {
+          steps: [
+            {
+              type: "verify_state",
+              window_id: "fake-calculator",
+              expect: [{ label: "Display", value: "0" }],
+            },
+          ],
+        }),
+      ) as { steps: { ok: boolean }[] };
+      expect(run.steps[0]!.ok).toBe(true);
+      expect(backend.callsFor("verifyState").at(-1)?.args).toEqual([
+        "fake-calculator",
+        [{ label: "Display", value: "0" }],
+      ]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
 describe("computer_run flow control", () => {
   it("skips a step whose if_element is absent and runs it when present", async () => {
     const { backend, call, manager } = await setup();

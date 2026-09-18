@@ -2535,6 +2535,8 @@ export function makeAgentGatewayComputerTools(
     kill_app: ["window_id", "windowId"],
     set_window_minimized: ["window_id", "windowId", "minimized"],
     set_app_visibility: ["pid", "hidden"],
+    get_state: ["window_id", "windowId", "label_contains", "labelContains"],
+    verify_state: ["window_id", "windowId", "expect"],
   };
 
   /**
@@ -2799,6 +2801,65 @@ export function makeAgentGatewayComputerTools(
           throw new ToolInputError('Step "set_app_visibility" requires a boolean "hidden".');
         }
         return () => manager.setAppVisibility(threadId, pid, hidden);
+      }
+      case "get_state": {
+        const windowId = readWindowIdArg(step);
+        const labelContains =
+          readVerbatimStringArg(step, "label_contains") ??
+          readVerbatimStringArg(step, "labelContains");
+        // A mid-run observation: it re-baselines the scope's diff, mints the
+        // elements' refs for later steps and the model's next calls, and
+        // reports the listing back in the step's own result.
+        return async () => {
+          const state = await manager.getState({
+            includeTree: true,
+            ...(windowId ? { windowId } : {}),
+          });
+          const elements = state.root
+            ? actionableElements(state.root, {
+                ...(windowId === undefined ? {} : { windowId }),
+                ...(labelContains === undefined ? {} : { labelContains }),
+              })
+            : undefined;
+          const stable =
+            elements === undefined
+              ? undefined
+              : rememberDigest(
+                  threadId,
+                  digestScopeKey(threadId, windowId, labelContains),
+                  elements,
+                );
+          return {
+            ...(windowId !== undefined ? { windowId } : {}),
+            elements: stable?.items ?? [],
+            // An empty listing with an unreadable tree must not look like
+            // "nothing on screen" — carry the read's own status with it.
+            ...(state.accessibility !== undefined
+              ? { accessibility: state.accessibility }
+              : {}),
+            ...(stable?.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
+            ...(stable !== undefined && !stable.complete
+              ? { elementsTruncated: true, elementsOmitted: stable.omitted }
+              : {}),
+          };
+        };
+      }
+      case "verify_state": {
+        const windowId = readWindowIdArg(step);
+        if (!windowId) throw new ToolInputError('Step "verify_state" requires "window_id".');
+        const raw = step.expect;
+        if (
+          !Array.isArray(raw) ||
+          raw.length === 0 ||
+          raw.length > 8 ||
+          !raw.every((entry) => typeof entry === "object" && entry !== null)
+        ) {
+          throw new ToolInputError(
+            'Step "verify_state" needs "expect" as an array of one to eight predicates.',
+          );
+        }
+        const expect = raw as Record<string, unknown>[];
+        return () => manager.verifyState(windowId, expect);
       }
       default:
         throw new ToolInputError(`Unknown run step type ${JSON.stringify(type)}.`);
@@ -4305,7 +4366,7 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_run",
       "Run computer actions",
-      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional label + window_id), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden — launches are hidden by default; hidden:false shows the app), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution, and ref targets name elements from the thread's earlier listings. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
+      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional element target; "absent":true waits for the element to disappear), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden — launches are hidden by default; hidden:false shows the app), write_clipboard (text), paste (text). Observation steps: get_state (optional window_id + label_contains — returns a fresh elements listing and mints refs usable by later steps), verify_state (window_id + expect predicates). Any step can carry "if_element"/"unless_element" — a target object checked live at step time, skipping the step when its condition fails — and "continue_on_error":true to keep going past its own failure. Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution, and ref targets name elements from the thread's earlier listings. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen, or make the dependency a condition or a get_state step. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
@@ -4328,6 +4389,9 @@ export function makeAgentGatewayComputerTools(
                 ref_ordinal: { type: "integer", minimum: 0 },
                 refOrdinal: { type: "integer", minimum: 0 },
                 window_id: { type: "string" },
+                windowId: { type: "string" },
+                label_contains: { type: "string" },
+                labelContains: { type: "string" },
                 if_element: {
                   type: "object",
                   description:
@@ -4340,6 +4404,7 @@ export function makeAgentGatewayComputerTools(
                 },
                 continue_on_error: { type: "boolean" },
                 absent: { type: "boolean" },
+                expect: { type: "array", items: { type: "object" }, minItems: 1, maxItems: 8 },
                 modifiers: MODIFIERS_PROPERTY.modifiers,
                 from: {
                   type: "object",
