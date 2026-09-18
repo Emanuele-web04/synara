@@ -87,9 +87,25 @@ change. Then the same surface on Windows and Linux.
     yet.
 11. ComputerManager is 5.4k lines post-merge — six features, parallel seams;
     no refactor pass yet.
-12. Unused private-API inventory: dock-swipe instant switch,
-    `CGSSetWindowLevel` masking variant, focus-theft suppression taps,
-    CPS type-21 notifications (dead for key-window manufacture — proven).
+12. Private-API inventory — resolved 2026-10-02:
+    - dock-swipe instant switch — **shipped**: `SLSDisableUpdate`/
+      `SLSReenableUpdate` around `SLSManagedDisplaySetCurrentSpace`
+      turns the ~0.3s slide into a 3-4ms switch (verified live);
+      `space-ctl set-current-instant`, cert `switchSpace()` prefers it.
+    - `CGSSetWindowLevel` masking variant — **rejected**: level -1000
+      still composites above the desktop (not hidden); and all
+      cross-process window property mutation is refused by the window
+      server — `SLSOrderWindow` rc=1000, `SLSMoveWindow`/`SLSSetWindowAlpha`
+      silent no-ops, AX position clamps (-5000→-546 leaves a sliver).
+      Only Space membership (`SLSMoveWindowsToManagedSpace` etc.) is
+      settable cross-process: hidden-Space + shield is the only viable
+      hide surface, as built.
+    - focus-theft suppression — **parked**: auto-revert fights the
+      operator's own clicks; the only legit case (app self-activation)
+      is rare since driver ops are focus-neutral (0 theft in cert).
+      Design if needed: `CGEventSourceSecondsSinceLastEventType`
+      heuristic + NSWorkspace activate revert.
+    - CPS type-21 notifications (dead for key-window manufacture — proven).
     `SLSHWCaptureWindowList` — **evaluated and rejected 2026-09-18**:
     present on Darwin 25.5 (`CGSHWCaptureWindowList` too), signature
     validated, returns CFArray<CGImage> — but it serves the same
