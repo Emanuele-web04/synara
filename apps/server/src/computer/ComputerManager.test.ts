@@ -1378,14 +1378,19 @@ describe("ComputerManager and FakeComputerBackend", () => {
     }
   });
 
-  it("forwards the hidden launch option to the backend only when asked", async () => {
+  it("launches hidden by default and only shows the app on explicit hidden:false", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });
     try {
+      // Absent → invisible workspace default.
+      await manager.launchApp("thread-1", "kcalc");
+      expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", [], { hidden: true }]);
+      // Explicit true → hidden, same as the default.
       await manager.launchApp("thread-1", "kcalc", [], 0, { hidden: true });
       expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", [], { hidden: true }]);
-      await manager.launchApp("thread-1", "kcalc");
-      expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", []]);
+      // Explicit false → the only visible-launch path.
+      await manager.launchApp("thread-1", "kcalc", [], 0, { hidden: false });
+      expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", [], { hidden: false }]);
     } finally {
       computerApprovalGate.cancelThread("thread-1");
       await manager.dispose();

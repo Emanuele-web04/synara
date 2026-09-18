@@ -46,6 +46,8 @@ import { cuaRequest, type CuaReply } from "@synara/shared/cuaDriverProtocol";
 import { CuaDriverHost } from "../../apps/desktop/src/cuaDriverHost";
 import { ComputerShield } from "../../apps/desktop/src/computerShield";
 import { EscapeKillSwitchMonitor } from "../../apps/desktop/src/escapeKillSwitchMonitor";
+import { CuaComputerBackend } from "../../apps/server/src/computer/CuaComputerBackend";
+import { ComputerManager } from "../../apps/server/src/computer/ComputerManager";
 import {
   analyzeFocusSamples,
   parseFocusProbeLine,
@@ -723,6 +725,89 @@ end repeat`,
         { opWin: opWin?.window_id, agentWin: agentWin?.window_id, tok: !!agentTok },
         Date.now() - t,
       );
+  }
+
+  // ── hidden-launch-default (manager seam: absent hidden → invisible) ──
+  // Drives the real product path — ComputerManager.launchApp with no
+  // options → CuaComputerBackend → driver launch_app — and asserts the
+  // produced window is off-screen with the operator front unchanged.
+  if (wanted("hidden-launch-default")) {
+    const t = Date.now();
+    let backend: CuaComputerBackend | undefined;
+    let manager: ComputerManager | undefined;
+    try {
+      backend = new CuaComputerBackend({ endpoint, capability });
+      manager = new ComputerManager({ backend });
+      const frontBefore = frontmostPid();
+      // A running instance gets reused by `open` semantics — no new window.
+      // Calculator launches are guaranteed-fresh here because the harness
+      // only spawns them through this row; quit any strays first.
+      for (const stray of (
+        spawnSync("pgrep", ["-x", "Calculator"], { encoding: "utf8" }).stdout ?? ""
+      )
+        .split("\n")
+        .map(Number)
+        .filter(Boolean))
+        spawnSync("kill", [String(stray)]);
+      await new Promise((r) => setTimeout(r, 600));
+      const launch = await manager.launchApp("live-cert-hidden-default", "Calculator");
+      let launchPid = launch.window?.pid;
+      let winNum = Number(/^cua:\d+:(\d+)$/.exec(launch.window?.id ?? "")?.[1]);
+      let listed: WinInfo | undefined;
+      for (let i = 0; i < 20 && launchPid === undefined; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        const calcWins = (await listWindows()).filter((w) =>
+          w.app_name?.includes("Calculator"),
+        );
+        const fresh = calcWins.sort((a, b) => (a.z_index ?? 999) - (b.z_index ?? 999));
+        if (fresh[0]) {
+          launchPid = fresh[0].pid;
+          winNum = fresh[0].window_id;
+          listed = fresh[0];
+          break;
+        }
+      }
+      if (launchPid) spawnedPids.push(launchPid);
+      if (launchPid !== undefined && listed === undefined) {
+        const candidates = (await listWindows(launchPid)).sort(
+          (a, b) => (a.z_index ?? 999) - (b.z_index ?? 999),
+        );
+        listed =
+          (Number.isInteger(winNum)
+            ? candidates.find((w) => w.window_id === winNum)
+            : candidates[0]) ?? candidates[0];
+        winNum = listed?.window_id ?? winNum;
+      }
+      const winPid = launchPid;
+      const frontAfter = frontmostPid();
+      const offScreen = listed?.is_on_screen === false;
+      const ok = winPid !== undefined && offScreen === true && frontAfter === frontBefore;
+      row(
+        "hidden-launch-default",
+        ok ? "pass" : "fail",
+        `manager.launchApp(no opts) → pid ${winPid} on_screen=${listed?.is_on_screen} front ${frontBefore}→${frontAfter}`,
+        {
+          launch: JSON.stringify(launch).slice(0, 300),
+          launchPid,
+          winNum,
+          listed,
+          frontBefore,
+          frontAfter,
+        },
+        Date.now() - t,
+      );
+    } catch (e) {
+      row(
+        "hidden-launch-default",
+        "fail",
+        String(e).slice(0, 200),
+        { error: String(e) },
+        Date.now() - t,
+      );
+    } finally {
+      await manager?.dispose().catch(() => undefined);
+      backend?.dispose?.();
+    }
   }
 
   // ── space-roundtrip (needs a second managed desktop) ──

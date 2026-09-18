@@ -2505,9 +2505,17 @@ export function makeAgentGatewayComputerTools(
         const app = readStringArg(step, "app", { required: true })!;
         const appArgs = readStringArrayArg(step, "arguments") ?? [];
         const waitMs = readBooleanArg(step, "wait_for_window") === false ? 0 : 2_000;
-        const hidden = readBooleanArg(step, "hidden") === true;
+        // Three states: absent lets the manager's invisible-by-default apply,
+        // explicit false is the only way to ask for a visible launch.
+        const hidden = readBooleanArg(step, "hidden");
         return () =>
-          manager.launchApp(threadId, app, appArgs, waitMs, hidden ? { hidden: true } : undefined);
+          manager.launchApp(
+            threadId,
+            app,
+            appArgs,
+            waitMs,
+            hidden !== undefined ? { hidden } : undefined,
+          );
       }
       case "write_clipboard": {
         const text = readClipboardText(step);
@@ -3224,20 +3232,22 @@ export function makeAgentGatewayComputerTools(
           hidden: {
             type: "boolean",
             description:
-              "Launch the application hidden: its windows are created off-screen, it never activates, takes focus, or switches Spaces, and it still answers the semantic tools (set_value, clicks by label, get_window_state). Defaults to false.",
+              "Launch the application hidden: its windows are created off-screen, it never activates, takes focus, or switches Spaces, and it still answers the semantic tools (set_value, clicks by label, get_window_state). Defaults to true — agent launches stay invisible; pass hidden:false only when the operator should see the app appear.",
           },
         },
         required: ["app"],
         additionalProperties: false,
       },
-      async (args, context) =>
-        manager.launchApp(
+      async (args, context) => {
+        const hidden = readBooleanArg(args, "hidden");
+        return manager.launchApp(
           context.callerThreadId,
           readStringArg(args, "app", { required: true })!,
           readStringArrayArg(args, "arguments") ?? [],
           readBooleanArg(args, "wait_for_window") === false ? 0 : 2_000,
-          readBooleanArg(args, "hidden") === true ? { hidden: true } : undefined,
-        ),
+          hidden !== undefined ? { hidden } : undefined,
+        );
+      },
     ),
     {
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
@@ -3960,7 +3970,7 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_run",
       "Run computer actions",
-      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional label + window_id), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
+      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional label + window_id), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden — launches are hidden by default; hidden:false shows the app), write_clipboard (text), paste (text). Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {

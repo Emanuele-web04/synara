@@ -506,16 +506,20 @@ const REPLAY_PLANS: Record<string, ReplayStepPlan> = {
   computer_launch_app: {
     mutating: true,
     target: "app",
-    run: (call) =>
-      call.manager.launchApp(
+    run: (call) => {
+      // Three states preserved: a recorded `hidden:false` must stay a visible
+      // launch on replay; absent rides the manager's invisible-by-default.
+      const hidden = argBoolean(call.args, "hidden");
+      return call.manager.launchApp(
         call.threadId,
         argString(call.args, "app") ?? call.step.declaredTarget?.app ?? "",
         // Launch arguments are a payload list: verbatim only under `full`
         // fidelity, an empty list otherwise — never a fabricated guess.
         argStringArray(call.args, "arguments") ?? [],
         argBoolean(call.args, "wait_for_window") === false ? 0 : 2_000,
-        argBoolean(call.args, "hidden") === true ? { hidden: true } : undefined,
-      ),
+        hidden !== undefined ? { hidden } : undefined,
+      );
+    },
   },
   computer_activate_window: {
     mutating: true,

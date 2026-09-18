@@ -2289,7 +2289,18 @@ export class ComputerManager {
     return { computerId: this.computerId, screenSize, availability };
   }
 
-  /** Launching spawns windows on the shared desktop, so it takes the lease too. */
+  /**
+   * Launching spawns windows on the shared desktop, so it takes the lease too.
+   *
+   * Agent launches are hidden by default: an agent-driven thread is a
+   * background workspace, and a window the agent did not explicitly ask to
+   * show must never appear on the operator's screen or take focus. The
+   * opt-out is explicit — `options.hidden === false` launches visibly.
+   * Hidden apps keep their AX trees live, so the semantic tools (set_value,
+   * label clicks, get_window_state) work without ever surfacing the app;
+   * `set_app_visibility` and `activate_window` remain the ways to bring one
+   * forward when the operator should see it.
+   */
   async launchApp(
     threadId: string | undefined,
     app: string,
@@ -2301,8 +2312,9 @@ export class ComputerManager {
       markComputerCall("computer_launch_app");
       assertDesktopOperationActive();
       this.assertDrivenAppAdmitted(threadId, app);
+      const hidden = options?.hidden !== false;
       const result = await timedComputerLeg("dispatch", () =>
-        this.backend.launchApp(app, args, options),
+        this.backend.launchApp(app, args, hidden ? { hidden: true } : options),
       );
       // Launch resolves no desktop target ahead of dispatch — the app name is
       // the address — so the note records the launch and the window it
