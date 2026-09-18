@@ -62,6 +62,11 @@ import {
   type ComputerAuditEntry,
 } from "../computer/computerAuditLog.ts";
 import {
+  withComputerRecordingCapture,
+  type ComputerRecordingCapture,
+} from "../computer/computerCallContext.ts";
+import { rectContainsPoint, topmostWindowAtPoint } from "../computer/computerGeometry.ts";
+import {
   computerGrantClassesForTool,
   computerGrantIdentityForAppArg,
   computerGrantIdentityForPid,
@@ -69,7 +74,17 @@ import {
   computerGrantIdentityKey,
   type ComputerGrantCallContext,
 } from "../computer/computerGrants.ts";
-import { rectContainsPoint, topmostWindowAtPoint } from "../computer/computerGeometry.ts";
+import {
+  computerRecordingHistoryLines,
+  redactComputerRecordingArgs,
+  redactComputerRecordingResult,
+  ComputerRecordingError,
+  type ComputerRecordingActionClass,
+  type ComputerRecordingApproval,
+  type ComputerRecordingDeclaredTarget,
+  type ComputerRecordingFidelity,
+  type ComputerRecordingStepInput,
+} from "../computer/computerRecording.ts";
 import {
   ScreenshotFrameRegistry,
   screenshotDeltaToDesktop,
@@ -169,6 +184,13 @@ export const COMPUTER_APPROVAL_REQUIRED_TOOLS = new Set([
   "computer_kill_app",
   "computer_set_window_minimized",
   "computer_set_app_visibility",
+  // Starting a session decides what evidence gets kept — `full` fidelity
+  // captures text payloads verbatim — so it is consented like the actions it
+  // records. Deleting a recording destroys evidence; replaying one re-issues
+  // real input. Neither is ever silent.
+  "computer_recording_start",
+  "computer_recording_delete",
+  "computer_replay",
 ]);
 
 export function computerToolRequiresApproval(name: string): boolean {
@@ -244,6 +266,83 @@ function computerAuditSuccessEffect(name: string, value: unknown): ComputerAudit
   return "dispatched-unknown";
 }
 
+/**
+ * The action family a step record carries — descriptive for the reader and
+ * the replay classifier; dispatch decisions are made on the tool name, not
+ * this field.
+ */
+function computerRecordingActionClass(name: string): ComputerRecordingActionClass {
+  switch (name) {
+    case "computer_click":
+    case "computer_double_click":
+    case "computer_triple_click":
+    case "computer_right_click":
+    case "computer_move_cursor":
+    case "computer_drag":
+    case "computer_scroll":
+      return "pointer";
+    case "computer_press_key":
+    case "computer_hotkey":
+      return "keyboard";
+    case "computer_type_text":
+      return "text";
+    case "computer_set_value":
+    case "computer_perform_action":
+    case "computer_select_text":
+      return "semantic";
+    case "computer_read_clipboard":
+    case "computer_write_clipboard":
+    case "computer_paste":
+      return "clipboard";
+    case "computer_activate_window":
+    case "computer_set_window_frame":
+    case "computer_invoke_menu":
+    case "computer_set_window_minimized":
+      return "window";
+    case "computer_launch_app":
+    case "computer_kill_app":
+    case "computer_set_app_visibility":
+      return "lifecycle";
+    case "computer_run":
+      return "batch";
+    case "computer_recording_start":
+    case "computer_recording_stop":
+    case "computer_recording_list":
+    case "computer_recording_read":
+    case "computer_recording_export":
+    case "computer_recording_delete":
+    case "computer_replay":
+      return "replay";
+    default:
+      // Perception calls — the read side of a session's history.
+      return "observation";
+  }
+}
+
+/**
+ * The target the call declared, verbatim — the replay key. Only fields the
+ * model could actually have written are read; a `computer_run`'s per-step
+ * declarations ride on the inner step records, not this one.
+ */
+function computerRecordingDeclaredTarget(
+  args: Record<string, unknown>,
+): ComputerRecordingDeclaredTarget | undefined {
+  const target: {
+    -readonly [K in keyof ComputerRecordingDeclaredTarget]?: ComputerRecordingDeclaredTarget[K];
+  } = {};
+  if (typeof args.x === "number" && Number.isFinite(args.x)) target.x = args.x;
+  if (typeof args.y === "number" && Number.isFinite(args.y)) target.y = args.y;
+  if (typeof args.label === "string" && args.label.length > 0) target.label = args.label;
+  if (typeof args.role === "string" && args.role.length > 0) target.role = args.role;
+  const windowId = readWindowIdArg(args);
+  if (windowId !== undefined) target.windowId = windowId;
+  if (typeof args.pid === "number" && Number.isSafeInteger(args.pid) && args.pid > 0) {
+    target.pid = args.pid;
+  }
+  if (typeof args.app === "string" && args.app.trim().length > 0) target.app = args.app;
+  return Object.keys(target).length === 0 ? undefined : (target as ComputerRecordingDeclaredTarget);
+}
+
 /** The effect/code pair a failed call reports — a typed refusal or a fault. */
 export function computerAuditErrorOutcome(error: unknown): {
   readonly effect: ComputerAuditEffect;
@@ -254,6 +353,9 @@ export function computerAuditErrorOutcome(error: unknown): {
     return { effect: error.effect, code: error.code ?? "cua_action_error" };
   if (error instanceof ComputerTargetError) return { effect: "refused", code: error.code };
   if (error instanceof ComputerLeaseError) return { effect: "refused", code: error.code };
+  if (error instanceof ComputerRecordingError) {
+    return { effect: "refused", code: "computer_recording_error" };
+  }
   if (error instanceof ComputerBackendError) {
     return error.inputPause !== undefined
       ? { effect: "refused", code: "computer_input_paused" }
@@ -1588,6 +1690,59 @@ export function makeAgentGatewayComputerTools(
           ...(outcome.code !== undefined ? { code: outcome.code } : {}),
         });
       };
+      // The recording seam rides the same outcome points the audit does, plus
+      // the call's own capture: when this thread has an open session the
+      // manager's resolution and dispatch notes land on `capture` as the call
+      // runs, and the step record is written when the outcome is known. No
+      // session means no capture and `record` is a no-op — the hot path is
+      // unchanged.
+      const capture = manager.recordingCaptureFor(context.callerThreadId);
+      const callStartedAt = Date.now();
+      let recordingApproval: ComputerRecordingApproval = {
+        required: computerToolRequiresApproval(name),
+        decision: computerToolRequiresApproval(name) ? "unavailable" : "not-required",
+      };
+      const record = (outcome: {
+        readonly effect: ComputerRecordingStepInput["effect"];
+        readonly code?: string;
+        /** A read-back payload the call returned (clipboard contents), summarized. */
+        readonly resultValue?: string;
+      }): void => {
+        const fidelity = manager.recordingFidelityFor(context.callerThreadId);
+        if (fidelity === undefined) return;
+        const secure = (capture?.resolutions ?? []).some(
+          (resolution) => resolution.secure === true,
+        );
+        const redacted = redactComputerRecordingArgs(args, { fidelity, protected: secure });
+        const declaredTarget = computerRecordingDeclaredTarget(args);
+        manager.recordComputerStep(context.callerThreadId, {
+          tool: name,
+          actionClass: computerRecordingActionClass(name),
+          threadId: context.callerThreadId,
+          ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+          approval: recordingApproval,
+          ...(declaredTarget !== undefined ? { declaredTarget } : {}),
+          resolutions: capture?.resolutions ?? [],
+          args: redacted.args,
+          ...(redacted.payload !== undefined ? { payload: redacted.payload } : {}),
+          ...(outcome.resultValue !== undefined
+            ? { result: redactComputerRecordingResult(outcome.resultValue) }
+            : {}),
+          dispatches: capture?.dispatches ?? [],
+          // `dispatched-unknown` means "the backend accepted it" — a call
+          // whose capture holds no dispatch (a perception read, a
+          // recording-family call, a file read) must not claim one. The
+          // run container is exempt: its dispatches live on the inner steps.
+          effect:
+            outcome.effect === "dispatched-unknown" &&
+            name !== "computer_run" &&
+            (capture?.dispatches.length ?? 0) === 0
+              ? "not-dispatched"
+              : outcome.effect,
+          ...(outcome.code !== undefined ? { code: outcome.code } : {}),
+          latencyMs: Math.max(0, Date.now() - callStartedAt),
+        });
+      };
       return Effect.tryPromise({
         try: async (abortSignal) => {
           if (
@@ -1598,7 +1753,9 @@ export function makeAgentGatewayComputerTools(
               name === "computer_activate_window")
           ) {
             if (!options.authorizeAction) {
+              recordingApproval = { required: true, decision: "unavailable" };
               audit({ effect: "refused", code: "approval_unavailable" });
+              record({ effect: "refused", code: "approval_unavailable" });
               return {
                 result: approvalUnavailableResult(name),
                 signal: undefined,
@@ -1625,7 +1782,9 @@ export function makeAgentGatewayComputerTools(
                 grantContext,
               ))
             ) {
+              recordingApproval = { required: true, decision: "denied" };
               audit({ effect: "refused", code: "approval_denied" });
+              record({ effect: "refused", code: "approval_denied" });
               return {
                 result: mcpToolResultError(
                   "Computer action was denied or cancelled; no input was sent.",
@@ -1633,6 +1792,11 @@ export function makeAgentGatewayComputerTools(
                 signal: undefined,
               };
             }
+            recordingApproval = { required: true, decision: "granted" };
+          } else if (computerToolRequiresApproval(name)) {
+            // Required by the taxonomy but the gate never engaged — the
+            // trusted-baseline case the record must name honestly.
+            recordingApproval = { required: true, decision: "skipped" };
           }
           // Second-app consent runs here, on the caller's signal, before the
           // desktop queue is taken: a prompt nobody can reach must never park
@@ -1660,22 +1824,24 @@ export function makeAgentGatewayComputerTools(
           // Action targeting and automatic previews do not replace a model's
           // explicit observation after a desktop interruption.
           const invoke = () =>
-            withComputerTask(
-              {
-                threadId: context.callerThreadId,
-                ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
-                ...(context.callerThreadLabel ? { label: context.callerThreadLabel } : {}),
-              },
-              () =>
-                name === "computer_get_state" ||
-                name === "computer_screenshot" ||
-                name === "computer_wait" ||
-                // A run's internal reads — the wait-step polls and the closing
-                // state — are the model's observations, with the same authority
-                // to satisfy a pending observation requirement.
-                name === "computer_run"
-                  ? withModelDesktopObservation(() => run(args, context))
-                  : run(args, context),
+            withComputerRecordingCapture(capture, () =>
+              withComputerTask(
+                {
+                  threadId: context.callerThreadId,
+                  ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+                  ...(context.callerThreadLabel ? { label: context.callerThreadLabel } : {}),
+                },
+                () =>
+                  name === "computer_get_state" ||
+                  name === "computer_screenshot" ||
+                  name === "computer_wait" ||
+                  // A run's internal reads — the wait-step polls and the closing
+                  // state — are the model's observations, with the same authority
+                  // to satisfy a pending observation requirement.
+                  name === "computer_run"
+                    ? withModelDesktopObservation(() => run(args, context))
+                    : run(args, context),
+              ),
             );
           const value =
             name === "computer_wait"
@@ -1740,6 +1906,15 @@ export function makeAgentGatewayComputerTools(
           // cannot lose a record of input already sent.
           resultWindowId = computerAuditResultWindowId(value);
           audit({ effect: computerAuditSuccessEffect(name, value) });
+          record({
+            effect: computerAuditSuccessEffect(name, value),
+            // The one read-back payload a session summarizes: the clipboard
+            // text stays out either way — `result` is chars + hash.
+            ...(name === "computer_read_clipboard" &&
+            typeof (value as { value?: unknown } | null | undefined)?.value === "string"
+              ? { resultValue: (value as { value: string }).value }
+              : {}),
+          });
           // A call can succeed and still report that the desktop is out of
           // reach: a perception read answers with a `permission-required`
           // availability, and a missing Screen Recording grant blocks nothing at
@@ -1780,9 +1955,12 @@ export function makeAgentGatewayComputerTools(
         Effect.flatMap(({ result, signal }) => withSetupCard(name, context, signal, result)),
         Effect.catch((error) => {
           // The kill switch writes nothing: a disabled thread refusing input
-          // is a state, not an event, and the log must stay empty for it.
+          // is a state, not an event, and the log must stay empty for it. The
+          // recording keeps the same rule — `recordComputerStep` also refuses
+          // disabled threads at the manager seam.
           if (!(error instanceof ComputerBackendError && error.controlRevoked)) {
             audit(computerAuditErrorOutcome(error));
+            record(computerAuditErrorOutcome(error));
           }
           const failure =
             error instanceof ComputerBackendError && error.inputPause
@@ -2090,6 +2268,8 @@ export function makeAgentGatewayComputerTools(
 
   interface PreparedRunStep {
     readonly type: string;
+    /** The step object as declared — the inner record's redaction input. */
+    readonly step: Record<string, unknown>;
     readonly run: () => Promise<unknown>;
   }
 
@@ -2405,13 +2585,54 @@ export function makeAgentGatewayComputerTools(
             .join(", ")}.`,
         );
       }
-      return { type, run: prepareRunStep(type, step, context) };
+      return { type, step, run: prepareRunStep(type, step, context) };
     });
 
     const steps: Record<string, unknown>[] = [];
     let stopped = false;
     // The window the last step touched scopes the closing state read.
     let lastWindowId: string | undefined;
+    // A run inside an open session records one step line per inner step, each
+    // with its own capture — the outer call's record stays the container. The
+    // approval the batch ran under is inherited verbatim: reaching this point
+    // means the run was granted, or ran on the trusted baseline.
+    const runApproval: ComputerRecordingApproval = {
+      required: true,
+      decision: options.authorizeAction === undefined ? "skipped" : "granted",
+    };
+    const recordRunStep = (
+      preparedStep: PreparedRunStep,
+      stepCapture: ComputerRecordingCapture | undefined,
+      outcome: { readonly effect: ComputerRecordingStepInput["effect"]; readonly code?: string },
+      startedAt: number,
+    ): void => {
+      const fidelity = manager.recordingFidelityFor(threadId);
+      if (fidelity === undefined) return;
+      const secure = (stepCapture?.resolutions ?? []).some(
+        (resolution) => resolution.secure === true,
+      );
+      const redacted = redactComputerRecordingArgs(preparedStep.step, {
+        fidelity,
+        protected: secure,
+      });
+      const declaredTarget = computerRecordingDeclaredTarget(preparedStep.step);
+      const tool = `computer_${preparedStep.type}`;
+      manager.recordComputerStep(threadId, {
+        tool,
+        actionClass: computerRecordingActionClass(tool),
+        threadId,
+        ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+        approval: runApproval,
+        ...(declaredTarget !== undefined ? { declaredTarget } : {}),
+        resolutions: stepCapture?.resolutions ?? [],
+        args: redacted.args,
+        ...(redacted.payload !== undefined ? { payload: redacted.payload } : {}),
+        dispatches: stepCapture?.dispatches ?? [],
+        effect: outcome.effect,
+        ...(outcome.code !== undefined ? { code: outcome.code } : {}),
+        latencyMs: Math.max(0, Date.now() - startedAt),
+      });
+    };
     for (const [index, preparedStep] of prepared.entries()) {
       // Between steps, not just around the batch: a revocation or a dead turn
       // stops the run before the next dispatch, not after it.
@@ -2419,11 +2640,13 @@ export function makeAgentGatewayComputerTools(
       await Effect.runPromise(context.assertCallerTurnActive(), {
         signal: desktopOperationSignal(),
       });
+      const stepCapture = manager.recordingCaptureFor(threadId);
+      const stepStartedAt = Date.now();
       try {
         const value = await manager.cursorActivity.during(
           threadId,
           cursorToolActivity(`computer_${preparedStep.type}`),
-          preparedStep.run,
+          () => withComputerRecordingCapture(stepCapture, preparedStep.run),
         );
         if (
           typeof value === "object" &&
@@ -2432,6 +2655,22 @@ export function makeAgentGatewayComputerTools(
         ) {
           lastWindowId = (value as { windowId: string }).windowId;
         }
+        // A wait dispatched nothing; a step whose capture holds no dispatch
+        // did not reach the backend either — the same honesty rule the outer
+        // record keeps.
+        const stepEffect = computerAuditSuccessEffect(`computer_${preparedStep.type}`, value);
+        recordRunStep(
+          preparedStep,
+          stepCapture,
+          {
+            effect:
+              preparedStep.type === "wait" ||
+              (stepEffect === "dispatched-unknown" && (stepCapture?.dispatches.length ?? 0) === 0)
+                ? "not-dispatched"
+                : stepEffect,
+          },
+          stepStartedAt,
+        );
         steps.push({
           step: index,
           type: preparedStep.type,
@@ -2448,6 +2687,7 @@ export function makeAgentGatewayComputerTools(
         await Effect.runPromise(context.assertCallerTurnActive(), {
           signal: desktopOperationSignal(),
         });
+        recordRunStep(preparedStep, stepCapture, computerAuditErrorOutcome(error), stepStartedAt);
         steps.push({
           step: index,
           type: preparedStep.type,
@@ -3738,6 +3978,238 @@ export function makeAgentGatewayComputerTools(
       },
       runComputerBatch,
     ),
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_recording_start",
+        description:
+          'Start a structured recording of this thread\'s computer calls — one bounded local file per session under the server state dir. Records carry the target identity, action class, approval path, dispatch verdict, and verification evidence of every call — never screenshots, never clipboard contents. fidelity "redacted" (default) stores text payloads as length+sha256; "full" keeps them verbatim so they can be replayed, except onto protected fields, which stay hashed at every fidelity. One session per thread; stop it with computer_recording_stop.',
+        inputSchema: {
+          type: "object",
+          properties: {
+            fidelity: {
+              type: "string",
+              enum: ["redacted", "full"],
+              description:
+                '"redacted" is the default and the contract; "full" keeps text payloads verbatim so a replay can re-issue them. Secure-field payloads stay hashed either way.',
+            },
+          },
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Start computer recording",
+          ...WRITE_TOOL_ANNOTATIONS,
+        },
+      },
+      handler: handle("computer_recording_start", async (args, context) => {
+        const fidelity = readStringArg(args, "fidelity");
+        if (fidelity !== undefined && fidelity !== "redacted" && fidelity !== "full") {
+          throw new ToolInputError('fidelity must be "redacted" or "full".');
+        }
+        return manager.startComputerRecording({
+          threadId: context.callerThreadId,
+          ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+          ...(fidelity !== undefined ? { fidelity: fidelity as ComputerRecordingFidelity } : {}),
+        });
+      }),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_recording_stop",
+        description:
+          "Stop a computer recording session and write its end line. With no recording_id, stops the session open on this thread.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            recording_id: {
+              type: "string",
+              description: "A recording id from computer_recording_list or _start.",
+            },
+          },
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Stop computer recording",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
+      },
+      handler: handle("computer_recording_stop", async (args, context) => {
+        const recordingId = readStringArg(args, "recording_id");
+        const summary =
+          recordingId === undefined
+            ? await manager.stopComputerRecordingForThread(context.callerThreadId)
+            : await manager.stopComputerRecording(recordingId);
+        return summary === undefined
+          ? { stopped: false, note: "No open recording session matches." }
+          : { stopped: true, ...summary };
+      }),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_recording_list",
+        description:
+          "List computer recording sessions — open ones first, then newest-first — with step counts, fidelity, and close reasons.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        annotations: {
+          title: "List computer recordings",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
+      },
+      handler: handle("computer_recording_list", async () => ({
+        recordings: await manager.listComputerRecordings(),
+      })),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_recording_read",
+        description:
+          "Read one recording: the header, the recorded steps, and a plain-English history line per step. Steps carry redacted arguments — hashes stand in for text payloads at redacted fidelity.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            recording_id: {
+              type: "string",
+              description: "A recording id from computer_recording_list.",
+            },
+          },
+          required: ["recording_id"],
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Read computer recording",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
+      },
+      handler: handle("computer_recording_read", async (args) => {
+        const recordingId = readStringArg(args, "recording_id", { required: true })!;
+        const document = await manager.readComputerRecording(recordingId);
+        return { ...document, history: computerRecordingHistoryLines(document) };
+      }),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_recording_export",
+        description:
+          "Export one recording's raw NDJSON — already redacted at write time. Contents over 200,000 characters are truncated; the file on disk is the full record.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            recording_id: {
+              type: "string",
+              description: "A recording id from computer_recording_list.",
+            },
+          },
+          required: ["recording_id"],
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Export computer recording",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
+      },
+      handler: handle("computer_recording_export", async (args) => {
+        const recordingId = readStringArg(args, "recording_id", { required: true })!;
+        const contents = await manager.exportComputerRecording(recordingId);
+        const truncated = contents.length > 200_000;
+        return {
+          recordingId,
+          format: "ndjson",
+          bytes: Buffer.byteLength(contents, "utf8"),
+          contents: truncated ? `${contents.slice(0, 200_000)}…` : contents,
+          ...(truncated ? { truncated: true } : {}),
+        };
+      }),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_recording_delete",
+        description:
+          "Delete one recording's file. An open session is closed first. The file is gone — this is evidence deletion, which is why it asks.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            recording_id: {
+              type: "string",
+              description: "A recording id from computer_recording_list.",
+            },
+          },
+          required: ["recording_id"],
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Delete computer recording",
+          ...WRITE_TOOL_ANNOTATIONS,
+        },
+      },
+      handler: handle("computer_recording_delete", async (args) => {
+        const recordingId = readStringArg(args, "recording_id", { required: true })!;
+        return { deleted: await manager.deleteComputerRecording(recordingId), recordingId };
+      }),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_replay",
+        description:
+          "Classify a recording's steps against the live desktop — and with execute:true, re-issue the ready ones through the same resolution, consent, and dispatch paths a live call takes. execute absent or false is the dry run: nothing is dispatched and the report says what would happen. A step is re-issued only after its target re-resolves fresh (window still present, or exactly one same-app window to remap to, or a re-anchored point) — recorded pixels and window ids are hints, never proof. Text payloads re-issue only when the session captured them at full fidelity; protected-field steps are never retyped. Blocked and skipped steps name their reason in the report.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            recording_id: {
+              type: "string",
+              description: "A recording id from computer_recording_list.",
+            },
+            execute: {
+              type: "boolean",
+              description:
+                "Re-dispatch the steps classified ready. Default false — classify only, send nothing.",
+            },
+            from_seq: {
+              type: "integer",
+              minimum: 1,
+              description: "First recorded step number to consider, inclusive.",
+            },
+            to_seq: {
+              type: "integer",
+              minimum: 1,
+              description: "Last recorded step number to consider, inclusive.",
+            },
+          },
+          required: ["recording_id"],
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Replay computer recording",
+          ...WRITE_TOOL_ANNOTATIONS,
+        },
+      },
+      handler: handle("computer_replay", async (args, context) => {
+        const recordingId = readStringArg(args, "recording_id", { required: true })!;
+        const execute = readBooleanArg(args, "execute");
+        const fromSeq = readNumberArg(args, "from_seq");
+        const toSeq = readNumberArg(args, "to_seq");
+        const signal = desktopOperationSignal();
+        return manager.replayComputerRecording(context.callerThreadId, recordingId, {
+          ...(execute !== undefined ? { execute } : {}),
+          ...(fromSeq !== undefined ? { fromSeq } : {}),
+          ...(toSeq !== undefined ? { toSeq } : {}),
+          ...(signal !== undefined ? { signal } : {}),
+          ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+        });
+      }),
+    },
   ];
 }
 

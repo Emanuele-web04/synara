@@ -41,6 +41,7 @@ import {
   type ComputerState,
   type ComputerStatusResult,
   type ComputerTarget,
+  type ComputerUiNode,
   type ComputerVerifyStateResult,
   type ComputerWindow,
   type ComputerZoomResult,
@@ -109,6 +110,32 @@ import {
   cuaMaskedActivationOptIn,
   maskedActivationOptedIn,
 } from "./computerShield.ts";
+import type { ComputerRecordingCapture } from "./computerCallContext.ts";
+import {
+  COMPUTER_RECORDING_CAPTURE_MAX_ENTRIES,
+  ComputerRecordingError,
+  ComputerRecordingStore,
+  computerEnvironmentBase,
+  isProtectedComputerRole,
+  readMacAppBundleVersion,
+  sha256Hex,
+  uiTreeNodePath,
+  uiTreeShapeHash,
+} from "./computerRecording.ts";
+import type {
+  ComputerRecordedResolution,
+  ComputerRecordingEndReason,
+  ComputerRecordingEnvironment,
+  ComputerRecordingFidelity,
+  ComputerRecordingStepInput,
+  ComputerRecordingSummary,
+} from "./computerRecording.ts";
+import type { ComputerRecordingDocument } from "./computerRecording.ts";
+import {
+  classifyComputerReplay,
+  type ComputerReplayOptions,
+  type ComputerReplayReport,
+} from "./computerReplay.ts";
 import { describeComputerUiTree } from "./uiTreeText.ts";
 import { clampTextToLength } from "./utf8Truncation.ts";
 
@@ -271,6 +298,12 @@ export interface ComputerManagerOptions {
    * embeddings get the same behavior the feature had before it existed.
    */
   readonly auditLogPath?: string;
+  /**
+   * Where `computer_recording` session files live — beside the audit log in
+   * the server state dir. Absent disables recording: the tools report it as
+   * unavailable and the capture seam records nothing.
+   */
+  readonly recordingDir?: string;
   readonly transport?: FrameTransport<string, ComputerStreamFrame>;
   /** Injected for tests; the lease is the only clock-dependent state here. */
   readonly now?: () => number;
@@ -464,6 +497,14 @@ export class ComputerManager {
    */
   private lastKnownWindowIds: ReadonlySet<string> | undefined;
   /**
+   * The same cache keyed the other way, so a recording note can attach a
+   * window's title hash and bounds without a second backend read. Filled on
+   * every `readWindows` and `windows-changed` event; a resolution that runs
+   * before either has happened records no window fields rather than paying
+   * for a read inside the dispatch path.
+   */
+  private lastKnownWindows = new Map<string, ComputerWindow>();
+  /**
    * The window ids that existed when the action now running started. The
    * baseline for "did this action open a window?", which is the question a
    * byte-identical post-action screenshot cannot answer on its own.
@@ -478,6 +519,13 @@ export class ComputerManager {
   private readonly controlState: ComputerControlState;
   private readonly auditLog: ComputerAuditLog;
   private readonly grantStore: ComputerGrantStore;
+  /**
+   * The `computer_recording` session store. Always constructed; an absent
+   * `recordingDir` makes `enabled` false, which is what the tools report.
+   */
+  private readonly recordings: ComputerRecordingStore;
+  /** `.app` bundle path → version string, read once per path per process. */
+  private readonly appVersionCache = new Map<string, string | undefined>();
   /**
    * The running-app inventory the denylist's pid resolution reuses; see
    * `COMPUTER_DENYLIST_APP_CACHE_MS` for the bound.
@@ -829,6 +877,278 @@ export class ComputerManager {
     return { revoked, grants: this.grantStore.list() };
   }
 
+  // ── Session recording ────────────────────────────────────────────
+
+  /** Whether `computer_recording` sessions can be opened on this server. */
+  get recordingEnabled(): boolean {
+    return this.recordings.enabled;
+  }
+
+  /**
+   * Open a `computer_recording` session for a thread. The environment
+   * fingerprint is collected here, best-effort — every probe is optional and
+   * a backend that cannot answer one omits the field rather than refusing
+   * the recording.
+   */
+  async startComputerRecording(input: {
+    readonly threadId: string;
+    readonly turnId?: string;
+    readonly fidelity?: ComputerRecordingFidelity;
+  }): Promise<ComputerRecordingSummary> {
+    const environment = await this.recordingEnvironment();
+    return this.recordings.start({
+      threadId: input.threadId,
+      ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
+      fidelity: input.fidelity ?? "redacted",
+      environment,
+    });
+  }
+
+  /** Close a session by id — the stop tool's path. */
+  async stopComputerRecording(
+    recordingId: string,
+    reason: ComputerRecordingEndReason = "stopped",
+  ): Promise<ComputerRecordingSummary | undefined> {
+    return this.recordings.stop(recordingId, reason);
+  }
+
+  /** Close the thread's own open session, when it has one — the no-id stop. */
+  async stopComputerRecordingForThread(
+    threadId: string | undefined,
+    reason: ComputerRecordingEndReason = "stopped",
+  ): Promise<ComputerRecordingSummary | undefined> {
+    const owner = agentThreadId(threadId);
+    return owner === undefined ? undefined : this.recordings.stopForThread(owner, reason);
+  }
+
+  async listComputerRecordings(): Promise<ComputerRecordingSummary[]> {
+    return this.recordings.list();
+  }
+
+  async readComputerRecording(recordingId: string): Promise<ComputerRecordingDocument> {
+    return this.recordings.read(recordingId);
+  }
+
+  async exportComputerRecording(recordingId: string): Promise<string> {
+    return this.recordings.export(recordingId);
+  }
+
+  async deleteComputerRecording(recordingId: string): Promise<boolean> {
+    return this.recordings.delete(recordingId);
+  }
+
+  /**
+   * The capture a tool call attaches to its computer-call context when its
+   * thread has an open session. Undefined otherwise — unrecorded threads
+   * keep the old hot path with no allocation and no reads.
+   */
+  recordingCaptureFor(threadId: string | undefined): ComputerRecordingCapture | undefined {
+    const owner = agentThreadId(threadId);
+    if (owner === undefined) return undefined;
+    if (this.recordings.activeForThread(owner) === undefined) return undefined;
+    return { resolutions: [], dispatches: [] };
+  }
+
+  /** The session's fidelity — the tool layer's lookup when redacting a record. */
+  recordingFidelityFor(threadId: string | undefined): ComputerRecordingFidelity | undefined {
+    const owner = agentThreadId(threadId);
+    return owner === undefined ? undefined : this.recordings.activeForThread(owner)?.fidelity;
+  }
+
+  /**
+   * Append one step record to the thread's open session, under the same
+   * contract {@link recordComputerAudit} keeps: fire-and-forget, and a
+   * thread whose control is off records nothing — not even the refusal that
+   * stopped it.
+   */
+  recordComputerStep(threadId: string | undefined, step: ComputerRecordingStepInput): void {
+    const owner = agentThreadId(threadId);
+    if (owner === undefined) return;
+    if (this.controlDisabled(owner)) return;
+    this.recordings.appendStep(owner, step);
+  }
+
+  /**
+   * Replay a closed recording against the live desktop — see
+   * `computerReplay.ts` for the contract. Runs every step's target back
+   * through the same resolution and denylist paths the live call would take;
+   * `execute: true` re-dispatches mutating steps, and the tool that reaches
+   * here has already taken fresh approval for that.
+   */
+  async replayComputerRecording(
+    threadId: string,
+    recordingId: string,
+    options: ComputerReplayOptions,
+  ): Promise<ComputerReplayReport> {
+    const document = await this.recordings.read(recordingId);
+    const environment = await this.recordingEnvironment();
+    return classifyComputerReplay(this, document, environment, { ...options, threadId });
+  }
+
+  /**
+   * The fingerprint a recording (or a replay's drift check) measures the
+   * desktop against. Every probe is independent and best-effort: this reads
+   * like `getState` does, so a backend that cannot answer the tree or the
+   * app list records the absence rather than failing the session start.
+   */
+  private async recordingEnvironment(): Promise<ComputerRecordingEnvironment> {
+    this.engageBackend();
+    const [availability, screenSize, apps, tree] = await Promise.all([
+      this.backend.availability().catch(() => undefined),
+      this.backend.getScreenSize().catch(() => undefined),
+      this.backend.listApps
+        ?.bind(this.backend)()
+        .catch(() => undefined),
+      this.backend
+        .getState({ includeTree: true })
+        .then((state) => state.root)
+        .catch(() => undefined),
+    ]);
+    const appRows = await Promise.all(
+      (apps ?? []).map(async (app) => {
+        const version = await this.appVersionFor(app);
+        return {
+          name: app.name,
+          ...(app.bundleId !== undefined ? { bundleId: app.bundleId } : {}),
+          ...(version !== undefined ? { version } : {}),
+        };
+      }),
+    );
+    return {
+      ...computerEnvironmentBase(),
+      ...(availability?.kind === "available" && availability.backend !== undefined
+        ? { backend: availability.backend }
+        : {}),
+      dialect: this.agentDialect,
+      computerId: this.computerId,
+      ...(screenSize !== undefined
+        ? {
+            display: {
+              width: screenSize.width,
+              height: screenSize.height,
+              ...(screenSize.scale !== undefined ? { scale: screenSize.scale } : {}),
+            },
+            displayHash: sha256Hex(
+              `${screenSize.width}x${screenSize.height}@${screenSize.scale ?? 1}`,
+            ),
+          }
+        : {}),
+      ...(tree !== undefined ? { elementTreeHash: uiTreeShapeHash(tree) } : {}),
+      apps: appRows,
+    };
+  }
+
+  /**
+   * The bundle version a fingerprint records for an app — the Info.plist
+   * string on macOS, the driver's reported bundle mtime elsewhere, read once
+   * per bundle path per process. Best-effort like everything it feeds.
+   */
+  private async appVersionFor(app: ComputerApp): Promise<string | undefined> {
+    const key = app.launchPath ?? app.name;
+    if (this.appVersionCache.has(key)) return this.appVersionCache.get(key);
+    const version =
+      (await readMacAppBundleVersion(app.launchPath).catch(() => undefined)) ?? app.lastUsed;
+    if (this.appVersionCache.size < 256) this.appVersionCache.set(key, version);
+    return version;
+  }
+
+  // ── Recording notes ──────────────────────────────────────────────
+
+  /**
+   * Push one resolution onto the active call's recording capture, capped so
+   * a pathological call cannot grow a record without limit. Never throws —
+   * a note that cannot be built is simply absent from the record.
+   */
+  private noteResolution(note: ComputerRecordedResolution): void {
+    try {
+      const capture = currentComputerCall()?.recording;
+      if (capture === undefined) return;
+      if (capture.resolutions.length < COMPUTER_RECORDING_CAPTURE_MAX_ENTRIES) {
+        capture.resolutions.push(note);
+      }
+    } catch {
+      // Evidence collection must never fail the action it records.
+    }
+  }
+
+  /**
+   * The window half of a resolution note — title hashed, bounds verbatim.
+   * App/bundle identity resolves through the denylist's cached inventory so
+   * the note pays for no extra process enumeration.
+   */
+  private async windowResolutionFields(
+    window: ComputerWindow | undefined,
+  ): Promise<
+    Pick<
+      ComputerRecordedResolution,
+      "windowId" | "pid" | "app" | "bundleId" | "appVersion" | "windowTitleHash" | "windowBounds"
+    >
+  > {
+    if (window === undefined) return {};
+    const owner =
+      window.pid === undefined
+        ? undefined
+        : (await this.runningAppsForDenylist()).find((app) => app.pid === window.pid);
+    const appVersion = owner === undefined ? undefined : await this.appVersionFor(owner);
+    return {
+      windowId: window.id,
+      ...(window.pid !== undefined ? { pid: window.pid } : {}),
+      ...(window.appName !== undefined ? { app: window.appName } : {}),
+      ...(owner?.bundleId !== undefined ? { bundleId: owner.bundleId } : {}),
+      ...(appVersion !== undefined ? { appVersion } : {}),
+      windowTitleHash: sha256Hex(window.title),
+      ...(window.bounds !== undefined ? { windowBounds: window.bounds } : {}),
+    };
+  }
+
+  /**
+   * What a semantic resolution established: the node path a replay re-walks,
+   * the role, a hashed label, the secure-field marker, and the owning
+   * window's subtree hash at resolution time.
+   */
+  private async noteSemanticResolution(
+    resolved: ComputerResolvedTarget,
+    root: ComputerUiNode,
+  ): Promise<void> {
+    try {
+      const node = resolved.node;
+      const window = node.windowId === null ? undefined : this.lastKnownWindows.get(node.windowId);
+      const nodePath = uiTreeNodePath(root, node);
+      this.noteResolution({
+        via: "semantic",
+        ...(await this.windowResolutionFields(window)),
+        point: resolved.point,
+        ...(nodePath !== undefined ? { nodePath } : {}),
+        ...(node.role.length > 0 ? { role: node.role } : {}),
+        ...(node.label !== null && node.label.length > 0
+          ? { labelHash: sha256Hex(node.label) }
+          : {}),
+        ...(isProtectedComputerRole(node.role) ? { secure: true } : {}),
+        elementTreeHash: uiTreeShapeHash(root, node.windowId ?? undefined),
+      });
+    } catch {
+      // Evidence collection must never fail the action it records.
+    }
+  }
+
+  /** What a coordinate/window/keyboard/app resolution established. */
+  private async noteTargetResolution(
+    via: ComputerRecordedResolution["via"],
+    window: ComputerWindow | undefined,
+    extra?: Partial<ComputerRecordedResolution>,
+  ): Promise<void> {
+    try {
+      if (currentComputerCall()?.recording === undefined) return;
+      this.noteResolution({
+        via,
+        ...(await this.windowResolutionFields(window)),
+        ...extra,
+      });
+    } catch {
+      // Evidence collection must never fail the action it records.
+    }
+  }
+
   /**
    * The denylist check for the admission/consent keys, which are the raw
    * strings a tool call declared — an app name, a bundle id, an executable
@@ -1087,6 +1407,10 @@ export class ComputerManager {
     // Settle pending approval prompts synchronously: a mid-turn Off must not
     // leave a prompt hanging until the gate's five-minute timeout.
     computerApprovalGate.cancelThread(threadId);
+    // An open session ends with the control it recorded — fire-and-forget
+    // like every other evidence write, and idempotent against the
+    // `thread-removed` stop that may already have claimed the close.
+    void this.recordings.stopForThread(threadId, "control-revoked").catch(() => undefined);
     this.authorityRevocations
       .get(threadId)
       ?.abort(
@@ -1196,6 +1520,10 @@ export class ComputerManager {
     this.controlState = new ComputerControlState(options.controlStatePath);
     // Beside the control state file: same directory, same local-only lifetime.
     this.auditLog = new ComputerAuditLog(options.auditLogPath);
+    this.recordings = new ComputerRecordingStore({
+      dir: options.recordingDir,
+      now: () => new Date(this.now()),
+    });
     // Beside the control state: same directory, same atomicity expectations.
     this.scrollGearingFile = new ScrollGearingFile(
       options.controlStatePath === undefined
@@ -1250,6 +1578,7 @@ export class ComputerManager {
       this.backendUnsubscribe = options.backend.onEvent((event) => {
         if (event.type === "windows-changed") {
           this.lastKnownWindowIds = windowIdSet(event.windows);
+          this.lastKnownWindows = new Map(event.windows.map((window) => [window.id, window]));
           for (const state of this.threads.values()) state.windows = event.windows;
           this.emit({
             type: "computer.windows-changed",
@@ -1401,6 +1730,7 @@ export class ComputerManager {
   private async readWindows(): Promise<readonly ComputerWindow[]> {
     const windows = await this.backend.listWindows();
     this.lastKnownWindowIds = windowIdSet(windows);
+    this.lastKnownWindows = new Map(windows.map((window) => [window.id, window]));
     return windows;
   }
 
@@ -1926,6 +2256,15 @@ export class ComputerManager {
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.launchApp(app, args, options),
       );
+      // Launch resolves no desktop target ahead of dispatch — the app name is
+      // the address — so the note records the launch and the window it
+      // produced, which is what a replay re-checks.
+      this.noteResolution({
+        via: "app",
+        app,
+        ...(result.window?.pid !== undefined ? { pid: result.window.pid } : {}),
+        ...(result.window != null ? { windowId: result.window.id } : {}),
+      });
       this.emitAction(threadId, "computer_launch_app");
       if (!result.window && waitForWindowMs > 0) {
         const window = await waitForWindow(
@@ -1964,6 +2303,7 @@ export class ComputerManager {
       if (!target) throw windowNotFoundError(windowId);
       this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
       await this.assertWindowInputAllowedWindow(threadId, target);
+      await this.noteTargetResolution("window", target);
       const result = await timedComputerLeg("dispatch", () => setter(windowId, frame));
       return this.actionResult(threadId, "computer_set_window_frame", undefined, result, windowId);
     });
@@ -1982,6 +2322,7 @@ export class ComputerManager {
       if (!target) throw windowNotFoundError(windowId);
       this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
       await this.assertWindowInputAllowedWindow(threadId, target);
+      await this.noteTargetResolution("window", target);
       const result = await timedComputerLeg("dispatch", () => invoke(windowId, path));
       return this.actionResult(threadId, "computer_invoke_menu", undefined, result, windowId);
     });
@@ -2007,6 +2348,7 @@ export class ComputerManager {
       if (!target) throw windowNotFoundError(windowId);
       this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
       await this.assertWindowInputAllowedWindow(threadId, target);
+      await this.noteTargetResolution("window", target);
       const result = await timedComputerLeg("dispatch", () => setter(windowId, minimized));
       return this.actionResult(
         threadId,
@@ -2041,6 +2383,11 @@ export class ComputerManager {
         return apps?.find((app) => app.pid === pid && app.running)?.name;
       });
       this.assertDrivenAppAdmitted(threadId, named ?? `pid ${pid}`);
+      this.noteResolution({
+        via: "process",
+        pid,
+        ...(named !== undefined ? { app: named } : {}),
+      });
       if (agentThreadId(threadId) !== undefined) {
         const denied = await this.deniedMatchForPid(pid, named);
         if (denied) throw new ComputerDenylistError(denied.app, denied.matched);
@@ -2084,6 +2431,7 @@ export class ComputerManager {
       if (!target?.pid) throw windowNotFoundError(windowId);
       this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
       await this.assertWindowInputAllowedWindow(threadId, target);
+      await this.noteTargetResolution("window", target);
       const result = await timedComputerLeg("dispatch", () => kill(target.pid!));
       return this.actionResult(threadId, "computer_kill_app", undefined, result, windowId);
     });
@@ -2303,6 +2651,7 @@ export class ComputerManager {
       }
       this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
       await this.assertWindowInputAllowedWindow(threadId, target);
+      await this.noteTargetResolution("window", target);
       await timedComputerLeg("dispatch", async () => {
         await raise(windowId);
         // Aiming after the raise, never before: a raise that refuses must not leave
@@ -2947,9 +3296,14 @@ export class ComputerManager {
     await this.assertWindowInputAllowed(threadId, windowId);
     const state = await this.backend.getState({ includeTree: false });
     const match = state.root ? resolveComputerWindowTarget(state.root, windowId) : undefined;
-    if (match) return { point: match.point, windowId };
-    const windows = await this.readWindows();
-    const window = windows.find((candidate) => candidate.id === windowId);
+    const windows = match ? undefined : await this.readWindows();
+    const window =
+      windows?.find((candidate) => candidate.id === windowId) ??
+      this.lastKnownWindows.get(windowId);
+    if (match) {
+      await this.noteTargetResolution("window", window, { point: match.point });
+      return { point: match.point, windowId };
+    }
     if (!window) throw windowNotFoundError(windowId);
     const bounds = window.bounds;
     if (!bounds) {
@@ -2960,13 +3314,12 @@ export class ComputerManager {
           "point inside it cannot be chosen. Scroll at x/y coordinates instead.",
       });
     }
-    return {
-      point: {
-        x: bounds.x + bounds.width / 2,
-        y: bounds.y + bounds.height / 2,
-      },
-      windowId,
+    const point = {
+      x: bounds.x + bounds.width / 2,
+      y: bounds.y + bounds.height / 2,
     };
+    await this.noteTargetResolution("window", window, { point });
+    return { point, windowId };
   }
 
   private async injectScroll(
@@ -3982,7 +4335,9 @@ export class ComputerManager {
     this.suspendedThreads.add(threadId);
     // A rejected stop (e.g. preview cleanup failing inside the release) must
     // not skip removal — a removed thread that keeps its lease can reappear
-    // as the desktop's owner until the idle backstop fires.
+    // as the desktop's owner until the idle backstop fires. The recording
+    // closes first so its end reason is `thread-removed`, not the revocation's.
+    await this.recordings.stopForThread(threadId, "thread-removed").catch(() => undefined);
     await this.revokeControl(threadId).catch(() => undefined);
     this.publishChains.delete(threadId);
     this.threads.delete(threadId);
@@ -4035,8 +4390,10 @@ export class ComputerManager {
     await this.backend.dispose();
     this.listeners.clear();
     await this.grantStore.flush().catch(() => undefined);
-    // Queued audit appends settle last: nothing after this writes, so a flush
-    // here cannot hide a late record the way one earlier could.
+    // Open sessions close as `disposed` and their queued appends drain before
+    // the audit log's: nothing after this writes, so a flush here cannot hide
+    // a late record the way one earlier could.
+    await this.recordings.stopAll("disposed").catch(() => undefined);
     await this.auditLog.flush();
   }
 
@@ -4109,6 +4466,7 @@ export class ComputerManager {
             await this.assertWindowInputAllowedWindow(threadId, window);
           }
         }
+        await this.noteTargetResolution("coordinate", topmost, { point });
         return { point };
       }
       const occlusion = await this.scopedPointOcclusion(point, target.windowId);
@@ -4134,6 +4492,11 @@ export class ComputerManager {
           await this.assertWindowInputAllowedWindow(threadId, window);
         }
       }
+      await this.noteTargetResolution(
+        "coordinate",
+        occlusion.windows.find((window) => window.id === target.windowId),
+        { point },
+      );
       return { point, windowId: target.windowId, covering: occlusion.covering };
     }
     if (hasSemanticFields(target)) {
@@ -4322,9 +4685,11 @@ export class ComputerManager {
   ): Promise<void> {
     if (windowId === undefined) return;
     const windows = await this.readWindows();
-    if (!windows.some((candidate) => candidate.id === windowId)) {
+    const window = windows.find((candidate) => candidate.id === windowId);
+    if (window === undefined) {
       throw windowNotFoundError(windowId);
     }
+    await this.noteTargetResolution("keyboard", window);
     await this.prepareResolvedTarget({ windowId }, threadId);
   }
 
@@ -4426,12 +4791,16 @@ export class ComputerManager {
         notFound: true,
       });
     }
-    const resolve = (root: NonNullable<ComputerState["root"]>): ComputerResolvedTarget => ({
-      target,
-      ...(unnamedTarget
-        ? resolveComputerUniqueTextTarget(root, target.windowId!, allowUniqueTextTarget)
-        : resolveComputerSemanticTarget(root, target, allowUniqueTextTarget)),
-    });
+    const resolve = (root: NonNullable<ComputerState["root"]>): ComputerResolvedTarget => {
+      const resolved: ComputerResolvedTarget = {
+        target,
+        ...(unnamedTarget
+          ? resolveComputerUniqueTextTarget(root, target.windowId!, allowUniqueTextTarget)
+          : resolveComputerSemanticTarget(root, target, allowUniqueTextTarget)),
+      };
+      void this.noteSemanticResolution(resolved, root);
+      return resolved;
+    };
     try {
       return resolve(state.root);
     } catch (error) {
@@ -4492,6 +4861,31 @@ export class ComputerManager {
     const call = currentComputerCall();
     call?.timing?.setOperation(action);
     call?.recordActionProof(result);
+    // The dispatch note rides this funnel: every backend dispatch a call
+    // performs ends here, so the record shows the wire action and the
+    // delivery ladder verdict it returned — capped like the resolutions.
+    const capture = call?.recording;
+    if (
+      capture !== undefined &&
+      capture.dispatches.length < COMPUTER_RECORDING_CAPTURE_MAX_ENTRIES
+    ) {
+      capture.dispatches.push({
+        action,
+        ...(merged.windowId !== undefined ? { windowId: merged.windowId } : {}),
+        ...(merged.point !== undefined ? { point: merged.point } : {}),
+        ...(merged.delivery !== undefined
+          ? {
+              delivery: {
+                ...(merged.delivery.path !== undefined ? { path: merged.delivery.path } : {}),
+                ...(merged.delivery.verified !== undefined
+                  ? { verified: merged.delivery.verified }
+                  : {}),
+                ...(merged.delivery.effect !== undefined ? { effect: merged.delivery.effect } : {}),
+              },
+            }
+          : {}),
+      });
+    }
     this.emitAction(threadId, action, merged);
     // The pane's agent-cursor dot is fed from here, the one funnel every
     // pointer action passes through: without it the field stayed declared but
