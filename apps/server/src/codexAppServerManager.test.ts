@@ -1833,6 +1833,7 @@ describe("startSession", () => {
         runtimeMode: "full-access",
         cwd,
         resumeCursor: { threadId: "provider-thread" },
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
       });
       expect(firstSession).toMatchObject({
         status: "ready",
@@ -1850,6 +1851,7 @@ describe("startSession", () => {
         runtimeMode: "full-access",
         cwd,
         resumeCursor: firstSession.resumeCursor,
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
       });
       expect(resumedSession).toMatchObject({
         status: "ready",
@@ -1907,6 +1909,7 @@ describe("startSession", () => {
         runtimeMode: "auto",
         cwd,
         forkSourceResumeCursor: { threadId: "provider-source-thread" },
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
       });
 
       expect(session).toMatchObject({
@@ -1951,6 +1954,7 @@ describe("startSession", () => {
           runtimeMode: "full-access",
           cwd,
           resumeCursor: { threadId: "provider-thread" },
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
         })
         .catch((error: unknown) => error);
       expect(startError).toBeInstanceOf(Error);
@@ -2290,6 +2294,7 @@ describe("startSession", () => {
           provider: "codex",
           runtimeMode: "full-access",
           resumeCursor: { threadId: "provider-thread" },
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
         }),
       ).rejects.toThrow("Codex excludeTurns version gate");
       expect(versionCheck).toHaveBeenCalledTimes(1);
