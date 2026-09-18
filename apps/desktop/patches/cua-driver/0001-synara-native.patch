@@ -935,13 +935,13 @@ index 67e123b..4cfba70 100644
  
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
 new file mode 100644
-index 0000000..64225a0
+index 0000000..16bdc9b
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
 @@ -0,0 +1,330 @@
-+//! Compact pointer based on the black arrow / white outline in Computer Use's
-+//! SoftwareCursor artwork. Drawn as a vector at the actual input hotspot, with
-+//! no badge from the source asset and no theme morph, rotation, or click bounce.
++//! Compact pointer arrow drawn as a vector path at the actual input hotspot:
++//! white outline, dark fill, no badge, and no theme morph, rotation, or click
++//! bounce.
 +
 +use std::sync::OnceLock;
 +use tiny_skia::{Color, FillRule, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
