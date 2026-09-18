@@ -1,8 +1,6 @@
 export const PROJECT_AGENT_WORKER_HEALTH_INTERVAL_MS = 60_000;
 
-export function isFailedWorkerSessionStatus(
-  status: string | null | undefined,
-): boolean {
+export function isFailedWorkerSessionStatus(status: string | null | undefined): boolean {
   return status === "error" || status === "interrupted" || status === "stopped";
 }
 
@@ -17,8 +15,7 @@ export function isManagedWorkerThread(input: {
 }): boolean {
   if (input.threadId === input.coordinatorThreadId) return false;
   return input.index.some(
-    (entry) =>
-      entry.threadId === input.threadId && !entry.excluded && !entry.archived,
+    (entry) => entry.threadId === input.threadId && !entry.excluded && !entry.archived,
   );
 }
 
@@ -43,20 +40,14 @@ const WORKER_SETTLEMENT_REPORT_EVENTS = new Set([
   "thread.session-stop-requested",
 ]);
 
-export type WorkerSettlementOutcome =
-  "completed" | "failed" | "interrupted" | "updated";
+export type WorkerSettlementOutcome = "completed" | "failed" | "interrupted" | "updated";
 
 export function workerInboxReportPath(threadId: string): string {
   return `inbox/${threadId}/${WORKER_INBOX_REPORT_FILE}`;
 }
 
-export function shouldMaterializeWorkerSettlementReport(
-  eventType: string,
-): boolean {
-  return (
-    WORKER_SETTLEMENT_REPORT_EVENTS.has(eventType) ||
-    eventType.startsWith("worker.")
-  );
+export function shouldMaterializeWorkerSettlementReport(eventType: string): boolean {
+  return WORKER_SETTLEMENT_REPORT_EVENTS.has(eventType) || eventType.startsWith("worker.");
 }
 
 export function classifyWorkerSettlement(input: {
@@ -72,11 +63,7 @@ export function classifyWorkerSettlement(input: {
   ) {
     return "interrupted";
   }
-  if (
-    status === "error" ||
-    eventType === "worker.error" ||
-    eventType === "worker.missing"
-  ) {
+  if (status === "error" || eventType === "worker.error" || eventType === "worker.missing") {
     return "failed";
   }
   if (

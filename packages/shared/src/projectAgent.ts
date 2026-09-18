@@ -24,28 +24,16 @@ export function normalizeProjectDocumentPath(rawPath: string): string {
   if (trimmed.length === 0) {
     throw new ProjectAgentPathError("empty", "Document path is empty.");
   }
-  if (
-    trimmed.startsWith("/") ||
-    WINDOWS_DRIVE.test(trimmed) ||
-    trimmed.startsWith("//")
-  ) {
-    throw new ProjectAgentPathError(
-      "absolute",
-      "Document path must be relative.",
-    );
+  if (trimmed.startsWith("/") || WINDOWS_DRIVE.test(trimmed) || trimmed.startsWith("//")) {
+    throw new ProjectAgentPathError("absolute", "Document path must be relative.");
   }
-  const segments = trimmed
-    .split("/")
-    .filter((segment) => segment.length > 0 && segment !== ".");
+  const segments = trimmed.split("/").filter((segment) => segment.length > 0 && segment !== ".");
   if (segments.length === 0) {
     throw new ProjectAgentPathError("empty", "Document path is empty.");
   }
   for (const segment of segments) {
     if (segment === ".." || segment.includes("\0")) {
-      throw new ProjectAgentPathError(
-        "traversal",
-        `Document path rejects segment "${segment}".`,
-      );
+      throw new ProjectAgentPathError("traversal", `Document path rejects segment "${segment}".`);
     }
   }
   return segments.join("/");
@@ -75,9 +63,7 @@ export const PROJECT_CONTEXT_PREVIEW_DOCUMENTS = [
 ] as const;
 
 export function isProjectContextPreviewPath(logicalPath: string): boolean {
-  return PROJECT_CONTEXT_PREVIEW_DOCUMENTS.some(
-    (document) => document.logicalPath === logicalPath,
-  );
+  return PROJECT_CONTEXT_PREVIEW_DOCUMENTS.some((document) => document.logicalPath === logicalPath);
 }
 
 export const INITIAL_PROJECT_DIGEST_SUMMARY = "Coordinator is ready.";
@@ -89,9 +75,7 @@ const GOAL_GATE_DIGEST_SENTENCES = [
   /No worker completion is confirmed\.?/gi,
 ];
 
-export function sanitizeProjectDigestSummary(
-  summary: string | null | undefined,
-): string | null {
+export function sanitizeProjectDigestSummary(summary: string | null | undefined): string | null {
   if (summary == null) return null;
   let next = summary.trim();
   if (next.length === 0) return null;
@@ -102,10 +86,7 @@ export function sanitizeProjectDigestSummary(
     .replace(/\s{2,}/g, " ")
     .replace(/\s+\./g, ".")
     .trim();
-  if (
-    next === "Coordinator is configured." ||
-    next === "Coordinator is configured"
-  ) {
+  if (next === "Coordinator is configured." || next === "Coordinator is configured") {
     return INITIAL_PROJECT_DIGEST_SUMMARY;
   }
   return next.length > 0 ? next : INITIAL_PROJECT_DIGEST_SUMMARY;
@@ -146,9 +127,7 @@ export function truncateToContextBudget(
   readonly characterCount: number;
   readonly truncated: boolean;
 } {
-  const full = sections
-    .map((section) => `## ${section.label}\n${section.text}`)
-    .join("\n\n");
+  const full = sections.map((section) => `## ${section.label}\n${section.text}`).join("\n\n");
   if (full.length <= budget) {
     return { packet: full, characterCount: full.length, truncated: false };
   }
@@ -166,9 +145,7 @@ export function encodeProjectAgentListCursor(input: {
   readonly createdAt: string;
   readonly id: string;
 }): string {
-  return Buffer.from(`${input.createdAt}\t${input.id}`, "utf8").toString(
-    "base64url",
-  );
+  return Buffer.from(`${input.createdAt}\t${input.id}`, "utf8").toString("base64url");
 }
 
 export function decodeProjectAgentListCursor(

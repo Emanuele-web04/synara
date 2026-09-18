@@ -51,24 +51,16 @@ describe("worker health", () => {
   });
 
   it("writes a settlement report path under the worker inbox", () => {
-    expect(workerInboxReportPath("thread-worker")).toBe(
-      "inbox/thread-worker/report.md",
-    );
+    expect(workerInboxReportPath("thread-worker")).toBe("inbox/thread-worker/report.md");
   });
 
   it("materializes reports from settle and health events, not approval prompts", () => {
-    expect(
-      shouldMaterializeWorkerSettlementReport("thread.turn-diff-completed"),
-    ).toBe(true);
-    expect(
-      shouldMaterializeWorkerSettlementReport("thread.session-stop-requested"),
-    ).toBe(true);
+    expect(shouldMaterializeWorkerSettlementReport("thread.turn-diff-completed")).toBe(true);
+    expect(shouldMaterializeWorkerSettlementReport("thread.session-stop-requested")).toBe(true);
     expect(shouldMaterializeWorkerSettlementReport("worker.error")).toBe(true);
-    expect(
-      shouldMaterializeWorkerSettlementReport(
-        "thread.approval-response-requested",
-      ),
-    ).toBe(false);
+    expect(shouldMaterializeWorkerSettlementReport("thread.approval-response-requested")).toBe(
+      false,
+    );
   });
 
   it("classifies quota death as failed and a finished turn as completed", () => {

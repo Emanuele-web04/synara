@@ -21,13 +21,7 @@ export type ProjectFocusRow = {
   readonly state: ProjectFocusRowState;
 };
 
-const OPEN_TASK_STATUSES = new Set([
-  "planned",
-  "ready",
-  "running",
-  "review",
-  "blocked",
-]);
+const OPEN_TASK_STATUSES = new Set(["planned", "ready", "running", "review", "blocked"]);
 
 function firstLine(value: string | null | undefined): string | null {
   const trimmed = value?.trim() ?? "";
@@ -83,11 +77,7 @@ export function projectThreadIndexFocusRows(input: {
   const archived: ProjectFocusRow[] = [];
   for (const thread of input.threads) {
     if (thread.excluded) continue;
-    if (
-      input.coordinatorThreadId &&
-      thread.threadId === input.coordinatorThreadId
-    )
-      continue;
+    if (input.coordinatorThreadId && thread.threadId === input.coordinatorThreadId) continue;
     const title = input.titlesById.get(thread.threadId) ?? "Worker thread";
     const row: ProjectFocusRow = {
       id: thread.threadId,
@@ -107,12 +97,8 @@ export function mergeProjectFocusRows(
   threads: ReturnType<typeof projectThreadIndexFocusRows>,
 ): ReturnType<typeof partitionProjectFocusRows> {
   const seen = new Set(tasks.open.map((row) => row.threadId).filter(Boolean));
-  const extraOpen = threads.open.filter(
-    (row) => !row.threadId || !seen.has(row.threadId),
-  );
-  const archivedIds = new Set(
-    tasks.archived.map((row) => row.threadId).filter(Boolean),
-  );
+  const extraOpen = threads.open.filter((row) => !row.threadId || !seen.has(row.threadId));
+  const archivedIds = new Set(tasks.archived.map((row) => row.threadId).filter(Boolean));
   const extraArchived = threads.archived.filter(
     (row) => !row.threadId || !archivedIds.has(row.threadId),
   );
@@ -143,21 +129,14 @@ export function rewriteThreadIdsAsMarkdownLinks(
   let next = text;
   for (const thread of threads) {
     const escapedId = thread.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const label =
-      thread.title.trim().length > 0 ? thread.title.trim() : "Thread";
+    const label = thread.title.trim().length > 0 ? thread.title.trim() : "Thread";
     const markdownLink = `[${label}](thread://${thread.id})`;
     next = next.replace(
       new RegExp(`\\[([^\\]]+)\\]\\(thread://${escapedId}\\)`, "g"),
       markdownLink,
     );
-    next = next.replace(
-      new RegExp(`thread://${escapedId}(?!\\))`, "g"),
-      markdownLink,
-    );
-    next = next.replace(
-      new RegExp(`(?<!\\[|thread://)\\b${escapedId}\\b`, "g"),
-      markdownLink,
-    );
+    next = next.replace(new RegExp(`thread://${escapedId}(?!\\))`, "g"), markdownLink);
+    next = next.replace(new RegExp(`(?<!\\[|thread://)\\b${escapedId}\\b`, "g"), markdownLink);
   }
   return next;
 }
