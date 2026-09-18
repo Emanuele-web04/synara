@@ -100,7 +100,7 @@ default. Verification notes record what was checked in the tree on branch
   completeness run still needs a live desktop. Raw recording and history
   surfaces stay internal until a privacy policy exists
   (`v2-parity-matrix.md:31`).
-- Update (`wt/record`, unmerged): a structured session-history sibling landed
+- Update (merged on `pr-1227`): a structured session-history sibling landed
   on the same posture — `apps/server/src/computer/computerRecording.ts`
   writes one bounded NDJSON session under `computer-recordings/` in the
   server state dir (2,000 steps / 4 MiB per session; 64 files / 32 MiB /

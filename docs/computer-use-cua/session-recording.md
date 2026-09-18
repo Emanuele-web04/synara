@@ -11,7 +11,7 @@ internal per the parity matrix. Nothing here captures pixels: no screenshot,
 frame, or video bytes are written at any fidelity, and clipboard contents are
 never written at any fidelity.
 
-Status: implemented on branch `wt/record` (unmerged). All behavior below is
+Status: implemented and merged on `pr-1227`. All behavior below is
 verified by `apps/server/src/computer/computerRecording.test.ts`,
 `apps/server/src/computer/computerReplay.test.ts`, and
 `apps/server/src/agentGateway/computerTools.recording.test.ts` against the
