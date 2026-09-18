@@ -3068,6 +3068,113 @@ describe("native preview task lifetime", () => {
   });
 });
 
+describe("preview stills window scope", () => {
+  const task = { threadId: "thread", turnId: "turn" };
+  const signal = () => new AbortController().signal;
+
+  it("paints the window the task last addressed instead of the whole desktop", async () => {
+    const f = fixture();
+    await withComputerTask(task, () =>
+      f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
+    );
+    f.calls.length = 0;
+    const frames: Array<unknown> = [];
+    await f.backend.attachStream((frame) => frames.push(frame));
+    expect(frames).toHaveLength(1);
+    expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(0);
+    expect(f.calls.filter((call) => call.name === "get_window_state")).toHaveLength(1);
+    expect(f.calls.find((call) => call.name === "get_window_state")?.args).toMatchObject({
+      pid: 10,
+      window_id: 20,
+      include_screenshot: true,
+      include_accessibility_tree: false,
+    });
+    await f.backend.dispose();
+  });
+
+  it("falls back to the desktop when the scoped window is gone, and stays there", async () => {
+    const f = fixture();
+    await withComputerTask(task, () =>
+      f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
+    );
+    // The window the task last touched is gone: the driver's answer belongs
+    // to a different window, so the scoped capture refuses and the still
+    // falls back to the whole-desktop overview for that frame and the next.
+    f.captureWindow(999, 999);
+    f.calls.length = 0;
+    await f.backend.attachStream(() => undefined);
+    expect(f.calls.filter((call) => call.name === "get_window_state")).toHaveLength(1);
+    expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(1);
+    f.calls.length = 0;
+    await f.backend.requestKeyframe();
+    expect(f.calls.some((call) => call.name === "get_window_state")).toBe(false);
+    await f.backend.dispose();
+  });
+
+  it.each(["endTask", "stopInput"] as const)(
+    "hands the still back to the desktop after %s",
+    async (boundary) => {
+      const f = fixture();
+      await withComputerTask(task, () =>
+        f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
+      );
+      if (boundary === "endTask") await f.backend.endTask("thread", "turn");
+      else await f.backend.stopInput();
+      f.calls.length = 0;
+      await f.backend.attachStream(() => undefined);
+      expect(f.calls.some((call) => call.name === "get_window_state")).toBe(false);
+      expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(1);
+      await f.backend.dispose();
+    },
+  );
+
+  it("scopes the still to the window a browser bind call names", async () => {
+    const f = fixture();
+    await f.backend.browser!.call({
+      name: "get_browser_state",
+      args: { pid: 10, window_id: 20 },
+      task,
+      mutation: false,
+      signal: signal(),
+    });
+    f.calls.length = 0;
+    await f.backend.attachStream(() => undefined);
+    expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(0);
+    expect(f.calls.find((call) => call.name === "get_window_state")?.args).toMatchObject({
+      pid: 10,
+      window_id: 20,
+    });
+    // The bound window also releases the driver-side task surface: endTask
+    // reaches the host instead of early-returning on an unknown task.
+    await f.backend.endTask("thread", "turn");
+    expect(f.calls.at(-1)).toMatchObject({ method: "end_task", task });
+    await f.backend.dispose();
+  });
+
+  it("a refused bind call never claims the window", async () => {
+    const f = fixture();
+    f.onTool("get_browser_state", () => ({
+      structuredContent: {
+        status: "refused",
+        refusal: { code: "browser_requires_setup", message: "Prepare a browser first." },
+      },
+      content: [{ type: "text", text: "refused (browser_requires_setup)" }],
+    }));
+    await f.backend.browser!.call({
+      name: "get_browser_state",
+      args: { pid: 10, window_id: 20 },
+      task,
+      mutation: false,
+      signal: signal(),
+    });
+    f.calls.length = 0;
+    await f.backend.attachStream(() => undefined);
+    expect(f.calls.some((call) => call.name === "get_window_state")).toBe(false);
+    expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(1);
+    await f.backend.dispose();
+  });
+});
+
 describe("Cua workstream-C speed flags", () => {
   const ENV = ["SYNARA_CUA_PREVIEW_STILL_MS"] as const;
   const savedEnv = new Map<string, string | undefined>();
