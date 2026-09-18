@@ -73,81 +73,96 @@ async function clearStaleSocket(endpoint: string): Promise<void> {
   await unlink(endpoint);
 }
 
-const driverOption = option("--driver") ?? process.env.SYNARA_CUA_DRIVER;
-if (!driverOption) usage("--driver is required (provisioned cua-driver binary or bundle dir).");
+async function main(): Promise<void> {
+  const driverOption = option("--driver") ?? process.env.SYNARA_CUA_DRIVER;
+  if (!driverOption)
+    usage("--driver is required (provisioned cua-driver binary or bundle dir).");
 
-let binaryPath = driverOption;
-if ((await stat(driverOption).catch(() => undefined))?.isDirectory()) {
-  binaryPath = join(driverOption, process.platform === "win32" ? "cua-driver.exe" : "cua-driver");
-}
-await access(binaryPath).catch(() => usage(`driver not found or not readable: ${binaryPath}`));
-
-// The capability is the authority boundary on this socket — it must never
-// travel through argv, which every process on the machine can read.
-const capabilityFile = option("--capability-file");
-let capability = process.env.SYNARA_CUA_HOST_CAPABILITY?.trim() ?? "";
-let capabilitySource = "environment";
-if (!capability && capabilityFile) {
-  capability = (await readFile(capabilityFile, "utf8").catch(() => "")).trim();
-  capabilitySource = capabilityFile;
-}
-if (!capability) {
-  capability = randomBytes(32).toString("base64url");
-  if (capabilityFile) {
-    await writeFile(capabilityFile, capability + "\n", { mode: 0o600 });
-    capabilitySource = capabilityFile;
-  } else {
-    capabilitySource = "generated-below";
-  }
-}
-if (Buffer.byteLength(capability, "utf8") < 32)
-  usage("capability must be at least 32 bytes (SYNARA_CUA_HOST_CAPABILITY or --capability-file).");
-
-const endpoint = option("--socket");
-if (endpoint) await clearStaleSocket(endpoint);
-
-sweepOrphanedCuaDrivers();
-const host = new CuaDriverHost({
-  binaryPath,
-  // TCC's bundle identity has no meaning off macOS; the string still labels
-  // this host in permission replies that surface it.
-  bundleId: `synara-cua-standalone-${process.platform}`,
-  capability,
-  nativeRevision: null,
-  ...(endpoint ? { hostEndpoint: endpoint } : {}),
-  setup: async () => {
-    throw new Error(
-      `This host cannot request ${process.platform} permissions. Grant the driver host ` +
-        "whatever display-server or automation access the platform requires, then retry.",
+  let binaryPath = driverOption;
+  if ((await stat(driverOption).catch(() => undefined))?.isDirectory()) {
+    binaryPath = join(
+      driverOption,
+      process.platform === "win32" ? "cua-driver.exe" : "cua-driver",
     );
-  },
-});
-
-const bound = await host.listen();
-const shutdown = async (signal: string) => {
-  console.info(`[cua-driver-host] ${signal} received; disposing`);
-  await host.dispose().catch(() => undefined);
-  process.exit(0);
-};
-process.on("SIGINT", () => void shutdown("SIGINT"));
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
-
-// Everything the operator needs to wire the server, on stdout. The
-// capability value itself only prints when it was generated with nowhere
-// to store it — a bootstrap path, not a logging channel.
-console.info(`CUA_HOST_ENDPOINT=${bound}`);
-if (capabilitySource === "generated-below") {
-  console.info(`CUA_CAPABILITY=${capability}`);
-  console.info(
-    "[cua-driver-host] generated an ephemeral capability (above). Set it on the server as " +
-      "SYNARA_BROWSER_HOST_CAPABILITY; it dies with this host.",
+  }
+  await access(binaryPath).catch(() =>
+    usage(`driver not found or not readable: ${binaryPath}`),
   );
-} else {
-  console.info(`[cua-driver-host] capability source: ${capabilitySource}`);
+
+  // The capability is the authority boundary on this socket — it must never
+  // travel through argv, which every process on the machine can read.
+  const capabilityFile = option("--capability-file");
+  let capability = process.env.SYNARA_CUA_HOST_CAPABILITY?.trim() ?? "";
+  let capabilitySource = "environment";
+  if (!capability && capabilityFile) {
+    capability = (await readFile(capabilityFile, "utf8").catch(() => "")).trim();
+    capabilitySource = capabilityFile;
+  }
+  if (!capability) {
+    capability = randomBytes(32).toString("base64url");
+    if (capabilityFile) {
+      await writeFile(capabilityFile, capability + "\n", { mode: 0o600 });
+      capabilitySource = capabilityFile;
+    } else {
+      capabilitySource = "generated-below";
+    }
+  }
+  if (Buffer.byteLength(capability, "utf8") < 32)
+    usage(
+      "capability must be at least 32 bytes (SYNARA_CUA_HOST_CAPABILITY or --capability-file).",
+    );
+
+  const endpoint = option("--socket");
+  if (endpoint) await clearStaleSocket(endpoint);
+
+  sweepOrphanedCuaDrivers();
+  const host = new CuaDriverHost({
+    binaryPath,
+    // TCC's bundle identity has no meaning off macOS; the string still labels
+    // this host in permission replies that surface it.
+    bundleId: `synara-cua-standalone-${process.platform}`,
+    capability,
+    nativeRevision: null,
+    ...(endpoint ? { hostEndpoint: endpoint } : {}),
+    setup: async () => {
+      throw new Error(
+        `This host cannot request ${process.platform} permissions. Grant the driver host ` +
+          "whatever display-server or automation access the platform requires, then retry.",
+      );
+    },
+  });
+
+  const bound = await host.listen();
+  const shutdown = async (signal: string) => {
+    console.info(`[cua-driver-host] ${signal} received; disposing`);
+    await host.dispose().catch(() => undefined);
+    process.exit(0);
+  };
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+  // Everything the operator needs to wire the server, on stdout. The
+  // capability value itself only prints when it was generated with nowhere
+  // to store it — a bootstrap path, not a logging channel.
+  console.info(`CUA_HOST_ENDPOINT=${bound}`);
+  if (capabilitySource === "generated-below") {
+    console.info(`CUA_CAPABILITY=${capability}`);
+    console.info(
+      "[cua-driver-host] generated an ephemeral capability (above). Set it on the server as " +
+        "SYNARA_BROWSER_HOST_CAPABILITY; it dies with this host.",
+    );
+  } else {
+    console.info(`[cua-driver-host] capability source: ${capabilitySource}`);
+  }
+  console.info(
+    "[cua-driver-host] server wiring: SYNARA_CUA_HOST_SOCKET=" +
+      bound +
+      " SYNARA_BROWSER_HOST_CAPABILITY=<capability>",
+  );
+  console.info(`[cua-driver-host] driver: ${basename(binaryPath)} (unpatched upstream)`);
 }
-console.info(
-  "[cua-driver-host] server wiring: SYNARA_CUA_HOST_SOCKET=" +
-    bound +
-    " SYNARA_BROWSER_HOST_CAPABILITY=<capability>",
-);
-console.info(`[cua-driver-host] driver: ${basename(binaryPath)} (unpatched upstream)`);
+
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
