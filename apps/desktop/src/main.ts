@@ -56,11 +56,12 @@ import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
+  desktopUpdateChannel,
   SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
-  SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   resolveSynaraDesktopFlavor,
   synaraDesktopIdentity,
+  type SynaraDesktopFlavor,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
 import { applyShellEnvironmentHydrationMarker } from "@synara/shared/shell";
@@ -314,10 +315,37 @@ const shellEnvironmentSync = syncShellEnvironment();
 
 const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
+const ROOT_DIR = Path.resolve(__dirname, "../../..");
+
+function resolveEmbeddedFlavor(): SynaraDesktopFlavor | null {
+  const packageJsonPath = Path.join(resolveAppRoot(), "package.json");
+  if (!FS.existsSync(packageJsonPath)) {
+    return null;
+  }
+
+  try {
+    const raw = FS.readFileSync(packageJsonPath, "utf8");
+    // SAFETY: JSON.parse returns any; only the three known flavor literals are
+    // read, and each is compared by value before it is returned.
+    const parsed = JSON.parse(raw) as { synaraFlavor?: unknown };
+    if (
+      parsed.synaraFlavor === "production" ||
+      parsed.synaraFlavor === "beta" ||
+      parsed.synaraFlavor === "canary"
+    ) {
+      return parsed.synaraFlavor;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
+const embeddedFlavor = app.isPackaged ? resolveEmbeddedFlavor() : null;
 const desktopFlavor = resolveSynaraDesktopFlavor({
   isDevelopment,
-  requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
+  requestedFlavor: embeddedFlavor ?? process.env.SYNARA_DESKTOP_FLAVOR,
   allowDevelopmentOverride: requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
@@ -329,7 +357,6 @@ const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.jso
 const DESKTOP_APP_ICON_PATH = Path.join(STATE_DIR, "desktop-app-icon");
 const DESKTOP_CUSTOM_TITLE_BAR_PATH = Path.join(STATE_DIR, "desktop-custom-title-bar.json");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
-const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_USER_MODEL_ID = desktopIdentity.bundleId;
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
@@ -376,7 +403,7 @@ const POSIX_BACKEND_TERMINATE_DELAY_MS = 15_000;
 const POSIX_BACKEND_FORCE_KILL_DELAY_MS = 18_000;
 const POSIX_BACKEND_SHUTDOWN_TIMEOUT_MS = 20_000;
 const BACKEND_MAX_OLD_SPACE_ENV_KEYS = ["SYNARA_BACKEND_MAX_OLD_SPACE_MB"] as const;
-const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
+const DESKTOP_UPDATE_ALLOW_PRERELEASE = desktopFlavor === "beta";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
 const DESKTOP_MENU_MIN_ZOOM_FACTOR = 0.25;
@@ -544,7 +571,11 @@ const desktopRuntimeInfo = resolveDesktopRuntimeInfo({
   runningUnderArm64Translation: app.runningUnderARM64Translation === true,
 });
 const initialUpdateState = (): DesktopUpdateState =>
-  createInitialDesktopUpdateState(app.getVersion(), desktopRuntimeInfo);
+  createInitialDesktopUpdateState(
+    app.getVersion(),
+    desktopRuntimeInfo,
+    desktopFlavor === "development" ? "production" : desktopFlavor,
+  );
 
 function logTimestamp(): string {
   return new Date().toISOString();
@@ -3412,7 +3443,11 @@ function configureAutoUpdater(): void {
     githubUpdateSource === null ? null : buildGitHubReleasesPageUrl(githubUpdateSource);
   const enabled = shouldEnableAutoUpdates();
   setUpdateState({
-    ...createInitialDesktopUpdateState(app.getVersion(), desktopRuntimeInfo),
+    ...createInitialDesktopUpdateState(
+      app.getVersion(),
+      desktopRuntimeInfo,
+      desktopFlavor === "development" ? "production" : desktopFlavor,
+    ),
     enabled,
     status: enabled ? "idle" : "disabled",
     releaseUrl,
@@ -3434,7 +3469,7 @@ function configureAutoUpdater(): void {
   autoUpdater.autoInstallOnAppQuit = false;
   // The dedicated channel keeps the permanent compatibility release on the
   // default feed while Synara versions advance independently.
-  autoUpdater.channel = SYNARA_DESKTOP_UPDATE_CHANNEL;
+  autoUpdater.channel = desktopUpdateChannel(desktopFlavor);
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
   // Match electron-updater's native GitHub provider path; the packaged

@@ -28,6 +28,7 @@ export interface PackagedDesktopStartupOptions {
   readonly arch: string;
   readonly version: string;
   readonly timeoutMs: number;
+  readonly executableName: string;
 }
 
 export function parsePackagedDesktopStartupArgs(
@@ -42,7 +43,14 @@ export function parsePackagedDesktopStartupArgs(
     }
     values.set(name, value);
   }
-  const known = new Set(["--assets-dir", "--platform", "--arch", "--version", "--timeout-ms"]);
+  const known = new Set([
+    "--assets-dir",
+    "--platform",
+    "--arch",
+    "--version",
+    "--timeout-ms",
+    "--executable-name",
+  ]);
   for (const name of values.keys()) {
     if (!known.has(name)) throw new Error(`Unknown packaged startup argument: ${name}.`);
   }
@@ -65,6 +73,7 @@ export function parsePackagedDesktopStartupArgs(
     arch: required("--arch"),
     version: required("--version"),
     timeoutMs,
+    executableName: values.get("--executable-name")?.trim() || "synara",
   };
 }
 
@@ -149,7 +158,11 @@ function prepareMacLaunch(assetsDirectory: string, extractionRoot: string): Laun
   };
 }
 
-function prepareLinuxLaunch(assetsDirectory: string, extractionRoot: string): LaunchCommand {
+function prepareLinuxLaunch(
+  assetsDirectory: string,
+  extractionRoot: string,
+  executableName: string,
+): LaunchCommand {
   const collectedAppImage = requireSingleAsset(assetsDirectory, ".AppImage");
   const appImage = join(extractionRoot, basename(collectedAppImage));
   copyFileSync(collectedAppImage, appImage);
@@ -165,7 +178,7 @@ function prepareLinuxLaunch(assetsDirectory: string, extractionRoot: string): La
     args: ["-a", appRun, "--no-sandbox", "--disable-gpu"],
     cwd: join(extractionRoot, "squashfs-root"),
     runtime: {
-      executable: join(extractionRoot, "squashfs-root", "synara"),
+      executable: join(extractionRoot, "squashfs-root", executableName),
       resourcesDirectory: join(extractionRoot, "squashfs-root", "resources"),
     },
   };
@@ -188,10 +201,12 @@ function prepareWindowsLaunch(assetsDirectory: string, extractionRoot: string): 
   }
   runCommand("7z", ["x", "-y", `-o${applicationRoot}`, applicationArchives[0]!]);
   const executables = findFiles(applicationRoot, (candidate) =>
-    /[/\\]Synara\.exe$/i.test(candidate),
+    /[/\\]Synara[^/\\]*\.exe$/i.test(candidate),
   );
   if (executables.length !== 1) {
-    throw new Error(`Expected one extracted Synara.exe, found ${executables.length}.`);
+    throw new Error(
+      `Expected one extracted Synara application executable, found ${executables.length}.`,
+    );
   }
   return {
     command: executables[0]!,
@@ -244,7 +259,7 @@ function prepareLaunch(
     return prepareMacLaunch(options.assetsDirectory, extractionRoot);
   }
   if (options.platform === "linux") {
-    return prepareLinuxLaunch(options.assetsDirectory, extractionRoot);
+    return prepareLinuxLaunch(options.assetsDirectory, extractionRoot, options.executableName);
   }
   return prepareWindowsLaunch(options.assetsDirectory, extractionRoot);
 }

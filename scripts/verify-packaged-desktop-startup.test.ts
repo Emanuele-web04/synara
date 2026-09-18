@@ -51,7 +51,23 @@ describe("packaged desktop startup verification", () => {
       arch: "x64",
       version: "1.2.3",
       timeoutMs: 60_000,
+      executableName: "synara",
     });
+
+    expect(
+      parsePackagedDesktopStartupArgs([
+        "--assets-dir",
+        "./release-publish",
+        "--platform",
+        "linux",
+        "--arch",
+        "x64",
+        "--version",
+        "1.2.3",
+        "--executable-name",
+        "synara-beta",
+      ]),
+    ).toMatchObject({ executableName: "synara-beta" });
 
     expect(() =>
       parsePackagedDesktopStartupArgs([
