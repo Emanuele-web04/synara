@@ -165,6 +165,25 @@ export type ComputerBackendEvent =
   | { readonly type: "windows-changed"; readonly windows: readonly ComputerWindow[] }
   | { readonly type: "health-changed"; readonly health: ComputerHealth }
   | { readonly type: "capabilities-changed"; readonly capabilities: ComputerCapabilities }
+  /**
+   * The host proved a desktop availability interruption — screen lock,
+   * system sleep, or a session switch — ran since the previous reply, even
+   * when the cycle engaged and released between the two (the host's
+   * interruption count advanced). Consent granted before the interruption
+   * must not silently authorize the post-interruption desktop: the manager
+   * revokes standing task grants on this event so the next mutating call
+   * republishes its prompt. Input itself already fails closed at the host —
+   * this event is the consent half of the same boundary.
+   */
+  | {
+      readonly type: "desktop-interrupted";
+      /**
+       * The pause reasons the host reported active at reply time
+       * (`"screen-lock"`, `"system-sleep"`, `"user-session"`), already empty
+       * when the interruption cycle ended before the reply that carried it.
+       */
+      readonly pauses: readonly string[];
+    }
   | { readonly type: "frame"; readonly frame: ComputerStreamFrame };
 
 /**

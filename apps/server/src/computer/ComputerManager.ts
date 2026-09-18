@@ -978,6 +978,14 @@ export class ComputerManager {
           this.republishAllThreads();
         } else if (event.type === "capabilities-changed") {
           this.republishAllThreads();
+        } else if (event.type === "desktop-interrupted") {
+          // Locked-use resume policy: consent granted before a lock/sleep/
+          // session interruption does not carry across it. The host already
+          // refuses input until a fresh model observation lands; revoking
+          // the standing grants here adds the re-auth half — the next
+          // mutating call republishes its prompt instead of riding the
+          // pre-interruption "Allow Computer for this task" answer.
+          computerApprovalGate.revokeTaskGrants();
         }
       });
     }

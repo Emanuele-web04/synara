@@ -278,4 +278,48 @@ describe("ComputerApprovalGate", () => {
     gate.respond("dismiss", requestId, "accept");
     await expect(decision).resolves.toBe(true);
   });
+
+  it("a desktop interruption revokes grants but keeps declines and live prompts", async () => {
+    const gate = new ComputerApprovalGate();
+    const prompts = new Map<string, string[]>();
+    const input = (threadId: string) => ({
+      threadId,
+      turnId: "turn",
+      signal: new AbortController().signal,
+      publish: async (id: string, decision?: string) => {
+        if (decision === undefined) {
+          const ids = prompts.get(threadId) ?? [];
+          ids.push(id);
+          prompts.set(threadId, ids);
+        }
+      },
+    });
+    // One thread holds a standing grant, another holds a standing decline,
+    // and a third's prompt is still open when the interruption lands.
+    const granted = gate.requestTask(input("granted"));
+    gate.respond("granted", prompts.get("granted")![0]!, "accept");
+    expect(await granted).toBe(true);
+    const declined = gate.requestTask(input("declined"));
+    gate.respond("declined", prompts.get("declined")![0]!, "decline");
+    expect(await declined).toBe(false);
+    const pending = gate.requestTask(input("pending"));
+    expect(prompts.get("pending")).toHaveLength(1);
+    gate.revokeTaskGrants();
+    // The grant is gone: the next call republishes the prompt instead of
+    // riding the pre-interruption answer.
+    const reprompted = gate.requestTask(input("granted"));
+    expect(prompts.get("granted")).toHaveLength(2);
+    gate.respond("granted", prompts.get("granted")![1]!, "accept");
+    expect(await reprompted).toBe(true);
+    // The decline stays declined without a new prompt: a refusal is not the
+    // authority a lock needs to break.
+    expect(await gate.requestTask(input("declined"))).toBe(false);
+    expect(prompts.get("declined")).toHaveLength(1);
+    // The still-open prompt survives: its answer can only postdate the
+    // interruption, so accepting it now is the re-auth itself.
+    gate.respond("pending", prompts.get("pending")![0]!, "accept");
+    expect(await pending).toBe(true);
+    expect(await gate.requestTask(input("pending"))).toBe(true);
+    expect(prompts.get("pending")).toHaveLength(1);
+  });
 });

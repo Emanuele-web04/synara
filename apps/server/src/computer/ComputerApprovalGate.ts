@@ -50,6 +50,26 @@ export class ComputerApprovalGate {
     }
   }
 
+  /**
+   * A desktop interruption (screen lock, sleep, or a session switch the GUI
+   * host reported) revokes every standing task grant: consent answered
+   * before the interruption must not silently authorize the post-interruption
+   * desktop, so the next mutating call republishes its prompt — the explicit
+   * re-auth half of the locked-use boundary.
+   *
+   * Two states deliberately survive. Declines stay declined: a refusal is
+   * not the authority a lock needs to break, and re-asking a refused thread
+   * on every unlock would only nag. Pending prompts stay open: the prompt
+   * is unreachable while the desktop is interrupted, so any decision that
+   * arrives afterward already postdates the interruption — that answer IS
+   * the re-auth, and cancelling it would just ask the same question twice.
+   */
+  revokeTaskGrants(): void {
+    for (const task of this.tasks.values()) {
+      if (task.granted === true) delete task.granted;
+    }
+  }
+
   /** One consent for routine actions in the exact active turn, never a provider-wide grant. */
   async requestTask(input: {
     threadId: string;

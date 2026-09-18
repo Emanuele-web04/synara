@@ -299,6 +299,14 @@ export class CuaComputerBackend implements ComputerBackend {
   private readonly stills: StillFramePublisher;
   private cachedImage: ComputerScreenshot | undefined;
   private desktopEpoch: number | undefined;
+  /**
+   * The host's interruption count as of the newest reply observed. Unlike
+   * {@link desktopEpoch} it moves only on real OS interruptions (lock,
+   * sleep, session switch), so an advance — even with the pauses already
+   * back to empty — is the proof a lock/resume cycle ran since consent was
+   * last granted, and what drives the `desktop-interrupted` event.
+   */
+  private desktopInterruptions: number | undefined;
   private imageGeneration = 0;
   private readonly previewTasks = new Map<string, CuaComputerTask>();
   private clearCachedImage(): void {
@@ -444,6 +452,7 @@ export class CuaComputerBackend implements ComputerBackend {
           },
         ),
       );
+      this.observeDesktopInterruption(reply);
       const epoch = reply.desktopEpoch;
       if (epoch !== undefined && Number.isSafeInteger(epoch) && epoch >= 0) {
         if (
@@ -479,6 +488,32 @@ export class CuaComputerBackend implements ComputerBackend {
       if (error instanceof CuaTransportError) throw new CuaActionError(error.message, error.effect);
       throw error;
     }
+  }
+  /**
+   * Adopt the host's interruption count from a reply and announce a real
+   * change once. The first observed count only sets the baseline — consent
+   * cannot predate first contact — while every later difference (an advance,
+   * or a reset from a host that restarted) proves the desktop went through
+   * an interruption boundary consent must not silently cross. Called before
+   * the epoch staleness checks so a reply that is about to be rejected still
+   * reports the interruption it observed. Replies missing the field (an
+   * older host) degrade to no tracking rather than false interruptions.
+   */
+  private observeDesktopInterruption(reply: CuaReply): void {
+    const interruptions = reply.desktopInterruptions;
+    if (
+      typeof interruptions !== "number" ||
+      !Number.isSafeInteger(interruptions) ||
+      interruptions < 0
+    )
+      return;
+    if (this.desktopInterruptions !== undefined && interruptions !== this.desktopInterruptions) {
+      const pauses = Array.isArray(reply.desktopPauses)
+        ? reply.desktopPauses.filter((reason): reason is string => typeof reason === "string")
+        : [];
+      for (const listener of this.listeners) listener({ type: "desktop-interrupted", pauses });
+    }
+    this.desktopInterruptions = interruptions;
   }
   private async call(
     name: string,
@@ -2197,6 +2232,7 @@ export class CuaComputerBackend implements ComputerBackend {
         method: "stop",
         capability: this.capability,
       });
+      this.observeDesktopInterruption(result);
       if (!result.ok)
         throw new CuaActionError(
           result.error ?? "Computer stop was not acknowledged.",
@@ -2217,6 +2253,7 @@ export class CuaComputerBackend implements ComputerBackend {
       task: { threadId, ...(turnId ? { turnId } : {}) },
       capability: this.capability,
     });
+    this.observeDesktopInterruption(reply);
     if (!reply.ok) throw new Error(reply.error ?? "Computer preview did not stop.");
     for (const [key] of matches) this.previewTasks.delete(key);
     // Task-owned grounding ends with the task: a revoked task's window pixels
@@ -2265,6 +2302,10 @@ export class CuaComputerBackend implements ComputerBackend {
           { signal: call.signal, mutation: call.mutation, timeoutMs: 35_000 },
         ),
       );
+      // Desktop-epoch bookkeeping stays skipped on the CDP surface, but the
+      // interruption count is host state, not reply semantics: a browser
+      // reply proving a lock ran still invalidates pre-interruption consent.
+      this.observeDesktopInterruption(reply);
       if (!reply.ok)
         throw new CuaActionError(
           reply.error ?? "Cua host failed.",
@@ -2289,6 +2330,7 @@ export class CuaComputerBackend implements ComputerBackend {
       task: { threadId },
       capability: this.capability,
     });
+    this.observeDesktopInterruption(reply);
     if (!reply.ok) throw new Error(reply.error ?? "Browser session teardown was not acknowledged.");
   }
   async dispose() {

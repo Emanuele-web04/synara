@@ -335,6 +335,42 @@ describe("Cua GUI host retirement", () => {
     expect((await f.events()).filter((event) => event.event === "key")).toHaveLength(1);
   });
 
+  it("piggybacks sorted pauses and the never-reset interruption count on every reply", async () => {
+    const f = await fixture();
+    const probe = () => cuaRequest<CuaReply>(f.endpoint, { method: "probe" });
+    await expect(probe()).resolves.toMatchObject({
+      desktopEpoch: 0,
+      desktopPauses: [],
+      desktopInterruptions: 0,
+    });
+    await f.host.pauseDesktop("system-sleep");
+    await f.host.pauseDesktop("screen-lock");
+    const paused = await probe();
+    expect(paused.desktopPauses).toEqual(["screen-lock", "system-sleep"]);
+    expect(paused.desktopInterruptions).toBe(2);
+    // Refusals carry the same state: a paused action reports the reasons and
+    // the count alongside its desktop_input_paused result.
+    await expect(
+      cuaRequest<CuaReply>(f.endpoint, { method: "call", name: "press_key" }),
+    ).resolves.toMatchObject({
+      desktopPauses: ["screen-lock", "system-sleep"],
+      desktopInterruptions: 2,
+      result: { structuredContent: { code: "desktop_input_paused" } },
+    });
+    // The reasons net back to empty on resume while the count keeps the
+    // proof that the interruption cycle ran.
+    f.host.resumeDesktop("screen-lock");
+    await expect(probe()).resolves.toMatchObject({
+      desktopPauses: ["system-sleep"],
+      desktopInterruptions: 2,
+    });
+    f.host.resumeDesktop("system-sleep");
+    await expect(probe()).resolves.toMatchObject({
+      desktopPauses: [],
+      desktopInterruptions: 2,
+    });
+  });
+
   it("retires a driver-ended session and retries once with a fresh one", async () => {
     // The driver can end a session the host still holds (restart, timeout).
     // Without a heal, every later call fails the same way and no model-side

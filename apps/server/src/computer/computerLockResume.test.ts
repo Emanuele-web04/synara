@@ -16,6 +16,14 @@ const BOUNDS = { x: 0, y: 0, width: 200, height: 100 };
 interface LockableControls {
   /** Bump the desktop generation, as a lock/resume does. */
   lock: () => void;
+  /**
+   * Run one OS interruption cycle: bump the generation AND the interruption
+   * count, with `pauses` as the reasons still active at observation time —
+   * `[]` models a lock that already released before the next reply.
+   */
+  interrupt: (pauses: string[]) => void;
+  /** Lift every pause reason while keeping the interruption count. */
+  resumeDesktop: () => void;
   /** Hold click replies until released, to straddle the lock. */
   holdClicks: () => void;
   releaseClicks: () => void;
@@ -29,22 +37,43 @@ function lockableFixture(): {
 } {
   const calls: Array<{ name?: string }> = [];
   let desktopEpoch = 0;
+  let interruptions = 0;
+  let pauses: string[] = [];
   let clickGate: Promise<void> | undefined;
   let releaseClick = () => {};
   const request = vi.fn(async (_endpoint: string, req: Record<string, unknown>) => {
     calls.push({ ...(typeof req.name === "string" ? { name: req.name } : {}) });
     const method = req.method as string | undefined;
-    if (method === "probe" || method === "stop") return { ok: true, desktopEpoch };
+    const state = () => ({
+      desktopEpoch,
+      desktopInterruptions: interruptions,
+      desktopPauses: pauses,
+    });
+    if (method === "probe" || method === "stop") return { ok: true, ...state() };
+    // The host refuses every call while a pause is active.
+    if (method === "call" && pauses.length > 0)
+      return {
+        ok: true,
+        ...state(),
+        result: {
+          isError: true,
+          structuredContent: {
+            effect: "refused",
+            code: "desktop_input_paused",
+            message: "Desktop is locked.",
+          },
+        },
+      };
     if (req.name === "check_permissions")
       return {
         ok: true,
-        desktopEpoch,
+        ...state(),
         result: { structuredContent: { accessibility: true, screen_recording: true } },
       };
     if (req.name === "list_windows")
       return {
         ok: true,
-        desktopEpoch,
+        ...state(),
         result: {
           structuredContent: {
             windows: [
@@ -64,19 +93,19 @@ function lockableFixture(): {
     if (req.name === "get_screen_size")
       return {
         ok: true,
-        desktopEpoch,
+        ...state(),
         result: { structuredContent: { width: 1000, height: 800, scale_factor: 2 } },
       };
     if (req.name === "check_input_ready")
       return {
         ok: true,
-        desktopEpoch,
+        ...state(),
         result: { structuredContent: { ready: true, pid: 10, window_id: 20 } },
       };
     if (req.name === "get_window_state")
       return {
         ok: true,
-        desktopEpoch,
+        ...state(),
         result: {
           structuredContent: {
             pid: 10,
@@ -93,7 +122,7 @@ function lockableFixture(): {
       // The reply carries the generation current at delivery, not at dispatch.
       return {
         ok: true,
-        desktopEpoch,
+        ...state(),
         result: {
           structuredContent: {
             route: "synthetic_events",
@@ -103,7 +132,7 @@ function lockableFixture(): {
         },
       };
     }
-    return { ok: true, desktopEpoch, result: { structuredContent: {} } };
+    return { ok: true, ...state(), result: { structuredContent: {} } };
   }) as unknown as typeof cuaRequest;
   const backend = new CuaComputerBackend({ endpoint: "/lock-resume", request });
   return {
@@ -112,6 +141,14 @@ function lockableFixture(): {
     controls: {
       lock: () => {
         desktopEpoch += 1;
+      },
+      interrupt: (active: string[]) => {
+        desktopEpoch += 1;
+        interruptions += 1;
+        pauses = active;
+      },
+      resumeDesktop: () => {
+        pauses = [];
       },
       holdClicks: () => {
         clickGate = new Promise<void>((resolve) => {
@@ -175,6 +212,58 @@ describe("computer lock/resume", () => {
       await expect(backend.click({ x: 50, y: 50 }, "cua:10:20")).resolves.toBeDefined();
       expect(clickCount(calls)).toBe(1);
     } finally {
+      await backend.dispose();
+    }
+  });
+
+  it("announces an interruption cycle once, even when it ended between replies", async () => {
+    const { backend, controls } = lockableFixture();
+    const events: Array<{ type: string; pauses?: readonly string[] }> = [];
+    const unsubscribe = backend.onEvent((event) => {
+      if (event.type === "desktop-interrupted") events.push(event);
+    });
+    try {
+      await backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+      // The first observed count only sets the baseline: consent cannot
+      // predate first contact, so nothing is announced.
+      expect(events).toEqual([]);
+      // A lock that engaged and released entirely between two replies still
+      // advanced the count — the cycle is reported exactly once, with the
+      // pauses already empty.
+      controls.interrupt([]);
+      await backend.checkInputReady("cua:10:20");
+      expect(events).toEqual([{ type: "desktop-interrupted", pauses: [] }]);
+      // A steady count reports nothing further.
+      await backend.checkInputReady("cua:10:20");
+      expect(events).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      await backend.dispose();
+    }
+  });
+
+  it("reports a still-active pause on the refusal reply it produces", async () => {
+    const { backend, controls } = lockableFixture();
+    const events: Array<{ type: string; pauses?: readonly string[] }> = [];
+    const unsubscribe = backend.onEvent((event) => {
+      if (event.type === "desktop-interrupted") events.push(event);
+    });
+    try {
+      await backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+      controls.interrupt(["screen-lock"]);
+      // New admissions refuse while the desktop is locked, and the refusal
+      // reply itself is what carries the interruption news.
+      await expect(backend.checkInputReady("cua:10:20")).rejects.toMatchObject({
+        effect: "not-dispatched",
+        code: "desktop_input_paused",
+      });
+      expect(events).toEqual([{ type: "desktop-interrupted", pauses: ["screen-lock"] }]);
+      // The pause lifting changes no count — resume is not an interruption.
+      controls.resumeDesktop();
+      await backend.checkInputReady("cua:10:20");
+      expect(events).toHaveLength(1);
+    } finally {
+      unsubscribe();
       await backend.dispose();
     }
   });
