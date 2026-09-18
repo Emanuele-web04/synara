@@ -54,6 +54,7 @@ export const COMPUTER_GRANT_APPLIED_CODE = "grant_applied";
 export const COMPUTER_GRANT_REVOKED_CODE = "grant_revoked";
 export const COMPUTER_GRANT_EXPIRED_CODE = "grant_expired";
 export const COMPUTER_GRANT_REFUSED_CODE = "grant_refused";
+export const COMPUTER_GRANT_PERSIST_FAILED_CODE = "grant_persist_failed";
 
 /**
  * What one gated call needs a grant to cover, resolved at prompt time.
@@ -422,6 +423,7 @@ export class ComputerGrantStore {
   private readonly grants = new Map<string, StoredComputerGrant>();
   private writes = Promise.resolve();
   private loadError: Error | undefined;
+  private persistError: Error | undefined;
   private readonly ttl: ComputerGrantTtlConfig;
 
   constructor(options: ComputerGrantStoreOptions = {}) {
@@ -702,6 +704,15 @@ export class ComputerGrantStore {
     if (expired) this.persist();
   }
 
+  /**
+   * The last durable-write failure, when one exists. In-memory state stays
+   * authoritative for this session, but the caller can warn that created
+   * grants may die at restart — and revoked ones may resurrect.
+   */
+  degraded(): Error | undefined {
+    return this.persistError;
+  }
+
   private persist(): void {
     if (this.filePath === undefined || this.loadError !== undefined) return;
     const filePath = this.filePath;
@@ -712,10 +723,26 @@ export class ComputerGrantStore {
     this.writes = this.writes
       .catch(() => undefined)
       .then(async () => {
-        await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
-        const temporaryPath = `${filePath}.tmp`;
-        await writeFile(temporaryPath, content, { mode: 0o600 });
-        await rename(temporaryPath, filePath);
+        try {
+          await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
+          const temporaryPath = `${filePath}.tmp`;
+          await writeFile(temporaryPath, content, { mode: 0o600 });
+          await rename(temporaryPath, filePath);
+          this.persistError = undefined;
+        } catch (error) {
+          // Silence here was the resurrection hole: a failed revoke write
+          // left the grant on disk to reload next boot while the audit row
+          // claimed "verified". The failure must be evidence, not absence.
+          this.persistError = new Error("Computer grant store could not be persisted.", {
+            cause: error,
+          });
+          this.audit?.({
+            tool: COMPUTER_GRANT_AUDIT_TOOL,
+            args: { storePath: filePath },
+            effect: "refused",
+            code: COMPUTER_GRANT_PERSIST_FAILED_CODE,
+          });
+        }
       });
   }
 }

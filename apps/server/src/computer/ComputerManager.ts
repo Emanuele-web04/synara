@@ -99,6 +99,7 @@ import {
 import { ComputerAuditLog, type ComputerAuditEntry } from "./computerAuditLog.ts";
 import { ComputerDenylistError, computerDenylistMatch } from "./computerDenylist.ts";
 import {
+  COMPUTER_GRANT_AUDIT_TOOL,
   ComputerGrantStore,
   computerGrantIdentityForApp,
   computerGrantIdentityForPid,
@@ -265,6 +266,13 @@ export type ComputerEventListener = (event: ComputerEvent) => void;
 interface ThreadComputerRuntimeState {
   version: number;
   lastError: string | null;
+  /**
+   * An error reported by a caller (stream attach, device surface), not by
+   * the physical read — `publishNow` owns `lastError` and would erase it.
+   * The next publish carries it in the snapshot's `lastError` slot, then it
+   * is consumed and cleared.
+   */
+  reportedError: string | null;
   inputPause?: NonNullable<ThreadComputerState["inputPause"]>;
   windows: readonly ComputerWindow[];
   screenSize: ComputerScreenSize;
@@ -458,6 +466,7 @@ export class ComputerManager {
    * swapped in after the press still finds input closed.
    */
   private escapeStopped = false;
+  private escapeStopEpoch = 0;
 
   /**
    * Which desktop vocabulary the tool descriptions must speak. See
@@ -741,7 +750,15 @@ export class ComputerManager {
    * never produce evidence rows the feature was already refusing to act on.
    */
   recordComputerAudit(entry: Omit<ComputerAuditEntry, "ts">): void {
-    if (entry.threadId !== undefined && this.controlDisabled(entry.threadId)) return;
+    // Grant-lifecycle rows are exempt: they record authority that changed
+    // (created/expired/used), not attempts the disable refused — dropping
+    // them loses exactly the evidence a security review needs.
+    if (
+      entry.tool !== COMPUTER_GRANT_AUDIT_TOOL &&
+      entry.threadId !== undefined &&
+      this.controlDisabled(entry.threadId)
+    )
+      return;
     this.auditLog.record(entry);
   }
 
@@ -869,18 +886,25 @@ export class ComputerManager {
   /** The management surface's read of live grants plus the TTL bounds a client needs to render lifetimes. */
   listComputerGrants(): ComputerListGrantsResult {
     const ttl = this.grantStore.ttlConfig();
+    const degraded = this.grantStore.degraded();
     return {
       grants: this.grantStore.list(),
       defaultTtlMs: ttl.defaultTtlMs,
       minTtlMs: ttl.minTtlMs,
       maxTtlMs: ttl.maxTtlMs,
+      ...(degraded ? { persistError: degraded.message } : {}),
     };
   }
 
   /** Durable, audited revocation of one grant. */
   revokeComputerGrant(grantId: string): ComputerRevokeGrantResult {
     const revoked = this.grantStore.revoke(grantId);
-    return { revoked, grants: this.grantStore.list() };
+    const degraded = this.grantStore.degraded();
+    return {
+      revoked,
+      grants: this.grantStore.list(),
+      ...(degraded ? { persistError: degraded.message } : {}),
+    };
   }
 
   // ── Session recording ────────────────────────────────────────────
@@ -1328,6 +1352,12 @@ export class ComputerManager {
   ): Promise<boolean> {
     // A fresh user invocation can re-arm a stopped task. An invocation queued
     // before Stop still carries the old generation and cannot revive input.
+    // The guard must read the generation a pending disable will bump to —
+    // the write is serialized asynchronously, so waiting out the in-flight
+    // control write is what keeps a stale invocation from slipping the gap.
+    if (explicitInvocation && mode === "request" && this.controlDisabled(threadId)) {
+      await this.pendingControlWrites.get(threadId)?.catch(() => undefined);
+    }
     if (
       explicitInvocation &&
       mode === "request" &&
@@ -1405,7 +1435,12 @@ export class ComputerManager {
       // queued requests never regain authority when this thread is re-enabled.
       const write = this.controlState.set(threadId, true);
       this.pendingControlWrites.set(threadId, write);
-      const outcomes = await Promise.allSettled([write, this.revokeControl(threadId)]);
+      // Bounded like the enable path: the disable itself already holds
+      // (disabledThreads is synchronous), so a wedged stop cannot strand
+      // the RPC — it can only cost the cleanup confirmation.
+      const outcomes = await withControlTeardownTimeout(
+        Promise.allSettled([write, this.revokeControl(threadId)]),
+      );
       const failed = outcomes.find((outcome) => outcome.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
     }
@@ -1413,8 +1448,12 @@ export class ComputerManager {
       this.controlRequests.delete(threadId);
       this.pendingControlWrites.delete(threadId);
     }
-    this.threadRuntime(threadId);
-    this.publishCached(threadId);
+    // A thread mid-removal has no pane to update — publishing here would
+    // resurrect a runtime record the removal is trying to delete.
+    if (!this.suspendedThreads.has(threadId)) {
+      this.threadRuntime(threadId);
+      this.publishCached(threadId);
+    }
     return {
       enabled: !this.controlDisabled(threadId) && !this.suspendedThreads.has(threadId),
       generation: this.controlState.get(threadId).generation,
@@ -1429,15 +1468,15 @@ export class ComputerManager {
     // like every other evidence write, and idempotent against the
     // `thread-removed` stop that may already have claimed the close.
     void this.recordings.stopForThread(threadId, "control-revoked").catch(() => undefined);
-    this.authorityRevocations
-      .get(threadId)
-      ?.abort(
-        new ComputerBackendError(
-          "Computer control was revoked for this conversation; no new input may be dispatched.",
-          { controlRevoked: true },
-        ),
-      );
-    for (const controller of this.activeAuthorities.get(threadId) ?? []) controller.abort();
+    const revokeReason = new ComputerBackendError(
+      "Computer control was revoked for this conversation; no new input may be dispatched.",
+      { controlRevoked: true },
+    );
+    this.authorityRevocations.get(threadId)?.abort(revokeReason);
+    // Live ops get the same reason, not a bare AbortError: a call cancelled
+    // by an Off must classify as control-revoked, not a retryable abort.
+    for (const controller of this.activeAuthorities.get(threadId) ?? [])
+      controller.abort(revokeReason);
     const pending = this.pendingStops.get(threadId);
     if (pending) return pending;
     const stop = (async () => {
@@ -1510,6 +1549,7 @@ export class ComputerManager {
       owner &&
       !this.disposed &&
       !this.suspendedThreads.has(owner) &&
+      !this.controlDisabled(owner) &&
       error instanceof ComputerBackendError &&
       error.inputPause
     ) {
@@ -1533,6 +1573,7 @@ export class ComputerManager {
     if (this.disposed) return;
     const firstPress = !this.escapeStopped;
     this.escapeStopped = true;
+    this.escapeStopEpoch += 1;
     // Abort every admission broadcast and every live operation signal: calls
     // queued behind the operation queue fail at their wait instead of
     // dispatching after the press, and in-flight native calls get the same
@@ -1572,8 +1613,12 @@ export class ComputerManager {
    */
   async rearmInput(): Promise<{ rearmed: boolean; wasStopped: boolean }> {
     const wasStopped = this.escapeStopped;
+    const epoch = this.escapeStopEpoch;
     if (this.backend.rearmInput) await this.backend.rearmInput();
-    if (wasStopped) {
+    // A press that landed while the host re-arm was in flight supersedes the
+    // re-arm: the latch and the stopped event stay held. Without the epoch
+    // check this branch would clear a press it never saw.
+    if (wasStopped && this.escapeStopEpoch === epoch) {
       this.escapeStopped = false;
       this.emit({ type: "computer.input-stopped", stopped: false });
       this.republishAllThreads();
@@ -2579,7 +2624,11 @@ export class ComputerManager {
   }
 
   async getThreadState(threadId: string): Promise<ThreadComputerState> {
-    const state = this.threadRuntime(threadId);
+    // Registering a record is what seeds the panel — but a suspended thread
+    // is mid-removal, and recreating its record would resurrect it.
+    const state = this.suspendedThreads.has(threadId)
+      ? (this.threads.get(threadId) ?? this.newThreadRuntime())
+      : this.threadRuntime(threadId);
     await this.refreshPhysicalState();
     return (await this.publish(threadId)) ?? this.threadSnapshot(threadId, state);
   }
@@ -4255,9 +4304,16 @@ export class ComputerManager {
   async releaseDesktopControl(threadId: string, turnId?: string): Promise<void> {
     const owner = agentThreadId(threadId);
     if (owner === undefined) return;
-    const previewStopped = this.backend.endTask?.(owner, turnId);
-    // Capture cleanup must not delay or prevent release of desktop control.
-    void previewStopped?.catch(() => undefined);
+    // Capture cleanup must not delay or prevent release of desktop control —
+    // the catch is part of the promise, so the finally-await below can never
+    // re-throw a wedged or refused endTask. A cleanup failure is evidence on
+    // the owner's state (a stale preview may linger), not a claim that the
+    // release itself failed.
+    const previewStopped = this.backend.endTask?.(owner, turnId)?.catch((error: unknown) => {
+      void this.recordThreadError(owner, `Preview cleanup failed: ${errorMessage(error)}`).catch(
+        () => undefined,
+      );
+    });
     try {
       if (this.lease?.threadId !== owner) return;
       if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
@@ -4301,7 +4357,7 @@ export class ComputerManager {
   async recordThreadError(threadId: string, message: string): Promise<void> {
     const state = this.threads.get(threadId);
     if (!state) return;
-    state.lastError = clampComputerMessage(
+    state.reportedError = clampComputerMessage(
       message,
       "The computer backend reported an error without a message.",
     );
@@ -4369,7 +4425,9 @@ export class ComputerManager {
     // as the desktop's owner until the idle backstop fires. The recording
     // closes first so its end reason is `thread-removed`, not the revocation's.
     await this.recordings.stopForThread(threadId, "thread-removed").catch(() => undefined);
-    await this.revokeControl(threadId).catch(() => undefined);
+    // Bounded: a wedged in-flight op must not stall removal forever — the
+    // suspend and the deletions are already held, only the drain is lost.
+    await withControlTeardownTimeout(this.revokeControl(threadId)).catch(() => undefined);
     this.publishChains.delete(threadId);
     this.threads.delete(threadId);
     this.threadLabels.delete(threadId);
@@ -4378,13 +4436,18 @@ export class ComputerManager {
     this.activeAuthorities.delete(threadId);
     this.drivenAppsPerThread.delete(threadId);
     // Deleted after the thread state, so the resulting publish cannot recreate
-    // it: a removed thread must not reappear as a lease holder.
-    await this.releaseDesktopControl(threadId);
+    // it: a removed thread must not reappear as a lease holder. A rejected
+    // or wedged release must not stall removal either — the idle backstop
+    // owns the lease.
+    await withControlTeardownTimeout(this.releaseDesktopControl(threadId)).catch(() => undefined);
     // Browser sessions are thread-scoped, not lease-scoped: a browser-only
     // thread may never have held the desktop lease, so teardown cannot ride
     // the release. Failure is tolerated — the driver's transport-EOF reaper
-    // is the backstop for anything the explicit end could not reach.
-    await this.backend.browser?.endThread?.(threadId).catch(() => undefined);
+    // is the backstop for anything the explicit end could not reach — and a
+    // wedge is bounded like the rest of teardown.
+    await withControlTeardownTimeout(
+      this.backend.browser?.endThread?.(threadId) ?? Promise.resolve(),
+    ).catch(() => undefined);
   }
 
   async handleThreadRestored(threadId: string): Promise<void> {
@@ -4402,9 +4465,15 @@ export class ComputerManager {
     this.disposed = true;
     this.cursorActivity.dispose();
     // Teardown cannot depend on the host still answering: an unreachable
-    // endpoint means the input path it owned is already gone.
-    await this.backend.stopInput?.().catch(() => undefined);
-    await this.operations.close();
+    // endpoint means the input path it owned is already gone, so the wait is
+    // bounded like every other teardown leg.
+    await withControlTeardownTimeout(this.backend.stopInput?.() ?? Promise.resolve()).catch(
+      () => undefined,
+    );
+    // close() aborts live work synchronously before its drain awaits, so a
+    // wedged operation can only cost the drain — never the abort or the
+    // teardown that follows.
+    await withControlTeardownTimeout(this.operations.close()).catch(() => undefined);
     if (this.windowsPublishTimer !== undefined) clearTimeout(this.windowsPublishTimer);
     this.windowsPublishTimer = undefined;
     this.windowsPublishPending = false;
@@ -5009,6 +5078,10 @@ export class ComputerManager {
    * that drives the desktop needs one whether or not a pane is opened for it.
    */
   private surfacePaneForAgent(threadId: string): void {
+    // A removed thread must not resurrect: an action resolving after the
+    // thread's deletion would otherwise recreate its runtime record and emit
+    // pane requests for a thread that no longer exists.
+    if (this.suspendedThreads.has(threadId)) return;
     const state = this.threadRuntime(threadId);
     if (state.paneSurfaced) return;
     state.paneSurfaced = true;
@@ -5034,6 +5107,7 @@ export class ComputerManager {
     if (!state || this.disposed) return undefined;
     state.version = ++this.nextStateVersion;
     const snapshot = this.threadSnapshot(threadId, state);
+    state.reportedError = null;
     this.emit({ type: "computer.thread-state", state: snapshot });
     return snapshot;
   }
@@ -5074,6 +5148,9 @@ export class ComputerManager {
     if (this.disposed || this.threads.get(threadId) !== state) return undefined;
     state.version = ++this.nextStateVersion;
     const snapshot = this.threadSnapshot(threadId, state);
+    // A reported error lands in exactly one publish — the panel keeps it
+    // until the next refresh supersedes it, not forever.
+    state.reportedError = null;
     this.emit({ type: "computer.thread-state", state: snapshot });
     return snapshot;
   }
@@ -5131,20 +5208,29 @@ export class ComputerManager {
     }
   }
 
+  /**
+   * A runtime record that is not registered — for reads of a thread that has
+   * no live state, where inserting one would resurrect it.
+   */
+  private newThreadRuntime(): ThreadComputerRuntimeState {
+    return {
+      version: ++this.nextStateVersion,
+      lastError: null,
+      reportedError: null,
+      windows: [],
+      screenSize: { width: 1, height: 1 },
+      availability: {
+        kind: "backend-unavailable",
+        message: "Computer state has not been queried yet",
+      },
+      paneSurfaced: false,
+    };
+  }
+
   private threadRuntime(threadId: string): ThreadComputerRuntimeState {
     let state = this.threads.get(threadId);
     if (!state) {
-      state = {
-        version: ++this.nextStateVersion,
-        lastError: null,
-        windows: [],
-        screenSize: { width: 1, height: 1 },
-        availability: {
-          kind: "backend-unavailable",
-          message: "Computer state has not been queried yet",
-        },
-        paneSurfaced: false,
-      };
+      state = this.newThreadRuntime();
       this.threads.set(threadId, state);
     } else {
       this.threads.delete(threadId);
@@ -5193,7 +5279,7 @@ export class ComputerManager {
       health: this.backendHealth,
       capabilities: this.backendCapabilities,
       inputStopped: this.escapeStopped,
-      lastError: state.lastError,
+      lastError: state.reportedError ?? state.lastError,
     };
   }
 
@@ -5234,7 +5320,7 @@ export class ComputerManager {
       errorMessage(error),
       "The computer backend reported an error without a message.",
     );
-    for (const state of this.threads.values()) state.lastError = message;
+    for (const state of this.threads.values()) state.reportedError = message;
     // Written without a publish, a stream attach failure never reached the
     // panel it explains. Debounced, because this can fire per frame or per
     // call during an outage.
@@ -5466,6 +5552,29 @@ function withControlEnableTimeout<A>(action: Promise<A> | undefined): Promise<A 
       reject(
         new ComputerBackendError(
           "Enabling computer control timed out; control stays disabled for this conversation.",
+        ),
+      );
+    }, COMPUTER_CONTROL_ENABLE_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  return Promise.race([action, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
+/**
+ * The disable/removal/dispose side of the same bound: a wedged native call
+ * wedges the operation tail, and without a deadline every teardown that
+ * waits on it hangs forever — the in-memory gates are already held, so the
+ * bounded wait can only lose cleanup confirmation, never authority.
+ */
+function withControlTeardownTimeout<A>(action: Promise<A>): Promise<A> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new ComputerBackendError(
+          "Computer control teardown timed out waiting on a wedged operation; the in-memory gate stays held.",
         ),
       );
     }, COMPUTER_CONTROL_ENABLE_TIMEOUT_MS);

@@ -1037,6 +1037,9 @@ export const ComputerListGrantsResult = Schema.Struct({
   defaultTtlMs: Schema.Int,
   minTtlMs: Schema.Int,
   maxTtlMs: Schema.Int,
+  /** Set when the durable grant file failed to persist — created grants may
+   * die at restart and revoked ones may resurrect. */
+  persistError: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
 });
 export type ComputerListGrantsResult = typeof ComputerListGrantsResult.Type;
 
@@ -1049,6 +1052,9 @@ export const ComputerRevokeGrantResult = Schema.Struct({
   /** False when the id named no live grant — an already-expired row counts as gone. */
   revoked: Schema.Boolean,
   grants: Schema.Array(ComputerGrant).check(Schema.isMaxLength(COMPUTER_GRANT_LIST_MAX_LENGTH)),
+  /** Set when the durable grant file failed to persist — the in-memory
+   * revoke holds this session, but the grant may resurrect at restart. */
+  persistError: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
 });
 export type ComputerRevokeGrantResult = typeof ComputerRevokeGrantResult.Type;
 

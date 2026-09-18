@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +10,7 @@ import {
   COMPUTER_GRANT_AUDIT_TOOL,
   COMPUTER_GRANT_CREATED_CODE,
   COMPUTER_GRANT_EXPIRED_CODE,
+  COMPUTER_GRANT_PERSIST_FAILED_CODE,
   COMPUTER_GRANT_REFUSED_CODE,
   COMPUTER_GRANT_REVOKED_CODE,
   ComputerGrantStore,
@@ -571,5 +572,47 @@ describe("ComputerGrantStore", () => {
     expect(refusedAt).toBeGreaterThanOrEqual(0);
     expect(store.list().length).toBeLessThanOrEqual(256);
     expect(entries.some((entry) => entry.code === COMPUTER_GRANT_REFUSED_CODE)).toBe(true);
+  });
+
+  it("a failed durable write marks the store degraded, writes an audit row, and clears on the next success", async () => {
+    const dir = await tempDir();
+    const { entries, audit } = auditCollector();
+    // A read-only directory: the file load ENOENTs clean (no store yet), but
+    // every durable write EACCESes.
+    const grantsDir = join(dir, "grants-dir");
+    await mkdir(grantsDir);
+    await chmod(grantsDir, 0o500);
+    const filePath = join(grantsDir, "computer-grants.json");
+    const store = new ComputerGrantStore({ filePath, audit, defaultTtlMs: 60_000 });
+    const created = store.createFromApproval({
+      offer: { apps: [computerGrantIdentityForApp(SAFARI)], classes: ["input"] },
+      choice: { classes: ["input"], scope: "app" },
+      threadId: "thread-1",
+      isAppDenied: () => false,
+    });
+    expect(created).toHaveLength(1);
+    await store.flush();
+    // The in-memory grant stays live for this process — but the store must
+    // not claim it persisted, and the failure must be evidence.
+    expect(store.list()).toHaveLength(1);
+    expect(store.degraded()?.message).toBe("Computer grant store could not be persisted.");
+    expect(
+      entries.some(
+        (entry) =>
+          entry.code === COMPUTER_GRANT_PERSIST_FAILED_CODE &&
+          entry.tool === COMPUTER_GRANT_AUDIT_TOOL &&
+          entry.effect === "refused",
+      ),
+    ).toBe(true);
+
+    // With write permission back, the next mutation's write succeeds and
+    // the degraded flag clears — recovery is reported, not just assumed.
+    await chmod(grantsDir, 0o700);
+    expect(store.revoke(created[0]!.id)).toBe(true);
+    await store.flush();
+    expect(store.degraded()).toBeUndefined();
+    expect(store.list()).toHaveLength(0);
+    const persisted = JSON.parse(await readFile(filePath, "utf8")) as { grants: unknown[] };
+    expect(persisted.grants).toHaveLength(0);
   });
 });

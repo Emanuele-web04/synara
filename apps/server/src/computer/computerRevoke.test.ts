@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { ComputerBackendError } from "./ComputerBackend.ts";
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
 import { ComputerManager } from "./ComputerManager.ts";
+import { assertDesktopOperationActive } from "./DesktopOperationQueue.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 
 function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
@@ -124,6 +126,54 @@ describe("computer revoke", () => {
     expect(stoppedAgain.generation).toBe(2);
     expect(await manager.admitControl(threadId, "request", 1, true)).toBe(false);
     expect(backend.callsFor("click")).toHaveLength(0);
+    await manager.dispose();
+  });
+
+  it("a queued invocation cannot slip the gap between the stop latch and the generation bump", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const threadId = "stop-race-thread";
+    expect(await manager.admitControl(threadId, "chat", 0, true)).toBe(true);
+    // Stop without awaiting: the in-memory latch is held synchronously, but
+    // the durable generation bump lands behind the control-state write chain.
+    const stopping = manager.setControlEnabled(threadId, false);
+    // A request queued before Stop carries generation 0. Between the latch
+    // and the bump it looks identical to a fresh invocation — only waiting
+    // out the pending write keeps it from re-arming the thread.
+    expect(await manager.admitControl(threadId, "request", 0, true)).toBe(false);
+    const stopped = await stopping;
+    expect(stopped.enabled).toBe(false);
+    expect(stopped.generation).toBe(1);
+    // The thread stayed disabled through the whole race: generation 1 is the
+    // current one and it still answers no.
+    expect(manager.canActivateControl(threadId, 0)).toBe(false);
+    expect(manager.canActivateControl(threadId, 1)).toBe(false);
+    await manager.dispose();
+  });
+
+  it("revocation aborts live work with a control-revoked reason, not a bare abort", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const entered = deferred();
+    const release = deferred();
+    const active = manager.withAgentActivity("reason-thread", async () => {
+      entered.resolve();
+      await release.promise;
+      // The abort is only visible where the operation observes its signal —
+      // this throws the reason the controller was aborted with.
+      assertDesktopOperationActive();
+    });
+    await entered.promise;
+    // The disable's revoke aborts the live authority synchronously; the stop
+    // it queues drains once the call settles.
+    const disabling = manager.setControlEnabled("reason-thread", false);
+    release.resolve();
+    await disabling;
+    const rejection = await active.catch((error: unknown) => error);
+    // A bare AbortError classifies as retryable; the reason must carry the
+    // revocation flag the gateway's do-not-retry logic reads.
+    expect(rejection).toBeInstanceOf(ComputerBackendError);
+    expect((rejection as ComputerBackendError).controlRevoked).toBe(true);
     await manager.dispose();
   });
 });

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ComputerUiNode, ComputerWindow, ThreadComputerState } from "@synara/contracts";
+import type {
+  ComputerEvent,
+  ComputerUiNode,
+  ComputerWindow,
+  ThreadComputerState,
+} from "@synara/contracts";
 import { decodeComputerFrame } from "@synara/shared/computerFrame";
 
 import {
@@ -9,7 +14,7 @@ import {
   type ComputerBackendActionResult,
 } from "./ComputerBackend.ts";
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
-import { ComputerManager } from "./ComputerManager.ts";
+import { COMPUTER_CONTROL_ENABLE_TIMEOUT_MS, ComputerManager } from "./ComputerManager.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import type { FrameSink } from "@synara/shared/frameTransport";
 
@@ -1600,10 +1605,13 @@ describe("ComputerManager and FakeComputerBackend", () => {
       }),
     });
     const manager = new ComputerManager({ backend });
+    const states: ThreadComputerState[] = [];
+    manager.onEvent((event) => {
+      if (event.type === "computer.thread-state") states.push(event.state);
+    });
     await manager.launchApp("thread-a", "kcalc");
     const cleared = backend.callsFor("clearFocusWindow").length;
     const release = manager.releaseDesktopControl("thread-a", "turn-one");
-    const failed = expect(release).rejects.toThrow("Preview cleanup failed");
     await vi.waitFor(() => expect(backend.callsFor("clearFocusWindow")).toHaveLength(cleared + 1));
     await vi.waitFor(async () =>
       expect((await manager.getThreadState("thread-b")).controlledByOtherThread).toBe(false),
@@ -1612,8 +1620,20 @@ describe("ComputerManager and FakeComputerBackend", () => {
       action: "computer_type_text",
     });
     pending.resolve();
-    await failed;
+    // The release resolved the moment the lease dropped — the wedged endTask
+    // could not hold it, and its rejection must not be re-thrown either.
+    await release;
     expect(backend.endTask).toHaveBeenCalledWith("thread-a", "turn-one");
+    // The failure is still evidence: a stale preview is reported on the
+    // owner's state rather than silently leaked.
+    await vi.waitFor(() =>
+      expect(
+        states.some(
+          (state) =>
+            state.threadId === "thread-a" && state.lastError?.includes("Preview cleanup failed"),
+        ),
+      ).toBe(true),
+    );
     await manager.dispose();
   });
 
@@ -1781,9 +1801,9 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.getThreadState("thread-b");
     await manager.launchApp("thread-a", "kcalc");
 
-    // The rejection is still reported — but every removal step must have run:
-    // the lease released, the thread's state gone, nobody left blocked.
-    await expect(manager.handleThreadRemoved("thread-a")).rejects.toThrow("Preview cleanup failed");
+    // A rejected cleanup must not fail the removal itself — every step still
+    // runs: the lease released, the thread's state gone, nobody left blocked.
+    await manager.handleThreadRemoved("thread-a");
     await expect(manager.getThreadState("thread-b")).resolves.toMatchObject({
       controlledByOtherThread: false,
     });
@@ -3777,4 +3797,100 @@ describe("ComputerManager masked activation", () => {
       await manager.dispose();
     }
   });
+});
+
+it("an action resolving after thread removal does not resurrect the thread's state", async () => {
+  const pending = deferred();
+  const backend = Object.assign(new FakeComputerBackend(), {
+    launchApp: vi.fn(async () => {
+      await pending.promise;
+      return { computerId: "desktop", app: "kcalc", window: null };
+    }),
+  });
+  const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+  const events: ComputerEvent[] = [];
+  manager.onEvent((event) => events.push(event));
+
+  const launching = manager.launchApp("removed-thread", "kcalc").catch(() => undefined);
+  await vi.waitFor(() => expect(backend.launchApp).toHaveBeenCalled());
+  const removing = manager.handleThreadRemoved("removed-thread");
+  pending.resolve();
+  await Promise.allSettled([launching, removing]);
+
+  // The launch's emitAction fired after removal: the tombstone must keep it
+  // from opening a pane or recreating the record the removal deleted.
+  expect(events.some((event) => event.type === "computer.open-pane-requested")).toBe(false);
+  const statesBefore = events.filter((event) => event.type === "computer.thread-state").length;
+  const state = await manager.getThreadState("removed-thread");
+  expect(state.agentActive).toBe(false);
+  expect(events.filter((event) => event.type === "computer.thread-state")).toHaveLength(
+    statesBefore,
+  );
+  await manager.dispose();
+});
+
+it("publishes a reported thread error exactly once, then lets refresh own the field", async () => {
+  const backend = new FakeComputerBackend();
+  const manager = new ComputerManager({ backend });
+  const states: ThreadComputerState[] = [];
+  manager.onEvent((event) => {
+    if (event.type === "computer.thread-state" && event.state.threadId === "err-thread")
+      states.push(event.state);
+  });
+  await manager.getThreadState("err-thread");
+  await manager.recordThreadError("err-thread", "backend hiccup");
+  // The report lands in exactly one published snapshot...
+  expect(states.filter((state) => state.lastError === "backend hiccup")).toHaveLength(1);
+  // ...and the next publish reports the physical read, not a stale echo.
+  await manager.getThreadState("err-thread");
+  expect(states.at(-1)?.lastError).toBeNull();
+  expect(states.filter((state) => state.lastError === "backend hiccup")).toHaveLength(1);
+  await manager.dispose();
+});
+
+it("a pause arriving after control was revoked leaves no stale pause state", async () => {
+  const pending = deferred();
+  const backend = Object.assign(new FakeComputerBackend(), {
+    typeText: vi.fn(async (_text: string) => {
+      await pending.promise;
+      throw new ComputerBackendError("Return to the target window.", {
+        inputPause: { windowId: "fake-calculator", message: "Return to the target window." },
+      });
+    }),
+  });
+  const manager = new ComputerManager({ backend });
+  const typing = manager.typeText("paused-thread", "hi").catch((error: unknown) => error);
+  await vi.waitFor(() => expect(backend.typeText).toHaveBeenCalled());
+  // The disable latches synchronously; the stop it queues drains once the
+  // in-flight call settles, so the pause lands after the latch.
+  const disabling = manager.setControlEnabled("paused-thread", false);
+  pending.resolve();
+  await disabling;
+  await typing;
+  // The pause landed after the revocation — recording it would tell the
+  // panel a disabled thread is waiting on a window it cannot act on.
+  expect((await manager.getThreadState("paused-thread")).inputPause).toBeUndefined();
+  await manager.dispose();
+});
+
+it("thread removal completes on a wedged stop — the teardown wait is bounded", async () => {
+  const backend = Object.assign(new FakeComputerBackend(), {
+    stopInput: vi.fn(() => new Promise<void>(() => {})),
+  });
+  const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+  await manager.launchApp("wedged", "kcalc");
+  vi.useFakeTimers();
+  try {
+    const removing = manager.handleThreadRemoved("wedged");
+    // The host never answers stopInput: only the teardown bound lets the
+    // removal finish — the tombstone and deletions are already held.
+    await vi.advanceTimersByTimeAsync(COMPUTER_CONTROL_ENABLE_TIMEOUT_MS + 1_000);
+    await removing;
+    expect(backend.stopInput).toHaveBeenCalled();
+    const disposing = manager.dispose();
+    await vi.advanceTimersByTimeAsync(COMPUTER_CONTROL_ENABLE_TIMEOUT_MS * 2 + 2_000);
+    await disposing;
+  } finally {
+    vi.useRealTimers();
+  }
 });

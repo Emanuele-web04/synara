@@ -110,6 +110,36 @@ describe("computer emergency stop", () => {
     await manager.dispose();
   });
 
+  it("a press landing mid-rearm wins — the stale re-arm cannot clear the latch", async () => {
+    const pending = deferred();
+    class DeferredRearmBackend extends StopRearmBackend {
+      override async rearmInput(): Promise<void> {
+        this.rearmCalls += 1;
+        await pending.promise;
+      }
+    }
+    const backend = new DeferredRearmBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const events: ComputerEvent[] = [];
+    manager.onEvent((event) => events.push(event));
+
+    await manager.emergencyStopInput();
+    const rearm = manager.rearmInput();
+    await vi.waitFor(() => expect(backend.rearmCalls).toBe(1));
+    // The operator presses Escape again while the host re-arm is in flight.
+    await manager.emergencyStopInput();
+    pending.resolve();
+    await expect(rearm).resolves.toEqual({ rearmed: true, wasStopped: true });
+    // Without the epoch check this re-arm would clear a latch it never saw:
+    // the second press must keep input stopped and emit no re-arm event.
+    expect((await manager.getStatus()).inputStopped).toBe(true);
+    await expect(manager.click("esc-thread", { x: 1, y: 1 })).rejects.toThrow("Escape");
+    expect(events.some((event) => event.type === "computer.input-stopped" && !event.stopped)).toBe(
+      false,
+    );
+    await manager.dispose();
+  });
+
   it("keeps the latch when the backend re-arm relay fails", async () => {
     const backend = new StopRearmBackend();
     backend.rearmError = new Error("host unreachable");

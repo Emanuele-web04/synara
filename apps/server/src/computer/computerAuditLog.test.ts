@@ -11,6 +11,7 @@ import {
   ComputerAuditLog,
   summarizeComputerAuditArgs,
 } from "./computerAuditLog.ts";
+import { COMPUTER_GRANT_AUDIT_TOOL, COMPUTER_GRANT_REVOKED_CODE } from "./computerGrants.ts";
 
 const tempDirs: string[] = [];
 
@@ -179,6 +180,37 @@ describe("ComputerManager audit seam", () => {
     });
     await manager.dispose();
     await expect(readFile(auditLogPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("grant lifecycle rows survive the disabled-thread drop — they record what changed, not what was refused", async () => {
+    const dir = await tempDir();
+    const auditLogPath = join(dir, "computer-audit.jsonl");
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, auditLogPath, actionSettleMs: 0 });
+    const threadId = "disabled-thread";
+    await manager.setControlEnabled(threadId, false);
+    manager.recordComputerAudit({
+      tool: COMPUTER_GRANT_AUDIT_TOOL,
+      threadId,
+      args: { grantId: "grant-1" },
+      effect: "verified",
+      code: COMPUTER_GRANT_REVOKED_CODE,
+    });
+    // A refused input attempt on the same disabled thread still drops.
+    manager.recordComputerAudit({
+      tool: "computer_click",
+      threadId,
+      args: { x: 1, y: 1 },
+      effect: "refused",
+      code: "computer_control_revoked",
+    });
+    await manager.dispose();
+    const lines = (await readFile(auditLogPath, "utf8")).trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      tool: COMPUTER_GRANT_AUDIT_TOOL,
+      code: COMPUTER_GRANT_REVOKED_CODE,
+    });
   });
 
   it("records through the manager once control is enabled", async () => {
