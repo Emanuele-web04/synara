@@ -51,6 +51,13 @@ export const COMPUTER_TOOL_TITLES = {
   computer_write_clipboard: "Write to the clipboard",
   computer_paste: "Paste text",
   computer_run: "Run a sequence",
+  computer_recording_start: "Start a session recording",
+  computer_recording_stop: "Stop the recording",
+  computer_recording_list: "List recordings",
+  computer_recording_read: "Read a recording",
+  computer_recording_export: "Export a recording",
+  computer_recording_delete: "Delete a recording",
+  computer_replay: "Replay a recorded session",
 } as const;
 
 export type ComputerToolName = keyof typeof COMPUTER_TOOL_TITLES;

@@ -243,6 +243,28 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
   ),
   synara_computer_paste: presentComputerTool("pasting text", "pasted text"),
   synara_computer_run: presentComputerTool("running a desktop sequence", "ran a desktop sequence"),
+  synara_computer_recording_start: presentComputerTool(
+    "starting a session recording",
+    "started a session recording",
+  ),
+  synara_computer_recording_stop: presentComputerTool(
+    "stopping the recording",
+    "stopped the recording",
+  ),
+  synara_computer_recording_list: presentComputerTool("listing recordings", "listed recordings"),
+  synara_computer_recording_read: presentComputerTool("reading a recording", "read a recording"),
+  synara_computer_recording_export: presentComputerTool(
+    "exporting a recording",
+    "exported a recording",
+  ),
+  synara_computer_recording_delete: presentComputerTool(
+    "deleting a recording",
+    "deleted a recording",
+  ),
+  synara_computer_replay: presentComputerTool(
+    "replaying a recorded session",
+    "replayed a recorded session",
+  ),
 } as const satisfies Record<`synara_${ComputerToolName}`, SynaraMcpToolPresentation>;
 
 function presentComputerTool(present: string, past: string): SynaraMcpToolPresentation {

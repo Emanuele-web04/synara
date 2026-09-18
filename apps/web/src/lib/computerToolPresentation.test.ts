@@ -60,6 +60,13 @@ describe("computerToolName", () => {
       "computer_write_clipboard",
       "computer_paste",
       "computer_run",
+      "computer_recording_start",
+      "computer_recording_stop",
+      "computer_recording_list",
+      "computer_recording_read",
+      "computer_recording_export",
+      "computer_recording_delete",
+      "computer_replay",
     ]);
   });
 
