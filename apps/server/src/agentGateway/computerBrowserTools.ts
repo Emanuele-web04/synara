@@ -44,7 +44,12 @@ import {
   type ToolContext,
   type ToolEntry,
 } from "./toolRuntime.ts";
-import { COMPUTER_CONTROL_CAPABILITY, computerAuditErrorOutcome } from "./computerTools.ts";
+import {
+  COMPUTER_CONTROL_CAPABILITY,
+  computerApprovalRequiredError,
+  computerAuditErrorOutcome,
+  cuaActionErrorPayload,
+} from "./computerTools.ts";
 import {
   summarizeComputerAuditArgs,
   type ComputerAuditEffect,
@@ -113,12 +118,7 @@ function approvalUnavailableResult(name: string): McpToolCallResult {
     content: [
       {
         type: "text",
-        text: JSON.stringify({
-          error: {
-            code: "ComputerApprovalRequired",
-            message: `${name} requires explicit user approval, and this provider session has no approval gate. The action was refused before it ran.`,
-          },
-        }),
+        text: JSON.stringify({ error: computerApprovalRequiredError(name) }),
       },
     ],
     isError: true,
@@ -339,12 +339,7 @@ export function makeAgentGatewayComputerBrowserTools(
                   content: [
                     {
                       type: "text" as const,
-                      text: JSON.stringify({
-                        error: error.code,
-                        effect: error.effect,
-                        message: error.message,
-                        retryAllowed: false,
-                      }),
+                      text: JSON.stringify(cuaActionErrorPayload(error)),
                     },
                   ],
                   isError: true as const,
