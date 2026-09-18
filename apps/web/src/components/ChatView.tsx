@@ -3604,7 +3604,7 @@ export default function ChatView({
         toastManager.add({
           type: "error",
           title: "Could not reference this chat",
-          description: "Archived chats cannot be mentioned.",
+          description: "This chat is unavailable or cannot be mentioned here.",
         });
         return;
       }
