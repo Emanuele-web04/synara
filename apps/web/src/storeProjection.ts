@@ -1213,8 +1213,8 @@ function deriveThreadStateSignals(
   return {
     latestUserMessageAt: metadata.latestUserMessageAt,
     latestHumanMessageAt:
-      (thread.latestHumanMessageAt ?? "") > (metadata.latestHumanMessageAt ?? "")
-        ? (thread.latestHumanMessageAt ?? null)
+      thread.latestHumanMessageAt !== undefined
+        ? thread.latestHumanMessageAt
         : metadata.latestHumanMessageAt,
     hasPendingApprovals:
       actionableInteractions?.some((interaction) => interaction.interactionKind === "approval") ??

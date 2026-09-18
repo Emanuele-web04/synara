@@ -117,6 +117,64 @@ describe("store projection", () => {
     expect(state.sidebarThreadSummaryById[thread.id]?.latestHumanMessageAt).toBe(at(2));
   });
 
+  it.each(["2026-09-17T10:00:00.000Z", null])(
+    "preserves authoritative human recency %s while stale detail awaits hydration",
+    (latestHumanMessageAt) => {
+      const staleAt = "2026-09-17T10:20:00.000Z";
+      const incoming = makeReadModelThread({ latestHumanMessageAt, messages: [] });
+      const thread = makeThread({
+        id: incoming.id,
+        latestHumanMessageAt: staleAt,
+        messages: [
+          {
+            id: MessageId.makeUnsafe("rolled-back-human"),
+            role: "user",
+            text: "Removed remotely",
+            dispatchOrigin: "user",
+            turnId: null,
+            streaming: false,
+            createdAt: staleAt,
+          },
+        ],
+      });
+      let state = syncServerShellSnapshot(makeState(thread), {
+        ...makeShellSnapshot(incoming),
+        snapshotSequence: 20,
+      });
+      expect(getThreadFromState(state, thread.id)?.messages).toHaveLength(1);
+      state = applyThreadUpdate(state, thread.id, (current) => ({
+        ...current,
+        lastVisitedAt: "2026-09-17T10:30:00.000Z",
+      }));
+      expect(getThreadFromState(state, thread.id)?.latestHumanMessageAt).toBe(latestHumanMessageAt);
+      expect(state.sidebarThreadSummaryById[thread.id]?.latestHumanMessageAt).toBe(
+        latestHumanMessageAt,
+      );
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.message-sent",
+          {
+            threadId: thread.id,
+            messageId: MessageId.makeUnsafe("automatic-followup"),
+            role: "user",
+            dispatchOrigin: "automation",
+            text: "Continue",
+            streaming: false,
+            turnId: null,
+            source: "native",
+            createdAt: "2026-09-17T10:31:00.000Z",
+            updatedAt: "2026-09-17T10:31:00.000Z",
+          },
+          { sequence: 21, occurredAt: "2026-09-17T10:31:00.000Z" },
+        ),
+      ]);
+      expect(getThreadFromState(state, thread.id)?.latestHumanMessageAt).toBe(latestHumanMessageAt);
+      expect(state.sidebarThreadSummaryById[thread.id]?.latestHumanMessageAt).toBe(
+        latestHumanMessageAt,
+      );
+    },
+  );
+
   it("retains human recency through partial hydration, reads, agent sends, eviction, and reconnect", () => {
     const humanAt = "2026-09-17T10:00:00.000Z";
     const incoming = makeReadModelThread({ latestHumanMessageAt: humanAt, messages: [] });
