@@ -6,13 +6,15 @@ on:
     paths: [.github/workflows/project-relocation-development.yml]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  source:
-    if: github.ref == 'refs/heads/fix/project-relocation-recovery'
+  verify:
+    if: github.ref == 'refs/heads/fix/project-relocation-recovery' && github.repository == 'Emanuele-web04/synara'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 30
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - name: Check out exact source without initializing submodules
         run: |
@@ -21,10 +23,87 @@ jobs:
           git fetch --depth=1 origin "$GITHUB_SHA"
           git checkout --detach FETCH_HEAD
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - name: Prepare source-only verification archive
-        run: tar --exclude=.git -czf "$RUNNER_TEMP/synara-relocation-source.tar.gz" .
-      - uses: actions/upload-artifact@v4
+      - name: Verify and apply reviewed patch
+        run: |
+          base64 --decode .github/project-relocation.patch.gz.b64 | gzip -d > "$RUNNER_TEMP/relocation.patch"
+          echo "0dc80ae302b92fd833b4d25b726d8cc26c7d78c659889e0e9f0775b7530b2453  $RUNNER_TEMP/relocation.patch" | sha256sum -c -
+          git apply --check "$RUNNER_TEMP/relocation.patch"
+          git apply --index "$RUNNER_TEMP/relocation.patch"
+          git diff --cached --name-only --diff-filter=ACM -z > "$RUNNER_TEMP/relocation-files"
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
+      - name: Format changed files
+        run: |
+          xargs -0 ./node_modules/.bin/oxfmt < "$RUNNER_TEMP/relocation-files"
+          xargs -0 git add -- < "$RUNNER_TEMP/relocation-files"
+          git rm -- .github/project-relocation.patch.gz.b64
+      - name: Commit and push only the feature branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: relocate imported projects without losing thread context'
+          cat > "$RUNNER_TEMP/relocation-askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' 'x-access-token' ;;
+            *Password*) printf '%s\n' "$GH_TOKEN" ;;
+          esac
+          SH
+          chmod 700 "$RUNNER_TEMP/relocation-askpass"
+          GIT_ASKPASS="$RUNNER_TEMP/relocation-askpass" GIT_TERMINAL_PROMPT=0 git push origin HEAD:refs/heads/fix/project-relocation-recovery
+          rm "$RUNNER_TEMP/relocation-askpass"
+      - name: Format check
+        id: format
+        continue-on-error: true
+        run: bun run fmt:check
+      - name: Lint
+        id: lint
+        continue-on-error: true
+        run: bun run lint
+      - name: Typecheck
+        id: typecheck
+        continue-on-error: true
+        run: bun run typecheck
+      - name: Windows runtime boundary
+        id: boundary
+        continue-on-error: true
+        run: bun run windows-runtime:check
+      - name: Shared process regression tests
+        id: shared
+        continue-on-error: true
+        run: bun run --cwd packages/shared test -- src/processSpawnOutcome.test.ts src/processRuntime.test.ts
+      - name: Server relocation and teardown tests
+        id: server
+        continue-on-error: true
+        run: bun run --cwd apps/server test -- src/orchestration/decider.projectRelocation.test.ts src/orchestration/projectRelocationPaths.test.ts src/platform/supervisedProcessSpawnFailure.test.ts src/platform/supervisedProcessTeardown.test.ts src/orchestration/dispatchCommandNormalization.test.ts
+      - name: Provider lifecycle regression tests
+        id: provider
+        continue-on-error: true
+        run: bun run --cwd apps/server test -- src/orchestration/Layers/ProviderCommandReactor.test.ts
+      - name: Web relocation tests
+        id: web
+        continue-on-error: true
+        run: bun run test:web:focused src/lib/projectRelocation.test.ts
+      - name: Prepare verified source archive
+        if: always()
+        run: |
+          git rev-parse HEAD > "$RUNNER_TEMP/relocation-commit.txt"
+          tar --exclude=.git --exclude=node_modules --exclude=.turbo --exclude=dist --exclude=dist-electron -czf "$RUNNER_TEMP/synara-relocation-verified.tar.gz" .
+      - name: Upload verification source
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: synara-relocation-source
-          path: ${{ runner.temp }}/synara-relocation-source.tar.gz
+          name: synara-relocation-verified
+          path: |
+            ${{ runner.temp }}/synara-relocation-verified.tar.gz
+            ${{ runner.temp }}/relocation-commit.txt
           retention-days: 1
+      - name: Summarize verification outcomes
+        if: always()
+        env:
+          OUTCOMES: ${{ toJSON(steps) }}
+        run: |
+          printf '%s\n' "$OUTCOMES"
+          node -e 'const s=JSON.parse(process.env.OUTCOMES);if(Object.values(s).some(x=>x.outcome==="failure"))process.exit(1)'
