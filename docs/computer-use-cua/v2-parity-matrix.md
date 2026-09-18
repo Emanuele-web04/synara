@@ -80,7 +80,13 @@ The gap summary above predates the decisive input matrix. Verified results:
   `cua:<pid>:<window_id>` targets with both endpoints in-window; drivers
   without the patch refuse `background_unavailable` → `not-dispatched`, and
   foreground stays the fallback for surfaces that drop background events.
-  Electron remains dead — the recharacterization above still holds there.
+  Electron remains dead for CGEvent paths — the recharacterization above
+  still holds there. (2026-09-18 addendum: the AX-semantic path is NOT
+  dead on Chromium — the driver self-enables
+  `AXManualAccessibility`/`AXEnhancedUserInterface` and `set_value`/
+  readback/`get_window_state` work on a hidden real Chrome, certified by
+  the `chromium-semantic` live-cert row. The dead claim applies to
+  process-scoped event injection only.)
 - **Gap 4 (menus/frames) — WIRED.** `invoke_menu`, `set_window_frame`,
   `list_apps`, `verify_state`, `zoom`, `kill_app` verified live on TextEdit
   and shipped through protocol/backend/manager/gateway as

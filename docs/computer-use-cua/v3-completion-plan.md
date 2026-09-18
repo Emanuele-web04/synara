@@ -99,11 +99,19 @@ must pass it before and after.
    `set_value`→restore→release run against a canary app; optional
    transparent level-25 overlay variant (own window — feasible; foreign
    `CGSSetWindowLevel` is entitlement-dead). Keep fail-closed.
-3. **Electron-class apps**: the known-dead path. Spike: masked real
-   activation + focus-belief records (CPS type-21, constants resolved from
-   Codex's binary) + theft-suppression taps. Canary-gated; if belief can't
-   manufacture key focus (our earlier proof), masked activation is the
-   only honest rung — document which Electron apps accept it.
+3. **Electron-class apps — partially resolved (2026-09-18)**: the
+   AX-semantic path works and is certified. `chromium-semantic`
+   live-cert row: hidden `launch_app` on real Chrome → driver-internal
+   `AXManualAccessibility`/`AXEnhancedUserInterface` enablement →
+   139-element tree → omnibox `set_value` confirmed with value
+   readback → `set_app_visibility` re-hide (Chromium self-unhides on
+   startup) → operator front unchanged. Caveats recorded: Chromium
+   claims AX-focus on the written element for ~1s (exempted span,
+   keyWin/frontmost never move); hidden launch is best-effort until
+   re-hide. **Still dead**: CGEvent-based background input (scroll/
+   type/click) on inactive Electron — the fix path is CDP
+   `Input.dispatch*` into background renderers or masked activation;
+   belief-based key-focus manufacturing stays proven-dead.
 4. **Speed budgets**: p50/p95 table for get_state/click/type/scroll/
    launch/turn-start on a fixed scenario set; then targeted cuts
    (conditional settle, frame reuse, `SLSHWCaptureWindowList` fast
