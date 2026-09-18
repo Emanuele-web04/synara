@@ -10,6 +10,7 @@ export const SYNARA_COMPUTER_TOOL_NAMES = [
   "computer_get_cursor_position",
   "computer_get_screen_size",
   "computer_get_state",
+  "computer_help",
   "computer_hotkey",
   "computer_input_paused",
   "computer_invoke_menu",

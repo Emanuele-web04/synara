@@ -101,6 +101,12 @@ import { withModelDesktopObservation } from "../computer/modelDesktopObservation
 import { withComputerTask } from "../computer/computerTaskContext.ts";
 import { PROVIDERS_WITHOUT_APPROVAL_GATE } from "./approvalGate.ts";
 export { computerToolInstructions } from "./computerGuidance.ts";
+import {
+  COMPUTER_HELP_INDEX,
+  COMPUTER_HELP_SECTIONS,
+  COMPUTER_HELP_TOPICS,
+  type ComputerHelpTopic,
+} from "./computerGuidance.ts";
 import { mcpToolResultError, type McpToolCallResult } from "./protocol.ts";
 import {
   ToolInputError,
@@ -2834,9 +2840,7 @@ export function makeAgentGatewayComputerTools(
             elements: stable?.items ?? [],
             // An empty listing with an unreadable tree must not look like
             // "nothing on screen" — carry the read's own status with it.
-            ...(state.accessibility !== undefined
-              ? { accessibility: state.accessibility }
-              : {}),
+            ...(state.accessibility !== undefined ? { accessibility: state.accessibility } : {}),
             ...(stable?.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
             ...(stable !== undefined && !stable.complete
               ? { elementsTruncated: true, elementsOmitted: stable.omitted }
@@ -3799,6 +3803,52 @@ export function makeAgentGatewayComputerTools(
       handler: handle("computer_get_cursor_position", async (args) =>
         manager.getCursorPosition(readWindowIdArg(args)),
       ),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
+        name: "computer_help",
+        description:
+          "The detailed Computer playbook the injected guidance points at: situational chapters on browser-tab driving, menus/frames/app exits, hidden workspaces, form work, and recording/replay. Call with no topic for the index, or pass a topic to read that chapter before touching a surface it covers.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            topic: {
+              type: "string",
+              enum: [...COMPUTER_HELP_TOPICS, "all"],
+              description:
+                'Which chapter to read. Omit for the index of chapters; "all" reads every chapter.',
+            },
+          },
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Computer playbook",
+          ...READ_ONLY_TOOL_ANNOTATIONS,
+        },
+      },
+      handler: handle("computer_help", async (args) => {
+        const topic = readStringArg(args, "topic");
+        if (topic === undefined || topic === "all") {
+          const chapters =
+            topic === "all"
+              ? Object.entries(COMPUTER_HELP_SECTIONS)
+                  .map(([name, text]) => `## ${name}\n${text}`)
+                  .join("\n\n")
+              : undefined;
+          return {
+            ...(chapters !== undefined ? { chapters } : { topics: COMPUTER_HELP_INDEX }),
+          };
+        }
+        const section = COMPUTER_HELP_SECTIONS[topic as ComputerHelpTopic];
+        if (section === undefined) {
+          throw new ToolInputError(
+            `Unknown computer_help topic "${topic}". Topics: ${COMPUTER_HELP_TOPICS.join(", ")}, all.`,
+          );
+        }
+        return { topic, text: section };
+      }),
     },
     actionEntry(
       "computer_set_window_frame",

@@ -302,6 +302,7 @@ describe("agent gateway computer tools", () => {
       "computer_zoom",
       "computer_get_accessibility_tree",
       "computer_get_cursor_position",
+      "computer_help",
       "computer_set_window_frame",
       "computer_invoke_menu",
       "computer_kill_app",
@@ -4511,5 +4512,76 @@ describe("computer_run flow control", () => {
     } finally {
       await manager.dispose();
     }
+  });
+});
+
+describe("computer_help", () => {
+  it("indexes the chapters when called bare", async () => {
+    const { call, manager } = await setup();
+    try {
+      const result = await call("computer_help", {});
+      expect(result.isError).not.toBe(true);
+      const json = resultJson(result) as { topics: string };
+      for (const topic of ["browser", "menus", "hidden", "forms", "recording"]) {
+        expect(json.topics).toContain(topic);
+      }
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("serves one chapter verbatim on its topic", async () => {
+    const { call, manager } = await setup();
+    try {
+      const result = await call("computer_help", { topic: "browser" });
+      expect(result.isError).not.toBe(true);
+      const json = resultJson(result) as { topic: string; text: string };
+      expect(json.topic).toBe("browser");
+      expect(json.text).toContain("computer_browser_prepare");
+      expect(json.text).not.toContain("computer_recording_start");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("serves every chapter under all", async () => {
+    const { call, manager } = await setup();
+    try {
+      const result = await call("computer_help", { topic: "all" });
+      expect(result.isError).not.toBe(true);
+      const json = resultJson(result) as { chapters: string };
+      expect(json.chapters).toContain("computer_browser_prepare");
+      expect(json.chapters).toContain("computer_invoke_menu");
+      expect(json.chapters).toContain("set_window_minimized");
+      expect(json.chapters).toContain("computer_recording_start");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses an unknown topic and names the valid ones", async () => {
+    const { call, manager } = await setup();
+    try {
+      const result = await call("computer_help", { topic: "spaces" });
+      expect(result.isError).toBe(true);
+      const text = result.content.find((entry) => entry.type === "text");
+      expect(text?.type === "text" ? text.text : "").toContain("browser");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("keeps the injected block to the every-turn core and points at the tool", async () => {
+    // What moved behind computer_help was chosen for being situational: the
+    // injected block still carries consent, the observe-act loop, verdicts and
+    // refusals — everything a first action needs — but not the chapters.
+    const notes = computerToolInstructions();
+    expect(notes).toContain("computer_help");
+    expect(notes).not.toContain("computer_browser_prepare");
+    expect(notes).not.toContain("computer_invoke_menu");
+    expect(notes).not.toContain("computer_recording_start");
+    expect(notes).not.toContain("set_window_minimized");
+    expect(notes).toContain("Never replay an uncertain action");
+    expect(notes).toContain("delivery.verified");
   });
 });

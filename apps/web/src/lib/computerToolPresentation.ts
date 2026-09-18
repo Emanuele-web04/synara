@@ -25,6 +25,7 @@ export const COMPUTER_TOOL_TITLES = {
   computer_zoom: "Zoom into a window",
   computer_get_accessibility_tree: "List apps and windows",
   computer_get_cursor_position: "Read the cursor position",
+  computer_help: "Read the Computer playbook",
   computer_click: "Click",
   computer_double_click: "Double-click",
   computer_triple_click: "Triple-click",
@@ -288,6 +289,8 @@ function describeParams(
   }
   const action = readString(args.action);
   if (action) rows.push({ name: "Action", value: action });
+  const topic = readString(args.topic);
+  if (topic) rows.push({ name: "Topic", value: topic });
   const app = readString(args.app) ?? readString(args.name) ?? readString(args.bundle_id);
   if (app) rows.push({ name: "App", value: app });
   // The off-screen flag changes what the launch does to the user's screen, so

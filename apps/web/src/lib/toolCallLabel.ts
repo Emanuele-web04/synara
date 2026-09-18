@@ -187,6 +187,10 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
     "reading the cursor position",
     "read the cursor position",
   ),
+  synara_computer_help: presentComputerTool(
+    "reading the Computer playbook",
+    "read the Computer playbook",
+  ),
   synara_computer_click: presentComputerTool("clicking the desktop", "clicked the desktop"),
   synara_computer_double_click: presentComputerTool(
     "double-clicking the desktop",
