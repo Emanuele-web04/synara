@@ -37,6 +37,87 @@ export function computerPreviewCardCaps(size: ComputerPreviewCardSize): Computer
     : { minWidthPx: 240, maxWidthPx: 400 };
 }
 
+/** Viewport clearance kept around a detached floating card on every edge. */
+export const COMPUTER_PREVIEW_FLOAT_MARGIN_PX = 8;
+
+/**
+ * Clamp a detached card's top-left so the whole card stays on screen. When
+ * the card is wider or taller than the viewport itself the margin still
+ * applies on the origin edge, so the card can never start off-screen.
+ */
+export function clampComputerPreviewFloat(input: {
+  readonly x: number;
+  readonly y: number;
+  readonly cardWidthPx: number;
+  readonly cardHeightPx: number;
+  readonly viewportWidthPx: number;
+  readonly viewportHeightPx: number;
+}): { readonly x: number; readonly y: number } {
+  const margin = COMPUTER_PREVIEW_FLOAT_MARGIN_PX;
+  const maxX = Math.max(margin, input.viewportWidthPx - input.cardWidthPx - margin);
+  const maxY = Math.max(margin, input.viewportHeightPx - input.cardHeightPx - margin);
+  return {
+    x: Math.min(Math.max(input.x, margin), maxX),
+    y: Math.min(Math.max(input.y, margin), maxY),
+  };
+}
+
+/** Width a detached card takes: its footprint cap, minus viewport margin. */
+export function computerPreviewFloatWidthPx(input: {
+  readonly caps: ComputerPreviewCardCaps;
+  readonly viewportWidthPx: number;
+}): number {
+  return Math.max(
+    input.caps.minWidthPx,
+    Math.min(input.caps.maxWidthPx, input.viewportWidthPx - COMPUTER_PREVIEW_FLOAT_MARGIN_PX * 2),
+  );
+}
+
+const SLOT_MARGIN_X_PX = 32;
+const SLOT_TOP_PX = 16;
+const SLOT_BOTTOM_RESERVE_PX = 120;
+
+/**
+ * Rendered card width. Detached cards ignore the rail slot entirely — their
+ * bound is the viewport. Docked cards fill the slot's width and height
+ * budget at the content aspect, clamped to sane bounds: a tall phone-shaped
+ * window narrows the card instead of growing past the chat; a wide desktop
+ * caps at the max. The docked width basis is the rail budget when provided:
+ * the rail wrapper shrink-fits the card, so measuring it would feed the card
+ * its own width back and pin it small forever.
+ */
+export function computerPreviewCardFitWidth(input: {
+  readonly floating: boolean;
+  readonly caps: ComputerPreviewCardCaps;
+  /** Host-supplied rail budget (the maxWidthPx prop); overrides slot measure. */
+  readonly railBudgetPx: number | undefined;
+  /** Measured slot; callers pass fallbacks before the first observation. */
+  readonly slotWidthPx: number;
+  readonly slotHeightPx: number;
+  readonly frameAspect: number;
+  readonly viewportWidthPx: number;
+}): number {
+  if (input.floating) {
+    return computerPreviewFloatWidthPx({
+      caps: input.caps,
+      viewportWidthPx: input.viewportWidthPx,
+    });
+  }
+  const widthBasis = input.railBudgetPx ?? input.slotWidthPx - SLOT_MARGIN_X_PX;
+  const cardMaxWidth = Math.min(
+    input.railBudgetPx ?? input.caps.maxWidthPx,
+    input.caps.maxWidthPx,
+  );
+  return Math.max(
+    input.caps.minWidthPx,
+    Math.min(
+      cardMaxWidth,
+      widthBasis,
+      (input.slotHeightPx - SLOT_TOP_PX - SLOT_BOTTOM_RESERVE_PX) * input.frameAspect,
+    ),
+  );
+}
+
 /**
  * Rail gutter budget: how wide the card may grow in this layout. Monotone in
  * the measured content width, so window resizes, sidebar toggles, split

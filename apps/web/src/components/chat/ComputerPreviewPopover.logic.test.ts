@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   changedThreadComputerStates,
+  clampComputerPreviewFloat,
   computerPreviewAgentActive,
   computerPreviewBudgetPx,
   computerPreviewCardCaps,
+  computerPreviewCardFitWidth,
   computerPreviewCardOpen,
+  computerPreviewFloatWidthPx,
   computerPreviewFrameSource,
   computerPreviewPhaseOnAgentEdge,
   computerPreviewPhaseOnHide,
@@ -298,5 +301,108 @@ describe("computerPreviewBudgetPx", () => {
     expect(
       computerPreviewBudgetPx({ mainContentWidthPx: 500, environmentInsetPx: 0, caps: compact }),
     ).toBe(200);
+  });
+});
+
+describe("clampComputerPreviewFloat", () => {
+  const card = { cardWidthPx: 320, cardHeightPx: 200 };
+  const viewport = { viewportWidthPx: 1280, viewportHeightPx: 800 };
+
+  it("keeps an in-bounds position untouched", () => {
+    expect(clampComputerPreviewFloat({ x: 400, y: 300, ...card, ...viewport })).toEqual({
+      x: 400,
+      y: 300,
+    });
+  });
+
+  it("clamps each edge back to the margin", () => {
+    expect(clampComputerPreviewFloat({ x: -50, y: 2, ...card, ...viewport })).toEqual({
+      x: 8,
+      y: 8,
+    });
+    expect(clampComputerPreviewFloat({ x: 2000, y: 900, ...card, ...viewport })).toEqual({
+      x: 1280 - 320 - 8,
+      y: 800 - 200 - 8,
+    });
+  });
+
+  it("still anchors the origin edge when the card outgrows the viewport", () => {
+    expect(
+      clampComputerPreviewFloat({
+        x: 500,
+        y: 500,
+        cardWidthPx: 2000,
+        cardHeightPx: 2000,
+        ...viewport,
+      }),
+    ).toEqual({ x: 8, y: 8 });
+  });
+});
+
+describe("computerPreviewFloatWidthPx", () => {
+  const compact = { minWidthPx: 240, maxWidthPx: 400 };
+
+  it("takes the footprint cap on wide viewports", () => {
+    expect(computerPreviewFloatWidthPx({ caps: compact, viewportWidthPx: 1600 })).toBe(400);
+  });
+
+  it("shrinks to the viewport minus margins on narrow windows", () => {
+    expect(computerPreviewFloatWidthPx({ caps: compact, viewportWidthPx: 300 })).toBe(284);
+  });
+
+  it("never drops below the footprint minimum", () => {
+    expect(computerPreviewFloatWidthPx({ caps: compact, viewportWidthPx: 200 })).toBe(240);
+  });
+});
+
+describe("computerPreviewCardFitWidth", () => {
+  const compact = { minWidthPx: 240, maxWidthPx: 400 };
+  const base = {
+    caps: compact,
+    railBudgetPx: undefined,
+    slotWidthPx: 432,
+    slotHeightPx: 616,
+    frameAspect: 16 / 10,
+    viewportWidthPx: 1600,
+  };
+
+  it("docked: fills the slot width budget at the footprint cap", () => {
+    // 432 - 32 margin = 400 basis; height budget 480 * 1.6 = 768 → cap wins.
+    expect(computerPreviewCardFitWidth({ ...base, floating: false })).toBe(400);
+  });
+
+  it("docked: narrows for tall content instead of overflowing the slot", () => {
+    // Portrait phone aspect: height budget 480 * 0.5 = 240 < width basis.
+    expect(
+      computerPreviewCardFitWidth({ ...base, floating: false, frameAspect: 0.5 }),
+    ).toBe(240);
+  });
+
+  it("docked: the rail budget overrides the measured slot", () => {
+    expect(
+      computerPreviewCardFitWidth({ ...base, floating: false, railBudgetPx: 300 }),
+    ).toBe(300);
+  });
+
+  it("docked: never drops below the footprint minimum", () => {
+    expect(
+      computerPreviewCardFitWidth({
+        ...base,
+        floating: false,
+        railBudgetPx: 100,
+        slotWidthPx: 100,
+      }),
+    ).toBe(240);
+  });
+
+  it("floating: ignores the slot and caps at the viewport footprint", () => {
+    expect(
+      computerPreviewCardFitWidth({
+        ...base,
+        floating: true,
+        slotWidthPx: 50,
+        slotHeightPx: 50,
+      }),
+    ).toBe(400);
   });
 });
