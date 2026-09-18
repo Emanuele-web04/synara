@@ -461,7 +461,7 @@ agentGatewayRetentionLegacyLayer(
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
-        [105, "ProjectAgent"],
+          [105, "ProjectAgent"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -602,7 +602,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
-        [105, "ProjectAgent"],
+          [105, "ProjectAgent"],
         ],
       );
 
@@ -734,7 +734,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
-        [105, "ProjectAgent"],
+          [105, "ProjectAgent"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
