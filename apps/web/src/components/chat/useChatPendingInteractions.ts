@@ -2,6 +2,7 @@ import {
   RuntimeMode,
   ThreadId,
   type ApprovalRequestId,
+  type ComputerApprovalGrant,
   type ProviderApprovalDecision,
   type ProviderRequestKind,
   type ProviderUserInputAnswers,
@@ -243,6 +244,7 @@ export function useChatPendingInteractions({
       decision: ProviderApprovalDecision,
       lifecycleGeneration?: string,
       requestKind?: ProviderRequestKind,
+      computerGrant?: ComputerApprovalGrant,
     ) => {
       const api = readNativeApi();
       if (!api || !activeThreadId) return;
@@ -270,6 +272,9 @@ export function useChatPendingInteractions({
           requestId,
           decision,
           ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
+          // An explicit always-allow choice on a computer approval; the
+          // server mints the durable grant only when it is present.
+          ...(computerGrant !== undefined ? { computerGrant } : {}),
           createdAt: new Date().toISOString(),
         })
         .catch(async (err: unknown) => {

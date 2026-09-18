@@ -184,10 +184,14 @@ import type {
   ComputerInputClickInput,
   ComputerInputKeyInput,
   ComputerInputScrollInput,
+  ComputerListGrantsInput,
+  ComputerListGrantsResult,
   ComputerListWindowsInput,
   ComputerListWindowsResult,
   ComputerProvisionInput,
   ComputerProvisionResult,
+  ComputerRevokeGrantInput,
+  ComputerRevokeGrantResult,
   ComputerSetControlEnabledInput,
   ComputerState,
   ComputerStatusResult,
@@ -1079,6 +1083,13 @@ export interface NativeApi {
     inputClick: (input: ComputerInputClickInput) => Promise<ComputerActionResult>;
     inputScroll: (input: ComputerInputScrollInput) => Promise<ComputerActionResult>;
     inputKey: (input: ComputerInputKeyInput) => Promise<ComputerActionResult>;
+    /**
+     * The durable always-allow grants minted through computer approvals —
+     * read and revoke only; creation happens exclusively on the
+     * approval-response path.
+     */
+    listGrants: (input: ComputerListGrantsInput) => Promise<ComputerListGrantsResult>;
+    revokeGrant: (input: ComputerRevokeGrantInput) => Promise<ComputerRevokeGrantResult>;
     onEvent: (callback: (event: ComputerEvent) => void) => () => void;
   };
 }

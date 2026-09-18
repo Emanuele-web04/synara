@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { ComputerApprovalGrant } from "./computer";
 import { TrimmedNonEmptyString } from "./baseSchemas";
 import {
   ApprovalRequestId,
@@ -168,6 +169,12 @@ export const ProviderRespondToRequestInput = Schema.Struct({
   requestId: ApprovalRequestId,
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
+  /**
+   * The explicit always-allow choice a computer approval carried. Forwarded
+   * only to the computer approval gate (`computer:` request ids); ignored
+   * for provider-owned requests.
+   */
+  computerGrant: Schema.optional(ComputerApprovalGrant),
 });
 export type ProviderRespondToRequestInput = typeof ProviderRespondToRequestInput.Type;
 

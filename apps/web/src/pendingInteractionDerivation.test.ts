@@ -11,6 +11,15 @@ import { describe, expect, it } from "vitest";
 import { derivePendingApprovals, derivePendingUserInputs } from "./pendingInteractionDerivation";
 import { makeActivity } from "./storeTestFixtures";
 
+function grantOfferPayload(computerGrantOffer: unknown): OrchestrationThreadActivity["payload"] {
+  return {
+    requestId: "computer:grant-bad",
+    requestKind: "tool",
+    toolName: "computer_click",
+    computerGrantOffer: computerGrantOffer as OrchestrationThreadActivity["payload"],
+  };
+}
+
 function makePendingInteraction(
   interactionKind: OrchestrationPendingInteraction["interactionKind"],
   status: OrchestrationPendingInteraction["status"],
@@ -51,6 +60,79 @@ describe("derivePendingApprovals", () => {
     expect(approvals[0]).toMatchObject({
       approvalScope: "computer-task",
       sessionApprovalAvailable: false,
+    });
+  });
+
+  it("parses the durable always-allow offer a computer approval carries", () => {
+    // The gateway writes the offer stringified, like toolParamsDisplay.
+    const approvals = derivePendingApprovals([
+      makeActivity({
+        kind: "approval.requested",
+        summary: "Allow Computer for this task",
+        tone: "approval",
+        payload: {
+          requestId: "computer:grant-offer",
+          requestKind: "tool",
+          toolName: "computer_click",
+          approvalScope: "computer-task",
+          computerGrantOffer: JSON.stringify({
+            apps: [{ name: "Safari", bundleId: "com.apple.Safari", teamId: "APPLE_TEAM" }],
+            classes: ["input"],
+            scopes: ["app", "any-app"],
+            defaultTtlMs: 86_400_000,
+          }),
+        },
+      }),
+    ]);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]?.computerGrantOffer).toEqual({
+      apps: [{ name: "Safari", bundleId: "com.apple.Safari", teamId: "APPLE_TEAM" }],
+      classes: ["input"],
+      scopes: ["app", "any-app"],
+      defaultTtlMs: 86_400_000,
+    });
+  });
+
+  it("drops grant offers that cannot mint an honest grant", () => {
+    // Unparseable payloads, class lists with nothing grantable, and scope
+    // lists with no valid scope all leave the card one-time-only.
+    for (const offer of [
+      "{ not json",
+      42,
+      JSON.stringify({ apps: [], classes: [], scopes: ["app"], defaultTtlMs: 60_000 }),
+      JSON.stringify({ apps: [], classes: ["not-a-class"], scopes: ["app"] }),
+      JSON.stringify({ apps: [], classes: ["input"], scopes: [], defaultTtlMs: 60_000 }),
+      JSON.stringify({ apps: [], classes: ["input"], scopes: ["tenant-wide"] }),
+    ]) {
+      const approvals = derivePendingApprovals([
+        makeActivity({
+          kind: "approval.requested",
+          summary: "Computer action needs approval",
+          tone: "approval",
+          payload: grantOfferPayload(offer),
+        }),
+      ]);
+      expect(approvals[0]?.computerGrantOffer).toBeUndefined();
+    }
+    // An already-parsed object (alternate writers) is accepted too.
+    const approvals = derivePendingApprovals([
+      makeActivity({
+        kind: "approval.requested",
+        summary: "Computer action needs approval",
+        tone: "approval",
+        payload: grantOfferPayload({
+          apps: [],
+          classes: ["clipboard"],
+          scopes: ["any-app"],
+          defaultTtlMs: 60_000,
+        }),
+      }),
+    ]);
+    expect(approvals[0]?.computerGrantOffer).toEqual({
+      apps: [],
+      classes: ["clipboard"],
+      scopes: ["any-app"],
+      defaultTtlMs: 60_000,
     });
   });
   it("shows only actionable durable approval settlements", () => {

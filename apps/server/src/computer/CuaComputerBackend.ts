@@ -1746,6 +1746,10 @@ export class CuaComputerBackend implements ComputerBackend {
       const name = text(row.name, 512) || text(row.app_name, 512);
       if (!Number.isSafeInteger(pid) || pid < 0 || !name) continue;
       const bundleId = text(row.bundle_id, 512);
+      // The driver's signature read, when it has one: durable consent grants
+      // pin to bundle id + team id, so a missing team id only ever narrows
+      // what a grant can match — it never invents an identity.
+      const teamId = text(row.team_id, 128) || text(row.signing_team_id, 128);
       const launchPath = text(row.launch_path, 4_096);
       const lastUsed = text(row.last_used, 64);
       apps.push({
@@ -1754,6 +1758,7 @@ export class CuaComputerBackend implements ComputerBackend {
         running: row.running === true || pid > 0,
         active: row.active === true || row.is_active === true,
         ...(bundleId ? { bundleId } : {}),
+        ...(teamId ? { teamId } : {}),
         ...(launchPath ? { launchPath } : {}),
         ...(Array.isArray(row.windows) ? { windowCount: row.windows.length } : {}),
         ...(lastUsed ? { lastUsed } : {}),

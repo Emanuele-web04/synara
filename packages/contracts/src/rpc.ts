@@ -80,6 +80,8 @@ import {
   ComputerInputScrollInput,
   ComputerLaunchAppInput,
   ComputerLaunchAppResult,
+  ComputerListGrantsInput,
+  ComputerListGrantsResult,
   ComputerListWindowsInput,
   ComputerListWindowsResult,
   ComputerMoveCursorInput,
@@ -87,6 +89,8 @@ import {
   ComputerPressKeyInput,
   ComputerProvisionInput,
   ComputerProvisionResult,
+  ComputerRevokeGrantInput,
+  ComputerRevokeGrantResult,
   ComputerRightClickInput,
   ComputerScrollInput,
   ComputerSelectTextInput,
@@ -876,6 +880,18 @@ export const WsSubscribeComputerEventsRpc = Rpc.make(COMPUTER_WS_METHODS.subscri
   stream: true,
 });
 
+export const WsComputerListGrantsRpc = Rpc.make(COMPUTER_WS_METHODS.listGrants, {
+  payload: ComputerListGrantsInput,
+  success: ComputerListGrantsResult,
+  error: WsRpcError,
+});
+
+export const WsComputerRevokeGrantRpc = Rpc.make(COMPUTER_WS_METHODS.revokeGrant, {
+  payload: ComputerRevokeGrantInput,
+  success: ComputerRevokeGrantResult,
+  error: WsRpcError,
+});
+
 /** Platform-neutral computer control and perception surface. */
 export const WsComputerRpcGroup = RpcGroup.make(
   WsComputerGetStatusRpc,
@@ -902,6 +918,8 @@ export const WsComputerRpcGroup = RpcGroup.make(
   WsComputerInputScrollRpc,
   WsComputerInputKeyRpc,
   WsSubscribeComputerEventsRpc,
+  WsComputerListGrantsRpc,
+  WsComputerRevokeGrantRpc,
 );
 
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {

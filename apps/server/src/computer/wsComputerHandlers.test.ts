@@ -126,6 +126,47 @@ describe("computer WebSocket handlers", () => {
     expect(Object.keys(handlers).toSorted()).toEqual(expected.toSorted());
   });
 
+  it("lists and revokes durable grants through the manager's store", async () => {
+    const { manager, handlers } = setup();
+    try {
+      const empty = await Effect.runPromise(handlers[COMPUTER_WS_METHODS.listGrants]({}));
+      expect(empty.grants).toHaveLength(0);
+      expect(empty.defaultTtlMs).toBeGreaterThan(0);
+
+      // The management surface can never mint: grants arrive only through
+      // the approval path, simulated here at the manager seam.
+      manager.createComputerGrants({
+        offer: {
+          apps: [{ name: "Calculator", bundleId: "org.kde.kcalc" }],
+          classes: ["input"],
+          scopes: ["app", "any-app"],
+        },
+        choice: { classes: ["input"], scope: "app" },
+        threadId: "thread-grants",
+      });
+      const listed = await Effect.runPromise(handlers[COMPUTER_WS_METHODS.listGrants]({}));
+      expect(listed.grants).toHaveLength(1);
+      expect(listed.grants[0]).toMatchObject({
+        app: { name: "Calculator", bundleId: "org.kde.kcalc" },
+        classes: ["input"],
+        createdByThreadId: "thread-grants",
+      });
+
+      const revoked = await Effect.runPromise(
+        handlers[COMPUTER_WS_METHODS.revokeGrant]({ grantId: listed.grants[0]!.id }),
+      );
+      expect(revoked.revoked).toBe(true);
+      expect(revoked.grants).toHaveLength(0);
+      // A second revoke names no live grant.
+      const again = await Effect.runPromise(
+        handlers[COMPUTER_WS_METHODS.revokeGrant]({ grantId: listed.grants[0]!.id }),
+      );
+      expect(again.revoked).toBe(false);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("sends a pane click straight to the backend coordinate path", async () => {
     const { backend, handlers } = setup();
 

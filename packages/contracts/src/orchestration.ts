@@ -10,6 +10,7 @@ import {
   OpenCodeModelOptions,
   PiModelOptions,
 } from "./model";
+import { ComputerApprovalGrant } from "./computer";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
 import {
@@ -1432,6 +1433,12 @@ const ThreadApprovalRespondCommand = Schema.Struct({
   requestId: ApprovalRequestId,
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
+  /**
+   * The user's explicit "always allow" choice on a computer approval —
+   * present only when the prompt offered a grant and the user picked it. A
+   * response that omits it stays a one-time answer and mints nothing.
+   */
+  computerGrant: Schema.optional(ComputerApprovalGrant),
   createdAt: IsoDateTime,
 });
 
@@ -2062,6 +2069,8 @@ export const ThreadApprovalResponseRequestedPayload = Schema.Struct({
   requestId: ApprovalRequestId,
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
+  /** The explicit computer always-allow choice the responding command carried. */
+  computerGrant: Schema.optional(ComputerApprovalGrant),
   createdAt: IsoDateTime,
 });
 

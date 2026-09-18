@@ -11,6 +11,8 @@ import {
   COMPUTER_RELEASE_CONTROL_HOTKEY,
   COMPUTER_RELEASE_HOTKEY_BACKENDS,
   type ComputerCapabilities,
+  type ComputerGrant,
+  type ComputerGrantActionClass,
   type ComputerPermission,
 } from "@synara/contracts";
 import {
@@ -18,7 +20,7 @@ import {
   COMPUTER_PERMISSION_LABELS,
   listComputerPermissions,
 } from "@synara/shared/computerGrants";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
 import type { AppSettingsBinding, ComputerPreviewSize } from "~/appSettings";
@@ -40,7 +42,10 @@ import {
 } from "./AppSnapPermissionSection";
 import {
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
+  computerGrantsQueryOptions,
   computerStatusQueryOptions,
+  revokeComputerGrant,
+  serverQueryKeys,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { SettingResetButton, SettingsSegmentedControl } from "./SettingControls";
@@ -92,6 +97,55 @@ function capabilitySummary(capabilities: ComputerCapabilities, captureAvailable:
   return enabled.length > 0 ? enabled.join(", ") : "none";
 }
 
+/** How a grant's action classes read on its row — same words the approval card used. */
+const GRANT_CLASS_LABELS: Record<ComputerGrantActionClass, string> = {
+  observe: "screen reads",
+  input: "clicks and typing",
+  lifecycle: "app and window control",
+  clipboard: "clipboard use",
+  browser: "browser actions",
+};
+
+/** One grant row's title: the app it covers, or the whole desktop for an any-app grant. */
+function computerGrantTitle(grant: ComputerGrant): string {
+  if (grant.app === null) return "Any app";
+  return grant.app.name ?? grant.app.bundleId ?? "Unnamed app";
+}
+
+/**
+ * What the grant covers and for how much longer — the row's second line, so
+ * the scope and the clock are visible together rather than in a tooltip.
+ */
+function computerGrantDescription(grant: ComputerGrant, now: number): string {
+  const classes = grant.classes.map((entry) => GRANT_CLASS_LABELS[entry]).join(" + ");
+  const remainingMs = Date.parse(grant.expiresAt) - now;
+  const expiry =
+    remainingMs <= 0
+      ? "expired — will be dropped on next use"
+      : `expires in ${formatRemaining(remainingMs)}`;
+  const identity =
+    grant.app?.bundleId !== undefined && grant.app.bundleId !== grant.app.name
+      ? ` · ${grant.app.bundleId}`
+      : "";
+  const used = grant.lastUsedAt
+    ? ` · last used ${formatRemaining(now - Date.parse(grant.lastUsedAt))} ago`
+    : "";
+  return `${classes}${identity} · ${expiry}${used}`;
+}
+
+function formatRemaining(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  if (minutes >= 24 * 60) {
+    const days = Math.round(minutes / (24 * 60));
+    return `${days} ${days === 1 ? "day" : "days"}`;
+  }
+  if (minutes >= 60) {
+    const hours = Math.round(minutes / 60);
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+}
+
 export function ComputerSettingsPanel({
   settings,
   defaults,
@@ -103,6 +157,26 @@ export function ComputerSettingsPanel({
     enabled: active,
     // Health can flip (reconnecting, recovered) while the panel is open.
     refetchInterval: active ? COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS : false,
+  });
+
+  const queryClient = useQueryClient();
+  // The durable always-allow grants: minted on approval cards, listed and
+  // revoked here. Same poll cadence as status — expiry alone can change what
+  // the list shows, and a grant created from a chat card should appear while
+  // the panel is open without a manual refresh.
+  const grantsQuery = useQuery({
+    ...computerGrantsQueryOptions({ enabled: active }),
+    refetchInterval: active ? COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS : false,
+  });
+  const revokeGrant = useMutation({
+    mutationFn: (grantId: string) => revokeComputerGrant(grantId),
+    // The revoke answer already carries the post-delete list, so the panel
+    // reflects it without waiting on the next poll.
+    onSuccess: (result) => {
+      queryClient.setQueryData(serverQueryKeys.computerGrants(), (current) =>
+        current === undefined ? current : { ...current, grants: result.grants },
+      );
+    },
   });
 
   const status = statusQuery.data;
@@ -437,6 +511,43 @@ export function ComputerSettingsPanel({
             />
           }
         />
+      </SettingsSection>
+
+      {/* The durable consents minted by "Always allow" answers on computer
+          approval cards. Every row names the app and the action classes it
+          covers, how long it has left, and a Revoke that takes effect on the
+          next gated call — grants only ever waive the prompt, never the
+          denylist or the kill switch. */}
+      <SettingsSection title="Always allowed">
+        {grantsQuery.isError ? (
+          <SettingsRow
+            title="Always-allow grants are unavailable"
+            description="This build cannot read the grant list. Grants still apply; they expire on their own."
+          />
+        ) : (grantsQuery.data?.grants.length ?? 0) === 0 ? (
+          <SettingsRow
+            title="No always-allow grants"
+            description="When a computer approval offers Always allow, the grant it creates is listed here with its expiry. Approvals otherwise ask each time."
+          />
+        ) : (
+          (grantsQuery.data?.grants ?? []).map((grant) => (
+            <SettingsRow
+              key={grant.id}
+              title={computerGrantTitle(grant)}
+              description={computerGrantDescription(grant, Date.now())}
+              control={
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={revokeGrant.isPending}
+                  onClick={() => revokeGrant.mutate(grant.id)}
+                >
+                  Revoke
+                </Button>
+              }
+            />
+          ))
+        )}
       </SettingsSection>
     </div>
   );

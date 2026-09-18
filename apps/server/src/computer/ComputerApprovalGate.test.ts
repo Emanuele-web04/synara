@@ -278,4 +278,95 @@ describe("ComputerApprovalGate", () => {
     gate.respond("dismiss", requestId, "accept");
     await expect(decision).resolves.toBe(true);
   });
+
+  describe("durable grant choices", () => {
+    const safariIdentity = {
+      name: "Safari",
+      bundleId: "com.apple.Safari",
+      teamId: "APPLE_TEAM",
+    };
+
+    it("mints the grant an accepted response explicitly chose, with the prompt's own context", async () => {
+      const gate = new ComputerApprovalGate();
+      let requestId = "";
+      const created: Array<{
+        choice: unknown;
+        context: { threadId: string; turnId?: string | undefined };
+      }> = [];
+      const decision = gate.request({
+        threadId: "grant-thread",
+        turnId: "turn-9",
+        signal: new AbortController().signal,
+        publish: async (id, resolved) => {
+          if (resolved === undefined) requestId = id;
+        },
+        grant: {
+          offer: { apps: [safariIdentity], classes: ["input"], scopes: ["app", "any-app"] },
+          create: (choice, context) => {
+            created.push({ choice, context });
+          },
+        },
+      });
+      const choice = { classes: ["input" as const], scope: "app" as const };
+      expect(gate.respond("grant-thread", requestId, "accept", choice)).toBe(true);
+      await expect(decision).resolves.toBe(true);
+      expect(created).toEqual([
+        { choice, context: { threadId: "grant-thread", turnId: "turn-9" } },
+      ]);
+    });
+
+    it("mints nothing on a decline, and a grant choice on a prompt that offered none is ignored", async () => {
+      const gate = new ComputerApprovalGate();
+      const created: unknown[] = [];
+      let offeredId = "";
+      let plainId = "";
+      const declined = gate.request({
+        threadId: "a",
+        signal: new AbortController().signal,
+        publish: async (id, resolved) => {
+          if (resolved === undefined) offeredId = id;
+        },
+        grant: {
+          offer: { apps: [safariIdentity], classes: ["input"], scopes: ["app"] },
+          create: (choice) => created.push(choice),
+        },
+      });
+      const plain = gate.request({
+        threadId: "a",
+        signal: new AbortController().signal,
+        publish: async (id, resolved) => {
+          if (resolved === undefined) plainId = id;
+        },
+      });
+      const choice = { classes: ["input" as const], scope: "app" as const };
+      gate.respond("a", offeredId, "decline", choice);
+      gate.respond("a", plainId, "accept", choice);
+      await expect(declined).resolves.toBe(false);
+      await expect(plain).resolves.toBe(true);
+      expect(created).toEqual([]);
+    });
+
+    it("keeps the one-time approval when grant creation throws", async () => {
+      const gate = new ComputerApprovalGate();
+      let requestId = "";
+      const decision = gate.request({
+        threadId: "fragile",
+        signal: new AbortController().signal,
+        publish: async (id, resolved) => {
+          if (resolved === undefined) requestId = id;
+        },
+        grant: {
+          offer: { apps: [], classes: ["clipboard"], scopes: ["any-app"] },
+          create: () => {
+            throw new Error("grant store wedged");
+          },
+        },
+      });
+      gate.respond("fragile", requestId, "accept", {
+        classes: ["clipboard"],
+        scope: "any-app",
+      });
+      await expect(decision).resolves.toBe(true);
+    });
+  });
 });

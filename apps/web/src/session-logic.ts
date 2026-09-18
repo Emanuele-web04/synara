@@ -23,6 +23,7 @@ export {
   derivePendingApprovals,
   derivePendingUserInputs,
   type PendingApproval,
+  type PendingComputerGrantOffer,
   type PendingUserInput,
 } from "./pendingInteractionDerivation";
 export {

@@ -2687,7 +2687,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       if (response.kind === "approval" && input.requestId.startsWith("computer:")) {
         return Effect.gen(function* () {
           if (
-            !computerApprovalGate.respond(input.threadId, input.requestId, response.input.decision)
+            !computerApprovalGate.respond(
+              input.threadId,
+              input.requestId,
+              response.input.decision,
+              response.input.computerGrant,
+            )
           ) {
             return yield* toValidationError(
               "ProviderService.respondToRequest",

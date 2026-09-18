@@ -325,6 +325,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords:
       "Let the agent use the desktop in any chat. Approval gates and Stop still apply. enable toggle permission desktop agent computer use control",
   },
+  {
+    id: "computer:always-allowed",
+    section: "computer",
+    title: "Always allowed",
+    keywords:
+      "Durable per-app always-allow grants from computer approvals, with expiry and revoke. always allow approval grant revoke app bundle consent computer use",
+    target: null,
+  },
 
   // ── Behavior ──────────────────────────────────────────────────────────────────
   {

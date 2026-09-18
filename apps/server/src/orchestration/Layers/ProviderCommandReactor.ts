@@ -4238,6 +4238,9 @@ const make = Effect.gen(function* () {
           ? { lifecycleGeneration: event.payload.lifecycleGeneration }
           : {}),
         decision: event.payload.decision,
+        ...(event.payload.computerGrant !== undefined
+          ? { computerGrant: event.payload.computerGrant }
+          : {}),
       })
       .pipe(
         Effect.asVoid,
