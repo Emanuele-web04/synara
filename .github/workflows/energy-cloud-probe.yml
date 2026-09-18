@@ -23,8 +23,9 @@ jobs:
           electron: "true"
 
       - name: Run paired Electron CPU proxy benchmark
+        shell: bash
         run: |
-          xvfb-run -a ./node_modules/.bin/electron --no-sandbox \
+          xvfb-run -a ./apps/desktop/node_modules/.bin/electron --no-sandbox \
             .github/scripts/energy-cloud-probe.cjs 5 20000 | tee energy-cloud-probe.log
 
       - name: Upload benchmark log
