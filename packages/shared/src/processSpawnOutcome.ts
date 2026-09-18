@@ -3,7 +3,7 @@
 // Layer: Shared platform runtime
 
 import type { ChildProcess } from "node:child_process";
-import { errorMonitor } from "node:events";
+import { errorMonitor, type EventEmitter } from "node:events";
 
 const failedSpawns = new WeakSet<object>();
 
@@ -13,13 +13,15 @@ const failedSpawns = new WeakSet<object>();
  * An absent PID alone is deliberately not evidence of a failed spawn.
  */
 export function trackProcessSpawn<T extends ChildProcess>(child: T): T {
-  const onSpawn = () => child.removeListener(errorMonitor, onError);
+  // ChildProcess narrows once() to string events; EventEmitter supports symbols.
+  const emitter: EventEmitter = child;
+  const onSpawn = () => emitter.removeListener(errorMonitor, onError);
   const onError = () => {
-    child.removeListener("spawn", onSpawn);
+    emitter.removeListener("spawn", onSpawn);
     if (child.pid === undefined) failedSpawns.add(child);
   };
-  child.once(errorMonitor, onError);
-  child.once("spawn", onSpawn);
+  emitter.once(errorMonitor, onError);
+  emitter.once("spawn", onSpawn);
   return child;
 }
 
