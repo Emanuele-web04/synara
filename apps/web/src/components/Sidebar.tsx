@@ -367,6 +367,7 @@ import {
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { isFilePreviewFocused } from "./filePreviewFind.logic";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { normalizeSettingsSection } from "../settingsNavigation";
 import {
@@ -4304,6 +4305,7 @@ export default function Sidebar() {
       terminalFocus: isTerminalFocused(),
       terminalOpen,
       terminalWorkspaceOpen,
+      filePreviewFocus: isFilePreviewFocused(),
     }),
     [terminalOpen, terminalWorkspaceOpen],
   );

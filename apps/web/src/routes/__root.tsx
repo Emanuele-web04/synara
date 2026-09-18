@@ -59,6 +59,7 @@ import { useFocusedChatContext } from "../focusedChatContext";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import type { FeedbackThreadContext } from "../feedback";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { isFilePreviewFocused } from "../components/filePreviewFind.logic";
 import {
   invalidateProviderUsageQueries,
   reconcileServerProviderStatuses,
@@ -766,6 +767,7 @@ function GlobalShortcutsDialog() {
         terminalFocus: isTerminalFocused(),
         terminalOpen,
         terminalWorkspaceOpen,
+        filePreviewFocus: isFilePreviewFocused(),
       }}
     />
   );

@@ -23,6 +23,7 @@ import { useChatProviderModels } from "./useChatProviderModels";
 import { useChatTerminalController } from "./useChatTerminalController";
 import { useChatWorkLog } from "./useChatWorkLog";
 import { useComposerVoiceController } from "./useComposerVoiceController";
+import { isFilePreviewFocused, openFocusedFilePreviewFind } from "../filePreviewFind.logic";
 import { toastManager } from "../ui/toast";
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
@@ -212,6 +213,7 @@ export function useChatKeyboardShortcuts({
         !isVoiceTranscribing &&
         !isComposerApprovalState &&
         canHandleComposerPickerShortcut(event, composerFormRef.current);
+      const filePreviewFocus = isFilePreviewFocused();
       const shortcutContext = {
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
@@ -219,6 +221,7 @@ export function useChatKeyboardShortcuts({
         terminalWorkspaceTerminalOnly: terminalState.workspaceLayout === "terminal-only",
         terminalWorkspaceTerminalTabActive,
         terminalWorkspaceChatTabActive,
+        filePreviewFocus,
       };
 
       const command = resolveShortcutCommand(event, keybindings, {
@@ -234,12 +237,22 @@ export function useChatKeyboardShortcuts({
         return;
       }
 
+      if (command === "file.find") {
+        if (!openFocusedFilePreviewFind()) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       if (command === "chat.find") {
         if (
           !shouldCaptureChatFindShortcut({
             shouldRenderChatPaneContent,
             terminalWorkspaceTerminalTabActive,
             inAppBrowserFocused: eventTargetsInAppBrowser(event.target),
+            filePreviewFocused: filePreviewFocus,
           })
         ) {
           return;
