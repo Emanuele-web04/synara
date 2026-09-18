@@ -1,0 +1,47 @@
+{
+  "run": "livecert-mu6k1pqc",
+  "date": "2026-09-18T06:05:58.212Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-wxBciV/host.sock",
+  "elapsedMs": 8640,
+  "rows": [
+    {
+      "name": "masked-activation",
+      "verdict": "fail",
+      "detail": "panel=0 front=93821 (want 93821) masked=0 wrote=true released=true",
+      "evidence": {
+        "engage": {
+          "ok": true,
+          "result": {
+            "engaged": true,
+            "shield_id": "lc5bfeac289092"
+          },
+          "desktopEpoch": 0,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        },
+        "panels": [],
+        "raise": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"Brought exact window 1789 for pid 93821 to the foreground.\",\"type\":\"text\"}],\"structuredContent\":{\"activated\":true,\"code\":\"bring_to_front_exact_window_verified\"",
+        "frontPid": 93821,
+        "targetPid": 93821,
+        "write": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readback\"}],\"route\":\"accessibility\"}},\"desktopE",
+        "value": "livecert-mu6k1pqc-masked",
+        "release": {
+          "ok": true,
+          "desktopEpoch": 0,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        },
+        "panelsAfter": []
+      },
+      "elapsedMs": 5496
+    }
+  ],
+  "summary": {
+    "total": 1,
+    "pass": 0,
+    "fail": 1,
+    "skipped": 0,
+    "verdict": "fail"
+  }
+}
