@@ -69,6 +69,23 @@ describe("packaged desktop startup verification", () => {
       ]),
     ).toMatchObject({ executableName: "synara-beta" });
 
+    for (const bad of ["../outside", "a/b", "..", "synara\\beta"]) {
+      expect(() =>
+        parsePackagedDesktopStartupArgs([
+          "--assets-dir",
+          "./release-publish",
+          "--platform",
+          "linux",
+          "--arch",
+          "x64",
+          "--version",
+          "1.2.3",
+          "--executable-name",
+          bad,
+        ]),
+      ).toThrow("Invalid packaged startup executable name");
+    }
+
     expect(() =>
       parsePackagedDesktopStartupArgs([
         "--assets-dir",

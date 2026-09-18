@@ -67,13 +67,17 @@ export function parsePackagedDesktopStartupArgs(
   if (!Number.isInteger(timeoutMs) || timeoutMs < 5_000 || timeoutMs > 180_000) {
     throw new Error("--timeout-ms must be an integer between 5000 and 180000.");
   }
+  const executableName = values.get("--executable-name")?.trim() || "synara";
+  if (!/^[A-Za-z0-9._-]+$/.test(executableName) || executableName.includes("..")) {
+    throw new Error(`Invalid packaged startup executable name: ${executableName}.`);
+  }
   return {
     assetsDirectory: resolve(required("--assets-dir")),
     platform,
     arch: required("--arch"),
     version: required("--version"),
     timeoutMs,
-    executableName: values.get("--executable-name")?.trim() || "synara",
+    executableName,
   };
 }
 
