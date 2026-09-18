@@ -2119,7 +2119,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (input.requireCompletedSource) {
         const source = await this.readThreadSnapshot(context, sourceProviderThreadId);
         const lastTurn = source.turns.at(-1);
-        if (lastTurn && !["completed", "interrupted", "failed"].includes(lastTurn.status ?? "")) {
+        // Historical payloads can omit status. Require affirmative completion
+        // evidence instead of treating missing metadata as an idle source.
+        const completedAt = lastTurn?.completedAt;
+        const hasCompletionDate =
+          typeof completedAt === "number"
+            ? Number.isFinite(completedAt) && completedAt > 0
+            : typeof completedAt === "string" && Number.isFinite(Date.parse(completedAt));
+        const completed =
+          lastTurn?.status === undefined
+            ? hasCompletionDate
+            : ["completed", "interrupted", "failed"].includes(lastTurn.status);
+        if (lastTurn && !completed) {
           throw new Error(
             "Wait for the source Codex conversation to finish its turn before importing it.",
           );

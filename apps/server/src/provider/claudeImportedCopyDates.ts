@@ -2,7 +2,10 @@ import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 
-import { findClaudeSessionTranscriptPath } from "./claudeProjectImport.ts";
+import {
+  findClaudeSessionTranscriptPath,
+  readClaudeImportMessageDates,
+} from "./claudeProjectImport.ts";
 
 /** Restore original message dates only inside a newly created native copy. */
 export async function restoreClaudeImportedCopyDates(input: {
@@ -14,11 +17,19 @@ export async function restoreClaudeImportedCopyDates(input: {
   if (input.copiedSessionId === input.sourceSessionId) {
     throw new Error("The native Claude copy must have a different session ID.");
   }
+  // SDK SessionMessage does not declare timestamps. Read persisted dates only
+  // for the selected source and retain the SDK-selected frozen message chain.
+  const sourceDates = await readClaudeImportMessageDates({
+    sessionId: input.sourceSessionId,
+    ...(input.configDir ? { configDir: input.configDir } : {}),
+  });
   const dates = new Map<string, string>();
   for (const message of input.sourceMessages) {
-    // Current SDK returns the persisted timestamp but omits it from its public
-    // SessionMessage declaration. Never substitute the time of import.
-    const timestamp = (message as SessionMessage & { timestamp?: unknown }).timestamp;
+    // Some SDK versions expose a timestamp beyond the public SessionMessage
+    // declaration. Never substitute the time of import.
+    const timestamp =
+      sourceDates.get(message.uuid) ??
+      (message as SessionMessage & { timestamp?: unknown }).timestamp;
     if (typeof timestamp === "string" && Number.isFinite(Date.parse(timestamp))) {
       dates.set(message.uuid, timestamp);
     }

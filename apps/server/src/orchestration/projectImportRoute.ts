@@ -443,6 +443,7 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
             threadId,
             nativeId,
             sourceHome: source.sourceHome,
+            sourceCwd: source.cwd,
             sourceCreatedAt: source.createdAt,
             providerOptions,
             ...(runtimeCwd ? { cwd: runtimeCwd } : {}),

@@ -294,6 +294,7 @@ describe("project import routes", () => {
       "codex-original-copy",
       "claudeAgent-original-copy",
     ]);
+    expect(test.readHistory.mock.calls[1]?.[0].sourceCwd).toBe(root);
     expect(test.stopRuntimeSession).toHaveBeenCalledTimes(2);
   });
 

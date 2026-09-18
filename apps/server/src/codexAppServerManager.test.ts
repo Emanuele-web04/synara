@@ -3608,7 +3608,17 @@ describe("thread checkpoint control", () => {
     });
   });
 
-  it.each(["ordinary", "completed", "interrupted", "failed", "empty", "inProgress"])(
+  it.each([
+    "ordinary",
+    "completed",
+    "interrupted",
+    "failed",
+    "empty",
+    "inProgress",
+    "legacy-completed",
+    "legacy-unknown",
+    "legacy-invalid-date",
+  ])(
     "forks a provider thread with an explicitly selected Standard tier (%s)",
     async (sourceStatus) => {
       const requireCompletedSource = sourceStatus !== "ordinary";
@@ -3630,7 +3640,11 @@ describe("thread checkpoint control", () => {
               : [
                   {
                     id: "completed-source-turn",
-                    status: sourceStatus === "ordinary" ? "completed" : sourceStatus,
+                    ...(sourceStatus.startsWith("legacy-")
+                      ? {}
+                      : { status: sourceStatus === "ordinary" ? "completed" : sourceStatus }),
+                    ...(sourceStatus === "legacy-completed" ? { completedAt: 1700000005 } : {}),
+                    ...(sourceStatus === "legacy-invalid-date" ? { completedAt: "invalid" } : {}),
                     items: [],
                   },
                 ],
@@ -3655,7 +3669,7 @@ describe("thread checkpoint control", () => {
           },
           runtimeMode: "full-access",
         });
-        if (sourceStatus === "inProgress") {
+        if (["inProgress", "legacy-unknown", "legacy-invalid-date"].includes(sourceStatus)) {
           await expect(fork).rejects.toThrow("finish its turn");
           expect(sendRequest.mock.calls.some(([, method]) => method === "thread/fork")).toBe(false);
           return;

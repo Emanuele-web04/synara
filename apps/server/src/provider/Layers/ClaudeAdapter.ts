@@ -6588,9 +6588,27 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             message && typeof message === "object" && "stop_reason" in message
               ? message.stop_reason
               : undefined;
+          const content =
+            message && typeof message === "object" && "content" in message
+              ? message.content
+              : undefined;
+          const legacyTextOnly =
+            stopReason === undefined &&
+            ((typeof content === "string" && content.trim().length > 0) ||
+              (Array.isArray(content) &&
+                content.length > 0 &&
+                content.every((block) => block?.type === "text")));
+          const hasPendingToolUse =
+            Array.isArray(content) && content.some((block) => block?.type === "tool_use");
+          // Missing legacy metadata is different from an explicit unfinished
+          // stream (null) or tool-use boundary. Token exhaustion is terminal too.
           if (
             lastMessage?.type !== "assistant" ||
-            (stopReason !== "end_turn" && stopReason !== "stop_sequence")
+            hasPendingToolUse ||
+            (!legacyTextOnly &&
+              stopReason !== "end_turn" &&
+              stopReason !== "stop_sequence" &&
+              stopReason !== "max_tokens")
           ) {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,

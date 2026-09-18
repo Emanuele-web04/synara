@@ -35,6 +35,7 @@ export interface ReadProjectImportHistoryInput {
   readonly threadId: ThreadId;
   readonly nativeId: string;
   readonly sourceHome: string;
+  readonly sourceCwd: string;
   readonly sourceCreatedAt: string;
   readonly providerOptions?: ProviderStartOptions;
   readonly cwd?: string;
@@ -49,7 +50,7 @@ export function makeProjectImportHistoryReader(registry: ProviderAdapterRegistry
         const sdk = await loadClaudeAgentSdk();
         // The fork has a new identity. Read that frozen copy, never the mutable original.
         const [history, dates] = await Promise.all([
-          sdk.getSessionMessages(input.nativeId),
+          sdk.getSessionMessages(input.nativeId, { dir: input.sourceCwd }),
           readClaudeImportMessageDates({ sessionId: input.nativeId, configDir: input.sourceHome }),
         ]);
         return history.map((message) => ({ ...message, timestamp: dates.get(message.uuid) }));
