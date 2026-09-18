@@ -11,18 +11,20 @@ This file is the flag reference. The rationale and budget targets live in
 
 ## Flag table
 
-| Flag                             | Default | Effect when set                                                                                                                              | Lives in                                          |
-| -------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `SYNARA_CUA_TIMING_LOG`          | off     | Emits one `[computer-timing]` line per computer call: per-leg ms, counters, total.                                                           | `apps/server/src/computer/computerCallContext.ts` |
-| `SYNARA_CUA_ACTION_SETTLE_MS`    | `300`   | Overrides the fixed post-action settle sleep; `0` removes it. Invalid values fall back to `300`.                                             | `apps/server/src/computer/ComputerManager.ts`     |
-| `SYNARA_CUA_CONDITIONAL_SETTLE`  | off     | Skips the settle sleep only when the action's delivery verdict already proves its effect — or a scroll leg's measured travel proves arrival. | `apps/server/src/computer/ComputerManager.ts`     |
-| `SYNARA_CUA_AX_ONLY_GET_STATE`   | off     | Omits `include_screenshot`/`max_dimension` from `get_window_state` on tree-only reads.                                                       | `apps/server/src/computer/CuaComputerBackend.ts`  |
-| `SYNARA_CUA_CAPTURE_REUSE`       | off     | Explicit reads return the previous `screenshotId` when the fresh capture is byte-identical.                                                  | `apps/server/src/agentGateway/computerTools.ts`   |
-| `SYNARA_CUA_PREVIEW_STILL_MS`    | `2000`  | Overrides the pane still-capture cadence; clamped to the publisher's 100 ms floor.                                                           | `apps/server/src/computer/CuaComputerBackend.ts`  |
-| `SYNARA_CUA_WARM_ON_FIRST_TOUCH` | off     | Spawns the driver and runs the validated handshake on the first probe or permission check.                                                   | `apps/desktop/src/cuaDriverHost.ts`               |
+| Flag                             | Default | Effect when set                                                                                                                                                                  | Lives in                                          |
+| -------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `SYNARA_CUA_TIMING_LOG`          | off     | Emits one `[computer-timing]` line per computer call: per-leg ms, counters, total.                                                                                               | `apps/server/src/computer/computerCallContext.ts` |
+| `SYNARA_CUA_ACTION_SETTLE_MS`    | `300`   | Overrides the fixed post-action settle sleep; `0` removes it. Invalid values fall back to `300`.                                                                                 | `apps/server/src/computer/ComputerManager.ts`     |
+| `SYNARA_CUA_CONDITIONAL_SETTLE`  | on      | Skips the settle sleep only when the action's delivery verdict already proves its effect — or a scroll leg's measured travel proves arrival. `0`/`off` restores the always-wait. | `apps/server/src/computer/ComputerManager.ts`     |
+| `SYNARA_CUA_AX_ONLY_GET_STATE`   | off     | Omits `include_screenshot`/`max_dimension` from `get_window_state` on tree-only reads.                                                                                           | `apps/server/src/computer/CuaComputerBackend.ts`  |
+| `SYNARA_CUA_CAPTURE_REUSE`       | on      | Explicit reads return the previous `screenshotId` when the fresh capture is byte-identical. `0`/`off` ships every frame.                                                         | `apps/server/src/agentGateway/computerTools.ts`   |
+| `SYNARA_CUA_PREVIEW_STILL_MS`    | `2000`  | Overrides the pane still-capture cadence; clamped to the publisher's 100 ms floor.                                                                                               | `apps/server/src/computer/CuaComputerBackend.ts`  |
+| `SYNARA_CUA_WARM_ON_FIRST_TOUCH` | off     | Spawns the driver and runs the validated handshake on the first probe or permission check.                                                                                       | `apps/desktop/src/cuaDriverHost.ts`               |
 
 Boolean flags accept `1`, `true`, `on`, `yes` (case-insensitive, trimmed);
 everything else — including `0`, `false`, `off`, `no` — counts as unset.
+The two graduated flags (`CONDITIONAL_SETTLE`, `CAPTURE_REUSE`) invert that:
+they ship on, and only `0`, `false`, `off`, or `no` turns them off.
 
 ## What each flag does, and what it must never do
 
@@ -47,9 +49,9 @@ override (`actionSettleMs`, used by tests) still wins over the environment.
 With `0`, observation freshness depends entirely on the capture itself being
 post-paint, so pair it with the timing log before believing it.
 
-### `SYNARA_CUA_CONDITIONAL_SETTLE` (inherited from `78bc88bae`)
+### `SYNARA_CUA_CONDITIONAL_SETTLE` (inherited from `78bc88bae`; graduated to default-on)
 
-The skip requires **positive** proof on the same call: the backend's
+Now on by default — the flag is only a kill switch. The skip still requires **positive** proof on the same call: the backend's
 `effect: "verified"` or a `verified: "confirmed"` read-back. It never fires
 for `dispatched-unknown`, `unconfirmed`, `unverifiable`, or a missing verdict
 — those are exactly the surfaces the fixed wait exists for. The verdict is
@@ -83,7 +85,7 @@ frame for a read that discards it, and the AX-only contract is pinned on the
 wire where an A/B run can isolate it. A read that asked for pixels sends both
 arguments exactly as before.
 
-### `SYNARA_CUA_CAPTURE_REUSE` (added with this change)
+### `SYNARA_CUA_CAPTURE_REUSE` (added with this change; graduated to default-on)
 
 Extends the post-action observer's existing dedupe to explicit perception
 reads (`computer_get_state`, `computer_screenshot`). The fresh capture always

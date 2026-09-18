@@ -8,7 +8,7 @@ import type { ComputerRecordedDispatch, ComputerRecordedResolution } from "./com
  * AsyncLocalStorage so one tool call's dispatch, settle, and observation see
  * the same record without the gateway handing anything through.
  *
- * The context carries two things, each behind its own flag:
+ * The context carries two things:
  *
  * - `timing` — a `ComputerCallTiming` the manager and backend record legs
  *   into (resolve, dispatch, settle, observe, the native calls beneath them),
@@ -16,17 +16,18 @@ import type { ComputerRecordedDispatch, ComputerRecordedResolution } from "./com
  *   `SYNARA_CUA_TIMING_LOG=1` only; unset, no record exists and the leg
  *   helpers are passthroughs.
  * - `actionProof` — the delivery verdict of the most recent action in the
- *   call, consumed once by the post-action observer when
- *   `SYNARA_CUA_CONDITIONAL_SETTLE=1` lets a proven effect waive the fixed
- *   settle. Scoped to the call so a stale verdict can never waive a later
- *   call's wait.
+ *   call, consumed once by the post-action observer when a proven effect
+ *   waives the fixed settle. Scoped to the call so a stale verdict can never
+ *   waive a later call's wait. This consumer is on by default; only
+ *   `SYNARA_CUA_CONDITIONAL_SETTLE=0` turns it off.
  *
- * When neither flag is set no context is created at all, so the default path
- * keeps its exact current shape.
+ * When neither consumer is enabled no context is created at all, so a call
+ * with both off still allocates nothing.
  *
- * This module is also where the computer path's other opt-in env flags live
- * (the workstream-C speed flags). Each one defaults to the current behavior
- * so a live run can isolate a single optimization at a time; see
+ * This module is also where the computer path's other env flags live (the
+ * workstream-C speed flags). The ones still gated default to the previous
+ * behavior so a live run can isolate a single optimization at a time; the
+ * graduated ones default on with an explicit-off kill switch; see
  * docs/computer-use-cua/speed-flags.md for the full list.
  */
 
@@ -35,17 +36,31 @@ function envFlagEnabled(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes";
 }
 
+/**
+ * The graduated flags' kill switch: they ship on, and only an explicit
+ * `0`/`false`/`off`/`no` turns them back off. Anything else — unset included —
+ * leaves the optimization on.
+ */
+function envFlagDisabled(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return (
+    normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no"
+  );
+}
+
 /** `SYNARA_CUA_TIMING_LOG=1` emits one `[computer-timing]` line per computer call. */
 export function cuaTimingLogEnabled(): boolean {
   return envFlagEnabled(process.env.SYNARA_CUA_TIMING_LOG);
 }
 
 /**
- * `SYNARA_CUA_CONDITIONAL_SETTLE=1` lets the post-action settle be skipped
- * when the action's own delivery result already proves its effect.
+ * The post-action settle is skipped when the action's own delivery result
+ * already proves its effect. Graduated to the default: the skip still needs
+ * positive proof on the same call, so opting out is only a kill switch for a
+ * regression — `SYNARA_CUA_CONDITIONAL_SETTLE=0` restores the always-wait.
  */
 export function cuaConditionalSettleEnabled(): boolean {
-  return envFlagEnabled(process.env.SYNARA_CUA_CONDITIONAL_SETTLE);
+  return !envFlagDisabled(process.env.SYNARA_CUA_CONDITIONAL_SETTLE);
 }
 
 /**
@@ -74,16 +89,16 @@ export function cuaAxOnlyGetStateEnabled(): boolean {
 }
 
 /**
- * `SYNARA_CUA_CAPTURE_REUSE=1` extends the post-action observation's
- * byte-identical frame reuse to explicit perception reads: when a fresh
- * capture is byte-for-byte the latest delivered frame with the same
- * coordinate frame, the result names the existing `screenshotId` instead of
- * shipping the same pixels again. The capture itself always happens — only
- * identical bytes prove nothing changed — so no stale picture is ever
- * served; what is saved is the image part of the tool result.
+ * Explicit perception reads reuse the latest delivered frame's
+ * `screenshotId` when the fresh capture is byte-for-byte identical with the
+ * same coordinate frame, instead of shipping the same pixels again. The
+ * capture itself always happens — only identical bytes prove nothing
+ * changed — so no stale picture is ever served; what is saved is the image
+ * part of the tool result. Graduated to the default;
+ * `SYNARA_CUA_CAPTURE_REUSE=0` is the kill switch.
  */
 export function cuaCaptureReuseEnabled(): boolean {
-  return envFlagEnabled(process.env.SYNARA_CUA_CAPTURE_REUSE);
+  return !envFlagDisabled(process.env.SYNARA_CUA_CAPTURE_REUSE);
 }
 
 /**
@@ -225,8 +240,9 @@ export function withComputerCallContext<A>(
 }
 
 /**
- * The context for one computer call, or nothing when neither flag is set —
- * the default path then allocates nothing and reads nothing back.
+ * The context for one computer call, or nothing when both consumers are off
+ * — timing has always been opt-in, and conditional settle is off only where
+ * it was explicitly disabled.
  */
 export function createComputerCallContext(): ComputerCallContext | undefined {
   const timing = cuaTimingLogEnabled() ? new ComputerCallTiming() : undefined;

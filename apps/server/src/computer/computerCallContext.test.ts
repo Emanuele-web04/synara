@@ -37,12 +37,13 @@ afterEach(() => {
 });
 
 describe("computer call env flags", () => {
-  it.each(FLAGS)("defaults %s to off or unset", (flag) => {
+  it.each(FLAGS)("defaults %s to its shipped state", (flag) => {
     delete process.env[flag];
     expect(cuaTimingLogEnabled()).toBe(false);
-    expect(cuaConditionalSettleEnabled()).toBe(false);
+    // Graduated flags ship on; the env var is now only a kill switch.
+    expect(cuaConditionalSettleEnabled()).toBe(true);
     expect(cuaAxOnlyGetStateEnabled()).toBe(false);
-    expect(cuaCaptureReuseEnabled()).toBe(false);
+    expect(cuaCaptureReuseEnabled()).toBe(true);
     expect(cuaActionSettleMsOverride()).toBeUndefined();
     expect(cuaPreviewStillMsOverride()).toBeUndefined();
   });
@@ -61,17 +62,33 @@ describe("computer call env flags", () => {
     },
   );
 
+  it.each(["0", "false", "off", "no"])(
+    "treats %s as disabled for the graduated flags' kill switch",
+    (value) => {
+      process.env.SYNARA_CUA_CONDITIONAL_SETTLE = value;
+      process.env.SYNARA_CUA_CAPTURE_REUSE = value;
+      expect(cuaConditionalSettleEnabled()).toBe(false);
+      expect(cuaCaptureReuseEnabled()).toBe(false);
+    },
+  );
+
   it.each(["0", "false", "off", "no", "2", "enabled"])(
-    "treats %s as disabled for the boolean flags",
+    "treats %s as disabled for the opt-in boolean flags",
     (value) => {
       process.env.SYNARA_CUA_TIMING_LOG = value;
-      process.env.SYNARA_CUA_CONDITIONAL_SETTLE = value;
       process.env.SYNARA_CUA_AX_ONLY_GET_STATE = value;
-      process.env.SYNARA_CUA_CAPTURE_REUSE = value;
       expect(cuaTimingLogEnabled()).toBe(false);
-      expect(cuaConditionalSettleEnabled()).toBe(false);
       expect(cuaAxOnlyGetStateEnabled()).toBe(false);
-      expect(cuaCaptureReuseEnabled()).toBe(false);
+    },
+  );
+
+  it.each(["2", "enabled", "anything"])(
+    "keeps the graduated flags on for a non-off value like %s",
+    (value) => {
+      process.env.SYNARA_CUA_CONDITIONAL_SETTLE = value;
+      process.env.SYNARA_CUA_CAPTURE_REUSE = value;
+      expect(cuaConditionalSettleEnabled()).toBe(true);
+      expect(cuaCaptureReuseEnabled()).toBe(true);
     },
   );
 
@@ -109,9 +126,9 @@ describe("computer call env flags", () => {
 });
 
 describe("createComputerCallContext", () => {
-  it("creates no context at all when neither consumer flag is set", () => {
+  it("creates no context at all when both consumers are off", () => {
     delete process.env.SYNARA_CUA_TIMING_LOG;
-    delete process.env.SYNARA_CUA_CONDITIONAL_SETTLE;
+    process.env.SYNARA_CUA_CONDITIONAL_SETTLE = "0";
     expect(createComputerCallContext()).toBeUndefined();
   });
 

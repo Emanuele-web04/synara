@@ -3896,8 +3896,8 @@ describe("second-app consent", () => {
     const imageParts = (result: McpToolCallResult) =>
       result.content.filter((entry) => entry.type === "image").length;
 
-    it("ships a fresh image for every read by default, even a byte-identical one", async () => {
-      setFlag(undefined);
+    it("ships a fresh image for every read under the kill switch, even a byte-identical one", async () => {
+      setFlag("0");
       const { call, see, manager } = await setup();
       try {
         const first = await see();
@@ -3906,6 +3906,25 @@ describe("second-app consent", () => {
         expect(payload.screenshot.screenshotId).not.toBe(first.screenshotId);
         expect(payload).not.toHaveProperty("screenshotUnchanged");
         expect(imageParts(second)).toBe(1);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("names the earlier frame by default — reuse no longer needs the flag", async () => {
+      setFlag(undefined);
+      const backend = new FakeComputerBackend();
+      const { call, see, manager } = await setup(backend);
+      try {
+        const first = await see();
+        const second = await call("computer_get_state", { include_screenshot: true });
+        const payload = resultJson(second) as {
+          screenshotUnchanged?: boolean;
+          screenshot: { screenshotId: string };
+        };
+        expect(payload.screenshotUnchanged).toBe(true);
+        expect(payload.screenshot.screenshotId).toBe(first.screenshotId);
+        expect(imageParts(second)).toBe(0);
       } finally {
         await manager.dispose();
       }

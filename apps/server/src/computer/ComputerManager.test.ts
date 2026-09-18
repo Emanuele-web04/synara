@@ -781,13 +781,23 @@ describe("ComputerManager and FakeComputerBackend", () => {
         })
         .then((observation) => ({ observation, spy }));
 
-    it("waits the fixed settle by default even when the backend verified the effect", async () => {
-      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+    it("SYNARA_CUA_CONDITIONAL_SETTLE=0 restores the fixed wait even on a verified effect", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "0");
       const backend = new ProvenBackend();
       backend.proof = { effect: "verified", verified: "confirmed" };
       const manager = new ComputerManager({ backend, actionSettleMs: 60 });
       const { spy } = await pressThenObserve(manager);
       expect(settleWaitedFor(spy, 60)).toBe(true);
+      await manager.dispose();
+    });
+
+    it("skips the wait on a verified effect by default — no flag needed", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      const backend = new ProvenBackend();
+      backend.proof = { effect: "verified", verified: "confirmed" };
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      const { spy } = await pressThenObserve(manager);
+      expect(settleWaitedFor(spy, 60)).toBe(false);
       await manager.dispose();
     });
 
@@ -2948,7 +2958,8 @@ describe("ComputerManager and FakeComputerBackend", () => {
       await manager.dispose();
     });
 
-    it("keeps every settle and takes no early capture while the flag is unset", async () => {
+    it("keeps every settle and takes no early capture under the kill switch", async () => {
+      vi.stubEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "0");
       const { backend, manager } = settleScrollFixture([336, 64, 400]);
       await teachGearing(manager);
       const capturesBefore = backend.callsFor("captureScreenshot").length;
