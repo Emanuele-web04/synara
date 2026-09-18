@@ -1060,14 +1060,14 @@ export class CuaComputerBackend implements ComputerBackend {
           accessibility: { status: "partial", unavailableWindowIds: [] },
         };
     }
+    // A read that did not ask for pixels skips capture, encode, and image
+    // delivery — but only because the flag travels on the wire: the driver
+    // treats an ABSENT include_screenshot as true, so explicit false is the
+    // pinned no-capture contract. (The retired AX_ONLY flag omitted the
+    // field to "pin" the same contract and got a full-size frame instead.)
+    const wantsPixels = options.includeScreenshot === true;
     let result: CuaToolResult;
     try {
-      // A read that did not ask for pixels skips capture, encode, and image
-      // delivery — but only because the flag travels on the wire: the driver
-      // treats an ABSENT include_screenshot as true, so explicit false is the
-      // pinned no-capture contract. (The retired AX_ONLY flag omitted the
-      // field to "pin" the same contract and got a full-size frame instead.)
-      const wantsPixels = options.includeScreenshot === true;
       result = await this.call("get_window_state", {
         pid,
         window_id,
@@ -1079,9 +1079,11 @@ export class CuaComputerBackend implements ComputerBackend {
       });
       this.assertObservedWindow(result, pid, window_id);
     } catch (error) {
-      // Past the target, the observation produced no usable pixels, so health
-      // flips while the throw stands exactly as before.
-      this.markCaptureFailed(error);
+      // Past the target, a read that asked for pixels produced no frame, so
+      // capture health flips. A tree-only failure never touched capture — a
+      // timed-out AX walk on a heavy app must not mark it unavailable — while
+      // the throw itself stands exactly as before.
+      if (wantsPixels) this.markCaptureFailed(error);
       throw error;
     }
     const data = result.structuredContent ?? {};

@@ -2735,6 +2735,44 @@ describe("Cua hardening", () => {
       captureAvailable: true,
     });
   });
+  it("keeps capture health when a tree-only observation fails", async () => {
+    const f = fixture();
+    f.setElements([
+      {
+        role: "AXButton",
+        label: "Equals",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "fresh-token",
+      },
+    ]);
+    await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    expect(f.backend.health()).toMatchObject({ status: "connected", captureAvailable: true });
+    // The observation answers a different window: a call-level failure past
+    // the target, the same shape an AX walk timeout produces.
+    f.captureWindow(999);
+    // A tree-only read never asked for pixels: its failure is not a capture
+    // failure and must not mark capture unavailable.
+    await expect(
+      f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
+    ).rejects.toThrow("belongs to a different window");
+    expect(f.backend.health()).toMatchObject({
+      status: "connected",
+      captureAvailable: true,
+      consecutiveFailures: 0,
+    });
+    // The same failure on a read that asked for pixels still flips health.
+    await expect(
+      f.backend.getState({
+        windowId: "cua:10:20",
+        includeTree: true,
+        includeScreenshot: true,
+      }),
+    ).rejects.toThrow("belongs to a different window");
+    expect(f.backend.health()).toMatchObject({
+      status: "unavailable",
+      captureAvailable: false,
+    });
+  });
   it("returns a preview note instead of failing the observation on preview-only failure", async () => {
     const f = fixture();
     f.setElements([
