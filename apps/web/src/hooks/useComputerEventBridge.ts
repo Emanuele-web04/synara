@@ -11,6 +11,7 @@
 // `computer.open-pane-requested` arms the owning thread's preview session.
 // The in-chat popover is the only Computer surface.
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
 import { computerActionStatusLabel } from "~/components/ComputerPanel.logic";
@@ -19,12 +20,14 @@ import {
   removedThreadComputerStateIds,
 } from "~/components/chat/ComputerPreviewPopover.logic";
 import { ThreadId } from "@synara/contracts";
+import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
 import { useComputerPreviewStore } from "../computerPreviewStore";
 import { useComputerStateStore } from "../computerStateStore";
 
 /** Mounted once by EventRouter, including while settings or split view is open. */
 export function useComputerEventBridge(): void {
+  const queryClient = useQueryClient();
   useEffect(() => {
     const api = ensureNativeApi();
     if (!api.computer) {
@@ -59,6 +62,15 @@ export function useComputerEventBridge(): void {
           // preview session on the owning thread, armed whether or not that
           // chat is on screen.
           preview.requestPreviewSurface(event.threadId);
+          break;
+        case "computer.input-stopped":
+          // Host-wide: update the latch every surface reads, and re-pull the
+          // status the settings panel polls so its indicator flips at the
+          // press rather than on the next interval.
+          store.setInputStopped(event.stopped);
+          void queryClient.invalidateQueries({
+            queryKey: serverQueryKeys.computerStatus(),
+          });
           break;
         case "computer.frame":
           break;
@@ -97,5 +109,5 @@ export function useComputerEventBridge(): void {
       unsubscribe();
       unsubscribeThreadStates();
     };
-  }, []);
+  }, [queryClient]);
 }

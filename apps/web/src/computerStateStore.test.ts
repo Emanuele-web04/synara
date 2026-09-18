@@ -147,6 +147,40 @@ describe("computerStateStore", () => {
     expect(useComputerStateStore.getState()).toBe(updated);
   });
 
+  it("stamps the host-wide Escape stop onto every cached thread state", () => {
+    const store = useComputerStateStore.getState();
+    store.clear();
+    store.upsertThreadState(baseState);
+    store.upsertThreadState({ ...baseState, threadId: "thread-2" as ThreadId });
+
+    store.setInputStopped(true);
+
+    const stopped = useComputerStateStore.getState();
+    expect(stopped.inputStopped).toBe(true);
+    expect(stopped.threadStatesByThreadId["thread-1"]?.inputStopped).toBe(true);
+    expect(stopped.threadStatesByThreadId["thread-2"]?.inputStopped).toBe(true);
+
+    store.setInputStopped(false);
+
+    const rearmed = useComputerStateStore.getState();
+    expect(rearmed.inputStopped).toBe(false);
+    expect(rearmed.threadStatesByThreadId["thread-1"]?.inputStopped).toBe(false);
+    // Repeating the same flag is a no-op that preserves store identity.
+    const before = useComputerStateStore.getState();
+    useComputerStateStore.getState().setInputStopped(false);
+    expect(useComputerStateStore.getState()).toBe(before);
+  });
+
+  it("drops the Escape latch on a wholesale reset", () => {
+    const store = useComputerStateStore.getState();
+    store.clear();
+    store.setInputStopped(true);
+
+    store.clear();
+
+    expect(useComputerStateStore.getState().inputStopped).toBe(false);
+  });
+
   it("forgets a removed thread's action along with its snapshot", () => {
     useComputerStateStore.getState().clear();
     useComputerStateStore.getState().upsertThreadState(baseState);

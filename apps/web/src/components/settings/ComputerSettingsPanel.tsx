@@ -21,6 +21,8 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
+import { ensureNativeApi } from "~/nativeApi";
+
 import type { AppSettingsBinding, ComputerPreviewSize } from "~/appSettings";
 import type { DesktopAppSnapSettingsPane, DesktopAppSnapState } from "@synara/contracts";
 import {
@@ -168,6 +170,35 @@ export function ComputerSettingsPanel({
   // what happened. This surface keeps that account inline rather than as a
   // toast, because it has room for it and is where the user is already looking.
   const setup = useProvisionComputer({ missing: missingPermissions });
+  /**
+   * Re-arm state for the physical-Escape kill switch. The hooks sit above the
+   * `!active` return like every other state on this panel; the relay itself is
+   * the user's explicit `computer.rearmInput`, and a failed relay keeps the
+   * stop rather than reporting authority the driver does not have.
+   */
+  const [rearmPending, setRearmPending] = useState(false);
+  const [rearmError, setRearmError] = useState<string | null>(null);
+  const rearmInput = async () => {
+    if (rearmPending) return;
+    setRearmPending(true);
+    setRearmError(null);
+    try {
+      const api = ensureNativeApi();
+      if (!api.computer?.rearmInput) {
+        throw new Error("This app build cannot re-arm computer input.");
+      }
+      await api.computer.rearmInput({});
+      await statusQuery.refetch();
+    } catch (error) {
+      setRearmError(
+        error instanceof Error && error.message
+          ? error.message
+          : "The re-arm request failed. Try again.",
+      );
+    } finally {
+      setRearmPending(false);
+    }
+  };
 
   if (!active) return null;
 
@@ -192,7 +223,7 @@ export function ComputerSettingsPanel({
   // visible plugin-backed desktop may promise it.
   const capabilitiesDescription =
     backend === COMPUTER_MAC_BACKEND || backend === "cua"
-      ? "The agent shares your Mac desktop. An authorized Computer task can switch apps and bring its target window forward. Background input may also affect focus. Stop ends desktop control; the drawn cursor is a visual indicator, not a separate keyboard focus."
+      ? "The agent shares your Mac desktop. An authorized Computer task can switch apps and bring its target window forward. Background input may also affect focus. Stop ends desktop control; the drawn cursor is a visual indicator, not a separate keyboard focus. Pressing the physical Escape key while the agent drives stops all computer input until you re-arm it."
       : backend !== null &&
           COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
           status?.capabilities.visibleDesktop === true
@@ -223,6 +254,14 @@ export function ComputerSettingsPanel({
     computerReconnectsNote(health),
     availabilityView.kind === "ready" ? computerLastFailureNote(health) : null,
   ].filter((note): note is string => note !== null);
+  /**
+   * The physical-Escape kill is host-wide and outranks everything else on
+   * this card: while it holds, no agent call, pane click, or keystroke
+   * reaches the desktop. Re-arming is the user's explicit choice — the button
+   * relays `computer.rearmInput`, and a failed relay keeps the stop rather
+   * than reporting authority the driver does not have.
+   */
+  const inputStopped = status?.inputStopped === true;
 
   return (
     <div className="space-y-6">
@@ -261,6 +300,28 @@ export function ComputerSettingsPanel({
         }
       >
         <SettingsCard>
+          {inputStopped ? (
+            <SettingsRow
+              title={
+                <span className="flex items-center gap-2">
+                  <span aria-hidden className="size-2 shrink-0 rounded-full bg-red-500" />
+                  Input stopped — Escape was pressed
+                </span>
+              }
+              description="The physical Escape key stopped all computer input. No agent action, pane click, or keystroke reaches the desktop until you re-arm it."
+              status={rearmError ?? undefined}
+              control={
+                <Button
+                  size="xs"
+                  variant="default"
+                  disabled={rearmPending}
+                  onClick={() => void rearmInput()}
+                >
+                  {rearmPending ? "Re-arming…" : "Re-arm input"}
+                </Button>
+              }
+            />
+          ) : null}
           <SettingsRow
             title={
               <span className="flex items-center gap-2">

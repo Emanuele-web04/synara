@@ -101,8 +101,10 @@ function ComputerPreviewPopoverCard(props: {
   const hidePreviewForTask = useComputerPreviewStore((store) => store.hidePreviewForTask);
   const notePreviewLayout = useComputerPreviewStore((store) => store.notePreviewLayout);
   const desktopControl = useComputerDesktopControl(threadId);
+  const inputStopped = useComputerStateStore((store) => store.inputStopped);
   const statusLabel = computerPreviewStatusLabel({
     agentActive: desktopControl.agentActive,
+    inputStopped: inputStopped || threadState?.inputStopped === true,
     currentActivity: threadState?.activity ?? null,
     lastActionLabel: session.lastActionLabel ?? null,
   });

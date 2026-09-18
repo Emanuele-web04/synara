@@ -68,6 +68,27 @@ do {
         withExtendedLifetime((tap, parentProcessMonitor)) {
             RunLoop.main.run()
         }
+    case .escapeMonitor:
+        _ = NSApplication.shared.setActivationPolicy(.accessory)
+
+        let parentProcessMonitor = ParentProcessMonitor()
+        parentProcessMonitor.start()
+
+        let monitor = EscapeKillSwitchMonitor(emitter: emitter) {
+            emitter.emitEscape(capturedAt: appSnapTimestamp())
+        }
+        monitor.start()
+
+        // The parent arms the monitor only while a driver generation is live;
+        // EOF disarms as a fail-safe.
+        let commandListener = EscapeCommandListener(emitter: emitter) { armed in
+            monitor.setArmed(armed)
+        }
+        commandListener.start()
+
+        withExtendedLifetime((monitor, commandListener, parentProcessMonitor)) {
+            RunLoop.main.run()
+        }
     case let .permissionGuide(pane, appPath, appName):
         _ = NSApplication.shared.setActivationPolicy(.accessory)
 

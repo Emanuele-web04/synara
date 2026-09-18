@@ -160,6 +160,22 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).not.toContain("How agents use the desktop");
   });
 
+  it("shows the stopped indicator and re-arm control after the Escape kill", () => {
+    // The latch is host-wide state the panel reports wherever the user looks:
+    // while it holds, the card must say input is stopped and offer the one
+    // path that re-opens it.
+    const markup = render({ status: status({ inputStopped: true }) });
+    expect(markup).toContain("Input stopped — Escape was pressed");
+    expect(markup).toContain("Re-arm input");
+    expect(markup).toContain("physical Escape key");
+  });
+
+  it("omits the stopped row while input admission is open", () => {
+    const markup = render({ status: status() });
+    expect(markup).not.toContain("Input stopped — Escape was pressed");
+    expect(markup).not.toContain("Re-arm input");
+  });
+
   it("offers a preview size choice next to the automatic preview", () => {
     const markup = render({ status: status() });
     expect(markup).toContain("Preview size");

@@ -1256,3 +1256,208 @@ describe("browser surface", () => {
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
+
+describe("physical Escape kill switch", () => {
+  const escapeRefusal = {
+    ok: true,
+    result: {
+      isError: true,
+      structuredContent: { effect: "refused", code: "escape_emergency_stop" },
+    },
+  };
+  const pressKey = (endpoint: string) =>
+    cuaRequest<CuaReply>(endpoint, {
+      method: "call",
+      name: "press_key",
+      args: { key: "enter" },
+    });
+  /** Poll the driver's event log until `event` appears or ~3 s elapse. */
+  const waitForEvent = async (
+    f: Awaited<ReturnType<typeof fixture>>,
+    event: string,
+  ): Promise<Array<{ event: string; pid: number; time: number }>> => {
+    for (let attempt = 0; attempt < 300; attempt += 1) {
+      const events = await f
+        .events()
+        .catch(() => [] as Array<{ event: string; pid: number; time: number }>);
+      if (events.some((row) => row.event === event)) return events;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return f.events().catch(() => [] as Array<{ event: string; pid: number; time: number }>);
+  };
+
+  it("ignores the press when nothing is driving, so Escape stays an ordinary key", async () => {
+    const f = await fixture();
+    // No live or spawning generation and no held latch: the host reports the
+    // press did not engage, and mutating admission still works afterwards.
+    expect(f.host.emergencyStopInput()).toBe(false);
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+  });
+
+  it("latches mutating admission on the press and stays latched across repeated presses", async () => {
+    let releaseCalls = 0;
+    const f = await fixture(capability, {
+      releaseHeldInput: async () => {
+        releaseCalls += 1;
+      },
+    });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+
+    expect(f.host.emergencyStopInput()).toBe(true);
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject(escapeRefusal);
+    // Repeated presses are idempotent: the latch is already held, so each one
+    // just re-confirms the kill — input stays refused, no state corrupts.
+    expect(f.host.emergencyStopInput()).toBe(true);
+    expect(f.host.emergencyStopInput()).toBe(true);
+    await expect(
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "type_text",
+        args: { text: "must not arrive" },
+      }),
+    ).resolves.toMatchObject(escapeRefusal);
+    // Every press re-posts the OS-level held-input release — none is skipped
+    // because an earlier press already ran it.
+    expect(releaseCalls).toBeGreaterThanOrEqual(3);
+    // Reads are not input: they still dispatch (a fresh generation spawns for
+    // them) so the re-arm observation gate can be satisfied — but they must
+    // not reopen mutating admission.
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject(escapeRefusal);
+    expect((await f.events()).some((event) => event.event === "dispatch")).toBe(false);
+
+    // The only way back is the capability-authenticated rearm.
+    await expect(cuaRequest(f.endpoint, { method: "rearm" })).resolves.toMatchObject({
+      ok: true,
+      result: { rearmed: true, wasStopped: true },
+    });
+    // Re-arm demands a fresh model observation before input — same gate a
+    // desktop resume applies, because the stopped desktop may not match the
+    // last thing the agent saw.
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({
+      ok: true,
+      result: {
+        isError: true,
+        structuredContent: { effect: "refused", code: "desktop_input_paused" },
+      },
+    });
+    await expect(
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "get_window_state",
+        modelObservation: true,
+        args: {},
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+    // And a second re-arm with nothing stopped is a no-op, not an error.
+    await expect(cuaRequest(f.endpoint, { method: "rearm" })).resolves.toMatchObject({
+      ok: true,
+      result: { rearmed: true, wasStopped: false },
+    });
+  });
+
+  it("cancels a hung in-flight action without waiting on the driver", async () => {
+    let releaseCalls = 0;
+    const f = await fixture(capability, {
+      releaseHeldInput: async () => {
+        releaseCalls += 1;
+      },
+    });
+    // The fake driver holds a type_text reply for 10s — the wedged-provider
+    // shape the kill switch exists for. The press must not wait on it.
+    const hung = cuaRequest(
+      f.endpoint,
+      { method: "call", name: "type_text", args: { text: "fixture" } },
+      { timeoutMs: 5_000, mutation: true },
+    );
+    await waitForEvent(f, "dispatch");
+    expect(f.host.emergencyStopInput()).toBe(true);
+    // New mutating admission refuses synchronously; it does not queue behind
+    // the wedged call.
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject(escapeRefusal);
+    // The in-flight call is cancelled through the driver cancel path and the
+    // OS-level release posts beside it — neither waits on the held reply.
+    await expect(hung).resolves.toMatchObject({ ok: false });
+    expect(releaseCalls).toBeGreaterThanOrEqual(1);
+    await waitForEvent(f, "cancel");
+    const events = await f.events();
+    expect(events.some((event) => event.event === "release")).toBe(true);
+    expect(events.some((event) => event.event === "effect")).toBe(false);
+  });
+
+  it("keeps admission closed after a driver crash: the press latches over the retained generation", async () => {
+    const release = deferred<void>();
+    const f = await fixture(capability, {
+      crash: true,
+      releaseHeldInput: async () => {
+        await release.promise;
+      },
+    });
+    // The fake driver exits on dispatch. The call's own retirement stays
+    // pending on the release gate, so the crashed generation is still the
+    // host's live reference when Escape lands — and the request's reply is
+    // legitimately blocked on that cleanup, which is why it is not awaited yet.
+    const crashing = cuaRequest(
+      f.endpoint,
+      { method: "call", name: "type_text", args: { text: "fixture" } },
+      { timeoutMs: 5_000, mutation: true },
+    );
+    await waitForEvent(f, "crash");
+    expect(f.host.emergencyStopInput()).toBe(true);
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject(escapeRefusal);
+    // Let the crash retirement finish: with the release confirmed, the dead
+    // generation clears — but the latch is the host's, not the generation's,
+    // so input stays refused over the clean desktop too.
+    release.resolve();
+    await expect(crashing).resolves.toMatchObject({ ok: false });
+    // stop() joins the pending retirement chain, so its return proves the
+    // generation cleared rather than merely having had time to.
+    await f.host.stop();
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject(escapeRefusal);
+    await expect(cuaRequest(f.endpoint, { method: "rearm" })).resolves.toMatchObject({
+      ok: true,
+      result: { rearmed: true, wasStopped: true },
+    });
+    await expect(
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "get_window_state",
+        modelObservation: true,
+        args: {},
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+  });
+
+  it("treats an unconfirmed crash cleanup as fail-closed even after re-arm", async () => {
+    const f = await fixture(capability, {
+      crash: true,
+      releaseHeldInput: () => Promise.reject(new Error("helper gone")),
+    });
+    await expect(
+      cuaRequest(
+        f.endpoint,
+        { method: "call", name: "type_text", args: { text: "fixture" } },
+        { timeoutMs: 1_000, mutation: true },
+      ),
+    ).resolves.toMatchObject({ ok: false });
+    // The driver died mid-input and nothing confirmed the OS-level release:
+    // the generation stays referenced so admission fails closed — and the
+    // Escape latch lands on top of it.
+    expect(f.host.emergencyStopInput()).toBe(true);
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject(escapeRefusal);
+    // Re-arming clears only the Escape latch; the unprovable held-input state
+    // keeps admission closed on its own authority.
+    await expect(cuaRequest(f.endpoint, { method: "rearm" })).resolves.toMatchObject({
+      ok: true,
+      result: { rearmed: true, wasStopped: true },
+    });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "check_permissions" }),
+    ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    expect((await f.events()).filter((event) => event.event === "start")).toHaveLength(1);
+  });
+});

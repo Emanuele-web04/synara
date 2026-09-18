@@ -283,6 +283,8 @@ import {
 } from "./desktopStorageMigration";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { DesktopAppSnapManager } from "./appSnapManager";
+import { notifyBackendComputerEmergencyStop } from "./computerEmergencyStopNotice";
+import { EscapeKillSwitchMonitor } from "./escapeKillSwitchMonitor";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
@@ -3616,11 +3618,13 @@ function backendNodeArgs(): string[] {
 let cuaDriverHost: CuaDriverHost | undefined;
 let disposeComputerDesktopLifecycle: (() => void) | undefined;
 let cuaHostEndpoint: string | undefined;
+let escapeKillSwitchMonitor: EscapeKillSwitchMonitor | undefined;
 
 async function startCuaHost(): Promise<void> {
   if (process.platform !== "darwin" || cuaDriverHost) return;
   sweepOrphanedCuaDrivers();
   const host = new CuaDriverHost({
+    onInputMonitorArmedChange: (armed) => escapeKillSwitchMonitor?.setArmed(armed),
     binaryPath: app.isPackaged
       ? Path.join(process.resourcesPath, "cua-driver", "cua-driver")
       : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver"),
@@ -3678,6 +3682,29 @@ async function startCuaHost(): Promise<void> {
   disposeComputerDesktopLifecycle = registerComputerDesktopLifecycle(powerMonitor, host, (error) =>
     safeConsoleError("[desktop] computer input pause failed", error),
   );
+  // The physical Escape kill switch lives in a dedicated helper process: its
+  // listen-only event tap can report a hardware Escape even while Electron's
+  // main process is busy, and a missing Input Monitoring grant degrades it to
+  // silence rather than breaking the key. The host's armed callback (wired at
+  // construction above) is what scopes reporting to live driver generations.
+  if (!escapeKillSwitchMonitor) {
+    escapeKillSwitchMonitor = new EscapeKillSwitchMonitor({
+      helperPath: resolveAppSnapHelperPath(),
+      onEscape: () => {
+        // The local latch is the kill: it engages synchronously on the press.
+        // The backend notice only keeps the manager-side latch in step, so it
+        // stays best-effort and never sits on the stop's critical path.
+        if (!cuaDriverHost?.emergencyStopInput()) return;
+        notifyBackendComputerEmergencyStop({
+          backendHttpUrl,
+          shutdownToken: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
+          onError: (message) => safeConsoleError(`[desktop] ${message}`),
+        });
+      },
+      onError: (message) => safeConsoleError(`[desktop] Escape monitor: ${message}`),
+    });
+  }
+  escapeKillSwitchMonitor.start();
 }
 
 function backendEnv(): NodeJS.ProcessEnv {
@@ -4337,6 +4364,8 @@ async function stopBackendAndWaitForExit(): Promise<void> {
 async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<void> {
   disposeComputerDesktopLifecycle?.();
   disposeComputerDesktopLifecycle = undefined;
+  escapeKillSwitchMonitor?.dispose();
+  escapeKillSwitchMonitor = undefined;
   await cuaDriverHost?.dispose();
   cuaDriverHost = undefined;
   cuaHostEndpoint = undefined;

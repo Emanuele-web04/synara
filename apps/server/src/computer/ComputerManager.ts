@@ -396,6 +396,15 @@ export class ComputerManager {
    * until a real use flips this, and behave exactly as they always did after.
    */
   private backendEngaged = false;
+  /**
+   * The host-wide kill latch behind the physical Escape monitor. Unlike
+   * `controlDisabled` it is not thread-scoped and no generation bump can age
+   * it out: every mutating admission on every thread — pane input included —
+   * refuses until `rearmInput` runs the user's explicit re-arm. Set by the
+   * desktop's emergency-stop relay and cleared nowhere else, so a backend
+   * swapped in after the press still finds input closed.
+   */
+  private escapeStopped = false;
 
   /**
    * Which desktop vocabulary the tool descriptions must speak. See
@@ -919,6 +928,85 @@ export class ComputerManager {
     return stop;
   }
 
+  /**
+   * The refusal every mutating admission shares once the physical kill latch
+   * is held. Reads stay open — a stopped desktop must still be observable —
+   * but nothing may dispatch input until the user re-arms. `controlRevoked`
+   * marks it the way a per-thread disable does: the audit seam records
+   * nothing for a refusal the kill switch already owns, and the gateway's
+   * "do not retry" classification applies unchanged.
+   */
+  private assertInputNotEscapeStopped(): void {
+    if (!this.escapeStopped) return;
+    throw new ComputerBackendError(
+      "Computer input was stopped with the Escape key. It stays stopped until the user re-arms computer control; do not retry actions.",
+      { controlRevoked: true },
+    );
+  }
+
+  /**
+   * The manager side of the physical Escape kill switch, relayed from the
+   * desktop's monitor route (or invoked directly by tests).
+   *
+   * The desktop host has already engaged its own admission latch and posted
+   * the OS-level held-input release before this call lands, so a wedged or
+   * dead backend cannot weaken the stop — this half exists so queued work
+   * fails where it waits, and so a backend swapped in after the press still
+   * finds input closed. Repeated presses are safe: the latch is idempotent
+   * and each press re-aborts anything admitted between them.
+   */
+  async emergencyStopInput(): Promise<void> {
+    if (this.disposed) return;
+    const firstPress = !this.escapeStopped;
+    this.escapeStopped = true;
+    // Abort every admission broadcast and every live operation signal: calls
+    // queued behind the operation queue fail at their wait instead of
+    // dispatching after the press, and in-flight native calls get the same
+    // cancellation an ordinary stop delivers.
+    const stopReason = new ComputerBackendError(
+      "Computer input was stopped with the Escape key; no new input may be dispatched.",
+      { controlRevoked: true },
+    );
+    for (const authority of this.authorityRevocations.values()) {
+      authority.abort(stopReason);
+    }
+    for (const live of this.activeAuthorities.values()) {
+      // The same reason, not a bare AbortError: a tool call cancelled by the
+      // press must report the stop, not a generic abort the model might retry.
+      for (const controller of live) controller.abort(stopReason);
+    }
+    try {
+      await this.backend.stopInput?.();
+    } finally {
+      if (firstPress) {
+        // Host-wide and thread-independent: the event reaches clients even
+        // where no thread has a pane record to republish.
+        this.emit({ type: "computer.input-stopped", stopped: true });
+        this.republishAllThreads();
+      }
+    }
+  }
+
+  /**
+   * The user's explicit re-arm after an Escape stop. The relay runs first
+   * and the manager latch clears only after the host confirmed its own
+   * latch lifted: a host that cannot be reached keeps this latch held
+   * rather than reporting authority the driver does not have. A backend
+   * with no rearm route — where the manager latch is the only one — clears
+   * unconditionally, which is also the answer when the press stopped a
+   * driver that no longer exists.
+   */
+  async rearmInput(): Promise<{ rearmed: boolean; wasStopped: boolean }> {
+    const wasStopped = this.escapeStopped;
+    if (this.backend.rearmInput) await this.backend.rearmInput();
+    if (wasStopped) {
+      this.escapeStopped = false;
+      this.emit({ type: "computer.input-stopped", stopped: false });
+      this.republishAllThreads();
+    }
+    return { rearmed: true, wasStopped };
+  }
+
   constructor(options: ComputerManagerOptions) {
     this.backend = options.backend;
     this.controlState = new ComputerControlState(options.controlStatePath);
@@ -1072,6 +1160,7 @@ export class ComputerManager {
       health: this.backendHealth,
       capabilities: this.backendCapabilities,
       provisionable: this.backend.provision !== undefined,
+      inputStopped: this.escapeStopped,
     };
   }
 
@@ -3191,6 +3280,9 @@ export class ComputerManager {
             "Computer browser call ran outside an operation context.",
             { retryable: false },
           );
+        // The kill latch covers mutating browser calls the same way it covers
+        // desktop input; get_browser_state stays a read.
+        if (name !== "get_browser_state") this.assertInputNotEscapeStopped();
         return browser.call({
           name,
           args,
@@ -3243,6 +3335,7 @@ export class ComputerManager {
           { controlRevoked: true },
         );
       }
+      this.assertInputNotEscapeStopped();
       await this.assertWindowInputAllowed(threadId, windowId);
       const pausedState = owner ? this.threads.get(owner) : undefined;
       if (pausedState?.inputPause) {
@@ -3305,6 +3398,7 @@ export class ComputerManager {
           { controlRevoked: true },
         );
       }
+      this.assertInputNotEscapeStopped();
       // Readiness first: a paused thread is refused before it can take the
       // lease, clear focus, or announce itself — all of which claimDesktopControl
       // would otherwise do ahead of a refusal that sends nothing.
@@ -4341,6 +4435,7 @@ export class ComputerManager {
       availability: this.correctedAvailability(state.availability),
       health: this.backendHealth,
       capabilities: this.backendCapabilities,
+      inputStopped: this.escapeStopped,
       lastError: state.lastError,
     };
   }

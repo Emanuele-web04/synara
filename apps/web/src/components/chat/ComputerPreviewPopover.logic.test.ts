@@ -182,6 +182,35 @@ describe("computerPreviewStatusLabel", () => {
       }),
     ).toBeNull();
   });
+
+  it("reports the Escape stop ahead of any live activity", () => {
+    // Frames may keep arriving after the physical kill, so the chip must not
+    // keep claiming activity while input admission is closed.
+    expect(
+      computerPreviewStatusLabel({
+        agentActive: true,
+        inputStopped: true,
+        currentActivity: "Clicking",
+        lastActionLabel: "Click",
+      }),
+    ).toBe("Stopped — Escape");
+    expect(
+      computerPreviewStatusLabel({
+        agentActive: false,
+        inputStopped: true,
+        currentActivity: null,
+        lastActionLabel: null,
+      }),
+    ).toBe("Stopped — Escape");
+    expect(
+      computerPreviewStatusLabel({
+        agentActive: true,
+        inputStopped: false,
+        currentActivity: "Clicking",
+        lastActionLabel: null,
+      }),
+    ).toBe("Clicking");
+  });
 });
 
 describe("computerPreviewFrameSource", () => {

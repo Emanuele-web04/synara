@@ -271,6 +271,13 @@ export class CuaDriverHost {
   private retiring: Promise<void> = Promise.resolve();
   private closed = false;
   private suspended = false;
+  /**
+   * Physical-Escape kill latch. Once set, mutating calls are refused until a
+   * capability-authenticated `rearm` arrives; only the user re-arming through
+   * the server can clear it — no local path silently reopens input.
+   */
+  private emergencyStopped = false;
+  private inputMonitorArmed = false;
   private readonly desktopPauses = new Set<string>();
   private desktopObservationRequired = false;
   private desktopEpoch = 0;
@@ -295,6 +302,12 @@ export class CuaDriverHost {
       startupTimeoutMs?: number;
       normalizeOverview?: (result: CuaToolResult) => CuaToolResult;
       frameTap?: ComputerFrameTapHost;
+      /**
+       * Mirrors whether a live driver generation could dispatch input — the
+       * window during which the physical Escape monitor must be listening.
+       * The desktop wires this to the helper's `arm`/`disarm` commands.
+       */
+      onInputMonitorArmedChange?: (armed: boolean) => void;
     },
   ) {}
 
@@ -367,6 +380,19 @@ export class CuaDriverHost {
     if (request.method === "stop") {
       await this.stop();
       return { ok: true };
+    }
+    if (request.method === "rearm") {
+      // The only caller is the server relaying an explicit user re-arm. The
+      // latch clears even while suspended so a resuming backend is not left
+      // refusing input it already re-authorized.
+      const wasStopped = this.emergencyStopped;
+      this.emergencyStopped = false;
+      // A desktop the user just stopped may not match the last observation —
+      // require a fresh one before the next action, same as a resume.
+      if (!this.closed) this.desktopObservationRequired = true;
+      this.updateInputMonitorArmed();
+      if (wasStopped) log("computer input re-armed after the Escape kill switch");
+      return { ok: true, result: { rearmed: true, wasStopped } };
     }
     const task = parseCuaComputerTask(request.task);
     if (request.task !== undefined && !task) throw new Error("Invalid computer task attribution.");
@@ -483,6 +509,8 @@ export class CuaDriverHost {
     if (CUA_BROWSER_TOOLS.has(name) && !task)
       throw new Error("Computer browser calls require task attribution.");
     if (this.desktopPauses.size > 0) return this.desktopPauseReply();
+    const mutating = CUA_ACTION_TOOLS.has(name) || CUA_BROWSER_MUTATION_TOOLS.has(name);
+    if (this.emergencyStopped && mutating) return this.escapeStoppedReply();
     // Observations and input share one native session. A pane capture must not
     // race input or turn a harmless concurrent read into a driver restart.
     const previous = this.operations;
@@ -497,6 +525,7 @@ export class CuaDriverHost {
           error: "Cancelled before dispatch.",
           effect: "not-dispatched",
         } as const;
+      if (this.emergencyStopped && mutating) return this.escapeStoppedReply();
       if (this.desktopPauses.size > 0) return this.desktopPauseReply();
       if (task && this.userStoppedTasks.has(cuaComputerTaskKey(task))) {
         return {
@@ -987,6 +1016,7 @@ export class CuaDriverHost {
         endedTaskSessions: new Set<string>(),
       };
       this.generation = generation;
+      this.updateInputMonitorArmed();
       void exited.then(() => {
         generation.didExit = true;
       });
@@ -1114,6 +1144,7 @@ export class CuaDriverHost {
   private retire(generation: Generation): Promise<void> {
     if (generation.retirement) return generation.retirement;
     generation.retired = true;
+    this.updateInputMonitorArmed();
     // Browser teardown rides the control connection's lifetime: closing it
     // now lets the driver's EOF reaper end every session this transport owns
     // while the daemon is still alive to run its cleanup hooks, instead of
@@ -1263,6 +1294,69 @@ export class CuaDriverHost {
     return stopping;
   }
 
+  /**
+   * Physical Escape kill switch: latch mutating input refused until the
+   * server relays an explicit re-arm, post the OS-level held-input release
+   * immediately (the press cannot wait on a wedged driver's cancel
+   * acknowledgement), then run the same stop path as an ordinary stop —
+   * epoch bump, cancel_input, generation retirement.
+   *
+   * Returns whether the press engaged the kill. With no live or spawning
+   * driver generation and no latch already held, Escape is an ordinary key:
+   * the desktop ignores the event instead of locking a host nothing was
+   * driving.
+   */
+  emergencyStopInput(): boolean {
+    if (this.closed) return false;
+    const engaged =
+      this.emergencyStopped || this.generation !== undefined || this.starting !== undefined;
+    if (!engaged) return false;
+    if (!this.emergencyStopped) {
+      this.emergencyStopped = true;
+      this.updateInputMonitorArmed();
+      log("physical Escape: computer input is stopped until it is re-armed");
+    }
+    void this.options.releaseHeldInput?.().catch((error: unknown) => {
+      log(`emergency held-input release failed: ${String(error)}`);
+    });
+    void this.stop().catch((error: unknown) => {
+      log(`emergency stop failed: ${String(error)}`);
+    });
+    return true;
+  }
+
+  /**
+   * The helper only reports Escape while a live generation could dispatch
+   * input: armed on spawn, disarmed on retire, kill, or close.
+   */
+  private updateInputMonitorArmed(): void {
+    const armed =
+      !this.closed &&
+      !this.emergencyStopped &&
+      this.generation !== undefined &&
+      !this.generation.retired;
+    if (armed === this.inputMonitorArmed) return;
+    this.inputMonitorArmed = armed;
+    try {
+      this.options.onInputMonitorArmedChange?.(armed);
+    } catch {
+      // Monitor plumbing must never take input admission down with it.
+    }
+  }
+
+  private escapeStoppedReply(): CuaReply {
+    const message =
+      "Computer input was stopped with the Escape key. It stays stopped until the user re-arms computer control; do not retry actions.";
+    return {
+      ok: true,
+      result: {
+        isError: true,
+        content: [{ type: "text", text: message }],
+        structuredContent: { effect: "refused", code: "escape_emergency_stop", message },
+      },
+    };
+  }
+
   /** User Stop revokes the turn without changing OS grants. */
   stopTaskByUser(task: CuaComputerTask): Promise<void> {
     this.rememberTask(this.userStoppedTasks, task);
@@ -1404,6 +1498,7 @@ export class CuaDriverHost {
 
   async dispose(): Promise<void> {
     this.closed = true;
+    this.updateInputMonitorArmed();
     try {
       await this.stop();
     } finally {
