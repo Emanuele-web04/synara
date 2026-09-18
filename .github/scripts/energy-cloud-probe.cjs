@@ -1,5 +1,7 @@
 // Trigger cloud probe after workflow registration.
 const { app, BrowserWindow } = require("electron");
+// A probe intentionally destroys every window between paired runs.
+app.on("window-all-closed", () => {});
 const numericArgs = process.argv
   .slice(1)
   .filter((x) => /^\d+$/.test(x))
@@ -108,6 +110,7 @@ function summary(rows) {
 }
 app.whenReady().then(async () => {
   const rows = [];
+  let exitCode = 0;
   try {
     for (let r = 0; r < repeats; r++) {
       for (const v of r % 2 ? ["candidate", "baseline"] : ["baseline", "candidate"]) {
@@ -126,8 +129,7 @@ app.whenReady().then(async () => {
     console.log("SUMMARY " + JSON.stringify(summary(rows)));
   } catch (e) {
     console.error(e);
-    app.exit(1);
-  } finally {
-    app.quit();
+    exitCode = 1;
   }
+  app.exit(exitCode);
 });

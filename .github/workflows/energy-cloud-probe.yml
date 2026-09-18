@@ -26,7 +26,8 @@ jobs:
         shell: bash
         run: |
           xvfb-run -a ./apps/desktop/node_modules/.bin/electron --no-sandbox \
-            .github/scripts/energy-cloud-probe.cjs 5 20000 | tee energy-cloud-probe.log
+            .github/scripts/energy-cloud-probe.cjs 5 20000 2>&1 | tee energy-cloud-probe.log
+          node .github/scripts/verify-energy-cloud-probe.cjs energy-cloud-probe.log 5 20000
 
       - name: Upload benchmark log
         if: always()
