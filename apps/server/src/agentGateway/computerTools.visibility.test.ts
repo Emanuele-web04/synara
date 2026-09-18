@@ -385,7 +385,7 @@ describe("computer_launch_app hidden", () => {
     expect(backend.callsFor("raiseWindow")).toEqual([]);
   });
 
-  it("keeps an ordinary launch a two-argument backend call", async () => {
+  it("defaults an ordinary launch to the invisible workspace", async () => {
     const approval = vi.fn(async () => true);
     const backend = new FakeComputerBackend();
     const { call } = await setup(backend, approval);
@@ -394,7 +394,32 @@ describe("computer_launch_app hidden", () => {
       wait_for_window: false,
     });
     expect(result.isError).not.toBe(true);
-    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["TextEdit", []]);
+    // No `hidden` in the call still resolves hidden at the manager seam —
+    // invisible-by-default is the product behavior, visibility is opt-out.
+    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual([
+      "TextEdit",
+      [],
+      { hidden: true },
+    ]);
+    const launched = (await backend.listWindows()).find((window) => window.appName === "TextEdit");
+    expect(launched).toMatchObject({ focused: false, visible: false });
+  });
+
+  it("lets hidden:false opt a launch back into the visible workspace", async () => {
+    const approval = vi.fn(async () => true);
+    const backend = new FakeComputerBackend();
+    const { call } = await setup(backend, approval);
+    const result = await call("computer_launch_app", {
+      app: "TextEdit",
+      hidden: false,
+      wait_for_window: false,
+    });
+    expect(result.isError).not.toBe(true);
+    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual([
+      "TextEdit",
+      [],
+      { hidden: false },
+    ]);
     const launched = (await backend.listWindows()).find((window) => window.appName === "TextEdit");
     expect(launched).toMatchObject({ focused: true, visible: true });
   });
