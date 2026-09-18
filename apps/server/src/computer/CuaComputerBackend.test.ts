@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CuaComputerBackend } from "./CuaComputerBackend.ts";
-import { ComputerAvailability, ComputerScreenshot, ComputerState } from "@synara/contracts";
+import {
+  ComputerAvailability,
+  ComputerScreenshot,
+  ComputerState,
+} from "@synara/contracts";
 import { Schema } from "effect";
 import {
   CuaTransportError,
@@ -51,7 +55,10 @@ function fixture(options?: {
   let typingInFlight = 0;
   let typingMaxInFlight = 0;
   let extraWindows: Array<Record<string, unknown>> = [];
-  let toolHandlers: Record<string, (args: Record<string, unknown>) => Record<string, unknown>> = {};
+  let toolHandlers: Record<
+    string,
+    (args: Record<string, unknown>) => Record<string, unknown>
+  > = {};
   let setValueSwallowed = false;
   let actionResult: Record<string, unknown> = {
     route: "synthetic_events",
@@ -136,9 +143,11 @@ function fixture(options?: {
           : [],
       };
     if (request.name === "check_input_ready") data = ready;
-    if (request.name === "get_screen_size") data = { width: 1000, height: 800, scale_factor: 2 };
+    if (request.name === "get_screen_size")
+      data = { width: 1000, height: 800, scale_factor: 2 };
     if (request.name === "get_desktop_state") {
-      if (overviewFailure) throw new Error("Capture denied before permission recovery");
+      if (overviewFailure)
+        throw new Error("Capture denied before permission recovery");
       await overviewWait;
       return {
         ok: true,
@@ -177,9 +186,13 @@ function fixture(options?: {
       return { ok: true, result, desktopEpoch: responseEpoch };
     }
     if (request.name === "set_value" && !setValueSwallowed) {
-      const token = (request.args as Record<string, unknown> | undefined)?.element_token;
-      const written = (request.args as Record<string, unknown> | undefined)?.value;
-      const target = elements.find((element) => element.element_token === token);
+      const token = (request.args as Record<string, unknown> | undefined)
+        ?.element_token;
+      const written = (request.args as Record<string, unknown> | undefined)
+        ?.value;
+      const target = elements.find(
+        (element) => element.element_token === token,
+      );
       if (target && typeof written === "string") target.value = written;
     }
     if (isTyping(request.name)) data = actionResult;
@@ -205,7 +218,9 @@ function fixture(options?: {
     ...(options?.semanticTextLaneGapMs !== undefined
       ? { semanticTextLaneGapMs: options.semanticTextLaneGapMs }
       : {}),
-    ...(options?.stillIntervalMs !== undefined ? { stillIntervalMs: options.stillIntervalMs } : {}),
+    ...(options?.stillIntervalMs !== undefined
+      ? { stillIntervalMs: options.stillIntervalMs }
+      : {}),
   });
   return {
     backend,
@@ -221,7 +236,10 @@ function fixture(options?: {
     setBounds: (value: typeof bounds) => {
       bounds = value;
     },
-    onTool: (name: string, handler: (args: Record<string, unknown>) => Record<string, unknown>) => {
+    onTool: (
+      name: string,
+      handler: (args: Record<string, unknown>) => Record<string, unknown>,
+    ) => {
       toolHandlers[name] = handler;
     },
     gateTypeText: (wait: Promise<void> | undefined) => {
@@ -327,9 +345,12 @@ describe("Cua native boundary", () => {
     expect(f.calls.filter((c) => c.name === "list_windows")).toHaveLength(1);
     expect(state.windows).toHaveLength(1);
     expect(f.backend.supportsAction(target, "AXPress")).toBe(true);
-    expect(f.backend.supportsAction({ ...target, node: state.root!.children[1]! }, "AXPress")).toBe(
-      false,
-    );
+    expect(
+      f.backend.supportsAction(
+        { ...target, node: state.root!.children[1]! },
+        "AXPress",
+      ),
+    ).toBe(false);
     await f.backend.focusWindow("cua:10:20");
     expect(f.calls.filter((c) => c.name === "list_windows")).toHaveLength(1);
     await f.backend.performAction(target, "AXPress");
@@ -339,9 +360,13 @@ describe("Cua native boundary", () => {
       pid: 10,
       window_id: 20,
     });
-    expect(f.calls.find((c) => c.name === "click")?.args).not.toHaveProperty("force_synthetic");
+    expect(f.calls.find((c) => c.name === "click")?.args).not.toHaveProperty(
+      "force_synthetic",
+    );
     f.close();
-    await expect(f.backend.performAction(target, "AXPress")).rejects.toMatchObject({
+    await expect(
+      f.backend.performAction(target, "AXPress"),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
     });
     expect(f.calls.filter((c) => c.name === "click")).toHaveLength(1);
@@ -388,7 +413,14 @@ describe("Cua native boundary", () => {
     expect(f.backend.supportsAction(menuTarget, "activate")).toBe(false);
 
     await f.backend.performAction(openTarget, "open");
-    for (const action of ["press", "show_menu", "menu", "pick", "confirm", "cancel"]) {
+    for (const action of [
+      "press",
+      "show_menu",
+      "menu",
+      "pick",
+      "confirm",
+      "cancel",
+    ]) {
       await f.backend.performAction(menuTarget, action);
     }
     // Each admitted name lands on the token as the driver's `click` action
@@ -445,19 +477,32 @@ describe("Cua native boundary", () => {
       point: state.root!.children[1]!.activationPoint!,
     };
 
-    for (const action of ["open", "show_menu", "menu", "pick", "confirm", "cancel"]) {
-      await expect(f.backend.performAction(target, action)).rejects.toMatchObject({
+    for (const action of [
+      "open",
+      "show_menu",
+      "menu",
+      "pick",
+      "confirm",
+      "cancel",
+    ]) {
+      await expect(
+        f.backend.performAction(target, action),
+      ).rejects.toMatchObject({
         effect: "not-dispatched",
         code: "unsupported_operation",
       });
     }
     // An element that reported no action list at all refuses the same way.
-    await expect(f.backend.performAction(passive, "open")).rejects.toMatchObject({
+    await expect(
+      f.backend.performAction(passive, "open"),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "unsupported_operation",
     });
     // And a name the integration never mapped never reaches the driver.
-    await expect(f.backend.performAction(target, "toggle")).rejects.toMatchObject({
+    await expect(
+      f.backend.performAction(target, "toggle"),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "unsupported_operation",
     });
@@ -532,7 +577,9 @@ describe("Cua native boundary", () => {
         evidence: [{ kind: "value_readback" }],
       },
     }));
-    await expect(f.backend.selectText(target, { start: 2, length: 4 })).resolves.toMatchObject({
+    await expect(
+      f.backend.selectText(target, { start: 2, length: 4 }),
+    ).resolves.toMatchObject({
       verified: "confirmed",
       effect: "verified",
     });
@@ -553,7 +600,9 @@ describe("Cua native boundary", () => {
       structuredContent: { effect: "refused", code: "attribute_not_settable" },
       content: [{ type: "text", text: "AXSelectedTextRange is not settable." }],
     }));
-    await expect(f.backend.selectText(target, { start: 0, length: 1 })).rejects.toMatchObject({
+    await expect(
+      f.backend.selectText(target, { start: 0, length: 1 }),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "attribute_not_settable",
     });
@@ -567,7 +616,9 @@ describe("Cua native boundary", () => {
         effect: "unconfirmed",
       },
     }));
-    await expect(f.backend.selectText(target, { start: 0, length: 1 })).resolves.toMatchObject({
+    await expect(
+      f.backend.selectText(target, { start: 0, length: 1 }),
+    ).resolves.toMatchObject({
       verified: "unconfirmed",
       effect: "dispatched-unknown",
     });
@@ -580,13 +631,17 @@ describe("Cua native boundary", () => {
       node: { ...node, children: [] },
       point: node.activationPoint!,
     };
-    await expect(f.backend.selectText(unobserved, { start: 0, length: 1 })).rejects.toMatchObject({
+    await expect(
+      f.backend.selectText(unobserved, { start: 0, length: 1 }),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "stale_target",
     });
 
     f.close();
-    await expect(f.backend.selectText(target, { start: 0, length: 1 })).rejects.toMatchObject({
+    await expect(
+      f.backend.selectText(target, { start: 0, length: 1 }),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
     });
     expect(f.calls.filter((c) => c.name === "select_text")).toHaveLength(3);
@@ -614,19 +669,23 @@ describe("Cua native boundary", () => {
     };
 
     await f.backend.typeText("hello", "cua:10:20", target);
-    expect(f.calls.find((call) => call.name === "type_text")?.args).toMatchObject({
+    expect(
+      f.calls.find((call) => call.name === "type_text")?.args,
+    ).toMatchObject({
       text: "hello",
       pid: 10,
       window_id: 20,
       element_token: "message-token",
       semantic_only: true,
     });
-    expect(f.calls.find((call) => call.name === "type_text")?.args).not.toHaveProperty(
-      "force_synthetic",
-    );
+    expect(
+      f.calls.find((call) => call.name === "type_text")?.args,
+    ).not.toHaveProperty("force_synthetic");
 
     await f.backend.typeText("keyboard", "cua:10:20");
-    expect(f.calls.filter((call) => call.name === "type_text")[1]?.args).toMatchObject({
+    expect(
+      f.calls.filter((call) => call.name === "type_text")[1]?.args,
+    ).toMatchObject({
       text: "keyboard",
       force_synthetic: true,
     });
@@ -700,7 +759,10 @@ describe("Cua native boundary", () => {
     // the re-read must catch that and refuse to call it verified.
     f.swallowSetValue();
     const result = await f.backend.typeText("-typed", "cua:10:20", target);
-    expect(result).toMatchObject({ verified: "unconfirmed", effect: "dispatched-unknown" });
+    expect(result).toMatchObject({
+      verified: "unconfirmed",
+      effect: "dispatched-unknown",
+    });
   });
 
   it("semantic text lane serializes same-window writes", async () => {
@@ -722,7 +784,10 @@ describe("Cua native boundary", () => {
         element_token: "notes-token",
       },
     ]);
-    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const state = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+    });
     const firstNode = state.root!.children[0]!;
     const secondNode = state.root!.children[1]!;
     const firstTarget = {
@@ -748,7 +813,10 @@ describe("Cua native boundary", () => {
     releaseGate!();
 
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
-    expect(typeTexts().map((call) => call.args?.text)).toEqual(["alpha", "bravo"]);
+    expect(typeTexts().map((call) => call.args?.text)).toEqual([
+      "alpha",
+      "bravo",
+    ]);
   });
 
   it("semantic text lane holds select_text behind a same-window write", async () => {
@@ -761,8 +829,9 @@ describe("Cua native boundary", () => {
         element_token: "message-token",
       },
     ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
+    const node = (
+      await f.backend.getState({ windowId: "cua:10:20", includeTree: true })
+    ).root!.children[0]!;
     const target = {
       target: { label: "Message", windowId: "cua:10:20" },
       node,
@@ -772,7 +841,9 @@ describe("Cua native boundary", () => {
     f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
 
     const typing = f.backend.typeText("alpha", "cua:10:20", target);
-    await vi.waitFor(() => expect(f.calls.some((c) => c.name === "type_text")).toBe(true));
+    await vi.waitFor(() =>
+      expect(f.calls.some((c) => c.name === "type_text")).toBe(true),
+    );
     const selecting = f.backend.selectText(target, { start: 0, length: 2 });
     await new Promise((resolve) => setTimeout(resolve, 50));
     // The native semantic lease is per (pid, window): the selection must not
@@ -797,8 +868,9 @@ describe("Cua native boundary", () => {
         element_token: "message-token",
       },
     ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
+    const node = (
+      await f.backend.getState({ windowId: "cua:10:20", includeTree: true })
+    ).root!.children[0]!;
     const target = {
       target: { label: "Message", windowId: "cua:10:20" },
       node,
@@ -808,7 +880,9 @@ describe("Cua native boundary", () => {
     f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
 
     const typing = f.backend.typeText("alpha", "cua:10:20", target);
-    await vi.waitFor(() => expect(f.calls.some((c) => c.name === "type_text")).toBe(true));
+    await vi.waitFor(() =>
+      expect(f.calls.some((c) => c.name === "type_text")).toBe(true),
+    );
     const writing = f.backend.setValue(target, "beta");
     await new Promise((resolve) => setTimeout(resolve, 50));
     // The native semantic lease is per (pid, window) and set_value takes the
@@ -841,8 +915,9 @@ describe("Cua native boundary", () => {
         element_token: "message-token",
       },
     ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
+    const node = (
+      await f.backend.getState({ windowId: "cua:10:20", includeTree: true })
+    ).root!.children[0]!;
     const target = {
       target: { label: "Message", windowId: "cua:10:20" },
       node,
@@ -879,11 +954,13 @@ describe("Cua native boundary", () => {
         element_token: "message-token",
       },
     ]);
-    const firstNode = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
+    const firstNode = (
+      await f.backend.getState({ windowId: "cua:10:20", includeTree: true })
+    ).root!.children[0]!;
     f.captureWindow(21);
-    const secondNode = (await f.backend.getState({ windowId: "cua:10:21", includeTree: true }))
-      .root!.children[0]!;
+    const secondNode = (
+      await f.backend.getState({ windowId: "cua:10:21", includeTree: true })
+    ).root!.children[0]!;
     const firstTarget = {
       target: { label: "Message", windowId: "cua:10:20" },
       node: firstNode,
@@ -930,11 +1007,13 @@ describe("Cua native boundary", () => {
         element_token: "message-token",
       },
     ]);
-    const firstNode = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
+    const firstNode = (
+      await f.backend.getState({ windowId: "cua:10:20", includeTree: true })
+    ).root!.children[0]!;
     f.captureWindow(21, 11);
-    const secondNode = (await f.backend.getState({ windowId: "cua:11:21", includeTree: true }))
-      .root!.children[0]!;
+    const secondNode = (
+      await f.backend.getState({ windowId: "cua:11:21", includeTree: true })
+    ).root!.children[0]!;
     const firstTarget = {
       target: { label: "Message", windowId: "cua:10:20" },
       node: firstNode,
@@ -991,14 +1070,17 @@ describe("Cua native boundary", () => {
         element_token: "message-token",
       },
     ]);
-    const firstNode = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
+    const firstNode = (
+      await f.backend.getState({ windowId: "cua:10:20", includeTree: true })
+    ).root!.children[0]!;
     f.captureWindow(21);
-    const secondNode = (await f.backend.getState({ windowId: "cua:10:21", includeTree: true }))
-      .root!.children[0]!;
+    const secondNode = (
+      await f.backend.getState({ windowId: "cua:10:21", includeTree: true })
+    ).root!.children[0]!;
     f.captureWindow(22);
-    const thirdNode = (await f.backend.getState({ windowId: "cua:10:22", includeTree: true })).root!
-      .children[0]!;
+    const thirdNode = (
+      await f.backend.getState({ windowId: "cua:10:22", includeTree: true })
+    ).root!.children[0]!;
     const firstTarget = {
       target: { label: "Message", windowId: "cua:10:20" },
       node: firstNode,
@@ -1030,7 +1112,9 @@ describe("Cua native boundary", () => {
     releaseGate!();
 
     await expect(Promise.all(writes)).resolves.toHaveLength(3);
-    expect(typeTexts().map((call) => call.args?.window_id)).toEqual([20, 21, 22]);
+    expect(typeTexts().map((call) => call.args?.window_id)).toEqual([
+      20, 21, 22,
+    ]);
   });
 
   it("semantic text lane leaves synthetic keyboard writes alone", async () => {
@@ -1057,8 +1141,9 @@ describe("Cua native boundary", () => {
         element_token: "message-token",
       },
     ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
+    const node = (
+      await f.backend.getState({ windowId: "cua:10:20", includeTree: true })
+    ).root!.children[0]!;
     const target = {
       target: { label: "Message", windowId: "cua:10:20" },
       node,
@@ -1067,15 +1152,19 @@ describe("Cua native boundary", () => {
     let releaseGate!: () => void;
     f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
 
-    await expect(f.backend.typeText("alpha", "cua:10:20", target)).rejects.toMatchObject({
+    await expect(
+      f.backend.typeText("alpha", "cua:10:20", target),
+    ).rejects.toMatchObject({
       effect: "dispatched-unknown",
       code: "cua_action_failed",
     });
-    await expect(f.backend.typeText("alpha", "cua:10:20", target)).rejects.toThrow(
-      /partially dispatched/,
-    );
+    await expect(
+      f.backend.typeText("alpha", "cua:10:20", target),
+    ).rejects.toThrow(/partially dispatched/);
     releaseGate();
-    await expect(f.backend.typeText("beta", "cua:10:20", target)).resolves.toMatchObject({
+    await expect(
+      f.backend.typeText("beta", "cua:10:20", target),
+    ).resolves.toMatchObject({
       windowId: "cua:10:20",
     });
   });
@@ -1090,8 +1179,9 @@ describe("Cua native boundary", () => {
         element_token: "message-token",
       },
     ]);
-    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
-      .children[0]!;
+    const node = (
+      await f.backend.getState({ windowId: "cua:10:20", includeTree: true })
+    ).root!.children[0]!;
     // Consecutive writes to the same exact element: the second cannot start
     // until the first's settle gap has elapsed.
     const target = {
@@ -1130,10 +1220,14 @@ describe("Cua native boundary", () => {
     };
     f.setVisible(false);
 
-    await expect(f.backend.typeText("hello", "cua:10:20", target)).resolves.toMatchObject({
+    await expect(
+      f.backend.typeText("hello", "cua:10:20", target),
+    ).resolves.toMatchObject({
       windowId: "cua:10:20",
     });
-    expect(f.calls.findLast((call) => call.name === "type_text")?.args).toMatchObject({
+    expect(
+      f.calls.findLast((call) => call.name === "type_text")?.args,
+    ).toMatchObject({
       pid: 10,
       window_id: 20,
       text: "hello",
@@ -1156,20 +1250,26 @@ describe("Cua native boundary", () => {
       windowId: "cua:10:20",
       includeTree: true,
     });
-    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(1);
+    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(
+      1,
+    );
 
     const resolved = await f.backend.getState({
       windowId: "cua:10:20",
       includeTree: true,
       reuseRecentTree: true,
     });
-    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(1);
+    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(
+      1,
+    );
     expect(resolved.root).toBe(observed.root);
 
     // The freshness requirement stands on the agent-facing path: a second
     // observation without the reuse flag still pays for the walk.
     await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
-    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(2);
+    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(
+      2,
+    );
   });
 
   it("scopes the recent tree to its window and re-walks after it ages out", async () => {
@@ -1183,7 +1283,9 @@ describe("Cua native boundary", () => {
       },
     ]);
     await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
-    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(1);
+    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(
+      1,
+    );
 
     // A window the cache never saw cannot borrow another window's tree: the
     // fresh identity check runs before any cached state is served.
@@ -1194,7 +1296,9 @@ describe("Cua native boundary", () => {
         reuseRecentTree: true,
       }),
     ).rejects.toMatchObject({ effect: "not-dispatched" });
-    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(1);
+    expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(
+      1,
+    );
 
     const now = vi.spyOn(Date, "now");
     try {
@@ -1206,14 +1310,17 @@ describe("Cua native boundary", () => {
         includeTree: true,
         reuseRecentTree: true,
       });
-      expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(2);
+      expect(f.calls.filter((c) => c.name === "get_window_state")).toHaveLength(
+        2,
+      );
     } finally {
       now.mockRestore();
     }
   });
 
   it("allows the bounded native permission request to finish without extending action deadlines", async () => {
-    const requests: Array<{ method: string; timeoutMs: number | undefined }> = [];
+    const requests: Array<{ method: string; timeoutMs: number | undefined }> =
+      [];
     const request: typeof cuaRequest = async (_endpoint, request, options) => {
       requests.push({
         method: (request as { method: string }).method,
@@ -1231,9 +1338,9 @@ describe("Cua native boundary", () => {
       request,
     });
     await backend.provision();
-    expect(requests.find((request) => request.method === "setup")?.timeoutMs).toBe(
-      CUA_SETUP_TIMEOUT_MS,
-    );
+    expect(
+      requests.find((request) => request.method === "setup")?.timeoutMs,
+    ).toBe(CUA_SETUP_TIMEOUT_MS);
     expect(
       requests
         .filter((request) => request.method === "call")
@@ -1250,9 +1357,9 @@ describe("Cua native boundary", () => {
       missing: ["screenRecording"],
       bundleId: "com.synara.test",
     });
-    expect(availability.kind === "permission-required" && availability.message).not.toContain(
-      "Accessibility",
-    );
+    expect(
+      availability.kind === "permission-required" && availability.message,
+    ).not.toContain("Accessibility");
     expect(await f.backend.provision()).toContain("Allow Screen Recording");
   });
 
@@ -1324,7 +1431,9 @@ describe("Cua native boundary", () => {
   it("clears an old capture failure after explicit setup so recovery can be retried", async () => {
     const f = fixture();
     f.failOverview();
-    await expect(f.backend.getState({ includeScreenshot: true })).rejects.toThrow("Capture denied");
+    await expect(
+      f.backend.getState({ includeScreenshot: true }),
+    ).rejects.toThrow("Capture denied");
     expect(f.backend.health().captureAvailable).toBe(false);
     await f.backend.provision();
     expect(f.backend.health()).toMatchObject({
@@ -1332,7 +1441,9 @@ describe("Cua native boundary", () => {
       captureAvailable: true,
     });
     // Readiness recovery does not itself capture the screen to prove pixels.
-    expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(1);
+    expect(
+      f.calls.filter((call) => call.name === "get_desktop_state"),
+    ).toHaveLength(1);
   });
   it("marks only scoped model state reads and keeps inherited preview captures unmarked", async () => {
     const f = fixture();
@@ -1341,16 +1452,20 @@ describe("Cua native boundary", () => {
         kind: "window",
         windowId: "cua:10:20",
       });
-      expect(f.calls.find((call) => call.name === "get_window_state")?.modelObservation).toBe(
-        false,
-      );
+      expect(
+        f.calls.find((call) => call.name === "get_window_state")
+          ?.modelObservation,
+      ).toBe(false);
       f.calls.length = 0;
       await withModelDesktopObservation(async () => {
         await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
         await f.backend.getState({ includeScreenshot: true });
         await f.backend.attachStream(() => undefined);
       });
-      expect(f.calls.find((call) => call.name === "get_window_state")?.modelObservation).toBe(true);
+      expect(
+        f.calls.find((call) => call.name === "get_window_state")
+          ?.modelObservation,
+      ).toBe(true);
       expect(
         f.calls
           .filter((call) => call.name === "get_desktop_state")
@@ -1358,7 +1473,12 @@ describe("Cua native boundary", () => {
       ).toEqual([true, false]);
       expect(
         f.calls
-          .filter((call) => !["get_window_state", "get_desktop_state"].includes(call.name ?? ""))
+          .filter(
+            (call) =>
+              !["get_window_state", "get_desktop_state"].includes(
+                call.name ?? "",
+              ),
+          )
           .every((call) => call.modelObservation === undefined),
       ).toBe(true);
     } finally {
@@ -1372,7 +1492,9 @@ describe("Cua native boundary", () => {
       windowId: "cua:10:20",
     });
     f.changeDesktop();
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+    await expect(
+      f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "stale_geometry",
     });
@@ -1380,7 +1502,9 @@ describe("Cua native boundary", () => {
     await withModelDesktopObservation(() =>
       f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
     );
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
+    await expect(
+      f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+    ).resolves.toBeDefined();
   });
   it("rejects a delayed observation from before a known desktop interruption", async () => {
     const f = fixture();
@@ -1396,7 +1520,9 @@ describe("Cua native boundary", () => {
       code: "stale_desktop_epoch",
     });
     await vi.waitFor(() =>
-      expect(f.calls.some((call) => call.name === "get_desktop_state")).toBe(true),
+      expect(f.calls.some((call) => call.name === "get_desktop_state")).toBe(
+        true,
+      ),
     );
     f.changeDesktop();
     await f.backend.checkInputReady("cua:10:20");
@@ -1405,8 +1531,13 @@ describe("Cua native boundary", () => {
   });
   it("checks exact native input readiness without capturing or dispatching input", async () => {
     const f = fixture();
-    await expect(f.backend.checkInputReady("cua:10:20")).resolves.toBeUndefined();
-    expect(f.calls.map((call) => call.name)).toEqual(["list_windows", "check_input_ready"]);
+    await expect(
+      f.backend.checkInputReady("cua:10:20"),
+    ).resolves.toBeUndefined();
+    expect(f.calls.map((call) => call.name)).toEqual([
+      "list_windows",
+      "check_input_ready",
+    ]);
     expect(f.calls[1]?.args).toEqual({ pid: 10, window_id: 20 });
     f.readiness({ ready: true, pid: 10, window_id: 21 });
     await expect(f.backend.checkInputReady("cua:10:20")).rejects.toMatchObject({
@@ -1431,9 +1562,16 @@ describe("Cua native boundary", () => {
       },
     }));
     await expect(
-      f.backend.waitForSettle({ windowId: "cua:10:20", timeoutMs: 5_000, quietMs: 1_000 }),
+      f.backend.waitForSettle({
+        windowId: "cua:10:20",
+        timeoutMs: 5_000,
+        quietMs: 1_000,
+      }),
     ).resolves.toEqual({ settled: true, waitedMs: 120, eventsSeen: 3 });
-    expect(f.calls.map((call) => call.name)).toEqual(["list_windows", "wait_for_settle"]);
+    expect(f.calls.map((call) => call.name)).toEqual([
+      "list_windows",
+      "wait_for_settle",
+    ]);
     expect(f.calls[1]?.args).toEqual({
       pid: 10,
       window_id: 20,
@@ -1453,17 +1591,33 @@ describe("Cua native boundary", () => {
         quietMs: 999_999,
       }),
     ).resolves.toMatchObject({ settled: false, eventsSeen: 41 });
-    expect(f.calls[1]?.args).toMatchObject({ timeout_ms: 30_000, quiet_ms: 5_000 });
-    f.onTool("wait_for_settle", () => ({ structuredContent: { waited_ms: 5 } }));
+    expect(f.calls[1]?.args).toMatchObject({
+      timeout_ms: 30_000,
+      quiet_ms: 5_000,
+    });
+    f.onTool("wait_for_settle", () => ({
+      structuredContent: { waited_ms: 5 },
+    }));
     await expect(
-      f.backend.waitForSettle({ windowId: "cua:10:20", timeoutMs: 1_000, quietMs: 100 }),
-    ).rejects.toMatchObject({ code: "invalid_settle_read", effect: "not-dispatched" });
+      f.backend.waitForSettle({
+        windowId: "cua:10:20",
+        timeoutMs: 1_000,
+        quietMs: 100,
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_settle_read",
+      effect: "not-dispatched",
+    });
     f.onTool("wait_for_settle", () => ({
       isError: true,
       content: [{ type: "text", text: "Unknown tool: wait_for_settle" }],
     }));
     await expect(
-      f.backend.waitForSettle({ windowId: "cua:10:20", timeoutMs: 1_000, quietMs: 100 }),
+      f.backend.waitForSettle({
+        windowId: "cua:10:20",
+        timeoutMs: 1_000,
+        quietMs: 100,
+      }),
     ).rejects.toMatchObject({ effect: "not-dispatched" });
   });
   it("pauses input on another Space while leaving observation available", async () => {
@@ -1475,7 +1629,9 @@ describe("Cua native boundary", () => {
       inputPause: { windowId: "cua:10:20" },
     });
     expect(f.calls.some((call) => isTyping(call.name))).toBe(false);
-    await expect(f.backend.getState({ windowId: "cua:10:20" })).resolves.toMatchObject({
+    await expect(
+      f.backend.getState({ windowId: "cua:10:20" }),
+    ).resolves.toMatchObject({
       computerId: "desktop",
     });
   });
@@ -1497,7 +1653,10 @@ describe("Cua native boundary", () => {
         message: "The target is on another Space.",
       },
     });
-    expect(f.calls.map((call) => call.name)).toEqual(["list_windows", "check_input_ready"]);
+    expect(f.calls.map((call) => call.name)).toEqual([
+      "list_windows",
+      "check_input_ready",
+    ]);
   });
   it("maps only proven native Space refusals to recoverable pause", async () => {
     const f = fixture();
@@ -1510,8 +1669,15 @@ describe("Cua native boundary", () => {
       effect: "not-dispatched",
       inputPause: { windowId: "cua:10:20" },
     });
-    f.fail(new CuaTransportError("Space changed after dispatch", "dispatched-unknown"));
-    const error = await f.backend.typeText("abc", "cua:10:20").catch((error) => error);
+    f.fail(
+      new CuaTransportError(
+        "Space changed after dispatch",
+        "dispatched-unknown",
+      ),
+    );
+    const error = await f.backend
+      .typeText("abc", "cua:10:20")
+      .catch((error) => error);
     expect(error.effect).toBe("dispatched-unknown");
     expect(error.inputPause).toBeUndefined();
     expect(f.calls.filter((call) => isTyping(call.name))).toHaveLength(2);
@@ -1525,7 +1691,12 @@ describe("Cua native boundary", () => {
     f.move();
     await expect(
       withDesktopDeliveryMode("foreground", () =>
-        f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20"),
+        f.backend.drag(
+          { x: -275, y: 30 },
+          { x: -225, y: 50 },
+          500,
+          "cua:10:20",
+        ),
       ),
     ).rejects.toMatchObject({
       effect: "not-dispatched",
@@ -1590,20 +1761,26 @@ describe("Cua native boundary", () => {
       windowId: "cua:10:20",
     });
     f.pauseDesktop(true);
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+    await expect(
+      f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "desktop_input_paused",
       inputPause: { windowId: "cua:10:20" },
     });
     f.pauseDesktop(false);
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+    await expect(
+      f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+    ).rejects.toMatchObject({
       code: "stale_geometry",
     });
     await f.backend.captureScreenshot({
       kind: "window",
       windowId: "cua:10:20",
     });
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
+    await expect(
+      f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+    ).resolves.toBeDefined();
   });
   it("dispatches logical coordinate input without a preparation PNG", async () => {
     const f = fixture();
@@ -1618,7 +1795,9 @@ describe("Cua native boundary", () => {
       f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20"),
     );
     expect(f.calls.some((c) => c.name === "get_window_state")).toBe(false);
-    for (const call of f.calls.filter((c) => ["click", "scroll", "drag"].includes(c.name ?? ""))) {
+    for (const call of f.calls.filter((c) =>
+      ["click", "scroll", "drag"].includes(c.name ?? ""),
+    )) {
       expect(call.args).toMatchObject({
         pid: 10,
         window_id: 20,
@@ -1629,7 +1808,9 @@ describe("Cua native boundary", () => {
   });
   it("keeps explicitly approved foreground text on the native foreground tool", async () => {
     const f = fixture();
-    await withDesktopDeliveryMode("foreground", () => f.backend.typeText("abc", "cua:10:20"));
+    await withDesktopDeliveryMode("foreground", () =>
+      f.backend.typeText("abc", "cua:10:20"),
+    );
     expect(f.calls.find((call) => isTyping(call.name))).toMatchObject({
       name: "type_text",
       args: { delivery_mode: "foreground", force_synthetic: true },
@@ -1643,7 +1824,9 @@ describe("Cua native boundary", () => {
       keys: ["command", "a"],
     });
     f.calls.length = 0;
-    await withDesktopDeliveryMode("foreground", () => f.backend.hotkey(["meta", "a"], "cua:10:20"));
+    await withDesktopDeliveryMode("foreground", () =>
+      f.backend.hotkey(["meta", "a"], "cua:10:20"),
+    );
     expect(f.calls.find((call) => call.name === "hotkey")?.args).toMatchObject({
       delivery_mode: "foreground",
       keys: ["command", "a"],
@@ -1676,7 +1859,9 @@ describe("Cua native boundary", () => {
     // The launch goes through the driver's background `launch_app` only —
     // never an activation tool that would make the app frontmost.
     expect(
-      f.calls.filter((call) => call.name === "bring_to_front" || call.name === "activate"),
+      f.calls.filter(
+        (call) => call.name === "bring_to_front" || call.name === "activate",
+      ),
     ).toHaveLength(0);
     f.calls.length = 0;
     await expect(
@@ -1686,7 +1871,9 @@ describe("Cua native boundary", () => {
       bundle_id: "com.apple.Calculator",
       additional_arguments: ["--new-window"],
     });
-    await expect(f.backend.launchApp("/Applications/Calculator.app")).rejects.toMatchObject({
+    await expect(
+      f.backend.launchApp("/Applications/Calculator.app"),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "unsupported_operation",
     });
@@ -1765,13 +1952,20 @@ describe("Cua native boundary", () => {
       };
     });
     await expect(
-      f.backend.setWindowFrame!("cua:10:20", { x: 0, y: 0, width: 640, height: 480 }),
+      f.backend.setWindowFrame!("cua:10:20", {
+        x: 0,
+        y: 0,
+        width: 640,
+        height: 480,
+      }),
     ).resolves.toMatchObject({
       windowId: "cua:10:20",
       verified: "confirmed",
       effect: "verified",
     });
-    expect(f.calls.find((call) => call.name === "set_window_frame")?.args).toEqual({
+    expect(
+      f.calls.find((call) => call.name === "set_window_frame")?.args,
+    ).toEqual({
       pid: 10,
       window_id: 20,
       x: 0,
@@ -1791,8 +1985,16 @@ describe("Cua native boundary", () => {
       },
     }));
     await expect(
-      f.backend.setWindowFrame!("cua:10:20", { x: 0, y: 0, width: 640, height: 480 }),
-    ).resolves.toMatchObject({ verified: "unconfirmed", effect: "dispatched-unknown" });
+      f.backend.setWindowFrame!("cua:10:20", {
+        x: 0,
+        y: 0,
+        width: 640,
+        height: 480,
+      }),
+    ).resolves.toMatchObject({
+      verified: "unconfirmed",
+      effect: "dispatched-unknown",
+    });
   });
   it("invokes a menu path and preserves the status-coded refusal dialect", async () => {
     const f = fixture();
@@ -1803,7 +2005,9 @@ describe("Cua native boundary", () => {
         delivery: { mode: "foreground" },
       },
     }));
-    await expect(f.backend.invokeMenu!("cua:10:20", ["File", "Save"])).resolves.toMatchObject({
+    await expect(
+      f.backend.invokeMenu!("cua:10:20", ["File", "Save"]),
+    ).resolves.toMatchObject({
       windowId: "cua:10:20",
       verified: "unverifiable",
       effect: "dispatched-unknown",
@@ -1817,11 +2021,16 @@ describe("Cua native boundary", () => {
       isError: true,
       structuredContent: {
         status: "refused",
-        refusal: { code: "menu_path_unavailable", message: "The menu item is disabled." },
+        refusal: {
+          code: "menu_path_unavailable",
+          message: "The menu item is disabled.",
+        },
       },
       content: [{ type: "text", text: "The menu item is disabled." }],
     }));
-    await expect(f.backend.invokeMenu!("cua:10:20", ["Edit", "Undo"])).rejects.toMatchObject({
+    await expect(
+      f.backend.invokeMenu!("cua:10:20", ["Edit", "Undo"]),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "menu_path_unavailable",
     });
@@ -1829,10 +2038,20 @@ describe("Cua native boundary", () => {
   it("verifies window state from the driver's per-predicate outcome", async () => {
     const f = fixture();
     const predicates = [
-      { index: 0, status: "satisfied", unknown_reason: null, observed_json: "{}" },
+      {
+        index: 0,
+        status: "satisfied",
+        unknown_reason: null,
+        observed_json: "{}",
+      },
     ];
     f.onTool("verify_state", () => ({
-      structuredContent: { status: "satisfied", stable: true, samples: 2, predicates },
+      structuredContent: {
+        status: "satisfied",
+        stable: true,
+        samples: 2,
+        predicates,
+      },
     }));
     await expect(
       f.backend.verifyState!("cua:10:20", [
@@ -1856,7 +2075,12 @@ describe("Cua native boundary", () => {
         stable: true,
         samples: 1,
         predicates: [
-          { index: 0, status: "unsatisfied", unknown_reason: null, observed_json: "{}" },
+          {
+            index: 0,
+            status: "unsatisfied",
+            unknown_reason: null,
+            observed_json: "{}",
+          },
         ],
       },
     }));
@@ -1864,7 +2088,9 @@ describe("Cua native boundary", () => {
       f.backend.verifyState!("cua:10:20", [{ window: { bounds: { x: 0 } } }]),
     ).resolves.toMatchObject({ status: "unsatisfied", stable: true });
     // An unparseable status is "unknown", never collapsed to unsatisfied.
-    f.onTool("verify_state", () => ({ structuredContent: { status: "weird" } }));
+    f.onTool("verify_state", () => ({
+      structuredContent: { status: "weird" },
+    }));
     await expect(
       f.backend.verifyState!("cua:10:20", [{ window: { bounds: { x: 0 } } }]),
     ).resolves.toMatchObject({ status: "unknown" });
@@ -1898,13 +2124,26 @@ describe("Cua native boundary", () => {
       y2: 140,
     });
     await expect(
-      f.backend.zoomWindow!("cua:10:20", { x: 150, y: 0, width: 100, height: 50 }),
-    ).rejects.toMatchObject({ effect: "not-dispatched", code: "invalid_geometry" });
+      f.backend.zoomWindow!("cua:10:20", {
+        x: 150,
+        y: 0,
+        width: 100,
+        height: 50,
+      }),
+    ).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "invalid_geometry",
+    });
   });
   it("reports a killed app verified only once it leaves the app list", async () => {
     const f = fixture();
     let apps: Array<Record<string, unknown>> = [
-      { pid: 10, name: "TextEdit", bundle_id: "com.apple.TextEdit", active: true },
+      {
+        pid: 10,
+        name: "TextEdit",
+        bundle_id: "com.apple.TextEdit",
+        active: true,
+      },
     ];
     f.onTool("list_apps", () => ({ structuredContent: { apps } }));
     f.onTool("kill_app", () => {
@@ -1915,7 +2154,9 @@ describe("Cua native boundary", () => {
       verified: "confirmed",
       effect: "verified",
     });
-    expect(f.calls.find((call) => call.name === "kill_app")?.args).toEqual({ pid: 10 });
+    expect(f.calls.find((call) => call.name === "kill_app")?.args).toEqual({
+      pid: 10,
+    });
     f.onTool("kill_app", () => ({
       content: [{ type: "text", text: "Sent SIGKILL to pid 10." }],
     }));
@@ -1954,12 +2195,16 @@ describe("Cua native boundary", () => {
         evidence: [{ kind: "value_readback" }],
       },
     }));
-    await expect(f.backend.setWindowMinimized!("cua:10:20", true)).resolves.toMatchObject({
+    await expect(
+      f.backend.setWindowMinimized!("cua:10:20", true),
+    ).resolves.toMatchObject({
       windowId: "cua:10:20",
       verified: "confirmed",
       effect: "verified",
     });
-    expect(f.calls.find((call) => call.name === "set_window_minimized")?.args).toEqual({
+    expect(
+      f.calls.find((call) => call.name === "set_window_minimized")?.args,
+    ).toEqual({
       pid: 10,
       window_id: 20,
       minimized: true,
@@ -1968,14 +2213,18 @@ describe("Cua native boundary", () => {
     f.onTool("set_window_minimized", () => ({
       structuredContent: { effect: "confirmed", route: "ax_window_minimized" },
     }));
-    await expect(f.backend.setWindowMinimized!("cua:10:20", true)).resolves.toMatchObject({
+    await expect(
+      f.backend.setWindowMinimized!("cua:10:20", true),
+    ).resolves.toMatchObject({
       verified: "unverifiable",
       effect: "dispatched-unknown",
     });
     f.onTool("set_window_minimized", () => ({
       structuredContent: { effect: "unconfirmed" },
     }));
-    await expect(f.backend.setWindowMinimized!("cua:10:20", false)).resolves.toMatchObject({
+    await expect(
+      f.backend.setWindowMinimized!("cua:10:20", false),
+    ).resolves.toMatchObject({
       verified: "unconfirmed",
       effect: "dispatched-unknown",
     });
@@ -1994,17 +2243,21 @@ describe("Cua native boundary", () => {
       verified: "confirmed",
       effect: "verified",
     });
-    expect(f.calls.find((call) => call.name === "set_app_visibility")?.args).toEqual({
+    expect(
+      f.calls.find((call) => call.name === "set_app_visibility")?.args,
+    ).toEqual({
       pid: 10,
       hidden: true,
     });
     f.onTool("set_app_visibility", () => ({
       structuredContent: { effect: "suspected_noop" },
     }));
-    await expect(f.backend.setAppVisibility!(10, false)).resolves.toMatchObject({
-      verified: "unconfirmed",
-      effect: "dispatched-unknown",
-    });
+    await expect(f.backend.setAppVisibility!(10, false)).resolves.toMatchObject(
+      {
+        verified: "unconfirmed",
+        effect: "dispatched-unknown",
+      },
+    );
     // A target that is not a live pid, or a flag that is not a boolean, fails
     // closed before the driver is ever asked.
     await expect(f.backend.setAppVisibility!(0, true)).rejects.toMatchObject({
@@ -2013,8 +2266,13 @@ describe("Cua native boundary", () => {
     });
     await expect(
       f.backend.setAppVisibility!(10, "yes" as unknown as boolean),
-    ).rejects.toMatchObject({ effect: "not-dispatched", code: "invalid_arguments" });
-    expect(f.calls.filter((call) => call.name === "set_app_visibility")).toHaveLength(2);
+    ).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "invalid_arguments",
+    });
+    expect(
+      f.calls.filter((call) => call.name === "set_app_visibility"),
+    ).toHaveLength(2);
   });
   it("reads the desktop inventory and scopes it to the scoped window's app", async () => {
     const f = fixture();
@@ -2036,7 +2294,13 @@ describe("Cua native boundary", () => {
             is_on_screen: true,
             z_index: 0,
           },
-          { window_id: 21, pid: 10, app_name: "TextEdit", title: "Second", is_on_screen: false },
+          {
+            window_id: 21,
+            pid: 10,
+            app_name: "TextEdit",
+            title: "Second",
+            is_on_screen: false,
+          },
           { window_id: 40, pid: 20, app_name: "Finder", title: "" },
           { window_id: 0, pid: 10, title: "bogus" },
         ],
@@ -2057,30 +2321,46 @@ describe("Cua native boundary", () => {
           onScreen: true,
           zIndex: 0,
         },
-        { id: "cua:10:21", pid: 10, appName: "TextEdit", title: "Second", onScreen: false },
+        {
+          id: "cua:10:21",
+          pid: 10,
+          appName: "TextEdit",
+          title: "Second",
+          onScreen: false,
+        },
         { id: "cua:20:40", pid: 20, appName: "Finder", title: "" },
       ],
       truncated: false,
     });
     // The driver call is argument-free: window scoping is Synara-side, to the
     // app that owns the exact window resolved through list_windows.
-    await expect(f.backend.getAccessibilityTree!("cua:10:20")).resolves.toEqual({
-      apps: [{ pid: 10, name: "TextEdit", bundleId: "com.apple.TextEdit" }],
-      windows: [
-        {
-          id: "cua:10:20",
-          pid: 10,
-          appName: "TextEdit",
-          title: "Untitled",
-          bounds: { x: -300, y: 20, width: 200, height: 100 },
-          onScreen: true,
-          zIndex: 0,
-        },
-        { id: "cua:10:21", pid: 10, appName: "TextEdit", title: "Second", onScreen: false },
-      ],
-      truncated: false,
-    });
-    expect(f.calls.find((call) => call.name === "get_accessibility_tree")?.args).toEqual({});
+    await expect(f.backend.getAccessibilityTree!("cua:10:20")).resolves.toEqual(
+      {
+        apps: [{ pid: 10, name: "TextEdit", bundleId: "com.apple.TextEdit" }],
+        windows: [
+          {
+            id: "cua:10:20",
+            pid: 10,
+            appName: "TextEdit",
+            title: "Untitled",
+            bounds: { x: -300, y: 20, width: 200, height: 100 },
+            onScreen: true,
+            zIndex: 0,
+          },
+          {
+            id: "cua:10:21",
+            pid: 10,
+            appName: "TextEdit",
+            title: "Second",
+            onScreen: false,
+          },
+        ],
+        truncated: false,
+      },
+    );
+    expect(
+      f.calls.find((call) => call.name === "get_accessibility_tree")?.args,
+    ).toEqual({});
   });
   it("caps the inventory rows and refuses a malformed snapshot", async () => {
     const f = fixture();
@@ -2101,7 +2381,9 @@ describe("Cua native boundary", () => {
     expect(capped.truncated).toBe(true);
     // A snapshot without the row arrays is a malformed driver response, not an
     // empty desktop — fail closed rather than report nothing.
-    f.onTool("get_accessibility_tree", () => ({ structuredContent: { windows: [] } }));
+    f.onTool("get_accessibility_tree", () => ({
+      structuredContent: { windows: [] },
+    }));
     await expect(f.backend.getAccessibilityTree!()).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "invalid_response",
@@ -2110,36 +2392,50 @@ describe("Cua native boundary", () => {
     f.onTool("get_accessibility_tree", () => ({
       structuredContent: { apps: [], windows: [] },
     }));
-    await expect(f.backend.getAccessibilityTree!("cua:999:1")).rejects.toMatchObject({
+    await expect(
+      f.backend.getAccessibilityTree!("cua:999:1"),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "stale_target",
     });
   });
   it("reads the cursor position in desktop points and reports window containment", async () => {
     const f = fixture();
-    f.onTool("get_cursor_position", () => ({ structuredContent: { x: -200, y: 60 } }));
+    f.onTool("get_cursor_position", () => ({
+      structuredContent: { x: -200, y: 60 },
+    }));
     await expect(f.backend.getCursorPosition!()).resolves.toEqual({
       x: -200,
       y: 60,
       capturedAt: expect.any(String),
     });
     // The fixture window spans x -300..-100, y 20..120: (-200, 60) is inside.
-    await expect(f.backend.getCursorPosition!("cua:10:20")).resolves.toMatchObject({
+    await expect(
+      f.backend.getCursorPosition!("cua:10:20"),
+    ).resolves.toMatchObject({
       x: -200,
       y: 60,
       windowId: "cua:10:20",
       insideWindow: true,
     });
-    f.onTool("get_cursor_position", () => ({ structuredContent: { x: 50, y: 60 } }));
-    await expect(f.backend.getCursorPosition!("cua:10:20")).resolves.toMatchObject({
+    f.onTool("get_cursor_position", () => ({
+      structuredContent: { x: 50, y: 60 },
+    }));
+    await expect(
+      f.backend.getCursorPosition!("cua:10:20"),
+    ).resolves.toMatchObject({
       insideWindow: false,
     });
-    f.onTool("get_cursor_position", () => ({ structuredContent: { x: "left", y: 60 } }));
+    f.onTool("get_cursor_position", () => ({
+      structuredContent: { x: "left", y: 60 },
+    }));
     await expect(f.backend.getCursorPosition!()).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "invalid_response",
     });
-    expect(f.calls.find((call) => call.name === "get_cursor_position")?.args).toEqual({});
+    expect(
+      f.calls.find((call) => call.name === "get_cursor_position")?.args,
+    ).toEqual({});
   });
   it("reads the published action route and requires public verification evidence", async () => {
     const f = fixture();
@@ -2175,7 +2471,9 @@ describe("Cua native boundary", () => {
     const f = fixture();
     f.denyPermissions();
     const availability = await f.backend.availability();
-    expect(Schema.decodeUnknownSync(ComputerAvailability)(availability)).toMatchObject({
+    expect(
+      Schema.decodeUnknownSync(ComputerAvailability)(availability),
+    ).toMatchObject({
       kind: "permission-required",
       missing: ["accessibility", "screenRecording"],
     });
@@ -2212,10 +2510,16 @@ describe("Cua native boundary", () => {
     const windows = await f.backend.listWindows();
     const byId = new Map(windows.map((w) => [w.id, w]));
     // Minimized: off the screen list but still claimed by its Space.
-    expect(byId.get("cua:10:21")).toMatchObject({ minimized: true, visible: false });
+    expect(byId.get("cua:10:21")).toMatchObject({
+      minimized: true,
+      visible: false,
+    });
     // Hidden-app windows are detached from every Space — not minimized, but
     // still listed so the hidden workspace remains targetable.
-    expect(byId.get("cua:11:22")).toMatchObject({ minimized: false, visible: false });
+    expect(byId.get("cua:11:22")).toMatchObject({
+      minimized: false,
+      visible: false,
+    });
   });
   it("distinguishes a native admission refusal from an uncertain delivery", async () => {
     const f = fixture();
@@ -2236,7 +2540,9 @@ describe("Cua native boundary", () => {
     expect(f.calls.find((c) => c.name === "hotkey")?.args).toMatchObject({
       keys: ["command", "left"],
     });
-    expect(() => f.backend.hotkey(["meta", "a", "s"], "cua:10:20")).toThrow("exactly one");
+    expect(() => f.backend.hotkey(["meta", "a", "s"], "cua:10:20")).toThrow(
+      "exactly one",
+    );
   });
   it("maps xdotool-style key spellings onto driver keynames", async () => {
     const f = fixture();
@@ -2258,7 +2564,9 @@ describe("Cua native boundary", () => {
     for (const [name, driver] of mapped) {
       f.calls.length = 0;
       await f.backend.pressKey(name, "cua:10:20");
-      expect(f.calls.find((c) => c.name === "press_key")?.args).toMatchObject({ key: driver });
+      expect(f.calls.find((c) => c.name === "press_key")?.args).toMatchObject({
+        key: driver,
+      });
     }
     // Names the pinned keymap lacks pass through untouched so the driver's own
     // "Unknown key name" refusal stays the gate until the keymap revision
@@ -2284,13 +2592,23 @@ describe("Cua native boundary", () => {
   it("refuses Insert spellings and still refuses modifier-only chords", async () => {
     const f = fixture();
     for (const name of ["insert", "Insert", "ins"])
-      expect(() => f.backend.pressKey(name, "cua:10:20")).toThrow("no Insert key mapping");
-    expect(() => f.backend.hotkey(["meta", "ins"], "cua:10:20")).toThrow("no Insert key mapping");
+      expect(() => f.backend.pressKey(name, "cua:10:20")).toThrow(
+        "no Insert key mapping",
+      );
+    expect(() => f.backend.hotkey(["meta", "ins"], "cua:10:20")).toThrow(
+      "no Insert key mapping",
+    );
     // A chord of nothing but modifiers still has no base key, whether the
     // modifier arrives under a driver or a left-side spelling.
-    expect(() => f.backend.hotkey(["meta", "shift"], "cua:10:20")).toThrow("exactly one");
-    expect(() => f.backend.hotkey(["meta", "shift_l"], "cua:10:20")).toThrow("exactly one");
-    expect(f.calls.filter((c) => c.name === "press_key" || c.name === "hotkey")).toHaveLength(0);
+    expect(() => f.backend.hotkey(["meta", "shift"], "cua:10:20")).toThrow(
+      "exactly one",
+    );
+    expect(() => f.backend.hotkey(["meta", "shift_l"], "cua:10:20")).toThrow(
+      "exactly one",
+    );
+    expect(
+      f.calls.filter((c) => c.name === "press_key" || c.name === "hotkey"),
+    ).toHaveLength(0);
   });
   it("converts pixel deltas to one bounded wheel operation", async () => {
     const f = fixture();
@@ -2298,7 +2616,12 @@ describe("Cua native boundary", () => {
       kind: "window",
       windowId: "cua:10:20",
     });
-    const result = await f.backend.scroll({ x: -275, y: 30 }, 0, 250, "cua:10:20");
+    const result = await f.backend.scroll(
+      { x: -275, y: 30 },
+      0,
+      250,
+      "cua:10:20",
+    );
     expect(result.scrollDelta).toEqual({ deltaX: 0, deltaY: 240 });
     expect(f.calls.filter((c) => c.name === "scroll")).toHaveLength(1);
     expect(f.calls.find((c) => c.name === "scroll")?.args).toMatchObject({
@@ -2313,10 +2636,13 @@ describe("Cua native boundary", () => {
       kind: "window",
       windowId: "cua:10:20",
     });
-    const result = await f.backend.scroll({ x: -275, y: 30 }, -140, 250, "cua:10:20", [
-      "meta",
-      "shift",
-    ]);
+    const result = await f.backend.scroll(
+      { x: -275, y: 30 },
+      -140,
+      250,
+      "cua:10:20",
+      ["meta", "shift"],
+    );
     expect(result.scrollDelta).toEqual({ deltaX: -120, deltaY: 240 });
     expect(f.calls.filter((c) => c.name === "scroll")).toHaveLength(1);
     expect(f.calls.find((c) => c.name === "scroll")?.args).toMatchObject({
@@ -2334,10 +2660,16 @@ describe("Cua native boundary", () => {
     });
     await expect(
       f.backend.scroll({ x: -275, y: 30 }, 0, 61 * 120, "cua:10:20"),
-    ).rejects.toMatchObject({ effect: "not-dispatched", code: "unsupported_operation" });
+    ).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "unsupported_operation",
+    });
     await expect(
       f.backend.scroll({ x: -275, y: 30 }, 61 * 120, 0, "cua:10:20"),
-    ).rejects.toMatchObject({ effect: "not-dispatched", code: "unsupported_operation" });
+    ).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "unsupported_operation",
+    });
     expect(f.calls.filter((c) => c.name === "scroll")).toHaveLength(0);
   });
   it("prefers the AX scroll-bar route for an unmodified vertical element scroll", async () => {
@@ -2350,7 +2682,10 @@ describe("Cua native boundary", () => {
         element_token: "scroll-token",
       },
     ]);
-    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const state = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+    });
     const node = state.root!.children[0]!;
     const target = {
       target: { label: "Content", windowId: "cua:10:20" },
@@ -2359,8 +2694,18 @@ describe("Cua native boundary", () => {
     };
     // The point path is geometry-gated: a wheel scroll at a point still needs
     // a fresh observation of the window it lands in.
-    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
-    await f.backend.scroll(target.point, 0, 250, "cua:10:20", undefined, target);
+    await f.backend.captureScreenshot({
+      kind: "window",
+      windowId: "cua:10:20",
+    });
+    await f.backend.scroll(
+      target.point,
+      0,
+      250,
+      "cua:10:20",
+      undefined,
+      target,
+    );
     expect(f.calls.find((c) => c.name === "scroll")?.args).toMatchObject({
       element_token: "scroll-token",
       direction: "down",
@@ -2368,18 +2713,31 @@ describe("Cua native boundary", () => {
       by: "line",
     });
     // A horizontal or modified request cannot ride the vertical AX rung.
-    await f.backend.scroll(target.point, -140, 250, "cua:10:20", undefined, target);
+    await f.backend.scroll(
+      target.point,
+      -140,
+      250,
+      "cua:10:20",
+      undefined,
+      target,
+    );
     expect(f.calls.filter((c) => c.name === "scroll")[1]?.args).toMatchObject({
       delta_x: -1,
       delta_y: 2,
     });
-    expect(f.calls.filter((c) => c.name === "scroll")[1]?.args).not.toHaveProperty("element_token");
+    expect(
+      f.calls.filter((c) => c.name === "scroll")[1]?.args,
+    ).not.toHaveProperty("element_token");
   });
   it("coalesces physical state across concurrent thread projections", async () => {
     const f = fixture();
     await Promise.all(
       Array.from({ length: 12 }, () =>
-        Promise.all([f.backend.availability(), f.backend.listWindows(), f.backend.getScreenSize()]),
+        Promise.all([
+          f.backend.availability(),
+          f.backend.listWindows(),
+          f.backend.getScreenSize(),
+        ]),
       ),
     );
     expect(f.calls.map((c) => c.name)).toEqual([
@@ -2442,7 +2800,9 @@ describe("Cua native boundary", () => {
       windowId: "cua:10:20",
     });
     f.move();
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+    await expect(
+      f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "stale_geometry",
     });
@@ -2451,7 +2811,9 @@ describe("Cua native boundary", () => {
       effect: "not-dispatched",
       code: "stale_target",
     });
-    expect(f.calls.filter((c) => c.name === "click" || isTyping(c.name))).toHaveLength(0);
+    expect(
+      f.calls.filter((c) => c.name === "click" || isTyping(c.name)),
+    ).toHaveLength(0);
   });
   it("sends an exact-target background drag as window-local points", async () => {
     const f = fixture();
@@ -2459,7 +2821,12 @@ describe("Cua native boundary", () => {
       kind: "window",
       windowId: "cua:10:20",
     });
-    await f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20");
+    await f.backend.drag(
+      { x: -275, y: 30 },
+      { x: -225, y: 50 },
+      500,
+      "cua:10:20",
+    );
     expect(f.calls.filter((call) => call.name === "drag")).toEqual([
       expect.objectContaining({
         args: {
@@ -2483,7 +2850,10 @@ describe("Cua native boundary", () => {
     // screen points against, so the drag refuses rather than guess a frame.
     await expect(
       f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20"),
-    ).rejects.toMatchObject({ effect: "not-dispatched", code: "stale_geometry" });
+    ).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "stale_geometry",
+    });
     expect(f.calls.some((call) => call.name === "drag")).toBe(false);
   });
   it("refuses a background drag whose endpoint leaves the exact window", async () => {
@@ -2499,7 +2869,9 @@ describe("Cua native boundary", () => {
   });
   it("refuses a drag that names no exact window before reaching Cua", async () => {
     const f = fixture();
-    await expect(f.backend.drag({ x: 0, y: 0 }, { x: 10, y: 10 }, 500)).rejects.toMatchObject({
+    await expect(
+      f.backend.drag({ x: 0, y: 0 }, { x: 10, y: 10 }, 500),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "window_required",
     });
@@ -2568,9 +2940,10 @@ describe("Cua hardening", () => {
     expect(f.backend.buildSignature()).toBe(f.backend.buildSignature());
     f.denyPermissions();
     const availability = await f.backend.availability();
-    expect(availability.kind === "permission-required" && availability.buildSignature).toBe(
-      "unknown",
-    );
+    expect(
+      availability.kind === "permission-required" &&
+        availability.buildSignature,
+    ).toBe("unknown");
   });
   it("pauses input while an auth sheet holds focus, keeping observation available", async () => {
     const f = fixture();
@@ -2584,7 +2957,9 @@ describe("Cua hardening", () => {
       code: "auth_sheet_focused",
       inputPause: { windowId: "cua:10:20" },
     });
-    await expect(f.backend.getState({ windowId: "cua:10:20" })).resolves.toMatchObject({
+    await expect(
+      f.backend.getState({ windowId: "cua:10:20" }),
+    ).resolves.toMatchObject({
       computerId: "desktop",
     });
   });
@@ -2668,10 +3043,14 @@ describe("Cua hardening", () => {
       f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" }),
     );
     await withComputerTask(task, () =>
-      expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined(),
+      expect(
+        f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+      ).resolves.toBeDefined(),
     );
     await f.backend.endTask("thread", "turn");
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+    await expect(
+      f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+    ).rejects.toMatchObject({
       code: "stale_geometry",
     });
     await f.backend.dispose();
@@ -2683,7 +3062,9 @@ describe("Cua hardening", () => {
       kind: "window",
       windowId: "cua:10:20",
     });
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
+    await expect(
+      f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+    ).resolves.toBeDefined();
     const clicks = f.calls.filter((call) => call.name === "click").length;
 
     // The revoke lands mid-task: the probe reports the grant missing...
@@ -2701,7 +3082,9 @@ describe("Cua hardening", () => {
     expect(f.backend.health().captureAvailable).toBe(false);
     // ...and the desktop stays driveable: exactly one native input, never a replay.
     await expect(f.backend.typeText("abc", "cua:10:20")).resolves.toBeDefined();
-    expect(f.calls.filter((call) => call.name === "click")).toHaveLength(clicks);
+    expect(f.calls.filter((call) => call.name === "click")).toHaveLength(
+      clicks,
+    );
     expect(f.calls.filter((call) => isTyping(call.name))).toHaveLength(1);
     await f.backend.dispose();
   });
@@ -2709,13 +3092,19 @@ describe("Cua hardening", () => {
     const f = fixture();
     // A capture that fails native-side flips health while dispatching zero input...
     f.failOverview();
-    await expect(f.backend.getState({ includeScreenshot: true })).rejects.toThrow();
+    await expect(
+      f.backend.getState({ includeScreenshot: true }),
+    ).rejects.toThrow();
     expect(f.backend.health()).toMatchObject({
       status: "unavailable",
       captureAvailable: false,
     });
-    const overviews = f.calls.filter((call) => call.name === "get_desktop_state").length;
-    expect(f.calls.some((call) => call.name === "click" || isTyping(call.name))).toBe(false);
+    const overviews = f.calls.filter(
+      (call) => call.name === "get_desktop_state",
+    ).length;
+    expect(
+      f.calls.some((call) => call.name === "click" || isTyping(call.name)),
+    ).toBe(false);
     // ...inputs keep working through the outage...
     await expect(f.backend.typeText("abc", "cua:10:20")).resolves.toBeDefined();
     // ...and a latched heal is not enough: only a fresh successful observation
@@ -2726,12 +3115,16 @@ describe("Cua hardening", () => {
       status: "connected",
       captureAvailable: true,
     });
-    await expect(f.backend.getState({ includeScreenshot: true })).rejects.toThrow();
+    await expect(
+      f.backend.getState({ includeScreenshot: true }),
+    ).rejects.toThrow();
     expect(f.backend.health()).toMatchObject({
       status: "unavailable",
       captureAvailable: false,
     });
-    expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(overviews + 1);
+    expect(
+      f.calls.filter((call) => call.name === "get_desktop_state"),
+    ).toHaveLength(overviews + 1);
     await f.backend.dispose();
   });
   it("drops grounding after uncertain delivery but keeps it after a clean refusal", async () => {
@@ -2745,7 +3138,9 @@ describe("Cua hardening", () => {
       effect: "dispatched-unknown",
     });
     // Uncertain delivery may have moved the window: re-observe first.
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+    await expect(
+      f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+    ).rejects.toMatchObject({
       code: "stale_geometry",
     });
     await f.backend.captureScreenshot({
@@ -2758,7 +3153,9 @@ describe("Cua hardening", () => {
       effect: "not-dispatched",
     });
     // A clean refusal dispatched nothing, so the grounding still stands.
-    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).resolves.toBeDefined();
+    await expect(
+      f.backend.click({ x: -275, y: 30 }, "cua:10:20"),
+    ).resolves.toBeDefined();
     await f.backend.dispose();
   });
 });
@@ -2769,13 +3166,13 @@ describe("Computer authority", () => {
     await manager.setControlEnabled("fixture", false);
     await manager.handleThreadRemoved("fixture");
     await manager.handleThreadRestored("fixture");
-    await expect(manager.withAgentActivity("fixture", async () => undefined)).rejects.toThrow(
-      "revoked",
-    );
+    await expect(
+      manager.withAgentActivity("fixture", async () => undefined),
+    ).rejects.toThrow("revoked");
     await manager.setControlEnabled("fixture", true);
-    await expect(manager.withAgentActivity("fixture", async () => "new call")).resolves.toBe(
-      "new call",
-    );
+    await expect(
+      manager.withAgentActivity("fixture", async () => "new call"),
+    ).resolves.toBe("new call");
     await manager.dispose();
   });
   it("ignores an older turn ending after the same thread took a new lease", async () => {
@@ -2820,14 +3217,17 @@ describe("Computer authority", () => {
     await first;
     await rejected;
     expect(work).not.toHaveBeenCalled();
-    await expect(manager.withAgentActivity("fixture", work)).resolves.toBe("input");
+    await expect(manager.withAgentActivity("fixture", work)).resolves.toBe(
+      "input",
+    );
     await manager.dispose();
   });
 });
 
 describe("Cua preview image lifetime", () => {
   const retainedImage = (backend: CuaComputerBackend) =>
-    (backend as unknown as { cachedImage: ComputerScreenshot | undefined }).cachedImage;
+    (backend as unknown as { cachedImage: ComputerScreenshot | undefined })
+      .cachedImage;
   it("releases cached pixels when a new desktop epoch arrives on a metadata read", async () => {
     const f = fixture();
     try {
@@ -2905,7 +3305,10 @@ describe("native preview task lifetime", () => {
 });
 
 describe("Cua workstream-C speed flags", () => {
-  const ENV = ["SYNARA_CUA_AX_ONLY_GET_STATE", "SYNARA_CUA_PREVIEW_STILL_MS"] as const;
+  const ENV = [
+    "SYNARA_CUA_AX_ONLY_GET_STATE",
+    "SYNARA_CUA_PREVIEW_STILL_MS",
+  ] as const;
   const savedEnv = new Map<string, string | undefined>();
 
   afterEach(() => {
@@ -2944,7 +3347,10 @@ describe("Cua workstream-C speed flags", () => {
   it("SYNARA_CUA_AX_ONLY_GET_STATE omits the capture arguments on a tree-only read", async () => {
     setEnv("SYNARA_CUA_AX_ONLY_GET_STATE", "1");
     const f = fixture();
-    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const state = await f.backend.getState({
+      windowId: "cua:10:20",
+      includeTree: true,
+    });
     const args = windowStateArgs(f);
     expect(args).not.toHaveProperty("include_screenshot");
     expect(args).not.toHaveProperty("max_dimension");
@@ -3027,7 +3433,10 @@ describe("driver browser surface", () => {
       content: [{ type: "text", text: "refused (browser_requires_setup)" }],
       structuredContent: {
         status: "refused",
-        refusal: { code: "browser_requires_setup", message: "Prepare a browser first." },
+        refusal: {
+          code: "browser_requires_setup",
+          message: "Prepare a browser first.",
+        },
       },
     }));
     const result = await f.backend.browser!.call({
@@ -3069,5 +3478,41 @@ describe("driver browser surface", () => {
       method: "end_browser_thread",
       task: { threadId: "thread-1" },
     });
+  });
+});
+
+describe("host-reported platform and native revision", () => {
+  const hostReply = (reply: Record<string, unknown>) =>
+    (async () => ({ ok: true, ...reply })) as unknown as typeof cuaRequest;
+
+  it("adopts the host platform and narrows patched-only capabilities for an unpatched driver", async () => {
+    const backend = new CuaComputerBackend({
+      endpoint: "/fixture-only",
+      request: hostReply({ hostPlatform: "win32", driverNativeRevision: 0 }),
+    });
+    expect(backend.agentDialect).toBe(
+      process.platform === "darwin" ? "macos" : "linux",
+    );
+    expect(backend.focusNeutralSemanticText).toBe(true);
+    expect(backend.capabilities().ghostCursor).toBe(true);
+
+    await backend.probeAvailability();
+    // The first reply teaches the backend what actually runs on the other
+    // end: a Windows host speaks the generic desktop dialect, and an
+    // unpatched upstream driver carries none of the Synara-native surface.
+    expect(backend.agentDialect).toBe("linux");
+    expect(backend.focusNeutralSemanticText).toBe(false);
+    expect(backend.capabilities().ghostCursor).toBe(false);
+  });
+
+  it("keeps the patched surface for a driver that reports its revision", async () => {
+    const backend = new CuaComputerBackend({
+      endpoint: "/fixture-only",
+      request: hostReply({ hostPlatform: "darwin", driverNativeRevision: 20 }),
+    });
+    await backend.probeAvailability();
+    expect(backend.agentDialect).toBe("macos");
+    expect(backend.focusNeutralSemanticText).toBe(true);
+    expect(backend.capabilities().ghostCursor).toBe(true);
   });
 });

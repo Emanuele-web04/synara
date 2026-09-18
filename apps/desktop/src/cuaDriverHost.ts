@@ -1762,11 +1762,13 @@ export class CuaDriverHost {
     | "desktopPauses"
     | "desktopInterruptions"
     | "driverNativeRevision"
+    | "hostPlatform"
   > {
     return {
       desktopEpoch: this.desktopEpoch,
       desktopPauses: [...this.desktopPauses].toSorted(),
       desktopInterruptions: this.desktopInterruptionCount,
+      hostPlatform: process.platform,
       ...(this.observedNativeRevision !== undefined
         ? { driverNativeRevision: this.observedNativeRevision }
         : {}),

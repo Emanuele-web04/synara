@@ -426,6 +426,14 @@ export interface CuaReply {
    */
   driverNativeRevision?: number;
   /**
+   * The platform the host — and therefore the driver it supervises — runs
+   * on (`"darwin"`, `"win32"`, `"linux"`). Always present on host replies;
+   * backends key dialect and platform-specific semantics off the host's
+   * truth rather than the local process, so a remote endpoint on another
+   * OS still reports honestly.
+   */
+  hostPlatform?: string;
+  /**
    * The tool's MCP-shaped result — and, for `cancel_input`, the cleanup
    * acknowledgement object (`pid`, `input_admission_closed`,
    * `cleanup_complete`, `pending_input`) documented above.

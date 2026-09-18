@@ -258,9 +258,22 @@ function withSemanticTextLaneTimeout<A>(
 /** The single macOS backend. Cua owns native actions; Synara owns admission,
  * session authority, explicit delivery policy and the provider result. */
 export class CuaComputerBackend implements ComputerBackend {
-  readonly focusNeutralSemanticText = true;
+  // Focus-neutral semantic writes are a Synara-patch guarantee. Unknown
+  // (pre-handshake) reads as the patched default; `0` is the unpatched
+  // upstream driver, where the property is unverified and unclaimed.
+  get focusNeutralSemanticText(): boolean {
+    return this.driverNativeRevision !== 0;
+  }
   readonly computerId = DEFAULT_COMPUTER_ID;
-  readonly agentDialect = "macos" as const;
+  // The AXPress/meta-key dialect is macOS semantics; Windows and Linux
+  // drivers speak the generic desktop dialect (press, ctrl+chords). The
+  // host reports its own platform on every reply — a remote endpoint on
+  // another OS overrides the local assumption.
+  get agentDialect(): "macos" | "linux" {
+    return (this.hostPlatform ?? process.platform) === "darwin"
+      ? "macos"
+      : "linux";
+  }
   private readonly endpoint: string | undefined;
   private readonly capability: string | undefined;
   private windows: readonly ComputerWindow[] = [];
@@ -329,6 +342,8 @@ export class CuaComputerBackend implements ComputerBackend {
    * patch are advertised only while this is nonzero or unknown.
    */
   private driverNativeRevision: number | undefined;
+  /** The driver's host platform as last reported by a reply; undefined until first contact. */
+  private hostPlatform: string | undefined;
   private imageGeneration = 0;
   private readonly previewTasks = new Map<string, CuaComputerTask>();
   private clearCachedImage(): void {
@@ -499,6 +514,11 @@ export class CuaComputerBackend implements ComputerBackend {
         reply.driverNativeRevision >= 0
       )
         this.driverNativeRevision = reply.driverNativeRevision;
+      if (
+        typeof reply.hostPlatform === "string" &&
+        reply.hostPlatform.length > 0
+      )
+        this.hostPlatform = reply.hostPlatform;
       const epoch = reply.desktopEpoch;
       if (epoch !== undefined && Number.isSafeInteger(epoch) && epoch >= 0) {
         if (
