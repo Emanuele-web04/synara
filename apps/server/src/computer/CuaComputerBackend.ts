@@ -1104,6 +1104,17 @@ export class CuaComputerBackend implements ComputerBackend {
     // so it carries no visibility requirement either.
     const semanticLaneWrite =
       name === "select_text" ||
+      // `set_value` is the same class of exact semantic mutation the lane
+      // exists for: the driver admits it under StableMembership on the same
+      // per-(pid, window) lease a concurrent type_text/select_text write
+      // would race (same-target → native_input_busy), and an element-token
+      // write carries no pointer's visibility requirement — the driver
+      // explicitly permits it on minimized, hidden and off-Space windows.
+      // Server-side every set_value dispatch is element-addressed (setValue
+      // refuses without a token), so the lane condition mirrors the driver's
+      // own uses_stable_space_membership check.
+      (name === "set_value" &&
+        (args.element_token !== undefined || args.element_index !== undefined)) ||
       (name === "type_text" &&
         args.semantic_only === true &&
         desktopDeliveryMode() !== "foreground" &&
@@ -1624,14 +1635,21 @@ export class CuaComputerBackend implements ComputerBackend {
         "stale_target",
       );
     if (this.webContentElements.has(target.node)) {
-      const field = await this.resolveWebField(target.node.windowId, target.node);
-      if (!field)
-        throw new CuaActionError(
-          "The web text element is no longer present; observe fresh state.",
-          "not-dispatched",
-          "stale_target",
-        );
-      return this.webSetValue(target.node, target.node.windowId, field, value);
+      // The web path composes read → set_value → re-read on the same native
+      // semantic lease, so the whole compose takes the lane — the same shape
+      // webContentTypeText uses — instead of racing a same-window sibling.
+      const windowId = target.node.windowId;
+      const { pid, window_id } = await this.target(windowId);
+      return this.semanticTextInLane(pid, window_id, async () => {
+        const field = await this.resolveWebField(windowId, target.node);
+        if (!field)
+          throw new CuaActionError(
+            "The web text element is no longer present; observe fresh state.",
+            "not-dispatched",
+            "stale_target",
+          );
+        return this.webSetValue(target.node, windowId, field, value);
+      });
     }
     return this.input("set_value", { element_token: token, value }, target.node.windowId);
   }

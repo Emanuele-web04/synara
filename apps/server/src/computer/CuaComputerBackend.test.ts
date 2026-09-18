@@ -787,6 +787,77 @@ describe("Cua native boundary", () => {
     expect(order).toEqual(["type_text", "select_text"]);
   });
 
+  it("semantic text lane holds set_value behind a same-window write", async () => {
+    const f = fixture({ semanticTextLaneGapMs: 0 });
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Message",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "message-token",
+      },
+    ]);
+    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
+      .children[0]!;
+    const target = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node,
+      point: node.activationPoint!,
+    };
+    let releaseGate!: () => void;
+    f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
+
+    const typing = f.backend.typeText("alpha", "cua:10:20", target);
+    await vi.waitFor(() => expect(f.calls.some((c) => c.name === "type_text")).toBe(true));
+    const writing = f.backend.setValue(target, "beta");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The native semantic lease is per (pid, window) and set_value takes the
+    // same concurrent lease as type_text/select_text: it must not reach the
+    // driver while the same-window write is still held, or the lease refuses
+    // the second action outright (native_input_busy).
+    expect(f.calls.some((c) => c.name === "set_value")).toBe(false);
+    releaseGate!();
+
+    await expect(Promise.all([typing, writing])).resolves.toHaveLength(2);
+    const order = f.calls
+      .filter((c) => c.name === "type_text" || c.name === "set_value")
+      .map((c) => c.name);
+    expect(order).toEqual(["type_text", "set_value"]);
+  });
+
+  it("set_value dispatches to a window that is not on the current Space", async () => {
+    const f = fixture();
+    // A pure AX attribute write is exactly the mutation the driver's
+    // StableMembership policy admits on a hidden, minimized or off-Space
+    // window — the same admission semantic type_text and select_text get.
+    // Only pointer, synthetic keyboard and generic window actions carry the
+    // visibility requirement.
+    f.setVisible(false);
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Message",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "message-token",
+      },
+    ]);
+    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
+      .children[0]!;
+    const target = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node,
+      point: node.activationPoint!,
+    };
+    await expect(f.backend.setValue(target, "beta")).resolves.toBeDefined();
+    expect(f.calls.some((c) => c.name === "set_value")).toBe(true);
+    // The driver still sees the element-addressed semantic write shape.
+    expect(f.calls.find((c) => c.name === "set_value")?.args).toMatchObject({
+      element_token: "message-token",
+      pid: 10,
+      window_id: 20,
+    });
+  });
+
   it("semantic text lane overlaps same-pid writes to different windows", async () => {
     const f = fixture({ semanticTextLaneGapMs: 0 });
     f.setWindows([
