@@ -35,16 +35,28 @@ change. Then the same surface on Windows and Linux.
 
 ## Honest gaps (the real list)
 
-1. No single live gate — verification is scattered across /tmp scripts and
-   narrative certs. Slow to re-run, easy to skip.
-2. "Invisible workspace" is not a product behavior — hidden launch exists in
-   the driver but is not wired as the default agent-target policy.
-3. Masked activation: unit + binary smoke only; no live shield→activate→
-   op→release run; Electron-class apps still unreachable.
-4. Recording/replay: fake-backend only; no live desktop run.
-5. Escape switch: binary smoke only; no live key press through the merged
-   host→server→driver chain.
-6. Grants/locked-use: no live UX runs.
+1. Single live gate: **closed** — `live-cert.ts` is one command, ~66 s,
+   21 invariant-gated rows, JSON+Markdown evidence per run.
+2. Invisible workspace: **certified** — `hidden-launch-default` drives real
+   `ComputerManager.launchApp()` with no options → window lands off-screen,
+   operator front unchanged (invisible-by-default is the product seam).
+3. Masked activation: **certified** — `masked-activation` runs real
+   shield→activate→write→release with CGWindowList-confirmed panel;
+   Electron-class resolved via AX-semantic (`chromium-semantic` on real
+   Chrome: driver-enabled AX tree, omnibox set_value + exact readback).
+   CGEvent background input to inactive Electron renderers stays dead.
+4. Recording/replay: **certified** — `recording-privacy` runs a real
+   set_value under an open session; redacted default stores {chars,sha256}
+   only, the secure-field floor holds under full fidelity, full opt-in
+   captures, replay dry-run classifies.
+5. Escape switch: **certified at the seam** — `escape-kill-switch` proves
+   synthetic-event immunity + the full latch→refuse→rearm path through the
+   real monitor wiring; a physical key press remains hardware-unverified.
+6. Grants/locked-use: **certified** — `grant-lifecycle` (prompt→mint→silent
+   cover→revoke→re-prompt through `admitDrivenApp`) and
+   `locked-use-reauth` (real `pauseDesktop`→`desktop-interrupted`→
+   `revokeTaskGrants` chain: paused refusal, re-prompt, declines held,
+   pending prompts survive, observation re-arms).
 7. Second display: harness ready, hardware-pending (needs a 2-display Mac).
 8. Speed: baseline measured (live-cert now emits a per-tool p50/p95/max
    table every run — set_value p95 ~3.6s is the heaviest op).
