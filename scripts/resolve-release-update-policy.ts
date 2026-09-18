@@ -25,6 +25,7 @@ const output = {
   release_lane: policy.lane,
   bridge_tag: policy.bridgeTag,
   update_channel: policy.channel,
+  desktop_flavor: policy.desktopFlavor,
 };
 
 const githubOutput = process.env.GITHUB_OUTPUT;
