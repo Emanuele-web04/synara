@@ -66,7 +66,7 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
     // the Settings switch instead of faking it with another surface. One
     // line, kept out of the Computer-gated guidance below so it costs nothing
     // extra once control is on.
-    "To operate real macOS/Windows apps (open, click, type, scroll), use computer_* tools only when this session lists them; otherwise tell the user to turn Computer control on in Settings. Do not substitute shell/AppleScript/browser/device tools.",
+    "To operate real macOS/Windows apps (open, click, type, scroll), call the computer_* tools the Synara tool list exposes — by exact name. If none are listed, tell the user to turn Computer control on in Settings. Do not substitute shell/AppleScript/browser/device tools.",
     ...controlPolicy,
     ...(capabilities.gatewayControlAvailable && capabilities.enableComputerControl === true
       ? [computerToolInstructions()]

@@ -167,7 +167,7 @@ describe("Synara harness policy", () => {
     // the model must route desktop-app work to the Settings switch instead
     // of substituting shell/AppleScript/browser/device tools.
     const affordance =
-      "To operate real macOS/Windows apps (open, click, type, scroll), use computer_* tools only when this session lists them; otherwise tell the user to turn Computer control on in Settings. Do not substitute shell/AppleScript/browser/device tools.";
+      "To operate real macOS/Windows apps (open, click, type, scroll), call the computer_* tools the Synara tool list exposes — by exact name. If none are listed, tell the user to turn Computer control on in Settings. Do not substitute shell/AppleScript/browser/device tools.";
     for (const gatewayControlAvailable of [true, false] as const) {
       for (const enableComputerControl of [true, false, undefined] as const) {
         const policy = renderSynaraHarnessPolicy({
