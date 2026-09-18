@@ -5,6 +5,7 @@ import {
   CUA_BROWSER_MUTATION_TOOLS,
   CUA_BROWSER_TOOLS,
   CUA_READ_TOOLS,
+  cuaCleanupAcknowledged,
 } from "./cuaDriverProtocol";
 
 /**
@@ -231,5 +232,39 @@ describe("cuaDriverProtocol tool boundary", () => {
     for (const name of [...CUA_READ_TOOLS, ...CUA_ACTION_TOOLS, ...CUA_BROWSER_TOOLS]) {
       expect(registered.has(name), name).toBe(true);
     }
+  });
+});
+
+describe("cuaCleanupAcknowledged", () => {
+  // The retirement gate is deliberately strict: every field must read exactly
+  // as the protocol documents before a generation may be killed or replaced —
+  // anything less leaves held OS input unprovable and closes admission instead.
+  const PID = 4242;
+  const complete = {
+    pid: PID,
+    input_admission_closed: true,
+    cleanup_complete: true,
+    pending_input: 0,
+  };
+
+  it("accepts only the complete acknowledgement for the spawned child", () => {
+    expect(cuaCleanupAcknowledged(complete, PID)).toBe(true);
+  });
+
+  it.each([
+    ["a different pid", { ...complete, pid: PID + 1 }],
+    ["admission still open", { ...complete, input_admission_closed: false }],
+    ["cleanup incomplete", { ...complete, cleanup_complete: false }],
+    ["pending input", { ...complete, pending_input: 1 }],
+    ["a missing admission flag", { pid: PID, cleanup_complete: true, pending_input: 0 }],
+    ["a success string", "cleanup done"],
+    ["an empty result", {}],
+    ["no result", undefined],
+  ])("rejects %s", (_label, result) => {
+    expect(cuaCleanupAcknowledged(result as Record<string, unknown>, PID)).toBe(false);
+  });
+
+  it("rejects an unknown child pid", () => {
+    expect(cuaCleanupAcknowledged(complete, undefined)).toBe(false);
   });
 });

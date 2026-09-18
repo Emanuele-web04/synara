@@ -4,6 +4,8 @@ This file list defines the proposed open package. It mirrors the Interfaces tabl
 in `workstream-f-opensource-spec.md`. Every row was checked against the tree on
 branch `pr-1227`. Rows marked verified exist at the cited path. This is a docs
 deliverable: no file moves, no code changes, no new capabilities.
+`extraction-plan.md` carries the component-level companion: what each piece is,
+its extraction form, maintenance cost, and the recommended order.
 
 The spec's control rule applies: anything not in the Interfaces table and not
 listed in the spec's Approach section stays product code. A new file needs a
@@ -51,17 +53,20 @@ and `packages/contracts` types). Whether the package compiles with only the
 listed files plus their import closure is unverified. The import closure needs a
 written audit before extraction. This is a file list only; no move is proposed.
 
-## Protocol file gap — verified
+## Protocol file gap — resolved 2026-09-17
 
-`packages/shared/src/cuaDriverProtocol.ts` is 181 lines. It carries the release
-constants, task and preview types, the bounded one-request-per-connection
-transport (`cuaRequest`, `:54`), the effect taxonomy (`:42`), `CuaReply`
-(`:143`), and the native read/action allowlists (`CUA_READ_TOOLS` `:151`,
-`CUA_ACTION_TOOLS` `:165`). It does not name `cancel_input`, the handshake
-fields, or the cleanup acknowledgement shape. Those live in
-`apps/desktop/src/cuaDriverHost.ts` (`:805` for `cancel_input`) and in the patch
-notes. Acceptance criterion 6 of the spec is not met by the file as it stands
-today.
+Original finding (checked on `pr-1227`): the protocol file was 181 lines, named
+no `cancel_input`, and carried no cleanup-acknowledgement shape — spec
+acceptance criterion 6 unmet.
+
+Current state (native revision 20): `packages/shared/src/cuaDriverProtocol.ts`
+documents `metadata`, `cancel_input` and the four-field acknowledgement in its
+protocol notes (`:13`–`:57`), types it as `CuaCleanupAcknowledgement` (`:213`),
+and exports the strict acceptance predicate `cuaCleanupAcknowledged` (`:229`)
+that `apps/desktop/src/cuaDriverHost.ts` `retire()` now calls (`:1169`). The
+predicate is pinned by unit tests in `cuaDriverProtocol.test.ts`. Criterion 6's
+documentation half is met; the auditor still verifies criterion 6 end-to-end
+against a live `cancel_input` exchange at package time.
 
 ## Stays out
 

@@ -8,6 +8,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   cuaRequest,
+  cuaCleanupAcknowledged,
   CUA_DRIVER_VERSION,
   CUA_NATIVE_REVISION,
   CUA_SETUP_TIMEOUT_MS,
@@ -1163,13 +1164,8 @@ export class CuaDriverHost {
             },
             { timeoutMs: 5_000 },
           );
-          const cleanup = reply.result;
           cleanupConfirmed =
-            reply.ok === true &&
-            cleanup?.pid === generation.child.pid &&
-            cleanup?.input_admission_closed === true &&
-            cleanup?.cleanup_complete === true &&
-            cleanup?.pending_input === 0;
+            reply.ok === true && cuaCleanupAcknowledged(reply.result, generation.child.pid);
         } catch {
           cleanupConfirmed = false;
         }

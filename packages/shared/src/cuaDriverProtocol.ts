@@ -41,7 +41,9 @@ export const CUA_MAX_RESPONSE_BYTES = 96 * 1024 * 1024;
  *
  * The host accepts the acknowledgement only when all four hold:
  * `pid === child.pid && input_admission_closed === true &&
- * cleanup_complete === true && pending_input === 0`. When the acknowledgement
+ * cleanup_complete === true && pending_input === 0` — the exact check
+ * {@link cuaCleanupAcknowledged} performs against {@link CuaCleanupAcknowledgement}.
+ * When the acknowledgement
  * is absent or invalid the host does not kill or replace the generation —
  * an unverifiable driver may still be holding OS input, so admission closes
  * for the host's lifetime instead of compounding the uncertainty with a
@@ -201,6 +203,41 @@ export interface CuaToolResult {
   content?: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
   isError?: boolean;
   structuredContent?: Record<string, unknown>;
+}
+/**
+ * The `cancel_input` cleanup acknowledgement, as the embedded daemon reports it
+ * in `CuaReply.result`. Every field must read exactly as documented in the
+ * protocol notes above — a reply that merely echoes success text is not an
+ * acknowledgement and must not retire a generation that may hold OS input.
+ */
+export interface CuaCleanupAcknowledgement {
+  /** Echoes the spawned child's PID so a reply cannot vouch for another process. */
+  readonly pid: number;
+  /** `true` once the in-gate has stopped admitting new input. */
+  readonly input_admission_closed: boolean;
+  /** `true` once every registered input release and action context has drained. */
+  readonly cleanup_complete: boolean;
+  /** Outstanding releases/contexts; the acknowledgement is complete only at `0`. */
+  readonly pending_input: number;
+}
+/**
+ * Whether a `cancel_input` result is the complete cleanup acknowledgement for
+ * the exact child the host spawned: `ok` transport plus `pid === expectedPid`,
+ * admission closed, cleanup complete, and zero pending input. Anything less is
+ * absent or invalid — the caller must not kill or replace that generation.
+ */
+export function cuaCleanupAcknowledged(
+  result: CuaToolResult | Record<string, unknown> | undefined,
+  expectedPid: number | undefined,
+): boolean {
+  const cleanup = result as Partial<CuaCleanupAcknowledgement> | undefined;
+  return (
+    expectedPid !== undefined &&
+    cleanup?.pid === expectedPid &&
+    cleanup?.input_admission_closed === true &&
+    cleanup?.cleanup_complete === true &&
+    cleanup?.pending_input === 0
+  );
 }
 export interface CuaReply {
   ok: boolean;
