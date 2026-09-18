@@ -1,0 +1,18 @@
+# Delegation plan — computer-use UI parity + backend polish
+
+Units: 6. Mode: single-agent sequential execution (subagents not authorized
+for this session; ledger kept for ordering and verification evidence).
+Recon basis: docs/computer-use-cua/codex-ui-recon-2026-09-21.md.
+
+| # | Unit | Files (mine) | Worker | Acceptance | Status |
+|---|------|--------------|--------|------------|--------|
+| 1 | Cursor life: visual-only glide + press pulse for compact cursor (no input latency added) | apps/desktop/patches/cua-driver/0001-synara-native.patch | self | Patch still applies cleanly to pinned upstream; embedded rust tests extended + pass if buildable; motion is post-dispatch only | verified — patch regenerated (sha c1120c9b), applies clean + byte-identical tree; 55 cursor-overlay + 421 platform-macos tests green; PNG dump eyeballed; rev-21 binary provisioned, metadata reports 21 |
+| 2 | Preview working orb + visual polish: animated "agent working" glyph in status pill, softer cursor halo | apps/web/src/components/chat/ComputerPreviewPopover.tsx (+ small new component if warranted) | self | Vitest suites pass; visuals verified via verify skill or component tests; reduced-motion honored | verified — sonar ping while agentActive + cursor-halo glide transition (motion-reduce honored); 62 focused tests green; react-doctor 63/100 (was 62), file carries no giant-component/refs findings |
+| 3 | Preview placement: detach popover into a draggable floating card, re-dock on close | apps/web/src/computerPreviewStore.ts, apps/web/src/components/chat/ComputerPreviewPopover.tsx, .logic.ts, ChatView.tsx, apps/web/src/components/computer/useComputerPreviewFloat.ts | self | Store machine gains floating phase w/ re-dock; drag persists per thread; tests updated | verified — per-thread floating map w/ clamp-on-render, portal + pointer-capture drag, dock/pop-out buttons, rail inset released while floating; store/logic/component suites green |
+| 4 | Driver frame-attach suppression on tree-only reads (get_state p95) | apps/desktop/patches/cua-driver/0001-synara-native.patch | self | Tree-only replies omit cached frame; protocol rev bumped if wire-visible; tests in patch updated | pending |
+| 5 | Backend polish sweep: bloat/latency/reliability wins found during the above | scoped to findings | self | Each change small, tested, atomically committed | pending |
+| 6 | Rebase agent/computer-use-preview onto upstream | n/a | self | Clean rebase, tests still green, no push | pending |
+
+Notes: approval-card app icons and per-app playbooks are deferred — both are
+larger surface changes (icon bridge / guidance schema) best sequenced after
+the core visual pass lands.
