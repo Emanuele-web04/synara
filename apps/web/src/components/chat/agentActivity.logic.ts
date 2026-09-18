@@ -149,7 +149,11 @@ export function deriveAgentActivityTimelineState(
       label: "Reasoning trace",
       toolTitle: "Reasoning trace",
       tone: "tool",
-      ...(displayPreview ? { preview: displayPreview, detail: displayPreview } : {}),
+      ...(displayPreview ? { preview: displayPreview } : {}),
+      detail: groupEntries
+        .map((entry) => entry.detail ?? entry.preview ?? "")
+        .filter(Boolean)
+        .join("\n\n"),
     };
 
     timelineWorkEntries.push(displayEntry);
@@ -256,7 +260,8 @@ function cleanReasoningProgressText(value: string | undefined): string | null {
     .replace(/^reasoning(?:\s+(?:update|trace|summary))?\b[\s:.-]*/i, "")
     .trim();
   const withoutRunningPrefix = withoutReasoningPrefix.replace(/^running\b[\s:.-]*/i, "").trim();
-  return withoutRunningPrefix || withoutReasoningPrefix || null;
+  const preview = withoutRunningPrefix || withoutReasoningPrefix;
+  return preview ? (preview.length > 120 ? `${preview.slice(0, 117)}...` : preview) : null;
 }
 
 function normalizeOptionalText(value: string | undefined): string | null {
