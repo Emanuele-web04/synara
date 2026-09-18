@@ -339,13 +339,18 @@ describe("actionableElements", () => {
       sourceIncomplete: false,
       omitted: 0,
       items: [
-        { role: "push button", label: "Reload", windowId: windowId("browser") },
+        { ref: 0, role: "push button", label: "Reload", windowId: windowId("browser") },
         {
+          ref: 1,
           role: "entry",
           label: "Email",
           value: "",
           windowId: windowId("browser"),
         },
+      ],
+      refIndex: [
+        { label: "Reload", role: "push button", windowId: "browser", ordinal: 0 },
+        { label: "Email", role: "entry", windowId: "browser", ordinal: 0 },
       ],
     });
   });
@@ -375,7 +380,7 @@ describe("actionableElements", () => {
     });
 
     expect(actionableElements(desktop).items).toEqual([
-      { role: "check box", label: "Subscribed", windowId: windowId("w") },
+      { ref: 0, role: "check box", label: "Subscribed", windowId: windowId("w") },
     ]);
   });
 
@@ -394,7 +399,7 @@ describe("actionableElements", () => {
     // Targeting matches on `label ?? description`, so the digest must name the
     // element by the same words or the model could not act on it by label.
     expect(actionableElements(desktop).items).toEqual([
-      { role: "slider", label: "Volume", windowId: windowId("player") },
+      { ref: 0, role: "slider", label: "Volume", windowId: windowId("player") },
     ]);
   });
 
@@ -494,6 +499,7 @@ describe("diffActionableElements", () => {
     label: string,
     extra: Partial<ComputerActionableElement> = {},
   ): ComputerActionableElement => ({
+    ref: 0,
     role: "push button",
     label,
     windowId: windowId("editor"),
@@ -526,6 +532,7 @@ describe("diffActionableElements", () => {
       removed: [element("Help")],
       changed: [
         {
+          ref: 0,
           role: "push button",
           label: "Display",
           windowId: windowId("editor"),
@@ -574,6 +581,7 @@ describe("diffActionableElements", () => {
     const after = [element("Notes", { value: "draft text" })];
     expect(diffActionableElements(before, after).changed).toEqual([
       {
+        ref: 0,
         role: "push button",
         label: "Notes",
         windowId: windowId("editor"),
@@ -582,11 +590,136 @@ describe("diffActionableElements", () => {
     ]);
     expect(diffActionableElements(after, before).changed).toEqual([
       {
+        ref: 0,
         role: "push button",
         label: "Notes",
         windowId: windowId("editor"),
         was: "draft text",
       },
     ]);
+  });
+});
+
+describe("resolving a duplicate by ordinal", () => {
+  const twoSaves = node({
+    role: "desktop",
+    children: [
+      node({
+        role: "window",
+        label: "Editor",
+        windowId: windowId("editor"),
+        children: [
+          node({
+            role: "push button",
+            label: "Save",
+            windowId: windowId("editor"),
+            activationPoint: { x: 10, y: 10 },
+          }),
+          node({
+            role: "push button",
+            label: "Save",
+            windowId: windowId("editor"),
+            activationPoint: { x: 20, y: 20 },
+          }),
+        ],
+      }),
+    ],
+  });
+
+  it("picks the ordinal-th control sharing the exact identity", () => {
+    const match = resolveComputerSemanticTarget(twoSaves, {
+      label: "Save",
+      refOrdinal: 1,
+    });
+    expect(match.point).toEqual({ x: 20, y: 20 });
+  });
+
+  it("falls back to the sole survivor when the ordinal slot is gone", () => {
+    const oneSave = node({
+      role: "desktop",
+      children: [
+        node({
+          role: "push button",
+          label: "Save",
+          windowId: windowId("editor"),
+          activationPoint: { x: 10, y: 10 },
+        }),
+      ],
+    });
+    const match = resolveComputerSemanticTarget(oneSave, {
+      label: "Save",
+      refOrdinal: 3,
+    });
+    expect(match.point).toEqual({ x: 10, y: 10 });
+  });
+
+  it("reports the pool's near-misses when nothing matches", () => {
+    const thrown = (() => {
+      try {
+        resolveComputerSemanticTarget(twoSaves, {
+          label: "Missing",
+          refOrdinal: 0,
+        });
+      } catch (cause) {
+        return cause as ComputerTargetError;
+      }
+      throw new Error("expected a refusal");
+    })();
+    expect(thrown.code).toBe("computer_target_not_found");
+  });
+});
+
+describe("actionableElements ref data", () => {
+  it("indexes each item with its full identity and duplicate ordinal", () => {
+    const tree = node({
+      role: "desktop",
+      children: [
+        node({
+          role: "window",
+          windowId: windowId("editor"),
+          children: [
+            node({
+              role: "push button",
+              label: "Save",
+              windowId: windowId("editor"),
+            }),
+            node({
+              role: "push button",
+              label: "Save",
+              windowId: windowId("editor"),
+            }),
+          ],
+        }),
+      ],
+    });
+    const digest = actionableElements(tree);
+    expect(digest.items.map((item) => item.ref)).toEqual([0, 1]);
+    expect(digest.refIndex).toEqual([
+      { label: "Save", role: "push button", windowId: "editor", ordinal: 0 },
+      { label: "Save", role: "push button", windowId: "editor", ordinal: 1 },
+    ]);
+  });
+
+  it("keeps the full label in the ref index when the wire label clamps", () => {
+    const longLabel = "x".repeat(200);
+    const tree = node({
+      role: "desktop",
+      children: [
+        node({
+          role: "window",
+          windowId: windowId("editor"),
+          children: [
+            node({
+              role: "push button",
+              label: longLabel,
+              windowId: windowId("editor"),
+            }),
+          ],
+        }),
+      ],
+    });
+    const digest = actionableElements(tree);
+    expect(digest.items[0]!.label.length).toBeLessThan(longLabel.length);
+    expect(digest.refIndex[0]!.label).toBe(longLabel);
   });
 });

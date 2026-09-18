@@ -117,6 +117,9 @@ export function resolveComputerSemanticTarget(
   target: ComputerTarget,
   allowOffscreen = false,
 ): ComputerTargetMatch {
+  if (target.refOrdinal !== undefined && target.label !== undefined) {
+    return resolveComputerOrdinalTarget(root, target, target.refOrdinal, allowOffscreen);
+  }
   const match = resolveUiTreeTarget({
     pool: flattenUiTree(root, childrenOf).filter((node) => matchesWindow(node, target.windowId)),
     query: { label: target.label, role: target.role },
@@ -130,6 +133,57 @@ export function resolveComputerSemanticTarget(
     });
   }
   return { node: match.node, point: activationPointForNode(match.node) };
+}
+
+/**
+ * A ref-resolved target: the ordinal-th control sharing the exact listed
+ * identity, in tree order.
+ *
+ * Only exact label matches are considered — the listing already named the
+ * control verbatim, so substring promotion would only buy collisions with
+ * controls that share a prefix. When the ordinal slot no longer exists the
+ * outcome follows what a plain label search would conclude: one survivor
+ * resolves, none reports the pool's near-misses, and several that cannot be
+ * told apart refuse rather than guess. Preferring on-screen matches mirrors
+ * the digest's own membership (it only lists on-screen controls), and the
+ * usual off-screen refusal still applies to the picked node.
+ */
+function resolveComputerOrdinalTarget(
+  root: ComputerUiNode,
+  target: ComputerTarget,
+  ordinal: number,
+  allowOffscreen: boolean,
+): ComputerTargetMatch {
+  const spec = computerTargetSpec(target);
+  const pool = flattenUiTree(root, childrenOf).filter((node) =>
+    matchesWindow(node, target.windowId),
+  );
+  const exact = spec.exactKey(target.label!);
+  const matches = pool.filter(
+    (node) =>
+      (target.role === undefined || spec.matchesRole(node, target.role)) &&
+      spec.exactKey(spec.labelOf(node)) === exact,
+  );
+  const onScreen = matches.filter((node) => spec.isOnScreen(node));
+  const ordered = onScreen.length > 0 ? onScreen : matches;
+  let node: ComputerUiNode;
+  if (ordered.length > ordinal) {
+    node = ordered[ordinal]!;
+  } else if (ordered.length === 1) {
+    node = ordered[0]!;
+  } else if (ordered.length === 0) {
+    throw spec.noMatch(pool);
+  } else {
+    throw spec.ambiguous(ordered);
+  }
+  if (!spec.isOnScreen(node) && !allowOffscreen) {
+    throw new ComputerTargetError({
+      code: "computer_target_offscreen",
+      message: `Computer target ${describeTarget(target)} is off-screen; refusing to guess a click.`,
+      candidates: candidateDescriptions([node]),
+    });
+  }
+  return { node, point: activationPointForNode(node) };
 }
 
 const SEMANTIC_TEXT_ROLES = new Set([
@@ -313,6 +367,14 @@ const ELEMENT_DIGEST_MAX_LENGTH = 60;
 const ELEMENT_TEXT_MAX_LENGTH = 80;
 
 export interface ComputerActionableElement {
+  /**
+   * The handle an action cites instead of re-quoting label and role. The
+   * digest mints it as the listing position; the serving layer remaps it to
+   * the thread's stable ref — the number bound to this element's identity —
+   * before the listing is stored or shown, so wire refs survive a reorder
+   * that positions would not.
+   */
+  readonly ref: number;
   readonly role: string;
   readonly label: string;
   /** Current contents of an editable control, truncated. Absent otherwise. */
@@ -320,8 +382,32 @@ export interface ComputerActionableElement {
   readonly windowId: string | null;
 }
 
+/**
+ * What a `ref` actually resolves to — kept beside the display items because
+ * their labels are truncated for the wire while targeting needs the
+ * element's full identity.
+ */
+export interface ComputerActionableElementRef {
+  /** The element's complete matchable label, never clamped. */
+  readonly label: string;
+  readonly role: string;
+  readonly windowId: string | null;
+  /**
+   * Which same-identity occurrence this element is, in tree order. Two
+   * controls that share window, role and label are still told apart by it —
+   * the property a plain label search cannot express.
+   */
+  readonly ordinal: number;
+}
+
 export interface ComputerActionableElements {
   readonly items: readonly ComputerActionableElement[];
+  /**
+   * Resolution identity for each item, parallel to `items` — the untruncated
+   * label plus the duplicate ordinal the wire `ref` is bound to. Server-side
+   * only — it is not part of the payload the model reads.
+   */
+  readonly refIndex: readonly ComputerActionableElementRef[];
   /**
    * False when the source tree is partial or more actionable elements exist
    * than fit. Missing controls may still exist in the application.
@@ -364,6 +450,11 @@ export function actionableElements(
   filter: ComputerActionableElementFilter = {},
 ): ComputerActionableElements {
   const items: ComputerActionableElement[] = [];
+  const refIndex: ComputerActionableElementRef[] = [];
+  // Ordinals count every collectible same-identity node, not only the ones
+  // that fit the cap — a ref points into tree order, and skipped members
+  // still shift the positions behind them.
+  const ordinals = new Map<string, number>();
   const wanted =
     filter.labelContains === undefined
       ? undefined
@@ -381,8 +472,13 @@ export function actionableElements(
       (filter.windowId === undefined || node.windowId === filter.windowId) &&
       (wanted === undefined || normalizeLabelSpaces(label).toLocaleLowerCase().includes(wanted));
     if (collectible) {
+      const identity = `${node.windowId}${node.role}${normalizeLabelSpaces(label)}`;
+      const ordinal = ordinals.get(identity) ?? 0;
+      ordinals.set(identity, ordinal + 1);
       if (items.length < ELEMENT_DIGEST_MAX_LENGTH) {
+        refIndex.push({ label, role: node.role, windowId: node.windowId, ordinal });
         items.push({
+          ref: items.length,
           role: node.role,
           label: clampTextToLength(label, ELEMENT_TEXT_MAX_LENGTH),
           // An entry's empty value is real information — "this field is blank" —
@@ -407,6 +503,7 @@ export function actionableElements(
   walk(root);
   return {
     items,
+    refIndex,
     complete: omitted === 0 && !sourceIncomplete,
     omitted,
     sourceIncomplete,
@@ -431,6 +528,7 @@ export interface ComputerActionableElementsDiff {
   readonly added: readonly ComputerActionableElement[];
   readonly removed: readonly ComputerActionableElement[];
   readonly changed: readonly {
+    readonly ref: number;
     readonly role: string;
     readonly label: string;
     readonly windowId: string | null;
@@ -474,6 +572,7 @@ export function diffActionableElements(
       if (previous[index]!.value !== current[index]!.value) {
         const item = current[index]!;
         changed.push({
+          ref: item.ref,
           role: item.role,
           label: item.label,
           windowId: item.windowId,
@@ -495,6 +594,7 @@ export function describeTarget(target: ComputerTarget): string {
     target.label ? `label=${JSON.stringify(target.label)}` : null,
     target.role ? `role=${JSON.stringify(target.role)}` : null,
     target.windowId ? `window=${JSON.stringify(target.windowId)}` : null,
+    target.refOrdinal !== undefined ? `duplicate ${target.refOrdinal + 1}` : null,
   ].filter((part): part is string => part !== null);
   return parts.length > 0 ? parts.join(", ") : "the supplied coordinates";
 }
@@ -520,7 +620,7 @@ function matchableLabel(node: ComputerUiNode): string {
  * Preserve whitespace positions and counts, case and the original labels in
  * results. Equivalent labels still go through the normal ambiguity refusal.
  */
-function normalizeLabelSpaces(label: string): string {
+export function normalizeLabelSpaces(label: string): string {
   return label.replace(/[\u00a0\u2007\u202f]/g, " ");
 }
 
