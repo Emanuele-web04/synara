@@ -278,10 +278,10 @@ function processesByPid(childrenByParentPid: ProcessChildrenMap): Map<number, Ca
 }
 
 function sameCapturedIdentity(expected: CapturedProcess, current: CapturedProcess): boolean {
-  // A process may rewrite argv or be reparented after its root exits. Start
-  // time is the identity when captured; never downgrade to a command-only match.
-  if (expected.startedAt !== undefined) return current.startedAt === expected.startedAt;
-  return expected.command === current.command;
+  // Start time adds evidence to the existing command check. POSIX lstart has
+  // second resolution: it must not authorize a different command on its own.
+  if (expected.command !== current.command) return false;
+  return expected.startedAt === undefined || current.startedAt === expected.startedAt;
 }
 
 /** Capture descendants using the native platform observer. */

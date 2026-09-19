@@ -86,9 +86,9 @@ those descendants. When updating Effect, keep these behaviors and run
 runtime, including its Windows cases.
 
 Process-tree teardown captures POSIX start times and Windows creation times for
-checking descendants during delayed cleanup and exit verification. This rejects
-observed PID reuse without depending on stable command-line text. POSIX start
-times have second resolution and observation followed by signaling is not atomic;
+checking descendants during delayed cleanup and exit verification. Start times
+add evidence to the existing command-line comparison. POSIX start times have
+second resolution and observation followed by signaling is not atomic;
 these checks are not proof of arbitrary PID ownership. Root signaling still
 requires the caller to own the live process lifecycle. Direct owned-child
 cancellation must work even when external process-table tools are unavailable.

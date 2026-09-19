@@ -234,17 +234,17 @@ describe("signal target and captured identity safeguards", () => {
 
   it("rejects same-command recycled descendants using one batched identity lookup", () => {
     const original = { pid: 101, command: "worker", startedAt: "Fri Sep 18 10:00:00 2026" };
-    const renamed = { pid: 102, command: "worker", startedAt: "Fri Sep 18 10:00:01 2026" };
+    const unchanged = { pid: 102, command: "worker", startedAt: "Fri Sep 18 10:00:01 2026" };
     const readCurrentProcesses = vi.fn(
       () =>
         new Map([
           [101, { ...original, startedAt: "Fri Sep 18 11:00:00 2026" }],
-          [102, { ...renamed, command: "renamed worker" }],
+          [102, { ...unchanged }],
         ]),
     );
     const signalPid = vi.fn(() => null);
     const killer = createProcessTreeKiller({ readCurrentProcesses, signalPid });
-    const tree = { descendants: [original, renamed] };
+    const tree = { descendants: [original, unchanged] };
     killer.signal({
       rootPid: 100,
       signal: "SIGKILL",
@@ -254,7 +254,7 @@ describe("signal target and captured identity safeguards", () => {
     });
     expect(readCurrentProcesses).toHaveBeenCalledExactlyOnceWith([101, 102]);
     expect(signalPid).toHaveBeenCalledExactlyOnceWith(102, "SIGKILL");
-    expect(killer.inspect?.(tree)).toEqual({ verified: true, survivors: [renamed] });
+    expect(killer.inspect?.(tree)).toEqual({ verified: true, survivors: [unchanged] });
   });
 
   it("does not downgrade a captured start time when the new snapshot lacks it", () => {
@@ -302,4 +302,23 @@ describe("owned child signals", () => {
       new Map([[100, [{ pid: 101, command: "/bin/sh worker" }]]]),
     );
   });
+});
+
+it("rejects a different command even when second-resolution start times match", () => {
+  const captured = { pid: 101, command: "owned worker", startedAt: "Fri Sep 18 10:00:00 2026" };
+  const signalPid = vi.fn(() => null);
+  const killer = createProcessTreeKiller({
+    signalPid,
+    readCurrentProcesses: () => new Map([[101, { ...captured, command: "unrelated worker" }]]),
+  });
+  const tree = { descendants: [captured] };
+  killer.signal({
+    rootPid: 100,
+    signal: "SIGKILL",
+    tree,
+    includeRootTree: false,
+    onError: vi.fn(),
+  });
+  expect(signalPid).not.toHaveBeenCalled();
+  expect(killer.inspect?.(tree)).toEqual({ verified: true, survivors: [] });
 });
