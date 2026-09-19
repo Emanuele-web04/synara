@@ -350,6 +350,34 @@ describe("ComposerModelPicker", () => {
     }
   });
 
+  it("keeps the trigger's size while the slider panel is open", async () => {
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+      provider: "codex",
+      model: GPT_5_5,
+      options: { reasoningEffort: "medium" },
+    });
+    const screen = await render(<Harness effortControl="slider" />);
+    try {
+      const trigger = page.getByRole("button", { name: "Change model and reasoning" });
+      const closedWidth = trigger.element().getBoundingClientRect().width;
+      await trigger.click();
+
+      // The covered label keeps sizing the pill; a resize under the cursor would make
+      // Base UI cancel the open on mouseup.
+      await expect.element(page.getByText("Select effort")).toBeVisible();
+      const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      await expect.element(slider).toBeVisible();
+      expect(trigger.element().getBoundingClientRect().width).toBeCloseTo(closedWidth, 1);
+
+      slider.element().focus();
+      await userEvent.keyboard("{ArrowRight}{ArrowRight}");
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "Extra High");
+      expect(trigger.element().getBoundingClientRect().width).toBeCloseTo(closedWidth, 1);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("toggles fast mode and resets both controls from the slider card", async () => {
     const screen = await mountPicker({ effortControl: "slider" }, { reasoningEffort: "xhigh" });
     try {
