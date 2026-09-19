@@ -3662,6 +3662,9 @@ async function startCuaHost(): Promise<void> {
       : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver"),
     bundleId: desktopIdentity.bundleId,
     capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+    // Computer use must never bind the app hosting it: the integrated
+    // browser's webviews live in this app's own renderer pids.
+    ownPids: () => new Set([process.pid, ...app.getAppMetrics().map((m) => m.pid)]),
     checkPermissions: async () => {
       // The AppSnap manager owns the shared native permission helper; lazily
       // starting it here keeps the CUA host working even when AppSnap itself is

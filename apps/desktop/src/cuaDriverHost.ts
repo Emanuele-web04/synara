@@ -271,6 +271,7 @@ function isDriverSessionDeath(reply: CuaReply): boolean {
  * confer TCC. The standalone host entry (`cuaDriverHostStandalone`) runs the
  * same class on platforms where no such grant model exists. */
 export class CuaDriverHost {
+  private static readonly defaultOwnPids: ReadonlySet<number> = new Set([process.pid]);
   private directory = "";
   private server: Server | undefined;
   private generation: Generation | undefined;
@@ -353,6 +354,13 @@ export class CuaDriverHost {
        * endpoint so the server can be configured to reach it.
        */
       hostEndpoint?: string;
+      /**
+       * Pids belonging to this application (main, helpers, renderers).
+       * Browser calls carrying one as `args.pid` are refused: the integrated
+       * browser is a separate surface and computer use must never bind the
+       * app that hosts it. Defaults to this process alone.
+       */
+      ownPids?: () => ReadonlySet<number>;
     },
   ) {}
 
@@ -575,6 +583,25 @@ export class CuaDriverHost {
     // admission rather than dropped into an anonymous namespace.
     if (CUA_BROWSER_TOOLS.has(name) && !task)
       throw new Error("Computer browser calls require task attribution.");
+    if (CUA_BROWSER_TOOLS.has(name)) {
+      const args =
+        request.args && typeof request.args === "object" && !Array.isArray(request.args)
+          ? (request.args as Record<string, unknown>)
+          : {};
+      const pid = args.pid;
+      if (typeof pid === "number" && Number.isSafeInteger(pid) && this.ownPids().has(pid)) {
+        const message =
+          "Computer browser calls may never target this application's own processes; the integrated browser is a separate surface.";
+        return {
+          ok: true,
+          result: {
+            isError: true,
+            content: [{ type: "text", text: message }],
+            structuredContent: { effect: "refused", code: "browser_self_target", message },
+          },
+        };
+      }
+    }
     if (this.desktopPauses.size > 0) return this.desktopPauseReply();
     const mutating = CUA_ACTION_TOOLS.has(name) || CUA_BROWSER_MUTATION_TOOLS.has(name);
     if (this.emergencyStopped && mutating) return this.escapeStoppedReply();
@@ -1515,6 +1542,10 @@ export class CuaDriverHost {
     } catch {
       // Monitor plumbing must never take input admission down with it.
     }
+  }
+
+  private ownPids(): ReadonlySet<number> {
+    return this.options.ownPids?.() ?? CuaDriverHost.defaultOwnPids;
   }
 
   private escapeStoppedReply(): CuaReply {

@@ -44,6 +44,7 @@ async function fixture(
     dropCancel?: boolean;
     startupTimeoutMs?: number;
     deathFlag?: string;
+    ownPids?: () => ReadonlySet<number>;
     checkPermissions?: () => Promise<{
       accessibility: boolean;
       screenRecording: boolean;
@@ -151,6 +152,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
     ...(options.shield ? { shield: options.shield } : {}),
     ...(options.startupTimeoutMs ? { startupTimeoutMs: options.startupTimeoutMs } : {}),
     ...(options.nativeRevision !== undefined ? { nativeRevision: options.nativeRevision } : {}),
+    ...(options.ownPids ? { ownPids: options.ownPids } : {}),
   });
   const events = async () =>
     (await readFile(log, "utf8"))
@@ -1489,6 +1491,36 @@ describe("browser surface", () => {
       cuaRequest(f.endpoint, { method: "end_browser_thread", task }),
     ).resolves.toMatchObject({ ok: true });
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("refuses a browser bind that names one of this app's own pids", async () => {
+    const f = await fixture(capability, { ownPids: () => new Set([424242]) });
+    const reply = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "get_browser_state",
+      task,
+      args: { pid: 424242, window_id: 20 },
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.result?.isError).toBe(true);
+    expect(reply.result?.structuredContent).toMatchObject({
+      effect: "refused",
+      code: "browser_self_target",
+    });
+    // The refusal is decided at admission: no daemon ever started.
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+    // An unrelated pid still dispatches normally.
+    const other = await cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "get_browser_state",
+      task,
+      args: { pid: 777, window_id: 20 },
+    });
+    expect(other.ok).toBe(true);
+    expect(
+      (await f.events()).some((row) =>
+        String(row.event).startsWith("browser:get_browser_state:"),
+      ),
+    ).toBe(true);
   });
 });
 
