@@ -22,6 +22,25 @@ On macOS, use the Arm64 build for Apple Silicon and the x64 build for Intel. On 
 chmod +x Synara*.AppImage
 ```
 
+### Linux AppImage exits silently (missing FUSE 2)
+
+On Linux, clicking the launcher with no visible result is commonly a missing FUSE 2
+runtime rather than a damaged installation: the AppImage needs `libfuse.so.2` to
+mount, while many current distributions ship only FUSE 3. Run the AppImage once
+from a terminal to confirm — a `dlopen(): error loading libfuse.so.2` message
+proves this case.
+
+Install the system FUSE 2 package (`fuse2` on Arch-based distributions,
+`libfuse2` on Debian-based ones) and launch normally again. As a temporary
+workaround without FUSE 2, start the AppImage with extraction instead of mounting:
+
+```bash
+./Synara*.AppImage --appimage-extract-and-run
+```
+
+Extraction starts more slowly because the payload is unpacked on every launch;
+installing FUSE 2 remains the recommended fix.
+
 <Callout type="warn" title="Do not delete data as a first step">
   Replacing the application bundle and deleting Synara’s local data are different operations. As a
   rule, reinstall the application first. Preserve repositories, uncommitted changes, task evidence,
