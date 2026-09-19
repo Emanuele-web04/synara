@@ -1,4 +1,3 @@
-import { ProjectImportAnnouncement } from "~/projectImport/ProjectImportAnnouncement";
 import { useProjectImportDialogStore } from "~/projectImport/projectImportDialogStore";
 // FILE: Sidebar.tsx
 // Purpose: Renders the project/thread sidebar, including row status, sorting, and thread actions.
@@ -6039,7 +6038,6 @@ export default function Sidebar() {
                 ) : null}
               </div>
             </div>
-            <ProjectImportAnnouncement />
             {/* The keyed content remounts with a short enter animation while the picker
                 stays mounted so its thumb can glide between Projects and Studio. */}
             <div

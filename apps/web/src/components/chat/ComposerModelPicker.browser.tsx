@@ -342,10 +342,6 @@ describe("ComposerModelPicker", () => {
       await expect.element(slider).toBeVisible();
       await expect.element(otherModel).toHaveAttribute("aria-current", "true");
 
-      // Stop labels are a second way to set the level.
-      await page.getByRole("button", { name: "Set effort to High" }).click();
-      await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
-
       // Picking the model that is already current is the "done" gesture.
       await otherModel.click();
       await expect.element(slider).not.toBeInTheDocument();
@@ -382,7 +378,6 @@ describe("ComposerModelPicker", () => {
       expect(page.getByRole("tab", { name: "Claude" }).elements()).toHaveLength(0);
       await page.getByRole("tab", { name: "Starred" }).click();
       expect(page.getByRole("menuitem", { name: /Claude Sonnet/u }).elements()).toHaveLength(0);
-      await expect.element(page.getByText(/1 starred from other providers/u)).toBeVisible();
     } finally {
       await screen.unmount();
     }

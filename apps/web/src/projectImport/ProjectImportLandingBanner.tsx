@@ -71,10 +71,10 @@ export function ProjectImportLandingBanner(props: { className?: string }) {
           </IconTile>
         </span>
         <span className="flex min-w-0 flex-col gap-0.5">
-          <span className="truncate text-sm font-medium text-foreground">
+          <span className="truncate text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground">
             Import your Claude Code and Codex projects
           </span>
-          <span className="truncate text-sm text-muted-foreground">
+          <span className="truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
             Bring your chats and continue them in Synara
           </span>
         </span>

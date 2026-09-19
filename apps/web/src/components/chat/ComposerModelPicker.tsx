@@ -163,7 +163,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     lockedProvider === null
       ? starredModels
       : starredModels.filter((entry) => entry.provider === lockedProvider);
-  const hiddenStarredCount = starredModels.length - usableStarredModels.length;
 
   const [tab, setTab] = useState<ComposerModelPickerTab>(activeProvider);
   const [query, setQuery] = useState("");
@@ -498,12 +497,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                     : "No models found"}
               </div>
             )}
-            {tab === STARRED_TAB && hiddenStarredCount > 0 ? (
-              <div className="px-2 pt-1.5 pb-1 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
-                {hiddenStarredCount} starred from other providers — this thread stays on its
-                provider.
-              </div>
-            ) : null}
           </div>
           <ComposerModelPickerTraitRows
             provider={props.provider}
@@ -514,7 +507,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             modelOptions={props.modelOptions}
             prompt={props.prompt}
             onPromptChange={props.onPromptChange}
-            modelLabel={modelLabel}
             effortControl={effortControl}
           />
         </div>
