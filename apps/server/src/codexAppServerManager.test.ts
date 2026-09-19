@@ -825,6 +825,135 @@ describe("Codex app-server teardown", () => {
     await vi.waitFor(() => expect(internals.sessions.has(threadId)).toBe(false));
     expect(teardownProcessTree).toHaveBeenCalledOnce();
   });
+
+  it("settles approvals parked on an app-server that exited on its own", async () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5353;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const manager = new CodexAppServerManager(undefined, {
+      teardownProcessTree: vi.fn(async () => ({
+        escalated: false,
+        signalErrors: [],
+        capturedBeforeRootExit: false,
+      })),
+    });
+    const threadId = asThreadId("thread-codex-exit-with-approval");
+    const requestId = ApprovalRequestId.makeUnsafe("req-approval-on-exit");
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map([
+        [
+          requestId,
+          {
+            requestId,
+            jsonRpcId: 42,
+            method: "item/commandExecution/requestApproval" as const,
+            requestKind: "command" as const,
+            threadId,
+          },
+        ],
+      ]),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      attachProcessListeners: (context: unknown) => void;
+    };
+    internals.sessions.set(threadId, context);
+    internals.attachProcessListeners(context);
+
+    child.exitCode = 1;
+    child.emit("exit", 1, null);
+
+    // The child is gone, so nothing will ever answer this approval. Leaving it
+    // in the map strands the turn that is blocked on it for the life of the
+    // process.
+    await vi.waitFor(() => expect(context.pendingApprovals.size).toBe(0));
+  });
+
+  it("delivers a response that shared its stdout chunk with an undecodable line", async () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5454;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-codex-bad-stdout-line");
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      attachProcessListeners: (context: unknown) => void;
+      sendRequest: (context: unknown, method: string, params: unknown) => Promise<unknown>;
+    };
+    internals.sessions.set(threadId, context);
+    internals.attachProcessListeners(context);
+    vi.spyOn(
+      manager as unknown as { writeMessage: () => Promise<void> },
+      "writeMessage",
+    ).mockResolvedValue(undefined);
+
+    const response = internals.sendRequest(context, "model/list", {});
+    // A hook or a subprocess wrote non-UTF-8 bytes to the same pipe. The line
+    // is unusable; the response that arrived behind it in the same read is not.
+    child.stdout.emit(
+      "data",
+      Buffer.concat([
+        Buffer.from([0xff, 0x0a]),
+        Buffer.from(`${JSON.stringify({ id: 1, result: { models: [] } })}\n`),
+      ]),
+    );
+
+    await expect(response).resolves.toEqual({ models: [] });
+    expect(manager.hasSession(threadId)).toBe(true);
+  });
 });
 
 describe("classifyCodexStderrLine", () => {
