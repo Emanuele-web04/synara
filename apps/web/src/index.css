@@ -844,6 +844,68 @@ label:has(> select#reasoning-effort) select {
   color: var(--muted-foreground);
 }
 
+/* Block-level text direction (chat transcript only). Explicit `dir` values
+   come from the direction rehype plugin; geometry stays physical unless the
+   block itself is RTL so pure-LTR content is untouched. */
+.chat-markdown[data-direction-mode="auto-blocks"] [dir="rtl"],
+.chat-markdown[data-direction-mode="auto-blocks"] [dir="ltr"] {
+  text-align: start;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] blockquote[dir="rtl"] {
+  border-left: none;
+  border-right: 2px solid var(--border);
+  padding-left: 0;
+  padding-right: 0.8rem;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] ul[dir="rtl"],
+.chat-markdown[data-direction-mode="auto-blocks"] ol[dir="rtl"] {
+  padding-left: 0;
+  padding-right: 1.25rem;
+}
+
+/* Mixed-direction lists keep the LTR container gutter; RTL items switch to
+   inside markers so their bullet sits at the visual start of the item text. */
+.chat-markdown[data-direction-mode="auto-blocks"]
+  ul[data-mixed-direction-list="true"]
+  li[dir="rtl"],
+.chat-markdown[data-direction-mode="auto-blocks"]
+  ol[data-mixed-direction-list="true"]
+  li[dir="rtl"] {
+  list-style-position: inside;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] li[dir="rtl"] .chat-markdown-task-checkbox {
+  margin-left: 0.4em;
+  margin-right: -1.4em;
+}
+
+/* Fenced code blocks render through a wrapper that does not forward the
+   hast `pre` dir attribute, so the wrapper pins LTR explicitly. */
+.chat-markdown[data-direction-mode="auto-blocks"] .chat-markdown-codeblock {
+  direction: ltr;
+}
+
+/* Find-match continuation edges follow the reading order of the block. */
+.chat-markdown[data-direction-mode="auto-blocks"] [dir="rtl"] .chat-find-match-continues-before {
+  padding-left: 0.2em;
+  padding-right: 0;
+  border-top-left-radius: 0.45em;
+  border-bottom-left-radius: 0.45em;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.chat-markdown[data-direction-mode="auto-blocks"] [dir="rtl"] .chat-find-match-continues-after {
+  padding-right: 0.2em;
+  padding-left: 0;
+  border-top-right-radius: 0.45em;
+  border-bottom-right-radius: 0.45em;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
 .chat-markdown :not(pre) > code {
   border-radius: 0.4rem;
   background: var(--app-user-message-background);
