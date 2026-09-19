@@ -202,9 +202,9 @@ export function buildQuitInterruptCommand(input: {
  * Pure: map a consumed record onto the current read model. A thread is resumed
  * only when it still exists, is not deleted, its project exists, and
  * `threadResumePreconditionViolation` is clear (not archived, nothing in flight,
- * no turn completed on its own since the record). The continuation is an
- * ordinary user turn on the thread's own runtime/interaction settings (model
- * omitted → provider reactor uses the thread's current selection) and carries
+ * no turn completed on its own since the record). The automatic continuation
+ * uses the thread's own runtime/interaction settings (model omitted → provider
+ * reactor uses the thread's current selection) and carries
  * the same precondition for the decider to enforce atomically.
  *
  * Command and message ids derive from the record so an accidental re-run
@@ -261,6 +261,7 @@ export function planQuitResumeTurns(input: {
         attachments: [],
       },
       dispatchMode: "queue",
+      dispatchOrigin: "automation",
       runtimeMode: thread.runtimeMode,
       interactionMode: thread.interactionMode,
       resumePrecondition,

@@ -1243,6 +1243,7 @@ describe("store event reducer", () => {
   it("rolls back conversation state from an edited user message", () => {
     const initialState = makeState(
       makeThread({
+        latestHumanMessageAt: "2026-02-27T00:01:00.000Z",
         latestTurn: {
           turnId: TurnId.makeUnsafe("turn-2"),
           state: "completed",
@@ -1339,6 +1340,7 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.proposedPlans).toEqual([]);
     expect(threadsOf(next)[0]?.activities).toEqual([]);
     expect(threadsOf(next)[0]?.pendingSourceProposedPlan).toBeUndefined();
+    expect(threadsOf(next)[0]?.latestHumanMessageAt).toBe("2026-02-27T00:00:00.000Z");
     expect(threadsOf(next)[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
   });
 

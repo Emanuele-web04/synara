@@ -3,6 +3,7 @@ import {
   encodeMessageTextFallback,
 } from "../../persistence/messageTextChunks.ts";
 import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/contracts";
+import { resolveHumanMessageAt } from "@synara/shared/threadSummary";
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
 import {
   addPinnedMessage,
@@ -235,8 +236,11 @@ const withRebuiltThreadShellSummary = Effect.fn(function* (input: {
   readonly projectionThreadProposedPlanRepository: ProjectionThreadProposedPlanRepositoryShape;
   readonly projectionPendingInteractionRepository: ProjectionPendingInteractionRepositoryShape;
 }) {
-  const [latestUserMessageAt, latestPlan, pendingCounts] = yield* Effect.all([
+  const [latestUserMessageAt, latestHumanMessageAt, latestPlan, pendingCounts] = yield* Effect.all([
     input.projectionThreadMessageRepository.getLatestUserMessageAt({
+      threadId: input.thread.threadId,
+    }),
+    input.projectionThreadMessageRepository.getLatestHumanMessageAt({
       threadId: input.thread.threadId,
     }),
     input.projectionThreadProposedPlanRepository.getLatestSummaryByThreadId({
@@ -251,6 +255,7 @@ const withRebuiltThreadShellSummary = Effect.fn(function* (input: {
   return {
     ...input.thread,
     latestUserMessageAt,
+    latestHumanMessageAt,
     pendingApprovalCount: pendingCounts.pendingApprovalCount,
     pendingUserInputCount: pendingCounts.pendingUserInputCount,
     hasActionableProposedPlan:
@@ -595,6 +600,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             goalPausedAt: null,
             goalAchievements: null,
             latestUserMessageAt: null,
+            latestHumanMessageAt: null,
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
@@ -881,9 +887,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (!shouldApplyDeferredThreadShellSummary(event)) {
             return;
           }
+          const humanMessageAt = resolveHumanMessageAt(event.payload);
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
             latestUserMessageAt: maxIso(thread.latestUserMessageAt, event.payload.createdAt),
+            latestHumanMessageAt:
+              humanMessageAt === null
+                ? (thread.latestHumanMessageAt ?? null)
+                : maxIso(thread.latestHumanMessageAt ?? null, humanMessageAt),
             updatedAt: event.occurredAt,
           }));
         }
