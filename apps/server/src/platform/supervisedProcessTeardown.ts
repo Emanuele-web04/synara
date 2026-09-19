@@ -3,6 +3,7 @@
 // Layer: Server platform runtime
 
 import { Effect } from "effect";
+import { didProcessFailToSpawn } from "@synara/shared/processRuntime";
 
 import {
   captureProcessTree,
@@ -118,6 +119,10 @@ export async function teardownChildProcessTree(
   teardownProcessTree: typeof teardownProviderProcessTree = teardownProviderProcessTree,
 ): Promise<SupervisedProcessTeardownResult> {
   if (process.pid === undefined) {
+    // A witnessed Node spawn error proves there was no process tree to retire.
+    // Missing cwd/executable must not become a second, permanent cleanup failure.
+    // Unknown PID-less handles still fail closed below.
+    if (didProcessFailToSpawn(process)) return { escalated: false, signalErrors: [] };
     throw new Error("Cannot prove process exit because the spawned process has no PID.");
   }
   return teardownProcessTree({
