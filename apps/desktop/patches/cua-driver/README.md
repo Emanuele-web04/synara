@@ -306,6 +306,40 @@ background route.
   editable element. No text ever leaves the page; results carry lengths and
   booleans only.
 
+Revision 26 removes the session badge, makes the stock pointer monochrome, and
+keeps spawned browsers invisible.
+
+- Badge removal: every `paint_session_badge` call site is gone from both the
+  compact and the classic cursor paths (`render_state.rs`), so no label chip,
+  action glyph, or badge alpha can reach the pixmap in any mode. The label
+  state machine stays dormant and harmless; a regression test renders a
+  labelled cursor and asserts pixel-for-pixel equality with an unlabelled one.
+- Stock colors: the paint no longer tints from the session hash. The default
+  pointer is monochrome — near-black fill, light rim, soft black shadow — in
+  both paths; the classic `cua.default` theme maps its blue body palette key
+  to the stock fill and its white ink to the style rim, and custom themes keep
+  their authored colors. A new session-scoped `set_agent_cursor_style` tool
+  accepts optional `fill`/`rim`/`shadow` `#rrggbb` channels (omitted = stock,
+  junk is rejected with an honest error). It is registered as an internal
+  control tool: callable by the embedding host over the daemon socket,
+  deliberately absent from the model-facing `tools/list`.
+- Offscreen spawn: the isolated Chromium launch now passes
+  `--window-position=-32000,-32000` on every platform, so the first window is
+  created off every display even before the process-lifetime conceal watcher
+  lands its first sweep. The watcher still never unhides or activates, and
+  `visualize_browser_action` re-hides around every browser action.
+- Focus/z-order audit: `invoke_menu` no longer falls back to a raising
+  `NSRunningApplication.activateWithOptions` when the exact-window key recipe
+  is unavailable — it uses the yabai-style focus-without-raise recipe (or
+  proceeds when the target app is already frontmost) and refuses rather than
+  raising. The background click recipe still uses `activate_without_raise`,
+  `set_app_visibility` uses `AXHidden` with no activation, and the cursor
+  overlay keeps its non-activating accessory-policy borderless window
+  (`orderFrontRegardless`, no make-key, click-through). Restore funnels
+  (`focus_steal` demotion, click/drag/menu "previous frontmost" restores) keep
+  Cocoa activation on purpose: they run only to undo an observed steal, and a
+  non-raising focus would leave the intruder's window on top.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records

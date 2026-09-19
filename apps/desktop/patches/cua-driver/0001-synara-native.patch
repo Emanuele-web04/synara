@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
-index 87bc75ea7..0af084cdf 100644
+index 87bc75ea7..69b5e580e 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/cursor.rs
 @@ -207,6 +207,7 @@ pub fn classify_cursor_semantics(name: &str, args: &Value) -> Option<CursorSeman
@@ -40,6 +40,14 @@ index 87bc75ea7..0af084cdf 100644
  
          "upload_file" | "download_file" | "copy_file" | "move_file" => CursorAction::Transfer,
  
+@@ -250,6 +261,7 @@ pub fn classify_cursor_semantics(name: &str, args: &Value) -> Option<CursorSeman
+ 
+         "set_agent_cursor_enabled"
+         | "set_agent_cursor_motion"
++        | "set_agent_cursor_style"
+         | "set_agent_cursor_theme"
+         | "get_agent_cursor_state" => return None,
+         _ => return None,
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
 index ef089ba10..7f955d172 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
@@ -186,7 +194,7 @@ index 18004509d..8a546eb7d 100644
              "browser_pointer",
              "browser_type",
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
-index 2625ee2ff..5d31fafb0 100644
+index 2625ee2ff..dded0587b 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
 @@ -282,6 +282,7 @@ const DESKTOP_INPUT_OPERATIONS: &[&str] = &[
@@ -206,7 +214,7 @@ index 2625ee2ff..5d31fafb0 100644
          | "check_for_update"
          | "health_report"
          | "probe" => RiskClass::R0,
-@@ -889,10 +892,13 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
+@@ -889,14 +892,18 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
          | "press_key"
          | "hotkey"
          | "set_value"
@@ -220,7 +228,12 @@ index 2625ee2ff..5d31fafb0 100644
          | "start_session"
          | "end_session"
          | "set_agent_cursor_enabled"
-@@ -1162,6 +1168,43 @@ pub fn authorize_tool_call_with_context(
+         | "set_agent_cursor_motion"
++        | "set_agent_cursor_style"
+         | "set_agent_cursor_theme" => RiskClass::R1,
+ 
+         "clipboard_write" => RiskClass::R1,
+@@ -1162,6 +1169,43 @@ pub fn authorize_tool_call_with_context(
                  )))
              }
          }
@@ -264,7 +277,7 @@ index 2625ee2ff..5d31fafb0 100644
      }
      Ok(risk)
  }
-@@ -1187,10 +1230,13 @@ fn enforce_hard_invariants(
+@@ -1187,10 +1231,13 @@ fn enforce_hard_invariants(
              | "press_key"
              | "hotkey"
              | "set_value"
@@ -278,7 +291,7 @@ index 2625ee2ff..5d31fafb0 100644
              | "verify_state"
              | "page"
              | "browser_prepare"
-@@ -1519,6 +1565,105 @@ mod tests {
+@@ -1519,6 +1566,105 @@ mod tests {
          assert!(!risk.operation_sensitive);
      }
  
@@ -673,10 +686,30 @@ index ad80763bb..42f72f7d4 100644
          None
      }
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
-index 1d10b3195..72a1a4cfc 100644
+index 1d10b3195..4012bea43 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
-@@ -735,6 +735,10 @@ impl BrowserEngine {
+@@ -357,11 +357,15 @@ fn isolated_browser_command(executable: &str, profile: &Path) -> Command {
+         .arg("--disable-background-networking")
+         .arg("--disable-component-update")
+         .arg("--disable-default-apps")
+-        .arg("--disable-extensions");
++        .arg("--disable-extensions")
++        // Create the first window off every display so the spawn race can
++        // never show a browser frame before concealment lands. Chromium
++        // accepts negative window positions on all three platforms; the
++        // process-lifetime conceal watcher then hides it from the first sweep
++        // and nothing in the driver ever re-shows it.
++        .arg("--window-position=-32000,-32000");
+     #[cfg(target_os = "windows")]
+-    command
+-        .arg("--window-position=40,40")
+-        .arg("--window-size=900,640");
++    command.arg("--window-size=900,640");
+     #[cfg(target_os = "linux")]
+     {
+         let native_wayland = std::env::var("XDG_SESSION_TYPE")
+@@ -735,6 +739,10 @@ impl BrowserEngine {
                  format!("could not launch an isolated browser process: {error}"),
              )
          })?;
@@ -687,6 +720,44 @@ index 1d10b3195..72a1a4cfc 100644
          let endpoint = match wait_for_spawned_endpoint(&mut child, &prepared_profile.path).await {
              Ok(endpoint) => {
                  match attest_spawned_endpoint(self, i64::from(child.id()), endpoint).await {
+@@ -1416,13 +1424,36 @@ mod tests {
+             assert!(args.iter().any(|arg| arg == required), "missing {required}");
+         }
+         #[cfg(target_os = "windows")]
+-        for required in ["--window-position=40,40", "--window-size=900,640"] {
++        for required in ["--window-size=900,640"] {
+             assert!(args.iter().any(|arg| arg == required), "missing {required}");
+         }
+         #[cfg(target_os = "linux")]
+         assert!(args.iter().any(|arg| arg == "--password-store=basic"));
+     }
+ 
++    #[test]
++    fn isolated_launch_never_creates_an_on_screen_window() {
++        // The spawn must be offscreen on every platform: the conceal watcher
++        // is the second line of defense, not the first. A regression here is
++        // exactly the visible browser flash this revision exists to prevent.
++        let command = isolated_browser_command("chromium-under-test", Path::new("profile"));
++        let args = command
++            .get_args()
++            .map(|arg| arg.to_string_lossy().into_owned())
++            .collect::<Vec<_>>();
++        assert!(
++            args.iter()
++                .any(|arg| arg == "--window-position=-32000,-32000"),
++            "the spawned browser window must be created offscreen: {args:?}"
++        );
++        assert!(
++            !args
++                .iter()
++                .any(|arg| arg.starts_with("--window-position=40,40")),
++            "the old on-screen launch position must be gone: {args:?}"
++        );
++    }
++
+     #[test]
+     fn clean_launcher_exit_is_only_deferred_on_windows() {
+         let mut command = if cfg!(target_os = "windows") {
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
 index e7be28523..69e9bf635 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
@@ -1522,9 +1593,18 @@ index 4fa445fb1..56c09ad44 100644
                  "mouse_button_up",
                  "mouse_drag",
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
-index d93bf6d20..b9ca6fd26 100644
+index d93bf6d20..92a1f2c3d 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
+@@ -257,7 +257,7 @@ fn advertised_runtime_input_schema(tool_name: &str, schema: &Value) -> Value {
+ ///   `session.capture_scope.escalate` compatibility tokens
+ /// - `agent_cursor.move`, `agent_cursor.set_enabled`,
+ ///   `agent_cursor.set_motion`, `agent_cursor.set_theme`,
+-///   `agent_cursor.state`
++///   `agent_cursor.set_style`, `agent_cursor.state`
+ /// - `recording.start`, `recording.stop`, `recording.state`,
+ ///   `recording.replay`, `recording.install_dependency`
+ /// - `page.action`
 @@ -321,6 +321,13 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
              "input.keyboard.type",
              "accessibility.element_tokens",
@@ -1559,7 +1639,42 @@ index d93bf6d20..b9ca6fd26 100644
          "debug_window_info" => &["window.debug_info"],
  
          // ── permissions / config ─────────────────────────────────────
-@@ -2567,6 +2580,7 @@ fn is_physical_desktop_action(tool: &str) -> bool {
+@@ -375,6 +388,7 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
+         // ── agent cursor ─────────────────────────────────────────────
+         "set_agent_cursor_enabled" => &["agent_cursor.set_enabled"],
+         "set_agent_cursor_motion" => &["agent_cursor.set_motion"],
++        "set_agent_cursor_style" => &["agent_cursor.set_style"],
+         "set_agent_cursor_theme" => &["agent_cursor.set_theme"],
+         "get_agent_cursor_state" => &["agent_cursor.state"],
+ 
+@@ -619,6 +633,18 @@ impl TrustedInvocationEvidence {
+ }
+ 
+ /// Thread-safe collection of all registered tools.
++/// Driver-internal control tools.
++///
++/// These are callable by an embedding host over the daemon socket exactly
++/// like any other registered tool, but they are deliberately excluded from
++/// the model-facing `tools/list` advertisement: they exist for host/control
++/// surfaces (for example a settings panel pushing a cursor style), not for
++/// an agent to discover or route. Keep new entries here only when the tool
++/// must never appear in a model prompt.
++pub fn is_internal_control_tool(name: &str) -> bool {
++    matches!(name, "set_agent_cursor_style")
++}
++
+ pub struct ToolRegistry {
+     tools: HashMap<String, Box<dyn Tool>>,
+     /// Ordered list of tool names for `tools/list`.
+@@ -871,6 +897,7 @@ impl ToolRegistry {
+         let list: Vec<Value> = self
+             .order
+             .iter()
++            .filter(|name| !is_internal_control_tool(name))
+             .filter(|name| crate::policy::is_tool_listable(name))
+             .filter_map(|name| self.tools.get(name))
+             .map(|tool| tool.def().to_list_entry())
+@@ -2567,6 +2594,7 @@ fn is_physical_desktop_action(tool: &str) -> bool {
              | "press_key"
              | "hotkey"
              | "set_value"
@@ -1567,7 +1682,7 @@ index d93bf6d20..b9ca6fd26 100644
              | "bring_to_front"
              | "set_window_frame"
      )
-@@ -4918,6 +4932,11 @@ fn synthesize_action_label(tool_name: &str, args: &Value) -> String {
+@@ -4918,6 +4946,11 @@ fn synthesize_action_label(tool_name: &str, args: &Value) -> String {
          ),
          "drag" => "drag".into(),
          "set_value" => arg("value").unwrap_or_default(),
@@ -1579,7 +1694,7 @@ index d93bf6d20..b9ca6fd26 100644
          "launch_app" => arg("bundle_id").or_else(|| arg("name")).unwrap_or_default(),
          _ => String::new(),
      };
-@@ -5059,6 +5078,7 @@ mod capability_tests {
+@@ -5059,6 +5092,7 @@ mod capability_tests {
          "press_key",
          "hotkey",
          "set_value",
@@ -1587,7 +1702,7 @@ index d93bf6d20..b9ca6fd26 100644
          // screen
          "zoom",
          "get_screen_size",
-@@ -5067,6 +5087,7 @@ mod capability_tests {
+@@ -5067,6 +5101,7 @@ mod capability_tests {
          // accessibility
          "get_accessibility_tree",
          "get_window_state",
@@ -1595,7 +1710,15 @@ index d93bf6d20..b9ca6fd26 100644
          // app / window
          "launch_app",
          "list_apps",
-@@ -5146,6 +5167,10 @@ mod capability_tests {
+@@ -5089,6 +5124,7 @@ mod capability_tests {
+         // agent cursor
+         "set_agent_cursor_enabled",
+         "set_agent_cursor_motion",
++        "set_agent_cursor_style",
+         "set_agent_cursor_theme",
+         "get_agent_cursor_state",
+         // recording / replay
+@@ -5146,6 +5182,10 @@ mod capability_tests {
          "accessibility.tree.structured",
          "accessibility.tree.bounded",
          "accessibility.window_state",
@@ -1606,7 +1729,61 @@ index d93bf6d20..b9ca6fd26 100644
          // Surface 6 — claimed by tools that accept the opaque
          // `element_token` arg + get_window_state which emits them.
          "accessibility.element_tokens",
-@@ -5384,6 +5409,7 @@ mod capability_tests {
+@@ -5176,6 +5216,7 @@ mod capability_tests {
+         "agent_cursor.move",
+         "agent_cursor.set_enabled",
+         "agent_cursor.set_motion",
++        "agent_cursor.set_style",
+         "agent_cursor.set_theme",
+         "agent_cursor.state",
+         // recording
+@@ -5367,6 +5408,45 @@ mod capability_tests {
+         }
+     }
+ 
++    struct DefOnlyTool(ToolDef);
++
++    #[async_trait::async_trait]
++    impl Tool for DefOnlyTool {
++        fn def(&self) -> &ToolDef {
++            &self.0
++        }
++
++        async fn invoke(&self, _args: Value) -> crate::protocol::ToolResult {
++            crate::protocol::ToolResult::text("stub")
++        }
++    }
++
++    #[test]
++    fn internal_control_tools_stay_callable_but_unlisted() {
++        assert!(is_internal_control_tool("set_agent_cursor_style"));
++        assert!(!is_internal_control_tool("set_agent_cursor_motion"));
++
++        let mut reg = ToolRegistry::new();
++        reg.register(Box::new(DefOnlyTool(dummy_def("set_agent_cursor_motion"))));
++        reg.register(Box::new(DefOnlyTool(dummy_def("set_agent_cursor_style"))));
++        let listed: Vec<String> = reg.tools_list()["tools"]
++            .as_array()
++            .unwrap()
++            .iter()
++            .filter_map(|entry| entry["name"].as_str().map(str::to_owned))
++            .collect();
++        assert!(
++            listed.iter().any(|name| name == "set_agent_cursor_motion"),
++            "ordinary cursor tools stay listed: {listed:?}"
++        );
++        assert!(
++            !listed.iter().any(|name| name == "set_agent_cursor_style"),
++            "the style control tool must never be advertised: {listed:?}"
++        );
++        // Unlisted is not unregistered: the daemon can still dispatch it.
++        assert!(reg.get_def("set_agent_cursor_style").is_some());
++    }
++
+     /// Surface 6: every tool that accepts the opaque `element_token`
+     /// arg must claim the `accessibility.element_tokens` capability so
+     /// Hermes/Codex/Claude Code consumers can branch on the capability
+@@ -5384,6 +5464,7 @@ mod capability_tests {
              "type_text_chars",
              "press_key",
              "set_value",
@@ -1634,7 +1811,7 @@ index 5d6ac1f14..e772ddaf6 100644
                  })
                  .expect("spawn serve thread");
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
-index a26a6bfe9..064d69170 100644
+index a26a6bfe9..696aabb02 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 @@ -12,6 +12,39 @@ use cua_driver_core::{server::ToolProvider, CaptureScope};
@@ -1677,7 +1854,25 @@ index a26a6bfe9..064d69170 100644
  #[derive(Default)]
  struct PublicSessionState {
      scopes: HashMap<String, CaptureScope>,
-@@ -172,7 +205,119 @@ impl SdkAdapter {
+@@ -140,16 +173,7 @@ impl SdkAdapter {
+     }
+ 
+     pub fn is_known_tool(&self, name: &str) -> bool {
+-        name == "type_text_chars"
+-            || self
+-                .tools_list
+-                .get("tools")
+-                .and_then(Value::as_array)
+-                .is_some_and(|tools| {
+-                    tools
+-                        .iter()
+-                        .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+-                })
++        tool_is_known(name, &self.tools_list)
+     }
+ 
+     pub fn describe(&self, name: &str) -> Option<Value> {
+@@ -172,7 +196,119 @@ impl SdkAdapter {
          daemon_tools_list_from(&self.tools_list)
      }
  
@@ -1798,10 +1993,55 @@ index a26a6bfe9..064d69170 100644
          let _lifecycle = if matches!(name, "start_session" | "end_session") {
              Some(self.session_lifecycle.lock().await)
          } else {
-@@ -453,6 +598,42 @@ impl ToolProvider for SdkAdapter {
+@@ -401,6 +537,27 @@ impl SdkAdapter {
+     }
+ }
+ 
++/// Whether a tool name must be admitted by the daemon dispatch gate.
++///
++/// The advertised inventory is the model-facing list, which excludes the
++/// internal control set (see `cua_driver_core::tool::is_internal_control_tool`).
++/// Those tools stay dispatchable for an authenticated embedding host over the
++/// daemon socket; whether a platform actually registered one is still decided
++/// by its own registry at invoke time, so a name that is only on the control
++/// list fails honestly instead of being advertised.
++fn tool_is_known(name: &str, tools_list: &Value) -> bool {
++    name == "type_text_chars"
++        || cua_driver_core::tool::is_internal_control_tool(name)
++        || tools_list
++            .get("tools")
++            .and_then(Value::as_array)
++            .is_some_and(|tools| {
++                tools
++                    .iter()
++                    .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
++            })
++}
++
+ fn daemon_tools_list_from(tools_list: &Value) -> Value {
+     let tools = tools_list
+             .get("tools")
+@@ -453,6 +610,59 @@ impl ToolProvider for SdkAdapter {
  mod tests {
      use super::*;
  
++    #[test]
++    fn internal_control_tools_are_known_but_never_advertised() {
++        let advertised = json!({
++            "tools": [
++                {"name": "set_agent_cursor_motion"},
++                {"name": "click"},
++            ]
++        });
++        assert!(tool_is_known("click", &advertised));
++        assert!(tool_is_known("set_agent_cursor_motion", &advertised));
++        assert!(tool_is_known("type_text_chars", &advertised));
++        // Internal control tools: admitted by the dispatch gate even though
++        // the inventory they were loaded from does not advertise them.
++        assert!(tool_is_known("set_agent_cursor_style", &advertised));
++        assert!(!tool_is_known("totally_made_up_tool", &advertised));
++    }
++
 +    #[cfg(target_os = "macos")]
 +    #[test]
 +    fn only_exact_background_semantic_text_uses_stable_space_membership() {
@@ -1842,7 +2082,7 @@ index a26a6bfe9..064d69170 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123bc7..e1e790ce2 100644
+index 67e123bc7..d6b3c4c44 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -1857,7 +2097,7 @@ index 67e123bc7..e1e790ce2 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(25);
++        metadata["synara_native_revision"] = serde_json::json!(26);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -2022,6 +2262,18 @@ index 67e123bc7..e1e790ce2 100644
      };
      tokio::pin!(parent_liveness);
  
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/telemetry.rs b/libs/cua-driver/rust/crates/cua-driver/src/telemetry.rs
+index 2453fec21..67dc6319e 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/telemetry.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/telemetry.rs
+@@ -599,6 +599,7 @@ impl AgentSessionState {
+             tool_name,
+             "set_agent_cursor_enabled"
+                 | "set_agent_cursor_motion"
++                | "set_agent_cursor_style"
+                 | "set_agent_cursor_theme"
+                 | "get_agent_cursor_state"
+         );
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/arc.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/arc.rs
 new file mode 100644
 index 000000000..1eb3bd0b1
@@ -2484,10 +2736,10 @@ index 000000000..1eb3bd0b1
 +}
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
 new file mode 100644
-index 000000000..69b995cec
+index 000000000..059379e88
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
-@@ -0,0 +1,644 @@
+@@ -0,0 +1,728 @@
 +//! Compact pointer artwork: a crisp layered arrow drawn as a vector path at
 +//! the actual input hotspot.
 +//!
@@ -2547,6 +2799,14 @@ index 000000000..69b995cec
 +    /// Idle-fade alpha, 0..1.
 +    pub alpha: f64,
 +    pub pressed: bool,
++    /// Arrow body color (stock near-black by default).
++    pub fill: [u8; 3],
++    /// Arrow body color while pressed.
++    pub fill_pressed: [u8; 3],
++    /// Outline color (stock light rim by default).
++    pub rim: [u8; 3],
++    /// Drop-shadow color (stock black by default).
++    pub shadow: [u8; 3],
 +}
 +
 +/// Build the artwork transform.
@@ -2586,12 +2846,14 @@ index 000000000..69b995cec
 +    }
 +    let alpha = paint.alpha.clamp(0.0, 1.0);
 +
-+    // Soft shadow: the same silhouette, offset down-right, no rim.
++    // Soft shadow: the same silhouette, offset down-right, no rim. The stock
++    // shadow color is black; a session style can repaint it.
++    let [sr, sg, sb] = paint.shadow;
 +    let shadow = Paint {
 +        shader: tiny_skia::Shader::SolidColor(Color::from_rgba8(
-+            0,
-+            0,
-+            0,
++            sr,
++            sg,
++            sb,
 +            (alpha * 0.30 * 255.0) as u8,
 +        )),
 +        anti_alias: true,
@@ -2606,11 +2868,12 @@ index 000000000..69b995cec
 +    );
 +
 +    // Light rim: keeps the arrow visible on dark backgrounds.
++    let [rr, rg, rb] = paint.rim;
 +    let rim = Paint {
 +        shader: tiny_skia::Shader::SolidColor(Color::from_rgba8(
-+            255,
-+            255,
-+            255,
++            rr,
++            rg,
++            rb,
 +            (alpha * 0.95 * 255.0) as u8,
 +        )),
 +        anti_alias: true,
@@ -2629,11 +2892,13 @@ index 000000000..69b995cec
 +        None,
 +    );
 +
-+    // Near-black fill; the press lightens it a touch so the shrink reads.
++    // Arrow body; the press lightens it a touch so the shrink reads.
 +    let (r, g, b) = if paint.pressed {
-+        (44, 47, 56)
++        let [r, g, b] = paint.fill_pressed;
++        (r, g, b)
 +    } else {
-+        (18, 20, 26)
++        let [r, g, b] = paint.fill;
++        (r, g, b)
 +    };
 +    let fill = Paint {
 +        shader: tiny_skia::Shader::SolidColor(Color::from_rgba8(
@@ -2711,6 +2976,10 @@ index 000000000..69b995cec
 +            rotation: 0.0,
 +            alpha: 1.0,
 +            pressed: false,
++            fill: crate::STOCK_CURSOR_FILL,
++            fill_pressed: crate::STOCK_CURSOR_FILL_PRESSED,
++            rim: crate::STOCK_CURSOR_RIM,
++            shadow: crate::STOCK_CURSOR_SHADOW,
 +        }
 +    }
 +
@@ -3130,6 +3399,73 @@ index 000000000..69b995cec
 +            },
 +        );
 +        assert_ne!(baseline.data(), pressed.data());
++    }
++
++    fn has_color(pm: &Pixmap, target: [u8; 3], tolerance: i16, min_alpha: u8) -> bool {
++        pm.pixels().iter().any(|pixel| {
++            pixel.alpha() >= min_alpha && {
++                let color = pixel.demultiply();
++                let close = |a: u8, b: u8| (i16::from(a) - i16::from(b)).abs() <= tolerance;
++                close(color.red(), target[0])
++                    && close(color.green(), target[1])
++                    && close(color.blue(), target[2])
++            }
++        })
++    }
++
++    #[test]
++    fn stock_paint_is_monochrome_and_matches_the_authored_ink() {
++        // The stock default must stay byte-identical to the authored
++        // near-black/white artwork: a session style with every channel
++        // omitted paints the same pixels as the hardcoded defaults.
++        let mut stock = Pixmap::new(64, 64).unwrap();
++        paint(&mut stock, &stationary_paint());
++
++        let mut explicit = Pixmap::new(64, 64).unwrap();
++        paint(
++            &mut explicit,
++            &CompactPaint {
++                fill: crate::STOCK_CURSOR_FILL,
++                fill_pressed: crate::STOCK_CURSOR_FILL_PRESSED,
++                rim: crate::STOCK_CURSOR_RIM,
++                shadow: crate::STOCK_CURSOR_SHADOW,
++                ..stationary_paint()
++            },
++        );
++        assert_eq!(stock.data(), explicit.data());
++
++        // Near-black body ink and near-white rim ink are both present in the
++        // stock pointer (premultiplied pixels are demultiplied first).
++        assert!(has_color(&stock, crate::STOCK_CURSOR_FILL, 3, 200));
++        assert!(has_color(&stock, crate::STOCK_CURSOR_RIM, 3, 100));
++    }
++
++    #[test]
++    fn session_style_repaints_the_fill_rim_and_shadow() {
++        let mut baseline = Pixmap::new(64, 64).unwrap();
++        paint(&mut baseline, &stationary_paint());
++
++        let mut styled = Pixmap::new(64, 64).unwrap();
++        paint(
++            &mut styled,
++            &CompactPaint {
++                fill: [0xE8, 0x6C, 0x00],
++                fill_pressed: [0xE8, 0x6C, 0x00],
++                rim: [0x10, 0x20, 0x30],
++                shadow: [0x40, 0x00, 0x80],
++                ..stationary_paint()
++            },
++        );
++        assert_ne!(baseline.data(), styled.data(), "the style must repaint");
++        assert!(has_color(&styled, [0xE8, 0x6C, 0x00], 3, 200));
++        assert!(has_color(&styled, [0x10, 0x20, 0x30], 3, 100));
++        // The shadow is the faintest layer; it is offset below-right of the
++        // tip where nothing else paints.
++        assert!(has_color(&styled, [0x40, 0x00, 0x80], 6, 20));
++        assert!(
++            !has_color(&styled, crate::STOCK_CURSOR_FILL, 2, 200),
++            "the stock near-black body ink must be fully replaced"
++        );
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/feel.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/feel.rs
@@ -3672,7 +4008,7 @@ index 000000000..7cffbc26f
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
-index 493656b5b..041c76b47 100644
+index 493656b5b..b5495754f 100644
 --- a/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
 @@ -6,25 +6,34 @@
@@ -3712,15 +4048,34 @@ index 493656b5b..041c76b47 100644
  };
  pub use session_badge::{
      paint_session_badge, sanitize_session_label, session_badge_extents, session_badge_layout,
-@@ -32,6 +41,7 @@ pub use session_badge::{
+@@ -32,17 +41,19 @@ pub use session_badge::{
      BADGE_CHIP_GROUP_GAP, BADGE_CHIP_SIZE, BADGE_CURSOR_GAP, BADGE_HEIGHT, BADGE_MAX_WIDTH,
      MAX_SESSION_LABEL_CHARS,
  };
 +pub use spring::{travel_response, SpringChannel, SpringSpec};
  pub use theme::{
-     session_fill_hex, session_fill_rgba, CursorAction, CursorVisualState, DeliveryModifier,
-     PlaybackKind, ReducedMotion, TargetModifier, DEFAULT_CURSOR_FILL, DEFAULT_THEME_ID,
-@@ -52,6 +62,9 @@ pub use z_order::ZOrderEnforcer;
+-    session_fill_hex, session_fill_rgba, CursorAction, CursorVisualState, DeliveryModifier,
+-    PlaybackKind, ReducedMotion, TargetModifier, DEFAULT_CURSOR_FILL, DEFAULT_THEME_ID,
+-    DEFAULT_THEME_VERSION, THEME_PROFILE,
++    parse_style_color, session_fill_hex, session_fill_rgba, CursorAction, CursorStyle,
++    CursorVisualState, DeliveryModifier, PlaybackKind, ReducedMotion, TargetModifier,
++    DEFAULT_CURSOR_FILL, DEFAULT_THEME_ID, DEFAULT_THEME_VERSION, STOCK_CURSOR_FILL,
++    STOCK_CURSOR_FILL_PRESSED, STOCK_CURSOR_RIM, STOCK_CURSOR_SHADOW, THEME_PROFILE,
+ };
+ pub use theme_artifact::{
+     decode_theme, embedded_default_theme, inspect_artifact, list_installed_themes,
+-    load_installed_theme, paint_compiled_theme, paint_compiled_theme_with_tint,
+-    resolve_theme_selection, theme_store_root, validate_compiled_theme, CompiledAnimation,
+-    CompiledDrawCommand, CompiledFrame, CompiledGeometry, CompiledStroke, CompiledTheme,
+-    CompiledTransform,
++    load_installed_theme, paint_compiled_theme, paint_compiled_theme_with_style,
++    paint_compiled_theme_with_tint, resolve_theme_selection, theme_store_root,
++    validate_compiled_theme, CompiledAnimation, CompiledDrawCommand, CompiledFrame,
++    CompiledGeometry, CompiledStroke, CompiledTheme, CompiledTransform,
+ };
+ #[cfg(feature = "theme-authoring")]
+ pub use theme_artifact::{encode_theme, install_artifact, uninstall_theme};
+@@ -52,6 +63,9 @@ pub use z_order::ZOrderEnforcer;
  /// platform backend when it initialises the overlay window.
  #[derive(Debug, Clone)]
  pub struct CursorConfig {
@@ -3730,7 +4085,7 @@ index 493656b5b..041c76b47 100644
      /// Multi-cursor instance identifier. Defaults to `"default"`.
      pub cursor_id: String,
  
-@@ -72,6 +85,7 @@ pub struct CursorConfig {
+@@ -72,6 +86,7 @@ pub struct CursorConfig {
  impl Default for CursorConfig {
      fn default() -> Self {
          Self {
@@ -3738,7 +4093,7 @@ index 493656b5b..041c76b47 100644
              cursor_id: "default".into(),
              theme_id: DEFAULT_THEME_ID.into(),
              reduced_motion: ReducedMotion::Auto,
-@@ -88,6 +102,7 @@ impl CursorConfig {
+@@ -88,6 +103,7 @@ impl CursorConfig {
      /// ```text
      /// --cursor-theme <installed-theme-id>
      /// --cursor-reduced-motion <auto|on|off>
@@ -3746,7 +4101,7 @@ index 493656b5b..041c76b47 100644
      /// --no-overlay                (start with overlay disabled)
      /// --glide-ms     <f64>        (glideDurationMs override)
      /// --dwell-ms     <f64>        (dwellAfterClickMs override)
-@@ -125,6 +140,7 @@ impl CursorConfig {
+@@ -125,6 +141,7 @@ impl CursorConfig {
                          i += 1;
                      }
                  }
@@ -3754,8 +4109,18 @@ index 493656b5b..041c76b47 100644
                  "--no-overlay" => cfg.enabled = false,
                  "--glide-ms" => {
                      if let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) {
+@@ -351,6 +368,9 @@ pub enum OverlayCommand {
+     SetEnabled(bool),
+     /// Update the motion/timing config live.
+     SetMotion(MotionConfig),
++    /// Update the session color style live. `CursorStyle::default()` restores
++    /// the stock monochrome pointer.
++    SetStyle(CursorStyle),
+     /// Pin the overlay above a specific window (by platform window id).
+     PinAbove(u64),
+     /// Begin a best-effort semantic cursor cue.
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
-index cb1e39396..bcbe70f93 100644
+index cb1e39396..64999331b 100644
 --- a/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
 @@ -35,8 +35,10 @@
@@ -3765,13 +4130,24 @@ index cb1e39396..bcbe70f93 100644
 -    CompiledTheme, CursorAction, CursorConfig, CursorVisualState, DeliveryModifier, MotionConfig,
 -    OverlayCommand, PathPlanner, PathState, PlannedPath, Spring, TargetModifier,
 +    CompactActivity, CompactMotion, CompiledTheme, CursorAction, CursorConfig, CursorFeel,
-+    CursorVisualState, DeliveryModifier, MotionConfig, OverlayCommand, PaintChannels, PathPlanner,
-+    PathState, PlannedPath, ReducedMotion, Spring, TargetModifier, EARLY_ACK_DISTANCE,
++    CursorStyle, CursorVisualState, DeliveryModifier, MotionConfig, OverlayCommand, PaintChannels,
++    PathPlanner, PathState, PlannedPath, ReducedMotion, Spring, TargetModifier, EARLY_ACK_DISTANCE,
 +    EARLY_ACK_PROGRESS,
  };
  use std::sync::Arc;
  
-@@ -96,8 +98,39 @@ pub struct RenderStateCore {
+@@ -82,6 +84,10 @@ pub struct RenderStateCore {
+     pub idle_alpha: f64,
+     /// Window id the overlay should be pinned above (for z-ordering).
+     pub pinned_wid: Option<u64>,
++    /// Session color style. Defaults to the stock monochrome pointer; the
++    /// internal `set_agent_cursor_style` control tool overrides channels per
++    /// session. Nothing derives colors from the session id.
++    pub style: CursorStyle,
+     /// Sanitized caller-facing label painted below the cursor.
+     pub session_label: Option<String>,
+     /// Elapsed time since the session label was revealed with the cursor.
+@@ -96,8 +102,39 @@ pub struct RenderStateCore {
      pub badge_modifiers: Option<(Option<DeliveryModifier>, Option<TargetModifier>)>,
      /// Elapsed chip fade time after the active semantic action clears.
      pub badge_modifier_fade_secs: Option<f64>,
@@ -3811,7 +4187,7 @@ index cb1e39396..bcbe70f93 100644
  impl RenderStateCore {
      /// Build the core from a launch-time CursorConfig.
      /// `pos` starts at the off-screen sentinel `(-200, -200)` to indicate
-@@ -109,16 +142,20 @@ impl RenderStateCore {
+@@ -109,16 +146,20 @@ impl RenderStateCore {
              reduced_motion: cfg.reduced_motion,
              ..CursorVisualState::default()
          };
@@ -3842,7 +4218,13 @@ index cb1e39396..bcbe70f93 100644
          };
          Self {
              cfg,
-@@ -143,7 +180,177 @@ impl RenderStateCore {
+@@ -138,12 +179,183 @@ impl RenderStateCore {
+             idle_secs: 0.0,
+             idle_alpha: 1.0,
+             pinned_wid: None,
++            style: CursorStyle::default(),
+             session_label: None,
+             session_badge_secs: SESSION_BADGE_HOLD_SECS + SESSION_BADGE_FADE_SECS,
              session_badge_hovered: false,
              badge_modifiers: None,
              badge_modifier_fade_secs: None,
@@ -4020,16 +4402,79 @@ index cb1e39396..bcbe70f93 100644
      }
  
      fn cursor_is_revealed(&self) -> bool {
-@@ -202,7 +409,7 @@ impl RenderStateCore {
-     /// from [`Self::session_badge_needs_frame_tick`]: a faded badge needs hover
-     /// hit-testing, not continuous 60 fps repainting.
+@@ -190,61 +402,45 @@ impl RenderStateCore {
+     }
+ 
+     pub fn session_badge_needs_frame_tick(&self) -> bool {
+-        self.cursor_is_revealed()
+-            && ((self.session_label.is_some()
+-                && self.session_badge_secs < SESSION_BADGE_HOLD_SECS + SESSION_BADGE_FADE_SECS)
+-                || self.badge_modifier_fade_secs.is_some()
+-                || self.visual.resolved_action != CursorAction::Idle)
++        // The badge cannot paint any more, so a label or a latched modifier
++        // fade is not a reason to keep a frame cadence alive. Only the
++        // cursor's own action animation still changes pixels.
++        self.cursor_is_revealed() && self.visual.resolved_action != CursorAction::Idle
+     }
+ 
+     /// Whether the platform overlay should keep a low-frequency hardware
+-    /// pointer poll alive for hover-to-reveal. This is deliberately separate
+-    /// from [`Self::session_badge_needs_frame_tick`]: a faded badge needs hover
+-    /// hit-testing, not continuous 60 fps repainting.
++    /// pointer poll alive for hover-to-reveal.
++    ///
++    /// Always `false`: hover-to-reveal was a badge affordance, and the badge
++    /// pixels are unreachable. Keeping the poll would wake the render loop
++    /// (and sample the hardware pointer) every 80 ms for no visible effect.
      pub fn session_badge_needs_hover_poll(&self) -> bool {
 -        self.session_label.is_some() && self.cursor_is_revealed()
-+        !self.cfg.compact && self.session_label.is_some() && self.cursor_is_revealed()
++        false
      }
  
      /// Update hover state from a platform-native hardware pointer sample.
-@@ -245,6 +452,14 @@ impl RenderStateCore {
+     ///
+-    /// `self.pos` is the centre of the cursor artwork. The hit radius is a
+-    /// little larger than the 42 point production artwork so the interaction
+-    /// remains comfortable around the white outline and glow.
+-    pub fn update_session_badge_hover(&mut self, pointer: Option<(f64, f64)>) -> bool {
+-        const HOVER_RADIUS: f64 = crate::theme::DISPLAY_SIZE as f64 * 0.82;
+-        let hovered = self.session_badge_needs_hover_poll()
+-            && pointer.is_some_and(|(x, y)| {
+-                let dx = x - self.pos.0;
+-                let dy = y - self.pos.1;
+-                if dx * dx + dy * dy <= HOVER_RADIUS * HOVER_RADIUS {
+-                    return true;
+-                }
+-                crate::session_badge_layout(crate::SessionBadgeInput {
+-                    label: self.session_label.as_deref(),
+-                    delivery: self.badge_modifiers.and_then(|modifiers| modifiers.0),
+-                    target: self.badge_modifiers.and_then(|modifiers| modifiers.1),
+-                    cursor: (self.pos.0 as f32, self.pos.1 as f32),
+-                    backing_scale: 1.0,
+-                    label_alpha: self.session_badge_alpha(),
+-                    chip_alpha: self.session_badge_chip_alpha(),
+-                    clip: None,
+-                })
+-                .is_some_and(|layout| {
+-                    let rect = layout.rect;
+-                    x >= rect.x() as f64
+-                        && x <= (rect.x() + rect.width()) as f64
+-                        && y >= rect.y() as f64
+-                        && y <= (rect.y() + rect.height()) as f64
+-                })
+-            });
+-        let changed = hovered != self.session_badge_hovered;
+-        self.session_badge_hovered = hovered;
++    /// Hover-to-reveal belonged to the removed badge chip; with the badge
++    /// pixels unreachable there is nothing to reveal, so this is a no-op that
++    /// reports "no change". It never requests a badge layout, which keeps the
++    /// platform render loop from polling the hardware pointer for nothing.
++    pub fn update_session_badge_hover(&mut self, _pointer: Option<(f64, f64)>) -> bool {
++        let changed = self.session_badge_hovered;
++        self.session_badge_hovered = false;
+         changed
+     }
+ 
      /// Return the theme that is actually being painted, including any
      /// non-fatal fallback from an unavailable launch-time selection.
      pub fn active_theme_metadata(&self) -> (String, String, String, Option<String>) {
@@ -4044,7 +4489,7 @@ index cb1e39396..bcbe70f93 100644
          match self.theme.as_deref() {
              Some(theme) => (
                  theme.id.clone(),
-@@ -333,6 +548,17 @@ impl RenderStateCore {
+@@ -333,6 +529,17 @@ impl RenderStateCore {
                  // rate-limited toward it, so the tip actually tracks the
                  // trajectory instead of lagging behind on fast/short glides.
                  self.heading = s.heading + std::f64::consts::PI;
@@ -4062,7 +4507,7 @@ index cb1e39396..bcbe70f93 100644
              }
          } else if let Some(mut s) = self.spring {
              if let Some((tx, ty, th)) = self.spring_tgt {
-@@ -444,6 +670,15 @@ impl RenderStateCore {
+@@ -444,6 +651,15 @@ impl RenderStateCore {
                  // π, so store tangent+π). Direct assignment, not rate-limited, so
                  // the tip tracks the trajectory instead of lagging on fast moves.
                  self.heading = s.heading + std::f64::consts::PI;
@@ -4078,7 +4523,7 @@ index cb1e39396..bcbe70f93 100644
              }
          } else if let Some(mut s) = self.spring {
              if let Some((tx, ty, th)) = self.spring_tgt {
-@@ -549,6 +784,47 @@ impl RenderStateCore {
+@@ -549,6 +765,47 @@ impl RenderStateCore {
          move_to_snap_sentinel: bool,
          click_pulse_sentinel_only: bool,
      ) -> bool {
@@ -4126,7 +4571,7 @@ index cb1e39396..bcbe70f93 100644
          match cmd {
              OverlayCommand::MoveTo {
                  x,
-@@ -579,6 +855,7 @@ impl RenderStateCore {
+@@ -579,6 +836,7 @@ impl RenderStateCore {
                  self.dist = 0.0;
                  self.spring = None;
                  self.spring_tgt = None;
@@ -4134,7 +4579,7 @@ index cb1e39396..bcbe70f93 100644
                  if matches!(
                      self.visual.resolved_action,
                      CursorAction::Idle | CursorAction::Navigate
-@@ -608,6 +885,7 @@ impl RenderStateCore {
+@@ -608,6 +866,7 @@ impl RenderStateCore {
                  self.dist = 0.0;
                  self.spring = None;
                  self.spring_tgt = None;
@@ -4142,14 +4587,25 @@ index cb1e39396..bcbe70f93 100644
                  if matches!(
                      self.visual.resolved_action,
                      CursorAction::Idle | CursorAction::Navigate
-@@ -823,6 +1101,59 @@ pub fn paint_cursor(
+@@ -681,6 +940,10 @@ impl RenderStateCore {
+                 self.motion = m;
+                 true
+             }
++            OverlayCommand::SetStyle(style) => {
++                self.style = style;
++                true
++            }
+             OverlayCommand::PinAbove(wid) => {
+                 self.pinned_wid = Some(wid);
+                 true
+@@ -823,6 +1086,46 @@ pub fn paint_cursor(
      let heading = core.heading;
      let alpha_scale = core.idle_alpha as f32;
  
 +    if core.cfg.compact {
-+        // The arrow (and its badge anchor) rides the spring-driven channel
-+        // position so a recorded travel shows motion; `pos` itself already
-+        // sits on the logical hotspot for registry/visibility purposes.
++        // The arrow rides the spring-driven channel position so a recorded
++        // travel shows motion; `pos` itself already sits on the logical
++        // hotspot for registry/visibility purposes.
 +        let channels = core.compact_paint_channels();
 +        crate::compact_cursor::paint(
 +            pm,
@@ -4164,6 +4620,10 @@ index cb1e39396..bcbe70f93 100644
 +                rotation: channels.rotation,
 +                alpha: alpha_scale as f64,
 +                pressed: core.pressed,
++                fill: core.style.fill_rgb(),
++                fill_pressed: core.style.fill_rgb_pressed(),
++                rim: core.style.rim_rgb(),
++                shadow: core.style.shadow_rgb(),
 +            },
 +        );
 +        if let Some((ring_x, ring_y, radius, ring_alpha)) = core.compact_pulse_ring() {
@@ -4176,32 +4636,231 @@ index cb1e39396..bcbe70f93 100644
 +                sf,
 +            );
 +        }
-+        if let Some(layout) = crate::session_badge_layout(crate::SessionBadgeInput {
-+            label: core.session_label.as_deref(),
-+            delivery: None,
-+            target: None,
-+            cursor: (
-+                ((channels.x - origin_x) * s) as f32,
-+                ((channels.y - origin_y) * s) as f32,
-+            ),
-+            backing_scale: sf,
-+            label_alpha: 1.0,
-+            chip_alpha: 0.0,
-+            clip: Some((pm.width() as f32, pm.height() as f32)),
-+        }) {
-+            crate::paint_session_badge(
-+                pm,
-+                &layout,
-+                crate::session_fill_rgba(&core.cfg.cursor_id),
-+                alpha_scale,
-+            );
-+        }
++        // The session label / badge never paints: the cursor is the whole
++        // visual. The label state stays dormant (harmless), and no glyph or
++        // chip call site exists in either mode.
 +        return;
 +    }
 +
      // --- Focus rect highlight (macOS only — others pass None) ---
      // Cyan glow border + faint fill, matching Swift AgentCursor.showFocusRect.
      if let Some(fr) = focus_rect {
+@@ -876,9 +1179,15 @@ pub fn paint_cursor(
+     }
+ 
+     if let Some(theme) = core.theme.as_deref() {
+-        let tint = (theme.id == crate::DEFAULT_THEME_ID)
+-            .then(|| crate::session_fill_rgba(&core.cfg.cursor_id));
+-        crate::paint_compiled_theme_with_tint(
++        // Only the checked-in default theme carries the replaceable palette
++        // key; custom themes keep their authored colors. The stock style maps
++        // that key to the near-black pointer fill and the white ink to the
++        // style rim, so the default is a plain monochrome pointer with no
++        // session-derived tint.
++        let (tint, rim) = (theme.id == crate::DEFAULT_THEME_ID)
++            .then(|| (Some(core.style.fill_rgba()), Some(core.style.rim_rgba())))
++            .unwrap_or((None, None));
++        crate::paint_compiled_theme_with_style(
+             pm,
+             theme,
+             &core.visual,
+@@ -888,6 +1197,7 @@ pub fn paint_cursor(
+             backing_scale.max(1.0),
+             alpha_scale,
+             tint,
++            rim,
+         );
+     } else {
+         // Defensive fallback for a manually constructed RenderStateCore. The
+@@ -901,28 +1211,12 @@ pub fn paint_cursor(
+             heading as f32,
+             backing_scale.max(1.0),
+             alpha_scale,
+-            crate::session_fill_rgba(&core.cfg.cursor_id),
++            core.style.fill_rgba(),
+         );
+     }
+ 
+-    let (delivery, target) = core.badge_modifiers.unwrap_or((None, None));
+-    if let Some(layout) = crate::session_badge_layout(crate::SessionBadgeInput {
+-        label: core.session_label.as_deref(),
+-        delivery,
+-        target,
+-        cursor: (px as f32, py as f32),
+-        backing_scale: backing_scale.max(1.0),
+-        label_alpha: core.session_badge_alpha(),
+-        chip_alpha: core.session_badge_chip_alpha(),
+-        clip: Some((pm.width() as f32, pm.height() as f32)),
+-    }) {
+-        crate::paint_session_badge(
+-            pm,
+-            &layout,
+-            crate::session_fill_rgba(&core.cfg.cursor_id),
+-            alpha_scale,
+-        );
+-    }
++    // No session badge, chip, or glyph ever paints in the non-compact path
++    // either — the label state above is dormant by design.
+ }
+ 
+ #[cfg(test)]
+@@ -1092,7 +1386,7 @@ mod session_badge_and_action_tests {
+     }
+ 
+     #[test]
+-    fn hardware_pointer_hover_reveals_only_while_over_cursor() {
++    fn hardware_pointer_hover_cannot_reveal_a_removed_badge() {
+         let mut core = RenderStateCore::new(CursorConfig::default());
+         core.pos = (300.0, 240.0);
+         core.apply_command_base(
+@@ -1102,15 +1396,130 @@ mod session_badge_and_action_tests {
+         );
+         core.tick_motion(SESSION_BADGE_HOLD_SECS + SESSION_BADGE_FADE_SECS);
+         assert_eq!(core.session_badge_alpha(), 0.0);
+-        assert!(core.session_badge_needs_hover_poll());
++        // The hover-to-reveal path is gone with the badge: no poll, no state
++        // change, and certainly no pixels.
++        assert!(!core.session_badge_needs_hover_poll());
++        assert!(!core.update_session_badge_hover(Some((302.0, 238.0))));
++        assert_eq!(core.session_badge_alpha(), 0.0);
++        assert!(!core.session_badge_hovered);
++        assert!(!core.update_session_badge_hover(None));
++        assert!(!core.session_badge_hovered);
++    }
+ 
+-        assert!(core.update_session_badge_hover(Some((302.0, 238.0))));
+-        assert_eq!(core.session_badge_alpha(), 1.0);
+-        assert!(!core.update_session_badge_hover(Some((304.0, 241.0))));
+-        assert_eq!(core.session_badge_alpha(), 1.0);
++    #[test]
++    fn session_label_never_reaches_the_pixmap_in_either_mode() {
++        // The badge/chip/glyph paint path is gone: a label and latched action
++        // modifiers may keep the dormant badge *state* "visible", but the
++        // rendered pixels must be identical to a cursor without any label.
++        for compact in [true, false] {
++            let mut plain = RenderStateCore::new(CursorConfig {
++                compact,
++                ..CursorConfig::default()
++            });
++            plain.pos = (80.0, 80.0);
++            plain.idle_alpha = 1.0;
++            // Identical semantic action on both so only badge state differs.
++            plain.apply_command_base(
++                OverlayCommand::BeginAction {
++                    action: CursorAction::Click,
++                    delivery: Some(DeliveryModifier::Background),
++                    target: Some(TargetModifier::Browser),
++                },
++                true,
++                true,
++            );
+ 
+-        assert!(core.update_session_badge_hover(Some((500.0, 500.0))));
+-        assert_eq!(core.session_badge_alpha(), 0.0);
++            let mut labelled = RenderStateCore::new(CursorConfig {
++                compact,
++                ..CursorConfig::default()
++            });
++            labelled.pos = (80.0, 80.0);
++            labelled.idle_alpha = 1.0;
++            labelled.apply_command_base(
++                OverlayCommand::SetSessionLabel("synara-browser-l7".into()),
++                true,
++                true,
++            );
++            labelled.apply_command_base(
++                OverlayCommand::BeginAction {
++                    action: CursorAction::Click,
++                    delivery: Some(DeliveryModifier::Background),
++                    target: Some(TargetModifier::Browser),
++                },
++                true,
++                true,
++            );
++            // The dormant state machine still reports the badge as revealed —
++            // that is exactly the state that must no longer paint anything.
++            assert!(
++                labelled.session_label.is_some(),
++                "compact={compact}: label state should stay latched"
++            );
++            assert!(
++                labelled.badge_modifiers.is_some(),
++                "compact={compact}: modifier state should stay latched"
++            );
++
++            let mut plain_pm = tiny_skia::Pixmap::new(160, 160).unwrap();
++            paint_cursor(&mut plain_pm, &plain, 0.0, 0.0, None, 1.0);
++            let mut labelled_pm = tiny_skia::Pixmap::new(160, 160).unwrap();
++            paint_cursor(&mut labelled_pm, &labelled, 0.0, 0.0, None, 1.0);
++
++            assert_eq!(
++                plain_pm.data(),
++                labelled_pm.data(),
++                "compact={compact}: a session label must not change one pixel"
++            );
++            assert!(
++                plain_pm.pixels().iter().any(|pixel| pixel.alpha() != 0),
++                "compact={compact}: the cursor itself must still paint"
++            );
++        }
++    }
++
++    #[test]
++    fn session_badge_hover_cannot_add_pixels() {
++        // Hover used to reveal a faded badge; it may still flip the dormant
++        // hover state, but nothing may reach the pixmap.
++        let mut core = RenderStateCore::new(CursorConfig::default());
++        core.pos = (80.0, 80.0);
++        core.idle_alpha = 1.0;
++        core.apply_command_base(
++            OverlayCommand::SetSessionLabel("Research".into()),
++            false,
++            false,
++        );
++        core.tick_motion(SESSION_BADGE_HOLD_SECS + SESSION_BADGE_FADE_SECS);
++
++        let mut before = tiny_skia::Pixmap::new(160, 160).unwrap();
++        paint_cursor(&mut before, &core, 0.0, 0.0, None, 1.0);
++        assert!(!core.update_session_badge_hover(Some((82.0, 78.0))));
++        let mut after = tiny_skia::Pixmap::new(160, 160).unwrap();
++        paint_cursor(&mut after, &core, 0.0, 0.0, None, 1.0);
++        assert_eq!(before.data(), after.data());
++    }
++
++    #[test]
++    fn style_defaults_to_stock_and_applies_per_session() {
++        let mut core = RenderStateCore::new(CursorConfig::default());
++        assert!(core.style.is_stock());
++        assert!(core.apply_command_base(
++            OverlayCommand::SetStyle(crate::CursorStyle {
++                fill: Some([0xE8, 0x6C, 0x00]),
++                ..Default::default()
++            }),
++            false,
++            false,
++        ));
++        assert_eq!(core.style.fill_rgb(), [0xE8, 0x6C, 0x00]);
++        assert_eq!(core.style.rim_rgb(), crate::STOCK_CURSOR_RIM);
++        // A fully omitted style restores stock.
++        core.apply_command_base(
++            OverlayCommand::SetStyle(crate::CursorStyle::default()),
++            false,
++            false,
++        );
++        assert!(core.style.is_stock());
+     }
+ 
+     #[test]
+@@ -1175,7 +1584,8 @@ mod session_badge_and_action_tests {
+         }
+         assert!(core.session_badge_chip_alpha() > 0.0);
+         assert!(core.session_badge_chip_alpha() < 1.0);
+-        assert!(core.session_badge_needs_frame_tick());
++        // The dormant modifier fade needs no frames: the chip cannot paint.
++        assert!(!core.session_badge_needs_frame_tick());
+ 
+         core.tick_motion(SESSION_BADGE_FADE_SECS);
+         assert_eq!(core.badge_modifiers, None);
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/spring.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/spring.rs
 new file mode 100644
 index 000000000..9711dc976
@@ -4422,6 +5081,366 @@ index 000000000..9711dc976
 +        assert_eq!(channel.velocity, 0.0);
 +    }
 +}
+diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/theme.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/theme.rs
+index d84cb08fa..5e94c2430 100644
+--- a/libs/cua-driver/rust/crates/cursor-overlay/src/theme.rs
++++ b/libs/cua-driver/rust/crates/cursor-overlay/src/theme.rs
+@@ -51,6 +51,101 @@ pub fn session_fill_hex(session_id: &str) -> String {
+     format!("#{r:02X}{g:02X}{b:02X}")
+ }
+ 
++// ── Agent cursor style (stock monochrome + optional session overrides) ───────
++
++/// Stock fill: the near-black arrow body of a normal pointer.
++pub const STOCK_CURSOR_FILL: [u8; 3] = [18, 20, 26];
++/// Stock fill while a button is held (a touch lighter so the press reads).
++pub const STOCK_CURSOR_FILL_PRESSED: [u8; 3] = [44, 47, 56];
++/// Stock rim: the light outline that keeps the arrow readable on dark art.
++pub const STOCK_CURSOR_RIM: [u8; 3] = [255, 255, 255];
++/// Stock shadow color; the paint applies its own alpha.
++pub const STOCK_CURSOR_SHADOW: [u8; 3] = [0, 0, 0];
++
++/// Per-session cursor color channels.
++///
++/// Every channel is optional: `None` means the stock monochrome default, so an
++/// empty style always renders the stock pointer. The driver never derives
++/// colors from the session hash any more; a session-scoped
++/// `set_agent_cursor_style` call (an internal control tool, not part of the
++/// model-facing tool list) is the only way to paint other colors.
++#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
++#[serde(default, deny_unknown_fields)]
++pub struct CursorStyle {
++    /// Arrow body color, `#rrggbb`.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub fill: Option<[u8; 3]>,
++    /// Outline color, `#rrggbb`.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub rim: Option<[u8; 3]>,
++    /// Drop-shadow color, `#rrggbb`.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub shadow: Option<[u8; 3]>,
++}
++
++impl CursorStyle {
++    /// Stock style: every channel falls back to the monochrome defaults.
++    pub fn is_stock(&self) -> bool {
++        self.fill.is_none() && self.rim.is_none() && self.shadow.is_none()
++    }
++
++    pub fn fill_rgb(&self) -> [u8; 3] {
++        self.fill.unwrap_or(STOCK_CURSOR_FILL)
++    }
++
++    pub fn rim_rgb(&self) -> [u8; 3] {
++        self.rim.unwrap_or(STOCK_CURSOR_RIM)
++    }
++
++    pub fn shadow_rgb(&self) -> [u8; 3] {
++        self.shadow.unwrap_or(STOCK_CURSOR_SHADOW)
++    }
++
++    /// Arrow body color with the fill alpha the compact paint uses.
++    pub fn fill_rgba(&self) -> [u8; 4] {
++        let [r, g, b] = self.fill_rgb();
++        [r, g, b, 255]
++    }
++
++    /// Outline color with full alpha for the theme palette replacement.
++    pub fn rim_rgba(&self) -> [u8; 4] {
++        let [r, g, b] = self.rim_rgb();
++        [r, g, b, 255]
++    }
++
++    /// Paint-time arrow color for the current press state.
++    ///
++    /// Stock colors reproduce the authored artwork exactly (including the
++    /// pressed shade); a custom fill lightens by the same delta.
++    pub fn fill_rgb_pressed(&self) -> [u8; 3] {
++        match self.fill {
++            None => STOCK_CURSOR_FILL_PRESSED,
++            Some(fill) => [
++                fill[0].saturating_add(STOCK_CURSOR_FILL_PRESSED[0] - STOCK_CURSOR_FILL[0]),
++                fill[1].saturating_add(STOCK_CURSOR_FILL_PRESSED[1] - STOCK_CURSOR_FILL[1]),
++                fill[2].saturating_add(STOCK_CURSOR_FILL_PRESSED[2] - STOCK_CURSOR_FILL[2]),
++            ],
++        }
++    }
++}
++
++/// Parse one `#rrggbb` style argument. Returns the channel name in the error
++/// so a junk value is rejected honestly instead of silently stock.
++pub fn parse_style_color(channel: &str, value: &str) -> Result<[u8; 3], String> {
++    let Some(hex) = value.strip_prefix('#') else {
++        return Err(format!(
++            "cursor style `{channel}` must be \"#rrggbb\" (e.g. \"#122334\"), got {value:?}"
++        ));
++    };
++    if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
++        return Err(format!(
++            "cursor style `{channel}` must be \"#rrggbb\" (e.g. \"#122334\"), got {value:?}"
++        ));
++    }
++    let byte = |index: usize| u8::from_str_radix(&hex[index..index + 2], 16).expect("hex digit");
++    Ok([byte(0), byte(2), byte(4)])
++}
++
+ fn stable_session_index(id: &str, count: usize) -> usize {
+     let suffix = id
+         .rfind(['-', '_', '.'])
+@@ -276,6 +371,58 @@ mod tests {
+         assert_ne!(session_fill_rgba("agent-2"), DEFAULT_CURSOR_FILL);
+     }
+ 
++    #[test]
++    fn empty_style_is_stock_monochrome() {
++        let style = CursorStyle::default();
++        assert!(style.is_stock());
++        assert_eq!(style.fill_rgb(), STOCK_CURSOR_FILL);
++        assert_eq!(style.fill_rgb_pressed(), STOCK_CURSOR_FILL_PRESSED);
++        assert_eq!(style.rim_rgb(), STOCK_CURSOR_RIM);
++        assert_eq!(style.shadow_rgb(), STOCK_CURSOR_SHADOW);
++        // The stock fill is nothing like any hash-palette session color.
++        assert_ne!(style.fill_rgba()[0..3], DEFAULT_CURSOR_FILL[0..3]);
++    }
++
++    #[test]
++    fn style_hex_parsing_accepts_rrggbb_and_rejects_junk() {
++        assert_eq!(parse_style_color("fill", "#122334"), Ok([0x12, 0x23, 0x34]));
++        assert_eq!(parse_style_color("rim", "#AABBCC"), Ok([0xAA, 0xBB, 0xCC]));
++        for junk in [
++            "122334",
++            "#12345",
++            "#1234567",
++            "#12g334",
++            "",
++            "#",
++            "rgb(1,2,3)",
++            "#1122334",
++            " #112233",
++        ] {
++            assert!(
++                parse_style_color("shadow", junk).is_err(),
++                "{junk:?} must be rejected"
++            );
++        }
++    }
++
++    #[test]
++    fn custom_style_channels_override_independently() {
++        let style = CursorStyle {
++            fill: Some([0xE8, 0x6C, 0x00]),
++            rim: None,
++            shadow: None,
++        };
++        assert_eq!(style.fill_rgb(), [0xE8, 0x6C, 0x00]);
++        assert_eq!(style.rim_rgb(), STOCK_CURSOR_RIM);
++        assert_eq!(style.shadow_rgb(), STOCK_CURSOR_SHADOW);
++        assert!(!style.is_stock());
++        // The pressed shade keeps the same lightening delta.
++        let pressed = style.fill_rgb_pressed();
++        assert_eq!(pressed[0], 0xE8u8.saturating_add(26));
++        assert_eq!(pressed[1], 0x6Cu8.saturating_add(27));
++        assert_eq!(pressed[2], 0x00u8.saturating_add(30));
++    }
++
+     #[test]
+     fn default_cursor_uses_parameterized_fill_white_ink_and_matching_glow() {
+         let mut pixmap = tiny_skia::Pixmap::new(256, 256).unwrap();
+diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/theme_artifact.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/theme_artifact.rs
+index e3b5ae415..46acb2940 100644
+--- a/libs/cua-driver/rust/crates/cursor-overlay/src/theme_artifact.rs
++++ b/libs/cua-driver/rust/crates/cursor-overlay/src/theme_artifact.rs
+@@ -642,17 +642,33 @@ fn append_geometry(builder: &mut PathBuilder, geometry: &CompiledGeometry) {
+     }
+ }
+ 
+-fn resolved_color(mut color: [u8; 4], tint: Option<[u8; 4]>) -> [u8; 4] {
++/// Replaceable palette entries of the embedded default theme.
++///
++/// The checked-in `cua.default` artwork paints in exactly two palette
++/// colors: the Cua blue body fill and pure white ink. A session style maps
++/// the blue to the arrow fill and the white to the rim; everything else is
++/// authored. `Default` (both `None`) leaves the artwork untouched.
++#[derive(Clone, Copy, Debug, Default, PartialEq)]
++pub struct ThemePaletteOverride {
++    pub fill: Option<[u8; 4]>,
++    pub rim: Option<[u8; 4]>,
++}
++
++fn resolved_color(mut color: [u8; 4], overrides: ThemePaletteOverride) -> [u8; 4] {
+     if color[0..3] == crate::theme::DEFAULT_CURSOR_FILL[0..3] {
+-        if let Some(tint) = tint {
+-            color[0..3].copy_from_slice(&tint[0..3]);
++        if let Some(fill) = overrides.fill {
++            color[0..3].copy_from_slice(&fill[0..3]);
++        }
++    } else if color[0..3] == [255, 255, 255] {
++        if let Some(rim) = overrides.rim {
++            color[0..3].copy_from_slice(&rim[0..3]);
+         }
+     }
+     color
+ }
+ 
+-fn vector_paint(color: [u8; 4], opacity: f32, tint: Option<[u8; 4]>) -> Paint<'static> {
+-    let color = resolved_color(color, tint);
++fn vector_paint(color: [u8; 4], opacity: f32, overrides: ThemePaletteOverride) -> Paint<'static> {
++    let color = resolved_color(color, overrides);
+     let alpha = (f32::from(color[3]) / 255.0 * opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+     Paint {
+         shader: tiny_skia::Shader::SolidColor(
+@@ -674,7 +690,7 @@ fn draw_frame(
+     frame: &CompiledFrame,
+     outer_transform: Transform,
+     alpha: f32,
+-    tint: Option<[u8; 4]>,
++    overrides: ThemePaletteOverride,
+ ) {
+     for command in &frame.commands {
+         let mut builder = PathBuilder::new();
+@@ -689,7 +705,7 @@ fn draw_frame(
+         if let Some(fill) = command.fill {
+             target.fill_path(
+                 &path,
+-                &vector_paint(fill, opacity, tint),
++                &vector_paint(fill, opacity, overrides),
+                 FillRule::Winding,
+                 transform,
+                 None,
+@@ -712,7 +728,7 @@ fn draw_frame(
+             };
+             target.stroke_path(
+                 &path,
+-                &vector_paint(stroke.color, opacity, tint),
++                &vector_paint(stroke.color, opacity, overrides),
+                 &stroke_style,
+                 transform,
+                 None,
+@@ -728,12 +744,12 @@ fn draw_layer(
+     reduced_motion: bool,
+     transform: Transform,
+     alpha: f32,
+-    tint: Option<[u8; 4]>,
++    overrides: ThemePaletteOverride,
+ ) {
+     let Some(frame) = animation_frame(animation, elapsed_secs, reduced_motion) else {
+         return;
+     };
+-    draw_frame(target, frame, transform, alpha, tint);
++    draw_frame(target, frame, transform, alpha, overrides);
+ }
+ 
+ #[allow(clippy::too_many_arguments)]
+@@ -761,7 +777,7 @@ pub fn paint_compiled_theme(
+ }
+ 
+ /// Paint a compiled theme, optionally replacing the embedded default's blue
+-/// palette key with a stable per-session fill.
++/// palette key with a stable per-session fill (legacy entry point).
+ ///
+ /// Custom themes pass `None` and retain their authored colors. Only the
+ /// checked-in `cua.default` path passes a tint.
+@@ -776,6 +792,40 @@ pub fn paint_compiled_theme_with_tint(
+     backing_scale: f32,
+     alpha: f32,
+     tint: Option<[u8; 4]>,
++) {
++    paint_compiled_theme_with_style(
++        target,
++        theme,
++        visual,
++        anchor_x,
++        anchor_y,
++        heading,
++        backing_scale,
++        alpha,
++        tint,
++        None,
++    );
++}
++
++/// Paint a compiled theme with an optional palette override.
++///
++/// The default theme paints in exactly two palette colors: the Cua blue body
++/// fill and pure white ink. `fill` replaces the blue, `rim` replaces the
++/// white; both `None` leaves the artwork byte-identical. Session-style
++/// callers pass the stock monochrome values (near-black fill, white rim), so
++/// the default pointer carries no session-derived color at all.
++#[allow(clippy::too_many_arguments)]
++pub fn paint_compiled_theme_with_style(
++    target: &mut tiny_skia::Pixmap,
++    theme: &CompiledTheme,
++    visual: &CursorVisualState,
++    anchor_x: f32,
++    anchor_y: f32,
++    heading: f32,
++    backing_scale: f32,
++    alpha: f32,
++    fill: Option<[u8; 4]>,
++    rim: Option<[u8; 4]>,
+ ) {
+     let scale = crate::theme::DISPLAY_SIZE * backing_scale / crate::theme::CANVAS_SIZE;
+     let (float_dx, float_dy, float_rotation) = if theme.id == crate::DEFAULT_THEME_ID {
+@@ -796,7 +846,7 @@ pub fn paint_compiled_theme_with_tint(
+             reduced,
+             transform,
+             alpha,
+-            tint,
++            ThemePaletteOverride { fill, rim },
+         );
+     }
+ }
+@@ -927,12 +977,48 @@ mod tests {
+     #[test]
+     fn default_tint_preserves_white_and_replaces_blue() {
+         assert_eq!(
+-            resolved_color([94, 192, 232, 255], Some([12, 34, 56, 255])),
++            resolved_color(
++                [94, 192, 232, 255],
++                ThemePaletteOverride {
++                    fill: Some([12, 34, 56, 255]),
++                    rim: None,
++                }
++            ),
+             [12, 34, 56, 255]
+         );
+         assert_eq!(
+-            resolved_color([255, 255, 255, 255], Some([12, 34, 56, 255])),
++            resolved_color(
++                [255, 255, 255, 255],
++                ThemePaletteOverride {
++                    fill: Some([12, 34, 56, 255]),
++                    rim: None,
++                }
++            ),
+             [255, 255, 255, 255]
+         );
+     }
++
++    #[test]
++    fn style_override_replaces_white_ink_with_the_rim() {
++        assert_eq!(
++            resolved_color(
++                [255, 255, 255, 255],
++                ThemePaletteOverride {
++                    fill: None,
++                    rim: Some([0x10, 0x20, 0x30, 255]),
++                }
++            ),
++            [0x10, 0x20, 0x30, 255]
++        );
++        assert_eq!(
++            resolved_color(
++                [94, 192, 232, 255],
++                ThemePaletteOverride {
++                    fill: None,
++                    rim: Some([0x10, 0x20, 0x30, 255]),
++                }
++            ),
++            [94, 192, 232, 255]
++        );
++    }
+ }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
 index 78981e9cc..33fe51793 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
@@ -6720,6 +7739,28 @@ index 5d74dddf5..cf0aac1de 100644
      #[test]
      fn sentinel_default_cursor_does_not_require_frame_ticks() {
          // Regression for idle CPU: a freshly-started serve daemon seeds only the
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/state.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/state.rs
+index 5a7d655b9..77a6f6764 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/state.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/cursor/state.rs
+@@ -15,6 +15,9 @@ pub struct CursorConfig {
+     pub reduced_motion: cursor_overlay::ReducedMotion,
+     /// Whether the overlay is currently visible.
+     pub enabled: bool,
++    /// Session color style. `None` channels are the stock monochrome pointer.
++    #[serde(default)]
++    pub style: cursor_overlay::CursorStyle,
+ }
+ 
+ impl Default for CursorConfig {
+@@ -24,6 +27,7 @@ impl Default for CursorConfig {
+             theme_id: cursor_overlay::DEFAULT_THEME_ID.into(),
+             reduced_motion: cursor_overlay::ReducedMotion::Auto,
+             enabled: true,
++            style: cursor_overlay::CursorStyle::default(),
+         }
+     }
+ }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
 index 371773760..6e976a5cf 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
@@ -10629,6 +11670,133 @@ index af99862ce..6f35a29b5 100644
  
      #[test]
      fn plain_click_requires_selected_readback() {
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/cursor_tools.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/cursor_tools.rs
+index 8023a2055..96bc2fae2 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/cursor_tools.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/cursor_tools.rs
+@@ -150,6 +150,122 @@ impl Tool for SetAgentCursorMotionTool {
+     }
+ }
+ 
++pub struct SetAgentCursorStyleTool {
++    state: Arc<ToolState>,
++}
++
++impl SetAgentCursorStyleTool {
++    pub fn new(state: Arc<ToolState>) -> Self {
++        Self { state }
++    }
++}
++
++static STYLE_DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
++
++/// Internal/control tool: callable by an embedding host over the daemon
++/// socket, deliberately absent from the model-facing `tools/list` (see
++/// `cua_driver_core::tool::is_internal_control_tool`). The contract is not
++/// part of the public SDK manifest, so it cannot drift into a model prompt.
++fn style_def() -> &'static ToolDef {
++    STYLE_DEF.get_or_init(|| ToolDef {
++        name: "set_agent_cursor_style".into(),
++        description: "Set the session cursor's color channels (fill, rim, shadow). \
++                      Omitted channels keep the stock monochrome pointer (near-black fill, \
++                      light rim, soft black shadow). Hex \"#rrggbb\" only; invalid values are \
++                      rejected. Session-scoped exactly like set_agent_cursor_motion."
++            .into(),
++        input_schema: serde_json::json!({
++            "type": "object",
++            "properties": {
++                "session": {
++                    "type": "string",
++                    "description": "Session label whose cursor is restyled; omit to use the caller's implicit session."
++                },
++                "fill": {
++                    "type": "string",
++                    "description": "Arrow body color, \"#rrggbb\". Omit for the stock near-black."
++                },
++                "rim": {
++                    "type": "string",
++                    "description": "Outline color, \"#rrggbb\". Omit for the stock light rim."
++                },
++                "shadow": {
++                    "type": "string",
++                    "description": "Drop-shadow color, \"#rrggbb\". Omit for the stock black."
++                }
++            },
++            "additionalProperties": false
++        }),
++        read_only: false,
++        destructive: false,
++        idempotent: true,
++        open_world: false,
++    })
++}
++
++fn parse_style_arg(args: &Value, channel: &str) -> Result<Option<[u8; 3]>, String> {
++    match args.get(channel) {
++        None | Some(Value::Null) => Ok(None),
++        Some(Value::String(value)) => cursor_overlay::parse_style_color(channel, value).map(Some),
++        Some(other) => Err(format!(
++            "cursor style `{channel}` must be a \"#rrggbb\" string, got {other}"
++        )),
++    }
++}
++
++#[async_trait]
++impl Tool for SetAgentCursorStyleTool {
++    fn def(&self) -> &ToolDef {
++        style_def()
++    }
++
++    async fn invoke(&self, args: Value) -> ToolResult {
++        if !self.state.cursor_overlay_available {
++            return super::cursor_overlay_unavailable();
++        }
++        let session = resolve_cursor_key(&args);
++        let mut style = cursor_overlay::CursorStyle::default();
++        for (channel, slot) in [
++            ("fill", &mut style.fill),
++            ("rim", &mut style.rim),
++            ("shadow", &mut style.shadow),
++        ] {
++            match parse_style_arg(&args, channel) {
++                Ok(value) => *slot = value,
++                Err(error) => return ToolResult::error(error),
++            }
++        }
++        let mut state = self.state.cursor_registry.get_or_create(&session);
++        state.config.style = style;
++        self.state.cursor_registry.update_config(state.config);
++        crate::cursor::overlay::send_command(
++            session.clone(),
++            cursor_overlay::OverlayCommand::SetStyle(style),
++        );
++        ToolResult::text(format!(
++            "Agent cursor style for session '{session}' updated{}.",
++            if style.is_stock() {
++                " (stock monochrome)"
++            } else {
++                ""
++            }
++        ))
++        .with_structured(serde_json::json!({
++            "session": session,
++            "style": {
++                "stock": style.is_stock(),
++                "fill": style.fill.map(hex_string),
++                "rim": style.rim.map(hex_string),
++                "shadow": style.shadow.map(hex_string)
++            }
++        }))
++    }
++}
++
++fn hex_string(rgb: [u8; 3]) -> String {
++    format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
++}
++
+ pub struct SetAgentCursorThemeTool {
+     state: Arc<ToolState>,
+ }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
 index f5eb9d039..94e61799a 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/drag.rs
@@ -10831,6 +11999,39 @@ index 90786072c..13cc3eaca 100644
      fn node(
          idx: Option<usize>,
          role: &str,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/invoke_menu.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/invoke_menu.rs
+index ff2f7d450..d2234b253 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/invoke_menu.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/invoke_menu.rs
+@@ -306,11 +306,23 @@ fn focus_ax_window_with_thread_affinity(pid: i32, window_id: u32) -> Result<(),
+ 
+ fn focus_exact_window(pid: i32, window_id: u32) -> Result<(), String> {
+     let native_key_requested = crate::input::skylight::make_exact_window_key(pid, window_id);
+-    if !native_key_requested
+-        && crate::apps::frontmost_pid() != Some(pid)
+-        && !crate::apps::activate_pid(pid)
+-    {
+-        return Err("invoke_menu: target application could not be activated".into());
++    if !native_key_requested {
++        // No raising fallback: the Cocoa `activate_pid` path would bring the
++        // whole target app forward (visible z-order churn) for what is meant
++        // to be a background-capable action. When the target app is already
++        // frontmost no activation is needed at all; otherwise use the
++        // yabai-style focus-without-raise recipe, which makes the exact window
++        // key without raising it, and refuse honestly when even that is
++        // unavailable instead of silently raising the app.
++        let frontmost = crate::apps::frontmost_pid();
++        if frontmost != Some(pid) && !crate::input::skylight::activate_without_raise(pid, window_id)
++        {
++            return Err(
++                "invoke_menu: this macOS build exposes no non-raising activation route for the \
++                 target window; refusing instead of raising it"
++                    .into(),
++            );
++        }
+     }
+     if !native_key_requested {
+         std::thread::sleep(Duration::from_millis(120));
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
 index 6085da994..22db22e6d 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
@@ -10914,7 +12115,7 @@ index 6085da994..22db22e6d 100644
                  });
                  // Only emit `self_activation_suppressed` when the
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
-index 5b2ce9ed5..a35497ea8 100644
+index 5b2ce9ed5..e7247a89a 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
 @@ -15,14 +15,19 @@ mod list_windows;
@@ -11094,6 +12295,18 @@ index 5b2ce9ed5..a35497ea8 100644
      registry.register(Box::new(get_screen_size::GetScreenSizeTool));
      registry.register(Box::new(get_desktop_state::GetDesktopStateTool));
      registry.register(Box::new(get_cursor_position::GetCursorPositionTool));
+@@ -991,6 +1100,11 @@ pub fn register_all(
+     registry.register(Box::new(cursor_tools::SetAgentCursorMotionTool::new(
+         state.clone(),
+     )));
++    // Internal/control cursor-style surface: callable by the embedding host
++    // over the daemon socket, never listed in the model-facing tools/list.
++    registry.register(Box::new(cursor_tools::SetAgentCursorStyleTool::new(
++        state.clone(),
++    )));
+     registry.register(Box::new(cursor_tools::SetAgentCursorThemeTool::new(
+         state.clone(),
+     )));
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
 index 393f17c3a..00c21f9c2 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
@@ -11801,7 +13014,7 @@ index 000000000..a8766a50a
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs
 new file mode 100644
-index 000000000..e1b38ad68
+index 000000000..afed308b6
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs
 @@ -0,0 +1,184 @@
@@ -11898,8 +13111,8 @@ index 000000000..e1b38ad68
 +                let mut observed = None;
 +                for _ in 0..30 {
 +                    std::thread::sleep(std::time::Duration::from_millis(50));
-+                    let state = copy_bool_attr(app_element, "AXHidden")
-+                        .unwrap_or_else(|| app.isHidden());
++                    let state =
++                        copy_bool_attr(app_element, "AXHidden").unwrap_or_else(|| app.isHidden());
 +                    observed = Some(state);
 +                    if state == hidden {
 +                        break;
