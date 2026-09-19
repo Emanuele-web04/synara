@@ -48,6 +48,7 @@ import {
   type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
   type ComputerFrameListener,
+  type ComputerMenuBackendTarget,
   type ComputerShieldTarget,
   type ComputerResolvedTarget,
   type ComputerTextRange,
@@ -1940,7 +1941,7 @@ export class CuaComputerBackend implements ComputerBackend {
     };
   }
   async invokeMenu(
-    windowId: string,
+    target: ComputerMenuBackendTarget,
     path: readonly string[],
   ): Promise<ComputerBackendActionResult> {
     // Fail closed rather than truncate: a sliced path can resolve to a
@@ -1951,8 +1952,30 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "invalid_arguments",
       );
-    const { pid, window_id, window } = await this.target(windowId);
-    const result = await this.call("invoke_menu", { pid, window_id, path: [...path] }, true);
+    // Two routes, one driver tool. `windowId` keeps the exact-window
+    // semantics; the windowless form resolves the application-level
+    // AXMenuBar of the named pid without targeting, focusing, or raising
+    // any window, so its result carries no window id — nothing else may
+    // fabricate one.
+    let result: CuaToolResult;
+    let windowId: string | undefined;
+    if ("windowId" in target) {
+      const resolved = await this.target(target.windowId);
+      windowId = resolved.window.id;
+      result = await this.call(
+        "invoke_menu",
+        { pid: resolved.pid, window_id: resolved.window_id, path: [...path] },
+        true,
+      );
+    } else {
+      if (!Number.isSafeInteger(target.pid) || target.pid <= 0)
+        throw new CuaActionError(
+          "invoke_menu needs a positive integer pid for the windowless form.",
+          "not-dispatched",
+          "invalid_arguments",
+        );
+      result = await this.call("invoke_menu", { pid: target.pid, path: [...path] }, true);
+    }
     const data = result.structuredContent ?? {};
     const confirmed = data.effect === "confirmed";
     // A menu command can open or close windows (a Save dialog, a Quit): the
@@ -1960,7 +1983,7 @@ export class CuaComputerBackend implements ComputerBackend {
     this.clearCachedImage();
     this.snapshotAt = 0;
     return {
-      windowId: window.id,
+      ...(windowId !== undefined ? { windowId } : {}),
       deliveryPath: `cua-${text(data.route, 64) || "menu"}-${text(record(data.delivery).mode, 32) || "background"}`,
       verified: confirmed
         ? "confirmed"

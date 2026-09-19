@@ -17,7 +17,7 @@ import {
   type ComputerRecordingEnvironment,
   type ComputerRecordingStep,
 } from "./computerRecording.ts";
-import { ComputerBackendError } from "./ComputerBackend.ts";
+import { ComputerBackendError, type ComputerMenuTarget } from "./ComputerBackend.ts";
 import type { ComputerForegroundAuthorization } from "./computerVisibleUse.ts";
 
 /**
@@ -263,7 +263,7 @@ export interface ComputerReplayManager {
   ): Promise<unknown>;
   invokeMenu(
     threadId: string | undefined,
-    windowId: string,
+    target: ComputerMenuTarget,
     path: readonly string[],
   ): Promise<unknown>;
   killApp(threadId: string | undefined, windowId: string): Promise<unknown>;
@@ -389,6 +389,7 @@ type ReplayTargetKind =
   | "keyboard"
   | "app"
   | "process"
+  | "menu"
   | "none";
 
 interface ReplayCall {
@@ -563,13 +564,24 @@ const REPLAY_PLANS: Record<string, ReplayStepPlan> = {
   },
   computer_invoke_menu: {
     mutating: true,
-    target: "window",
-    run: (call) =>
-      call.manager.invokeMenu(
-        call.threadId,
-        call.windowId!,
-        argStringArray(call.args, "path") ?? [],
-      ),
+    target: "menu",
+    run: (call) => {
+      const path = argStringArray(call.args, "path") ?? [];
+      // A recorded window anchor keeps the exact-window route; a windowless
+      // recording re-issues against the live process it named — never a
+      // fabricated window, and never a different app spelling.
+      if (call.windowId !== undefined) {
+        return call.manager.invokeMenu(call.threadId, { windowId: call.windowId }, path);
+      }
+      if (call.pid !== undefined) {
+        return call.manager.invokeMenu(call.threadId, { pid: call.pid }, path);
+      }
+      const app = argString(call.args, "app") ?? call.step.declaredTarget?.app;
+      if (app !== undefined) return call.manager.invokeMenu(call.threadId, { app }, path);
+      throw new ComputerBackendError(
+        "The recorded menu step named no window, app, or pid to re-issue.",
+      );
+    },
   },
   computer_kill_app: {
     mutating: true,
@@ -760,6 +772,56 @@ function resolveStepTarget(
           ...(app !== undefined ? { app } : {}),
         }
       : { via: "process", status: "remapped", detail: "app-remap", app: remapped.name };
+  }
+
+  if (kind === "menu") {
+    // A window-anchored recording keeps the exact-window route. One that
+    // recorded no window stays windowless: it re-issues from the live
+    // process it named and is never remapped onto some window of the app —
+    // that would silently change an application-level menu call into a
+    // focus-sensitive one. A dead process is `unresolved`.
+    if (declaredWindowId !== undefined) {
+      const { window, remapped, app } = windowFor(declaredWindowId);
+      if (window === undefined) {
+        return {
+          via: "window",
+          status: "unresolved",
+          detail: "window-gone",
+          ...(app !== undefined ? { app } : {}),
+        };
+      }
+      return {
+        via: "window",
+        status: remapped ? "remapped" : "resolved",
+        ...(remapped ? { detail: "app-remap" } : {}),
+        windowId: window.id,
+        app: window.appName ?? app,
+      };
+    }
+    const app = resolution?.app ?? declared?.app;
+    const pid = declared?.pid ?? resolution?.pid;
+    if (
+      pid !== undefined &&
+      fresh.apps.some((candidate) => candidate.pid === pid && candidate.running)
+    ) {
+      return { via: "process", status: "resolved", ...(app !== undefined ? { app } : {}) };
+    }
+    const remappedApp =
+      app === undefined
+        ? undefined
+        : fresh.apps.find(
+            (candidate) =>
+              candidate.running && candidate.name.toLowerCase() === app.toLowerCase(),
+          );
+    if (remappedApp !== undefined) {
+      return { via: "process", status: "remapped", detail: "app-remap", app: remappedApp.name };
+    }
+    return {
+      via: "process",
+      status: "unresolved",
+      detail: pid !== undefined || app !== undefined ? "process-gone" : "no-target",
+      ...(app !== undefined ? { app } : {}),
+    };
   }
 
   if (semantic || kind === "semantic") {

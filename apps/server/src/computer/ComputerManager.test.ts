@@ -1400,6 +1400,71 @@ describe("ComputerManager and FakeComputerBackend", () => {
     }
   });
 
+  it("invokes a windowless menu target on the app name's live pid", async () => {
+    const backend = new FakeComputerBackend({
+      apps: [
+        { pid: 6_001, name: "Helium", bundleId: "net.imput.helium", running: true, active: false },
+        { pid: 1_001, name: "Terminal", bundleId: "org.kde.konsole", running: true, active: true },
+      ],
+    });
+    const manager = new ComputerManager({ backend });
+    try {
+      const result = await manager.invokeMenu("thread-1", { app: "Helium" }, ["File", "New Window"]);
+      expect(backend.callsFor("invokeMenu").at(-1)?.args).toEqual([
+        { pid: 6_001 },
+        ["File", "New Window"],
+      ]);
+      // No window took part, so the result names no window.
+      expect(result.windowId).toBeUndefined();
+      // An unknown spelling refuses with the list_apps pointer rather than
+      // guessing a process.
+      await expect(
+        manager.invokeMenu("thread-1", { app: "Ghost" }, ["File"]),
+      ).rejects.toMatchObject({ code: "computer_target_not_found", notFound: true });
+      expect(backend.callsFor("invokeMenu")).toHaveLength(1);
+      // The pid form rides through to the backend, which refuses a pid that
+      // is not running — the same split set_app_visibility makes. Consent
+      // for the pid key is the pre-queue admission's job, exactly as there.
+      await manager.admitDrivenApp("thread-1", "pid 9999", {
+        signal: new AbortController().signal,
+      });
+      await expect(
+        manager.invokeMenu("thread-1", { pid: 9_999 }, ["File"]),
+      ).rejects.toThrow(/No running application has pid 9999/);
+    } finally {
+      computerApprovalGate.cancelThread("thread-1");
+      await manager.dispose();
+    }
+  });
+
+  it("says plainly when an unhide ran on an app with no windows", async () => {
+    const backend = new FakeComputerBackend({
+      apps: [
+        { pid: 6_001, name: "Helium", bundleId: "net.imput.helium", running: true, active: false },
+        { pid: 1_001, name: "Terminal", bundleId: "org.kde.konsole", running: true, active: true },
+        { pid: 1_002, name: "Calculator", bundleId: "org.kde.kcalc", running: true, active: false },
+      ],
+    });
+    const manager = new ComputerManager({ backend });
+    try {
+      // The listing the manager remembers holds windows, none for Helium.
+      await manager.listWindows();
+      const shown = await manager.setAppVisibility(undefined, 6_001, false);
+      expect(shown.delivery?.verified).toBe("confirmed");
+      expect(shown.note).toEqual(expect.stringContaining("no window"));
+      expect(shown.note).toContain("computer_invoke_menu");
+      expect(shown.note).toContain("computer_browser_prepare");
+      // Hiding is not an unhide: no note, even with no window.
+      const hidden = await manager.setAppVisibility(undefined, 6_001, true);
+      expect(hidden.note).toBeUndefined();
+      // An app whose window the listing holds earns no note either.
+      const withWindow = await manager.setAppVisibility(undefined, 1_002, false);
+      expect(withWindow.note).toBeUndefined();
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("launches hidden by default and only shows the app on explicit hidden:false", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });

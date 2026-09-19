@@ -36,6 +36,7 @@ import {
   type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
   type ComputerFrameListener,
+  type ComputerMenuBackendTarget,
   type ComputerResolvedTarget,
   type ComputerShieldTarget,
   type ComputerStreamFrame,
@@ -460,13 +461,19 @@ export class FakeComputerBackend implements ComputerBackend {
   }
 
   async invokeMenu(
-    windowId: string,
+    target: ComputerMenuBackendTarget,
     path: readonly string[],
   ): Promise<ComputerBackendActionResult> {
-    this.record("invokeMenu", windowId, path);
+    this.record("invokeMenu", target, path);
     this.throwIfFailed("invokeMenu");
-    if (!this.currentWindows.some((window) => window.id === windowId)) {
-      throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(windowId)}.`);
+    if ("windowId" in target) {
+      if (!this.currentWindows.some((window) => window.id === target.windowId)) {
+        throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(target.windowId)}.`);
+      }
+    } else if (!this.currentApps.some((app) => app.pid === target.pid && app.running)) {
+      // The windowless form proves the process, not a window — the same
+      // refusal the real driver raises for a pid that is not running.
+      throw new ComputerBackendError(`No running application has pid ${target.pid}.`);
     }
     if (path.length === 0 || path.some((segment) => segment.trim().length === 0)) {
       throw new ComputerBackendError("A menu path needs at least one non-empty title.");
@@ -474,7 +481,7 @@ export class FakeComputerBackend implements ComputerBackend {
     const refusal = this.refusedMenuPaths.get(path.join(""));
     if (refusal) throw refusal;
     return {
-      windowId,
+      ...("windowId" in target ? { windowId: target.windowId } : {}),
       deliveryPath: "fake-menu",
       verified: "confirmed",
       effect: "verified",

@@ -126,6 +126,32 @@ export interface ComputerTextRange {
   readonly length: number;
 }
 
+/**
+ * How a menu invocation names its target.
+ *
+ * `windowId` keeps the exact-window semantics: one window of the owning app
+ * is validated, the focus-sensitive menu state is made ready without raising
+ * the app, and the prior key window is restored afterwards. `app`/`pid`
+ * select the application-level menu bar — no window is resolved, focused, or
+ * raised, which is the only menu route for a running app that has none. The
+ * forms are mutually exclusive: a caller names exactly one, and mixing them
+ * is refused rather than guessed at.
+ */
+export type ComputerMenuTarget =
+  | { readonly windowId: string }
+  | { readonly app: string }
+  | { readonly pid: number };
+
+/**
+ * What a backend receives: the window form, or the process form the caller
+ * (or the manager's app resolution) already settled on. An app name is
+ * resolved to a live pid before dispatch, so a backend never has to guess
+ * which process a name meant.
+ */
+export type ComputerMenuBackendTarget =
+  | { readonly windowId: string }
+  | { readonly pid: number };
+
 export interface ComputerBackendActionResult {
   readonly point?: ComputerPoint;
   /**
@@ -548,12 +574,16 @@ export interface ComputerBackend {
     frame: ComputerRect,
   ): Promise<ComputerBackendActionResult | void>;
   /**
-   * Invoke a menu-bar path on the exact window's owning app — `["File",
-   * "Save"]`. The driver walks the AX menu hierarchy itself; disabled or absent
-   * items refuse rather than fall through to another actuator.
+   * Invoke a menu-bar path — `["File", "Save"]`. A `windowId` target walks
+   * the exact window's owning app; a `pid` target resolves from the
+   * application-level `AXMenuBar` of that process without targeting,
+   * focusing, or raising any window — the route for an app that has none.
+   * The driver refuses disabled or absent items rather than falling through
+   * to another actuator, and a non-macOS build refuses the pid form honestly
+   * instead of approximating it.
    */
   invokeMenu?(
-    windowId: string,
+    target: ComputerMenuBackendTarget,
     path: readonly string[],
   ): Promise<ComputerBackendActionResult | void>;
   /**

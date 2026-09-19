@@ -185,6 +185,59 @@ describe("classifyComputerReplay", () => {
     await manager.dispose();
   });
 
+  it("execute re-issues a windowless menu step onto the live process", async () => {
+    const backend = new FakeComputerBackend({
+      apps: [
+        { pid: 6_001, name: "Helium", bundleId: "net.imput.helium", running: true, active: false },
+        { pid: 1_001, name: "Terminal", bundleId: "org.test.terminal", running: true, active: true },
+      ],
+    });
+    const { manager, run } = await replayWith(backend);
+    const doc = document([
+      step({
+        tool: "computer_invoke_menu",
+        actionClass: "lifecycle",
+        args: { app: "Helium", path: ["File", "New Window"] },
+        declaredTarget: { app: "Helium" },
+        resolutions: [{ via: "process", pid: 6_001, app: "Helium" }],
+      }),
+    ]);
+    const report = await run(doc, { execute: true });
+    expect(report.steps[0]?.verdict).toBe("ready");
+    expect(report.steps[0]?.target).toMatchObject({ via: "process", status: "resolved" });
+    // The windowless route stays windowless: the dispatch carries the live
+    // pid and no window id at all.
+    expect(backend.callsFor("invokeMenu").at(-1)?.args).toEqual([
+      { pid: 6_001 },
+      ["File", "New Window"],
+    ]);
+    expect(report.steps[0]?.dispatch).toMatchObject({ ok: true });
+    await manager.dispose();
+  });
+
+  it("blocks a windowless menu step whose process is gone", async () => {
+    const backend = new FakeComputerBackend({
+      apps: [
+        { pid: 1_001, name: "Terminal", bundleId: "org.test.terminal", running: true, active: true },
+      ],
+    });
+    const { manager, run } = await replayWith(backend);
+    const doc = document([
+      step({
+        tool: "computer_invoke_menu",
+        actionClass: "lifecycle",
+        args: { app: "Helium", path: ["File"] },
+        declaredTarget: { app: "Helium" },
+        resolutions: [{ via: "process", pid: 6_001, app: "Helium" }],
+      }),
+    ]);
+    const report = await run(doc, { execute: true });
+    expect(report.steps[0]?.verdict).toBe("blocked");
+    expect(report.steps[0]?.reason).toBe("process-gone");
+    expect(backend.callsFor("invokeMenu")).toHaveLength(0);
+    await manager.dispose();
+  });
+
   it("execute remaps a point through the window's fresh bounds, never the pixels", async () => {
     const backend = new FakeComputerBackend({ windows: windows() });
     const { manager, run } = await replayWith(backend);

@@ -1842,7 +1842,9 @@ describe("Cua native boundary", () => {
         delivery: { mode: "foreground" },
       },
     }));
-    await expect(f.backend.invokeMenu!("cua:10:20", ["File", "Save"])).resolves.toMatchObject({
+    await expect(
+      f.backend.invokeMenu!({ windowId: "cua:10:20" }, ["File", "Save"]),
+    ).resolves.toMatchObject({
       windowId: "cua:10:20",
       verified: "unverifiable",
       effect: "dispatched-unknown",
@@ -1863,9 +1865,38 @@ describe("Cua native boundary", () => {
       },
       content: [{ type: "text", text: "The menu item is disabled." }],
     }));
-    await expect(f.backend.invokeMenu!("cua:10:20", ["Edit", "Undo"])).rejects.toMatchObject({
+    await expect(
+      f.backend.invokeMenu!({ windowId: "cua:10:20" }, ["Edit", "Undo"]),
+    ).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "menu_path_unavailable",
+    });
+  });
+  it("invokes the application-level menu on a windowless app with no window id", async () => {
+    const f = fixture();
+    f.onTool("invoke_menu", () => ({
+      structuredContent: {
+        effect: "confirmed",
+        route: "ax_menu_bar",
+        delivery: { mode: "background" },
+      },
+    }));
+    await expect(
+      f.backend.invokeMenu!({ pid: 44 }, ["File", "New Window"]),
+    ).resolves.toMatchObject({
+      verified: "confirmed",
+      effect: "verified",
+    });
+    const call = f.calls.find((entry) => entry.name === "invoke_menu");
+    // The driver's windowless contract: pid and path, and no window_id to
+    // misread as an exact-window request.
+    expect(call?.args).toEqual({ pid: 44, path: ["File", "New Window"] });
+    // No window took part, so the result must not fabricate one.
+    const result = await f.backend.invokeMenu!({ pid: 44 }, ["File", "New Window"]);
+    expect(result).not.toHaveProperty("windowId");
+    // The pid form fails closed on a malformed pid before any dispatch.
+    await expect(f.backend.invokeMenu!({ pid: 0 }, ["File"])).rejects.toMatchObject({
+      code: "invalid_arguments",
     });
   });
   it("verifies window state from the driver's per-predicate outcome", async () => {

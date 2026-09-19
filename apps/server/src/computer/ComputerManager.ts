@@ -69,6 +69,7 @@ import {
   type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
   type ComputerStreamFrame,
+  type ComputerMenuTarget,
   type ComputerResolvedTarget,
   type ComputerTextRange,
 } from "./ComputerBackend.ts";
@@ -2523,18 +2524,97 @@ export class ComputerManager {
     });
   }
 
+  /**
+   * Invoke a menu-bar path on the app the target names: one exact window
+   * (validated against a fresh listing, with the owning app's consent and
+   * denylist gates exactly as before), or the application-level menu bar of
+   * a running app/pid — no window is resolved, focused, or raised, which is
+   * the only route for an app that has no windows. An app name resolves to a
+   * live pid through the same process list the visibility tool consults; an
+   * unresolvable name refuses with the list_apps pointer. A named pid rides
+   * through, and the driver's own refusal names an unknown process.
+   */
   async invokeMenu(
     threadId: string | undefined,
-    windowId: string,
+    target: ComputerMenuTarget,
     path: readonly string[],
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
       const invoke = this.backend.invokeMenu?.bind(this.backend);
       if (!invoke) throw new ComputerBackendError("This backend cannot invoke menu items.");
-      await this.resolveWindowTarget(threadId, windowId);
-      const result = await timedComputerLeg("dispatch", () => invoke(windowId, path));
-      return this.actionResult(threadId, "computer_invoke_menu", undefined, result, windowId);
+      if ("windowId" in target) {
+        await this.resolveWindowTarget(threadId, target.windowId);
+        const result = await timedComputerLeg("dispatch", () =>
+          invoke({ windowId: target.windowId }, path),
+        );
+        return this.actionResult(
+          threadId,
+          "computer_invoke_menu",
+          undefined,
+          result,
+          target.windowId,
+        );
+      }
+      // Application-level: consent and denylist key on the app this target
+      // provably names, the same split set_app_visibility makes. An app
+      // spelling is its own consent key because that is the key the
+      // pre-queue admission used; the inventory's capitalization must not
+      // turn an admitted app into a second-app refusal.
+      const resolved = await timedComputerLeg("resolve", () => this.resolveMenuAppTarget(target));
+      const consentKey = "app" in target ? target.app : (resolved.name ?? `pid ${target.pid}`);
+      this.assertDrivenAppAdmitted(threadId, consentKey);
+      this.noteResolution({
+        via: "process",
+        pid: resolved.pid,
+        ...(resolved.name !== undefined ? { app: resolved.name } : {}),
+      });
+      if (agentThreadId(threadId) !== undefined) {
+        const denied = await this.deniedMatchForPid(resolved.pid, resolved.name);
+        if (denied) throw new ComputerDenylistError(denied.app, denied.matched);
+      }
+      const result = await timedComputerLeg("dispatch", () => invoke({ pid: resolved.pid }, path));
+      return this.actionResult(threadId, "computer_invoke_menu", undefined, result);
     });
+  }
+
+  /**
+   * The live process an application-level menu target names. An `app` is
+   * resolved through the same running-app inventory the consent path
+   * consults — exact name or bundle id, case-insensitive — and refuses when
+   * nothing matches; a `pid` is passed through with whatever name the
+   * inventory has for it, because an unknown pid is the driver's refusal to
+   * make, matching set_app_visibility.
+   */
+  private async resolveMenuAppTarget(
+    target: Exclude<ComputerMenuTarget, { readonly windowId: string }>,
+  ): Promise<{ readonly pid: number; readonly name?: string }> {
+    const listApps = this.backend.listApps?.bind(this.backend);
+    if (listApps === undefined) {
+      throw new ComputerBackendError(
+        "This backend cannot enumerate applications, so a menu target has to name an exact window.",
+      );
+    }
+    if ("pid" in target) {
+      // The tool layer already refuses a malformed pid; this is the direct
+      // caller's backstop, matching setAppVisibility's own validation gap.
+      if (!Number.isSafeInteger(target.pid) || target.pid <= 0) {
+        throw new ComputerTargetError({
+          code: "computer_target_invalid",
+          message: `"pid" must be a positive integer; got ${JSON.stringify(target.pid)}.`,
+        });
+      }
+      const owner = (await listApps()).find((app) => app.pid === target.pid && app.running);
+      return { pid: target.pid, ...(owner !== undefined ? { name: owner.name } : {}) };
+    }
+    const spelling = target.app.trim();
+    const owner = (await listApps()).find(
+      (app) =>
+        app.running &&
+        (app.name.trim().toLowerCase() === spelling.toLowerCase() ||
+          (app.bundleId !== undefined && app.bundleId.toLowerCase() === spelling.toLowerCase())),
+    );
+    if (owner === undefined) throw menuAppNotFoundError(spelling);
+    return { pid: owner.pid, name: owner.name };
   }
 
   /**
@@ -2575,7 +2655,7 @@ export class ComputerManager {
     threadId: string | undefined,
     pid: number,
     hidden: boolean,
-  ): Promise<ComputerActionResult> {
+  ): Promise<ComputerActionResult & { readonly note?: string }> {
     return this.withDesktopControl(threadId, async () => {
       const setter = this.backend.setAppVisibility?.bind(this.backend);
       if (!setter)
@@ -2597,7 +2677,23 @@ export class ComputerManager {
         if (denied) throw new ComputerDenylistError(denied.app, denied.matched);
       }
       const result = await timedComputerLeg("dispatch", () => setter(pid, hidden));
-      return this.actionResult(threadId, "computer_set_app_visibility", undefined, result);
+      const base = this.actionResult(threadId, "computer_set_app_visibility", undefined, result);
+      // An unhide on an app with no windows shows nothing, and a bare
+      // "confirmed" would read as "there it is". The last window listing —
+      // maintained by every readWindows and by the backend's
+      // windows-changed events — is the cheap evidence: when one exists and
+      // holds no window for this pid, say so with the ways forward instead
+      // of leaving the model to stare at an unchanged screen. No new read is
+      // taken here; an absent listing is not evidence, so it earns no note.
+      if (hidden || this.lastKnownWindowIds === undefined) return base;
+      if ([...this.lastKnownWindows.values()].some((window) => window.pid === pid)) return base;
+      return {
+        ...base,
+        note:
+          "This app has no window in the last desktop listing, so the unhide had nothing to show. " +
+          'Create a window with the app-level computer_invoke_menu (name the app or pid, e.g. ' +
+          '["File", "New Window"]), or drive the app through computer_browser_prepare with allow_launch.',
+      };
     });
   }
 
@@ -5527,6 +5623,21 @@ function windowNotFoundError(windowId: string): ComputerTargetError {
     message:
       `No desktop window has id ${JSON.stringify(windowId)}. ` +
       "Call computer_list_windows for the current window ids.",
+    notFound: true,
+  });
+}
+
+/**
+ * Refusal for an app-named menu target the running inventory does not know.
+ * The name may be a bundle id or a display name, so the message names both
+ * spellings the caller can check against computer_list_apps.
+ */
+function menuAppNotFoundError(app: string): ComputerTargetError {
+  return new ComputerTargetError({
+    code: "computer_target_not_found",
+    message:
+      `No running application matches ${JSON.stringify(app)}. ` +
+      "Call computer_list_apps for the running apps and their pids, then name one by app or pid.",
     notFound: true,
   });
 }
