@@ -412,23 +412,198 @@ index cfd35d264..5e16b8319 100644
      /// the routed pointer refuse rather than restoring the window.
      #[test]
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs
-index bf0912f4b..e21487501 100644
+index bf0912f4b..429098fcb 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs
-@@ -286,6 +286,13 @@ pub trait BrowserPlatform: Send + Sync {
+@@ -258,6 +258,25 @@ pub struct PrepareSideEffects {
+     pub injected_global_input: bool,
+ }
+ 
++/// Trusted CDP input on a standalone browser cannot preserve background
++/// posture: [`BrowserPlatform::standalone_trusted_input_background_limitation`]
++/// reports that the dispatch raises the standalone window. A bound record
++/// proves standalone-ness through its CDP window id — the pre-existing
++/// proof — or through its endpoint access class, which also covers standalone
++/// browsers bound without a Browser-domain window id: a tiling compositor or
++/// an endpoint that omits `Browser.getWindowForTarget` still owns a native
++/// window the dispatch would raise. Embedded Chromium endpoints keep the
++/// exact pre-existing cdp_window_id behavior.
++pub(crate) fn standalone_trusted_input_limitation(
++    record: &super::store::TargetRecord,
++    platform_limitation: Option<&'static str>,
++) -> Option<&'static str> {
++    let limitation = platform_limitation?;
++    let standalone = record.cdp_window_id.is_some()
++        || record.endpoint_access_class != super::types::EndpointAccessClass::EmbeddedApplication;
++    standalone.then_some(limitation)
++}
++
+ /// OS-identity services a platform crate provides to the browser-tool
+ /// core. All methods are point-in-time queries; core re-invokes them
+ /// for revalidation before every mutation rather than caching.
+@@ -286,6 +305,16 @@ pub trait BrowserPlatform: Send + Sync {
          None
      }
  
 +    /// Keep a freshly spawned driver-owned browser out of the user's
-+    /// foreground. Chromium activates its first window even for an isolated
-+    /// launch; platforms where that activation can be withdrawn implement a
-+    /// bounded conceal. The default is a no-op. This is visual posture only —
-+    /// it must never touch the process, its profile, or any input contract.
++    /// foreground for the whole life of that process. Chromium activates its
++    /// first window even for an isolated launch and can re-show or
++    /// re-activate later; platforms where that activation can be withdrawn
++    /// implement a persistent conceal that re-hides on activation, on window
++    /// creation, and after actions until the process exits. The default is a
++    /// no-op. This is visual posture only — it must never touch the process,
++    /// its profile, or any input contract.
 +    fn conceal_spawned_browser(&self, _pid: i64) {}
 +
      /// Best-effort, visual-only feedback for an authorized browser action.
      /// The default is a no-op so platforms without an agent-cursor overlay do
      /// not change behavior. Implementations must not deliver input or alter
+@@ -483,4 +512,81 @@ mod tests {
+             super::super::refusal::BrowserRefusalCode::BrowserRouteUnavailable
+         );
+     }
++
++    fn standalone_record(
++        access_class: super::super::types::EndpointAccessClass,
++        cdp_window_id: Option<i64>,
++    ) -> super::super::store::TargetRecord {
++        super::super::store::TargetRecord {
++            target_id: String::new(),
++            pid: 42,
++            window_id: 7,
++            ws_url: "ws://127.0.0.1:9222/devtools/browser/x".into(),
++            endpoint_owner_pid: 42,
++            endpoint_transport: super::super::types::EndpointTransport::LegacyJsonVersion,
++            endpoint_access_class: access_class,
++            generation: 0,
++            transport_session: None,
++            fingerprint: super::super::types::ProcessFingerprint {
++                pid: 42,
++                start_time: Some(1),
++                executable: None,
++            },
++            native_title: "Docs - Chrome".into(),
++            native_bounds: super::super::types::Rect::new(0.0, 0.0, 800.0, 600.0),
++            cdp_target_id: "CDP1".into(),
++            cdp_window_id,
++            quality: super::super::types::BindingQuality::Exact,
++            tabs: std::collections::HashMap::new(),
++        }
++    }
++
++    #[test]
++    fn trusted_input_limitation_covers_standalone_without_a_cdp_window_id() {
++        use super::super::types::EndpointAccessClass;
++        let limitation = Some("fixture limitation");
++
++        // The pre-existing proof: a CDP window id plus the platform
++        // limitation.
++        assert_eq!(
++            super::standalone_trusted_input_limitation(
++                &standalone_record(EndpointAccessClass::EmbeddedApplication, Some(1)),
++                limitation
++            ),
++            limitation
++        );
++        // The access class closes the windowless-standalone hole where a
++        // tiling compositor or a missing Browser-domain method yields a
++        // standalone record with no CDP window id.
++        assert_eq!(
++            super::standalone_trusted_input_limitation(
++                &standalone_record(EndpointAccessClass::DriverOwned, None),
++                limitation
++            ),
++            limitation
++        );
++        assert_eq!(
++            super::standalone_trusted_input_limitation(
++                &standalone_record(EndpointAccessClass::ExistingProfileApproved, None),
++                limitation
++            ),
++            limitation
++        );
++        // An embedded endpoint without a CDP window id stays unlimited,
++        // and a platform without the limitation is never restricted.
++        assert_eq!(
++            super::standalone_trusted_input_limitation(
++                &standalone_record(EndpointAccessClass::EmbeddedApplication, None),
++                limitation
++            ),
++            None
++        );
++        assert_eq!(
++            super::standalone_trusted_input_limitation(
++                &standalone_record(EndpointAccessClass::DriverOwned, None),
++                None
++            ),
++            None
++        );
++    }
+ }
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/pointer.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/pointer.rs
+index ad80763bb..42f72f7d4 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/pointer.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/pointer.rs
+@@ -18,7 +18,7 @@ use crate::tool_args::ArgsExt;
+ 
+ use super::cdp_ws::CdpConnection;
+ use super::engine::{BrowserEngine, ValidatedTab};
+-use super::platform::BrowserVisualActionKind;
++use super::platform::{standalone_trusted_input_limitation, BrowserVisualActionKind};
+ use super::refusal::{BrowserRefusal, BrowserRefusalCode};
+ use super::required_session_schema;
+ use super::store::{BrowserActionKind, FrameKind, FrameRef};
+@@ -365,29 +365,28 @@ impl BrowserPointerTool {
+     }
+ 
+     fn trusted_background_refusal(&self, validated: &ValidatedTab) -> Option<ToolResult> {
+-        if validated.record.cdp_window_id.is_some() {
+-            if let Some(limitation) = self
+-                .engine
++        if let Some(limitation) = standalone_trusted_input_limitation(
++            &validated.record,
++            self.engine
+                 .platform
+-                .standalone_trusted_input_background_limitation()
+-            {
+-                return Some(
+-                    BrowserRefusal::new(
+-                        BrowserRefusalCode::BrowserInputTrustUnavailable,
+-                        format!(
+-                            "{limitation}; use input_route=\"dom_event\" with refs to explicitly request synthetic full-background pointer delivery"
+-                        ),
+-                    )
+-                    .with_detail(json!({
+-                        "requested_route": "trusted",
+-                        "limitation": limitation,
+-                        "alternative_route": "dom_event",
+-                        "alternative_requires_ref": true,
+-                        "trusted_delivery_attempted": false,
+-                    }))
+-                    .to_tool_result(),
+-                );
+-            }
++                .standalone_trusted_input_background_limitation(),
++        ) {
++            return Some(
++                BrowserRefusal::new(
++                    BrowserRefusalCode::BrowserInputTrustUnavailable,
++                    format!(
++                        "{limitation}; use input_route=\"dom_event\" with refs to explicitly request synthetic full-background pointer delivery"
++                    ),
++                )
++                .with_detail(json!({
++                    "requested_route": "trusted",
++                    "limitation": limitation,
++                    "alternative_route": "dom_event",
++                    "alternative_requires_ref": true,
++                    "trusted_delivery_attempted": false,
++                }))
++                .to_tool_result(),
++            );
+         }
+         None
+     }
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
 index 1d10b3195..72a1a4cfc 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
@@ -444,6 +619,125 @@ index 1d10b3195..72a1a4cfc 100644
          let endpoint = match wait_for_spawned_endpoint(&mut child, &prepared_profile.path).await {
              Ok(endpoint) => {
                  match attest_spawned_endpoint(self, i64::from(child.id()), endpoint).await {
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
+index e7be28523..70d4553f5 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
+@@ -17,7 +17,10 @@ use crate::tool_args::ArgsExt;
+ use super::cdp_ws::CdpConnection;
+ use super::download::BrowserDownloadTool;
+ use super::engine::{BrowserEngine, BrowserTabScreenshot};
+-use super::platform::{BrowserVisualActionKind, PrepareProfile, PrepareRequest, PrepareStrategy};
++use super::platform::{
++    standalone_trusted_input_limitation, BrowserVisualActionKind, PrepareProfile, PrepareRequest,
++    PrepareStrategy,
++};
+ use super::pointer::BrowserPointerTool;
+ use super::refusal::{BrowserRefusal, BrowserRefusalCode};
+ use super::session_schema as schema_session;
+@@ -997,12 +1000,13 @@ impl Tool for BrowserClickTool {
+             Ok(v) => v,
+             Err(refusal) => return refusal.to_tool_result(),
+         };
+-        if route == "trusted" && validated.record.cdp_window_id.is_some() {
+-            if let Some(limitation) = self
+-                .engine
+-                .platform
+-                .standalone_trusted_input_background_limitation()
+-            {
++        if route == "trusted" {
++            if let Some(limitation) = standalone_trusted_input_limitation(
++                &validated.record,
++                self.engine
++                    .platform
++                    .standalone_trusted_input_background_limitation(),
++            ) {
+                 return BrowserRefusal::new(
+                     BrowserRefusalCode::BrowserInputTrustUnavailable,
+                     format!(
+@@ -1596,6 +1600,37 @@ impl Tool for BrowserTypeTool {
+             Ok(v) => v,
+             Err(refusal) => return refusal.to_tool_result(),
+         };
++        // Input.insertText and Input.dispatchKeyEvent are the trusted CDP
++        // Input route, and on macOS that route activates a standalone
++        // browser window. The standalone posture is background-only, so
++        // refuse before any event reaches the tab. No synthetic typing
++        // route exists to downgrade to, and a silent downgrade would be a
++        // different, unverifiable action — the caller gets the honest
++        // refusal plus the native element-text alternative.
++        if let Some(limitation) = standalone_trusted_input_limitation(
++            &validated.record,
++            self.engine
++                .platform
++                .standalone_trusted_input_background_limitation(),
++        ) {
++            return BrowserRefusal::new(
++                BrowserRefusalCode::BrowserInputTrustUnavailable,
++                format!(
++                    "{limitation}; no key or insert event was sent to the standalone browser, \
++                     because the dispatch would raise its window. Type through the native \
++                     element-text route instead (an exact accessibility element token never \
++                     activates the app), or have the user authorize foreground input on the \
++                     visible window"
++                ),
++            )
++            .with_detail(json!({
++                "requested_route": "trusted",
++                "limitation": limitation,
++                "alternative_route": "native_element_text",
++                "trusted_delivery_attempted": false,
++            }))
++            .to_tool_result();
++        }
+ 
+         let ext_ref = match args.require_str("ref") {
+             Ok(value) => value,
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
+index 2b82930cd..2dafbbbb1 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
+@@ -2161,6 +2161,40 @@ async fn trusted_click_refuses_when_standalone_background_posture_is_unavailable
+     assert!(recorded_calls(&f, "Target.activateTarget").is_empty());
+ }
+ 
++#[tokio::test]
++async fn trusted_type_refuses_when_standalone_background_posture_is_unavailable() {
++    let f = fixture_with_platform(|_| {}, true).await;
++    let (target, tab) = bind(&f).await;
++    let snap = snapshot(&f, &target, &tab).await;
++    let main_ref = ref_of(&snap, "main", "main-btn");
++
++    let result = BrowserTypeTool::new(f.engine.clone())
++        .invoke(json!({
++            "target_id": target, "tab_id": tab, "ref": main_ref,
++            "text": "hello", "session": SESSION
++        }))
++        .await;
++    assert_eq!(
++        structured(&result)["refusal"]["code"],
++        "browser_input_trust_unavailable"
++    );
++    assert_eq!(
++        structured(&result)["refusal"]["detail"]["trusted_delivery_attempted"],
++        false
++    );
++    assert_eq!(
++        structured(&result)["refusal"]["detail"]["alternative_route"],
++        "native_element_text"
++    );
++    // No key, insert or focus-emulation event may reach the standalone tab.
++    assert!(recorded_calls(&f, "Input.insertText").is_empty());
++    assert!(recorded_calls(&f, "Input.dispatchKeyEvent").is_empty());
++    assert!(recorded_calls(&f, "Emulation.setFocusEmulationEnabled").is_empty());
++    assert!(recorded_calls(&f, "DOM.focus").is_empty());
++    assert!(recorded_calls(&f, "Page.bringToFront").is_empty());
++    assert!(recorded_calls(&f, "Target.activateTarget").is_empty());
++}
++
+ #[tokio::test]
+ async fn main_frame_navigation_invalidates_refs_via_loader_identity() {
+     let f = fixture().await;
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs
 index 3711b192f..22df2e9d2 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/capture_scope.rs
@@ -469,7 +763,7 @@ index 4fa445fb1..56c09ad44 100644
                  "mouse_button_up",
                  "mouse_drag",
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
-index d93bf6d20..9fcd77a62 100644
+index d93bf6d20..b9ca6fd26 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 @@ -321,6 +321,13 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
@@ -542,15 +836,18 @@ index d93bf6d20..9fcd77a62 100644
          // app / window
          "launch_app",
          "list_apps",
-@@ -5146,6 +5167,7 @@ mod capability_tests {
+@@ -5146,6 +5167,10 @@ mod capability_tests {
          "accessibility.tree.structured",
          "accessibility.tree.bounded",
          "accessibility.window_state",
 +        "accessibility.settle",
++        // Exact-range semantic selection on an editable field's
++        // AXSelectedTextRange — claimed by `select_text`.
++        "accessibility.text.selection",
          // Surface 6 — claimed by tools that accept the opaque
          // `element_token` arg + get_window_state which emits them.
          "accessibility.element_tokens",
-@@ -5384,6 +5406,7 @@ mod capability_tests {
+@@ -5384,6 +5409,7 @@ mod capability_tests {
              "type_text_chars",
              "press_key",
              "set_value",
@@ -786,7 +1083,7 @@ index a26a6bfe9..064d69170 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123bc7..e2843e544 100644
+index 67e123bc7..fc6979fd5 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -801,7 +1098,7 @@ index 67e123bc7..e2843e544 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(23);
++        metadata["synara_native_revision"] = serde_json::json!(24);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -3160,8 +3457,323 @@ index 4ca69d9ab..12ab3d7c2 100644
      #[tokio::test]
      async fn nested_lease_proof_is_task_local_and_pid_bound() {
          assert!(!held_by_current_task(-91_004));
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/conceal.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/conceal.rs
+new file mode 100644
+index 000000000..5134d8e7c
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/conceal.rs
+@@ -0,0 +1,297 @@
++//! Process-lifetime concealment for driver-owned standalone browsers.
++//!
++//! Revision 23 hid a spawned isolated Chromium with a bounded loop of
++//! `NSRunningApplication.hide()` calls: fifty attempts at 100 ms, so roughly
++//! five seconds. Chromium activates its first window *after* `spawn()`
++//! returns, and it can re-show or re-activate that window later — first
++//! paint, popups, debugger attach, a Dock click. A bounded loop leaves the
++//! rest of the session uncovered, and the incident this revision answers
++//! had the browser re-front while the user was typing.
++//!
++//! Revision 24 replaces the bounded loop with a registry-backed watcher that
++//! runs for the concealed process's whole lifetime:
++//!
++//! - [`conceal`] registers the pid and hides it immediately.
++//! - a watcher thread sweeps fast ([`SPAWN_TICK`]) for the first seconds to
++//!   cover the spawn/first-window race, then slowly ([`IDLE_TICK`]) for the
++//!   rest of the process lifetime. A new registration, an activation, or an
++//!   explicit sweep ([`reconceal_now`], called around browser actions) wakes
++//!   it immediately.
++//! - an `NSWorkspace.didActivateApplicationNotification` observer hides a
++//!   concealed pid the moment it becomes frontmost, so a re-activation
++//!   cannot outlive the notification.
++//!
++//! The module only ever calls `hide()`. It never unhides, never activates,
++//! and never touches the process, its profile, its windows, or any input
++//! contract — this is visual posture only.
++
++use std::collections::HashMap;
++use std::sync::mpsc::{Receiver, Sender};
++use std::sync::{Mutex, OnceLock};
++use std::time::{Duration, Instant};
++
++use objc2_app_kit::{
++    NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
++    NSWorkspaceDidActivateApplicationNotification,
++};
++use objc2_foundation::NSOperationQueue;
++
++/// Sweep cadence while a concealed browser is inside its spawn race window
++/// (Chromium activates its first window shortly after `spawn()` returns).
++pub(crate) const SPAWN_TICK: Duration = Duration::from_millis(50);
++
++/// Steady-state sweep cadence for the rest of the process lifetime. One
++/// LaunchServices query per registered pid, with a hide only when the app
++/// is actually visible.
++pub(crate) const IDLE_TICK: Duration = Duration::from_millis(250);
++
++/// How long after registration the spawn-race cadence applies.
++pub(crate) const SPAWN_RACE: Duration = Duration::from_secs(5);
++
++/// One concealed process. `registered_at` anchors the spawn-race cadence;
++/// `seen_running` distinguishes "LaunchServices has not registered the
++/// freshly spawned process yet" (keep watching) from "the app exited"
++/// (drop the entry).
++#[derive(Debug)]
++struct Entry {
++    registered_at: Instant,
++    seen_running: bool,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum Sweep {
++    /// The app is registered; hide it if it is visible.
++    Hide,
++    /// No app registered and the process is still starting; keep watching.
++    Keep,
++    /// The app exited; drop the entry.
++    Drop,
++}
++
++/// Pure sweep decision, split out so the bookkeeping is testable without
++/// Cocoa.
++fn sweep_action(app_registered: bool, seen_running: bool, process_exists: bool) -> Sweep {
++    if app_registered {
++        return Sweep::Hide;
++    }
++    if seen_running || !process_exists {
++        Sweep::Drop
++    } else {
++        Sweep::Keep
++    }
++}
++
++fn tick_interval(in_spawn_race: bool) -> Duration {
++    if in_spawn_race {
++        SPAWN_TICK
++    } else {
++        IDLE_TICK
++    }
++}
++
++fn registry() -> &'static Mutex<HashMap<i32, Entry>> {
++    static REGISTRY: OnceLock<Mutex<HashMap<i32, Entry>>> = OnceLock::new();
++    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
++}
++
++/// Register `pid` as concealed. The watcher sweeps the moment it is woken
++/// and keeps hiding the process for as long as it lives; nothing here ever
++/// unhides. Registration itself performs no process lookup or hide IPC, so
++/// the caller's thread is not blocked on LaunchServices round-trips.
++pub(crate) fn conceal(pid: i32) {
++    if pid <= 0 {
++        return;
++    }
++    registry().lock().unwrap().insert(
++        pid,
++        Entry {
++            registered_at: Instant::now(),
++            seen_running: false,
++        },
++    );
++    ensure_activation_observer();
++    let _ = watcher().send(());
++}
++
++/// Hide every concealed pid again right now — the "after any action" half of
++/// the concealment contract. Also prunes entries whose process has exited.
++pub(crate) fn reconceal_now() {
++    sweep_once();
++}
++
++/// Whether any pid is currently registered as concealed.
++pub(crate) fn has_concealed() -> bool {
++    !registry().lock().unwrap().is_empty()
++}
++
++/// The watcher thread's wake channel. The thread is created once and lives
++/// for the process; it parks on the channel when nothing is registered and
++/// costs nothing while idle.
++fn watcher() -> &'static Sender<()> {
++    static WATCHER: OnceLock<Sender<()>> = OnceLock::new();
++    WATCHER.get_or_init(|| {
++        let (tx, rx) = std::sync::mpsc::channel::<()>();
++        let _ = std::thread::Builder::new()
++            .name("cua-browser-conceal".to_owned())
++            .spawn(move || watcher_loop(rx));
++        tx
++    })
++}
++
++fn watcher_loop(rx: Receiver<()>) {
++    loop {
++        sweep_once();
++        let (empty, in_spawn_race) = {
++            let guard = registry().lock().unwrap();
++            (
++                guard.is_empty(),
++                guard
++                    .values()
++                    .any(|entry| entry.registered_at.elapsed() < SPAWN_RACE),
++            )
++        };
++        if empty {
++            // Park until a new registration (or an explicit sweep) wakes
++            // the watcher.
++            if rx.recv().is_err() {
++                return;
++            }
++            continue;
++        }
++        let _ = rx.recv_timeout(tick_interval(in_spawn_race));
++    }
++}
++
++/// One sweep: hide every registered, visible, still-running app and prune
++/// entries whose process is gone.
++fn sweep_once() {
++    let pids: Vec<i32> = registry().lock().unwrap().keys().copied().collect();
++    for pid in pids {
++        match running_application(pid) {
++            Some(app) => {
++                {
++                    let mut guard = registry().lock().unwrap();
++                    if let Some(entry) = guard.get_mut(&pid) {
++                        entry.seen_running = true;
++                    }
++                }
++                unsafe {
++                    if !app.isHidden() {
++                        let _ = app.hide();
++                    }
++                }
++            }
++            None => {
++                let mut guard = registry().lock().unwrap();
++                let should_drop = guard.get(&pid).is_some_and(|entry| {
++                    sweep_action(false, entry.seen_running, process_exists(pid)) == Sweep::Drop
++                });
++                if should_drop {
++                    guard.remove(&pid);
++                }
++            }
++        }
++    }
++}
++
++fn running_application(pid: i32) -> Option<objc2::rc::Retained<NSRunningApplication>> {
++    unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(pid) }
++}
++
++fn hide_if_visible(pid: i32) -> Option<()> {
++    let app = running_application(pid)?;
++    unsafe {
++        if !app.isHidden() {
++            let _ = app.hide();
++        }
++    }
++    Some(())
++}
++
++fn process_exists(pid: i32) -> bool {
++    let result = unsafe { libc::kill(pid, 0) };
++    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
++}
++
++/// The activated pid carried by an `NSWorkspace` activation notification.
++fn activated_pid(note: &objc2_foundation::NSNotification) -> Option<i32> {
++    use objc2::msg_send;
++    use objc2::runtime::AnyObject;
++    unsafe {
++        let info = note.userInfo()?;
++        // userInfo[NSWorkspaceApplicationKey] -> NSRunningApplication*.
++        let app_ptr: *mut AnyObject = msg_send![&*info, objectForKey: NSWorkspaceApplicationKey];
++        if app_ptr.is_null() {
++            return None;
++        }
++        let pid: libc::pid_t = msg_send![app_ptr, processIdentifier];
++        Some(pid as i32)
++    }
++}
++
++/// Install the process-lifetime `didActivateApplicationNotification`
++/// observer. Fires on any app activation; a concealed pid is hidden again
++/// immediately. Mirrors the observer pattern already used by `focus_steal`
++/// (fresh background queue, leaked token and queue).
++fn ensure_activation_observer() {
++    static INSTALLED: OnceLock<()> = OnceLock::new();
++    INSTALLED.get_or_init(|| {
++        use block2::RcBlock;
++        use objc2_foundation::NSNotification;
++        use std::ptr::NonNull;
++
++        let workspace = unsafe { NSWorkspace::sharedWorkspace() };
++        let center = unsafe { workspace.notificationCenter() };
++        let queue = unsafe { NSOperationQueue::new() };
++        unsafe { queue.setMaxConcurrentOperationCount(1) };
++
++        let block = RcBlock::new(move |note_ptr: NonNull<NSNotification>| {
++            let note = unsafe { note_ptr.as_ref() };
++            if let Some(pid) = activated_pid(note) {
++                if registry().lock().unwrap().contains_key(&pid) {
++                    let _ = hide_if_visible(pid);
++                }
++            }
++        });
++
++        let observer = unsafe {
++            center.addObserverForName_object_queue_usingBlock(
++                Some(NSWorkspaceDidActivateApplicationNotification),
++                None,
++                Some(&queue),
++                &block,
++            )
++        };
++
++        // The observer and queue must outlive this call for the life of the
++        // process; the singleton registration never tears them down.
++        std::mem::forget(observer);
++        std::mem::forget(queue);
++    });
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn sweep_keeps_a_freshly_spawned_process_until_launchservices_registers_it() {
++        // The process exists but has no NSRunningApplication yet: keep.
++        assert_eq!(sweep_action(false, false, true), Sweep::Keep);
++        // Once registered, hide.
++        assert_eq!(sweep_action(true, false, true), Sweep::Hide);
++        assert_eq!(sweep_action(true, true, true), Sweep::Hide);
++        // First sighting then gone: the app exited, drop it even if a
++        // zombie still answers kill(pid, 0).
++        assert_eq!(sweep_action(false, true, false), Sweep::Drop);
++        assert_eq!(sweep_action(false, true, true), Sweep::Drop);
++        // Process truly gone before it ever registered: drop it.
++        assert_eq!(sweep_action(false, false, false), Sweep::Drop);
++    }
++
++    #[test]
++    fn spawn_race_uses_the_fast_tick() {
++        assert_eq!(tick_interval(true), SPAWN_TICK);
++        assert_eq!(tick_interval(false), IDLE_TICK);
++    }
++}
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/mod.rs
+index 859243557..b37dc630d 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/browser/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/mod.rs
+@@ -1,6 +1,7 @@
+ pub mod ax_page_reader;
+ pub mod browser_js;
+ pub mod cdp_client;
++mod conceal;
+ mod consent_ui;
+ pub mod electron_js;
+ pub mod platform;
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
-index 603f2ae4e..dbc78e259 100644
+index 603f2ae4e..1a08a0c5d 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
 @@ -280,6 +280,15 @@ fn is_chromium(name: &str, bundle_id: &str) -> bool {
@@ -3196,37 +3808,31 @@ index 603f2ae4e..dbc78e259 100644
          .arg(executable)
          .stdin(Stdio::null())
          .stdout(Stdio::null())
-@@ -759,6 +774,30 @@ impl BrowserPlatform for MacOsBrowserPlatform {
+@@ -759,7 +774,24 @@ impl BrowserPlatform for MacOsBrowserPlatform {
          Some("Chromium's trusted CDP Input route activates its standalone browser window on macOS")
      }
  
 +    fn conceal_spawned_browser(&self, pid: i64) {
 +        // Chromium activates its first window after spawn returns and can
-+        // re-fire activation while its windows register, so one hide() races
-+        // it. Re-hide over the startup window instead: an already-hidden app
-+        // ignores the call, and the loop ends once first-run settles. Visual
-+        // posture only — the process, its profile, and every input contract
-+        // are untouched.
-+        tokio::task::spawn_blocking(move || {
-+            let pid = pid as i32;
-+            for _ in 0..50 {
-+                unsafe {
-+                    if let Some(app) =
-+                        objc2_app_kit::NSRunningApplication::runningApplicationWithProcessIdentifier(
-+                            pid,
-+                        )
-+                    {
-+                        let _ = app.hide();
-+                    }
-+                }
-+                std::thread::sleep(Duration::from_millis(100));
-+            }
-+        });
++        // re-show or re-activate later, so a bounded re-hide loop leaves the
++        // rest of the session uncovered. `browser::conceal` arms a
++        // process-lifetime watcher instead: it hides at spawn, re-hides on
++        // activation, on window creation, and after actions, and never
++        // unhides. Visual posture only — the process, its profile, and every
++        // input contract are untouched.
++        crate::browser::conceal::conceal(pid as i32);
 +    }
 +
      async fn visualize_browser_action(&self, action: BrowserVisualAction) {
++        // Re-hide any concealed driver-owned browser around every action so
++        // an action that could re-show or re-activate one never leaves it in
++        // the user's foreground.
++        if crate::browser::conceal::has_concealed() {
++            let _ = tokio::task::spawn_blocking(crate::browser::conceal::reconceal_now);
++        }
          if action.session.is_empty()
              || action.cdp_target_id.is_empty()
+             || cua_driver_core::session::is_session_ended(&action.session)
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
 index 5d74dddf5..f862f5a4a 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs

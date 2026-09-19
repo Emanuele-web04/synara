@@ -223,6 +223,49 @@ adapter re-hides the spawned pid over the startup window so the browser
 process binds headlessly without touching its windows, profile, or input
 contract.
 
+Revision 24 makes that concealment last the whole session and closes the
+remaining trusted-input paths that could raise a standalone browser window.
+
+- Concealment persistence: `conceal_spawned_browser` no longer runs a
+  five-second re-hide loop. The macOS adapter registers the spawned pid in a
+  process-lifetime watcher that hides it as soon as the registration lands,
+  keeps a fast 50 ms cadence across the spawn/first-window race window, then
+  sweeps every 250 ms for the rest of the process's life. An
+  `NSWorkspace.didActivateApplicationNotification` observer hides the pid
+  again the moment it becomes frontmost, and `visualize_browser_action`
+  re-hides it around every browser action. The watcher only ever calls
+  `hide()`; it never unhides, never activates, and never touches the
+  process, its profile, or any input contract. Session end is the browser
+  process's own death — the watcher prunes the entry and parks.
+- Spawn activation suppression: the spawn path issues no activation call.
+  Chromium's first-window activation is withdrawn by the watcher (the
+  observer catches the activation itself, the sweep catches window creation
+  without an activation notification), and nothing in the driver re-shows a
+  concealed pid.
+- Trusted input never raises: `browser_click`, `browser_pointer`, and now
+  `browser_type` all consult one shared standalone check before any event is
+  sent. The check keeps the pre-existing CDP-window-id proof and
+  additionally treats a non-embedded endpoint access class (`DriverOwned`,
+  `ExistingProfileApproved`, `ExternalConsumerBrowser`) as standalone, so a
+  browser bound without a `Browser.getWindowForTarget` window id — a tiling
+  compositor, or an endpoint that omits the Browser domain — can no longer
+  receive a trusted dispatch that raises its window. `browser_type` had no
+  such guard at all: trusted `Input.insertText`/`Input.dispatchKeyEvent`
+  now return `browser_input_trust_unavailable` with
+  `trusted_delivery_attempted: false` and
+  `alternative_route: native_element_text` instead of raising the window.
+  Nothing is silently downgraded to a synthetic route, and no success is
+  claimed for an event that was not delivered.
+- The revision also adds `accessibility.text.selection` to the canonical
+  capability vocabulary, a token the rev-20 `select_text` tool already
+  claimed; the capability-vocabulary test was red on a clean patched tree
+  without it.
+
+`apps/desktop/scripts/provision-cua-driver.mjs` now records
+`binarySha256` after the staged binary is adhoc-signed, so a reused
+artifact directory verifies against the bytes it actually holds instead of
+the pre-sign digest.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records
