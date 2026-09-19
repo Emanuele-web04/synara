@@ -1,0 +1,124 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+  "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  The Synara KWin computer-use plugin, service org.synara.ComputerUse.
+
+  This file is the declaration of the interface the plugin exports with
+  QDBusConnection::ExportAllInvokables; tests/introspection_test.py holds it
+  against the Q_INVOKABLE declarations in synaracomputeruseplugin.h, and the
+  server's kwinPluginInterface.test.ts holds its proxy against this file.
+
+  Every method but authenticate and healthJson answers
+  org.synara.ComputerUse.Error.Unauthorized until the calling connection has
+  authenticated. Other errors a method can return, all retryable on the server
+  side unless noted:
+    org.synara.ComputerUse.Error.Throttled       authenticate: a failed attempt from
+                                                 this connection is under a second old
+    org.synara.ComputerUse.Error.SessionLocked   screen locked or session inactive
+    org.synara.ComputerUse.Error.HumanActive     the human is using the target
+    org.synara.ComputerUse.Error.SeatUnsupported the client holds no input object
+    org.synara.ComputerUse.Error.ControlReleased latched by the panic shortcut
+    org.synara.ComputerUse.Error.CaptureFailed   a capture could not be rendered
+-->
+<node name="/org/synara/ComputerUse">
+  <interface name="org.synara.ComputerUse1">
+    <!-- Binds the capability to the calling connection; empty on refusal. -->
+    <method name="authenticate">
+      <arg name="token" type="s" direction="in"/>
+      <arg name="instance" type="s" direction="out"/>
+    </method>
+
+    <!-- Public diagnostics (no pixels, titles or input); the server's poll. -->
+    <method name="healthJson">
+      <arg name="json" type="s" direction="out"/>
+    </method>
+    <method name="stateJson">
+      <arg name="json" type="s" direction="out"/>
+    </method>
+    <method name="windowsJson">
+      <arg name="json" type="s" direction="out"/>
+    </method>
+
+    <!-- Session lifetime. -->
+    <method name="start">
+      <arg name="started" type="b" direction="out"/>
+    </method>
+    <method name="stop">
+      <arg name="stopped" type="b" direction="out"/>
+    </method>
+    <method name="setIdleTimeout">
+      <arg name="milliseconds" type="u" direction="in"/>
+      <arg name="accepted" type="b" direction="out"/>
+    </method>
+    <method name="setHumanActiveGuardMs">
+      <arg name="milliseconds" type="u" direction="in"/>
+      <arg name="accepted" type="b" direction="out"/>
+    </method>
+    <method name="setAgentName">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="accepted" type="b" direction="out"/>
+    </method>
+
+    <!-- Targeting. -->
+    <method name="focusWindow">
+      <arg name="windowId" type="s" direction="in"/>
+      <arg name="focused" type="b" direction="out"/>
+    </method>
+    <method name="raiseWindow">
+      <arg name="windowId" type="s" direction="in"/>
+      <arg name="raised" type="b" direction="out"/>
+    </method>
+    <method name="clearFocusWindow">
+      <arg name="cleared" type="b" direction="out"/>
+    </method>
+    <!-- Lease handover: clears the target, releases held input, hands every
+         shared seat0 object back to the human. Works while stopped. -->
+    <method name="resetInputDelivery">
+      <arg name="reset" type="b" direction="out"/>
+    </method>
+
+    <!-- Input. Coordinates and deltas are desktop pixels. -->
+    <method name="movePointer">
+      <arg name="x" type="d" direction="in"/>
+      <arg name="y" type="d" direction="in"/>
+      <arg name="delivered" type="b" direction="out"/>
+    </method>
+    <method name="button">
+      <arg name="button" type="u" direction="in"/>
+      <arg name="pressed" type="b" direction="in"/>
+      <arg name="delivered" type="b" direction="out"/>
+    </method>
+    <method name="axis">
+      <arg name="horizontal" type="d" direction="in"/>
+      <arg name="vertical" type="d" direction="in"/>
+      <arg name="delivered" type="b" direction="out"/>
+    </method>
+    <method name="key">
+      <arg name="keyCode" type="u" direction="in"/>
+      <arg name="pressed" type="b" direction="in"/>
+      <arg name="delivered" type="b" direction="out"/>
+    </method>
+
+    <!-- Capture. PNG bytes; maxDimension 0 keeps native pixels. Failures are
+         errors, never an empty array. -->
+    <method name="captureWindow">
+      <arg name="windowId" type="s" direction="in"/>
+      <arg name="maxDimension" type="u" direction="in"/>
+      <arg name="png" type="ay" direction="out"/>
+    </method>
+    <method name="captureRegion">
+      <arg name="x" type="i" direction="in"/>
+      <arg name="y" type="i" direction="in"/>
+      <arg name="width" type="u" direction="in"/>
+      <arg name="height" type="u" direction="in"/>
+      <arg name="maxDimension" type="u" direction="in"/>
+      <arg name="png" type="ay" direction="out"/>
+    </method>
+
+    <!-- A running session ended: request, idle-timeout, user-release, or
+         session-locked. -->
+    <signal name="sessionStopped">
+      <arg name="reason" type="s"/>
+    </signal>
+  </interface>
+</node>

@@ -7,6 +7,7 @@ import { claudeTurnResultUsage, type ClaudeResultUsageBaseline } from "../claude
  *
  * @module ClaudeAdapterLive
  */
+import { stripDiagnosticImages } from "../stripDiagnosticImages.ts";
 import { execProcessFile, spawnProcess } from "@synara/shared/processRuntime";
 import type {
   AgentInfo,
@@ -84,6 +85,8 @@ import {
   claudeCacheForModel,
 } from "../claudeCacheObservation.ts";
 import { compareSemverVersions } from "../providerMaintenance.ts";
+import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
+import { approvalRequestKindFromRequestType } from "@synara/shared/threadSummary";
 import {
   Cause,
   DateTime,
@@ -112,6 +115,7 @@ import {
   cancelAgentGatewayTurn,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
+  captureAgentGatewayCapabilityInput,
 } from "../../agentGateway/sessionLease.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -1110,11 +1114,15 @@ function classifyRequestType(toolName: string): CanonicalRequestType {
     return "file_read_approval";
   }
   const itemType = classifyToolItemType(toolName);
+  // Everything else — MCP tools, subagent launches, plain built-ins — is a generic
+  // tool approval. This must be the canonical request type, not an item-type string:
+  // the request kind mapping is keyed on approval types, and an unmapped value makes
+  // the approval unrenderable, which hangs the turn with no way to respond.
   return itemType === "command_execution"
     ? "command_execution_approval"
     : itemType === "file_change"
       ? "file_change_approval"
-      : "dynamic_tool_call";
+      : "tool_approval";
 }
 
 function summarizeToolRequest(
@@ -2106,7 +2114,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       event: ProviderRuntimeEvent,
     ): Effect.Effect<void> =>
       Queue.offer(runtimeEventQueue, {
-        ...event,
+        ...stripDiagnosticImages(event),
         ...(context.lifecycleGeneration !== undefined
           ? { lifecycleGeneration: context.lifecycleGeneration }
           : {}),
@@ -3579,7 +3587,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (context.turnState) {
-          context.turnState.items.push(message.message);
+          context.turnState.items.push(stripDiagnosticImages(message.message));
         }
 
         for (const toolResult of toolResultBlocksFromUserMessage(message)) {
@@ -3939,7 +3947,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (context.turnState) {
-          context.turnState.items.push(message.message);
+          context.turnState.items.push(stripDiagnosticImages(message.message));
           yield* backfillAssistantTextBlocksFromSnapshot(context, message);
         }
 
@@ -5378,6 +5386,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               // calls still reach the user instead of becoming unrestricted.
               const requestId = ApprovalRequestId.makeUnsafe(yield* Random.nextUUIDv4);
               const requestType = classifyRequestType(toolName);
+              const sessionGrantKind = approvalRequestKindFromRequestType(requestType);
+              // An unmapped kind is never widened: the request could not be
+              // rendered as a command/file-change prompt, so nothing proves the
+              // user judged a session-wide grant.
+              const sessionGrantWidensSessionPolicy =
+                sessionGrantKind !== null &&
+                approvalSessionGrantWidensSessionPolicy(sessionGrantKind);
               const detail = summarizeToolRequest(toolName, toolInput);
               const interactionTurnId =
                 context.turnState?.turnId ??
@@ -5463,7 +5478,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               );
 
               if (decision === "accept" || decision === "acceptForSession") {
-                if (decision === "acceptForSession" && runtimeMode !== "auto") {
+                // A session grant only widens the whole session for the kinds
+                // that carry that blast radius (see `approvalSessionGrant`). A
+                // tool grant is scoped to the tool that was shown: it rides
+                // back as `updatedPermissions` below, and the next Bash or Edit
+                // request still opens a card. Setting the blanket flag for a
+                // tool approval silently un-supervised the rest of the session
+                // while the UI kept reporting "approval required".
+                if (
+                  decision === "acceptForSession" &&
+                  runtimeMode !== "auto" &&
+                  sessionGrantWidensSessionPolicy
+                ) {
                   // The SDK's permission suggestions only cover some requests;
                   // supervised mode preserves its live "always allow" fallback.
                   // Auto stays reviewer-gated and applies only SDK-provided
@@ -5586,6 +5612,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           agentGatewayCredentials,
           threadId,
           PROVIDER,
+          captureAgentGatewayCapabilityInput(input),
         );
         const queryOptions: ClaudeQueryOptions = {
           ...(input.cwd ? { cwd: input.cwd } : {}),
