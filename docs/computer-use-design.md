@@ -248,3 +248,49 @@ Integration tests are opt-in by environment variable and skipped otherwise:
 - `SYNARA_COMPUTER_AUTH_PROBE=<path to SynaraComputerAuthProbe>` runs `computerAuth.integration.test.ts` against an isolated `dbus-daemon`, checking that one server authenticates and a stranger is refused. Build the probe with `-DSYNARA_BUILD_AUTH_PROBE=ON`.
 
 Anything involving the human's seat needs a live compositor and cannot run in CI: dedicated-seat versus direct-injection delivery, the same-client rule, the human-activity guard, the release shortcut, lock refusal, and prebuilt loading on each distribution. Development testing for those runs against a disposable nested compositor (headless `kwin_wayland --virtual`, or Hyprland nested inside one), never against the desktop the developer is sitting at.
+
+## Backend: KWin plugin (Plasma Wayland)
+
+`KWinComputerBackend.ts` driving `apps/server/native/computer-use-kwin/` loaded into the human's own `kwin_wayland`. Reports backend `kwin`, `visibleDesktop: true`, and the full capability set.
+
+### Plugin
+
+The plugin is a `KWin::Plugin` built with CMake against the installed `kwin-devel` headers (KWin 6, Qt 6, KF6, ECM 5.240 or newer). `metadata.json` sets `EnabledByDefault: false`, so KWin never auto-loads any installed generation; the backend loads exactly one by id through `org.kde.KWin` `/Plugins` (`LoadPlugin`, `UnloadPlugin`, and the `LoadedPlugins` property, with a `loadedPlugins` method fallback for KWin variants that expose one).
+
+The agent cursor is a scene overlay `Item` at z=1000 under `effects->scene()->overlayItem()`, drawn with `QPainter` as a violet arrow with a light rim and dark outer stroke so it is never confused with the human's theme cursor. It is sized from the human's `themeSize`, rasterized per output scale, and carries the name badge as a child `ImageItem` that fades two seconds after the last action.
+
+The dedicated seat is a second `SeatInterface` named `synara-agent`. It mirrors the real keyboard's xkb keymap and tracks its own `xkb_state`. Delivery goes through `notifyPointerEnter`, `notifyPointerMotion`, `notifyPointerButton`, and `notifyKeyboardKey` on that seat. Path selection reads `PointerInterface::get(resource)->seat()` for the target client: a pointer on the agent seat means seat delivery, anything else means direct injection onto the client's seat0 resources.
+
+Human-input recency comes from a `KWin::InputEventSpy` installed on `InputRedirection`, which runs before any filter and sees only real device events. The release shortcut is registered through `KGlobalAccel` as `SynaraReleaseComputerControl` (listed under KWin in System Settings, remappable). Registration failure is reported as `releaseShortcut: null`.
+
+Capture renders an offscreen filtered `SceneView`. On the shared desktop the human's cursor is claimed by an exclusive `ItemTreeView` that is never painted, so it cannot appear in a capture.
+
+KWin-specific `stateJson` fields: `borrowedActivation` and `keyboardWindowActive`, from the borrowed-activation rule that marks the keyboard target `Window::setActive(true)` so Qt dispatches shortcuts sent to it, and undoes the borrow when the target changes unless KWin has since activated the window for real.
+
+### Backend
+
+Connect order in `ensurePlugin`:
+
+1. Open the session bus and read the current `org.synara.ComputerUse` owner.
+2. Plan a load with `resolveSynaraPluginLoad` from the loaded ids and the installed `V<n>` files.
+3. Provision when nothing installed will load; a `requiresRelogin` result is reported as-is.
+4. Unload stale ids, load the newest, and confirm through `authenticate` that a new instance answered.
+5. Re-send idle timeout, human-activity guard, and agent name.
+
+A plan that fails to replace the instance is reported as a refusal rather than retried forever.
+
+Reconnect uses exponential backoff from 250 ms to 5 s, is bounded, and does not re-run provisioning on every attempt. A slow capture reply is a method-level timeout, not a dead connection.
+
+Environment: `SYNARA_COMPUTER_USE_OWNS_COMPOSITOR` is never set on the human's desktop. `SYNARA_KWIN_PLUGIN_DIR`, `SYNARA_KWIN_PREBUILT_DIR`, `SYNARA_KWIN_SOURCE_DIR`, and `SYNARA_KWIN_STATE_ROOT` override the paths below.
+
+### Provisioning
+
+Installs go under the user's Qt plugin root, `~/.local/lib64/qt6/plugins/kwin/plugins` or `~/.local/lib/...` (the split is read from whichever system root exists), as `SynaraComputerUsePluginV<n>.so`. The env script `~/.config/plasma-workspace/env/synara-computer-use.sh` prepends that root to `QT_PLUGIN_PATH`; Plasma sources it at login. Qt reads the variable at compositor start, so the very first install on a machine takes effect at the next login (`requiresRelogin`); every later install loads live. The install stamp lives under `~/.local/state/synara/`.
+
+`provisionKWinPlugin` runs under a file lock, writes the env script on every run, then picks a prebuilt matching KWin version, architecture, and `builtOn` exactly, or builds from source with `scripts/install-and-load.sh --build-only`. The KWin version it matches is the running compositor's. `wl-clipboard` is installed with the toolchain packages from Set up when missing.
+
+`scripts/install-and-load.sh` is the manual and CI path (`--build-only`, `--force`, `--noninteractive`). It creates the same env script as the application provisioner. `scripts/uninstall.sh` unloads and removes every generation from every root. `systemd/` holds an opt-in path unit, timer, and service that rebuild after a KWin upgrade; `enable.sh` installs them without starting them. They do nothing on an unchanged system and never run mid-package-transaction.
+
+### Testing
+
+`tests/pointer_cleanup_test.py` compiles `sendButton`, `releasePressedButtons`, and `clearPointerDelivery` against a fixture and checks that buttons are released before delivery is cleared. `authprobe.cpp` (built with `-DSYNARA_BUILD_AUTH_PROBE=ON`) is the fixture for `computerAuth.integration.test.ts`. Everything about seat delivery, the same-client rule, the guard, the shortcut, and lock refusal needs a live KWin and is exercised against a disposable nested `kwin_wayland`, never the developer's desktop.

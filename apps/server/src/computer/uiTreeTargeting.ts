@@ -163,7 +163,7 @@ function computerTargetSpec(target: ComputerTarget): UiTreeTargetSpec<ComputerUi
   return {
     labelOf: matchableLabel,
     matchesRole: (node, role) => node.role === role,
-    matchKey: (label) => normalizeLabelSpaces(label).toLocaleLowerCase(),
+    matchKey: matchableLabelKey,
     // Promotion to "this is the label, exactly" is case-sensitive here while the
     // substring test is not, which is how the desktop family has always behaved.
     exactKey: normalizeLabelSpaces,
@@ -313,9 +313,7 @@ export function actionableElements(
 ): ComputerActionableElements {
   const items: ComputerActionableElement[] = [];
   const wanted =
-    filter.labelContains === undefined
-      ? undefined
-      : normalizeLabelSpaces(filter.labelContains).toLocaleLowerCase();
+    filter.labelContains === undefined ? undefined : matchableLabelKey(filter.labelContains);
   let omitted = 0;
   let sourceIncomplete = false;
   const walk = (node: ComputerUiNode): void => {
@@ -327,7 +325,7 @@ export function actionableElements(
       node.windowId !== null &&
       label !== "" &&
       (filter.windowId === undefined || node.windowId === filter.windowId) &&
-      (wanted === undefined || normalizeLabelSpaces(label).toLocaleLowerCase().includes(wanted));
+      (wanted === undefined || matchableLabelKey(label).includes(wanted));
     if (collectible) {
       if (items.length < ELEMENT_DIGEST_MAX_LENGTH) {
         items.push({
@@ -386,8 +384,24 @@ function matchableLabel(node: ComputerUiNode): string {
  * Preserve whitespace positions and counts, case and the original labels in
  * results. Equivalent labels still go through the normal ambiguity refusal.
  */
+/**
+ * Space-like characters folded to a plain space and the string put in NFC, so
+ * "é" typed as one code point and "é" composed from two compare equal — an
+ * accessible name arrives however the toolkit stored it. Case is not folded
+ * here; the AT-SPI helper applies the same fold on its side of a write.
+ */
 function normalizeLabelSpaces(label: string): string {
-  return label.replace(/[\u00a0\u2007\u202f]/g, " ");
+  return label.normalize("NFC").replace(/[\u00a0\u2007\u202f]/g, " ");
+}
+
+/**
+ * The case-insensitive substring key. `toLowerCase` rather than
+ * `toLocaleLowerCase`: the latter follows the server's locale, and under a
+ * Turkish locale "I" lowercases to a dotless "ı", so the same tree matched
+ * differently depending on where the server ran.
+ */
+function matchableLabelKey(label: string): string {
+  return normalizeLabelSpaces(label).toLowerCase();
 }
 
 function matchesWindow(node: ComputerUiNode, windowId: string | undefined): boolean {

@@ -130,6 +130,26 @@ describe("resolving a labelled desktop target", () => {
     },
   );
 
+  it("matches a label whatever Unicode composition the toolkit stored it in", () => {
+    // "é" as one code point in the query, as "e" + combining acute in the tree.
+    const field = node({ role: "entry", label: "Pr\u0065\u0301nom" });
+    const desktop = node({
+      role: "desktop",
+      children: [field, node({ role: "entry", label: "Nom" })],
+    });
+    expect(resolveComputerSemanticTarget(desktop, { label: "Pr\u00e9nom" }).node).toBe(field);
+    expect(resolveComputerSemanticTarget(desktop, { label: "pr\u00e9n" }).node).toBe(field);
+  });
+
+  it("folds case the same way in every locale", () => {
+    // Under a Turkish locale a locale-aware lowercase turns "I" into a dotless
+    // "ı", so "Insert" would stop matching "insert" depending on the server.
+    const field = node({ role: "entry", label: "Insert Image" });
+    const desktop = node({ role: "desktop", children: [field] });
+    expect("INSERT IMAGE".toLowerCase()).toBe("insert image");
+    expect(resolveComputerSemanticTarget(desktop, { label: "insert im" }).node).toBe(field);
+  });
+
   it("refuses ambiguity between labels differing only in non-breaking spaces", () => {
     const desktop = node({
       role: "desktop",
