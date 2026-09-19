@@ -5,7 +5,7 @@
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 
-import { spawnProcess } from "@synara/shared/processRuntime";
+import { spawnProcess, spawnProcessSync } from "@synara/shared/processRuntime";
 import { resolveWindowsSystemRoot } from "@synara/shared/windowsProcess";
 
 import type { ProcessChildrenMap } from "./processTreeController";
@@ -421,5 +421,65 @@ export async function captureWindowsProcessChildrenMap(): Promise<ProcessChildre
     return await observer.capture();
   } finally {
     observer.dispose();
+  }
+}
+
+// The single-pid probe emits the same pid\tppid\tcreatedate\tbase64(command)
+// row as WINDOWS_PROCESS_SNAPSHOT_SCRIPT, filtered to one ProcessId.
+function windowsProcessRowProbeScript(pid: number): string {
+  return `
+$ErrorActionPreference = 'Stop'
+Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | ForEach-Object {
+  $command = if ($_.CommandLine) { [string]$_.CommandLine } else { [string]$_.Name }
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($command))
+  [Console]::Out.WriteLine(("{0}\t{1}\t{2}\t{3}" -f $_.ProcessId, $_.ParentProcessId, ([string]$_.CreationDate), $encoded))
+}
+`.trim();
+}
+
+/**
+ * One-shot CIM row probe for a single PID, used to verify spawn-time and
+ * signal-time identity. Returns null on any probe or parse failure, on a
+ * missing process, and on non-Windows platforms — callers must treat null as
+ * "not verified", never as proof of exit.
+ */
+export function readWindowsProcessRow(
+  pid: number,
+): { ppid: number; pgid?: number; startedAt?: string; command?: string } | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (globalThis.process.platform !== "win32") return null;
+  try {
+    const result = spawnProcessSync(
+      powershellExecutablePath(),
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        encodedPowerShellCommand(windowsProcessRowProbeScript(pid)),
+      ],
+      {
+        encoding: "utf8",
+        maxBuffer: MAX_SNAPSHOT_OUTPUT_BYTES,
+        timeout: DEFAULT_PROBE_TIMEOUT_MS,
+        platform: "win32",
+      },
+    );
+    if (result.error || result.status !== 0) return null;
+    for (const line of result.stdout.split(/\r?\n/g)) {
+      if (line.trim().length === 0) continue;
+      const row = parseWindowsProcessSnapshotLine(line);
+      // A malformed row or a row for the wrong pid means the probe cannot be
+      // trusted; fail closed rather than return partial evidence.
+      if (row === null || row.pid !== pid) return null;
+      return {
+        ppid: row.ppid,
+        ...(row.startedAt ? { startedAt: row.startedAt } : {}),
+        command: row.command,
+      };
+    }
+    return null;
+  } catch {
+    return null;
   }
 }

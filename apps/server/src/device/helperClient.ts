@@ -32,6 +32,7 @@ import * as path from "node:path";
 
 import { decodeDeviceFrame } from "@synara/shared/deviceFrame";
 
+import { noteSpawnedProcess } from "../platform/processTreeController.ts";
 import type { DeviceStreamFrame } from "./DeviceBackend.ts";
 import { describeSandboxSuspicion, type HelperSandboxCommand } from "./helperSandbox.ts";
 
@@ -228,6 +229,7 @@ export class HelperClient {
     });
     this.process = child;
     this.exited = false;
+    noteSpawnedProcess(child.pid);
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => this.consumeStdout(chunk));

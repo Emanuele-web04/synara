@@ -43,6 +43,7 @@ import {
 import * as Semaphore from "effect/Semaphore";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
+import { noteSpawnedProcess } from "../platform/processTreeController.ts";
 
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
 import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
@@ -870,6 +871,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
             env: childEnv,
           }),
         );
+        noteSpawnedProcess(Number(child.pid));
         const [stdout, stderr, code] = yield* Effect.all(
           [
             collectStreamAsString(child.stdout),
@@ -958,6 +960,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
                 }),
             ),
           );
+        noteSpawnedProcess(Number(child.pid));
         yield* Scope.addFinalizer(
           runtimeScope,
           Effect.tryPromise({

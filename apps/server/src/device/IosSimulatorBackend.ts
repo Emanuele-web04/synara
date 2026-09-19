@@ -49,6 +49,7 @@ import {
 } from "@synara/shared/deviceHelperCache";
 
 import { runProcess, type ProcessRunResult } from "../processRunner.ts";
+import { noteSpawnedProcess } from "../platform/processTreeController.ts";
 import {
   DeviceBackendError,
   type DeviceBackend,
@@ -776,6 +777,7 @@ export class IosSimulatorBackend implements DeviceBackend {
         cause,
       });
     }
+    noteSpawnedProcess(child.pid);
 
     const recording: ActiveRecording = {
       child,

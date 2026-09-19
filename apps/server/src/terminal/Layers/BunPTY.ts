@@ -1,4 +1,6 @@
 import { Effect, Layer } from "effect";
+
+import { noteSpawnedProcess } from "../../platform/processTreeController";
 import { PtyAdapter, PtyAdapterShape, PtyExitEvent, PtyProcess } from "../Services/PTY";
 
 /**
@@ -168,6 +170,7 @@ export const layer = Layer.effect(
               },
             },
           });
+          noteSpawnedProcess(subprocess.pid);
           processHandle = new BunPtyProcess(subprocess);
           return processHandle;
         }),
