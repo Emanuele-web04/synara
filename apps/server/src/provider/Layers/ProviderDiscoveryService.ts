@@ -95,9 +95,8 @@ const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
   // One catalog cache for every provider: adapters that spawn a CLI/ACP process
-  // per listModels call (cursor, grok, antigravity, opencode, pi) get the same
-  // stale-while-revalidate, single-flight, and failure-replay behaviour that
-  // codex/claude implement privately.
+  // per listModels call share stale-while-revalidate, single-flight, and
+  // failure-replay behaviour with adapters that reuse a running process.
   const modelDiscoveryCache = makeProviderModelDiscoveryCache<ProviderDiscoveryError>();
   const providerIsEnabled = Effect.fn("providerIsEnabled")(function* (
     provider: ProviderGetComposerCapabilitiesInput["provider"],

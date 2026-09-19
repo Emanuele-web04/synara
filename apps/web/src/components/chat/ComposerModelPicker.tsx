@@ -14,7 +14,6 @@ import {
   type ServerProviderStatus,
   type ThreadId,
 } from "@synara/contracts";
-import { resolveSelectableModel } from "@synara/shared/model";
 import {
   useDeferredValue,
   useEffect,
@@ -302,15 +301,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   };
 
   const selectRow = (row: PickerRow) => {
-    if (props.disabled) return;
-    const resolvedModel = resolveSelectableModel(
-      row.provider,
-      row.model,
-      props.modelOptionsByProvider[row.provider],
-    );
-    // A starred model may be missing until its provider's catalog is discovered.
-    const model = (resolvedModel ?? (row.preset ? row.model : null)) as ModelSlug | null;
-    if (!model) return;
+    const model = row.selectableModel;
+    if (props.disabled || model === null) return;
     const selection = traitSelectionFor(row.provider, model);
     // Slider mode: switching to a model with an effort ladder keeps the panel open so the
     // footer slider can set its effort. Presets already carry their effort, and picking
@@ -329,13 +321,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 
   // Pick a model and its effort in one gesture from the row's side block.
   const selectRowWithEffort = (row: PickerRow, value: string) => {
-    if (props.disabled) return;
-    const model = resolveSelectableModel(
-      row.provider,
-      row.model,
-      props.modelOptionsByProvider[row.provider],
-    );
-    if (!model) return;
+    const model = row.selectableModel;
+    if (props.disabled || model === null) return;
     const plan = planComposerEffortChange({
       provider: row.provider,
       selection: traitSelectionFor(row.provider, model),
@@ -485,7 +472,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                     key={row.key}
                     row={row}
                     shortcutHint={
-                      index < MODEL_PICKER_SHORTCUT_ROW_LIMIT
+                      row.selectableModel !== null && index < MODEL_PICKER_SHORTCUT_ROW_LIMIT
                         ? `${shortcutModifierLabel}${index + 1}`
                         : null
                     }

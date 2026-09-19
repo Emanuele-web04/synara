@@ -59,6 +59,9 @@ function readyProvider(provider: ProviderKind): ServerProviderStatus {
 
 type HarnessProps = {
   lockedProvider?: ProviderKind | null;
+  modelOptionsByProvider?: React.ComponentProps<
+    typeof ComposerModelPicker
+  >["modelOptionsByProvider"];
   effortControl?: "menu" | "slider";
   onProviderModelChange?: React.ComponentProps<typeof ComposerModelPicker>["onProviderModelChange"];
 };
@@ -80,7 +83,7 @@ function Harness(props: HarnessProps) {
       lockedProvider={props.lockedProvider ?? null}
       effortControl={props.effortControl ?? "menu"}
       providers={[readyProvider("codex"), readyProvider("claudeAgent")]}
-      modelOptionsByProvider={MODEL_OPTIONS_BY_PROVIDER}
+      modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
       onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
       threadId={THREAD_ID}
       modelOptions={modelOptions?.codex}
@@ -215,6 +218,73 @@ describe("ComposerModelPicker", () => {
       expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
         modelOptions: { reasoningEffort: "low", fastMode: true },
       });
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps retired presets removable while blocking clicks and shortcuts", async () => {
+    const onProviderModelChange = vi.fn();
+    const screen = await mountPicker(
+      {
+        onProviderModelChange,
+        modelOptionsByProvider: {
+          ...MODEL_OPTIONS_BY_PROVIDER,
+          codex: [{ slug: GPT_5_5, name: "GPT-5.5" }],
+        },
+      },
+      undefined,
+      [{ provider: "codex", model: GPT_5_4, effort: "low", fastMode: null, thinking: null }],
+    );
+    try {
+      const retired = page.getByRole("menuitem", { name: /GPT-5\.4.*Unavailable/u });
+      await expect.element(retired).toHaveAttribute("aria-disabled", "true");
+      retired.element().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await userEvent.keyboard("{Control>}1{/Control}");
+      expect(onProviderModelChange).not.toHaveBeenCalled();
+
+      await page.getByRole("button", { name: "Remove GPT-5.4 from starred" }).click();
+      expect(readStoredStars()).toEqual([]);
+      expect(onProviderModelChange).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("enables a saved custom preset when its catalog becomes available", async () => {
+    const onProviderModelChange = vi.fn();
+    const model = "private-model" as ModelSlug;
+    const preset: StarredModel = {
+      provider: "codex",
+      model,
+      effort: null,
+      fastMode: null,
+      thinking: null,
+    };
+    const screen = await mountPicker(
+      { onProviderModelChange, modelOptionsByProvider: EMPTY_BY_PROVIDER },
+      undefined,
+      [preset],
+    );
+    try {
+      await expect
+        .element(page.getByRole("menuitem", { name: /Private Model.*Unavailable/u }))
+        .toHaveAttribute("aria-disabled", "true");
+      expect(readStoredStars()).toEqual([preset]);
+
+      await screen.rerender(
+        <Harness
+          onProviderModelChange={onProviderModelChange}
+          modelOptionsByProvider={{
+            ...EMPTY_BY_PROVIDER,
+            codex: [{ slug: model, name: "Private Model" }],
+          }}
+        />,
+      );
+      const available = page.getByRole("menuitem", { name: /Private Model/u });
+      await expect.element(available).not.toHaveAttribute("aria-disabled", "true");
+      await available.click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", model);
     } finally {
       await screen.unmount();
     }

@@ -77,11 +77,21 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
+For Codex, successful model discovery determines the built-in choices, including when the returned
+catalog is empty. Models absent from that catalog are not added back from Synara's static list.
+Custom models remain available. Until discovery succeeds, Synara uses a static fallback; a failed
+refresh keeps the last successful catalog. The shared discovery cache refreshes catalogs in the
+background after its ten-minute fresh window.
+
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
 saves it together with its current effort and speed, so one click (or `mod+1`…`mod+9` while the
 picker is open) restores the whole combination. A task that has started stays on its provider: only
 that provider's tab and starred entries are offered. Supported provider executables can be pointed
 at custom binary locations.
+
+Starred models absent from the current catalog remain saved and can be removed, but cannot be
+selected. They become selectable again when discovery or custom model settings add them to the
+catalog.
 
 ## Provider sessions
 
