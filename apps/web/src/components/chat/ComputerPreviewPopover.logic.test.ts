@@ -221,10 +221,22 @@ describe("computerPreviewFrameSource", () => {
     expect(computerPreviewFrameSource({ streamWanted: true, tapActive: true })).toBe("tap");
   });
 
-  it("falls back to the stills stream when the tap is quiet or absent", () => {
-    // tapActive false covers both a silent tap and a browser without the
-    // desktop bridge channel at all.
+  it("falls back to the stills stream when no window frame exists yet", () => {
+    // tapActive false with no frame covers a silent tap that never painted
+    // and a browser without the desktop bridge channel at all.
     expect(computerPreviewFrameSource({ streamWanted: true, tapActive: false })).toBe("stills");
+    expect(
+      computerPreviewFrameSource({ streamWanted: true, tapActive: false, tapHasFrame: false }),
+    ).toBe("stills");
+  });
+
+  it("holds the last window frame instead of painting the desktop overview", () => {
+    // The tap keeps its last window frame on the canvas through the quiet
+    // window by design; enabling stills there would overwrite the task
+    // window with the full-desktop overview.
+    expect(
+      computerPreviewFrameSource({ streamWanted: true, tapActive: false, tapHasFrame: true }),
+    ).toBe("none");
   });
 
   it("keeps both sources off when the preview does not want frames", () => {

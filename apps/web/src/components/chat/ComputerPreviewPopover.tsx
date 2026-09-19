@@ -151,6 +151,7 @@ function ComputerPreviewPopoverCard(props: {
   const frameSource = computerPreviewFrameSource({
     streamWanted,
     tapActive: tap.active,
+    tapHasFrame: tap.frameSize !== null,
   });
   const { status: streamStatus, dimensions } = useComputerImageStream({
     canvasRef,

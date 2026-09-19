@@ -230,16 +230,23 @@ export type ComputerPreviewFrameSource = "tap" | "stills" | "none";
 /**
  * Which source draws the canvas while the preview wants frames. The desktop
  * app's native tap wins whenever it decoded a frame recently ("tap"); the
- * stills WebSocket covers every gap, including quiet taps and browsers where
- * the channel does not exist. "none" means the preview should not draw at
- * all, so both sources stay off and never write the canvas simultaneously.
+ * stills WebSocket covers every gap where no window frame exists yet,
+ * including quiet taps and browsers where the channel does not exist. When
+ * the tap already painted a window frame and just went quiet, neither source
+ * draws ("none") so the canvas keeps showing that window frame: falling back
+ * to stills there would paint the full-desktop overview over the task window.
+ * "none" also means the preview should not draw at all, so both sources
+ * stay off and never write the canvas simultaneously.
  */
 export function computerPreviewFrameSource(input: {
   readonly streamWanted: boolean;
   readonly tapActive: boolean;
+  readonly tapHasFrame?: boolean | undefined;
 }): ComputerPreviewFrameSource {
   if (!input.streamWanted) return "none";
-  return input.tapActive ? "tap" : "stills";
+  if (input.tapActive) return "tap";
+  if (input.tapHasFrame === true) return "none";
+  return "stills";
 }
 
 /**
