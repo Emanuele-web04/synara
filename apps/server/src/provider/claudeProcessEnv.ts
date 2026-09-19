@@ -157,5 +157,10 @@ export function withClaudeArtifactOptIn(
   env: NodeJS.ProcessEnv,
   enableArtifacts: boolean | undefined,
 ): NodeJS.ProcessEnv {
-  return enableArtifacts === true ? { ...env, CLAUDE_CODE_ARTIFACT: "1" } : env;
+  if (enableArtifacts === true) return { ...env, CLAUDE_CODE_ARTIFACT: "1" };
+  // The setting is authoritative: a value inherited from the shell that launched
+  // Synara must not publish while Settings and discovery report Artifacts as off.
+  if (env.CLAUDE_CODE_ARTIFACT === undefined) return env;
+  const { CLAUDE_CODE_ARTIFACT: _inherited, ...rest } = env;
+  return rest;
 }

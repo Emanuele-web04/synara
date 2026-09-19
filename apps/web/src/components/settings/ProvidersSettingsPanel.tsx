@@ -617,8 +617,10 @@ function ProviderInstallFieldControl(props: {
         className="flex items-start justify-between gap-3 rounded-md border border-border/70 bg-background/60 px-3 py-2"
       >
         <span className="min-w-0">
-          <span className="block text-xs font-medium text-foreground">{props.field.label}</span>
-          <span className="mt-1 block text-xs text-muted-foreground">
+          <span className="block text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground">
+            {props.field.label}
+          </span>
+          <span className="mt-1 block text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
             {props.field.description}
           </span>
         </span>

@@ -23,6 +23,7 @@ import {
   TerminalIcon,
   WorktreeIcon,
 } from "~/lib/icons";
+import { type ProviderCommandNotice } from "~/lib/claudeArtifactCommands";
 import { slashCommandIcon } from "~/lib/slashCommandIcons";
 import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
@@ -118,6 +119,12 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
 }
 
 function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
+  // The menu is driven from the composer, so focus never reaches the warning icon:
+  // the row itself has to say why the command will not work.
+  if (item.type === "provider-native-command" && item.notice) {
+    return item.notice.summary;
+  }
+
   if (item.type === "slash-command" || item.type === "provider-native-command") {
     return item.description;
   }
@@ -168,8 +175,8 @@ export type ComposerCommandItem =
       command: ProviderNativeCommandDescriptor["name"];
       label: string;
       description: string;
-      /** Why the command cannot fully work right now; shown as a warning tooltip. */
-      notice?: string | null;
+      /** Why the command cannot fully work right now: row text plus a warning tooltip. */
+      notice?: ProviderCommandNotice | null;
     }
   | {
       id: string;
@@ -351,7 +358,7 @@ export function ComposerCommandMenu(props: {
         item.type === "provider-native-command" && item.notice ? (
           <span className="inline-flex items-center gap-1.5">
             {commandMenuTrailingMeta(item)}
-            <CommandNoticeBadge notice={item.notice} />
+            <CommandNoticeBadge notice={item.notice.detail} />
           </span>
         ) : (
           commandMenuTrailingMeta(item)

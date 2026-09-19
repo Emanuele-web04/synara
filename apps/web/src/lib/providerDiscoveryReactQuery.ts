@@ -376,7 +376,14 @@ export function providerCommandsQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: 30_000,
-    placeholderData: (previous) => previous ?? EMPTY_COMMANDS_RESULT,
+    // Keeps the menu populated while refetching. `artifacts` is dropped because the
+    // previous entry can belong to another Claude thread, whose session may have a
+    // different Artifact opt-in; the warning waits for this thread's own answer.
+    placeholderData: (previous) => {
+      if (!previous) return EMPTY_COMMANDS_RESULT;
+      const { artifacts: _previousArtifacts, ...rest } = previous;
+      return rest;
+    },
   });
 }
 

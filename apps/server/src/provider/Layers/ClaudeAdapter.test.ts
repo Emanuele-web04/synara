@@ -12242,7 +12242,14 @@ describe("Claude explicit native compaction", () => {
         );
         assert.equal((yield* discover()).artifacts, enableArtifacts ? "available" : "disabled");
         harness.query.supportedCommandList = [fakeSlashCommand("design")];
-        assert.equal((yield* discover()).artifacts, enableArtifacts ? "unavailable" : "disabled");
+        const withoutSlides = yield* discover();
+        assert.equal(withoutSlides.artifacts, enableArtifacts ? "unavailable" : "disabled");
+        // Claude stopped listing `/slides`; it stays discoverable so the composer can
+        // explain why, without duplicating the `/design` Claude still reports.
+        assert.deepEqual(
+          withoutSlides.commands.map((command) => command.name),
+          ["design", "slides"],
+        );
       }).pipe(
         Effect.provideService(Random.Random, makeDeterministicRandomService()),
         Effect.provide(harness.layer),

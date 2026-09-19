@@ -11,13 +11,13 @@ describe("getClaudeArtifactCommandNotice", () => {
   });
 
   it("points at the setting while artifacts are off", () => {
-    expect(getClaudeArtifactCommandNotice({ ...base, artifacts: "disabled" })).toContain(
-      "Settings → Providers → Claude",
-    );
+    const notice = getClaudeArtifactCommandNotice({ ...base, artifacts: "disabled" });
+    expect(notice?.summary).toContain("Settings → Providers → Claude");
+    expect(notice?.detail).toContain("/design needs Claude Artifacts");
   });
 
   it("explains account requirements when Claude refused artifacts", () => {
-    expect(getClaudeArtifactCommandNotice({ ...base, artifacts: "unavailable" })).toContain(
+    expect(getClaudeArtifactCommandNotice({ ...base, artifacts: "unavailable" })?.detail).toContain(
       "claude.ai login",
     );
   });

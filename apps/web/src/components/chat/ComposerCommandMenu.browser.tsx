@@ -88,6 +88,7 @@ describe("ComposerCommandMenu provider command notices", () => {
 
   it("explains an unavailable provider command from a warning tooltip", async () => {
     const notice = "/design needs Claude Artifacts, which are off in Synara sessions by default.";
+    const summary = "Artifacts are off. Turn them on in Settings.";
     const menu = await mountMenu({
       isLoading: false,
       triggerKind: "slash-command",
@@ -99,7 +100,7 @@ describe("ComposerCommandMenu provider command notices", () => {
           command: "design",
           label: "/design",
           description: "Make a new Design artifact from a brief",
-          notice,
+          notice: { summary, detail: notice },
         },
         {
           id: "provider-command:claudeAgent:compact",
@@ -113,6 +114,8 @@ describe("ComposerCommandMenu provider command notices", () => {
     });
 
     try {
+      // Readable from the row alone, since keyboard use never focuses the icon.
+      await expect.element(page.getByText(summary, { exact: true })).toBeVisible();
       const badge = page.getByRole("img", { name: notice });
       await expect.element(badge).toBeVisible();
       expect(document.querySelectorAll('[role="img"][aria-label]').length).toBe(1);

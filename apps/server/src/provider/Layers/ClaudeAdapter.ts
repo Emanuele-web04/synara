@@ -637,15 +637,31 @@ function resolveClaudeArtifactsState(input: {
   return available ? "available" : "unavailable";
 }
 
+// Claude drops these while the Artifact tool is off, which would leave the composer
+// no row to explain why. Listed only when Claude did not report them itself.
+const CLAUDE_ARTIFACT_COMMANDS = [
+  { name: "design", description: "Make a new Design artifact from a brief" },
+  { name: "slides", description: "Make a new Slides deck artifact from a brief" },
+] as const;
+
 function mapSupportedCommands(
   commands: SlashCommand[],
   artifacts: ProviderArtifactsState,
 ): ProviderListCommandsResult {
+  const missingArtifactCommands =
+    artifacts === "available"
+      ? []
+      : CLAUDE_ARTIFACT_COMMANDS.filter(
+          (known) => !commands.some((command) => command.name === known.name),
+        );
   return {
-    commands: commands.map((cmd) => ({
-      name: cmd.name,
-      description: cmd.description || undefined,
-    })),
+    commands: [
+      ...commands.map((cmd) => ({
+        name: cmd.name,
+        description: cmd.description || undefined,
+      })),
+      ...missingArtifactCommands,
+    ],
     artifacts,
     source: "claudeAgent",
     cached: false,

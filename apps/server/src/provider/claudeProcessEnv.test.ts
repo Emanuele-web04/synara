@@ -200,5 +200,8 @@ describe("claudeProcessEnv", () => {
       PATH: "/usr/bin",
       CLAUDE_CODE_ARTIFACT: "1",
     });
+    assert.deepStrictEqual(withClaudeArtifactOptIn({ ...env, CLAUDE_CODE_ARTIFACT: "1" }, false), {
+      PATH: "/usr/bin",
+    });
   });
 });
