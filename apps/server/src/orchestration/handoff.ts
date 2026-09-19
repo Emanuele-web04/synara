@@ -62,7 +62,7 @@ export function hasNativeHandoffMessages(thread: Pick<OrchestrationThread, "mess
   return thread.messages.some(
     (message) =>
       (message.role === "user" || message.role === "assistant") &&
-      message.source === "native" &&
+      (message.source === "native" || message.source === "async-user-input") &&
       message.streaming === false,
   );
 }

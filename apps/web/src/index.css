@@ -2566,7 +2566,9 @@ diffs-container {
 :root[data-runtime="electron"] .chat-composer-surface,
 :root[data-runtime="electron"] .chat-composer-stacked-top,
 :root[data-runtime="electron"] .chat-composer-surface-banner,
-:root[data-runtime="electron"] .chat-user-message-bubble {
+:root[data-runtime="electron"] .chat-user-message-bubble,
+:root[data-runtime="electron"] .palette-surface,
+:root[data-runtime="electron"] .palette-row {
   -electron-corner-smoothing: system-ui;
 }
 
@@ -2576,7 +2578,9 @@ diffs-container {
   :root:not([data-runtime="electron"]) .chat-composer-surface,
   :root:not([data-runtime="electron"]) .chat-composer-stacked-top,
   :root:not([data-runtime="electron"]) .chat-composer-surface-banner,
-  :root:not([data-runtime="electron"]) .chat-user-message-bubble {
+  :root:not([data-runtime="electron"]) .chat-user-message-bubble,
+  :root:not([data-runtime="electron"]) .palette-surface,
+  :root:not([data-runtime="electron"]) .palette-row {
     corner-shape: squircle;
   }
 }

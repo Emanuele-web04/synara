@@ -1163,7 +1163,7 @@ function SettingsRouteView() {
           settingKey: "composerEffortSlider",
           title: "Effort slider",
           description:
-            "Once a chat has started, show reasoning effort as a slider in the composer's model menu, with fast mode and the model list alongside it. New chats keep the separate model and effort pickers.",
+            "Show effort as a slider at the bottom of the composer's model picker, with fast mode and reset alongside it, instead of separate Effort and Speed rows.",
           resetLabel: "effort slider",
           ariaLabel: "Show effort slider in the composer",
         })}

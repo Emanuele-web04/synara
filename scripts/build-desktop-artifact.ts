@@ -21,6 +21,7 @@ import {
   MAC_DEVICE_HELPER_RESOURCE_PATH,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
 import { finalizeSignedMacDmg } from "./lib/mac-dmg-finalize.ts";
@@ -1039,8 +1040,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
   }
 
-  // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
-  yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
+  yield* stageDesktopRuntimeResources(
+    stageResourcesDir,
+    path.join(stageAppDir, "apps/desktop/prod-resources"),
+  );
 
   const resolvedBuildConfig = yield* createBuildConfig(
     options.platform,

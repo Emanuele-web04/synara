@@ -163,4 +163,17 @@ describe("listEditableShortcutDefinitions", () => {
       STATIC_KEYBINDING_COMMANDS,
     );
   });
+
+  it("shows a friendly label instead of the raw command id for every built-in command", () => {
+    const definitions = listEditableShortcutDefinitions();
+    const unlabeledCommands = definitions
+      .filter(
+        (definition) =>
+          definition.label === definition.command ||
+          definition.description === "Assign a shortcut to this built-in command.",
+      )
+      .map((definition) => definition.command);
+
+    expect(unlabeledCommands).toEqual([]);
+  });
 });

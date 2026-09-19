@@ -235,6 +235,15 @@ jobs:
       - name: Build desktop pipeline
         run: bun run build:desktop
 
+      - name: Configure Electron sandbox helper
+        run: |
+          sandbox_helper="$(node -p "require('node:path').join(require('node:path').dirname(require('./apps/desktop/node_modules/electron')), 'chrome-sandbox')")"
+          sudo chown root:root "$sandbox_helper"
+          sudo chmod 4755 "$sandbox_helper"
+
+      - name: Verify live Electron browser lifecycle
+        run: xvfb-run -a bun run --cwd apps/desktop smoke:browser-lifecycle
+
       - name: Verify preload bundle output
         run: |
           test -f apps/desktop/dist-electron/preload.js

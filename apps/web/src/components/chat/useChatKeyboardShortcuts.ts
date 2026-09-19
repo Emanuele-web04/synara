@@ -6,7 +6,7 @@ import {
 } from "@synara/contracts";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { useEffect } from "react";
-import { readFavoriteModelSlugs } from "~/lib/modelFavorites";
+import { readStarredModelSlugs } from "~/lib/starredModels";
 import { isMacNavigatorPlatform } from "~/lib/utils";
 import { projectScriptIdFromCommand } from "~/projectScripts";
 import { isElectron } from "../../env";
@@ -269,7 +269,7 @@ export function useChatKeyboardShortcuts({
         const nextSlug = resolveCycledModelSlug({
           currentModel: selectedModel,
           options: providerOptions,
-          favoriteSlugs: readFavoriteModelSlugs(selectedProvider),
+          favoriteSlugs: readStarredModelSlugs(selectedProvider),
           direction,
         });
         if (!nextSlug) return;

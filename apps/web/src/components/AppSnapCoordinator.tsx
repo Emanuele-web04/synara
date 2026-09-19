@@ -288,15 +288,18 @@ export function AppSnapCoordinator() {
         : { kind: "both-option-keys" };
     // The opt-in preference lives in the renderer settings store. This root
     // coordinator is mounted for the full UI lifetime and owns the native listener.
-    // Enable even when the saved shortcut is unavailable: the manager surfaces
-    // the conflict as an error state instead of AppSnap silently staying off.
+    // AppSnap is macOS-only, so unsupported desktop platforms must not attempt
+    // shortcut registration or log the expected platform availability result.
     void bridge
-      .setShortcut(shortcut)
-      .then((result) => {
-        if (!result.availability.available) {
-          console.warn("[appsnap] Saved shortcut is unavailable", result.availability.reason);
-        }
-        return bridge.setEnabled(settings.enableAppSnap);
+      .getState()
+      .then((state) => {
+        if (!state.supported) return;
+        return bridge.setShortcut(shortcut).then((result) => {
+          if (!result.availability.available) {
+            console.warn("[appsnap] Saved shortcut is unavailable", result.availability.reason);
+          }
+          return bridge.setEnabled(settings.enableAppSnap);
+        });
       })
       .catch((error) => {
         console.warn("[appsnap] Could not update native listener state", error);

@@ -4,22 +4,41 @@ import {
   formatContextWindowTokens,
   formatCostUsd,
 } from "~/lib/contextWindow";
+import { useState } from "react";
+import { useNowMs } from "~/hooks/useNowMs";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { ClaudeCacheDetails } from "./ClaudeCacheDetails";
+import { Button } from "../ui/button";
 
 export function ContextWindowMeter(props: {
   usage: ContextWindowSnapshot;
   cumulativeCostUsd?: number | null | undefined;
   activeWindowLabel?: string | null | undefined;
   pendingWindowLabel?: string | null | undefined;
+  showClaudeCache?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  compactAction?: {
+    disabledReason: string | null;
+    isSubmitting: boolean;
+    onCompact: () => Promise<boolean>;
+  };
 }) {
   const { usage, cumulativeCostUsd, activeWindowLabel, pendingWindowLabel } = props;
+  const [open, setOpen] = useState(false);
+  const nowMs = useNowMs(open && usage.claudeCache != null, 10_000);
   const display = deriveContextWindowMeterDisplay(usage);
   const radius = 6;
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference - (display.normalizedPercentage / 100) * circumference;
 
   return (
-    <Popover>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        props.onOpenChange?.(nextOpen);
+      }}
+    >
       <PopoverTrigger
         openOnHover
         delay={150}
@@ -91,7 +110,15 @@ export function ContextWindowMeter(props: {
           )}
           {usage.maxTokens !== null ? (
             <div className="text-xs text-muted-foreground">
-              Model window: {formatContextWindowTokens(usage.maxTokens)} tokens
+              Active context limit: {formatContextWindowTokens(usage.maxTokens)} tokens
+            </div>
+          ) : null}
+          {props.showClaudeCache && activeWindowLabel ? (
+            <div className="max-w-72 space-y-1 text-xs text-muted-foreground">
+              <div>Auto-compact target: {activeWindowLabel}</div>
+              <p className="leading-relaxed">
+                The session's auto-compact target can be lower than the model's supported window.
+              </p>
             </div>
           ) : null}
           {pendingWindowLabel ? (
@@ -112,6 +139,30 @@ export function ContextWindowMeter(props: {
           {cumulativeCostUsd !== null && cumulativeCostUsd !== undefined ? (
             <div className="text-xs text-muted-foreground">
               Session cost: {formatCostUsd(cumulativeCostUsd)}
+            </div>
+          ) : null}
+          {usage.claudeCache || props.showClaudeCache ? (
+            <ClaudeCacheDetails observation={usage.claudeCache ?? undefined} nowMs={nowMs} />
+          ) : null}
+          {props.compactAction ? (
+            <div className="max-w-72 space-y-1.5 border-t border-border/50 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={
+                  props.compactAction.disabledReason !== null || props.compactAction.isSubmitting
+                }
+                onClick={() => {
+                  void props.compactAction?.onCompact();
+                }}
+              >
+                {props.compactAction.isSubmitting ? "Starting compaction..." : "Compact now"}
+              </Button>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {props.compactAction.disabledReason ??
+                  "Compaction processes this conversation and consumes usage. Later turns use its summary."}
+              </p>
             </div>
           ) : null}
         </div>

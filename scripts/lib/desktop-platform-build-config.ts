@@ -3,6 +3,11 @@
 // Layer: Release/build helper
 // Depends on: Desktop packaging policy and electron-builder config shape.
 
+import {
+  createDesktopBundleFilePatterns,
+  preserveDependencyDiagnostics,
+} from "./desktop-bundle-files.ts";
+
 export const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
 export const MAC_ENTITLEMENTS_PATH = "apps/desktop/resources/entitlements.mac.plist";
@@ -67,7 +72,15 @@ export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInpu
 export function createDesktopPlatformBuildConfig(
   input: CreateDesktopPlatformBuildConfigInput,
 ): DesktopPlatformBuildConfig {
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS] };
+  const report =
+    process.platform === "linux"
+      ? (process.report.getReport() as { header?: { glibcVersionRuntime?: string } })
+      : undefined;
+  const files = createDesktopBundleFilePatterns(input.platform, {
+    diagnostics: preserveDependencyDiagnostics(process.env),
+    linuxGlibc: typeof report?.header?.glibcVersionRuntime === "string",
+  });
+  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS], files };
 
   if (input.platform === "mac") {
     const mac = {
@@ -90,13 +103,21 @@ export function createDesktopPlatformBuildConfig(
     return {
       ...nativePackaging,
       dmg: {
+        background: "apps/desktop/resources/dmgly/assets/dmg-background.png",
+        window: { width: 642, height: 406 },
+        iconSize: 128,
+        contents: [
+          // Omit path so electron-builder uses the packaged app and its actual filename.
+          { x: 172, y: 135, type: "file" },
+          { x: 514, y: 241, type: "link", path: "/Applications" },
+        ],
         sign: input.signed === true,
         // The signed release flow notarizes and staples the DMG after electron-builder exits.
         // Do not emit a blockmap/update entry whose hashes would describe the pre-stapled image;
         // macOS auto-updates use the separately finalized ZIP artifact.
         writeUpdateInfo: false,
       },
-      files: ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION],
+      files: [...files, MAC_APPSNAP_HELPER_ASAR_EXCLUSION],
       extraFiles: [
         {
           from: MAC_APPSNAP_HELPER_STAGE_PATH,

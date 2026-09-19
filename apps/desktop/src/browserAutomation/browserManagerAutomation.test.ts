@@ -448,6 +448,61 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     rendererManager.dispose();
   });
 
+  it.each(["native", "renderer"] as const)(
+    "restores the %s viewport on panel resize but preserves it during panel movement",
+    (surface) => {
+      const contents = Object.assign(new FakeWebContents(103), {
+        getType: () => "webview",
+        hostWebContents: { id: 41 },
+        session: browserSession,
+        debugger: {
+          isAttached: () => true,
+          detach: vi.fn(),
+          sendCommand: vi.fn(async () => ({})),
+        },
+      });
+      const manager = new DesktopBrowserManager();
+      if (surface === "native") {
+        webContentsViewConstructor.mockReturnValueOnce({
+          webContents: contents,
+          setBounds: vi.fn(),
+          setVisible: vi.fn(),
+          setBorderRadius: vi.fn(),
+        });
+        manager.setWindow({
+          contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+        } as never);
+      }
+      const state = manager.open({ threadId: THREAD_ID });
+      if (surface === "renderer") {
+        fromId.mockReturnValue(contents);
+        manager.attachWebview(
+          { threadId: THREAD_ID, tabId: state.activeTabId!, webContentsId: 103 },
+          41,
+        );
+      }
+      const input = { threadId: THREAD_ID, surface };
+      const bounds = { x: 0, y: 50, width: 800, height: 600 };
+      try {
+        manager.setPanelBounds({ ...input, bounds });
+        contents.debugger.sendCommand.mockClear();
+        manager.setPanelBounds({ ...input, bounds });
+        manager.setPanelBounds({ ...input, bounds: { ...bounds, x: 10 } });
+        expect(contents.debugger.sendCommand).not.toHaveBeenCalled();
+
+        manager.setPanelBounds({ ...input, bounds: { ...bounds, width: 700 } });
+        expect(contents.debugger.sendCommand).toHaveBeenCalledExactlyOnceWith(
+          "Emulation.clearDeviceMetricsOverride",
+        );
+        manager.setPanelBounds({ ...input, bounds, pageZoomFactor: 0.5 });
+        manager.setPanelBounds({ ...input, bounds, pageZoomFactor: 1 });
+        expect(contents.debugger.sendCommand).toHaveBeenCalledTimes(3);
+      } finally {
+        manager.dispose();
+      }
+    },
+  );
+
   it("demotes a native runtime to renderer when the floating surface claims the tab", () => {
     const nativeWebContents = new FakeWebContents(201);
     const nativeView = {

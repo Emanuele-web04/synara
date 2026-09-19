@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { BrowserVaultSnapshot } from "@synara/contracts";
-import type { CaptureContext } from "betterwright/capture";
+import type { CaptureContextShim } from "./browserVaultCapture";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import type { BrowserVault } from "./browserVault";
@@ -52,6 +52,7 @@ describe("native credential capture lifecycle", () => {
     expect(mocks.install).not.toHaveBeenCalled();
     f.update({ settings: { offerSave: true, autosave: false, agentUse: true } });
     await vi.waitFor(() => expect(mocks.install).toHaveBeenCalledTimes(1));
+    expect(mocks.install.mock.calls[0]![1]).toMatchObject({ promptTtlMs: 120_000 });
     f.update({ protection: { configured: true, locked: true, osProtected: false } });
     await vi.waitFor(() => expect(mocks.dispose).toHaveBeenCalledTimes(1));
     await f.capture.dispose();
@@ -61,7 +62,7 @@ describe("native credential capture lifecycle", () => {
     const f = fixture();
     f.update({ settings: { offerSave: true, autosave: false, agentUse: true } });
     await vi.waitFor(() => expect(mocks.install).toHaveBeenCalled());
-    const context = mocks.install.mock.calls[0]![0] as CaptureContext;
+    const context = mocks.install.mock.calls[0]![0] as CaptureContextShim;
     const debuggerApi = Object.assign(new EventEmitter(), {
       isAttached: () => true,
       sendCommand: vi.fn(async (method: string) =>
@@ -87,6 +88,45 @@ describe("native credential capture lifecycle", () => {
     });
     unregister();
     expect(context.pages()).toEqual([]);
+    await f.capture.dispose();
+  });
+
+  it("keeps the capture surface structurally complete (pages/on/off/newCDPSession/isClosed)", async () => {
+    const f = fixture();
+    f.update({ settings: { offerSave: true, autosave: false, agentUse: true } });
+    await vi.waitFor(() => expect(mocks.install).toHaveBeenCalled());
+    const context = mocks.install.mock.calls[0]![0] as CaptureContextShim;
+    // on("page") fires for late-registered tabs; off("page") stops the fan-out.
+    const seen: string[] = [];
+    const listener = (page: { id: string }) => void seen.push(page.id);
+    context.on("page", listener);
+    const unregister = f.capture.register({
+      webContents: {
+        debugger: Object.assign(new EventEmitter(), {
+          isAttached: () => false,
+          sendCommand: vi.fn(),
+        }),
+        isDestroyed: () => false,
+      },
+    } as unknown as BrowserAutomationVisibleRuntime);
+    expect(seen).toHaveLength(1);
+    context.off("page", listener);
+    f.capture.register({
+      webContents: {
+        debugger: Object.assign(new EventEmitter(), {
+          isAttached: () => false,
+          sendCommand: vi.fn(),
+        }),
+        isDestroyed: () => false,
+      },
+    } as unknown as BrowserAutomationVisibleRuntime);
+    expect(seen).toHaveLength(1);
+    // Closed tabs are reported shut and refuse new CDP sessions.
+    const [page] = context.pages();
+    expect(page!.isClosed()).toBe(false);
+    unregister();
+    expect(page!.isClosed()).toBe(true);
+    await expect(context.newCDPSession(page!)).rejects.toThrow("unavailable");
     await f.capture.dispose();
   });
 });

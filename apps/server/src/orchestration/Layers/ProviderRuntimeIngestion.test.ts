@@ -6792,6 +6792,63 @@ describe("ProviderRuntimeIngestion", () => {
     expect(failed?.tone).toBe("error");
   });
 
+  it("keeps async question completion separate from independent streaming text", async () => {
+    const harness = await createHarness();
+    const createdAt = new Date().toISOString();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("async-turn");
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("async-start"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+      payload: {},
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("independent-text"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+      itemId: RuntimeItemId.makeUnsafe("independent"),
+      payload: { streamKind: "assistant_text", delta: "Inspecting the code." },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("async-question"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+      itemId: RuntimeItemId.makeUnsafe("question"),
+      payload: {
+        itemType: "assistant_message",
+        detail: "When does it happen?",
+        asyncQuestions: [{ title: "When does it happen?", options: ["On launch", "On reconnect"] }],
+      },
+    });
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some((message) => message.asyncUserInput !== undefined),
+    );
+    expect(thread.messages.find((message) => message.id === "assistant:question")).toMatchObject({
+      text: "When does it happen?",
+      streaming: false,
+      asyncUserInput: {
+        questions: [{ title: "When does it happen?", options: ["On launch", "On reconnect"] }],
+      },
+    });
+    expect(thread.messages.find((message) => message.id === "assistant:independent")).toMatchObject(
+      { text: "Inspecting the code.", streaming: true },
+    );
+    expect(thread.session?.status).toBe("running");
+    expect(thread.activities.some((activity) => activity.kind === "user-input.requested")).toBe(
+      false,
+    );
+  });
+
   it("projects Codex task lifecycle chunks into thread activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

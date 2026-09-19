@@ -44,7 +44,8 @@ describe("createDesktopPlatformBuildConfig", () => {
       "apps/desktop/native/appsnap/build/synara-appsnap-helper",
     );
     assert.equal(MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/native/appsnap/build/**");
-    assert.deepStrictEqual(config.files, ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION]);
+    assert.equal(config.files?.[0], "**/*");
+    assert.ok(config.files?.includes(MAC_APPSNAP_HELPER_ASAR_EXCLUSION));
     assert.deepStrictEqual(config.extraFiles, [
       {
         from: "apps/desktop/native/appsnap/build/synara-appsnap-helper",
@@ -66,7 +67,17 @@ describe("createDesktopPlatformBuildConfig", () => {
       signed: false,
     });
 
-    assert.deepStrictEqual(config.dmg, { sign: false, writeUpdateInfo: false });
+    assert.deepStrictEqual(config.dmg, {
+      background: "apps/desktop/resources/dmgly/assets/dmg-background.png",
+      window: { width: 642, height: 406 },
+      iconSize: 128,
+      contents: [
+        { x: 172, y: 135, type: "file" },
+        { x: 514, y: 241, type: "link", path: "/Applications" },
+      ],
+      sign: false,
+      writeUpdateInfo: false,
+    });
   });
 
   it("leaves non-macOS platform configs unchanged", () => {

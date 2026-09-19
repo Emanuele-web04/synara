@@ -30,6 +30,7 @@ import {
   shell,
   systemPreferences,
 } from "electron";
+import { configureElectronNetwork } from "betterwright/electron";
 import type {
   BrowserWindowConstructorOptions,
   FileFilter,
@@ -189,6 +190,7 @@ import {
   applyDesktopPhysicalZoomAction,
   resolveDesktopMenuAccelerator,
   resolveDesktopPhysicalZoomAction,
+  resolveDesktopZoomShortcutAction,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
@@ -467,7 +469,11 @@ const browserManager = new DesktopBrowserManager({
     }
 
     const target = resolveMenuTargetWindow()?.webContents;
-    return target ? handleDesktopPhysicalZoomShortcut(event, input, target) : false;
+    if (!target) return false;
+    return (
+      handleDesktopPhysicalZoomShortcut(event, input, target) ||
+      handleDesktopZoomShortcut(event, input, target)
+    );
   },
 });
 let browserHostPipeServer: BrowserHostPipeServer | null = null;
@@ -1612,8 +1618,33 @@ function handleDesktopPhysicalZoomShortcut(
 
 function attachDesktopPhysicalZoomShortcuts(window: BrowserWindow): void {
   window.webContents.on("before-input-event", (event, input) => {
-    handleDesktopPhysicalZoomShortcut(event, input, window.webContents);
+    if (handleDesktopPhysicalZoomShortcut(event, input, window.webContents)) return;
+    handleDesktopZoomShortcut(event, input, window.webContents);
   });
+}
+
+function handleDesktopZoomShortcut(
+  event: Electron.Event,
+  input: Electron.Input,
+  target: Electron.WebContents,
+): boolean {
+  const action = resolveDesktopZoomShortcutAction(process.platform, input);
+  if (!action || target.isDestroyed()) {
+    return false;
+  }
+
+  event.preventDefault();
+  if (action === "resetZoom") {
+    target.setZoomFactor(1);
+  } else {
+    // Same 1.1 step as the View-menu click handlers so keyboard and menu
+    // zoom can never drift apart.
+    adjustWebContentsZoom(
+      target,
+      action === "zoomIn" ? DESKTOP_MENU_ZOOM_FACTOR_STEP : 1 / DESKTOP_MENU_ZOOM_FACTOR_STEP,
+    );
+  }
+  return true;
 }
 
 function resetWindowZoomFromMenu(): void {
@@ -5221,6 +5252,7 @@ if (hasSingleInstanceLock) {
 }
 
 configureAppIdentity();
+configureElectronNetwork();
 
 const browserEngineFeatures = new Set([
   ...app.commandLine.getSwitchValue("enable-features").split(",").filter(Boolean),

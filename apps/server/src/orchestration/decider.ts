@@ -7,8 +7,13 @@ import type {
   ThreadGoalAchievement,
 } from "@synara/contracts";
 import {
+  ASYNC_USER_INPUT_ALREADY_ANSWERED,
+  formatAsyncUserInputResponse,
+} from "@synara/shared/asyncUserInput";
+import {
   EventId,
   MAX_PINNED_PROJECTS,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   PINNED_MESSAGES_MAX_COUNT,
   RESERVED_VOID_SPACE_ID,
   SPACES_MAX_COUNT,
@@ -1376,7 +1381,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const occurredAt = nowIso();
-      return {
+      const deleteEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1389,6 +1394,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+      return thread.claudeCacheReview
+        ? [
+            {
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt,
+                commandId: command.commandId,
+              }),
+              type: "thread.claude-cache-set" as const,
+              payload: { threadId: command.threadId, review: null, updatedAt: occurredAt },
+            },
+            deleteEvent,
+          ]
+        : deleteEvent;
     }
 
     case "thread.archive": {
@@ -1404,21 +1424,40 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const subagentThreadIds = collectSubagentDescendants(readModel.threads, command.threadId)
         .filter((thread) => thread.deletedAt === null && (thread.archivedAt ?? null) === null)
         .map((thread) => thread.id);
-      return [...subagentThreadIds, command.threadId].map(
-        (threadId): Omit<OrchestrationEvent, "sequence"> => ({
-          ...withEventBase({
-            aggregateKind: "thread",
-            aggregateId: threadId,
-            occurredAt,
-            commandId: command.commandId,
-          }),
-          type: "thread.archived",
-          payload: {
-            threadId,
-            archivedAt: occurredAt,
-            updatedAt: occurredAt,
-          },
-        }),
+      return [...subagentThreadIds, command.threadId].flatMap(
+        (threadId): Array<Omit<OrchestrationEvent, "sequence">> => {
+          const review = readModel.threads.find(
+            (entry) => entry.id === threadId,
+          )?.claudeCacheReview;
+          const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+          if (review) {
+            events.push({
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: threadId,
+                occurredAt,
+                commandId: command.commandId,
+              }),
+              type: "thread.claude-cache-set",
+              payload: { threadId, review: null, updatedAt: occurredAt },
+            });
+          }
+          events.push({
+            ...withEventBase({
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt,
+              commandId: command.commandId,
+            }),
+            type: "thread.archived",
+            payload: {
+              threadId,
+              archivedAt: occurredAt,
+              updatedAt: occurredAt,
+            },
+          });
+          return events;
+        },
       );
     }
 
@@ -1691,13 +1730,65 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const sourceProposedPlan = command.sourceProposedPlan;
+      const questionResponse = command.asyncUserInputResponse;
+      const questionMessage = questionResponse
+        ? targetThread.messages.find((message) => message.id === questionResponse.messageId)
+        : undefined;
+      if (questionResponse) {
+        if (
+          !questionMessage?.asyncUserInput ||
+          questionMessage.role !== "assistant" ||
+          targetThread.modelSelection.provider !== "codex" ||
+          (targetThread.session?.providerName != null &&
+            targetThread.session.providerName !== "codex") ||
+          (command.modelSelection && command.modelSelection.provider !== "codex") ||
+          targetThread.parentThreadId !== null
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "This asynchronous question is unavailable in this Codex thread.",
+          });
+        }
+        // Serialized command admission makes concurrent answers from multiple
+        // clients a single durable submission, even with different command ids.
+        if (questionMessage.asyncUserInput.response) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: ASYNC_USER_INPUT_ALREADY_ANSWERED,
+          });
+        }
+        if (
+          questionResponse.answers.length !== questionMessage.asyncUserInput.questions.length ||
+          targetThread.messages.some((message) => message.id === command.message.messageId)
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Provide one answer per question and a new response message id.",
+          });
+        }
+      }
+      const messageText =
+        questionResponse && questionMessage?.asyncUserInput
+          ? formatAsyncUserInputResponse(
+              questionMessage.asyncUserInput.questions,
+              questionResponse.answers,
+            )
+          : command.message.text;
+      if (messageText.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The question response exceeds the maximum message length.",
+        });
+      }
       // A quit-resume command is planned just before commands are admitted.
       // Respect settings changed before its serialized dispatch instead of
       // replaying the planner's stale permission or interaction mode.
       const runtimeMode =
-        command.resumePrecondition === undefined ? command.runtimeMode : targetThread.runtimeMode;
+        command.resumePrecondition === undefined && !questionResponse
+          ? command.runtimeMode
+          : targetThread.runtimeMode;
       const interactionMode =
-        command.resumePrecondition === undefined
+        command.resumePrecondition === undefined && !questionResponse
           ? command.interactionMode
           : targetThread.interactionMode;
       yield* validateAutoRuntimeMode(
@@ -1716,7 +1807,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         sourceProposedPlan && sourceThread
           ? sourceThread.proposedPlans.find((entry) => entry.id === sourceProposedPlan.planId)
           : null;
-      const dispatchMode = command.dispatchMode ?? "queue";
+      const dispatchMode = questionResponse ? "steer" : (command.dispatchMode ?? "queue");
       if (sourceProposedPlan && !sourcePlan) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1740,8 +1831,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // inject mid-turn input; everywhere else they queue and interrupt below.
       const shouldQueue =
         targetThread.parentThreadId === null &&
-        isThreadRunning &&
-        (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider));
+        (targetThread.claudeCacheReview != null ||
+          (isThreadRunning &&
+            (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider))));
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1754,7 +1846,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: command.message.messageId,
           role: "user",
-          text: command.message.text,
+          text: messageText,
           attachments: command.message.attachments,
           ...(command.message.skills !== undefined ? { skills: command.message.skills } : {}),
           ...(command.message.mentions !== undefined ? { mentions: command.message.mentions } : {}),
@@ -1768,7 +1860,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           startsNewTurn: dispatchMode !== "steer" || !isThreadRunning || shouldQueue,
           turnId: null,
           streaming: false,
-          source: "native",
+          source: questionResponse ? "async-user-input" : "native",
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -1800,7 +1892,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: shouldQueue ? "thread.turn-queued" : "thread.turn-start-requested",
         payload: turnRequestPayload,
       };
-      if (shouldQueue && dispatchMode === "steer") {
+      if (shouldQueue && dispatchMode === "steer" && targetThread.claudeCacheReview == null) {
         return [
           userMessageEvent,
           queuedEvent,
@@ -1821,7 +1913,164 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         ];
       }
+      if (questionResponse && questionMessage?.asyncUserInput) {
+        return [
+          {
+            ...withEventBase({
+              aggregateKind: "thread",
+              aggregateId: command.threadId,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            }),
+            type: "thread.async-user-input-answered",
+            payload: {
+              threadId: command.threadId,
+              messageId: questionMessage.id,
+              response: {
+                messageId: command.message.messageId,
+                answers: questionResponse.answers,
+              },
+            },
+          },
+          userMessageEvent,
+          queuedEvent,
+        ];
+      }
       return [userMessageEvent, queuedEvent];
+    }
+
+    case "thread.claude-cache.set": {
+      if (command.hold) {
+        const target = readModel.threads.find((thread) => thread.id === command.threadId);
+        if (
+          !target ||
+          target.deletedAt != null ||
+          target.archivedAt != null ||
+          isExpiredSidechat(target) ||
+          command.hold.session.threadId !== command.threadId ||
+          command.hold.session.status !== "ready" ||
+          (command.review !== null &&
+            (command.review.status !== "pending" ||
+              !target.messages.some(
+                (message) => message.id === command.review?.messageId && message.role === "user",
+              )))
+        )
+          return [];
+      }
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (
+        command.expectedReviewId !== undefined &&
+        (thread.claudeCacheReview?.reviewId ?? null) !== command.expectedReviewId
+      )
+        return [];
+      const reviewEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.claude-cache-set",
+        payload: {
+          threadId: command.threadId,
+          review: command.review,
+          updatedAt: command.createdAt,
+        },
+      };
+      return command.hold
+        ? [
+            reviewEvent,
+            {
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              }),
+              type: "thread.session-set",
+              payload: { threadId: command.threadId, session: command.hold.session },
+            },
+          ]
+        : reviewEvent;
+    }
+
+    case "thread.claude-cache.compacted": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const review = thread.claudeCacheReview;
+      if (
+        !review ||
+        review.reviewId !== command.reviewId ||
+        (review.status !== "compacting" && review.status !== "uncertain") ||
+        review.compactionTurnId !== command.turnId ||
+        thread.archivedAt != null
+      )
+        return [];
+      const base = {
+        aggregateKind: "thread" as const,
+        aggregateId: command.threadId,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      };
+      return [
+        {
+          ...withEventBase(base),
+          type: "thread.claude-cache-set",
+          payload: {
+            threadId: command.threadId,
+            review: { ...review, status: "responding" as const },
+            updatedAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase(base),
+          type: "thread.claude-cache-response-requested",
+          payload: {
+            threadId: command.threadId,
+            review,
+            decision: "continue" as const,
+            createdAt: command.createdAt,
+          },
+        },
+      ];
+    }
+
+    case "thread.claude-cache.respond": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const review = thread.claudeCacheReview;
+      if (
+        !review ||
+        review.reviewId !== command.reviewId ||
+        review.messageId !== command.messageId ||
+        (review.status !== "pending" && review.status !== "failed")
+      )
+        return [];
+      const base = {
+        aggregateKind: "thread" as const,
+        aggregateId: command.threadId,
+        occurredAt: command.createdAt,
+        commandId: command.commandId,
+      };
+      return [
+        {
+          ...withEventBase(base),
+          type: "thread.claude-cache-set",
+          payload: {
+            threadId: command.threadId,
+            review: { ...review, status: "responding" as const, error: undefined },
+            updatedAt: command.createdAt,
+          },
+        },
+        {
+          ...withEventBase(base),
+          type: "thread.claude-cache-response-requested",
+          payload: {
+            threadId: command.threadId,
+            review,
+            decision: command.decision,
+            createdAt: command.createdAt,
+          },
+        },
+      ];
     }
 
     case "thread.turn.dispatch-queued": {
@@ -2226,12 +2475,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.session.stop": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const stopEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -2244,6 +2493,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      const review = thread.claudeCacheReview;
+      return review
+        ? [
+            {
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              }),
+              type: "thread.claude-cache-set" as const,
+              payload: { threadId: command.threadId, review: null, updatedAt: command.createdAt },
+            },
+            stopEvent,
+          ]
+        : stopEvent;
     }
 
     case "thread.goal.continue": {
@@ -2388,6 +2653,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.messageId,
           role: "assistant",
           text: existingMessage?.text ?? "",
+          ...(command.asyncQuestions
+            ? {
+                asyncUserInput: existingMessage?.asyncUserInput ?? {
+                  questions: command.asyncQuestions,
+                },
+              }
+            : {}),
           turnId: resolveStableMessageTurnId({
             existingTurnId: existingMessage?.turnId,
             incomingTurnId: command.turnId,
