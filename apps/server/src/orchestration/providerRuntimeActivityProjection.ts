@@ -3,16 +3,23 @@ import {
   EventId,
   isToolLifecycleItemType,
   type OrchestrationThreadActivity,
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderKind,
   type ProviderRuntimeEvent,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
 import { nonEmptyTrimmed } from "@synara/shared/text";
+import { toolParamsDisplayFromToolInput } from "@synara/shared/toolParamsDisplay";
 
 import {
   sanitizeUnmappedProviderData,
   sanitizeUnmappedProviderDetail,
 } from "../provider/unmappedProviderEvents.ts";
+import {
+  buildToolApprovalPresentation,
+  type ToolApprovalPresentation,
+} from "./toolApprovalPresentation.ts";
 
 const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
 const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
@@ -508,11 +515,16 @@ export function runtimeTurnState(
 
 function requestKindFromCanonicalRequestType(
   requestType: string | undefined,
-): "command" | "file-read" | "file-change" | "permissions" | undefined {
+): "command" | "file-read" | "file-change" | "permissions" | "tool" | undefined {
   if (requestType === "command_execution_approval" || requestType === "exec_command_approval")
     return "command";
   if (requestType === "file_read_approval") return "file-read";
   if (requestType === "permissions_approval") return "permissions";
+  if (requestType === "tool_approval") return "tool";
+  // Legacy Claude classification: generic/MCP tool approvals were labelled with the
+  // item type instead of the canonical "tool_approval". Kept so persisted events
+  // still resolve to a renderable kind.
+  if (requestType === "dynamic_tool_call") return "tool";
   return requestType === "file_change_approval" || requestType === "apply_patch_approval"
     ? "file-change"
     : undefined;
@@ -538,6 +550,26 @@ function sessionApprovalAvailable(
   return typeof args?.sessionApprovalAvailable === "boolean"
     ? args.sessionApprovalAvailable
     : undefined;
+}
+
+function requestedToolCallPresentation(
+  event: Extract<ProviderRuntimeEvent, { type: "request.opened" }>,
+): ToolApprovalPresentation | Record<string, never> {
+  return (
+    buildToolApprovalPresentation({
+      requestType: event.payload.requestType,
+      providerDisplayName: providerDisplayName(event.provider),
+      args: event.payload.args,
+    }) ?? {}
+  );
+}
+
+function providerDisplayName(provider: string): string {
+  return isProviderKind(provider) ? PROVIDER_DISPLAY_NAMES[provider] : provider;
+}
+
+function isProviderKind(provider: string): provider is ProviderKind {
+  return Object.hasOwn(PROVIDER_DISPLAY_NAMES, provider);
 }
 
 export function projectProviderRuntimeActivities(
@@ -611,6 +643,8 @@ export function projectProviderRuntimeActivities(
         event.type === "request.opened" ? requestedPermissionProfile(event) : undefined;
       const canApproveForSession =
         event.type === "request.opened" ? sessionApprovalAvailable(event) : undefined;
+      const toolCallPresentation =
+        event.type === "request.opened" ? requestedToolCallPresentation(event) : {};
       const requestId = nonEmptyTrimmed(event.requestId);
       return [
         {
@@ -629,7 +663,9 @@ export function projectProviderRuntimeActivities(
                     ? "File-change approval requested"
                     : requestKind === "permissions"
                       ? "Permission approval requested"
-                      : "Approval requested",
+                      : requestKind === "tool"
+                        ? "Tool approval requested"
+                        : "Approval requested",
           payload: toActivityPayload({
             // Omitted, never `undefined`: `Schema.Json` rejects a member that is
             // explicitly present and undefined.
@@ -643,6 +679,7 @@ export function projectProviderRuntimeActivities(
               ? { detail: truncateDetail(event.payload.detail) }
               : {}),
             ...(permissionProfile ? { permissionProfile } : {}),
+            ...toolCallPresentation,
             ...(canApproveForSession !== undefined
               ? { sessionApprovalAvailable: canApproveForSession }
               : {}),

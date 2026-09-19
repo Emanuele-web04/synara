@@ -5,6 +5,104 @@ import type {
   AgentGatewayCredentialsShape,
   AgentGatewayMcpConnection,
 } from "./Services/AgentGatewayCredentials.ts";
+import type { AgentGatewayCapability } from "./Services/AgentGatewaySessionRegistry.ts";
+
+export interface AgentGatewaySessionLeaseOptions {
+  readonly additionalCapabilities?: readonly AgentGatewayCapability[];
+}
+
+/**
+ * The session-start facts that decide what a gateway credential may do.
+ *
+ * Adapters never assemble capability lists. Every lease site hands the start
+ * input it already has (or the subset it captured for a later re-lease) to
+ * `acquireAgentGatewaySessionLease`, and this module derives the capabilities.
+ *
+ * What this guarantees, exactly: every capability fact is a *required* field,
+ * enforced below by `NoOptionalCapabilityFacts`, and every field is listed in
+ * `AGENT_GATEWAY_CAPABILITY_FACTS`, enforced by `EveryCapabilityFactIsListed`.
+ * Adding a fact therefore fails to compile in three places at once — the keys
+ * tuple, `AGENT_GATEWAY_NO_CAPABILITIES`, and every call site that builds a
+ * capability input without it — instead of leasing a credential whose tools
+ * are quietly missing. It does not (and cannot) stop a caller passing a
+ * structurally wider object; it stops a caller passing an incomplete one.
+ *
+ */
+export interface AgentGatewayCapabilityInput {
+  /** The turn or session asked for desktop control (`computer:control`). */
+  readonly enableComputerControl: boolean | undefined;
+}
+
+/**
+ * Every field of `AgentGatewayCapabilityInput`, as a tuple, so the derivation
+ * and the capture projection can be checked against one list.
+ */
+export const AGENT_GATEWAY_CAPABILITY_FACTS = [
+  "enableComputerControl",
+] as const satisfies readonly (keyof AgentGatewayCapabilityInput)[];
+
+type AssertNever<Key extends never> = Key;
+/** Fails to compile when a field is added without listing it above. */
+export type EveryCapabilityFactIsListed = AssertNever<
+  Exclude<keyof AgentGatewayCapabilityInput, (typeof AGENT_GATEWAY_CAPABILITY_FACTS)[number]>
+>;
+/**
+ * Fails to compile when a field is optional. An optional fact is exactly the
+ * silent omission this module exists to prevent: call sites keep compiling
+ * while the capability is never requested.
+ */
+export type NoOptionalCapabilityFacts = AssertNever<
+  {
+    [Key in keyof AgentGatewayCapabilityInput]-?: Record<string, never> extends Pick<
+      AgentGatewayCapabilityInput,
+      Key
+    >
+      ? Key
+      : never;
+  }[keyof AgentGatewayCapabilityInput]
+>;
+
+/** Lease no optional capabilities. Spelled out so an omission reads as a choice. */
+export const AGENT_GATEWAY_NO_CAPABILITIES: AgentGatewayCapabilityInput = {
+  enableComputerControl: false,
+};
+
+/** The single derivation from session-start facts to gateway capabilities. */
+export function agentGatewayCapabilitiesFor(
+  input: AgentGatewayCapabilityInput,
+): readonly AgentGatewayCapability[] {
+  const capabilities: AgentGatewayCapability[] = [];
+  if (input.enableComputerControl === true) capabilities.push("computer:control");
+  return capabilities;
+}
+
+export function agentGatewaySessionLeaseOptionsFor(
+  input: AgentGatewayCapabilityInput,
+): AgentGatewaySessionLeaseOptions | undefined {
+  const additionalCapabilities = agentGatewayCapabilitiesFor(input);
+  return additionalCapabilities.length === 0 ? undefined : { additionalCapabilities };
+}
+
+/**
+ * Narrow a start input to the fields a later re-lease needs. This is the one
+ * place a session-start input (where every fact is optional) becomes a
+ * capability input (where every fact is required), so a fact added to the
+ * interface must be projected here or nothing compiles.
+ *
+ * Adapters that re-lease from a stored session context (Antigravity mints its
+ * credential per turn; Pi rotates the credential when a turn completes) no
+ * longer hold the start input by then. They keep this projection instead of a
+ * hand-picked flag, so the set of capability facts stays defined in one place.
+ */
+export type AgentGatewayCapabilityFacts = {
+  readonly [Key in keyof AgentGatewayCapabilityInput]?: AgentGatewayCapabilityInput[Key];
+};
+
+export function captureAgentGatewayCapabilityInput(
+  input: AgentGatewayCapabilityFacts,
+): AgentGatewayCapabilityInput {
+  return { enableComputerControl: input.enableComputerControl === true };
+}
 
 type AgentGatewaySessionLeaseCredentials = Pick<
   AgentGatewayCredentialsShape,
@@ -142,14 +240,26 @@ export function withAgentGatewayTurnCancellation<A, E, R>(
   });
 }
 
+/**
+ * The capability input is a required parameter on purpose: a lease that
+ * forgets it fails silently (the credential is issued, the tools are just
+ * missing), so the type checker refuses the omission at every call site. The
+ * completeness of the input itself is enforced by the assertions on
+ * `AgentGatewayCapabilityInput`.
+ */
 export function acquireAgentGatewaySessionLease(
   credentials: AgentGatewaySessionLeaseCredentials | undefined,
   threadId: ThreadId,
   provider: ProviderKind,
+  capabilityInput: AgentGatewayCapabilityInput,
 ): AgentGatewaySessionLease | undefined {
   if (credentials === undefined) return undefined;
 
-  const connection = credentials.connectionForThread(threadId, provider);
+  const options = agentGatewaySessionLeaseOptionsFor(capabilityInput);
+  const connection =
+    options === undefined
+      ? credentials.connectionForThread(threadId, provider)
+      : credentials.connectionForThread(threadId, provider, options);
   let released = false;
 
   return {

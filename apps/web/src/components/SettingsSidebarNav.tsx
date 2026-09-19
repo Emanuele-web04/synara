@@ -7,8 +7,11 @@
 
 import { type KeyboardEvent as ReactKeyboardEvent, useState } from "react";
 
+import { computerBackendIsVisibleDesktop } from "~/components/ComputerPanel.logic";
+import { useCachedComputerStatus } from "~/hooks/useCachedComputerStatus";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { Badge } from "./ui/badge";
 import { SearchInput } from "./ui/search-input";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import {
@@ -20,6 +23,7 @@ import {
   rankSettingsSearchEntries,
   settingsSearchEntryTarget,
   settingsSectionLabel,
+  type SettingsSearchContext,
   type SettingsSearchEntry,
 } from "../settingsSearchIndex";
 import {
@@ -87,12 +91,35 @@ export function SettingsSidebarNav(props: {
   activeSection: SettingsSectionId;
   onBack: () => void;
   onSelectSection: (section: SettingsSectionId, options?: { target?: string }) => void;
+  /**
+   * Which conditionally-rendered rows exist on this machine, so the search
+   * cannot offer a row the panel does not draw. Optional, and only for tests
+   * and for a caller that already knows: left out, it is read below.
+   */
+  searchContext?: SettingsSearchContext | undefined;
 }) {
   const { onSelectSection } = props;
   const [query, setQuery] = useState("");
   const trimmedQuery = query.trim();
   const isSearching = trimmedQuery.length > 0;
-  const results = rankSettingsSearchEntries(trimmedQuery, SETTINGS_SEARCH_RESULTS_LIMIT);
+  // Read, never fetched. `computer.getStatus` engages the desktop backend — on
+  // macOS that starts the helper and can put a permission dialog on screen —
+  // and a sidebar deciding whether a search result exists must not be the thing
+  // that does that. `useCachedComputerStatus` subscribes to the query the
+  // Computer settings panel owns and answers `undefined` until it has fetched.
+  //
+  // Nothing supplied this context before, so `computerBackendIsVisibleDesktop`
+  // was permanently false and the search offered the pane auto-open row on
+  // exactly the backends whose panel hides it.
+  const cachedComputerStatus = useCachedComputerStatus();
+  const searchContext: SettingsSearchContext = props.searchContext ?? {
+    computerBackendIsVisibleDesktop: computerBackendIsVisibleDesktop(cachedComputerStatus),
+  };
+  const results = rankSettingsSearchEntries(
+    trimmedQuery,
+    SETTINGS_SEARCH_RESULTS_LIMIT,
+    searchContext,
+  );
 
   const handleSelectResult = (entry: SettingsSearchEntry) => {
     const target = settingsSearchEntryTarget(entry);
@@ -204,6 +231,11 @@ export function SettingsSidebarNav(props: {
                           <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>
                             {item.label}
                           </span>
+                          {item.badge ? (
+                            <Badge variant="warning" size="sm" className="ml-auto">
+                              {item.badge}
+                            </Badge>
+                          ) : null}
                         </button>
                       </li>
                     );
