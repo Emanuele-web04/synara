@@ -48,8 +48,52 @@ index 87bc75ea7..69b5e580e 100644
          | "set_agent_cursor_theme"
          | "get_agent_cursor_state" => return None,
          _ => return None,
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/desktop.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/desktop.rs
+index f30c11709..026094c3a 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/desktop.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/desktop.rs
+@@ -229,7 +229,7 @@ fn set_window_frame() -> ToolContract {
+ fn invoke_menu() -> ToolContract {
+     contract::<InvokeMenuInput, ActionResult>(
+         "invoke_menu",
+-        "Resolve an exact application-menu path one live native level at a time and invoke its final item through accessibility APIs. Missing, ambiguous, disabled, or structurally mismatched segments fail closed; this tool never falls back to pixels.",
++        "Resolve an exact application-menu path one live native level at a time and invoke its final item through accessibility APIs. Pass window_id to validate one exact window's focus-sensitive menu state first; omit it to resolve from the application-level menu bar without targeting, focusing or raising any window (this is the path for an application that has no windows). Missing, ambiguous, disabled, or structurally mismatched segments fail closed; this tool never falls back to pixels.",
+         &["menu.path.invoke", "accessibility.menu.native"],
+         ToolAnnotations {
+             read_only: false,
+diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs
+index 69bd68f71..ba8f0c48d 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/inputs.rs
+@@ -91,6 +91,10 @@ fn positive_integer_schema(_: &mut SchemaGenerator) -> Schema {
+     json_schema!({ "type": "integer", "minimum": 1 })
+ }
+ 
++fn optional_positive_integer_schema(_: &mut SchemaGenerator) -> Schema {
++    json_schema!({ "type": ["integer", "null"], "minimum": 1 })
++}
++
+ fn click_button_schema(generator: &mut SchemaGenerator) -> Schema {
+     ClickButton::json_schema(generator)
+ }
+@@ -545,8 +549,13 @@ impl ToolInput for SetWindowFrameInput {
+ pub struct InvokeMenuInput {
+     #[schemars(schema_with = "positive_integer_schema")]
+     pub pid: u32,
+-    #[schemars(schema_with = "positive_integer_schema")]
+-    pub window_id: u64,
++    /// Exact application window whose focus-sensitive native menu state must
++    /// be validated before invoking the path. Omit it to resolve the path
++    /// from the application-level menu bar without targeting, focusing or
++    /// raising any window — the path for applications that have no windows.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    #[schemars(schema_with = "optional_positive_integer_schema")]
++    pub window_id: Option<u64>,
+     #[schemars(schema_with = "menu_path_schema")]
+     pub path: Vec<String>,
+     /// For multi-call work, prefer a short public session label and repeat it on every call that
 diff --git a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
-index ef089ba10..7f955d172 100644
+index ef089ba10..14fdd2530 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-contract/src/lib.rs
 @@ -90,6 +90,7 @@ pub const ACTION_RESULT_TOOLS: &[&str] = &[
@@ -60,6 +104,25 @@ index ef089ba10..7f955d172 100644
      "set_window_frame",
      "invoke_menu",
      "browser_click",
+@@ -509,7 +510,17 @@ mod tests {
+         let contract = tool_contract("invoke_menu").expect("invoke_menu contract");
+         assert_eq!(
+             contract.input_schema["required"],
+-            serde_json::json!(["pid", "window_id", "path"])
++            serde_json::json!(["pid", "path"])
++        );
++        // The window anchor is optional: omitting it selects the
++        // application-level menu bar (the windowless-app path).
++        assert_eq!(
++            contract.input_schema["properties"]["window_id"]["type"],
++            serde_json::json!(["integer", "null"])
++        );
++        assert_eq!(
++            contract.input_schema["properties"]["window_id"]["minimum"],
++            serde_json::json!(1)
+         );
+         let path = &contract.input_schema["properties"]["path"];
+         assert_eq!(path["minItems"], serde_json::json!(1));
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
 index 18004509d..8a546eb7d 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
@@ -686,7 +749,7 @@ index ad80763bb..42f72f7d4 100644
          None
      }
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
-index 1d10b3195..4012bea43 100644
+index 1d10b3195..4f95b7e7e 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
 @@ -357,11 +357,15 @@ fn isolated_browser_command(executable: &str, profile: &Path) -> Command {
@@ -709,7 +772,184 @@ index 1d10b3195..4012bea43 100644
      #[cfg(target_os = "linux")]
      {
          let native_wayland = std::env::var("XDG_SESSION_TYPE")
-@@ -735,6 +739,10 @@ impl BrowserEngine {
+@@ -643,6 +647,176 @@ fn spawned_runtime_pid(ownership: &EndpointOwnershipProof) -> i64 {
+     ownership.listener_pid.unwrap_or(ownership.owner_pid)
+ }
+ 
++// ── Real offscreen placement for the just-spawned browser ───────────────────
++//
++// `--window-position=-32000,-32000` is a Chromium switch that Windows and
++// Linux honor and macOS ignores: macOS Chrome creates its first window on
++// screen whatever the switch says (verified live: bounds (0,30,1200,1006)
++// while the switch was present). The launch switch stays as the cheap
++// first line for the platforms that honor it; now that the driver owns an
++// attested DevTools endpoint it also writes the position through the
++// browser's own protocol and reads the bounds back. Nothing here unhides:
++// the process-lifetime conceal watcher stays armed and remains the backstop.
++
++/// Window origin the driver writes for a just-spawned browser window.
++const OFFSCREEN_WINDOW_POSITION: i64 = -32000;
++/// A window origin at or beyond this coordinate is off every display.
++const OFFSCREEN_ORIGIN_LIMIT: i64 = -10_000;
++/// How long the write-back/readback proof may take before the driver gives up
++/// and relies on the conceal watcher.
++const OFFSCREEN_PROOF_DEADLINE: Duration = Duration::from_secs(5);
++const OFFSCREEN_PROOF_POLL: Duration = Duration::from_millis(100);
++
++/// One spawned CDP window, as `Browser.getWindowBounds` reports it.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub(crate) struct SpawnedWindowBounds {
++    pub window_id: i64,
++    pub left: i64,
++    pub top: i64,
++    pub width: i64,
++    pub height: i64,
++}
++
++impl SpawnedWindowBounds {
++    pub(crate) fn is_offscreen(&self) -> bool {
++        self.left <= OFFSCREEN_ORIGIN_LIMIT || self.top <= OFFSCREEN_ORIGIN_LIMIT
++    }
++
++    pub(crate) fn describe(&self) -> String {
++        format!(
++            "window {} at ({},{}) {}x{}",
++            self.window_id, self.left, self.top, self.width, self.height
++        )
++    }
++}
++
++/// Parse one `Browser.getWindowBounds` reply. Position is what the proof
++/// needs; size is informational and defaults to zero when omitted.
++fn cdp_window_bounds(window_id: i64, reply: &serde_json::Value) -> Option<SpawnedWindowBounds> {
++    let bounds = reply.get("bounds")?;
++    let field = |name: &str| bounds.get(name).and_then(serde_json::Value::as_i64);
++    Some(SpawnedWindowBounds {
++        window_id,
++        left: field("left")?,
++        top: field("top")?,
++        width: field("width").unwrap_or(0),
++        height: field("height").unwrap_or(0),
++    })
++}
++
++/// Push every page target's window offscreen through CDP and read the bounds
++/// back. Returns whatever the browser reported; the caller decides how to
++/// describe an unproven result. Never unhides and never activates.
++async fn conceal_spawned_windows(
++    connection: &super::cdp_ws::CdpConnection,
++    deadline: Duration,
++) -> Result<Vec<SpawnedWindowBounds>, String> {
++    let started = Instant::now();
++    let mut last: Vec<SpawnedWindowBounds> = Vec::new();
++    loop {
++        let mut observed = Vec::new();
++        let mut write_supported = false;
++        let targets = connection
++            .call(None, "Target.getTargets", serde_json::json!({}))
++            .await
++            .map_err(|error| error.to_string())?;
++        let page_targets: Vec<String> = targets
++            .get("targetInfos")
++            .and_then(serde_json::Value::as_array)
++            .into_iter()
++            .flatten()
++            .filter(|target| target.get("type").and_then(serde_json::Value::as_str) == Some("page"))
++            .filter_map(|target| {
++                target
++                    .get("targetId")
++                    .and_then(serde_json::Value::as_str)
++                    .map(str::to_owned)
++            })
++            .take(8)
++            .collect();
++        for target_id in page_targets {
++            let Ok(window) = connection
++                .call(
++                    None,
++                    "Browser.getWindowForTarget",
++                    serde_json::json!({ "targetId": target_id }),
++                )
++                .await
++            else {
++                // No window yet: the endpoint preceded the first window.
++                continue;
++            };
++            let Some(window_id) = window.get("windowId").and_then(serde_json::Value::as_i64) else {
++                continue;
++            };
++            // Move the window off every display first; the readback below is
++            // the only thing the driver reports.
++            if connection
++                .call(
++                    None,
++                    "Browser.setWindowBounds",
++                    serde_json::json!({
++                        "windowId": window_id,
++                        "bounds": {
++                            "left": OFFSCREEN_WINDOW_POSITION,
++                            "top": OFFSCREEN_WINDOW_POSITION,
++                        }
++                    }),
++                )
++                .await
++                .is_ok()
++            {
++                write_supported = true;
++            }
++            if let Ok(reply) = connection
++                .call(
++                    None,
++                    "Browser.getWindowBounds",
++                    serde_json::json!({ "windowId": window_id }),
++                )
++                .await
++            {
++                if let Some(bounds) = cdp_window_bounds(window_id, &reply) {
++                    observed.push(bounds);
++                }
++            }
++        }
++
++        if !observed.is_empty() {
++            last = observed.clone();
++            if observed.iter().all(SpawnedWindowBounds::is_offscreen) {
++                return Ok(observed);
++            }
++            // The endpoint cannot move windows at all (the write itself
++            // failed): stop retrying and report the honest readback.
++            if !write_supported {
++                return Ok(observed);
++            }
++        }
++        if started.elapsed() >= deadline {
++            return Ok(last);
++        }
++        tokio::time::sleep(OFFSCREEN_PROOF_POLL).await;
++    }
++}
++
++impl BrowserEngine {
++    /// Run the CDP offscreen write-back against a just-attested spawned
++    /// endpoint. Best-effort by design: an unreachable or unsupported
++    /// endpoint returns the error for the caller to report, and the conceal
++    /// watcher remains the active backstop.
++    async fn conceal_spawned_windows_via_cdp(
++        &self,
++        ws_url: &str,
++    ) -> Result<Vec<SpawnedWindowBounds>, String> {
++        let connection = self
++            .connect(ws_url)
++            .await
++            .map_err(|error| format!("{}: {}", error.code.as_str(), error.message))?;
++        conceal_spawned_windows(&connection, OFFSCREEN_PROOF_DEADLINE).await
++    }
++}
++
+ impl BrowserEngine {
+     pub(crate) fn is_driver_owned_pid_for_session(&self, session: &str, pid: i64) -> bool {
+         self.managed_browsers.lock().unwrap().iter().any(|browser| {
+@@ -735,6 +909,10 @@ impl BrowserEngine {
                  format!("could not launch an isolated browser process: {error}"),
              )
          })?;
@@ -720,7 +960,60 @@ index 1d10b3195..4012bea43 100644
          let endpoint = match wait_for_spawned_endpoint(&mut child, &prepared_profile.path).await {
              Ok(endpoint) => {
                  match attest_spawned_endpoint(self, i64::from(child.id()), endpoint).await {
-@@ -1416,13 +1424,36 @@ mod tests {
+@@ -754,6 +932,40 @@ impl BrowserEngine {
+                 return Err(error);
+             }
+         };
++        // The endpoint is attested, so the browser is driver-owned and the
++        // CDP surface is trusted. Put the window truly offscreen before any
++        // content can render and report exactly what the browser says. This
++        // can never unhide: the conceal watcher stays armed regardless.
++        let offscreen_note = match self.conceal_spawned_windows_via_cdp(&endpoint.ws_url).await {
++            Ok(bounds)
++                if !bounds.is_empty() && bounds.iter().all(SpawnedWindowBounds::is_offscreen) =>
++            {
++                format!(
++                    " CDP reports the spawned window offscreen ({}).",
++                    bounds
++                        .iter()
++                        .map(SpawnedWindowBounds::describe)
++                        .collect::<Vec<_>>()
++                        .join(", ")
++                )
++            }
++            Ok(bounds) if bounds.is_empty() => " CDP saw no window to place before the proof \
++                 deadline; the conceal watcher is the active backstop."
++                .to_owned(),
++            Ok(bounds) => format!(
++                " CDP could not prove offscreen bounds ({}); the conceal watcher is the active \
++                 backstop.",
++                bounds
++                    .iter()
++                    .map(SpawnedWindowBounds::describe)
++                    .collect::<Vec<_>>()
++                    .join(", ")
++            ),
++            Err(error) => format!(
++                " CDP offscreen write-back was unavailable ({error}); the conceal watcher is the \
++                 active backstop."
++            ),
++        };
+         let prepared_pid = endpoint.ownership.owner_pid;
+         let mut owner_sessions = vec![request.session];
+         if let Some(transport_session) = request.transport_session {
+@@ -778,7 +990,10 @@ impl BrowserEngine {
+         Ok(PrepareOutcome {
+             action: PrepareAction::LaunchedIsolatedBrowser,
+             endpoint: Some(endpoint),
+-            message: "Launched a separate driver-owned isolated Chromium process; no existing browser process was modified or terminated.".to_owned(),
++            message: format!(
++                "Launched a separate driver-owned isolated Chromium process; no existing browser \
++                 process was modified or terminated.{offscreen_note}"
++            ),
+             prepared_pid: Some(prepared_pid),
+             side_effects: PrepareSideEffects {
+                 launched_browser: true,
+@@ -1416,13 +1631,221 @@ mod tests {
              assert!(args.iter().any(|arg| arg == required), "missing {required}");
          }
          #[cfg(target_os = "windows")]
@@ -753,6 +1046,191 @@ index 1d10b3195..4012bea43 100644
 +                .any(|arg| arg.starts_with("--window-position=40,40")),
 +            "the old on-screen launch position must be gone: {args:?}"
 +        );
++    }
++
++    #[test]
++    fn cdp_bounds_replies_parse_and_the_offscreen_rule_is_explicit() {
++        let reply = serde_json::json!({
++            "windowId": 7,
++            "bounds": {"left": -32000, "top": -32000, "width": 1200, "height": 1006}
++        });
++        let bounds = cdp_window_bounds(7, &reply).expect("parsed bounds");
++        assert_eq!(
++            bounds,
++            SpawnedWindowBounds {
++                window_id: 7,
++                left: -32000,
++                top: -32000,
++                width: 1200,
++                height: 1006,
++            }
++        );
++        assert!(bounds.is_offscreen());
++        assert!(
++            SpawnedWindowBounds {
++                left: 0,
++                top: 30,
++                ..bounds
++            }
++            .is_offscreen()
++                == false
++        );
++
++        // A reply without a position cannot prove anything.
++        let missing = serde_json::json!({"bounds": {"width": 800}});
++        assert!(cdp_window_bounds(7, &missing).is_none());
++        assert!(cdp_window_bounds(7, &serde_json::json!({})).is_none());
++    }
++
++    #[test]
++    fn offscreen_window_position_is_off_every_display() {
++        assert!(OFFSCREEN_WINDOW_POSITION <= OFFSCREEN_ORIGIN_LIMIT);
++    }
++
++    fn mock_call_log() -> Arc<Mutex<Vec<(String, serde_json::Value)>>> {
++        Arc::new(Mutex::new(Vec::new()))
++    }
++
++    #[tokio::test]
++    async fn cdp_offscreen_write_back_is_proven_by_the_browser_readback() {
++        use crate::browser::cdp_ws::CdpConnection;
++        use crate::browser::mock_cdp::{MockCall, MockCdpServer, MockReply};
++
++        let calls = mock_call_log();
++        let log = calls.clone();
++        let server = MockCdpServer::start(Arc::new(move |call: &MockCall| {
++            log.lock()
++                .unwrap()
++                .push((call.method.clone(), call.params.clone()));
++            match call.method.as_str() {
++                "Target.getTargets" => MockReply::ok(serde_json::json!({
++                    "targetInfos": [
++                        {"targetId": "T1", "type": "page", "url": "about:blank"}
++                    ]
++                })),
++                "Browser.getWindowForTarget" => MockReply::ok(serde_json::json!({"windowId": 11})),
++                "Browser.setWindowBounds" => MockReply::ok(serde_json::json!({})),
++                "Browser.getWindowBounds" => {
++                    let moved = log
++                        .lock()
++                        .unwrap()
++                        .iter()
++                        .any(|(method, _)| method == "Browser.setWindowBounds");
++                    MockReply::ok(serde_json::json!({
++                        "bounds": {
++                            "left": if moved { -32000 } else { 0 },
++                            "top": if moved { -32000 } else { 30 },
++                            "width": 1200,
++                            "height": 1006,
++                        }
++                    }))
++                }
++                other => MockReply::method_not_found(other),
++            }
++        }))
++        .await;
++
++        let connection = CdpConnection::connect(&server.ws_url()).await.unwrap();
++        let bounds = conceal_spawned_windows(&connection, Duration::from_millis(500))
++            .await
++            .unwrap();
++        assert_eq!(bounds.len(), 1);
++        assert!(bounds[0].is_offscreen());
++        assert_eq!((bounds[0].left, bounds[0].top), (-32000, -32000));
++
++        let calls = calls.lock().unwrap();
++        let write_index = calls
++            .iter()
++            .position(|(method, params)| {
++                method == "Browser.setWindowBounds" && params["bounds"]["left"] == -32000
++            })
++            .expect("the offscreen write must be issued");
++        let read_index = calls
++            .iter()
++            .rposition(|(method, _)| method == "Browser.getWindowBounds")
++            .expect("a readback must be issued");
++        assert!(
++            write_index < read_index,
++            "the proof readback must follow the write: {calls:?}"
++        );
++    }
++
++    #[tokio::test]
++    async fn cdp_offscreen_never_claims_bounds_it_could_not_read_back() {
++        use crate::browser::cdp_ws::CdpConnection;
++        use crate::browser::mock_cdp::{MockCall, MockCdpServer, MockReply};
++
++        // macOS Chrome before this fix: the write is accepted (or silently
++        // ignored) and the readback stays on screen. The driver must report
++        // the real readback and leave concealment to the watcher.
++        let server = MockCdpServer::start(Arc::new(move |call: &MockCall| {
++            match call.method.as_str() {
++                "Target.getTargets" => MockReply::ok(serde_json::json!({
++                    "targetInfos": [
++                        {"targetId": "T1", "type": "page", "url": "about:blank"}
++                    ]
++                })),
++                "Browser.getWindowForTarget" => MockReply::ok(serde_json::json!({"windowId": 11})),
++                "Browser.setWindowBounds" => MockReply::ok(serde_json::json!({})),
++                "Browser.getWindowBounds" => MockReply::ok(serde_json::json!({
++                    "bounds": {"left": 0, "top": 30, "width": 1200, "height": 1006}
++                })),
++                other => MockReply::method_not_found(other),
++            }
++        }))
++        .await;
++
++        let connection = CdpConnection::connect(&server.ws_url()).await.unwrap();
++        let bounds = conceal_spawned_windows(&connection, Duration::from_millis(250))
++            .await
++            .unwrap();
++        assert_eq!(bounds.len(), 1);
++        assert!(
++            !bounds[0].is_offscreen(),
++            "an unchanged window must never be reported as offscreen"
++        );
++        assert_eq!((bounds[0].left, bounds[0].top), (0, 30));
++    }
++
++    #[tokio::test]
++    async fn cdp_offscreen_gives_up_immediately_when_the_endpoint_cannot_move_windows() {
++        use crate::browser::cdp_ws::CdpConnection;
++        use crate::browser::mock_cdp::{MockCall, MockCdpServer, MockReply};
++
++        let write_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
++        let attempts = write_attempts.clone();
++        let server = MockCdpServer::start(Arc::new(move |call: &MockCall| {
++            match call.method.as_str() {
++                "Target.getTargets" => MockReply::ok(serde_json::json!({
++                    "targetInfos": [
++                        {"targetId": "T1", "type": "page", "url": "about:blank"}
++                    ]
++                })),
++                "Browser.getWindowForTarget" => MockReply::ok(serde_json::json!({"windowId": 11})),
++                "Browser.setWindowBounds" => {
++                    attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
++                    MockReply::method_not_found("Browser.setWindowBounds")
++                }
++                "Browser.getWindowBounds" => MockReply::ok(serde_json::json!({
++                    "bounds": {"left": 0, "top": 30, "width": 1200, "height": 1006}
++                })),
++                other => MockReply::method_not_found(other),
++            }
++        }))
++        .await;
++
++        let connection = CdpConnection::connect(&server.ws_url()).await.unwrap();
++        let started = Instant::now();
++        let bounds = conceal_spawned_windows(&connection, Duration::from_secs(30))
++            .await
++            .unwrap();
++        assert!(
++            started.elapsed() < Duration::from_secs(2),
++            "an endpoint without Browser.setWindowBounds must not stall the prepare"
++        );
++        assert_eq!(write_attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
++        assert_eq!(bounds.len(), 1);
++        assert!(!bounds[0].is_offscreen());
 +    }
 +
      #[test]
@@ -2082,7 +2560,7 @@ index a26a6bfe9..696aabb02 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123bc7..d6b3c4c44 100644
+index 67e123bc7..fde1942e5 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -2097,7 +2575,7 @@ index 67e123bc7..d6b3c4c44 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(26);
++        metadata["synara_native_revision"] = serde_json::json!(27);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -2736,15 +3214,15 @@ index 000000000..1eb3bd0b1
 +}
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
 new file mode 100644
-index 000000000..059379e88
+index 000000000..de4e9ec45
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
-@@ -0,0 +1,728 @@
+@@ -0,0 +1,999 @@
 +//! Compact pointer artwork: a crisp layered arrow drawn as a vector path at
 +//! the actual input hotspot.
 +//!
 +//! Three layers, painted back to front:
-+//! 1. a soft offset shadow so the arrow reads on light backgrounds,
++//! 1. a soft blurred drop shadow so the arrow reads on light backgrounds,
 +//! 2. a light rim so it reads on dark backgrounds,
 +//! 3. a near-black fill.
 +//!
@@ -2760,6 +3238,17 @@ index 000000000..059379e88
 +const ART_WIDTH: f64 = 18.4;
 +/// Artwork-local vertical centre used as the pivot's y coordinate.
 +const ART_PIVOT_Y: f64 = 14.6;
++/// Drop-shadow offset in logical points, down-right of the silhouette.
++const SHADOW_OFFSET_POINTS: (f64, f64) = (1.2, 1.8);
++/// Blur radius of the drop shadow in logical points. The arrow itself keeps
++/// its crisp rim; only the shadow is soft.
++const SHADOW_BLUR_POINTS: f64 = 2.0;
++/// Peak opacity of the fully-overlapped soft shadow. Low enough that the rim
++/// and the fill always dominate the composite.
++const SHADOW_PEAK_ALPHA: f64 = 0.42;
++/// Separable box-blur passes. Three boxes approximate a Gaussian closely
++/// enough that the shadow reads soft rather than banded.
++const SHADOW_BLUR_PASSES: usize = 3;
 +
 +fn arrow() -> &'static Path {
 +    static PATH: OnceLock<Path> = OnceLock::new();
@@ -2840,32 +3329,159 @@ index 000000000..059379e88
 +    )
 +}
 +
-+pub fn paint(pm: &mut Pixmap, paint: &CompactPaint) {
-+    if paint.alpha <= 0.0 || paint.scale <= 0.0 || !paint.scale.is_finite() {
++/// Device-space bounding box of the arrow after `ts` is applied.
++fn transformed_arrow_bounds(ts: Transform) -> Option<(f64, f64, f64, f64)> {
++    let bounds = arrow().bounds();
++    let corners = [
++        tiny_skia::Point::from_xy(bounds.left(), bounds.top()),
++        tiny_skia::Point::from_xy(bounds.right(), bounds.top()),
++        tiny_skia::Point::from_xy(bounds.left(), bounds.bottom()),
++        tiny_skia::Point::from_xy(bounds.right(), bounds.bottom()),
++    ];
++    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
++    for mut corner in corners {
++        ts.map_point(&mut corner);
++        if !corner.x.is_finite() || !corner.y.is_finite() {
++            return None;
++        }
++        min_x = min_x.min(corner.x as f64);
++        min_y = min_y.min(corner.y as f64);
++        max_x = max_x.max(corner.x as f64);
++        max_y = max_y.max(corner.y as f64);
++    }
++    Some((min_x, min_y, max_x, max_y))
++}
++
++/// Kernel support (device pixels) of the multi-pass box blur.
++fn shadow_support_px(blur_radius: i64) -> i64 {
++    blur_radius * SHADOW_BLUR_PASSES as i64 + 2
++}
++
++/// Paint the soft drop shadow: the arrow silhouette, offset down-right,
++/// blurred and faint. Rendered into a small scratch pixmap and composited, so
++/// the blur can never smear the rim, the fill, or the click-pulse ring —
++/// everything else is painted after this layer.
++fn paint_soft_shadow(pm: &mut Pixmap, paint: &CompactPaint, alpha: f64) {
++    let device = paint.device_scale.max(0.0);
++    if device <= 0.0 {
 +        return;
 +    }
-+    let alpha = paint.alpha.clamp(0.0, 1.0);
-+
-+    // Soft shadow: the same silhouette, offset down-right, no rim. The stock
-+    // shadow color is black; a session style can repaint it.
++    let ts = affine(paint, SHADOW_OFFSET_POINTS);
++    let Some((min_x, min_y, max_x, max_y)) = transformed_arrow_bounds(ts) else {
++        return;
++    };
++    let blur_radius = (SHADOW_BLUR_POINTS * device).round().max(1.0) as i64;
++    let support = shadow_support_px(blur_radius);
++    let x0 = (min_x.floor() as i64 - support).max(0);
++    let y0 = (min_y.floor() as i64 - support).max(0);
++    let x1 = (max_x.ceil() as i64 + support).min(pm.width() as i64 - 1);
++    let y1 = (max_y.ceil() as i64 + support).min(pm.height() as i64 - 1);
++    if x1 < x0 || y1 < y0 {
++        return;
++    }
++    let (w, h) = ((x1 - x0 + 1) as u32, (y1 - y0 + 1) as u32);
++    let Some(mut scratch) = Pixmap::new(w, h) else {
++        return;
++    };
 +    let [sr, sg, sb] = paint.shadow;
 +    let shadow = Paint {
 +        shader: tiny_skia::Shader::SolidColor(Color::from_rgba8(
 +            sr,
 +            sg,
 +            sb,
-+            (alpha * 0.30 * 255.0) as u8,
++            (alpha * SHADOW_PEAK_ALPHA * 255.0) as u8,
 +        )),
 +        anti_alias: true,
 +        ..Default::default()
 +    };
-+    pm.fill_path(
++    scratch.fill_path(
 +        arrow(),
 +        &shadow,
 +        FillRule::Winding,
-+        affine(paint, (1.2, 1.8)),
++        ts.post_translate(-(x0 as f32), -(y0 as f32)),
 +        None,
 +    );
++    box_blur_rgba(scratch.data_mut(), w, h, blur_radius as u32);
++    pm.draw_pixmap(
++        x0 as i32,
++        y0 as i32,
++        scratch.as_ref(),
++        &tiny_skia::PixmapPaint::default(),
++        Transform::identity(),
++        None,
++    );
++}
++
++/// Separable three-pass box blur over premultiplied RGBA bytes. Box blurs of
++/// premultiplied components preserve the color/coverage ratio of a solid
++/// silhouette, which is all this shadow needs.
++fn box_blur_rgba(data: &mut [u8], width: u32, height: u32, radius: u32) {
++    if radius == 0 {
++        return;
++    }
++    let (w, h) = (width as usize, height as usize);
++    if w == 0 || h == 0 || data.len() < w * h * 4 {
++        return;
++    }
++    let mut scratch = vec![0u8; w * h * 4];
++    for _ in 0..SHADOW_BLUR_PASSES {
++        box_blur_pass(data, &mut scratch, w, h, radius as usize);
++    }
++}
++
++/// One separable box-blur pass (horizontal into `scratch`, vertical back).
++/// Samples clamp at the edges, so the border keeps its value instead of
++/// darkening.
++fn box_blur_pass(data: &mut [u8], scratch: &mut [u8], w: usize, h: usize, radius: usize) {
++    let window = radius * 2 + 1;
++    let half = window as u32 / 2;
++    let clamp = |value: i64, max: i64| value.clamp(0, max) as usize;
++
++    for y in 0..h {
++        let row = y * w * 4;
++        for c in 0..4 {
++            let mut sum = 0u32;
++            for k in 0..window {
++                sum += u32::from(data[row + clamp(k as i64 - radius as i64, w as i64 - 1) * 4 + c]);
++            }
++            for x in 0..w {
++                scratch[row + x * 4 + c] = ((sum + half) / window as u32) as u8;
++                let drop = clamp(x as i64 - radius as i64, w as i64 - 1);
++                let add = clamp(x as i64 + radius as i64 + 1, w as i64 - 1);
++                sum =
++                    sum - u32::from(data[row + drop * 4 + c]) + u32::from(data[row + add * 4 + c]);
++            }
++        }
++    }
++
++    for x in 0..w {
++        for c in 0..4 {
++            let mut sum = 0u32;
++            for k in 0..window {
++                sum += u32::from(
++                    scratch[(clamp(k as i64 - radius as i64, h as i64 - 1) * w + x) * 4 + c],
++                );
++            }
++            for y in 0..h {
++                data[(y * w + x) * 4 + c] = ((sum + half) / window as u32) as u8;
++                let drop = clamp(y as i64 - radius as i64, h as i64 - 1);
++                let add = clamp(y as i64 + radius as i64 + 1, h as i64 - 1);
++                sum = sum - u32::from(scratch[(drop * w + x) * 4 + c])
++                    + u32::from(scratch[(add * w + x) * 4 + c]);
++            }
++        }
++    }
++}
++
++pub fn paint(pm: &mut Pixmap, paint: &CompactPaint) {
++    if paint.alpha <= 0.0 || paint.scale <= 0.0 || !paint.scale.is_finite() {
++        return;
++    }
++    let alpha = paint.alpha.clamp(0.0, 1.0);
++
++    // Soft shadow: the same silhouette, offset down-right, blurred, and faint.
++    // The stock shadow color is black; a session style can repaint it.
++    paint_soft_shadow(pm, paint, alpha);
 +
 +    // Light rim: keeps the arrow visible on dark backgrounds.
 +    let [rr, rg, rb] = paint.rim;
@@ -3318,6 +3934,16 @@ index 000000000..059379e88
 +        assert_eq!(frame.pixel(56, 8).unwrap().alpha(), 0);
 +    }
 +
++    /// Every pixel at or above `threshold` alpha, as `(x, y)` pairs.
++    fn ink_with_alpha(pm: &Pixmap, threshold: u8) -> Vec<(u32, u32)> {
++        pm.pixels()
++            .iter()
++            .enumerate()
++            .filter(|(_, pixel)| pixel.alpha() >= threshold)
++            .map(|(index, _)| (index as u32 % pm.width(), index as u32 / pm.width()))
++            .collect()
++    }
++
 +    #[test]
 +    fn paint_anchors_the_tip_on_every_device_scale() {
 +        for device in [1.0_f64, 2.0, 3.0] {
@@ -3333,20 +3959,60 @@ index 000000000..059379e88
 +                    ..stationary_paint()
 +                },
 +            );
++
++            // The crisp rim + fill stay anchored: no opaque ink starts
++            // farther than the round-join margin above or left of the tip.
++            let rim_margin = (1.6 * device).ceil() as i64;
++            let opaque = ink_with_alpha(&frame, 200);
++            assert!(!opaque.is_empty(), "device {device}: no opaque ink painted");
++            let opaque_min_x = opaque.iter().map(|(x, _)| *x).min().unwrap();
++            let opaque_min_y = opaque.iter().map(|(_, y)| *y).min().unwrap();
++            assert!(
++                i64::from(opaque_min_x) >= i64::from(anchor) - rim_margin,
++                "device {device}: opaque ink starts left of the tip at {opaque_min_x}"
++            );
++            assert!(
++                i64::from(opaque_min_y) >= i64::from(anchor) - rim_margin,
++                "device {device}: opaque ink starts above the tip at {opaque_min_y}"
++            );
++
++            // The faint blurred shadow trails the offset and the blur support,
++            // and the whole footprint stays inside that bounded envelope.
++            let blur = (SHADOW_BLUR_POINTS * device).round().max(1.0) as i64;
++            let support = shadow_support_px(blur);
++            let offset_x = (SHADOW_OFFSET_POINTS.0 * device).ceil() as i64;
++            let offset_y = (SHADOW_OFFSET_POINTS.1 * device).ceil() as i64;
 +            let (min_x, min_y, max_x, max_y) = ink_bounds(&frame).expect("ink");
-+            // The rim's round join sticks out about 1.2 artwork units around
-+            // the tip; nothing may start further away than that.
-+            let margin = (1.6 * device).ceil() as i64;
 +            assert!(
-+                (i64::from(min_x) - i64::from(anchor)).abs() <= margin,
-+                "device {device}: tip x {min_x} is not anchored at {anchor}"
++                i64::from(min_x) >= i64::from(anchor) + offset_x - support - 2,
++                "device {device}: shadow leaks left of the tip: {min_x}"
 +            );
 +            assert!(
-+                (i64::from(min_y) - i64::from(anchor)).abs() <= margin,
-+                "device {device}: tip y {min_y} is not anchored at {anchor}"
++                i64::from(min_y) >= i64::from(anchor) + offset_y - support - 2,
++                "device {device}: shadow leaks above the tip: {min_y}"
 +            );
++            let art = arrow().bounds();
++            assert!(
++                i64::from(max_x)
++                    <= i64::from(anchor)
++                        + (f64::from(art.right() + 1.2) * device) as i64
++                        + offset_x
++                        + support
++                        + 2,
++                "device {device}: ink leaks right: {max_x}"
++            );
++            assert!(
++                i64::from(max_y)
++                    <= i64::from(anchor)
++                        + (f64::from(art.bottom() + 1.2) * device) as i64
++                        + offset_y
++                        + support
++                        + 2,
++                "device {device}: ink leaks down: {max_y}"
++            );
++
 +            // The silhouette extends down-right and nothing is painted past
-+            // its footprint in the bottom-right corner.
++            // its bounded footprint in the bottom-right corner.
 +            assert!(
 +                max_x > anchor + (10.0 * device) as u32,
 +                "art must extend right"
@@ -3362,6 +4028,89 @@ index 000000000..059379e88
 +                "device {device}: paint must not leak past the artwork"
 +            );
 +        }
++    }
++
++    #[test]
++    fn box_blur_turns_a_hard_edge_into_a_ramp() {
++        // One full-alpha row on an empty mask; three 2-px box passes must
++        // leave a multi-pixel falloff above and below instead of a step.
++        let mut data = vec![0u8; 21 * 21 * 4];
++        for x in 0..21 {
++            data[(10 * 21 + x) * 4 + 3] = 255;
++        }
++        box_blur_rgba(&mut data, 21, 21, 2);
++        let column: Vec<u8> = (0..21).map(|y| data[(y * 21 + 10) * 4 + 3]).collect();
++        let lit = column.iter().filter(|alpha| **alpha > 0).count();
++        assert!(lit >= 8, "the kernel must spread the row: {column:?}");
++        assert_eq!(column[0], 0, "the kernel support is bounded: {column:?}");
++        assert_eq!(column[20], 0, "the kernel support is bounded: {column:?}");
++        let ramp = column
++            .windows(2)
++            .filter(|pair| pair[0] > pair[1] && pair[0] - pair[1] < 60)
++            .count();
++        assert!(ramp >= 3, "the falloff must be gradual: {column:?}");
++    }
++
++    #[test]
++    fn soft_shadow_is_blurred_faint_and_offset_below_right() {
++        let anchor = 40.0_f64;
++        let mut frame = Pixmap::new(128, 128).unwrap();
++        paint(
++            &mut frame,
++            &CompactPaint {
++                x: anchor,
++                y: anchor,
++                ..stationary_paint()
++            },
++        );
++
++        let art = arrow().bounds();
++        let blur = (SHADOW_BLUR_POINTS).round().max(1.0) as i64;
++        let support = shadow_support_px(blur);
++        // The blur tail below the silhouette: from the arrow's bottom edge to
++        // the full kernel reach of the offset shadow.
++        let top = (anchor + f64::from(art.bottom())) as u32 + 1;
++        let bottom = top + support as u32;
++        let mut alphas = Vec::new();
++        for y in top..=bottom {
++            for x in 24..=72 {
++                let alpha = frame.pixel(x, y).unwrap().alpha();
++                if alpha > 0 {
++                    alphas.push(alpha);
++                }
++            }
++        }
++        assert!(
++            alphas.len() >= 40,
++            "the drop shadow must paint a visible tail: {alphas:?}"
++        );
++
++        let peak = *alphas.iter().max().unwrap();
++        assert!(peak > 10, "the drop shadow must be visible: {peak}");
++        assert!(
++            peak < 140,
++            "the drop shadow must stay faint (fill/rim dominate): {peak}"
++        );
++
++        // The blur produces a gradual alpha ramp, not a hard silhouette edge.
++        let mut levels = alphas.clone();
++        levels.sort_unstable();
++        levels.dedup();
++        assert!(
++            levels.len() >= 5,
++            "the shadow edge must be soft, found levels {levels:?}"
++        );
++
++        // The shadow sits down-right: at the same distance up-left of the
++        // tip the sheet stays empty.
++        let up_left = frame
++            .pixel(
++                (anchor as u32).saturating_sub(support as u32 + 2),
++                (anchor as u32).saturating_sub(support as u32 + 2),
++            )
++            .unwrap()
++            .alpha();
++        assert_eq!(up_left, 0, "the stock shadow is down-right only");
 +    }
 +
 +    #[test]
@@ -5441,8 +6190,29 @@ index e3b5ae415..46acb2940 100644
 +        );
 +    }
  }
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
+index 790254fb4..0da43ecc5 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
+@@ -9450,7 +9450,15 @@ impl Tool for InvokeMenuTool {
+             Err(error) => return menu_refusal(error),
+         };
+         let pid = input.pid;
+-        let window_id = input.window_id;
++        // The application-level (windowless) menu path is macOS-only; the
++        // AT-SPI menu route needs an exact window here.
++        let Some(window_id) = input.window_id else {
++            return menu_refusal(
++                "invoke_menu: the application-level menu path is only supported on macOS; \
++                 pass an exact window_id"
++                    .into(),
++            );
++        };
+         if !crate::wayland::list_windows_dispatch(Some(pid))
+             .iter()
+             .any(|window| window.xid == window_id && window.pid == Some(pid))
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
-index 78981e9cc..33fe51793 100644
+index 78981e9cc..e1c38094e 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
 @@ -80,6 +80,21 @@ fn list_running_apps_native() -> Vec<AppInfo> {
@@ -5503,7 +6273,67 @@ index 78981e9cc..33fe51793 100644
          apple_event_bundle_id: bid,
          ..Default::default()
      };
-@@ -141,6 +168,7 @@ pub fn launch_with_urls_by_bundle(
+@@ -129,18 +156,66 @@ pub fn launch_app_by_name(name: &str) -> anyhow::Result<i32> {
+     Ok(pid)
+ }
+ 
++/// Whether LaunchServices will actually deliver `arguments` for this request.
++///
++/// `NSWorkspaceOpenConfiguration.arguments` is documented to apply to the
++/// NEW application instance only. When the target app is already running the
++/// launch is delivered as an "open" event to that instance and the arguments
++/// are silently dropped. So a request that carries arguments to a running app
++/// must force `createsNewApplicationInstance`; Chromium-family browsers then
++/// hand the arguments off to their running process (ProcessSingleton) and
++/// create the requested window there — `--incognito` opens a new incognito
++/// window in the already-running browser.
++pub(crate) fn effective_creates_new_instance(
++    requested: bool,
++    has_arguments: bool,
++    app_already_running: bool,
++) -> bool {
++    requested || (has_arguments && app_already_running)
++}
++
++/// Build the launch configuration both URL/by-name paths use, applying the
++/// argument-delivery rule above.
++pub(crate) fn launch_config_for(
++    additional_args: &[String],
++    env: &std::collections::HashMap<String, String>,
++    creates_new_instance: bool,
++    hidden: bool,
++    apple_event_bundle_id: Option<String>,
++    app_already_running: bool,
++) -> nsworkspace::OpenConfig {
++    nsworkspace::OpenConfig {
++        arguments: additional_args.to_vec(),
++        environment: env.clone(),
++        creates_new_instance: effective_creates_new_instance(
++            creates_new_instance,
++            !additional_args.is_empty(),
++            app_already_running,
++        ),
++        hidden,
++        apple_event_bundle_id,
++    }
++}
++
++/// Whether `value` names a bundle id rather than a path or URL.
++fn looks_like_bundle_id(value: &str) -> bool {
++    !value.contains('/') && !value.contains("://") && value.contains('.')
++}
++
+ /// Launch a bundle with URL handoff. Mirrors Swift's
+ /// `NSWorkspace.open(urls:withApplicationAt:configuration:)` flow.
+ ///
+ /// `additional_args` and `env` are merged into the `OpenConfig`.
+ /// `creates_new_instance` corresponds to AppKit's
+-/// `createsNewApplicationInstance = true`.
++/// `createsNewApplicationInstance = true` (and is implied when arguments
++/// must reach an already-running app — see [`effective_creates_new_instance`]).
+ pub fn launch_with_urls_by_bundle(
+     bundle_id: &str,
+     urls: &[String],
      additional_args: &[String],
      env: &std::collections::HashMap<String, String>,
      creates_new_instance: bool,
@@ -5511,15 +6341,33 @@ index 78981e9cc..33fe51793 100644
  ) -> anyhow::Result<i32> {
      if additional_args.is_empty()
          && env.is_empty()
-@@ -162,6 +190,7 @@ pub fn launch_with_urls_by_bundle(
-         arguments: additional_args.to_vec(),
-         environment: env.clone(),
+@@ -158,16 +233,20 @@ pub fn launch_with_urls_by_bundle(
+     // the target and attaching `oapp` on top causes
+     // openURLs:withApplicationAtURL: to bail with "application not
+     // found" for Cryptex-installed apps (Safari). Verified empirically.
+-    let cfg = nsworkspace::OpenConfig {
+-        arguments: additional_args.to_vec(),
+-        environment: env.clone(),
++    let app_already_running =
++        looks_like_bundle_id(bundle_id) && nsworkspace::bundle_is_running(bundle_id);
++    let cfg = launch_config_for(
++        additional_args,
++        env,
          creates_new_instance,
+-        apple_event_bundle_id: if urls.is_empty() {
 +        hidden,
-         apple_event_bundle_id: if urls.is_empty() {
++        if urls.is_empty() {
              Some(bundle_id.to_owned())
          } else {
-@@ -187,6 +216,7 @@ pub fn launch_with_urls_by_name(
+             None
+         },
+-    };
++        app_already_running,
++    );
+     let running = if urls.is_empty() {
+         nsworkspace::open_application(bundle_id, &cfg)
+     } else {
+@@ -187,6 +266,7 @@ pub fn launch_with_urls_by_name(
      additional_args: &[String],
      env: &std::collections::HashMap<String, String>,
      creates_new_instance: bool,
@@ -5527,16 +6375,94 @@ index 78981e9cc..33fe51793 100644
  ) -> anyhow::Result<i32> {
      let located = locate_by_name(name)
          .ok_or_else(|| anyhow::anyhow!("Could not locate app with name '{name}'"))?;
-@@ -206,6 +236,7 @@ pub fn launch_with_urls_by_name(
-         arguments: additional_args.to_vec(),
-         environment: env.clone(),
+@@ -202,12 +282,15 @@ pub fn launch_with_urls_by_name(
+     }
+     // See `launch_with_urls_by_bundle` — skip `oapp` AppleEvent on
+     // the URL-handoff path.
+-    let cfg = nsworkspace::OpenConfig {
+-        arguments: additional_args.to_vec(),
+-        environment: env.clone(),
++    let app_already_running = bid.as_deref().is_some_and(nsworkspace::bundle_is_running);
++    let cfg = launch_config_for(
++        additional_args,
++        env,
          creates_new_instance,
+-        apple_event_bundle_id: if urls.is_empty() { bid } else { None },
+-    };
 +        hidden,
-         apple_event_bundle_id: if urls.is_empty() { bid } else { None },
-     };
++        if urls.is_empty() { bid } else { None },
++        app_already_running,
++    );
      let running = if urls.is_empty() {
+         nsworkspace::open_application(&app_ref, &cfg)
+     } else {
+@@ -716,7 +799,63 @@ pub fn format_app_list(apps: &[AppInfo]) -> String {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::{finder_folder_handoff, unix_secs_to_rfc3339};
++    use super::{
++        effective_creates_new_instance, finder_folder_handoff, launch_config_for,
++        looks_like_bundle_id, unix_secs_to_rfc3339,
++    };
++    use std::collections::HashMap;
++
++    #[test]
++    fn arguments_to_a_running_app_force_a_new_instance_so_they_are_delivered() {
++        // LaunchServices drops `arguments` on a handoff to a running app, so
++        // an argument-bearing request must become a new instance even when
++        // the caller did not ask for one. This is what makes
++        // `additional_arguments: ["--incognito"]` open an incognito window in
++        // an already-running Chromium browser.
++        assert!(effective_creates_new_instance(false, true, true));
++        assert!(effective_creates_new_instance(true, false, false));
++        assert!(!effective_creates_new_instance(false, true, false));
++        assert!(!effective_creates_new_instance(false, false, true));
++    }
++
++    #[test]
++    fn launch_config_keeps_arguments_and_hidden_on_every_route() {
++        let args = vec!["--incognito".to_owned()];
++        let env = HashMap::new();
++
++        let running = launch_config_for(
++            &args,
++            &env,
++            false,
++            true,
++            Some("com.google.Chrome".to_owned()),
++            true,
++        );
++        assert_eq!(running.arguments, args);
++        assert!(running.creates_new_instance);
++        assert!(running.hidden);
++        assert_eq!(
++            running.apple_event_bundle_id.as_deref(),
++            Some("com.google.Chrome")
++        );
++
++        let cold = launch_config_for(&args, &env, false, false, None, false);
++        assert_eq!(cold.arguments, args);
++        assert!(!cold.creates_new_instance);
++
++        // No arguments: the app-running probe never forces a second instance.
++        let plain = launch_config_for(&[], &env, false, true, None, true);
++        assert!(plain.arguments.is_empty());
++        assert!(!plain.creates_new_instance);
++    }
++
++    #[test]
++    fn bundle_id_detection_never_mistakes_a_path_or_url() {
++        assert!(looks_like_bundle_id("com.google.Chrome"));
++        assert!(!looks_like_bundle_id("/Applications/Google Chrome.app"));
++        assert!(!looks_like_bundle_id("https://example.com/app"));
++        assert!(!looks_like_bundle_id("Google Chrome"));
++    }
+ 
+     #[test]
+     fn finder_folder_handoff_is_narrowly_selected() {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs b/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
-index 7893a0132..b0ec2ca7e 100644
+index 7893a0132..65ce34a3d 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
 @@ -63,6 +63,9 @@ pub struct OpenConfig {
@@ -5557,6 +6483,22 @@ index 7893a0132..b0ec2ca7e 100644
  
          if !cfg.arguments.is_empty() {
              let strs: Vec<Retained<NSString>> = cfg
+@@ -324,6 +328,15 @@ impl Reconciliation {
+     }
+ }
+ 
++/// Whether any live process is running under `bundle_id`.
++///
++/// Callers use this to decide whether `arguments` can be delivered at all:
++/// LaunchServices drops configuration arguments when it hands a launch to an
++/// already-running instance (see `apps::effective_creates_new_instance`).
++pub(crate) fn bundle_is_running(bundle_id: &str) -> bool {
++    !running_pids_for_bundle(bundle_id).is_empty()
++}
++
+ fn running_pids_for_bundle(bundle_id: &str) -> HashSet<i32> {
+     let bundle_id = NSString::from_str(bundle_id);
+     let running =
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 index 02ba09c01..67ce4b258 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
@@ -12000,7 +12942,7 @@ index 90786072c..13cc3eaca 100644
          idx: Option<usize>,
          role: &str,
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/invoke_menu.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/invoke_menu.rs
-index ff2f7d450..d2234b253 100644
+index ff2f7d450..953790911 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/invoke_menu.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/invoke_menu.rs
 @@ -306,11 +306,23 @@ fn focus_ax_window_with_thread_affinity(pid: i32, window_id: u32) -> Result<(),
@@ -12032,11 +12974,187 @@ index ff2f7d450..d2234b253 100644
      }
      if !native_key_requested {
          std::thread::sleep(Duration::from_millis(120));
+@@ -357,6 +369,44 @@ fn exact_window_is_ready(
+     frontmost_pid == Some(target_pid) && focused_window_id == Some(target_window_id)
+ }
+ 
++/// Where a menu invocation resolves its path from.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum MenuScope {
++    /// One exact window: validate its focus-sensitive native menu state first.
++    ExactWindow(u32),
++    /// The application-level `AXMenuBar` of the application element. Used
++    /// when the caller targets no window — including applications that have
++    /// no windows at all. Nothing is focused, raised, or activated on this
++    /// path.
++    Application,
++}
++
++/// Decide the menu scope from the requested window anchor and the window ids
++/// the target process actually owns.
++///
++/// The caller may omit `window_id` to invoke from the application-level menu
++/// bar; this is the only possible route for a windowless app. When a window
++/// IS requested, it must belong to `pid` — the exact-window semantics are
++/// kept, just relocated into a testable helper. Out-of-range ids are refused
++/// rather than truncated.
++fn resolve_menu_scope(
++    window_id: Option<u64>,
++    owned_window_ids: &[u32],
++) -> Result<MenuScope, String> {
++    match window_id {
++        None => Ok(MenuScope::Application),
++        Some(window_id) => {
++            let window_id = u32::try_from(window_id)
++                .map_err(|_| "invoke_menu: window_id is out of range".to_owned())?;
++            if owned_window_ids.contains(&window_id) {
++                Ok(MenuScope::ExactWindow(window_id))
++            } else {
++                Err("invoke_menu: window_id does not belong to pid".to_owned())
++            }
++        }
++    }
++}
++
+ fn refusal(message: String) -> ToolResult {
+     ToolResult::error(message.clone()).with_structured(serde_json::json!({
+         "status": "refused",
+@@ -384,41 +434,57 @@ impl Tool for InvokeMenuTool {
+             Ok(pid) => pid,
+             Err(_) => return refusal("invoke_menu: pid is out of range".into()),
+         };
+-        let window_id = match u32::try_from(input.window_id) {
+-            Ok(window_id) => window_id,
+-            Err(_) => return refusal("invoke_menu: window_id is out of range".into()),
+-        };
+-        if !crate::windows::all_windows()
++        // The owned-window snapshot is captured once, before the blocking
++        // task: an exact request is validated against it, while an omitted
++        // `window_id` selects the application-level menu bar and never
++        // touches (or needs) a window.
++        let owned_window_ids: Vec<u32> = crate::windows::all_windows()
+             .iter()
+-            .any(|window| window.pid == pid && window.window_id == window_id)
+-        {
+-            return refusal("invoke_menu: window_id does not belong to pid".into());
+-        }
++            .filter(|window| window.pid == pid)
++            .map(|window| window.window_id)
++            .collect();
++        let scope = match resolve_menu_scope(input.window_id, &owned_window_ids) {
++            Ok(scope) => scope,
++            Err(error) => return refusal(error),
++        };
+ 
+         let outcome = tokio::task::spawn_blocking(move || {
+-            let prior_frontmost = crate::apps::frontmost_pid();
+-            let prior_frontmost_window =
+-                prior_frontmost.and_then(crate::ax::bindings::focused_window_id_of_pid);
+-            let needs_activation = prior_frontmost != Some(pid);
+-
+-            let result = focus_exact_window(pid, window_id)
+-                .and_then(|()| unsafe { invoke_path(pid, &path) });
+-
+-            // Restore the exact prior key window when one was observable,
+-            // including across applications. Falling back to app activation
+-            // preserves the previous behavior for apps without an AX window.
+-            if let Some(prior_pid) = prior_frontmost {
+-                let already_restored =
+-                    prior_pid == pid && prior_frontmost_window == Some(window_id);
+-                if !already_restored {
+-                    let restored_exact = prior_frontmost_window.is_some_and(|prior_window_id| {
+-                        focus_exact_window(prior_pid, prior_window_id).is_ok()
+-                    });
+-                    if needs_activation && !restored_exact {
+-                        let _ = crate::apps::activate_pid(prior_pid);
++            let result = match scope {
++                MenuScope::ExactWindow(window_id) => {
++                    let prior_frontmost = crate::apps::frontmost_pid();
++                    let prior_frontmost_window =
++                        prior_frontmost.and_then(crate::ax::bindings::focused_window_id_of_pid);
++                    let needs_activation = prior_frontmost != Some(pid);
++
++                    let result = focus_exact_window(pid, window_id)
++                        .and_then(|()| unsafe { invoke_path(pid, &path) });
++
++                    // Restore the exact prior key window when one was
++                    // observable, including across applications. Falling back
++                    // to app activation preserves the previous behavior for
++                    // apps without an AX window.
++                    if let Some(prior_pid) = prior_frontmost {
++                        let already_restored =
++                            prior_pid == pid && prior_frontmost_window == Some(window_id);
++                        if !already_restored {
++                            let restored_exact =
++                                prior_frontmost_window.is_some_and(|prior_window_id| {
++                                    focus_exact_window(prior_pid, prior_window_id).is_ok()
++                                });
++                            if needs_activation && !restored_exact {
++                                let _ = crate::apps::activate_pid(prior_pid);
++                            }
++                        }
+                     }
++                    result
+                 }
+-            }
++                // Application-level path: resolve the live AXMenuBar from the
++                // application element for every hop and invoke without any
++                // window focus, raise, or activation. This is the only
++                // route for an app that has no windows; the earlier refusal
++                // ("window_id does not belong to pid") is not reachable here.
++                MenuScope::Application => unsafe { invoke_path(pid, &path) },
++            };
+             result
+         })
+         .await;
+@@ -475,4 +541,29 @@ mod tests {
+         assert!(!exact_window_is_ready(Some(7), 7, Some(41), 42));
+         assert!(!exact_window_is_ready(Some(7), 7, None, 42));
+     }
++
++    #[test]
++    fn menu_scope_keeps_exact_window_semantics_when_a_window_is_targeted() {
++        assert_eq!(
++            resolve_menu_scope(Some(42), &[7, 42]),
++            Ok(MenuScope::ExactWindow(42))
++        );
++        assert!(resolve_menu_scope(Some(42), &[7]).is_err());
++        assert!(resolve_menu_scope(Some(42), &[]).is_err());
++        assert!(resolve_menu_scope(Some(u64::MAX), &[]).is_err());
++    }
++
++    #[test]
++    fn menu_scope_allows_a_windowless_app_from_the_application_menu_bar() {
++        // The windowless fixture: the app owns no windows at all. Omitting
++        // the window anchor is the only menu route, and it resolves from the
++        // application-level AXMenuBar.
++        assert_eq!(resolve_menu_scope(None, &[]), Ok(MenuScope::Application));
++        // An omitted anchor is still valid when windows exist: the caller
++        // asked for the application-level path, which touches no window.
++        assert_eq!(
++            resolve_menu_scope(None, &[7, 42]),
++            Ok(MenuScope::Application)
++        );
++    }
+ }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
-index 6085da994..22db22e6d 100644
+index 6085da994..ac54cc7cb 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
-@@ -64,6 +64,10 @@ fn def() -> &'static ToolDef {
+@@ -30,7 +30,11 @@ fn def() -> &'static ToolDef {
+              window so each session acts on its own isolated window instead of clobbering one \
+              shared instance. Without it, single-instance apps (Calculator, many utilities) hand \
+              every caller the same window, so two sessions fight over it.\n\n\
+-             Optional `additional_arguments`: extra argv strings appended after --args.\n\n\
++             Optional `additional_arguments`: extra argv strings appended after --args. LaunchServices \n\
++             only delivers arguments to a new application instance, so when the target app is already \n\
++             running the launch is forced into a new instance and the arguments are delivered there; \n\
++             Chromium-family browsers hand them off to the running process and create the requested \n\
++             window (e.g. `--incognito` opens a new incognito window in the already-running browser).\n\n\
+              Returns the launched app's pid, bundle_id, name, and a `windows` array \
+              (same shape as `list_windows`) so callers can skip an extra round-trip before \
+              `get_window_state(pid, window_id)`. `launch_state` distinguishes whether the \
+@@ -64,6 +68,10 @@ fn def() -> &'static ToolDef {
                      "type": "boolean",
                      "description": "When true, force a new app instance even if already running (open -n). Use for concurrent multi-agent/multi-session work so each session gets an isolated instance + window instead of sharing one — on single-instance apps (e.g. Calculator) every caller otherwise gets the same window and the sessions clobber each other."
                  },
@@ -12047,7 +13165,7 @@ index 6085da994..22db22e6d 100644
                  "additional_arguments": {
                      "type": "array",
                      "items": { "type": "string" },
-@@ -103,6 +107,7 @@ impl Tool for LaunchAppTool {
+@@ -103,6 +111,7 @@ impl Tool for LaunchAppTool {
          }
          let webkit_inspector_port = args.opt_u64("webkit_inspector_port").map(|v| v as u16);
          let creates_new_instance = args.bool_or("creates_new_application_instance", false);
@@ -12055,7 +13173,7 @@ index 6085da994..22db22e6d 100644
          let additional_arguments: Vec<String> = args.str_array("additional_arguments");
          if additional_arguments
              .iter()
-@@ -233,7 +238,7 @@ impl Tool for LaunchAppTool {
+@@ -233,7 +242,7 @@ impl Tool for LaunchAppTool {
                      && env.is_empty()
                      && !creates_new_instance
                  {
@@ -12064,7 +13182,7 @@ index 6085da994..22db22e6d 100644
                  } else {
                      crate::apps::launch_with_urls_by_bundle(
                          bid,
-@@ -241,6 +246,7 @@ impl Tool for LaunchAppTool {
+@@ -241,6 +250,7 @@ impl Tool for LaunchAppTool {
                          &additional_arguments,
                          &env,
                          creates_new_instance,
@@ -12072,7 +13190,7 @@ index 6085da994..22db22e6d 100644
                      )?
                  }
              } else {
-@@ -250,7 +256,7 @@ impl Tool for LaunchAppTool {
+@@ -250,7 +260,7 @@ impl Tool for LaunchAppTool {
                      && env.is_empty()
                      && !creates_new_instance
                  {
@@ -12081,7 +13199,7 @@ index 6085da994..22db22e6d 100644
                  } else {
                      crate::apps::launch_with_urls_by_name(
                          n,
-@@ -258,6 +264,7 @@ impl Tool for LaunchAppTool {
+@@ -258,6 +268,7 @@ impl Tool for LaunchAppTool {
                          &additional_arguments,
                          &env,
                          creates_new_instance,
@@ -12089,7 +13207,7 @@ index 6085da994..22db22e6d 100644
                      )?
                  }
              };
-@@ -452,8 +459,14 @@ impl Tool for LaunchAppTool {
+@@ -452,8 +463,14 @@ impl Tool for LaunchAppTool {
                      response_requested_name.as_deref(),
                  );
  
@@ -12106,7 +13224,7 @@ index 6085da994..22db22e6d 100644
  
                  if !windows.is_empty() {
                      summary.push_str("\n\nWindows:");
-@@ -480,6 +493,7 @@ impl Tool for LaunchAppTool {
+@@ -480,6 +497,7 @@ impl Tool for LaunchAppTool {
                      "bundle_id": bid,
                      "name": app_name,
                      "windows": windows_json,
@@ -15234,3 +16352,24 @@ index 64fdf2641..06d08091c 100644
  pub fn window_info_by_id(window_id: u32) -> Option<WindowInfo> {
      all_windows_any_layer()
          .into_iter()
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
+index 29b2f054f..499d826e8 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
+@@ -9115,7 +9115,15 @@ impl Tool for InvokeMenuTool {
+             Ok(path) => path,
+             Err(error) => return menu_refusal(error),
+         };
+-        let hwnd_value = input.window_id;
++        // The application-level (windowless) menu path is macOS-only; the
++        // UIA menu route needs an exact window here.
++        let Some(hwnd_value) = input.window_id else {
++            return menu_refusal(
++                "invoke_menu: the application-level menu path is only supported on macOS; \
++                 pass an exact window_id"
++                    .into(),
++            );
++        };
+         let hwnd = HWND(hwnd_value as usize as *mut _);
+         if !unsafe { IsWindow(hwnd) }.as_bool() {
+             return menu_refusal("invoke_menu: window_id is closed, stale, or invalid".into());

@@ -340,6 +340,46 @@ keeps spawned browsers invisible.
   Cocoa activation on purpose: they run only to undo an observed steal, and a
   non-raising focus would leave the intruder's window on top.
 
+Revision 27 softens the cursor shadow, makes `invoke_menu` work on a
+windowless app, places spawned browsers truly offscreen through CDP, and
+makes launch arguments reach an already-running Chromium app.
+
+- Soft cursor shadow: the compact stock arrow's drop shadow is now a
+  blurred silhouette (three separable box passes, radius 2 pt, 42% peak
+  opacity, offset 1.2/1.8 pt down-right) rendered into a scratch pixmap and
+  composited beneath the rim and fill, so the blur can never smear the
+  crisp ink or the click-pulse ring. Stock inks and the
+  `set_agent_cursor_style` `shadow` channel are unchanged; render tests pin
+  the soft ramp, the peak opacity, the down-right offset, and the bounded
+  footprint at 1×/2×/3×.
+- Windowless menus: `invoke_menu` now takes an optional `window_id`
+  (contract `InvokeMenuInput`). With a window id the exact-window semantics
+  are unchanged (validate the window, make it key without raising,
+  restore). With `window_id` omitted the path resolves from the
+  application-level `AXMenuBar` of the application element every hop and
+  invokes it with no window focus, raise, or activation — the only route
+  for an app that has no windows at all, and the previous refusal
+  ("window_id does not belong to pid") is unreachable on that path. The
+  Windows/Linux implementations refuse the omitted form honestly (their
+  menu routes need an exact window).
+- Real offscreen spawn: `--window-position` is a Windows/Linux-only
+  Chromium switch — macOS Chrome creates its first window on screen while
+  the switch is present (live-verified in revision 26). After the spawned
+  endpoint is attested, the driver now writes the window origin through
+  `Browser.setWindowBounds` (-32000, -32000), reads `Browser.getWindowBounds`
+  back, and reports the observed bounds in the `browser_prepare` message.
+  The proof is honest: an unchanged or unreadable window is reported as
+  such and never claimed offscreen. The process-lifetime conceal watcher
+  stays armed as the backstop and nothing here unhides or activates.
+- Launch arguments: LaunchServices delivers
+  `NSWorkspaceOpenConfiguration.arguments` to a NEW application instance
+  only; a launch handed to an already-running app silently drops them. The
+  launch path now forces `createsNewApplicationInstance` exactly when
+  arguments are present and the app is already running, so
+  `additional_arguments: ["--incognito"]` reaches a running Chromium
+  browser, whose process singleton opens the requested incognito window.
+  Hidden/activation rules are unchanged.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records
