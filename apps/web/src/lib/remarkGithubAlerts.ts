@@ -31,7 +31,8 @@ function toGithubAlert(node: Blockquote, source: string): void {
   if (start && start.offset !== undefined) {
     const removed = match[0];
     if (removed.endsWith("\n")) {
-      const lineStart = start.offset + removed.length;
+      // Search the source: a CRLF there is a single `\n` in the text value.
+      const lineStart = source.indexOf("\n", start.offset) + 1;
       const prefix = /^[ \t]*(?:>[ \t]?)*/.exec(source.slice(lineStart))![0];
       text.position!.start = {
         line: start.line + 1,

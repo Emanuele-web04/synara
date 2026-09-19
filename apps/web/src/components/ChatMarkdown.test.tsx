@@ -558,15 +558,22 @@ it("opens Obsidian aliases relative to the vault and leaves code unchanged", asy
   expect(markup).not.toContain("[[03-Resources");
 });
 
-it("keeps wiki links on the first line of a GitHub alert", async () => {
-  const { default: ChatMarkdown } = await import("./ChatMarkdown");
-  const markup = renderWithQueryClient(
-    <ChatMarkdown text={"> [!NOTE]\n> See [[My note]] now"} cwd="/vault" wikiLinkRoot="/vault" />,
-  );
-  expect(markup).toContain('data-github-alert="note"');
-  expect(markup).toContain('href="/vault/My%20note.md"');
-  expect(markup).not.toContain("[[My note]]");
-});
+it.each(["\n", "\r\n"])(
+  "keeps wiki links on the first line of a GitHub alert (%j)",
+  async (eol) => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={`> [!NOTE]${eol}> See [[My note]] now`}
+        cwd="/vault"
+        wikiLinkRoot="/vault"
+      />,
+    );
+    expect(markup).toContain('data-github-alert="note"');
+    expect(markup).toContain('href="/vault/My%20note.md"');
+    expect(markup).not.toContain("[[My note]]");
+  },
+);
 
 describe("workspace Wiki links", () => {
   it.each([
