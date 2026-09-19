@@ -301,4 +301,24 @@ describe("RateLimitsPanel helpers", () => {
       { label: "Opus", remainingPercent: 90 },
     ]);
   });
+
+  it("preserves unmapped provider labels instead of collapsing them into the duration bucket", () => {
+    const rows = deriveVisibleRateLimitRows([
+      {
+        provider: "claudeAgent",
+        updatedAt: "2099-04-08T18:00:00.000Z",
+        limits: [
+          { window: "Weekly", usedPercent: 30, windowDurationMins: 10080 },
+          { window: "Opus 4.5", usedPercent: 70, windowDurationMins: 10080 },
+          { window: "Plus", usedPercent: 12, windowDurationMins: 300 },
+        ],
+      },
+    ]);
+
+    expect(rows.map(({ label, remainingPercent }) => ({ label, remainingPercent }))).toEqual([
+      { label: "Weekly", remainingPercent: 70 },
+      { label: "Opus 4.5", remainingPercent: 30 },
+      { label: "Plus", remainingPercent: 88 },
+    ]);
+  });
 });

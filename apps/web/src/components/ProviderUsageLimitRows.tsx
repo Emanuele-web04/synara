@@ -71,8 +71,13 @@ function SettingsUsageLimitRow({ row }: { row: ProviderUsageDisplayRow }) {
 
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center gap-1.5">
-        <span className="text-xs font-medium text-foreground">{row.label}</span>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span
+          className="min-w-0 truncate text-xs font-medium text-foreground"
+          title={row.displayLabel}
+        >
+          {row.displayLabel}
+        </span>
         <span
           className={cn("size-1.5 shrink-0 rounded-full", trackProps.markerClassName)}
           title={row.pace ? `Usage pace: ${row.pace.status}` : undefined}
@@ -94,8 +99,13 @@ function PopoverUsageLimitRow({ row }: { row: ProviderUsageDisplayRow }) {
     <div className="space-y-1 text-[length:var(--app-font-size-chat-meta,10px)] leading-tight">
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-baseline gap-x-3">
         <div className="flex min-w-0 items-baseline gap-1.5">
-          <span className="shrink-0 text-[11px] font-medium text-foreground">{row.label}</span>
-          <span className="min-w-0 truncate tabular-nums text-foreground">{row.leftText}</span>
+          <span
+            className="min-w-0 truncate text-[11px] font-medium text-foreground"
+            title={row.displayLabel}
+          >
+            {row.displayLabel}
+          </span>
+          <span className="shrink-0 tabular-nums text-foreground">{row.leftText}</span>
         </div>
         <div className="min-w-0 text-right text-muted-foreground">
           {row.resetText ? <div className="truncate tabular-nums">{row.resetText}</div> : null}
