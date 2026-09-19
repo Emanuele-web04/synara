@@ -556,7 +556,7 @@ index cfd35d264..5e16b8319 100644
      /// the routed pointer refuse rather than restoring the window.
      #[test]
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
-index 5f4d1a076..84bf35ee5 100644
+index 5f4d1a076..2a1004054 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
 @@ -9,7 +9,9 @@
@@ -570,7 +570,21 @@ index 5f4d1a076..84bf35ee5 100644
  //!
  //! Snapshot composition (v2 DOM-ref slice):
  //! - Shadow DOM is composed into the main-frame walk (`pierce: true`),
-@@ -58,7 +60,8 @@ use super::store::{
+@@ -48,17 +50,18 @@ use super::prepare::ManagedBrowsers;
+ use super::reconnect::ReconnectGates;
+ use super::refusal::{BrowserRefusal, BrowserRefusalCode};
+ use super::semantic::{
+-    build_dom_index, build_layout_index, compose_accessibility_tree, parse_viewport,
+-    OmissionCounts, SemanticDocument, SemanticNode, DEFAULT_SEMANTIC_NODE_BUDGET,
++    build_dom_index, build_dom_text_index, build_layout_index, compose_accessibility_tree,
++    parse_viewport, OmissionCounts, SemanticDocument, SemanticNode, DEFAULT_SEMANTIC_NODE_BUDGET,
+     SEMANTIC_COMPUTED_STYLES,
+ };
+ use super::store::{
+-    format_ref, BrowserStore, FrameIdentity, FrameKind, FrameRef, RefEntry, SemanticContinuation,
+-    SnapshotRecord, TabRecord, TargetRecord,
++    format_ref, BrowserStore, FrameIdentity, FrameKind, FrameRef, RebindHint, RefEntry,
++    SemanticContinuation, SnapshotRecord, TabRecord, TargetRecord,
  };
  use super::types::{
      BindingQuality, BrowserClassification, BrowserEngineFamily, BrowserProcessRole,
@@ -580,7 +594,27 @@ index 5f4d1a076..84bf35ee5 100644
  };
  
  /// Bounds tolerance (device pixels) for native ↔ CDP window correlation.
-@@ -215,10 +218,34 @@ pub(crate) struct ValidatedTab {
+@@ -138,6 +141,19 @@ fn route_err(context: &str, err: impl std::fmt::Display) -> BrowserRefusal {
+     )
+ }
+ 
++/// Internal retries for the transient `Accessibility.getFullAXTree` frame-id
++/// race. The delay grows linearly per attempt to let the frame swap settle.
++const AX_TREE_RETRY_ATTEMPTS: usize = 2;
++const AX_TREE_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
++
++/// Whether an AX-tree failure is the transient frame-not-found race rather
++/// than a real route failure. CDP reports `-32602` with a "Frame with the
++/// given frameId is not found." message while a frame is being detached.
++fn is_retryable_ax_tree_error(error: &anyhow::Error) -> bool {
++    let text = error.to_string();
++    text.contains("-32602") || text.contains("Frame with the given frameId")
++}
++
+ pub(super) fn unsupported_engine_refusal(
+     classification: &BrowserClassification,
+     operation: &'static str,
+@@ -215,10 +231,34 @@ pub(crate) struct ValidatedTab {
      pub record: TargetRecord,
      pub tab: TabRecord,
      /// Live native metadata from this mutation's revalidation, rather than
@@ -616,7 +650,15 @@ index 5f4d1a076..84bf35ee5 100644
  }
  
  fn viewport_point_to_screen(
-@@ -1056,11 +1083,13 @@ impl BrowserEngine {
+@@ -389,6 +429,7 @@ pub(crate) struct SemanticSnapshotOutcome {
+     pub url: String,
+     pub title: String,
+     pub outline: String,
++    pub text_digest: String,
+     pub refs: Vec<SemanticListedRef>,
+     pub content_refs: Vec<SemanticListedRef>,
+     pub complete: bool,
+@@ -1056,11 +1097,13 @@ impl BrowserEngine {
          Ok(endpoint)
      }
  
@@ -633,7 +675,7 @@ index 5f4d1a076..84bf35ee5 100644
          let targets = conn
              .call(None, "Target.getTargets", json!({}))
              .await
-@@ -1104,7 +1133,38 @@ impl BrowserEngine {
+@@ -1104,7 +1147,38 @@ impl BrowserEngine {
                  .and_then(Value::as_str)
                  .unwrap_or("")
                  .to_owned();
@@ -672,7 +714,7 @@ index 5f4d1a076..84bf35ee5 100644
              let window_geometry = match conn
                  .call(
                      None,
-@@ -1363,6 +1423,7 @@ impl BrowserEngine {
+@@ -1363,10 +1437,141 @@ impl BrowserEngine {
              native_bounds: native.bounds,
              cdp_target_id: candidate.cdp_target_id.clone(),
              cdp_window_id: candidate.cdp_window_id,
@@ -680,10 +722,38 @@ index 5f4d1a076..84bf35ee5 100644
              quality,
              tabs,
          };
-@@ -1371,6 +1432,108 @@ impl BrowserEngine {
-         Ok((target_id, record))
-     }
- 
+         let target_id = self.store.mint_target(session, record.clone());
++        self.record_rebind_hint(&target_id, pid, window_id, false, session, &record);
++        let record = self.store.get_target(session, &target_id)?;
++        Ok((target_id, record))
++    }
++
++    /// Remember the re-proof inputs for a minted target. Reinstating a dead
++    /// binding never skips a proof; it re-runs the same process, endpoint,
++    /// and CDP-target checks the original bind ran.
++    fn record_rebind_hint(
++        &self,
++        target_id: &str,
++        pid: i64,
++        window_id: u64,
++        windowless: bool,
++        session: &str,
++        record: &TargetRecord,
++    ) {
++        self.store.record_rebind_hint(RebindHint {
++            target_id: target_id.to_owned(),
++            pid,
++            window_id,
++            windowless,
++            owner_session: session.to_owned(),
++            tabs: record
++                .tabs
++                .iter()
++                .map(|(tab_id, tab)| (tab_id.clone(), tab.cdp_target_id.clone()))
++                .collect(),
++        });
++    }
++
 +    /// Bind a driver-owned headless browser with no native window. The
 +    /// capability is minted from the CDP endpoint the driver itself launched:
 +    /// process fingerprint + attested endpoint ownership + live CDP page
@@ -782,14 +852,191 @@ index 5f4d1a076..84bf35ee5 100644
 +            tabs,
 +        };
 +        let target_id = self.store.mint_target(session, record.clone());
-+        let record = self.store.get_target(session, &target_id)?;
-+        Ok((target_id, record))
++        self.record_rebind_hint(&target_id, pid, 0, true, session, &record);
+         let record = self.store.get_target(session, &target_id)?;
+         Ok((target_id, record))
+     }
+@@ -1390,6 +1595,149 @@ impl BrowserEngine {
+         Ok(native)
+     }
+ 
++    /// Resolve a target capability, transparently reinstating a binding whose
++    /// session namespace was dropped while the exact browser it was minted
++    /// against is still live. Reinstating never skips the proof chain: the
++    /// process fingerprint, endpoint ownership, and CDP page targets are all
++    /// re-proved. A target that is genuinely gone keeps the original refusal.
++    pub(crate) async fn target_for(
++        &self,
++        session: &str,
++        target_id: &str,
++    ) -> Result<TargetRecord, BrowserRefusal> {
++        match self.store.get_target(session, target_id) {
++            Ok(record) => Ok(record),
++            Err(original) if original.code == BrowserRefusalCode::BrowserBindingStale => {
++                match self.rebind_target(session, target_id).await {
++                    Ok(record) => Ok(record),
++                    Err(error) if error.code == BrowserRefusalCode::BrowserBindingStale => {
++                        Err(original)
++                    }
++                    Err(error) => Err(error),
++                }
++            }
++            Err(error) => Err(error),
++        }
 +    }
 +
-     pub(crate) async fn native_window_checked(
-         &self,
-         pid: i64,
-@@ -1499,10 +1662,15 @@ impl BrowserEngine {
++    fn stale_rebind_refusal(target_id: &str, detail: impl std::fmt::Display) -> BrowserRefusal {
++        refuse(
++            BrowserRefusalCode::BrowserBindingStale,
++            format!(
++                "target {target_id} is not a live binding and could not be reinstated: {detail}; \
++                 re-run get_browser_state with pid + window_id"
++            ),
++        )
++    }
++
++    async fn rebind_target(
++        &self,
++        session: &str,
++        target_id: &str,
++    ) -> Result<TargetRecord, BrowserRefusal> {
++        let Some(hint) = self.store.rebind_hint(target_id) else {
++            return Err(Self::stale_rebind_refusal(
++                target_id,
++                "this driver has no rebind record for it",
++            ));
++        };
++
++        let (fresh_target_id, fresh_record) = if hint.windowless {
++            let owned = self.is_driver_owned_headless_pid_for_session(session, hint.pid)
++                || self.is_driver_owned_headless_pid_for_session(&hint.owner_session, hint.pid);
++            if !owned {
++                self.store.clear_rebind_hint(target_id);
++                return Err(Self::stale_rebind_refusal(
++                    target_id,
++                    "the driver no longer owns that headless browser for this session",
++                ));
++            }
++            let fingerprint = match self.platform.process_fingerprint(hint.pid).await {
++                Ok(fingerprint) => fingerprint,
++                Err(error) => {
++                    self.store.clear_rebind_hint(target_id);
++                    return Err(Self::stale_rebind_refusal(target_id, error.message));
++                }
++            };
++            let endpoint = match self.owned_endpoint(hint.pid).await {
++                Ok(endpoint) => endpoint,
++                Err(error) => {
++                    self.store.clear_rebind_hint(target_id);
++                    return Err(Self::stale_rebind_refusal(target_id, error.message));
++                }
++            };
++            self.bind_windowless_endpoint(
++                session,
++                Some(hint.owner_session.as_str()),
++                hint.pid,
++                fingerprint,
++                endpoint,
++            )
++            .await?
++        } else {
++            let driver_owned = self.is_driver_owned_pid_for_session(session, hint.pid)
++                || self.is_driver_owned_pid_for_session(&hint.owner_session, hint.pid);
++            if !driver_owned {
++                // A user-profile window needs a fresh consent flow; never
++                // reinstated implicitly by a read.
++                self.store.clear_rebind_hint(target_id);
++                return Err(Self::stale_rebind_refusal(
++                    target_id,
++                    "the browser is not a driver-owned window, so it needs a fresh bind approval",
++                ));
++            }
++            self.bind_native(
++                session,
++                Some(hint.owner_session.as_str()),
++                hint.pid,
++                hint.window_id,
++            )
++            .await?
++        };
++
++        // Keep the caller's capability ids: the target id and every tab id it
++        // already holds stay valid as long as their CDP page target is live.
++        let mut repaired = fresh_record;
++        repaired.target_id = target_id.to_owned();
++        let mut repaired_tabs = HashMap::new();
++        for (old_tab_id, old_cdp_target_id) in &hint.tabs {
++            if let Some(tab) = repaired
++                .tabs
++                .values()
++                .find(|tab| tab.cdp_target_id == *old_cdp_target_id)
++            {
++                let mut tab = tab.clone();
++                tab.tab_id = old_tab_id.clone();
++                tab.snapshots.clear();
++                repaired_tabs.insert(old_tab_id.clone(), tab);
++            }
++        }
++        if repaired_tabs.is_empty() && !hint.tabs.is_empty() {
++            self.store.remove_target(session, &fresh_target_id);
++            self.store.clear_rebind_hint(target_id);
++            return Err(Self::stale_rebind_refusal(
++                target_id,
++                "the browser is live but every tab the capability addressed is gone",
++            ));
++        }
++        if !repaired_tabs.is_empty() {
++            repaired.tabs = repaired_tabs;
++        }
++        let record = repaired.clone();
++        self.store.remove_target(session, &fresh_target_id);
++        self.store.clear_rebind_hint(&fresh_target_id);
++        self.store.reinstate_target(session, record);
++        self.record_rebind_hint(
++            target_id,
++            hint.pid,
++            hint.window_id,
++            hint.windowless,
++            &hint.owner_session,
++            &repaired,
++        );
++        Ok(repaired)
++    }
++
+     // ── Revalidation (before every mutation) ────────────────────────────
+ 
+     /// Re-prove the entire binding chain for a mutation on one tab.
+@@ -1401,7 +1749,7 @@ impl BrowserEngine {
+         target_id: &str,
+         tab_id: Option<&str>,
+     ) -> Result<ValidatedTab, BrowserRefusal> {
+-        let record = self.store.get_target(session, target_id)?;
++        let record = self.target_for(session, target_id).await?;
+ 
+         if record.quality != BindingQuality::Exact {
+             return Err(refuse(
+@@ -1450,9 +1798,20 @@ impl BrowserEngine {
+ 
+         match record.endpoint_access_class {
+             EndpointAccessClass::DriverOwned => {
++                // A reinstated capability may be exercised under a revived
++                // session label; the lifecycle entry still belongs to the
++                // session named in the rebind hint, so accept that owner too.
++                let hint_owner = self.store.rebind_hint(target_id).map(|hint| hint.owner_session);
+                 let lifecycle_is_live = self.is_driver_owned_pid_for_session(session, record.pid)
+                     || record.transport_session.as_deref().is_some_and(|owner| {
+                         self.is_driver_owned_pid_for_session(owner, record.pid)
++                    })
++                    || hint_owner.as_deref().is_some_and(|owner| {
++                        if record.windowless {
++                            self.is_driver_owned_headless_pid_for_session(owner, record.pid)
++                        } else {
++                            self.is_driver_owned_pid_for_session(owner, record.pid)
++                        }
+                     });
+                 if !lifecycle_is_live {
+                     return Err(refuse(
+@@ -1499,10 +1858,15 @@ impl BrowserEngine {
              ));
          }
  
@@ -809,7 +1056,7 @@ index 5f4d1a076..84bf35ee5 100644
  
          // 3. Endpoint still owned and unchanged.
          let endpoint = if record.generation > 0 {
-@@ -1526,9 +1694,15 @@ impl BrowserEngine {
+@@ -1526,9 +1890,15 @@ impl BrowserEngine {
          }
  
          // 4. CDP target still a page in the bound CDP window, with either
@@ -827,7 +1074,7 @@ index 5f4d1a076..84bf35ee5 100644
          let live = candidates
              .iter()
              .find(|c| c.cdp_target_id == tab.cdp_target_id)
-@@ -1538,7 +1712,9 @@ impl BrowserEngine {
+@@ -1538,7 +1908,9 @@ impl BrowserEngine {
                      format!("tab {tab_id} no longer has a live CDP page target"),
                  )
              })?;
@@ -838,7 +1085,7 @@ index 5f4d1a076..84bf35ee5 100644
              if live.cdp_window_id != Some(bound_window_id) {
                  return Err(refuse(
                      BrowserRefusalCode::BrowserWrongTargetRefused,
-@@ -1601,12 +1777,14 @@ impl BrowserEngine {
+@@ -1601,12 +1973,14 @@ impl BrowserEngine {
                  .capability_manifest();
              authorize_live_browser_origin(manifest, &live_url)?;
          }
@@ -853,7 +1100,7 @@ index 5f4d1a076..84bf35ee5 100644
          })
      }
  
-@@ -1663,6 +1841,12 @@ impl BrowserEngine {
+@@ -1663,6 +2037,12 @@ impl BrowserEngine {
          viewport_y: f64,
          kind: BrowserVisualActionKind,
      ) {
@@ -866,6 +1113,240 @@ index 5f4d1a076..84bf35ee5 100644
          // `document.visibilityState` distinguishes the selected tab without
          // focusing its native window or invoking any CDP activation command.
          // Treat an unavailable or malformed proof as inactive: omitting
+@@ -1727,7 +2107,7 @@ impl BrowserEngine {
+         target_id: &str,
+         tab_id: &str,
+     ) -> Result<tokio::sync::OwnedMutexGuard<()>, BrowserRefusal> {
+-        let record = self.store.get_target(session, target_id)?;
++        let record = self.target_for(session, target_id).await?;
+         let tab = record.tabs.get(tab_id).ok_or_else(|| {
+             refuse(
+                 BrowserRefusalCode::BrowserTabNotFound,
+@@ -1927,7 +2307,7 @@ impl BrowserEngine {
+         target_id: &str,
+         tab_id: &str,
+     ) -> Result<BrowserTabScreenshot, BrowserRefusal> {
+-        let record = self.store.get_target(session, target_id)?;
++        let record = self.target_for(session, target_id).await?;
+         let tab = record.tabs.get(tab_id).cloned().ok_or_else(|| {
+             refuse(
+                 BrowserRefusalCode::BrowserTabNotFound,
+@@ -2024,7 +2404,7 @@ impl BrowserEngine {
+         target_id: &str,
+         tab_id: &str,
+     ) -> Result<SnapshotOutcome, BrowserRefusal> {
+-        let record = self.store.get_target(session, target_id)?;
++        let record = self.target_for(session, target_id).await?;
+         let tab = record.tabs.get(tab_id).cloned().ok_or_else(|| {
+             refuse(
+                 BrowserRefusalCode::BrowserTabNotFound,
+@@ -2238,6 +2618,41 @@ impl BrowserEngine {
+         })
+     }
+ 
++    /// Fetch one frame's accessibility tree, retrying the transient
++    /// `-32602` "Frame with the given frameId is not found" churn that
++    /// happens while a frame is being swapped during navigation. The retry
++    /// is internal: a transient frame-id race must not surface as
++    /// `browser_route_unavailable` to the model.
++    async fn full_ax_tree(
++        &self,
++        conn: &Arc<CdpConnection>,
++        cdp_session: &str,
++        frame_id: Option<&str>,
++    ) -> Result<Value, BrowserRefusal> {
++        let params = match frame_id {
++            Some(frame_id) => json!({ "frameId": frame_id }),
++            None => json!({}),
++        };
++        let mut attempt = 0usize;
++        loop {
++            match conn
++                .call(Some(cdp_session), "Accessibility.getFullAXTree", params.clone())
++                .await
++            {
++                Ok(tree) => return Ok(tree),
++                Err(error)
++                    if attempt < AX_TREE_RETRY_ATTEMPTS && is_retryable_ax_tree_error(&error) =>
++                {
++                    attempt += 1;
++                    tokio::time::sleep(AX_TREE_RETRY_DELAY * attempt as u32).await;
++                }
++                Err(error) => {
++                    return Err(route_err("Accessibility.getFullAXTree failed", error));
++                }
++            }
++        }
++    }
++
+     async fn collect_semantic_session(
+         &self,
+         conn: &Arc<CdpConnection>,
+@@ -2265,33 +2680,27 @@ impl BrowserEngine {
+         )
+         .map_err(|error| route_err("semantic layout collection failed", error))?;
+         let dom = build_dom_index(&root);
++        let texts = build_dom_text_index(&layout);
+         let layout = build_layout_index(&layout);
+         let viewport = parse_viewport(&metrics);
+ 
+         let identities = tree.map(LocalFrameTree::identities).unwrap_or_default();
+         let mut result = SemanticDocument::default();
+         if identities.is_empty() {
+-            let ax = conn
+-                .call(Some(cdp_session), "Accessibility.getFullAXTree", json!({}))
+-                .await
+-                .map_err(|error| route_err("Accessibility.getFullAXTree failed", error))?;
++            let ax = self.full_ax_tree(conn, cdp_session, None).await?;
+             result = compose_accessibility_tree(
+                 &ax,
+                 &dom,
+                 &layout,
++                &texts,
+                 &viewport,
+                 FrameRef::main_unproven(),
+             );
+         } else {
+             for (index, identity) in identities.into_iter().enumerate() {
+-                let ax = conn
+-                    .call(
+-                        Some(cdp_session),
+-                        "Accessibility.getFullAXTree",
+-                        json!({ "frameId": identity.frame_id }),
+-                    )
+-                    .await
+-                    .map_err(|error| route_err("Accessibility.getFullAXTree failed", error))?;
++                let ax = self
++                    .full_ax_tree(conn, cdp_session, Some(&identity.frame_id))
++                    .await?;
+                 let kind = if oopif_target_id.is_some() {
+                     FrameKind::Oopif
+                 } else if index == 0 {
+@@ -2303,6 +2712,7 @@ impl BrowserEngine {
+                     &ax,
+                     &dom,
+                     &layout,
++                    &texts,
+                     &viewport,
+                     FrameRef {
+                         kind,
+@@ -2438,23 +2848,20 @@ impl BrowserEngine {
+         document_complete: bool,
+         scope: &'static str,
+         oopif: OopifStatus,
+-        start_index: u32,
+     ) -> (SemanticSnapshotOutcome, HashMap<u32, RefEntry>) {
+         let mut stored_refs = HashMap::new();
+         let mut refs = Vec::new();
+         let mut content_refs = Vec::new();
+-        for (position, node) in page.selected.iter().enumerate() {
+-            let Some(entry) = node.to_ref_entry() else {
++        for listed in page.listed {
++            let Some(entry) = listed.node.to_ref_entry() else {
+                 continue;
+             };
+-            let index = start_index.saturating_add(position as u32);
+-            let external = format_ref(snapshot_id, index);
+-            stored_refs.insert(index, entry);
++            stored_refs.insert(listed.index, entry);
+             let listed = SemanticListedRef {
+-                external,
+-                node: node.clone(),
++                external: listed.external,
++                node: listed.node,
+             };
+-            if node.actions.is_empty() {
++            if listed.node.actions.is_empty() {
+                 content_refs.push(listed);
+             } else {
+                 refs.push(listed);
+@@ -2467,6 +2874,7 @@ impl BrowserEngine {
+                 url,
+                 title,
+                 outline: page.outline,
++                text_digest: page.text_digest,
+                 refs,
+                 content_refs,
+                 complete,
+@@ -2500,7 +2908,7 @@ impl BrowserEngine {
+             let (snapshot, continuation) = self
+                 .store
+                 .resolve_semantic_continuation(session, target_id, tab_id, token)?;
+-            let record = self.store.get_target(session, target_id)?;
++            let record = self.target_for(session, target_id).await?;
+             let tab = record.tabs.get(tab_id).cloned().ok_or_else(|| {
+                 refuse(
+                     BrowserRefusalCode::BrowserTabNotFound,
+@@ -2537,18 +2945,20 @@ impl BrowserEngine {
+                     "the continuation no longer has semantic snapshot state",
+                 )
+             })?;
+-            let page = document.page(
+-                continuation.offset,
+-                DEFAULT_SEMANTIC_NODE_BUDGET,
+-                continuation.query.as_deref(),
+-                continuation.scope_backend_node_id,
+-            );
+             let start_index = snapshot
+                 .refs
+                 .keys()
+                 .max()
+                 .copied()
+                 .map_or(0, |value| value.saturating_add(1));
++            let page = document.page(
++                continuation.offset,
++                DEFAULT_SEMANTIC_NODE_BUDGET,
++                continuation.query.as_deref(),
++                continuation.scope_backend_node_id,
++                snapshot.id,
++                start_index,
++            );
+             let oopif = if continuation.oopif_supported {
+                 OopifStatus::Attached(continuation.oopif_frames)
+             } else {
+@@ -2563,7 +2973,6 @@ impl BrowserEngine {
+                 document.complete,
+                 "continuation",
+                 oopif,
+-                start_index,
+             );
+             let next_token = outcome.continuation.clone();
+             self.store.update_target(session, target_id, |record| {
+@@ -2599,7 +3008,7 @@ impl BrowserEngine {
+             ),
+             None => None,
+         };
+-        let record = self.store.get_target(session, target_id)?;
++        let record = self.target_for(session, target_id).await?;
+         let tab = record.tabs.get(tab_id).cloned().ok_or_else(|| {
+             refuse(
+                 BrowserRefusalCode::BrowserTabNotFound,
+@@ -2704,14 +3113,16 @@ impl BrowserEngine {
+             OopifStatus::Unsupported
+         };
+ 
++        let snapshot_id = self.store.mint_snapshot_id();
+         let page = semantic.page(
+             0,
+             DEFAULT_SEMANTIC_NODE_BUDGET,
+             query,
+             scope_backend_node_id,
++            snapshot_id,
++            0,
+         );
+         let next_offset = page.next_offset;
+-        let snapshot_id = self.store.mint_snapshot_id();
+         let scope = if scope_ref.is_some() {
+             "subtree"
+         } else if query.is_some() {
+@@ -2727,7 +3138,6 @@ impl BrowserEngine {
+             semantic.complete,
+             scope,
+             oopif,
+-            0,
+         );
+         let continuation_token = outcome.continuation.clone();
+         self.store
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs
 index bf0912f4b..94af336eb 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs
@@ -1296,8 +1777,646 @@ index 1d10b3195..7c157e7b1 100644
      #[test]
      fn clean_launcher_exit_is_only_deferred_on_windows() {
          let mut command = if cfg!(target_os = "windows") {
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/semantic.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/semantic.rs
+index 63ee10a56..e73313491 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/semantic.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/semantic.rs
+@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
+ 
+ use serde_json::Value;
+ 
+-use super::store::{BrowserActionKind, BrowserVisibility, FrameRef, RefEntry};
++use super::store::{format_ref, BrowserActionKind, BrowserVisibility, FrameRef, RefEntry};
+ 
+ pub(crate) const SEMANTIC_COMPUTED_STYLES: &[&str] = &[
+     "display",
+@@ -24,6 +24,20 @@ pub(crate) const SEMANTIC_COMPUTED_STYLES: &[&str] = &[
+     "overflow-y",
+ ];
+ pub(crate) const DEFAULT_SEMANTIC_NODE_BUDGET: usize = 300;
++/// The rendered outline budget. The outline carries each listed ref inline;
++/// a page whose rendered outline exceeds this is cut with an honest marker
++/// (refs stay listed in the compact ref index).
++pub(crate) const SEMANTIC_OUTLINE_CHAR_BUDGET: usize = 10_000;
++/// The visible-text digest budget. Text lives here once, with refs inline.
++pub(crate) const SEMANTIC_TEXT_DIGEST_CHAR_BUDGET: usize = 2_000;
++const MAX_DIGEST_TEXT_LINES: usize = 120;
++/// Bound on DOM-extracted text runs composed per frame. AX static text is
++/// unstable on name-from-content pages (the whole product card becomes one
++/// link name and its text children are pruned from the AX tree), so DOM text
++/// is the fallback source; the cap keeps snapshots bounded.
++const MAX_DOM_TEXT_NODES_PER_FRAME: usize = 64;
++/// Bound on the ancestor walk used to find a text run's laid-out box.
++const MAX_DOM_TEXT_ANCESTOR_HOPS: usize = 64;
+ const NEAR_VIEWPORT_MARGIN: f64 = 1_000.0;
+ const MAX_SEMANTIC_TEXT_CHARS: usize = 1_000;
+ 
+@@ -99,6 +113,19 @@ struct LayoutMeta {
+     paint_order: Option<i64>,
+ }
+ 
++/// One text node extracted from `DOMSnapshot.captureSnapshot` (its
++/// `nodeValue` string), with the nearest laid-out ancestor's bounds. This is
++/// the stable text source when the accessibility tree prunes static text.
++#[derive(Debug, Clone)]
++pub(crate) struct DomTextRun {
++    backend_node_id: i64,
++    parent_backend_node_id: Option<i64>,
++    text: String,
++    order: usize,
++    rect: Option<Rect>,
++    frame_id: Option<String>,
++}
++
+ #[derive(Debug, Clone, Default)]
+ pub(crate) struct LayoutIndex {
+     nodes: HashMap<i64, LayoutMeta>,
+@@ -153,7 +180,15 @@ pub(crate) struct OmissionCounts {
+ 
+ #[derive(Debug, Clone)]
+ pub(crate) struct SemanticPage {
++    /// Rendered outline. Listed refs appear inline: `- link p14:12 "Name"`.
+     pub(crate) outline: String,
++    /// Bounded visible-text digest. Text nodes appear once, with refs.
++    pub(crate) text_digest: String,
++    /// Every node that received a ref, in ref-index order.
++    pub(crate) listed: Vec<ListedRef>,
++    /// Kept for tests that inspect the selected slice directly; the snapshot
++    /// envelope itself is built from `listed`.
++    #[cfg_attr(not(test), allow(dead_code))]
+     pub(crate) selected: Vec<SemanticNode>,
+     pub(crate) selected_nodes: usize,
+     pub(crate) total_nodes: usize,
+@@ -161,6 +196,14 @@ pub(crate) struct SemanticPage {
+     pub(crate) omissions: OmissionCounts,
+ }
+ 
++/// One listed node with its minted external ref.
++#[derive(Debug, Clone)]
++pub(crate) struct ListedRef {
++    pub(crate) index: u32,
++    pub(crate) external: String,
++    pub(crate) node: SemanticNode,
++}
++
+ #[derive(Debug, Clone, Default)]
+ pub(crate) struct SemanticDocument {
+     pub(crate) nodes: Vec<SemanticNode>,
+@@ -192,6 +235,8 @@ impl SemanticDocument {
+         budget: usize,
+         query: Option<&str>,
+         scope_backend_node_id: Option<i64>,
++        snapshot_id: u64,
++        start_index: u32,
+     ) -> SemanticPage {
+         let mut candidates = scoped_indices(&self.nodes, query, scope_backend_node_id);
+         candidates.retain(|idx| {
+@@ -212,7 +257,27 @@ impl SemanticDocument {
+         let end = (start + budget.max(1)).min(candidates.len());
+         let page_slice = &candidates[start..end];
+         let selected = with_ancestors(&self.nodes, page_slice);
+-        let outline = render_outline(&self.nodes, &selected);
++
++        // Refs are assigned to the page slice in rank order; a node without a
++        // backend id still consumes an index so continuation offsets stay
++        // stable. The outline carries each ref inline.
++        let mut ref_by_node: HashMap<usize, String> = HashMap::new();
++        let mut listed = Vec::new();
++        for (position, idx) in page_slice.iter().enumerate() {
++            let index = start_index.saturating_add(position as u32);
++            let external = format_ref(snapshot_id, index);
++            if self.nodes[*idx].backend_node_id.is_some() {
++                ref_by_node.insert(*idx, external.clone());
++                listed.push(ListedRef {
++                    index,
++                    external,
++                    node: self.nodes[*idx].clone(),
++                });
++            }
++        }
++
++        let outline = render_outline(&self.nodes, &selected, &ref_by_node);
++        let text_digest = render_text_digest(&self.nodes, &selected, &ref_by_node);
+         let selected_nodes = page_slice
+             .iter()
+             .map(|idx| self.nodes[*idx].clone())
+@@ -241,6 +306,8 @@ impl SemanticDocument {
+ 
+         SemanticPage {
+             outline,
++            text_digest,
++            listed,
+             selected: selected_nodes,
+             selected_nodes: page_slice.len(),
+             total_nodes: candidates.len(),
+@@ -454,6 +521,138 @@ pub(crate) fn build_layout_index(snapshot: &Value) -> LayoutIndex {
+     out
+ }
+ 
++/// Extract candidate text runs from a `DOMSnapshot.captureSnapshot` result.
++///
++/// Chrome's accessibility tree is allowed to prune static text (a product
++/// card's text becomes the link's accessible name and the text children are
++/// absent), so the digest needs a DOM-sourced text list. Each run carries the
++/// nearest ancestor with layout bounds so visibility classification stays the
++/// same contract as AX nodes.
++pub(crate) fn build_dom_text_index(snapshot: &Value) -> Vec<DomTextRun> {
++    let Some(strings) = snapshot.get("strings").and_then(Value::as_array) else {
++        return Vec::new();
++    };
++    let string_at = |idx: i64| -> Option<String> {
++        usize::try_from(idx)
++            .ok()
++            .and_then(|idx| strings.get(idx))
++            .and_then(Value::as_str)
++            .map(str::to_owned)
++    };
++
++    let mut runs = Vec::new();
++    let Some(documents) = snapshot.get("documents").and_then(Value::as_array) else {
++        return runs;
++    };
++    for document in documents {
++        let frame_id = document
++            .get("frameId")
++            .and_then(Value::as_str)
++            .map(str::to_owned);
++        let Some(nodes) = document.get("nodes") else {
++            continue;
++        };
++        let array = |field: &str| {
++            nodes
++                .get(field)
++                .and_then(Value::as_array)
++                .cloned()
++                .unwrap_or_default()
++        };
++        let node_types = array("nodeType");
++        let node_values = array("nodeValue");
++        let parent_indices = array("parentIndex");
++        let backend_ids = array("backendNodeId");
++
++        // Layout entries keyed by the index into the document's node list.
++        let mut laid_out: HashMap<usize, Rect> = HashMap::new();
++        if let Some(layout) = document.get("layout") {
++            let indices = layout
++                .get("nodeIndex")
++                .and_then(Value::as_array)
++                .cloned()
++                .unwrap_or_default();
++            let bounds = layout
++                .get("bounds")
++                .and_then(Value::as_array)
++                .cloned()
++                .unwrap_or_default();
++            for (position, node_index) in indices.iter().enumerate() {
++                let Some(node_index) = node_index
++                    .as_u64()
++                    .and_then(|value| usize::try_from(value).ok())
++                else {
++                    continue;
++                };
++                if let Some(rect) = bounds.get(position).and_then(Rect::from_value) {
++                    laid_out.insert(node_index, rect);
++                }
++            }
++        }
++
++        let backend_at = |index: usize| -> Option<i64> {
++            backend_ids
++                .get(index)
++                .and_then(Value::as_i64)
++                .filter(|value| *value > 0)
++        };
++        let parent_at = |index: usize| -> Option<usize> {
++            parent_indices
++                .get(index)
++                .and_then(Value::as_i64)
++                .and_then(|value| usize::try_from(value).ok())
++                .filter(|value| *value < node_types.len())
++        };
++
++        for index in 0..node_types.len() {
++            if node_types.get(index).and_then(Value::as_i64) != Some(3) {
++                continue;
++            }
++            let Some(value_index) = node_values.get(index).and_then(Value::as_i64) else {
++                continue;
++            };
++            let Some(text) = string_at(value_index) else {
++                continue;
++            };
++            let Some(backend_node_id) = backend_at(index) else {
++                continue;
++            };
++
++            // Nearest laid-out ancestor carries the text's visible box; a
++            // text node's own layout entry is used when Chrome emits one.
++            // The walk is bounded: a malformed endpoint must not be able to
++            // loop the collector through a cyclic parent chain.
++            let mut rect = laid_out.get(&index).copied();
++            let mut parent_backend_node_id = None;
++            let mut parent = parent_at(index);
++            let mut hops = 0;
++            while let Some(parent_index) = parent {
++                if hops >= MAX_DOM_TEXT_ANCESTOR_HOPS {
++                    break;
++                }
++                hops += 1;
++                if parent_backend_node_id.is_none() {
++                    parent_backend_node_id = backend_at(parent_index);
++                }
++                if rect.is_none() {
++                    rect = laid_out.get(&parent_index).copied();
++                }
++                parent = parent_at(parent_index);
++            }
++
++            runs.push(DomTextRun {
++                backend_node_id,
++                parent_backend_node_id,
++                text,
++                order: index,
++                rect,
++                frame_id: frame_id.clone(),
++            });
++        }
++    }
++    runs
++}
++
+ pub(crate) fn parse_viewport(metrics: &Value) -> Viewport {
+     let viewport = metrics
+         .get("cssVisualViewport")
+@@ -487,6 +686,7 @@ pub(crate) fn compose_accessibility_tree(
+     ax_tree: &Value,
+     dom: &DomIndex,
+     layout: &LayoutIndex,
++    texts: &[DomTextRun],
+     viewport: &Viewport,
+     frame: FrameRef,
+ ) -> SemanticDocument {
+@@ -557,6 +757,7 @@ pub(crate) fn compose_accessibility_tree(
+     supplement_dom_actions(&mut nodes, dom, layout, viewport, &frame);
+     apply_page_occlusion(&mut nodes, dom, layout);
+     remove_redundant_static_text(&mut nodes);
++    supplement_dom_text(&mut nodes, texts, viewport, &frame);
+     SemanticDocument {
+         nodes,
+         css_hidden_dom_count: dom.css_hidden_count,
+@@ -970,6 +1171,93 @@ fn remove_redundant_static_text(nodes: &mut Vec<SemanticNode>) {
+     });
+ }
+ 
++/// Whether a text run carries readable content. Punctuation-only AX text
++/// (`“`, `•`) is noise in a digest and never useful evidence.
++fn has_text_content(text: &str) -> bool {
++    text.chars().any(char::is_alphanumeric)
++}
++
++fn classify_rect_visibility(bounds: Rect, viewport: &Viewport) -> BrowserVisibility {
++    if !bounds.has_area() {
++        return BrowserVisibility::NoLayout;
++    }
++    let Some(viewport) = viewport.rect else {
++        return BrowserVisibility::Unknown;
++    };
++    if bounds.intersects(viewport) {
++        BrowserVisibility::InViewport
++    } else if bounds.intersects(viewport.expanded(NEAR_VIEWPORT_MARGIN)) {
++        BrowserVisibility::NearViewport
++    } else {
++        BrowserVisibility::Offscreen
++    }
++}
++
++/// Compose DOM text runs the accessibility tree did not expose. Runs whose
++/// exact text already exists as an accessible name are skipped, so the digest
++/// stays honest and does not restate outline names.
++fn supplement_dom_text(
++    nodes: &mut Vec<SemanticNode>,
++    texts: &[DomTextRun],
++    viewport: &Viewport,
++    frame: &FrameRef,
++) {
++    let existing_names = nodes
++        .iter()
++        .filter_map(|node| node.name.clone())
++        .collect::<HashSet<_>>();
++    let expected_frame = frame
++        .identity
++        .as_ref()
++        .map(|identity| identity.frame_id.as_str());
++    let mut added = 0usize;
++    for run in texts {
++        if added >= MAX_DOM_TEXT_NODES_PER_FRAME {
++            break;
++        }
++        if expected_frame.is_some() && run.frame_id.as_deref() != expected_frame {
++            continue;
++        }
++        let Some(text) = clean_semantic_text(run.text.clone()) else {
++            continue;
++        };
++        if !has_text_content(&text) || existing_names.contains(&text) {
++            continue;
++        }
++        let Some(rect) = run.rect else {
++            continue;
++        };
++        let visibility = classify_rect_visibility(rect, viewport);
++        if !matches!(
++            visibility,
++            BrowserVisibility::InViewport | BrowserVisibility::NearViewport
++        ) {
++            continue;
++        }
++        let parent_ax_id = run.parent_backend_node_id.and_then(|parent| {
++            nodes
++                .iter()
++                .find(|node| node.backend_node_id == Some(parent))
++                .map(|node| node.ax_id.clone())
++        });
++        nodes.push(SemanticNode {
++            ax_id: format!("domtext-{}", run.backend_node_id),
++            parent_ax_id,
++            child_ax_ids: Vec::new(),
++            backend_node_id: Some(run.backend_node_id),
++            role: "text".to_owned(),
++            name: Some(text),
++            value: None,
++            states: BTreeMap::new(),
++            frame: frame.clone(),
++            visibility,
++            actions: Vec::new(),
++            document_order: run.order,
++        });
++        added += 1;
++    }
++}
++
+ fn rank(node: &SemanticNode) -> u8 {
+     let priority_context = node.states.get("focused").and_then(Value::as_bool) == Some(true)
+         || matches!(node.role.as_str(), "dialog" | "alertdialog");
+@@ -1101,7 +1389,72 @@ fn with_ancestors(nodes: &[SemanticNode], selected: &[usize]) -> HashSet<usize>
+     keep
+ }
+ 
+-fn render_outline(nodes: &[SemanticNode], selected: &HashSet<usize>) -> String {
++/// Roles whose payload belongs in the text digest, never the outline.
++fn is_text_role(role: &str) -> bool {
++    matches!(
++        role,
++        "statictext" | "text" | "paragraph" | "heading" | "label" | "labeltext" | "listmarker"
++    )
++}
++
++/// Whether a selected node earns an outline line. Text-bearing roles are
++/// rendered by the digest; unnamed anonymous containers are dropped so the
++/// outline does not spend its budget on empty `generic` chains.
++fn outline_renders(node: &SemanticNode) -> bool {
++    if matches!(node.role.as_str(), "rootwebarea" | "webarea") {
++        return false;
++    }
++    if is_text_role(&node.role) {
++        return false;
++    }
++    if !node.actions.is_empty() || node.name.is_some() || node.value.is_some() {
++        return true;
++    }
++    if !node.states.is_empty() {
++        return true;
++    }
++    matches!(
++        node.role.as_str(),
++        "list"
++            | "listitem"
++            | "table"
++            | "row"
++            | "cell"
++            | "columnheader"
++            | "rowheader"
++            | "form"
++            | "navigation"
++            | "main"
++            | "banner"
++            | "contentinfo"
++            | "complementary"
++            | "region"
++            | "article"
++            | "dialog"
++            | "alertdialog"
++            | "menu"
++            | "menubar"
++            | "tablist"
++            | "tabpanel"
++            | "tree"
++            | "group"
++            | "toolbar"
++            | "search"
++            | "figure"
++            | "iframe"
++            | "separator"
++            | "progressbar"
++            | "meter"
++            | "status"
++            | "alert"
++    )
++}
++
++fn render_outline(
++    nodes: &[SemanticNode],
++    selected: &HashSet<usize>,
++    refs: &HashMap<usize, String>,
++) -> String {
+     let by_ax_id: HashMap<&str, usize> = nodes
+         .iter()
+         .enumerate()
+@@ -1109,10 +1462,17 @@ fn render_outline(nodes: &[SemanticNode], selected: &HashSet<usize>) -> String {
+         .collect();
+     let mut ordered: Vec<usize> = selected.iter().copied().collect();
+     ordered.sort_by_key(|idx| nodes[*idx].document_order);
++    let rendered: HashSet<usize> = ordered
++        .iter()
++        .copied()
++        .filter(|idx| outline_renders(&nodes[*idx]))
++        .collect();
++
+     let mut lines = Vec::new();
+-    for idx in ordered {
+-        let node = &nodes[idx];
+-        if matches!(node.role.as_str(), "rootwebarea" | "webarea") {
++    let mut chars = 0usize;
++    for (position, idx) in ordered.iter().enumerate() {
++        let node = &nodes[*idx];
++        if !rendered.contains(idx) {
+             continue;
+         }
+         let mut depth = 0;
+@@ -1121,14 +1481,16 @@ fn render_outline(nodes: &[SemanticNode], selected: &HashSet<usize>) -> String {
+             let Some(parent_idx) = by_ax_id.get(parent_id).copied() else {
+                 break;
+             };
+-            if selected.contains(&parent_idx)
+-                && !matches!(nodes[parent_idx].role.as_str(), "rootwebarea" | "webarea")
+-            {
++            if rendered.contains(&parent_idx) {
+                 depth += 1;
+             }
+             parent = nodes[parent_idx].parent_ax_id.as_deref();
+         }
+         let mut line = format!("{}- {}", "  ".repeat(depth), node.role);
++        if let Some(external) = refs.get(idx) {
++            line.push(' ');
++            line.push_str(external);
++        }
+         if let Some(name) = &node.name {
+             line.push(' ');
+             line.push_str(&serde_json::to_string(name).unwrap_or_else(|_| "\"\"".to_owned()));
+@@ -1148,6 +1510,69 @@ fn render_outline(nodes: &[SemanticNode], selected: &HashSet<usize>) -> String {
+                 .join(",");
+             line.push_str(&format!(" [{states}]"));
+         }
++        if chars + line.len() + 1 > SEMANTIC_OUTLINE_CHAR_BUDGET {
++            let remaining = ordered[position..]
++                .iter()
++                .filter(|candidate| rendered.contains(*candidate))
++                .count()
++                .saturating_sub(1);
++            lines.push(format!(
++                "- … {remaining} more node(s) omitted (outline budget)"
++            ));
++            break;
++        }
++        chars += line.len() + 1;
++        lines.push(line);
++    }
++    lines.join("\n")
++}
++
++/// One bounded, readable digest of visible text. Lines carry the listed ref
++/// when the text node got one, so a price is actionable evidence rather than
++/// ambient prose.
++fn render_text_digest(
++    nodes: &[SemanticNode],
++    selected: &HashSet<usize>,
++    refs: &HashMap<usize, String>,
++) -> String {
++    let mut ordered: Vec<usize> = selected.iter().copied().collect();
++    ordered.sort_by_key(|idx| nodes[*idx].document_order);
++    let mut lines: Vec<String> = Vec::new();
++    let mut chars = 0usize;
++    for idx in ordered {
++        let node = &nodes[idx];
++        if !node.actions.is_empty() || !is_text_role(&node.role) {
++            continue;
++        }
++        if !matches!(
++            node.visibility,
++            BrowserVisibility::InViewport | BrowserVisibility::NearViewport
++        ) {
++            continue;
++        }
++        let Some(name) = &node.name else {
++            continue;
++        };
++        if !has_text_content(name) {
++            continue;
++        }
++        let label = if node.role == "statictext" {
++            "text"
++        } else {
++            node.role.as_str()
++        };
++        let quoted = serde_json::to_string(name).unwrap_or_else(|_| "\"\"".to_owned());
++        let line = match refs.get(&idx) {
++            Some(external) => format!("- {label} {external} {quoted}"),
++            None => format!("- {label} {quoted}"),
++        };
++        if lines.len() >= MAX_DIGEST_TEXT_LINES
++            || chars + line.len() + 1 > SEMANTIC_TEXT_DIGEST_CHAR_BUDGET
++        {
++            lines.push("- … more visible text omitted (digest budget)".to_owned());
++            break;
++        }
++        chars += line.len() + 1;
+         lines.push(line);
+     }
+     lines.join("\n")
+@@ -1205,10 +1630,11 @@ mod tests {
+             &ax,
+             &dom,
+             &LayoutIndex::default(),
++            &[],
+             &Viewport::default(),
+             frame(),
+         );
+-        let page = document.page(0, 300, None, None);
++        let page = document.page(0, 300, None, None, 1, 0);
+         assert_eq!(page.omissions.css_hidden, 1);
+         let actionable = page
+             .selected
+@@ -1252,10 +1678,11 @@ mod tests {
+                 "role": {"value": "RootWebArea"}, "childIds": []}]}),
+             &dom,
+             &layout,
++            &[],
+             &viewport,
+             frame(),
+         );
+-        let page = document.page(0, 300, None, None);
++        let page = document.page(0, 300, None, None, 1, 0);
+         assert!(page.selected.iter().any(|node| {
+             node.name.as_deref() == Some("Custom action")
+                 && node.actions == vec![BrowserActionKind::Click, BrowserActionKind::Pointer]
+@@ -1304,10 +1731,11 @@ mod tests {
+                 "role": {"value": "RootWebArea"}, "childIds": []}]}),
+             &dom,
+             &layout,
++            &[],
+             &viewport,
+             frame(),
+         );
+-        let page = document.page(0, 300, None, None);
++        let page = document.page(0, 300, None, None, 1, 0);
+         let scrollable = page
+             .selected
+             .iter()
+@@ -1355,8 +1783,8 @@ mod tests {
+              "backendDOMNodeId": 2, "role": {"value": "button"},
+              "name": {"value": "Reply"}}
+         ]});
+-        let document = compose_accessibility_tree(&ax, &dom, &layout, &viewport, frame());
+-        let page = document.page(0, 1, None, None);
++        let document = compose_accessibility_tree(&ax, &dom, &layout, &[], &viewport, frame());
++        let page = document.page(0, 1, None, None, 1, 0);
+         assert_eq!(page.selected[0].name.as_deref(), Some("Reply"));
+         assert_eq!(page.next_offset, Some(1));
+     }
+@@ -1394,8 +1822,8 @@ mod tests {
+              "backendDOMNodeId": 1, "role": {"value": "button"},
+              "name": {"value": "Covered"}}
+         ]});
+-        let document = compose_accessibility_tree(&ax, &dom, &layout, &viewport, frame());
+-        let page = document.page(0, 300, None, None);
++        let document = compose_accessibility_tree(&ax, &dom, &layout, &[], &viewport, frame());
++        let page = document.page(0, 300, None, None, 1, 0);
+         assert!(page
+             .selected
+             .iter()
+@@ -1454,8 +1882,8 @@ mod tests {
+              "backendDOMNodeId": 12, "role": {"value": "button"},
+              "name": {"value": "Remove"}, "childIds": []}
+         ]});
+-        let document = compose_accessibility_tree(&ax, &dom, &layout, &viewport, frame());
+-        let page = document.page(0, 300, None, None);
++        let document = compose_accessibility_tree(&ax, &dom, &layout, &[], &viewport, frame());
++        let page = document.page(0, 300, None, None, 1, 0);
+         let actions = page
+             .selected
+             .iter()
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/store.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/store.rs
-index 68f2099f6..413b4698a 100644
+index 68f2099f6..d3a7c7ee6 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/store.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/store.rs
 @@ -227,6 +227,10 @@ pub struct TargetRecord {
@@ -1311,7 +2430,102 @@ index 68f2099f6..413b4698a 100644
      pub quality: BindingQuality,
      pub tabs: HashMap<String, TabRecord>,
  }
-@@ -487,6 +491,7 @@ mod tests {
+@@ -258,14 +262,38 @@ pub fn format_ref(snapshot_id: u64, index: u32) -> String {
+     format!("p{snapshot_id}:{index}")
+ }
+ 
++/// Bound on the process-local rebind-hint cache.
++const MAX_REBIND_HINTS: usize = 256;
++
++/// Enough identity to re-prove a binding inside a later call, and nothing
++/// more: the hint never skips a proof, it only remembers which process,
++/// window, and endpoint the capability was minted against.
++#[derive(Debug, Clone)]
++pub struct RebindHint {
++    pub target_id: String,
++    pub pid: i64,
++    pub window_id: u64,
++    pub windowless: bool,
++    pub owner_session: String,
++    /// Old tab id plus the CDP page target it addressed at bind time, so a
++    /// reinstated binding keeps the caller's tab ids.
++    pub tabs: Vec<(String, String)>,
++}
++
+ pub struct BrowserStore {
+     inner: Mutex<HashMap<String, SessionTargets>>,
++    /// Rebind hints survive `remove_session`: a session label that was
++    /// revived (or a call that arrives under a fresh label) can re-resolve
++    /// the same live browser instead of forcing a `get_browser_state`
++    /// round-trip. Keyed by target id, which is itself the capability.
++    rebind_hints: Mutex<HashMap<String, RebindHint>>,
+ }
+ 
+ impl BrowserStore {
+     pub fn new() -> Self {
+         Self {
+             inner: Mutex::new(HashMap::new()),
++            rebind_hints: Mutex::new(HashMap::new()),
+         }
+     }
+ 
+@@ -274,6 +302,55 @@ impl BrowserStore {
+         NEXT_BROWSER_SNAPSHOT_ID.fetch_add(1, Ordering::Relaxed)
+     }
+ 
++    /// Remember how a target was minted so a later call can re-prove it.
++    /// The registry is a best-effort cache with a hard bound: hints are
++    /// small, but a long-lived daemon must not grow without limit.
++    pub fn record_rebind_hint(&self, hint: RebindHint) {
++        let mut hints = self.rebind_hints.lock().unwrap();
++        if hints.len() >= MAX_REBIND_HINTS && !hints.contains_key(&hint.target_id) {
++            if let Some(stale) = hints.keys().next().cloned() {
++                hints.remove(&stale);
++            }
++        }
++        hints.insert(hint.target_id.clone(), hint);
++    }
++
++    /// The re-proof inputs for a target that is missing from its session
++    /// namespace, if this store minted it at some point.
++    pub fn rebind_hint(&self, target_id: &str) -> Option<RebindHint> {
++        self.rebind_hints.lock().unwrap().get(target_id).cloned()
++    }
++
++    pub fn clear_rebind_hint(&self, target_id: &str) {
++        self.rebind_hints.lock().unwrap().remove(target_id);
++    }
++
++    /// Number of cached rebind hints (diagnostics/tests).
++    pub fn rebind_hint_count(&self) -> usize {
++        self.rebind_hints.lock().unwrap().len()
++    }
++
++    /// Drop one target record (used when a reinstated binding supersedes the
++    /// freshly minted id).
++    pub fn remove_target(&self, session: &str, target_id: &str) {
++        if let Some(session_targets) = self.inner.lock().unwrap().get_mut(session) {
++            session_targets.targets.remove(target_id);
++        }
++    }
++
++    /// Insert a record under an exact target id, so a reinstated binding
++    /// keeps the caller's capability id.
++    pub fn reinstate_target(&self, session: &str, record: TargetRecord) {
++        let target_id = record.target_id.clone();
++        self.inner
++            .lock()
++            .unwrap()
++            .entry(session.to_owned())
++            .or_default()
++            .targets
++            .insert(target_id, record);
++    }
++
+     /// Mint a target id and insert the record under `session`.
+     /// Panics never; the caller has already enforced that `session` is
+     /// an explicit (non-default) session.
+@@ -487,6 +564,7 @@ mod tests {
              native_bounds: Rect::new(0.0, 0.0, 800.0, 600.0),
              cdp_target_id: "CDP1".into(),
              cdp_window_id: Some(11),
@@ -1319,8 +2533,47 @@ index 68f2099f6..413b4698a 100644
              quality: BindingQuality::Exact,
              tabs: HashMap::new(),
          }
+@@ -673,4 +751,38 @@ mod tests {
+         let b = store.mint_target("s2", record());
+         assert_ne!(a, b, "capability ids must never collide across sessions");
+     }
++
++    #[test]
++    fn rebind_hints_survive_session_end_and_stay_bounded() {
++        let store = BrowserStore::new();
++        let hint = |target_id: &str| RebindHint {
++            target_id: target_id.to_owned(),
++            pid: 42,
++            window_id: 7,
++            windowless: false,
++            owner_session: "sess-a".to_owned(),
++            tabs: vec![("tab1".to_owned(), "CDP1".to_owned())],
++        };
++        store.record_rebind_hint(hint("bt-first"));
++        store.remove_session("sess-a");
++        assert!(
++            store.rebind_hint("bt-first").is_some(),
++            "hints must outlive the session namespace they were minted in"
++        );
++
++        for index in 0..(MAX_REBIND_HINTS + 8) {
++            store.record_rebind_hint(hint(&format!("bt-{index}")));
++        }
++        assert!(
++            store.rebind_hint_count() <= MAX_REBIND_HINTS,
++            "the hint cache must stay bounded, saw {}",
++            store.rebind_hint_count()
++        );
++        assert!(
++            store
++                .rebind_hint(&format!("bt-{}", MAX_REBIND_HINTS + 7))
++                .is_some(),
++            "the newest hint is retained"
++        );
++    }
+ }
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
-index e7be28523..8313eaa54 100644
+index e7be28523..75a838d73 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
 @@ -16,8 +16,11 @@ use crate::tool_args::ArgsExt;
@@ -1337,7 +2590,48 @@ index e7be28523..8313eaa54 100644
  use super::pointer::BrowserPointerTool;
  use super::refusal::{BrowserRefusal, BrowserRefusalCode};
  use super::session_schema as schema_session;
-@@ -246,7 +249,10 @@ impl GetBrowserStateTool {
+@@ -194,16 +197,31 @@ pub(crate) async fn browser_protected_resource_scope(
+ }
+ 
+ fn semantic_ref_value(listed: &super::engine::SemanticListedRef) -> Value {
+-    json!({
++    // Compact index: the outline (action refs) and the text digest (content
++    // refs) already carry each name with its ref inline. This list exists so
++    // a consumer can enumerate refs without parsing prose; repeating value,
++    // per-node states, and viewport evidence here would double the payload.
++    let node = &listed.node;
++    let mut value = json!({
+         "ref": listed.external,
+-        "role": listed.node.role,
+-        "name": listed.node.name,
+-        "value": listed.node.value,
+-        "states": listed.node.states,
+-        "actions": listed.node.actions.iter().map(|action| action.as_str()).collect::<Vec<_>>(),
+-        "frame": listed.node.frame.kind.as_str(),
+-        "visibility": listed.node.visibility.as_str(),
+-    })
++        "role": node.role,
++        "name": node.name,
++        "frame": node.frame.kind.as_str(),
++    });
++    if let Some(node_value) = &node.value {
++        value["value"] = json!(node_value);
++    }
++    if !node.actions.is_empty() {
++        value["actions"] = json!(node
++            .actions
++            .iter()
++            .map(|action| action.as_str())
++            .collect::<Vec<_>>());
++    }
++    if node.visibility != super::store::BrowserVisibility::InViewport {
++        value["visibility"] = json!(node.visibility.as_str());
++    }
++    value
+ }
+ 
+ fn with_tab_screenshot(mut result: ToolResult, screenshot: BrowserTabScreenshot) -> ToolResult {
+@@ -246,12 +264,18 @@ impl GetBrowserStateTool {
              description: "Read-only browser inspection. Mode 1 (bind): pass pid + \
                  window_id of a native browser window to classify it, correlate it to \
                  a CDP target (exact-or-refuse), and mint a session-scoped target id \
@@ -1349,7 +2643,17 @@ index e7be28523..8313eaa54 100644
                  dom_refs_v1 compatibility format returns composed DOM refs. \
                  semantic_v2 joins accessibility, DOM, layout, and viewport state; \
                  ranks visible content before retained/offscreen state; and returns a \
-@@ -259,7 +265,7 @@ impl GetBrowserStateTool {
+-                semantic outline, typed action refs, content refs, scoped reads, and \
+-                opaque continuation. Never performs setup — a missing \
++                semantic outline with each listed ref inline (for example \
++                `- link p14:12 \"Name\"`), a bounded visible-text digest \
++                (`- text p14:31 \"$1,099.99\"`), a compact ref index, scoped reads, \
++                and opaque continuation. The outline and digest alone are enough to \
++                read the page and pick a ref. Never performs setup — a missing \
+                 endpoint is a structured browser_requires_setup refusal pointing at \
+                 browser_prepare."
+                 .into(),
+@@ -259,7 +283,7 @@ impl GetBrowserStateTool {
                  "type": "object",
                  "properties": {
                      "pid": { "type": "integer", "description": "Native browser process id (bind mode)." },
@@ -1358,7 +2662,15 @@ index e7be28523..8313eaa54 100644
                      "target_id": schema_target_id(),
                      "tab_id": schema_tab_id(),
                      "session": schema_session(),
-@@ -508,14 +514,20 @@ impl Tool for GetBrowserStateTool {
+@@ -432,6 +456,7 @@ impl Tool for GetBrowserStateTool {
+                                 "title": outcome.title,
+                             },
+                             "outline": outcome.outline,
++                            "text_digest": outcome.text_digest,
+                             "refs": refs,
+                             "content_refs": content_refs,
+                             "oopif": {
+@@ -508,14 +533,20 @@ impl Tool for GetBrowserStateTool {
              return snapshot;
          }
  
@@ -1383,7 +2695,7 @@ index e7be28523..8313eaa54 100644
          };
          let session = match require_explicit_session(&args) {
              Ok(s) => s,
-@@ -523,11 +535,19 @@ impl Tool for GetBrowserStateTool {
+@@ -523,11 +554,19 @@ impl Tool for GetBrowserStateTool {
          };
  
          let transport_session = args.opt_str("_transport_session_id");
@@ -1408,7 +2720,7 @@ index e7be28523..8313eaa54 100644
              Ok((target_id, record)) => {
                  let tabs: Vec<Value> = record
                      .tabs
-@@ -545,7 +565,9 @@ impl Tool for GetBrowserStateTool {
+@@ -545,7 +584,9 @@ impl Tool for GetBrowserStateTool {
                      BindingQuality::Exact => "exact",
                      BindingQuality::Heuristic => "heuristic",
                  };
@@ -1419,7 +2731,7 @@ index e7be28523..8313eaa54 100644
                      "native_cdp_window"
                  } else {
                      "embedded_single_page"
-@@ -589,7 +611,10 @@ impl BrowserPrepareTool {
+@@ -589,7 +630,10 @@ impl BrowserPrepareTool {
                  endpoints are detected without side effects. Acting setup \
                  for an isolated profile follows the runtime permission mode and optional \
                  capability manifest. It requires allow_launch=true, launches a separate browser, and never \
@@ -1431,7 +2743,7 @@ index e7be28523..8313eaa54 100644
                  platform-attested system Chrome/Edge installation (or a root-owned package \
                  payload on Linux) is eligible; redirects and user-controlled locations fail closed. Existing-profile \
                  attachment is explicit and follows the runtime's immutable permission mode: \
-@@ -612,6 +637,10 @@ impl BrowserPrepareTool {
+@@ -612,6 +656,10 @@ impl BrowserPrepareTool {
                          "type": "boolean",
                          "description": "Allow a separate driver-owned isolated Chromium process to be launched (default false)."
                      },
@@ -1442,7 +2754,7 @@ index e7be28523..8313eaa54 100644
                      "profile": {
                          "type": "object",
                          "properties": {
-@@ -678,6 +707,7 @@ impl Tool for BrowserPrepareTool {
+@@ -678,6 +726,7 @@ impl Tool for BrowserPrepareTool {
              },
          };
          let allow_launch = args.opt_bool("allow_launch").unwrap_or(false);
@@ -1450,7 +2762,7 @@ index e7be28523..8313eaa54 100644
          let pid = match args.get("pid") {
              None => None,
              Some(_) => match args.require_i64("pid") {
-@@ -700,6 +730,7 @@ impl Tool for BrowserPrepareTool {
+@@ -700,6 +749,7 @@ impl Tool for BrowserPrepareTool {
              strategy,
              profile,
              allow_launch,
@@ -1458,7 +2770,7 @@ index e7be28523..8313eaa54 100644
          };
          match self.engine.prepare_browser(request).await {
              Ok(outcome) => {
-@@ -997,12 +1028,13 @@ impl Tool for BrowserClickTool {
+@@ -997,12 +1047,13 @@ impl Tool for BrowserClickTool {
              Ok(v) => v,
              Err(refusal) => return refusal.to_tool_result(),
          };
@@ -1478,7 +2790,7 @@ index e7be28523..8313eaa54 100644
                  return BrowserRefusal::new(
                      BrowserRefusalCode::BrowserInputTrustUnavailable,
                      format!(
-@@ -1476,6 +1508,95 @@ async fn enter_focus_emulation(
+@@ -1476,6 +1527,95 @@ async fn enter_focus_emulation(
      ))
  }
  
@@ -1574,7 +2886,7 @@ index e7be28523..8313eaa54 100644
  pub struct BrowserTypeTool {
      def: ToolDef,
      engine: Arc<BrowserEngine>,
-@@ -1485,13 +1606,17 @@ impl BrowserTypeTool {
+@@ -1485,13 +1625,17 @@ impl BrowserTypeTool {
      pub fn new(engine: Arc<BrowserEngine>) -> Self {
          let def = ToolDef {
              name: "browser_type".into(),
@@ -1599,7 +2911,7 @@ index e7be28523..8313eaa54 100644
                  .into(),
              input_schema: json!({
                  "type": "object",
-@@ -1504,8 +1629,21 @@ impl BrowserTypeTool {
+@@ -1504,8 +1648,21 @@ impl BrowserTypeTool {
                      "mode": {
                          "type": "string",
                          "enum": ["insert_text", "keystrokes"],
@@ -1623,7 +2935,7 @@ index e7be28523..8313eaa54 100644
                      },
                      "replace": {
                          "type": "boolean",
-@@ -1527,6 +1665,210 @@ impl BrowserTypeTool {
+@@ -1527,6 +1684,210 @@ impl BrowserTypeTool {
          };
          Self { def, engine }
      }
@@ -1834,7 +3146,7 @@ index e7be28523..8313eaa54 100644
  }
  
  #[async_trait]
-@@ -1578,6 +1920,23 @@ impl Tool for BrowserTypeTool {
+@@ -1578,6 +1939,23 @@ impl Tool for BrowserTypeTool {
                  "mode must be \"insert_text\" or \"keystrokes\", got {mode:?}"
              ));
          }
@@ -1858,7 +3170,7 @@ index e7be28523..8313eaa54 100644
          let replace = args.opt_bool("replace").unwrap_or(false);
  
          let _mutation = match self
-@@ -1596,6 +1955,42 @@ impl Tool for BrowserTypeTool {
+@@ -1596,6 +1974,42 @@ impl Tool for BrowserTypeTool {
              Ok(v) => v,
              Err(refusal) => return refusal.to_tool_result(),
          };
@@ -1901,7 +3213,7 @@ index e7be28523..8313eaa54 100644
  
          let ext_ref = match args.require_str("ref") {
              Ok(value) => value,
-@@ -1629,6 +2024,25 @@ impl Tool for BrowserTypeTool {
+@@ -1629,6 +2043,25 @@ impl Tool for BrowserTypeTool {
          let conn = &validated.conn;
          let cdp = cdp_session.as_str();
  
@@ -1927,7 +3239,7 @@ index e7be28523..8313eaa54 100644
          if let Err(_e) = conn
              .call(
                  Some(cdp),
-@@ -2980,13 +3394,49 @@ mod tests {
+@@ -2980,13 +3413,49 @@ mod tests {
              .await;
          assert_eq!(nav.is_error, Some(true));
  
@@ -1978,7 +3290,7 @@ index e7be28523..8313eaa54 100644
      }
  
      #[tokio::test]
-@@ -3032,6 +3482,7 @@ mod tests {
+@@ -3032,6 +3501,7 @@ mod tests {
                  native_bounds: Rect::new(0.0, 0.0, 800.0, 600.0),
                  cdp_target_id: "CDPX".into(),
                  cdp_window_id: Some(5),
@@ -1986,7 +3298,7 @@ index e7be28523..8313eaa54 100644
                  quality: BindingQuality::Heuristic,
                  tabs,
              },
-@@ -3093,6 +3544,7 @@ mod tests {
+@@ -3093,6 +3563,7 @@ mod tests {
                  native_bounds: Rect::new(0.0, 0.0, 800.0, 600.0),
                  cdp_target_id: "CDPX".into(),
                  cdp_window_id: Some(5),
@@ -1994,7 +3306,7 @@ index e7be28523..8313eaa54 100644
                  quality: BindingQuality::Exact,
                  tabs,
              },
-@@ -3139,6 +3591,7 @@ mod tests {
+@@ -3139,6 +3610,7 @@ mod tests {
                  native_bounds: Rect::new(0.0, 0.0, 1.0, 1.0),
                  cdp_target_id: "C".into(),
                  cdp_window_id: Some(1),
@@ -2003,7 +3315,7 @@ index e7be28523..8313eaa54 100644
                  tabs: HashMap::new(),
              },
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
-index 2b82930cd..4326b88e6 100644
+index 2b82930cd..18c2be647 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
 @@ -6,7 +6,7 @@
@@ -2036,7 +3348,19 @@ index 2b82930cd..4326b88e6 100644
  };
  
  // ── Scripted Chromium fixture ────────────────────────────────────────────────
-@@ -63,6 +64,11 @@ struct FixtureState {
+@@ -56,6 +57,11 @@ struct FixtureState {
+     fail_key_down_after: Option<usize>,
+     completed_key_pairs: usize,
+     semantic_large_page: bool,
++    /// Product-card page whose AX link name swallows the price, so the DOM
++    /// text supplement is the only text source (the Newegg failure mode).
++    semantic_dom_text_page: bool,
++    /// Transient `-32602` AX frame-churn failures to emit before succeeding.
++    ax_tree_flakes_remaining: usize,
+     semantic_full_dom_fails: bool,
+     semantic_full_dom_times_out: bool,
+     semantic_truncated_dom: bool,
+@@ -63,6 +69,11 @@ struct FixtureState {
      viewport_css_width: f64,
      viewport_css_height: f64,
      tab_visible: bool,
@@ -2048,7 +3372,16 @@ index 2b82930cd..4326b88e6 100644
      /// Every incoming CDP call: (sessionId, method, params).
      calls: Vec<(Option<String>, String, Value)>,
  }
-@@ -89,6 +95,9 @@ impl Default for FixtureState {
+@@ -82,6 +93,8 @@ impl Default for FixtureState {
+             fail_key_down_after: None,
+             completed_key_pairs: 0,
+             semantic_large_page: false,
++            semantic_dom_text_page: false,
++            ax_tree_flakes_remaining: 0,
+             semantic_full_dom_fails: false,
+             semantic_full_dom_times_out: false,
+             semantic_truncated_dom: false,
+@@ -89,6 +102,9 @@ impl Default for FixtureState {
              viewport_css_width: 800.0,
              viewport_css_height: 600.0,
              tab_visible: true,
@@ -2058,7 +3391,123 @@ index 2b82930cd..4326b88e6 100644
              calls: Vec::new(),
          }
      }
-@@ -651,7 +660,29 @@ fn fixture_handler(state: SharedState) -> MockHandler {
+@@ -389,6 +405,79 @@ fn semantic_layout_snapshot(backends: &[i64], bounds: &[[f64; 4]]) -> Value {
+     })
+ }
+ 
++/// DOM text source for the product-card fixture. The AX tree names the link
++/// but prunes the price text node; only `DOMSnapshot` still carries it.
++fn dom_text_page_snapshot() -> Value {
++    json!({
++        "strings": [
++            "DIV", "#text", "$1,099.99", "block", "visible", "1", "auto", "pointer"
++        ],
++        "documents": [{
++            "frameId": "F_MAIN",
++            "nodes": {
++                "parentIndex": [-1, 0, 1],
++                "nodeType": [9, 1, 3],
++                "nodeName": [-1, 0, 1],
++                "nodeValue": [-1, -1, 2],
++                "backendNodeId": [5000, 5001, 5002]
++            },
++            "layout": {
++                "nodeIndex": [1, 2],
++                "bounds": [
++                    [20.0, 20.0, 400.0, 140.0],
++                    [20.0, 120.0, 100.0, 24.0]
++                ],
++                "styles": [[3, 4, 5, 6, 7], [3, 4, 5, 6, 7]],
++                "paintOrders": [1, 2]
++            }
++        }]
++    })
++}
++
++fn dom_text_document() -> Value {
++    json!({
++        "root": {
++            "nodeType": 9,
++            "nodeName": "#document",
++            "documentURL": "https://fixture.test/p/pl?d=rtx",
++            "frameId": "F_MAIN",
++            "children": [{
++                "nodeType": 1,
++                "nodeName": "A",
++                "backendNodeId": 5001,
++                "attributes": ["href", "/p/5001"],
++                "children": [{
++                    "nodeType": 3,
++                    "nodeName": "#text",
++                    "nodeValue": "$1,099.99"
++                }]
++            }]
++        }
++    })
++}
++
++fn dom_text_ax_tree(frame_id: &str) -> Value {
++    if frame_id != "F_MAIN" {
++        return json!({"nodes": [{
++            "nodeId": format!("root-{frame_id}"),
++            "ignored": false,
++            "role": {"value": "RootWebArea"},
++            "name": {"value": "Inner fixture"},
++            "childIds": []
++        }]});
++    }
++    json!({"nodes": [
++        {"nodeId": "root-main", "ignored": false,
++         "role": {"value": "RootWebArea"},
++         "name": {"value": "RTX 5080"},
++         "childIds": ["product"]},
++        {"nodeId": "product", "parentId": "root-main", "ignored": false,
++         "backendDOMNodeId": 5001, "role": {"value": "link"},
++         "name": {"value": "GIGABYTE GeForce RTX 5080 16GB GDDR7"},
++         "childIds": []}
++    ]})
++}
++
+ fn oopif_document() -> Value {
+     json!({
+         "root": {
+@@ -476,7 +565,9 @@ fn fixture_handler(state: SharedState) -> MockHandler {
+                 } else if st.semantic_truncated_dom && depth == 8 {
+                     MockReply::ok(truncated_semantic_document())
+                 } else {
+-                    MockReply::ok(if st.semantic_large_page {
++                    MockReply::ok(if st.semantic_dom_text_page {
++                        dom_text_document()
++                    } else if st.semantic_large_page {
+                         large_semantic_document()
+                     } else {
+                         main_document()
+@@ -491,7 +582,12 @@ fn fixture_handler(state: SharedState) -> MockHandler {
+             "DOM.getDocument" if is_oopif => MockReply::ok(oopif_document()),
+             "Accessibility.getFullAXTree" if is_tab => {
+                 let frame_id = call.params["frameId"].as_str().unwrap_or("F_MAIN");
+-                if st.semantic_large_page {
++                if st.ax_tree_flakes_remaining > 0 {
++                    st.ax_tree_flakes_remaining -= 1;
++                    MockReply::err(-32602, "Frame with the given frameId is not found.")
++                } else if st.semantic_dom_text_page {
++                    MockReply::ok(dom_text_ax_tree(frame_id))
++                } else if st.semantic_large_page {
+                     MockReply::ok(large_semantic_ax_tree(frame_id))
+                 } else {
+                     MockReply::ok(json!({"nodes": []}))
+@@ -507,7 +603,9 @@ fn fixture_handler(state: SharedState) -> MockHandler {
+                  "childIds": []}
+             ]})),
+             "DOMSnapshot.captureSnapshot" if is_tab => {
+-                if st.semantic_large_page {
++                if st.semantic_dom_text_page {
++                    MockReply::ok(dom_text_page_snapshot())
++                } else if st.semantic_large_page {
+                     let mut backends = vec![999, 2000, 2003, 2010, 2011];
+                     let mut bounds = vec![
+                         [0.0, 0.0, 800.0, 600.0],
+@@ -651,7 +749,29 @@ fn fixture_handler(state: SharedState) -> MockHandler {
              "DOM.resolveNode" => MockReply::ok(json!({
                  "object": { "objectId": format!("obj-{}", call.params["backendNodeId"]) }
              })),
@@ -2089,7 +3538,7 @@ index 2b82930cd..4326b88e6 100644
              other => MockReply::method_not_found(other),
          }
      })
-@@ -669,6 +700,9 @@ struct FixturePlatform {
+@@ -669,6 +789,9 @@ struct FixturePlatform {
      setup_invoked: Arc<AtomicBool>,
      setup_aborted: Arc<AtomicBool>,
      stall_consent: bool,
@@ -2099,7 +3548,7 @@ index 2b82930cd..4326b88e6 100644
  }
  
  #[async_trait]
-@@ -697,6 +731,7 @@ impl BrowserPlatform for FixturePlatform {
+@@ -697,6 +820,7 @@ impl BrowserPlatform for FixturePlatform {
          pid: i64,
          window_id: u64,
      ) -> Result<NativeWindowInfo, BrowserRefusal> {
@@ -2107,7 +3556,7 @@ index 2b82930cd..4326b88e6 100644
          Ok(NativeWindowInfo {
              pid,
              window_id,
-@@ -859,6 +894,8 @@ struct Fixture {
+@@ -859,6 +983,8 @@ struct Fixture {
      _server: MockCdpServer,
      engine: Arc<BrowserEngine>,
      setup_invoked: Arc<AtomicBool>,
@@ -2116,7 +3565,7 @@ index 2b82930cd..4326b88e6 100644
  }
  
  async fn fixture_with(configure: impl FnOnce(&mut FixtureState)) -> Fixture {
-@@ -874,8 +911,10 @@ async fn fixture_with_platform(
+@@ -874,8 +1000,10 @@ async fn fixture_with_platform(
      let state = Arc::new(StdMutex::new(initial));
      let server = MockCdpServer::start(fixture_handler(state.clone())).await;
      let setup_invoked = Arc::new(AtomicBool::new(false));
@@ -2128,7 +3577,7 @@ index 2b82930cd..4326b88e6 100644
          trusted_input_limited,
          managed_endpoint_visible: true,
          process_role: BrowserProcessRole::EmbeddedApplication,
-@@ -884,12 +923,15 @@ async fn fixture_with_platform(
+@@ -884,12 +1012,15 @@ async fn fixture_with_platform(
          setup_invoked: setup_invoked.clone(),
          setup_aborted: Arc::new(AtomicBool::new(false)),
          stall_consent: false,
@@ -2144,7 +3593,7 @@ index 2b82930cd..4326b88e6 100644
      }
  }
  
-@@ -926,9 +968,11 @@ async fn protected_existing_profile_fixture() -> (Fixture, Arc<FixtureProtectedP
+@@ -926,9 +1057,11 @@ async fn protected_existing_profile_fixture() -> (Fixture, Arc<FixtureProtectedP
      let provider = Arc::new(FixtureProtectedProvider {
          consent_seen: AtomicBool::new(false),
      });
@@ -2157,7 +3606,7 @@ index 2b82930cd..4326b88e6 100644
              trusted_input_limited: false,
              managed_endpoint_visible: false,
              process_role: BrowserProcessRole::StandaloneConsumer,
-@@ -937,6 +981,7 @@ async fn protected_existing_profile_fixture() -> (Fixture, Arc<FixtureProtectedP
+@@ -937,6 +1070,7 @@ async fn protected_existing_profile_fixture() -> (Fixture, Arc<FixtureProtectedP
              setup_invoked: setup_invoked.clone(),
              setup_aborted: Arc::new(AtomicBool::new(false)),
              stall_consent: false,
@@ -2165,7 +3614,7 @@ index 2b82930cd..4326b88e6 100644
          }),
          Some(provider.clone()),
      );
-@@ -946,6 +991,8 @@ async fn protected_existing_profile_fixture() -> (Fixture, Arc<FixtureProtectedP
+@@ -946,6 +1080,8 @@ async fn protected_existing_profile_fixture() -> (Fixture, Arc<FixtureProtectedP
              _server: server,
              engine,
              setup_invoked,
@@ -2174,7 +3623,7 @@ index 2b82930cd..4326b88e6 100644
          },
          provider,
      )
-@@ -955,9 +1002,11 @@ async fn existing_profile_setup_fixture() -> (Fixture, Arc<AtomicBool>) {
+@@ -955,9 +1091,11 @@ async fn existing_profile_setup_fixture() -> (Fixture, Arc<AtomicBool>) {
      let state = Arc::new(StdMutex::new(FixtureState::default()));
      let server = MockCdpServer::start(fixture_handler(state.clone())).await;
      let setup_invoked = Arc::new(AtomicBool::new(false));
@@ -2187,7 +3636,7 @@ index 2b82930cd..4326b88e6 100644
              trusted_input_limited: false,
              managed_endpoint_visible: false,
              process_role: BrowserProcessRole::StandaloneConsumer,
-@@ -966,6 +1015,7 @@ async fn existing_profile_setup_fixture() -> (Fixture, Arc<AtomicBool>) {
+@@ -966,6 +1104,7 @@ async fn existing_profile_setup_fixture() -> (Fixture, Arc<AtomicBool>) {
              setup_invoked: setup_invoked.clone(),
              setup_aborted: Arc::new(AtomicBool::new(false)),
              stall_consent: false,
@@ -2195,7 +3644,7 @@ index 2b82930cd..4326b88e6 100644
          }),
          Some(Arc::new(FixtureProtectedProvider {
              consent_seen: AtomicBool::new(false),
-@@ -977,6 +1027,8 @@ async fn existing_profile_setup_fixture() -> (Fixture, Arc<AtomicBool>) {
+@@ -977,6 +1116,8 @@ async fn existing_profile_setup_fixture() -> (Fixture, Arc<AtomicBool>) {
              _server: server,
              engine,
              setup_invoked: setup_invoked.clone(),
@@ -2204,7 +3653,7 @@ index 2b82930cd..4326b88e6 100644
          },
          setup_invoked,
      )
-@@ -1004,6 +1056,134 @@ async fn bind(f: &Fixture) -> (String, String) {
+@@ -1004,6 +1145,134 @@ async fn bind(f: &Fixture) -> (String, String) {
      (target_id, tab_id)
  }
  
@@ -2339,7 +3788,7 @@ index 2b82930cd..4326b88e6 100644
  #[tokio::test]
  async fn standalone_consumer_bind_without_grant_refuses_before_endpoint_discovery() {
      let state = Arc::new(StdMutex::new(FixtureState::default()));
-@@ -1020,6 +1200,7 @@ async fn standalone_consumer_bind_without_grant_refuses_before_endpoint_discover
+@@ -1020,6 +1289,7 @@ async fn standalone_consumer_bind_without_grant_refuses_before_endpoint_discover
          setup_invoked: setup_invoked.clone(),
          setup_aborted: Arc::new(AtomicBool::new(false)),
          stall_consent: false,
@@ -2347,7 +3796,7 @@ index 2b82930cd..4326b88e6 100644
      }));
  
      let result = GetBrowserStateTool::new(engine)
-@@ -1266,6 +1447,7 @@ async fn refused_consent_cancels_stalled_claim_before_revoking_grant() {
+@@ -1266,6 +1536,7 @@ async fn refused_consent_cancels_stalled_claim_before_revoking_grant() {
              setup_invoked: Arc::new(AtomicBool::new(false)),
              setup_aborted: Arc::new(AtomicBool::new(false)),
              stall_consent: false,
@@ -2355,7 +3804,7 @@ index 2b82930cd..4326b88e6 100644
          }),
          Some(Arc::new(FixtureProtectedProvider {
              consent_seen: AtomicBool::new(false),
-@@ -1310,6 +1492,7 @@ async fn cancelled_prepare_aborts_the_exact_pending_setup() {
+@@ -1310,6 +1581,7 @@ async fn cancelled_prepare_aborts_the_exact_pending_setup() {
              setup_invoked: Arc::new(AtomicBool::new(false)),
              setup_aborted: setup_aborted.clone(),
              stall_consent: true,
@@ -2363,7 +3812,168 @@ index 2b82930cd..4326b88e6 100644
          }),
          Some(Arc::new(FixtureProtectedProvider {
              consent_seen: AtomicBool::new(false),
-@@ -2161,6 +2344,176 @@ async fn trusted_click_refuses_when_standalone_background_posture_is_unavailable
+@@ -1453,12 +1725,22 @@ async fn semantic_snapshot_keeps_visible_content_after_hidden_node_pressure() {
+ 
+     assert_eq!(snap["status"], "ok", "{snap}");
+     assert_eq!(snap["snapshot"]["format"], "semantic_v2", "{snap}");
++    // Visible text is surfaced by the digest (with refs), not by the outline:
++    // the outline carries interactive elements only, so it stays bounded.
++    let digest = snap["text_digest"]
++        .as_str()
++        .unwrap_or_default()
++        .to_owned();
++    assert!(
++        digest.contains("Visible message")
++            && digest.contains("Please review the attached fixture report."),
++        "visible semantic content was omitted: {snap}"
++    );
+     assert!(
+         snap["outline"]
+             .as_str()
+-            .is_some_and(|outline| outline.contains("Visible message")
+-                && outline.contains("Please review the attached fixture report.")),
+-        "visible semantic content was omitted: {snap}"
++            .is_some_and(|outline| outline.contains("Reply")),
++        "visible actions were omitted from the outline: {snap}"
+     );
+     let refs = snap["refs"].as_array().expect("semantic refs");
+     assert!(
+@@ -1485,6 +1767,134 @@ async fn semantic_snapshot_keeps_visible_content_after_hidden_node_pressure() {
+     assert_eq!(snap["snapshot"]["omitted"]["css_hidden"], 320);
+ }
+ 
++#[tokio::test]
++async fn semantic_snapshot_inlines_refs_and_surfaces_dom_text_prices() {
++    let f = fixture_with(|st| st.semantic_dom_text_page = true).await;
++    let (target, tab) = bind(&f).await;
++    let snap = semantic_snapshot(&f, &target, &tab).await;
++
++    assert_eq!(snap["status"], "ok", "{snap}");
++    // The outline alone must be enough to pick a ref: role, ref id, name.
++    let outline = snap["outline"].as_str().unwrap_or_default();
++    let link = snap["refs"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .find(|entry| entry["name"] == "GIGABYTE GeForce RTX 5080 16GB GDDR7")
++        .expect("the product link must be an action ref");
++    let link_ref = link["ref"].as_str().unwrap();
++    assert!(
++        outline.contains(&format!(
++            "- link {link_ref} \"GIGABYTE GeForce RTX 5080 16GB GDDR7\""
++        )),
++        "outline must carry the ref inline: {snap}"
++    );
++
++    // The AX tree prunes the price text; the DOM text supplement must still
++    // surface it in the digest with a usable ref.
++    let digest = snap["text_digest"].as_str().unwrap_or_default();
++    let price = snap["content_refs"]
++        .as_array()
++        .unwrap()
++        .iter()
++        .find(|entry| entry["name"] == "$1,099.99")
++        .expect("the DOM price text must surface as a content ref");
++    let price_ref = price["ref"].as_str().unwrap();
++    assert!(
++        digest.contains(&format!("- text {price_ref} \"$1,099.99\"")),
++        "digest must carry the price with its ref: {snap}"
++    );
++    assert!(
++        snap["refs"]
++            .as_array()
++            .unwrap()
++            .iter()
++            .all(|entry| entry.get("states").is_none()),
++        "the compact ref index must not restate per-node state: {snap}"
++    );
++}
++
++#[tokio::test]
++async fn semantic_snapshot_retries_transient_ax_frame_churn_internally() {
++    let f = fixture_with(|st| {
++        st.semantic_large_page = true;
++        st.ax_tree_flakes_remaining = 1;
++    })
++    .await;
++    let (target, tab) = bind(&f).await;
++    let snap = semantic_snapshot(&f, &target, &tab).await;
++
++    assert_eq!(snap["status"], "ok", "the transient -32602 must not surface: {snap}");
++    let tab_ax_calls = f
++        .state
++        .lock()
++        .unwrap()
++        .calls
++        .iter()
++        .filter(|(session, method, _)| {
++            method == "Accessibility.getFullAXTree"
++                && session.as_deref().is_some_and(|s| s.starts_with("tab-sess-"))
++        })
++        .count();
++    assert!(
++        tab_ax_calls >= 2,
++        "the flaked AX call must be retried internally, saw {tab_ax_calls}"
++    );
++}
++
++#[tokio::test]
++async fn dead_binding_reinstates_while_the_driver_owned_browser_is_live() {
++    let f = fixture().await;
++    f.engine.register_test_managed_browser(1, SESSION, true);
++    let (target_id, tab_id) = bind_windowless(&f).await;
++
++    // The session namespace is dropped (idle expiry / label revive) while the
++    // browser process, endpoint, and page target all stay live.
++    f.engine.store.remove_session(SESSION);
++    assert!(f.engine.store.get_target(SESSION, &target_id).is_err());
++
++    let snap = semantic_snapshot(&f, &target_id, &tab_id).await;
++    assert_eq!(snap["status"], "ok", "the dead binding must reinstate: {snap}");
++    assert_eq!(snap["target_id"], target_id);
++    assert_eq!(snap["tab_id"], tab_id);
++    assert!(
++        f.engine.store.get_target(SESSION, &target_id).is_ok(),
++        "the reinstated record must keep the caller's capability ids"
++    );
++
++    // A revived session label (the host starts a fresh episode under the same
++    // label) must revalidate the reinstated target without a rebind round-trip.
++    f.engine.store.remove_session(SESSION);
++    let validated = f
++        .engine
++        .revalidate_for_mutation("run-v2-revived", &target_id, Some(&tab_id))
++        .await
++        .expect("a revived label must revalidate the reinstated driver-owned target");
++    assert_eq!(validated.record.pid, 1);
++}
++
++#[tokio::test]
++async fn dead_binding_refuses_when_reproof_cannot_succeed() {
++    let f = fixture().await;
++    let (target_id, tab_id) = bind(&f).await;
++    f.engine.store.remove_session(SESSION);
++    // A user-profile window needs a fresh consent flow; reinstatement must
++    // never happen implicitly, and with no proof path the refusal stands.
++    let snap = semantic_snapshot(&f, &target_id, &tab_id).await;
++    assert_eq!(snap["status"], "refused", "{snap}");
++    let code = snap["refusal"]["code"].as_str().unwrap_or_default();
++    assert!(
++        code == "browser_binding_stale" || code == "browser_consent_required",
++        "unexpected refusal: {snap}"
++    );
++
++    // With the proof path erased the same stale id keeps refusing.
++    f.engine.store.clear_rebind_hint(&target_id);
++    let snap = semantic_snapshot(&f, &target_id, &tab_id).await;
++    assert_eq!(snap["status"], "refused", "{snap}");
++    assert_eq!(snap["refusal"]["code"], "browser_binding_stale", "{snap}");
++}
++
+ #[tokio::test]
+ async fn semantic_snapshot_can_capture_an_inactive_tab_without_activation_calls() {
+     let f = fixture().await;
+@@ -2161,6 +2571,176 @@ async fn trusted_click_refuses_when_standalone_background_posture_is_unavailable
      assert!(recorded_calls(&f, "Target.activateTarget").is_empty());
  }
  
@@ -3092,7 +4702,7 @@ index a26a6bfe9..696aabb02 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123bc7..efe2124d6 100644
+index 67e123bc7..f159b30c3 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -3107,7 +4717,7 @@ index 67e123bc7..efe2124d6 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(30);
++        metadata["synara_native_revision"] = serde_json::json!(31);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -3284,6 +4894,29 @@ index 2453fec21..67dc6319e 100644
                  | "set_agent_cursor_theme"
                  | "get_agent_cursor_state"
          );
+diff --git a/libs/cua-driver/rust/crates/cua-driver/tests/standalone_browser_behavior_test.rs b/libs/cua-driver/rust/crates/cua-driver/tests/standalone_browser_behavior_test.rs
+index 645dabc99..45a9085ab 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/tests/standalone_browser_behavior_test.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/tests/standalone_browser_behavior_test.rs
+@@ -1752,11 +1752,14 @@ fn run_semantic_state(spec: &BrowserSpec) {
+                 "{}",
+                 snapshot.raw
+             );
+-            assert!(
+-                snapshot.structured()["outline"]
++            let marker_visible = ["outline", "text_digest"].iter().any(|field| {
++                snapshot.structured()[field]
+                     .as_str()
+-                    .is_some_and(|outline| outline.contains("WEB_HARNESS_MARKER_v1")),
+-                "visible fixture marker missing from semantic outline: {}",
++                    .is_some_and(|text| text.contains("WEB_HARNESS_MARKER_v1"))
++            });
++            assert!(
++                marker_visible,
++                "visible fixture marker missing from semantic outline/digest: {}",
+                 snapshot.raw
+             );
+             assert!(
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/arc.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/arc.rs
 new file mode 100644
 index 000000000..1eb3bd0b1

@@ -457,6 +457,44 @@ the hide/offscreen machinery it needed.
   reaps the process group and isolated profile with no leak across repeated
   prepare/close cycles, and the user's running Helium is untouched.
 
+Revision 31 makes one browser snapshot readable, and keeps a live binding
+alive across transient session death.
+
+- Refs inline: the `semantic_v2` outline renders each listed ref with its
+  role and name (`- link p14:12 "GIGABYTE ... QUICK VIEW"`), so the outline
+  alone is enough to pick a ref. Text-bearing roles move to a new bounded
+  `text_digest` section (`- text p14:31 "$1,099.99"`), anonymous empty
+  `generic` chains are dropped, and the outline is cut at ~10k characters
+  with an honest marker. The `refs`/`content_refs` arrays stay as a compact
+  index (ref, role, name, frame, actions; `value`/`visibility` only when
+  they carry information) instead of restating per-node state.
+- Text that the AX tree prunes: on name-from-content pages (product grids
+  where the whole card becomes the link's accessible name) Chrome's
+  accessibility tree drops the child static text. The snapshot now reads
+  text runs from the `DOMSnapshot` capture it already takes, keeps the
+  visible ones (own or nearest ancestor bounds), deduplicates against
+  accessible names, and lists the top runs in the digest with content refs —
+  so prices surface consistently instead of collapsing to zero content
+  refs across snapshots of the same page.
+- Transparent rebinding: a target that is missing from its session namespace
+  is re-resolved inside the same call. The driver records the bind's
+  re-proof inputs (pid, window, windowless route, tab ids with their CDP
+  page targets); reinstatement re-runs the full proof chain — lifecycle
+  ownership, process fingerprint, endpoint ownership, and live CDP page
+  targets — and keeps the caller's `target_id` and `tab_id`s. Only
+  driver-owned browsers are reinstated implicitly; a user-profile window
+  still needs an explicit consent-bound bind, and a genuinely gone process
+  or closed tab keeps the original structured refusal.
+- AX retry: `Accessibility.getFullAXTree` failures from the transient
+  `-32602` frame-id churn ("Frame with the given frameId is not found") are
+  retried internally twice with a short backoff instead of surfacing as a
+  `browser_route_unavailable` refusal.
+- Live-verified (`.unlazy/synara-cu-codex-parity/L22-notebook.md`,
+  `evidence/l22-snapshot/`): a deterministic local product-list fixture in a
+  driver-owned headless browser yields names and prices in one snapshot, an
+  inline outline ref clicks successfully, and a binding whose session
+  namespace was dropped reinstates without a `get_browser_state` round-trip.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records
