@@ -1340,7 +1340,7 @@ describe("Cua native boundary", () => {
     // Readiness recovery does not itself capture the screen to prove pixels.
     expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(1);
   });
-  it("marks only scoped model state reads and keeps inherited preview captures unmarked", async () => {
+  it("marks scoped model state reads and never marks a pane still as a model observation", async () => {
     const f = fixture();
     try {
       await f.backend.captureScreenshot({
@@ -1350,18 +1350,27 @@ describe("Cua native boundary", () => {
       expect(f.calls.find((call) => call.name === "get_window_state")?.modelObservation).toBe(
         false,
       );
+      await f.backend.focusWindow("cua:10:20");
       f.calls.length = 0;
       await withModelDesktopObservation(async () => {
         await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
         await f.backend.getState({ includeScreenshot: true });
         await f.backend.attachStream(() => undefined);
       });
-      expect(f.calls.find((call) => call.name === "get_window_state")?.modelObservation).toBe(true);
+      // The scoped read is the model's picture; the pane still of the same
+      // window is a preview leg and stays unmarked.
+      expect(
+        f.calls
+          .filter((call) => call.name === "get_window_state")
+          .map((call) => call.modelObservation),
+      ).toEqual([true, false]);
+      // The unscoped read is the model's overview — and the only desktop
+      // capture in the whole sequence.
       expect(
         f.calls
           .filter((call) => call.name === "get_desktop_state")
           .map((call) => call.modelObservation),
-      ).toEqual([true, false]);
+      ).toEqual([true]);
       expect(
         f.calls
           .filter((call) => !["get_window_state", "get_desktop_state"].includes(call.name ?? ""))
@@ -1881,12 +1890,12 @@ describe("Cua native boundary", () => {
         delivery: { mode: "background" },
       },
     }));
-    await expect(
-      f.backend.invokeMenu!({ pid: 44 }, ["File", "New Window"]),
-    ).resolves.toMatchObject({
-      verified: "confirmed",
-      effect: "verified",
-    });
+    await expect(f.backend.invokeMenu!({ pid: 44 }, ["File", "New Window"])).resolves.toMatchObject(
+      {
+        verified: "confirmed",
+        effect: "verified",
+      },
+    );
     const call = f.calls.find((entry) => entry.name === "invoke_menu");
     // The driver's windowless contract: pid and path, and no window_id to
     // misread as an exact-window request.
@@ -2783,9 +2792,9 @@ describe("Cua hardening", () => {
     f.captureWindow(999);
     // A tree-only read never asked for pixels: its failure is not a capture
     // failure and must not mark capture unavailable.
-    await expect(
-      f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
-    ).rejects.toThrow("belongs to a different window");
+    await expect(f.backend.getState({ windowId: "cua:10:20", includeTree: true })).rejects.toThrow(
+      "belongs to a different window",
+    );
     expect(f.backend.health()).toMatchObject({
       status: "connected",
       captureAvailable: true,
@@ -3020,54 +3029,6 @@ describe("Computer authority", () => {
   });
 });
 
-describe("Cua preview image lifetime", () => {
-  const retainedImage = (backend: CuaComputerBackend) =>
-    (backend as unknown as { cachedImage: ComputerScreenshot | undefined }).cachedImage;
-  it("releases cached pixels when a new desktop epoch arrives on a metadata read", async () => {
-    const f = fixture();
-    try {
-      await f.backend.attachStream(() => undefined);
-      expect(retainedImage(f.backend)).toBeDefined();
-      f.changeDesktop();
-      await f.backend.checkInputReady("cua:10:20");
-      expect(retainedImage(f.backend)).toBeUndefined();
-    } finally {
-      await f.backend.dispose();
-    }
-  });
-  it("retains no image for model-only perception and releases a detached preview", async () => {
-    const f = fixture();
-    await f.backend.getState({ includeScreenshot: true });
-    expect(retainedImage(f.backend)).toBeUndefined();
-    await f.backend.attachStream(() => undefined);
-    expect(retainedImage(f.backend)).toBeDefined();
-    await f.backend.detachStream();
-    expect(retainedImage(f.backend)).toBeUndefined();
-    await f.backend.dispose();
-  });
-  it.each(["detachStream", "stopInput", "dispose"] as const)(
-    "late overview cannot repopulate cache after %s",
-    async (boundary) => {
-      const f = fixture();
-      let resolve!: () => void;
-      f.delayOverview(
-        new Promise<void>((r) => {
-          resolve = r;
-        }),
-      );
-      const attaching = f.backend.attachStream(() => undefined);
-      await vi.waitFor(() =>
-        expect(f.calls.some((c) => c.name === "get_desktop_state")).toBe(true),
-      );
-      await f.backend[boundary]();
-      resolve();
-      await attaching;
-      expect(retainedImage(f.backend)).toBeUndefined();
-      await f.backend.dispose();
-    },
-  );
-});
-
 describe("native preview task lifetime", () => {
   it("does no host work when an ordinary turn ends", async () => {
     const f = fixture();
@@ -3099,25 +3060,103 @@ describe("native preview task lifetime", () => {
   });
 });
 
-describe("preview stills window scope", () => {
+describe("preview stills target scope", () => {
   const task = { threadId: "thread", turnId: "turn" };
   const signal = () => new AbortController().signal;
 
-  it("never opens a window capture for the still, even with a live task window", async () => {
-    // Window frames belong to the frame tap's persistent capture. A still
-    // that re-captured the task's window through `get_window_state` would
-    // start a fresh ScreenCaptureKit session every interval and flash the
-    // window each shot — this is the regression guard for that.
+  it("publishes nothing when no window or tab is the target", async () => {
+    // No target means no frame: the pane shows its waiting state instead of a
+    // whole-desktop picture.
     const f = fixture();
-    await withComputerTask(task, () =>
-      f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
-    );
+    const frames: Array<unknown> = [];
+    await f.backend.attachStream((frame) => frames.push(frame));
+    expect(frames).toHaveLength(0);
+    expect(f.calls.some((call) => call.name === "get_desktop_state")).toBe(false);
+    expect(f.calls.some((call) => call.name === "get_window_state")).toBe(false);
+    await f.backend.dispose();
+  });
+
+  it("captures the exact window the task aims at, never the desktop", async () => {
+    const f = fixture();
+    await f.backend.focusWindow("cua:10:20");
     f.calls.length = 0;
     const frames: Array<unknown> = [];
     await f.backend.attachStream((frame) => frames.push(frame));
     expect(frames).toHaveLength(1);
-    expect(f.calls.some((call) => call.name === "get_window_state")).toBe(false);
-    expect(f.calls.filter((call) => call.name === "get_desktop_state")).toHaveLength(1);
+    expect(f.calls.find((call) => call.name === "get_window_state")?.args).toMatchObject({
+      pid: 10,
+      window_id: 20,
+      include_screenshot: true,
+      include_accessibility_tree: false,
+    });
+    expect(f.calls.some((call) => call.name === "get_desktop_state")).toBe(false);
+    await f.backend.dispose();
+  });
+
+  it("captures a bound browser tab through the driver's screenshot route", async () => {
+    const f = fixture();
+    f.onTool("get_browser_state", (args) =>
+      args.pid !== undefined
+        ? {
+            structuredContent: {
+              status: "ok",
+              target_id: "bt-1",
+              tabs: [{ tab_id: "tab-1", active: true }],
+            },
+          }
+        : {
+            structuredContent: { status: "ok" },
+            content: [
+              {
+                type: "image",
+                mimeType: "image/png",
+                data: Buffer.from([1, 2, 3]).toString("base64"),
+              },
+            ],
+          },
+    );
+    await f.backend.browser!.call({
+      name: "get_browser_state",
+      args: { pid: 42 },
+      task,
+      mutation: false,
+      signal: signal(),
+    });
+    f.calls.length = 0;
+    const frames: Array<unknown> = [];
+    await f.backend.attachStream((frame) => frames.push(frame));
+    expect(frames).toHaveLength(1);
+    // The bind minted the target and its one active tab; the still snapshots
+    // exactly that tab, and the desktop is never captured.
+    expect(f.calls.at(-1)).toMatchObject({
+      method: "call",
+      name: "get_browser_state",
+      args: { target_id: "bt-1", tab_id: "tab-1", include_screenshot: true },
+      task,
+    });
+    expect(f.calls.some((call) => call.name === "get_desktop_state")).toBe(false);
+    await f.backend.dispose();
+  });
+
+  it("drops the browser still target when its task ends", async () => {
+    const f = fixture();
+    f.onTool("get_browser_state", () => ({
+      structuredContent: { status: "ok", target_id: "bt-1", tabs: [{ tab_id: "tab-1" }] },
+    }));
+    await f.backend.browser!.call({
+      name: "get_browser_state",
+      args: { pid: 42 },
+      task,
+      mutation: false,
+      signal: signal(),
+    });
+    await f.backend.endTask("thread", "turn");
+    f.calls.length = 0;
+    const frames: Array<unknown> = [];
+    await f.backend.attachStream((frame) => frames.push(frame));
+    // A pane still must never revive an ended browser session.
+    expect(frames).toHaveLength(0);
+    expect(f.calls.some((call) => call.name === "get_browser_state")).toBe(false);
     await f.backend.dispose();
   });
 

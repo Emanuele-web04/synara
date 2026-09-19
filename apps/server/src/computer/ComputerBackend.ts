@@ -148,9 +148,7 @@ export type ComputerMenuTarget =
  * resolved to a live pid before dispatch, so a backend never has to guess
  * which process a name meant.
  */
-export type ComputerMenuBackendTarget =
-  | { readonly windowId: string }
-  | { readonly pid: number };
+export type ComputerMenuBackendTarget = { readonly windowId: string } | { readonly pid: number };
 
 export interface ComputerBackendActionResult {
   readonly point?: ComputerPoint;
@@ -631,10 +629,9 @@ export interface ComputerBackend {
   /**
    * Minimize or restore the exact window without activating it or switching
    * Spaces. A minimized window keeps its AX surface, so background semantic
-   * actions still reach it — the window-grain half of the hidden-workspace
-   * lifecycle. Backends report `verified` only when the driver's read-back
-   * evidence shows the requested state; anything less is `unconfirmed`, never
-   * silent success.
+   * actions still reach it — the window-grain explicit visibility control.
+   * Backends report `verified` only when the driver's read-back evidence shows
+   * the requested state; anything less is `unconfirmed`, never silent success.
    */
   setWindowMinimized?(
     windowId: string,

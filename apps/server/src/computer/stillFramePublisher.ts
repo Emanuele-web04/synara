@@ -1,24 +1,25 @@
 /**
  * The still-frame stream every Tier-1 desktop backend publishes.
  *
- * A Tier-1 backend has no video encoder: it pulls a whole-desktop PNG on a
- * timer and pushes those stills at whoever is watching the pane. The loop
- * around that is identical on every display server — one interval, one capture
- * in flight at a time, a byte-identity dedupe (`StillFrameDedupe`), and the
- * `force` bookkeeping that guarantees a receiver with nothing to draw gets a
- * picture even when the desktop has not changed. It lived twice, once in the
- * KWin backend and once in the macOS one, and the two copies had already
- * drifted apart in the details.
+ * A Tier-1 backend has no video encoder: it pulls one still on a timer and
+ * pushes it at whoever is watching the pane. The still is always scoped to the
+ * thing the agent is using — one exact window, or one browser tab — and never
+ * the whole desktop: a capture with no such target returns `undefined` and
+ * nothing is published. The loop around that is identical on every display
+ * server — one interval, one capture in flight at a time, a byte-identity
+ * dedupe (`StillFrameDedupe`), and the `force` bookkeeping that guarantees a
+ * receiver with nothing to draw gets a picture even when the target has not
+ * changed.
  *
- * The part worth stating is the failure bound. Both copies re-armed the
+ * The part worth stating is the failure bound. An earlier version re-armed the
  * deferred force whenever a forced capture threw, and the `finally` block then
- * immediately republished because a force was pending — so a desktop whose
- * captures kept failing (a revoked Screen Recording grant, a wedged compositor)
- * span in a tight recursive retry loop for as long as anyone watched the pane,
- * with no delay between attempts. Here a failed force buys exactly one immediate
- * retry; after that the request is dropped and the ordinary timer cadence takes
- * over, so a persistent failure costs two captures per interval instead of an
- * unbounded recursion.
+ * immediately republished because a force was pending — so a target whose
+ * captures kept failing (a revoked Screen Recording grant, a window that moved
+ * off the current Space) spun in a tight recursive retry loop for as long as
+ * anyone watched the pane, with no delay between attempts. Here a failed force
+ * buys exactly one immediate retry; after that the request is dropped and the
+ * ordinary timer cadence takes over, so a persistent failure costs two captures
+ * per interval instead of an unbounded recursion.
  *
  * @module computer/stillFramePublisher
  */
@@ -36,7 +37,7 @@ const MAX_FORCE_RETRIES = 1;
 /**
  * How often a Tier-1 backend pulls a still when nobody asked for a faster one.
  * Twice a second: fast enough that the pane reads as live, slow enough that a
- * whole-desktop PNG encode is not the machine's busiest job.
+ * window PNG encode is not the machine's busiest job.
  */
 export const DEFAULT_STILL_INTERVAL_MS = 500;
 
@@ -54,12 +55,13 @@ export function resolveStillIntervalMs(intervalMs: number | undefined): number {
 
 export interface StillFramePublisherOptions {
   /**
-   * Captures one whole-workspace still as raw PNG bytes.
+   * Captures one still of the current target — the exact window the task is
+   * using, or one browser tab — as raw PNG bytes.
    *
-   * `undefined` means "skip this frame without treating it as a failure" — the
-   * backend noticed mid-capture that publishing is no longer appropriate (KWin
-   * uses it when a foreground screenshot claimed the capture path). A throw is a
-   * real failure and is what the retry bound applies to.
+   * `undefined` means "skip this frame without treating it as a failure": there
+   * is no target to capture, or the backend noticed mid-capture that publishing
+   * is no longer appropriate. A throw is a real failure and is what the retry
+   * bound applies to.
    */
   readonly capture: (force: boolean) => Promise<Uint8Array | undefined>;
   /**
@@ -96,11 +98,6 @@ export class StillFramePublisher {
     this.options = options;
   }
 
-  /** True while a receiver is subscribed, which is what a keyframe request needs. */
-  get attached(): boolean {
-    return this.listener !== undefined;
-  }
-
   async attach(listener: ComputerFrameListener): Promise<void> {
     const generation = ++this.attachmentGeneration;
     this.listener = undefined;
@@ -129,7 +126,7 @@ export class StillFramePublisher {
   async requestKeyframe(): Promise<void> {
     if (!this.listener) return;
     // A keyframe is asked for because the receiver has nothing to draw, so it
-    // publishes even when the desktop is byte-identical to the last frame.
+    // publishes even when the target is byte-identical to the last frame.
     await this.publish({ force: true });
   }
 
@@ -141,7 +138,7 @@ export class StillFramePublisher {
       // A keyframe asked for while a still is already in flight used to be
       // dropped outright. The in-flight capture then deduped against the digest
       // it had just published and sent nothing, so the receiver that asked
-      // precisely because it had no picture stayed blank until the desktop
+      // precisely because it had no picture stayed blank until the target
       // happened to change. The request is remembered instead.
       if (options.force) {
         this.forceRetries = 0;
@@ -158,7 +155,7 @@ export class StillFramePublisher {
       const bytes = await this.options.capture(force);
       if (bytes === undefined) return;
       if (this.attachmentGeneration !== generation) return;
-      // An idle desktop encodes the same bytes every tick; republishing them
+      // An idle target encodes the same bytes every tick; republishing them
       // spends about a megabyte of socket to convey nothing.
       if (!this.dedupe.shouldPublish(bytes, force)) return;
       this.forceRetries = 0;

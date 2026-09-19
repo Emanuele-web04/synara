@@ -2368,14 +2368,14 @@ export class ComputerManager {
   /**
    * Launching spawns windows on the shared desktop, so it takes the lease too.
    *
-   * Agent launches are hidden by default: an agent-driven thread is a
-   * background workspace, and a window the agent did not explicitly ask to
-   * show must never appear on the operator's screen or take focus. The
-   * opt-out is explicit — `options.hidden === false` launches visibly.
-   * Hidden apps keep their AX trees live, so the semantic tools (set_value,
-   * label clicks, get_window_state) work without ever surfacing the app;
-   * `set_app_visibility` and `activate_window` remain the ways to bring one
-   * forward when the operator should see it.
+   * Nothing we start may put a window or a Dock entry in front of the user:
+   * an ordinary launch stays off-screen (its windows are created but render
+   * nothing), and only a caller that explicitly asks for a visible launch
+   * (`options.hidden === false`) gets one — the tool layer gates that ask on
+   * the user's own task. Off-screen windows keep their AX trees live, so the
+   * semantic tools (set_value, label clicks, get_window_state) work on them;
+   * `set_app_visibility` and `activate_window` remain the explicit visibility
+   * controls for when the user asks to see or move an app.
    */
   async launchApp(
     threadId: string | undefined,
@@ -2388,7 +2388,7 @@ export class ComputerManager {
       markComputerCall("computer_launch_app");
       assertDesktopOperationActive();
       this.assertDrivenAppAdmitted(threadId, app);
-      const hidden = options?.hidden !== false;
+      const hidden = options?.hidden ?? true;
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.launchApp(app, args, hidden ? { hidden: true } : options),
       );
@@ -2568,9 +2568,9 @@ export class ComputerManager {
 
   /**
    * Minimize or restore the exact window without activating it — the
-   * window-grain half of the hidden-workspace lifecycle. Same lease,
-   * window-existence proof, and owning-app consent as a frame move: nothing
-   * here activates or switches Spaces.
+   * window-grain explicit visibility control. Same lease, window-existence
+   * proof, and owning-app consent as a frame move: nothing here activates or
+   * switches Spaces.
    */
   async setWindowMinimized(
     threadId: string | undefined,
@@ -2594,11 +2594,12 @@ export class ComputerManager {
   }
 
   /**
-   * Hide or unhide a running app by pid — the app-grain half of the hidden
-   * workspace. The pid is the target, so consent keys on what the pid
-   * resolves to: the app's name from the process list when it can be
-   * resolved, else a stable pid key — the same split the window-level tools
-   * make between an app name and the window id fallback.
+   * Hide or unhide a running app by pid — the app-grain explicit visibility
+   * control, for when the user asks to get an app out of the way or bring it
+   * back. The pid is the target, so consent keys on what the pid resolves to:
+   * the app's name from the process list when it can be resolved, else a
+   * stable pid key — the same split the window-level tools make between an app
+   * name and the window id fallback.
    */
   async setAppVisibility(
     threadId: string | undefined,
@@ -2640,8 +2641,9 @@ export class ComputerManager {
         ...base,
         note:
           "This app has no window in the last desktop listing, so the unhide had nothing to show. " +
-          'Create a window with the app-level computer_invoke_menu (name the app or pid, e.g. ' +
-          '["File", "New Window"]), or drive the app through computer_browser_prepare with allow_launch.',
+          "Create a window with the app-level computer_invoke_menu (name the app or pid, e.g. " +
+          '["File", "New Window"]), or bind the driver-owned headless browser with ' +
+          "computer_browser_prepare and computer_browser_state.",
       };
     });
   }

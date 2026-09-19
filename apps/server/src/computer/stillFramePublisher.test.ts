@@ -53,7 +53,6 @@ describe("StillFramePublisher", () => {
       preparation.resolve();
       await attaching;
       await vi.advanceTimersByTimeAsync(500);
-      expect(harness.publisher.attached).toBe(false);
       expect(harness.captures).toBe(0);
       expect(harness.observed).toEqual([]);
       expect(vi.getTimerCount()).toBe(0);
@@ -236,7 +235,7 @@ describe("StillFramePublisher", () => {
     gated = true;
     const inFlight = harness.publisher.publish();
     // Asked for precisely because the pane is blank; dropping it left the pane
-    // blank until the desktop happened to change on its own.
+    // blank until the target happened to change on its own.
     const keyframe = harness.publisher.requestKeyframe();
     release();
     await inFlight;
@@ -248,9 +247,11 @@ describe("StillFramePublisher", () => {
     await harness.publisher.detach();
   });
 
-  it("skips a tick the backend declines without spending the force", async () => {
-    // `undefined` is "step aside", not "failed": the backend noticed mid-capture
-    // that another request owns the capture path.
+  it("publishes nothing for a tick the backend has no target for", async () => {
+    // `undefined` is "nothing to publish", not "failed": no window or tab is
+    // the target right now, or the backend noticed mid-capture that another
+    // request owns the capture path. A receiver with no picture must not be
+    // sent a desktop-wide substitute.
     const harness = makePublisher(async () => undefined);
     await harness.publisher.attach((frame) => harness.frames.push(frame));
     expect(harness.frames).toHaveLength(0);
@@ -282,7 +283,7 @@ describe("StillFramePublisher", () => {
       bytes = FRAME_B;
       await vi.advanceTimersByTimeAsync(500);
       // A detached publisher owns no timer, so nothing keeps pulling captures
-      // out of a desktop nobody is watching.
+      // out of a target nobody is watching.
       expect(harness.captures).toBe(whileAttached);
       expect(harness.frames).toHaveLength(1);
     } finally {

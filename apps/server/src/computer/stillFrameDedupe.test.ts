@@ -18,8 +18,8 @@ describe("StillFrameDedupe", () => {
     const dedupe = new StillFrameDedupe();
 
     expect(dedupe.shouldPublish(IDLE, dedupe.takeForce(false))).toBe(true);
-    // The timer pulls a full-desktop PNG twice a second; an idle desktop
-    // encodes the same bytes every time and must not cost the socket anything.
+    // The timer pulls a still twice a second; an idle target encodes the same
+    // bytes every time and must not cost the socket anything.
     expect(dedupe.shouldPublish(IDLE, dedupe.takeForce(false))).toBe(false);
     expect(dedupe.shouldPublish(CHANGED, dedupe.takeForce(false))).toBe(true);
   });

@@ -1,8 +1,8 @@
 /**
  * Suppressing still frames that carry no new picture.
  *
- * Every Tier-1 backend publishes a whole-desktop PNG on a timer — twice a
- * second, for as long as the pane is open. An idle desktop encodes to the same
+ * Every Tier-1 backend publishes a still on a timer — one window or one
+ * browser tab, never the whole desktop. An idle target encodes to the same
  * bytes every time, and republishing them spends about a megabyte of socket to
  * convey nothing. Byte identity is the test rather than a similarity threshold:
  * it is exact, and a threshold can be wrong about "nothing changed" in both
@@ -10,11 +10,11 @@
  *
  * The subtle part is `force`, which is why this is a small object rather than a
  * comparison inlined at each call site. A receiver that has no picture must get
- * one even when the desktop is byte-identical to what the *previous* receiver
+ * one even when the target is byte-identical to what the *previous* receiver
  * saw — a fresh attach, an explicit keyframe request — and a force that arrives
  * while a capture is already in flight has to survive until that capture lands,
  * or the receiver that asked precisely because its pane was blank stays blank
- * until the desktop happens to change on its own.
+ * until the target happens to change on its own.
  *
  * @module computer/stillFrameDedupe
  */

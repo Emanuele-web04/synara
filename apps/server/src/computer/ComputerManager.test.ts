@@ -1409,7 +1409,10 @@ describe("ComputerManager and FakeComputerBackend", () => {
     });
     const manager = new ComputerManager({ backend });
     try {
-      const result = await manager.invokeMenu("thread-1", { app: "Helium" }, ["File", "New Window"]);
+      const result = await manager.invokeMenu("thread-1", { app: "Helium" }, [
+        "File",
+        "New Window",
+      ]);
       expect(backend.callsFor("invokeMenu").at(-1)?.args).toEqual([
         { pid: 6_001 },
         ["File", "New Window"],
@@ -1428,9 +1431,9 @@ describe("ComputerManager and FakeComputerBackend", () => {
       await manager.admitDrivenApp("thread-1", "pid 9999", {
         signal: new AbortController().signal,
       });
-      await expect(
-        manager.invokeMenu("thread-1", { pid: 9_999 }, ["File"]),
-      ).rejects.toThrow(/No running application has pid 9999/);
+      await expect(manager.invokeMenu("thread-1", { pid: 9_999 }, ["File"])).rejects.toThrow(
+        /No running application has pid 9999/,
+      );
     } finally {
       computerApprovalGate.cancelThread("thread-1");
       await manager.dispose();
@@ -1454,6 +1457,8 @@ describe("ComputerManager and FakeComputerBackend", () => {
       expect(shown.note).toEqual(expect.stringContaining("no window"));
       expect(shown.note).toContain("computer_invoke_menu");
       expect(shown.note).toContain("computer_browser_prepare");
+      expect(shown.note).toContain("computer_browser_state");
+      expect(shown.note).not.toContain("allow_launch");
       // Hiding is not an unhide: no note, even with no window.
       const hidden = await manager.setAppVisibility(undefined, 6_001, true);
       expect(hidden.note).toBeUndefined();
@@ -1465,14 +1470,14 @@ describe("ComputerManager and FakeComputerBackend", () => {
     }
   });
 
-  it("launches hidden by default and only shows the app on explicit hidden:false", async () => {
+  it("launches off-screen unless a visible launch is explicitly asked for", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });
     try {
-      // Absent → invisible workspace default.
+      // Absent → off-screen default: nothing we start renders a window.
       await manager.launchApp("thread-1", "kcalc");
       expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", [], { hidden: true }]);
-      // Explicit true → hidden, same as the default.
+      // Explicit true → off-screen, same as the default.
       await manager.launchApp("thread-1", "kcalc", [], 0, { hidden: true });
       expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", [], { hidden: true }]);
       // Explicit false → the only visible-launch path.

@@ -127,6 +127,22 @@ function confirmedValueReadback(data: Record<string, unknown>): boolean {
     data.evidence.some((item) => text(record(item).kind) === "value_readback")
   );
 }
+/**
+ * The one tab a browser bind can point a pane still at: the only tab, or the
+ * only active one. An ambiguous bind mints no still target — the pane waits
+ * for the tab the next call names rather than guessing.
+ */
+function resolvableStillTab(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tabs = value.flatMap((entry) => {
+    const tab = record(entry);
+    const id = text(tab.tab_id);
+    return id ? [{ id, active: tab.active === true }] : [];
+  });
+  if (tabs.length === 1) return tabs[0]!.id;
+  const active = tabs.filter((tab) => tab.active);
+  return active.length === 1 ? active[0]!.id : undefined;
+}
 /** Longest one same-window semantic text write may hold its lane before the
  * caller fails honestly. The underlying write still drains so lane order
  * survives the timeout and nothing is replayed. Same-window writes serialize
@@ -144,8 +160,8 @@ export const CUA_SEMANTIC_TEXT_LANE_GAP_MS = 100;
 const RECENT_TREE_TTL_MS = 5_000;
 /**
  * Pane preview still cadence when nothing overrides it. Slower than the
- * Tier-1 default: the whole-desktop PNG a tick pulls is the expensive frame
- * on this backend, and the pane reads as live at half a hertz.
+ * Tier-1 default: each tick re-observes the exact window or browser tab the
+ * task is using, and the pane reads as live at half a hertz.
  * `SYNARA_CUA_PREVIEW_STILL_MS` replaces it; the constructor option replaces
  * it in tests.
  */
@@ -309,7 +325,6 @@ export class CuaComputerBackend implements ComputerBackend {
   private readonly recentTrees = new Map<string, { at: number; root: ComputerUiNode }>();
   private readonly observedGeometry = new Map<string, ComputerRect>();
   private readonly stills: StillFramePublisher;
-  private cachedImage: ComputerScreenshot | undefined;
   private desktopEpoch: number | undefined;
   /**
    * The host's interruption count as of the newest reply observed. Unlike
@@ -328,12 +343,21 @@ export class CuaComputerBackend implements ComputerBackend {
   private driverNativeRevision: number | undefined;
   /** The driver's host platform as last reported by a reply; undefined until first contact. */
   private hostPlatform: string | undefined;
-  private imageGeneration = 0;
   private readonly previewTasks = new Map<string, CuaComputerTask>();
-  private clearCachedImage(): void {
-    this.imageGeneration += 1;
-    this.cachedImage = undefined;
-  }
+  /**
+   * What the pane still mirrors: the last exact window the task aimed at, or
+   * the last bound browser tab. The stills loop publishes nothing while this
+   * is undefined — a display-wide capture is never a pane frame.
+   */
+  private stillTarget:
+    | { readonly kind: "window"; readonly windowId: string }
+    | {
+        readonly kind: "browser";
+        readonly targetId: string;
+        readonly tabId: string | undefined;
+        readonly task: CuaComputerTask;
+      }
+    | undefined;
   private disposed = false;
   constructor(
     options: {
@@ -358,18 +382,7 @@ export class CuaComputerBackend implements ComputerBackend {
     this.semanticTextLaneHoldMs = options.semanticTextLaneHoldMs ?? CUA_SEMANTIC_TEXT_LANE_HOLD_MS;
     this.semanticTextLaneGapMs = options.semanticTextLaneGapMs ?? CUA_SEMANTIC_TEXT_LANE_GAP_MS;
     this.stills = new StillFramePublisher({
-      capture: async () => {
-        // Reuse a recent tool observation; idle panes spend at most one
-        // capture every two seconds and detached panes spend none. Window
-        // frames belong to the frame tap's persistent capture — a per-still
-        // `get_window_state` would open a fresh ScreenCaptureKit session on
-        // the target every interval and flash the user's window each shot.
-        const image =
-          this.cachedImage && Date.now() - Date.parse(this.cachedImage.capturedAt) < 1_500
-            ? this.cachedImage
-            : await this.captureOverview(false);
-        return Buffer.from(image.bytesBase64, "base64");
-      },
+      capture: () => this.captureStill(),
       prepare: async () => {
         await this.availability();
       },
@@ -496,7 +509,6 @@ export class CuaComputerBackend implements ComputerBackend {
           );
         if (epoch !== this.desktopEpoch) {
           this.desktopEpoch = epoch;
-          this.clearCachedImage();
           this.observedGeometry.clear();
           this.snapshotAt = 0;
         }
@@ -571,7 +583,6 @@ export class CuaComputerBackend implements ComputerBackend {
         "The native operation could not complete.";
       const code = text(structured.code) || text(refusal.code) || "cua_refusal";
       if (refused && code === "desktop_input_paused") {
-        this.clearCachedImage();
         this.observedGeometry.clear();
       }
       const inputPause =
@@ -844,6 +855,9 @@ export class CuaComputerBackend implements ComputerBackend {
     // window immediately before dispatch; reuse the just-observed identity here.
     await this.target(windowId, !this.windows.some((window) => window.id === windowId));
     this.selectedWindow = windowId;
+    // The pane still follows the window the task aims at, so a watching pane
+    // mirrors the work without a per-action capture request.
+    this.stillTarget = { kind: "window", windowId };
   }
   async checkInputReady(windowId: string): Promise<void> {
     const { pid, window_id } = await this.target(windowId);
@@ -914,6 +928,7 @@ export class CuaComputerBackend implements ComputerBackend {
   }
   async clearFocusWindow(): Promise<void> {
     this.selectedWindow = undefined;
+    this.stillTarget = undefined;
   }
   private screenshot(result: CuaToolResult, fallback?: ComputerRect): ComputerScreenshot {
     const data = result.structuredContent ?? {};
@@ -971,8 +986,12 @@ export class CuaComputerBackend implements ComputerBackend {
       this.previewTasks.delete(oldest);
     }
   }
+  /**
+   * The model's whole-desktop observation, returned by an unscoped
+   * `get_state`. This is a model picture, never a pane frame: the preview
+   * stills are window/tab captures only.
+   */
   private async captureOverview(allowModelObservation = true): Promise<ComputerScreenshot> {
-    const generation = this.imageGeneration;
     try {
       const result = await this.call("get_desktop_state", {}, false, allowModelObservation);
       const data = result.structuredContent ?? {};
@@ -982,9 +1001,6 @@ export class CuaComputerBackend implements ComputerBackend {
         width: number(data.screen_width),
         height: number(data.screen_height),
       });
-      if (generation === this.imageGeneration && this.stills.attached && !this.disposed) {
-        this.cachedImage = image;
-      }
       // No capture-failure reset here: only an observed Screen Recording grant
       // (in refresh()) proves capture is back, so only it clears the flag.
       this.setHealth({
@@ -1383,8 +1399,7 @@ export class CuaComputerBackend implements ComputerBackend {
         this.observedGeometry.clear();
       throw error;
     } finally {
-      // An error can follow partial input, so cached pixels cannot survive it.
-      this.clearCachedImage();
+      // An error can follow partial input, so any earlier observation is stale.
       this.snapshotAt = 0;
     }
     const data = result.structuredContent ?? {};
@@ -1931,7 +1946,6 @@ export class CuaComputerBackend implements ComputerBackend {
     // true geometry; when the read-back itself failed, nothing may stay.
     if (observed !== undefined) this.observedGeometry.set(window.id, observed);
     else this.observedGeometry.delete(window.id);
-    this.clearCachedImage();
     this.snapshotAt = 0;
     return {
       windowId: window.id,
@@ -1978,9 +1992,8 @@ export class CuaComputerBackend implements ComputerBackend {
     }
     const data = result.structuredContent ?? {};
     const confirmed = data.effect === "confirmed";
-    // A menu command can open or close windows (a Save dialog, a Quit): the
-    // cached snapshot no longer describes the desktop.
-    this.clearCachedImage();
+    // A menu command can open or close windows (a Save dialog, a Quit), so any
+    // earlier observation of the desktop no longer describes it.
     this.snapshotAt = 0;
     return {
       ...(windowId !== undefined ? { windowId } : {}),
@@ -2009,9 +2022,8 @@ export class CuaComputerBackend implements ComputerBackend {
     const result = await this.call("set_window_minimized", { pid, window_id, minimized }, true);
     const data = result.structuredContent ?? {};
     const confirmed = confirmedValueReadback(data);
-    // A minimize or restore changes what is on screen; the cached snapshot
-    // and retained geometry no longer describe it.
-    this.clearCachedImage();
+    // A minimize or restore changes what is on screen; retained geometry no
+    // longer describes it.
     this.snapshotAt = 0;
     return {
       windowId: window.id,
@@ -2034,7 +2046,6 @@ export class CuaComputerBackend implements ComputerBackend {
     const result = await this.call("set_app_visibility", { pid, hidden }, true);
     const data = result.structuredContent ?? {};
     const confirmed = confirmedValueReadback(data);
-    this.clearCachedImage();
     this.snapshotAt = 0;
     return {
       deliveryPath: `cua-${text(data.route, 64) || "app_visibility"}-${text(record(data.delivery).mode, 32) || "background"}`,
@@ -2094,11 +2105,9 @@ export class CuaComputerBackend implements ComputerBackend {
     // text reply, so the only honest confirmation is an independent check that
     // the process is actually gone afterwards.
     await this.call("kill_app", { pid }, true);
-    // The window set is stale the moment the signal lands: drop the cached
-    // snapshot and every retained geometry for the dead pid before the
-    // read-back, so nothing grounds a later call on a window that no longer
-    // exists.
-    this.clearCachedImage();
+    // The window set is stale the moment the signal lands: drop every retained
+    // geometry for the dead pid before the read-back, so nothing grounds a
+    // later call on a window that no longer exists.
     this.snapshotAt = 0;
     // Map iterators tolerate deletion mid-walk: a key already visited is gone,
     // one still pending is simply skipped — exactly what this loop wants.
@@ -2312,19 +2321,104 @@ export class CuaComputerBackend implements ComputerBackend {
         : {}),
     };
   }
+  /**
+   * One pane still of whatever the task is using: the exact window, or the tab
+   * of a bound driver-owned browser. No target means no frame — the pane shows
+   * its waiting state rather than a whole-desktop picture.
+   */
+  private async captureStill(): Promise<Uint8Array | undefined> {
+    const target = this.stillTarget;
+    if (!target || this.disposed) return undefined;
+    return target.kind === "browser"
+      ? await this.captureBrowserStill(target)
+      : await this.captureWindowStill(target.windowId);
+  }
+  /**
+   * The pane still of one exact window: the driver's window capture with the
+   * same validation the model's screenshot path applies, but never marked as
+   * a model observation — the pane is not the model. Failure throws into the
+   * publisher's bounded retry; a window that moved off the current Space
+   * throws through the shared validation, so unverified pixels never become a
+   * pane frame.
+   */
+  private async captureWindowStill(windowId: string): Promise<Uint8Array> {
+    const { pid, window_id } = await this.target(windowId);
+    const result = await this.call(
+      "get_window_state",
+      {
+        pid,
+        window_id,
+        include_screenshot: true,
+        include_accessibility_tree: false,
+        max_dimension: 1536,
+      },
+      false,
+      false,
+    );
+    return Buffer.from(this.screenshot(result).bytesBase64, "base64");
+  }
+  /**
+   * The tab still through the driver's CDP screenshot route. The snapshot is
+   * read-only and carries the task attribution browser calls require; a
+   * refusal (an ended session, a target that no longer resolves) is "nothing
+   * to publish", not a retry-worthy failure.
+   */
+  private async captureBrowserStill(target: {
+    readonly targetId: string;
+    readonly tabId: string | undefined;
+    readonly task: CuaComputerTask;
+  }): Promise<Uint8Array | undefined> {
+    if (!this.endpoint) return undefined;
+    const reply = await this.request<CuaReply>(
+      this.endpoint,
+      {
+        method: "call",
+        name: "get_browser_state",
+        args: {
+          target_id: target.targetId,
+          ...(target.tabId !== undefined ? { tab_id: target.tabId } : {}),
+          include_screenshot: true,
+        },
+        task: target.task,
+        capability: this.capability,
+      },
+      { mutation: false, timeoutMs: 20_000 },
+    );
+    if (!reply.ok) return undefined;
+    const image = (reply.result?.content ?? []).find(
+      (part) => part.type === "image" && typeof part.data === "string" && part.data.length > 0,
+    );
+    return image?.data !== undefined ? Buffer.from(image.data, "base64") : undefined;
+  }
+  /**
+   * Remembers the browser tab the pane should mirror. A bind result mints the
+   * target id; a snapshot call names it directly. The tab id comes from the
+   * call, or from a bind whose tabs resolve to one — an ambiguous bind leaves
+   * the still target unset until a call names the tab.
+   */
+  private noteBrowserStillTarget(
+    args: Record<string, unknown>,
+    result: CuaToolResult,
+    task: CuaComputerTask,
+  ): void {
+    const structured = result.structuredContent ?? {};
+    const targetId = text(structured.target_id) || text(args.target_id);
+    if (!targetId) return;
+    const tabId = text(args.tab_id) || resolvableStillTab(structured.tabs);
+    this.stillTarget = { kind: "browser", targetId, tabId: tabId || undefined, task };
+  }
   async attachStream(listener: ComputerFrameListener) {
     await this.stills.attach(listener);
   }
   async detachStream() {
-    this.clearCachedImage();
     await this.stills.detach();
   }
   async requestKeyframe() {
     await this.stills.requestKeyframe();
   }
   async stopInput() {
-    this.clearCachedImage();
     this.previewTasks.clear();
+    this.stillTarget = undefined;
     if (this.endpoint) {
       const result = await this.request<CuaReply>(this.endpoint, {
         method: "stop",
@@ -2356,6 +2450,15 @@ export class CuaComputerBackend implements ComputerBackend {
     for (const [key] of matches) {
       this.previewTasks.delete(key);
     }
+    // A pane still must never revive an ended browser session: drop the target
+    // the moment its task ends.
+    const still = this.stillTarget;
+    if (
+      still?.kind === "browser" &&
+      still.task.threadId === threadId &&
+      (turnId === undefined || still.task.turnId === turnId)
+    )
+      this.stillTarget = undefined;
     // Task-owned grounding ends with the task: a revoked task's window pixels
     // must not ground a later claim, so the next input re-observes first.
     this.observedGeometry.clear();
@@ -2524,7 +2627,9 @@ export class CuaComputerBackend implements ComputerBackend {
           reply.error ?? "Cua host failed.",
           reply.effect ?? "not-dispatched",
         );
-      return reply.result ?? {};
+      const result = reply.result ?? {};
+      this.noteBrowserStillTarget(call.args, result, task);
+      return result;
     } catch (error) {
       if (error instanceof CuaTransportError) throw new CuaActionError(error.message, error.effect);
       throw error;
@@ -2547,7 +2652,6 @@ export class CuaComputerBackend implements ComputerBackend {
     if (!reply.ok) throw new Error(reply.error ?? "Browser session teardown was not acknowledged.");
   }
   async dispose() {
-    this.clearCachedImage();
     await this.stills.detach();
     // Teardown cannot depend on the host still answering: an unreachable
     // endpoint means the input path it owned is already gone, so a transport
