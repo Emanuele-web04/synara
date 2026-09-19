@@ -2560,7 +2560,7 @@ index a26a6bfe9..696aabb02 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123bc7..fde1942e5 100644
+index 67e123bc7..b0b7c5eee 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -2575,7 +2575,7 @@ index 67e123bc7..fde1942e5 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(27);
++        metadata["synara_native_revision"] = serde_json::json!(28);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -8164,10 +8164,18 @@ index 859243557..b37dc630d 100644
  pub mod electron_js;
  pub mod platform;
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
-index 603f2ae4e..1a08a0c5d 100644
+index 603f2ae4e..7959fcbfd 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
-@@ -280,6 +280,15 @@ fn is_chromium(name: &str, bundle_id: &str) -> bool {
+@@ -273,13 +273,22 @@ fn is_chromium(name: &str, bundle_id: &str) -> bool {
+     let value = format!("{name} {bundle_id}").to_ascii_lowercase();
+     let products = [
+         "chrome", "chromium", "electron", "brave", "edge", "vivaldi", "opera", "arc", "thorium",
+-        "iridium", "yandex",
++        "iridium", "yandex", "helium",
+     ];
+     value
+         .split(|ch: char| !ch.is_ascii_alphanumeric())
          .any(|token| products.contains(&token))
  }
  
@@ -8224,6 +8232,34 @@ index 603f2ae4e..1a08a0c5d 100644
          if action.session.is_empty()
              || action.cdp_target_id.is_empty()
              || cua_driver_core::session::is_session_ended(&action.session)
+@@ -1675,6 +1707,27 @@ mod tests {
+         assert!(!is_chromium("Operator", "com.example.Operator"));
+     }
+ 
++    #[test]
++    fn helium_classifies_as_chromium_by_name_or_bundle_id() {
++        assert!(is_chromium("Helium", "net.imput.helium"));
++        assert!(is_chromium("", "net.imput.helium"));
++        // No Helium kind exists and none is required: the CDP route gates on
++        // the engine family, while process_role stays honest about a product
++        // the adapter cannot name.
++        assert_eq!(
++            browser_product("Helium", "net.imput.helium"),
++            BrowserProduct::Other
++        );
++        // `is_chromium` is a product-token check only. A Helium helper shares
++        // the product token; `classify_browser` derives the Helper role from
++        // the name/arguments and endpoint admission refuses that role, exactly
++        // as it already does for Chrome helpers.
++        assert!(is_chromium("Helium Helper", "net.imput.helium.helper"));
++        // The match is an exact token, not a substring: lookalikes stay out.
++        assert!(!is_chromium("Helios", "com.example.helios"));
++        assert!(!is_chromium("Heliotrope", "com.example.heliotrope"));
++    }
++
+     #[test]
+     fn firefox_classifier_uses_product_tokens() {
+         assert!(is_firefox("Firefox", "org.mozilla.firefox"));
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
 index 5d74dddf5..cf0aac1de 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
@@ -12856,7 +12892,7 @@ index f5eb9d039..94e61799a 100644
          if let Some(wid) = window_id {
              crate::cursor::overlay::send_command(
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
-index 90786072c..13cc3eaca 100644
+index 90786072c..7ef64f0a7 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
 @@ -8,6 +8,16 @@ use std::sync::Arc;
@@ -12891,7 +12927,15 @@ index 90786072c..13cc3eaca 100644
              `px_capture_unavailable` omits an unprovable screenshot/pixel frame \
              instead of guessing a transform; the truthful AX payload remains available.\n\n\
              Optional `query` projects both tree_markdown and structured `elements` to \
-@@ -678,13 +694,28 @@ impl Tool for GetWindowStateTool {
+@@ -162,6 +178,7 @@ fn chromium_browser_window(pid: i32) -> bool {
+                     | "thorium"
+                     | "iridium"
+                     | "yandex"
++                    | "helium"
+             )
+         })
+ }
+@@ -678,13 +695,28 @@ impl Tool for GetWindowStateTool {
          // names the surface even on the capture-only path, where no AX tree is
          // present to identify it. Omitted per-field when WindowServer reports an
          // empty string.
@@ -12921,7 +12965,7 @@ index 90786072c..13cc3eaca 100644
          }
          cua_driver_core::window_inspection::mark_browser_chrome_capture_coverage(
              &mut structured,
-@@ -1095,6 +1126,19 @@ mod tests {
+@@ -1095,6 +1127,19 @@ mod tests {
      use cua_driver_core::element_query::project_elements_for_query;
      use serde_json::json;
  

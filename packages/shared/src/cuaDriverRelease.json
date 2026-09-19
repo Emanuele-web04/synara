@@ -2,7 +2,7 @@
   "version": "0.28.2",
   "source": "7fe7c33f741ee2dd5961ba80044d59f93b48ba47",
   "sha256": "d0c276a933465e70765d60e1c244d803276b5b5805e6b9e4311841169620470e",
-  "nativeRevision": 27,
-  "patchSha256": "df8dd948a6aeabc95ae828c181ceaba0312c176ba8076d141c07c5e1a4a7865e",
+  "nativeRevision": 28,
+  "patchSha256": "482b6af1f9c9b9f85d401bef0ca7fa5118088423848d65f91bf4d6301617a9da",
   "rustVersion": "1.97.1"
 }

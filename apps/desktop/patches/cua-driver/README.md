@@ -380,6 +380,36 @@ makes launch arguments reach an already-running Chromium app.
   browser, whose process singleton opens the requested incognito window.
   Hidden/activation rules are unchanged.
 
+Revision 28 recognizes Helium as a macOS Chromium-family browser.
+
+- Product token: `is_chromium` (`platform-macos/src/browser/platform.rs`)
+  adds the `helium` token, so both the display name "Helium" and the bundle
+  id `net.imput.helium` classify. `get_window_state`'s Chromium window list
+  takes the same token so a Helium window carries the browser-chrome
+  capture-coverage caveat. No `BrowserProduct` variant is added: Helium
+  reports `Other`, and the CDP route gates on the engine family, not the
+  product kind. A renderer/GPU helper shares the product token, but
+  `classify_browser` still derives the `Helper` role from the name and
+  arguments and endpoint admission refuses that role, exactly as it does
+  for Chrome's helpers. Linux and Windows are untouched.
+- Effect: `browser_prepare` with the pid of a running Helium, `allow_launch:
+  true` and `profile.mode=isolated_new` passes the classification gate and
+  launches a driver-owned hidden isolated instance of the same Helium
+  executable with `--remote-debugging-port=0`; bind, navigate, snapshot and
+  the explicit `dom_event` text route then work over that endpoint. The
+  user's browser process and profile are never touched.
+- Live-verified (`.unlazy/synara-cu-codex-parity/L13-notebook.md`,
+  `evidence/l13-helium/`): with the user's Helium running,
+  `browser_prepare` on its pid returned `launched_isolated_browser` with the
+  spawned Helium hidden and its window proven offscreen at (-32000,-32000)
+  through CDP; bind minted an exact `driver_owned` target, navigate reached a
+  local page, the snapshot exposed the input ref, and `browser_type`
+  (`input_route:"dom_event"`) dispatched 13/13 characters with a matched
+  read-back (`effect:"unverifiable"`, the honest synthetic-route verdict).
+  The frontmost app never became the spawned instance, every Helium process
+  present before the run stayed alive, and `end_session` reaped the spawned
+  process group and its isolated profile.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records
