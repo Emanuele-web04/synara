@@ -499,7 +499,7 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
-  it("reports providers with turns but no token records without inventing usage", async () => {
+  it("reports providers without positive token totals without inventing usage", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -542,8 +542,23 @@ describe("ProfileStatsQuery", () => {
             '{"totalProcessedTokens":1000}', 1, '2026-06-13T09:06:00.000Z'
           )
         `;
+        const missingTelemetry = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(missingTelemetry.unavailableProviders).toEqual(["grok"]);
+        expect(missingTelemetry.lifetimeTotalTokens).toBe(1000);
+
+        // An observed zero is not a positive token total. The coverage notice must
+        // describe the missing positive totals, without claiming telemetry is absent.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES (
+            'grok-zero-tokens', 'grok', 'grok-turn', 'info', 'context-window.updated', 'tokens',
+            '{"totalProcessedTokens":0}', 1, '2026-06-13T09:06:00.000Z'
+          )
+        `;
         const partial = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
         expect(partial.available).toBe(true);
+        expect(partial.lifetimeTotalTokens).toBe(1000);
         expect(partial.topProviderPercent).toBe(100);
         expect(partial.unavailableProviders).toEqual(["grok"]);
         expect(partial.models).toEqual([

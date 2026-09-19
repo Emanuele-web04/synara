@@ -52,7 +52,7 @@ describe("profile ranking coverage", () => {
     const markup = renderToStaticMarkup(<ProfileSettingsPanel />);
     expect(markup).toContain("100% of tracked tokens");
     expect(markup).toContain("Share of tracked tokens.");
-    expect(markup.match(/Token data is unavailable for Grok, Devin/g)).toHaveLength(2);
+    expect(markup.match(/Token usage is unavailable or zero for Grok, Devin/g)).toHaveLength(2);
     expect(markup).toContain("Claude token totals use verifiable records");
   });
 
@@ -60,13 +60,13 @@ describe("profile ranking coverage", () => {
     queryState.tokenStats = { ...tokenStats, unavailableProviders: ["grok"] };
     const markup = renderCard();
     expect(markup).toContain("top provider · tracked tokens");
-    expect(markup).toContain("Token data is unavailable for Grok.");
+    expect(markup).toContain("Token usage is unavailable or zero for Grok.");
     expect(markup).toContain("Percentages reflect tracked tokens only.");
   });
 
   it("omits missing-provider notices when all providers have telemetry", () => {
     for (const markup of [renderToStaticMarkup(<ProfileSettingsPanel />), renderCard()]) {
-      expect(markup).not.toContain("Token data is unavailable");
+      expect(markup).not.toContain("Token usage is unavailable or zero");
       expect(markup).toContain("tracked tokens");
     }
   });
@@ -81,7 +81,7 @@ describe("profile ranking coverage", () => {
       const card = renderCard();
       expect(card).toContain("top provider · turns");
       for (const markup of [profile, card]) {
-        expect(markup).not.toContain("Token data is unavailable");
+        expect(markup).not.toContain("Token usage is unavailable or zero");
       }
     },
   );

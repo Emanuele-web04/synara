@@ -17,8 +17,9 @@ export function ProfileUsageCoverage({
   }
   return (
     <p className={className}>
-      Token data is unavailable for {unavailableProviders.map(formatProviderLabel).join(", ")}.{" "}
-      Percentages reflect tracked tokens only. Their turns still count toward activity totals.
+      Token usage is unavailable or zero for{" "}
+      {unavailableProviders.map(formatProviderLabel).join(", ")}. Percentages reflect tracked tokens
+      only. Their turns still count toward activity totals.
     </p>
   );
 }
