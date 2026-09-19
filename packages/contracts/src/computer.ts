@@ -31,13 +31,6 @@ export const COMPUTER_WS_METHODS = {
   selectText: "computer.selectText",
   getThreadState: "computer.getThreadState",
   setControlEnabled: "computer.setControlEnabled",
-  /**
-   * Clears the physical-Escape kill latch on both the manager and the GUI
-   * host. It is the only path that re-opens input after `inputStopped`
-   * reports true: deliberately a named action rather than a side effect of
-   * setControlEnabled, so re-arming is always the user's explicit choice.
-   */
-  rearmInput: "computer.rearmInput",
   subscribeEvents: "computer.subscribeEvents",
   /**
    * Durable per-app consent management: the grants a user created by
@@ -643,10 +636,9 @@ export const ThreadComputerState = Schema.Struct({
    */
   capabilities: ComputerCapabilities,
   /**
-   * The physical-Escape kill latch: true means every mutating admission —
-   * this thread's, other threads', and pane input — is refused until the
-   * user re-arms through `computer.rearmInput`. Optional for compatibility
-   * with servers that predate the latch; absent reads as not stopped.
+   * True only while a physical-Escape interrupt is draining. The server
+   * clears it on its own; there is no re-arm path. Optional for
+   * compatibility with older servers; absent reads as not interrupted.
    */
   inputStopped: Schema.optional(Schema.Boolean),
   lastError: Schema.NullOr(Schema.String.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH))),
@@ -884,21 +876,6 @@ export const ComputerControlEnabledResult = Schema.Struct({
   generation: Schema.optional(NonNegativeInt),
 });
 export type ComputerControlEnabledResult = typeof ComputerControlEnabledResult.Type;
-
-/**
- * The re-arm carries no payload: host-wide and thread-independent, like the
- * press that set the latch. Everything it means is implied by the
- * authenticated caller being the person at the machine.
- */
-export const ComputerRearmInput = Schema.Struct({});
-export type ComputerRearmInput = typeof ComputerRearmInput.Type;
-export const ComputerRearmResult = Schema.Struct({
-  /** True once the host confirmed its own latch lifted; a failed relay throws instead. */
-  rearmed: Schema.Boolean,
-  /** Whether a stop latch was actually held — false means the re-arm was a no-op. */
-  wasStopped: Schema.Boolean,
-});
-export type ComputerRearmResult = typeof ComputerRearmResult.Type;
 
 export const ComputerThreadInput = Schema.Struct({ threadId: ThreadId });
 export type ComputerThreadInput = typeof ComputerThreadInput.Type;
