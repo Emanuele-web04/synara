@@ -2663,6 +2663,25 @@ describe("resolveRuntimeModeAfterApprovalDecision", () => {
       resolveRuntimeModeAfterApprovalDecision("auto", "acceptForSession", "permissions"),
     ).toBeNull();
   });
+
+  it("does not widen a tool approval to full access", () => {
+    expect(
+      resolveRuntimeModeAfterApprovalDecision("approval-required", "acceptForSession", "tool"),
+    ).toBeNull();
+  });
+
+  it.each(["command", "file-read", "file-change"] as const)(
+    "still widens a %s session grant, matching the server-side grant policy",
+    (requestKind) => {
+      expect(
+        resolveRuntimeModeAfterApprovalDecision(
+          "approval-required",
+          "acceptForSession",
+          requestKind,
+        ),
+      ).toBe("full-access");
+    },
+  );
 });
 
 describe("commitAfterRuntimeModePersistence", () => {

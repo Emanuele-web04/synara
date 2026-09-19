@@ -531,6 +531,40 @@ describe("provider runtime activity projection", () => {
       },
     });
 
+    const toolApproval = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        eventId: "tool-approval-request",
+        requestId: ApprovalRequestId.makeUnsafe("tool-request-1"),
+        payload: {
+          requestType: "tool_approval",
+          detail: "Allow Synara to launch the calculator?",
+          args: {
+            serverName: "acme-tools",
+            _meta: {
+              tool_name: "mcp_tool",
+              tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
+            },
+          },
+        },
+      }),
+    )[0];
+    expect(toolApproval).toMatchObject({
+      kind: "approval.requested",
+      summary: "Tool approval requested",
+      payload: {
+        requestKind: "tool",
+        requestType: "tool_approval",
+        detail: "Allow Synara to launch the calculator?",
+        toolName: "mcp_tool",
+        // The MCP server that raised the elicitation, from the request itself.
+        toolSource: "acme-tools",
+        // Name and parameters came from the server's own `_meta`.
+        toolDetailsReported: true,
+        toolParamsDisplay: [{ name: "app", value: "kcalc", displayName: "app" }],
+      },
+    });
+
     const userInput = [
       runtimeEvent({
         type: "user-input.requested",
@@ -577,6 +611,143 @@ describe("provider runtime activity projection", () => {
         },
       },
     ]);
+  });
+
+  it.each(["tool_approval", "dynamic_tool_call"] as const)(
+    "renders Claude-shaped %s approvals as tool approvals with parameter rows",
+    (requestType) => {
+      const [approval] = projectProviderRuntimeActivities(
+        runtimeEvent({
+          type: "request.opened",
+          provider: "claudeAgent",
+          eventId: `claude-${requestType}-request`,
+          requestId: ApprovalRequestId.makeUnsafe(`claude-${requestType}-1`),
+          payload: {
+            requestType,
+            detail: "mcp__synara__tool: {}",
+            args: {
+              toolName: "mcp__synara__tool",
+              input: { app: "kcalc", args: ["--hidpi"], headless: false },
+              sessionApprovalAvailable: true,
+              toolUseId: "toolu_01",
+            },
+          },
+        }),
+      );
+
+      expect(approval).toMatchObject({
+        kind: "approval.requested",
+        summary: "Tool approval requested",
+        payload: {
+          requestKind: "tool",
+          requestType,
+          toolName: "mcp__synara__tool",
+          // Derived from the namespaced tool name, not from runtime metadata.
+          toolSource: "synara",
+          toolParamsDisplay: [
+            { name: "app", value: "kcalc" },
+            { name: "args", value: '["--hidpi"]' },
+            { name: "headless", value: "false" },
+          ],
+          sessionApprovalAvailable: true,
+        },
+      });
+      expect(approval?.payload).not.toHaveProperty("toolDetailsReported");
+      expect(() => decodeActivityAppendCommand(approval!)).not.toThrow();
+    },
+  );
+
+  it("omits tool presentation when a Claude tool approval carries no input", () => {
+    const [approval] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        provider: "claudeAgent",
+        eventId: "claude-tool-approval-empty-input",
+        requestId: ApprovalRequestId.makeUnsafe("claude-tool-approval-empty"),
+        payload: {
+          requestType: "tool_approval",
+          detail: "Agent: {}",
+          args: { toolName: "Agent", input: {}, sessionApprovalAvailable: false },
+        },
+      }),
+    );
+
+    expect(approval?.payload).toMatchObject({
+      requestKind: "tool",
+      toolName: "Agent",
+      // No MCP server to name, so the card falls back to the provider runtime.
+      toolSource: "Claude",
+    });
+    expect(approval?.payload).not.toHaveProperty("toolParamsDisplay");
+  });
+
+  it("never persists tool parameters whose name reads like a credential", () => {
+    const [approval] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        provider: "claudeAgent",
+        eventId: "claude-tool-approval-secret",
+        requestId: ApprovalRequestId.makeUnsafe("claude-tool-approval-secret"),
+        payload: {
+          requestType: "tool_approval",
+          detail: "mcp__synara__deploy: {}",
+          args: {
+            toolName: "mcp__synara__deploy",
+            input: {
+              api_key: "sk-live-secret-value",
+              authToken: "bearer-secret-value",
+              Password: "hunter2",
+              keyboard: "qwerty",
+              endpoint: "https://example.com",
+            },
+          },
+        },
+      }),
+    );
+
+    const rows = (
+      approval?.payload as
+        | { toolParamsDisplay?: ReadonlyArray<{ name: string; value: string }> }
+        | undefined
+    )?.toolParamsDisplay;
+    const valueOf = (name: string) => rows?.find((row) => row.name === name)?.value;
+    expect(valueOf("api_key")).not.toContain("sk-live-secret-value");
+    expect(valueOf("authToken")).not.toContain("bearer-secret-value");
+    expect(valueOf("Password")).not.toContain("hunter2");
+    // A parameter that merely contains "key" as a substring stays readable.
+    expect(valueOf("keyboard")).toBe("qwerty");
+    expect(valueOf("endpoint")).toBe("https://example.com");
+    expect(JSON.stringify(approval?.payload)).not.toContain("hunter2");
+  });
+
+  it("bounds a pathological Claude tool input before it becomes a durable card", () => {
+    const [approval] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        provider: "claudeAgent",
+        eventId: "claude-tool-approval-huge",
+        requestId: ApprovalRequestId.makeUnsafe("claude-tool-approval-huge"),
+        payload: {
+          requestType: "tool_approval",
+          detail: "mcp__synara__huge: {}",
+          args: {
+            toolName: "mcp__synara__huge",
+            input: Object.fromEntries(
+              Array.from({ length: 200 }, (_, index) => [`field-${index}`, "x".repeat(5_000)]),
+            ),
+          },
+        },
+      }),
+    );
+
+    const payload = approval?.payload as
+      | { toolParamsDisplay?: ReadonlyArray<{ name: string; value: string }> }
+      | undefined;
+    expect(payload?.toolParamsDisplay?.length ?? 0).toBeLessThanOrEqual(13);
+    for (const row of payload?.toolParamsDisplay ?? []) {
+      expect(row.value.length).toBeLessThanOrEqual(241);
+    }
+    expect(() => decodeActivityAppendCommand(approval!)).not.toThrow();
   });
 
   it("bounds pathological tool payloads before persistence", () => {

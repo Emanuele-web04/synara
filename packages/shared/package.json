@@ -160,6 +160,10 @@
       "types": "./src/sidechatExpiry.ts",
       "import": "./src/sidechatExpiry.ts"
     },
+    "./approvalSessionGrant": {
+      "types": "./src/approvalSessionGrant.ts",
+      "import": "./src/approvalSessionGrant.ts"
+    },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
