@@ -11,7 +11,7 @@ import { spawnProcess } from "@synara/shared/processRuntime";
 
 import { CodexJsonlFramer, CodexJsonlWriter } from "../codexAppServerTransport";
 import { createLogger } from "../logger";
-import { signalOwnedChildProcess } from "../platform/processTreeController";
+import { noteSpawnedProcess, signalOwnedChildProcess } from "../platform/processTreeController";
 import { asRecord, asString, isoFromUnixMillis, isoFromUnixSeconds } from "./parse";
 
 const log = createLogger("provider-usage:codex-resets");
@@ -106,6 +106,7 @@ async function withAppServer<T>(
     env: input.env,
     stdio: "pipe",
   });
+  noteSpawnedProcess(child.pid);
   const framer = new CodexJsonlFramer();
   const writer = new CodexJsonlWriter(child.stdin);
   let nextId = 0;

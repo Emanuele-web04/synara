@@ -29,6 +29,7 @@ import { makeAcpNotificationDispatcher } from "./AcpNotificationDispatcher.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import { noteSpawnedProcess } from "../../platform/processTreeController.ts";
 import {
   teardownEffectProcessTree,
   teardownProviderProcessTree,
@@ -1469,6 +1470,7 @@ const makeAcpSessionRuntime = (
         ),
       );
 
+    noteSpawnedProcess(Number(child.pid));
     yield* Effect.addFinalizer(() => teardownAcpChildProcess(child, options.teardownProcessTree));
     // Registered after child teardown so LIFO scope closure releases any first
     // prompt/fork waiter before waiting for the child process to exit.

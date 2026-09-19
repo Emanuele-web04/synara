@@ -78,23 +78,23 @@ describe("processTreeKiller", () => {
     expect(captureAttempts).toBe(2);
   });
 
-  it("validates captured child commands before delayed SIGKILL", () => {
+  it("validates captured child identities before delayed SIGKILL", () => {
     const signaledPids: Array<{ pid: number; signal: TerminalKillSignal }> = [];
     const treeSignals: Array<{ rootPid: number; signal: TerminalKillSignal }> = [];
-    const commandReadCalls: number[][] = [];
+    const rowReadCalls: number[] = [];
     const tree: CapturedProcessTree = {
       descendants: [
-        { pid: 102, command: "bun run dev" },
-        { pid: 103, command: "tsdown --watch" },
+        { pid: 102, ppid: 100, command: "bun run dev" },
+        { pid: 103, ppid: 100, command: "tsdown --watch" },
       ],
     };
     const killer = createProcessTreeKiller({
-      readCurrentCommands: (pids) => {
-        commandReadCalls.push([...pids]);
+      readLiveProcessRow: (pid) => {
+        rowReadCalls.push(pid);
         return new Map([
-          [102, "bun run dev"],
-          [103, "node unrelated-process.js"],
-        ]);
+          [102, { ppid: 100, command: "bun run dev" }],
+          [103, { ppid: 100, command: "node unrelated-process.js" }],
+        ]).get(pid);
       },
       signalPid: (pid, signal) => {
         signaledPids.push({ pid, signal });
@@ -110,20 +110,20 @@ describe("processTreeKiller", () => {
       rootPid: 100,
       signal: "SIGKILL",
       tree,
+      includeRootTree: false,
       onError: () => undefined,
     });
 
     expect(signaledPids).toEqual([{ pid: 102, signal: "SIGKILL" }]);
-    expect(commandReadCalls).toEqual([[102, 103]]);
-    expect(treeSignals).toEqual([{ rootPid: 100, signal: "SIGKILL" }]);
+    expect(rowReadCalls).toEqual([102, 103]);
+    expect(treeSignals).toEqual([]);
   });
 
-  it("does not validate captured child commands before initial SIGTERM", () => {
+  it("still verifies captured child identities before initial SIGTERM", () => {
     const signaledPids: number[] = [];
     const killer = createProcessTreeKiller({
-      readCurrentCommands: () => {
-        throw new Error("SIGTERM should not read current commands");
-      },
+      readLiveProcessRow: (pid) =>
+        pid === 103 ? { ppid: 100, command: "tsdown --watch" } : undefined,
       signalPid: (pid) => {
         signaledPids.push(pid);
         return null;
@@ -134,23 +134,25 @@ describe("processTreeKiller", () => {
     killer.signal({
       rootPid: 100,
       signal: "SIGTERM",
+      includeRootTree: false,
       tree: {
         descendants: [
-          { pid: 102, command: "bun run dev" },
-          { pid: 103, command: "tsdown --watch" },
+          { pid: 102, ppid: 100, command: "bun run dev" },
+          { pid: 103, ppid: 100, command: "tsdown --watch" },
         ],
       },
       onError: () => undefined,
     });
 
-    expect(signaledPids).toEqual([103, 102]);
+    expect(signaledPids).toEqual([103]);
   });
 
   it("can skip root tree signaling while still signaling captured children", () => {
     const signaledPids: number[] = [];
     const treeSignals: number[] = [];
     const killer = createProcessTreeKiller({
-      readCurrentCommands: () => new Map([[103, "tsdown --watch"]]),
+      readLiveProcessRow: (pid) =>
+        pid === 103 ? { ppid: 100, command: "tsdown --watch" } : undefined,
       signalPid: (pid) => {
         signaledPids.push(pid);
         return null;
@@ -166,7 +168,7 @@ describe("processTreeKiller", () => {
       signal: "SIGKILL",
       includeRootTree: false,
       tree: {
-        descendants: [{ pid: 103, command: "tsdown --watch" }],
+        descendants: [{ pid: 103, ppid: 100, command: "tsdown --watch" }],
       },
       onError: () => undefined,
     });

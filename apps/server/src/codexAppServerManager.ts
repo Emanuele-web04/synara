@@ -67,6 +67,7 @@ import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { resolveCodexServiceTier } from "./codexServiceTier.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
+import { noteSpawnedProcess, signalOwnedChildProcess } from "./platform/processTreeController.ts";
 import {
   teardownChildProcessTree,
   teardownProviderProcessTree,
@@ -778,12 +779,16 @@ function spawnCodexAppServer(input: {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
 }): ChildProcessWithoutNullStreams {
-  return spawnProcess(input.binaryPath, ["app-server"], {
+  const child = spawnProcess(input.binaryPath, ["app-server"], {
     requireExecutable: true,
     cwd: input.cwd,
     env: input.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
+  // Record the OS identity now: teardown verifies its start time against the
+  // live row, which shim/CLI launch transforms cannot forge or invalidate.
+  noteSpawnedProcess(child.pid);
+  return child;
 }
 
 export function normalizeCodexModelSlug(
@@ -4293,6 +4298,9 @@ function runCodexVersionCommand(input: {
       });
       return;
     }
+    // Record the spawn-time OS identity so the timeout kill can prove it is
+    // still signaling this exact process rather than a recycled pid.
+    noteSpawnedProcess(child.pid);
 
     let stdout = "";
     let stderr = "";
@@ -4317,7 +4325,7 @@ function runCodexVersionCommand(input: {
     timer = setTimeout(() => {
       // SIGKILL (rather than spawnSync's SIGTERM) because the promise settles here
       // regardless: a binary that ignores SIGTERM would otherwise linger forever.
-      child.kill("SIGKILL");
+      signalOwnedChildProcess(child, "SIGKILL");
       finish({
         error: new Error(
           `Codex CLI version check timed out after ${CODEX_VERSION_CHECK_TIMEOUT_MS}ms.`,

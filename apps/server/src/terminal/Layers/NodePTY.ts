@@ -6,6 +6,8 @@
 import { createRequire } from "node:module";
 
 import { Effect, FileSystem, Layer, Path } from "effect";
+
+import { noteSpawnedProcess } from "../../platform/processTreeController";
 import {
   PtyAdapter,
   PtyAdapterShape,
@@ -155,6 +157,7 @@ export const makeNodePtyLayer = (loadNodePtyModule: NodePtyLoader = () => import
                 cause,
               }),
           });
+          noteSpawnedProcess(ptyProcess.pid);
           return new NodePtyProcess(ptyProcess);
         }),
       } satisfies PtyAdapterShape;

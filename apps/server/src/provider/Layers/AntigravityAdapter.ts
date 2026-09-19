@@ -68,7 +68,10 @@ import {
   PROVIDER_RUNTIME_CALLBACK_TERMINAL_RESERVE,
   type SizedProviderRuntimeEvent,
 } from "../providerRuntimeEventIngress.ts";
-import { signalOwnedChildProcess } from "../../platform/processTreeController.ts";
+import {
+  noteSpawnedProcess,
+  signalOwnedChildProcess,
+} from "../../platform/processTreeController.ts";
 import { teardownChildProcessTree } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "antigravity" as const;
@@ -412,6 +415,7 @@ export async function runAntigravityHelperProcess(
       stdio: ["ignore", "pipe", "pipe"],
       requireExecutable: true,
     }) as AntigravityChildProcess;
+    noteSpawnedProcess(child.pid);
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -2468,6 +2472,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             cause,
           });
         }
+        noteSpawnedProcess(child.pid);
         context.activeProcess = child;
         const ownsTurn = () =>
           sessions.get(input.threadId) === context &&

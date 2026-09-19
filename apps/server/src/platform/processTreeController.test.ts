@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   captureProcessTree,
   createProcessTreeKiller,
   inspectProcessTree,
   type ProcessChildrenMap,
+  type ProcessTreeKiller,
+  type ProcessTreeKillerDependencies,
 } from "./processTreeController";
 
 function windowsTree(): ProcessChildrenMap {
@@ -158,12 +160,12 @@ describe("Windows process-tree controller", () => {
 
   it("does not force unverified descendants when identity lookup is unavailable", () => {
     const signalled: number[] = [];
-    let commandLookups = 0;
+    let rowLookups = 0;
     const killer = createProcessTreeKiller({
       captureChildrenMap: () => new Map(),
-      readCurrentCommands: () => {
-        commandLookups += 1;
-        return null;
+      readLiveProcessRow: () => {
+        rowLookups += 1;
+        return undefined;
       },
       signalPid: (pid) => {
         signalled.push(pid);
@@ -183,7 +185,112 @@ describe("Windows process-tree controller", () => {
       onError: () => undefined,
     });
 
-    expect(commandLookups).toBe(1);
+    expect(rowLookups).toBe(1);
     expect(signalled).toEqual([]);
+  });
+});
+
+describe("signal target guards", () => {
+  const itPosix = process.platform === "win32" ? it.skip : it;
+  const run = (
+    deps: Partial<ProcessTreeKillerDependencies>,
+    input: Omit<Parameters<ProcessTreeKiller["signal"]>[0], "onError">,
+  ) => {
+    const signalPid = vi.fn(() => null);
+    const signalTree = vi.fn();
+    createProcessTreeKiller({ signalPid, signalTree, ...deps }).signal({
+      ...input,
+      onError: () => undefined,
+    });
+    return { signalPid, signalTree };
+  };
+
+  // The module self-installs the process.kill guard at import; unsafe targets
+  // throw before any real signal can leave the process.
+  it("refuses broadcast signal targets", () => {
+    expect(() => process.kill(-1, "SIGTERM")).toThrow();
+    expect(() => process.kill(0, "SIGTERM")).toThrow();
+    expect(() => process.kill(1, "SIGTERM")).toThrow();
+  });
+
+  it("refuses to signal a stale root", () => {
+    const { signalPid, signalTree } = run(
+      { readLiveProcessRow: () => ({ ppid: process.pid, command: "x", startedAt: "new" }) },
+      {
+        rootPid: 424242,
+        signal: "SIGTERM",
+        tree: {
+          root: { pid: 424242, ppid: process.pid, command: "x", startedAt: "old" },
+          descendants: [],
+        },
+      },
+    );
+    expect(signalPid).not.toHaveBeenCalled();
+    expect(signalTree).not.toHaveBeenCalled();
+  });
+
+  itPosix("signals a verified root and verified descendants", () => {
+    const rows = new Map([
+      [424242, { ppid: process.pid, command: "x", startedAt: "s1" }],
+      [424243, { ppid: 424242, command: "x", startedAt: "s2" }],
+    ]);
+    const { signalPid, signalTree } = run(
+      { readLiveProcessRow: (pid) => rows.get(pid) },
+      {
+        rootPid: 424242,
+        signal: "SIGTERM",
+        tree: {
+          root: { pid: 424242, ppid: process.pid, command: "x", startedAt: "s1" },
+          descendants: [{ pid: 424243, ppid: 424242, command: "x", startedAt: "s2" }],
+        },
+      },
+    );
+    expect(signalPid.mock.calls).toEqual([
+      [424243, "SIGTERM"],
+      [424242, "SIGTERM"],
+    ]);
+    expect(signalTree).not.toHaveBeenCalled();
+  });
+
+  itPosix("signals verified descendants when the root already exited", () => {
+    const { signalPid, signalTree } = run(
+      {
+        readLiveProcessRow: (pid) =>
+          pid === 424243 ? { ppid: 1, command: "x", startedAt: "s2" } : null,
+        readSpawnIdentity: () => ({ ppid: process.pid, startedAt: "s1" }),
+      },
+      {
+        rootPid: 424242,
+        signal: "SIGTERM",
+        tree: {
+          root: { pid: 424242, ppid: process.pid, command: "x", startedAt: "s1" },
+          descendants: [{ pid: 424243, ppid: 424242, command: "x", startedAt: "s2" }],
+        },
+      },
+    );
+    expect(signalPid.mock.calls).toEqual([[424243, "SIGTERM"]]);
+    expect(signalTree).not.toHaveBeenCalled();
+  });
+
+  it("refuses a captured tree rooted at a recycled sibling", () => {
+    const { signalPid, signalTree } = run(
+      {
+        readLiveProcessRow: (pid) =>
+          pid === 424243
+            ? { ppid: 424242, command: "sib", startedAt: "s2" }
+            : { ppid: process.pid, command: "sib", startedAt: "s2" },
+        readSpawnIdentity: () => ({ ppid: process.pid, startedAt: "a" }),
+      },
+      {
+        rootPid: 424242,
+        signal: "SIGTERM",
+        tree: {
+          root: { pid: 424242, ppid: process.pid, command: "sib", startedAt: "s2" },
+          descendants: [{ pid: 424243, ppid: 424242, command: "sib", startedAt: "s2" }],
+        },
+      },
+    );
+    expect(signalPid).not.toHaveBeenCalled();
+    expect(signalTree).not.toHaveBeenCalled();
   });
 });

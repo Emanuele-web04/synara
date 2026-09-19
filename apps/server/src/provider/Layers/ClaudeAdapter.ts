@@ -179,6 +179,7 @@ import {
   teardownProviderProcessTree,
   type ProcessExitHandle,
 } from "../supervisedProcessTeardown.ts";
+import { noteSpawnedProcess } from "../../platform/processTreeController.ts";
 
 const PROVIDER = "claudeAgent" as const;
 const CLAUDE_DISCOVERY_THREAD_ID = ThreadId.makeUnsafe("claude:discovery");
@@ -544,13 +545,15 @@ interface ClaudeProcessOwner {
 }
 
 function spawnOwnedClaudeCodeProcess(options: ClaudeSpawnOptions): ClaudeOwnedProcess {
-  return spawnProcess(options.command, options.args, {
+  const child = spawnProcess(options.command, options.args, {
     requireExecutable: true,
     ...(options.cwd ? { cwd: options.cwd } : {}),
     env: options.env,
     signal: options.signal,
     stdio: ["pipe", "pipe", "inherit"],
   }) as unknown as ClaudeOwnedProcess;
+  noteSpawnedProcess(child.pid);
+  return child;
 }
 
 async function readInstalledClaudeCliVersion(input: {

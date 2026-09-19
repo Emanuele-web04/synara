@@ -3,7 +3,7 @@ import { StringDecoder } from "node:string_decoder";
 import { isCommandNotFoundExit } from "@synara/shared/platformProcess";
 import { spawnProcess } from "@synara/shared/processRuntime";
 
-import { signalOwnedChildProcess } from "./platform/processTreeController.ts";
+import { noteSpawnedProcess, signalOwnedChildProcess } from "./platform/processTreeController.ts";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -138,6 +138,7 @@ export async function runProcess(
       stdio: "pipe",
       requireExecutable: true,
     });
+    noteSpawnedProcess(child.pid);
 
     let stdout = "";
     let stderr = "";

@@ -95,6 +95,7 @@ import {
   teardownChildProcessTree,
   teardownProviderProcessTree,
 } from "../supervisedProcessTeardown.ts";
+import { noteSpawnedProcess } from "../../platform/processTreeController.ts";
 
 const PROVIDER = "pi" as const;
 const DEFAULT_PI_THINKING_LEVEL: ThinkingLevel = "medium";
@@ -266,6 +267,7 @@ export function makePiBashProcessSupervisor(
           stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
         },
       );
+      noteSpawnedProcess(child.pid);
       const active: PiActiveProcess = {
         child,
         teardown: undefined,

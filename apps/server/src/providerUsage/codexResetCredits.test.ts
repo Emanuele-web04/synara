@@ -11,7 +11,10 @@ import {
 
 const { spawn, signal } = vi.hoisted(() => ({ spawn: vi.fn(), signal: vi.fn() }));
 vi.mock("@synara/shared/processRuntime", () => ({ spawnProcess: spawn }));
-vi.mock("../platform/processTreeController", () => ({ signalOwnedChildProcess: signal }));
+vi.mock("../platform/processTreeController", () => ({
+  noteSpawnedProcess: () => undefined,
+  signalOwnedChildProcess: signal,
+}));
 const input = {
   binaryPath: "codex.cmd",
   cwd: "/isolated",
