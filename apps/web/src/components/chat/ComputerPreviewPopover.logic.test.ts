@@ -221,19 +221,22 @@ describe("computerPreviewFrameSource", () => {
     expect(computerPreviewFrameSource({ streamWanted: true, tapActive: true })).toBe("tap");
   });
 
-  it("falls back to the stills stream when no window frame exists yet", () => {
+  it("falls back to the window/tab stills stream when no tap frame exists yet", () => {
     // tapActive false with no frame covers a silent tap that never painted
-    // and a browser without the desktop bridge channel at all.
+    // and a browser without the desktop bridge channel at all. The stills are
+    // window/tab-scoped: the server publishes nothing when no window or tab
+    // is the target, so the pane shows its waiting state — never a
+    // desktop-wide picture.
     expect(computerPreviewFrameSource({ streamWanted: true, tapActive: false })).toBe("stills");
     expect(
       computerPreviewFrameSource({ streamWanted: true, tapActive: false, tapHasFrame: false }),
     ).toBe("stills");
   });
 
-  it("holds the last window frame instead of painting the desktop overview", () => {
+  it("holds the last window frame instead of swapping in a still", () => {
     // The tap keeps its last window frame on the canvas through the quiet
-    // window by design; enabling stills there would overwrite the task
-    // window with the full-desktop overview.
+    // window by design; enabling stills there could swap the canvas to a
+    // different target's still while the tap recovers.
     expect(
       computerPreviewFrameSource({ streamWanted: true, tapActive: false, tapHasFrame: true }),
     ).toBe("none");
@@ -385,15 +388,11 @@ describe("computerPreviewCardFitWidth", () => {
 
   it("docked: narrows for tall content instead of overflowing the slot", () => {
     // Portrait phone aspect: height budget 480 * 0.5 = 240 < width basis.
-    expect(
-      computerPreviewCardFitWidth({ ...base, floating: false, frameAspect: 0.5 }),
-    ).toBe(240);
+    expect(computerPreviewCardFitWidth({ ...base, floating: false, frameAspect: 0.5 })).toBe(240);
   });
 
   it("docked: the rail budget overrides the measured slot", () => {
-    expect(
-      computerPreviewCardFitWidth({ ...base, floating: false, railBudgetPx: 300 }),
-    ).toBe(300);
+    expect(computerPreviewCardFitWidth({ ...base, floating: false, railBudgetPx: 300 })).toBe(300);
   });
 
   it("docked: never drops below the footprint minimum", () => {

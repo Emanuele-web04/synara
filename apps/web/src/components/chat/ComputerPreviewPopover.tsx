@@ -13,14 +13,7 @@
 // content's aspect, never a fixed box.
 
 import type { ThreadId } from "@synara/contracts";
-import {
-  type ReactNode,
-  type RefObject,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ReactNode, type RefObject, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { useAppSettings } from "../../appSettings";
@@ -35,12 +28,7 @@ import { useThreadComputerStateSeed } from "../../hooks/useThreadComputerStateSe
 import { disclosurePopClassName } from "../../lib/disclosureMotion";
 import { PanelCollapseIcon, PanelExpandIcon, XIcon } from "../../lib/icons";
 import { cn } from "../../lib/utils";
-import {
-  computerCanvasLabel,
-  computerContainRect,
-  computerCursorPosition,
-  shouldSubscribeToComputerStream,
-} from "../ComputerPanel.logic";
+import { computerCanvasLabel, shouldSubscribeToComputerStream } from "../ComputerPanel.logic";
 import { useComputerImageStream } from "../computer/useComputerImageStream";
 import {
   type ComputerPreviewFloat,
@@ -106,7 +94,6 @@ function ComputerPreviewPopoverCard(props: {
   const cardMaxWidth = Math.min(props.maxWidthPx ?? caps.maxWidthPx, caps.maxWidthPx);
   const open = computerPreviewCardOpen(session.phase);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const viewportRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const threadState = useComputerStateStore(selectThreadComputerState(threadId));
   const markPreviewLive = useComputerPreviewStore((store) => store.markPreviewLive);
@@ -120,7 +107,6 @@ function ComputerPreviewPopoverCard(props: {
     currentActivity: threadState?.activity ?? null,
     lastActionLabel: session.lastActionLabel ?? null,
   });
-  const viewportSize = useObservedSize(viewportRef);
   // The card fits the space its slot offers: measure the positioned ancestor
   // so window resizes, sidebar toggles, and split leaves all re-fit the card
   // instead of it overflowing or floating in dead space. In the env rail the
@@ -145,8 +131,9 @@ function ComputerPreviewPopoverCard(props: {
     threadState,
   });
   // The desktop app's native tap is the preferred source while it keeps
-  // delivering frames; the stills stream owns the canvas only while the tap
-  // is quiet or absent, so the two never draw at the same time.
+  // delivering frames; the server's window/tab stills own the canvas only
+  // while the tap is quiet or absent, so the two never draw at the same time
+  // and neither can paint a desktop-wide image.
   const tap = useComputerPreviewTap({ canvasRef, threadId, enabled: streamWanted });
   const frameSource = computerPreviewFrameSource({
     streamWanted,
@@ -178,9 +165,10 @@ function ComputerPreviewPopoverCard(props: {
   // Publish the live footprint for the rail: the chat reserves gutter space
   // only for a card that actually has content, at its fitted width.
 
-  // Aspect follows the live content, not the desktop: tap frames are
-  // window-cropped (often portrait) while stills cover the full workspace.
-  const frameDims = tap.frameSize ?? threadState?.screenSize ?? dimensions ?? undefined;
+  // Aspect follows the live content. Both sources are window/tab captures
+  // now, so the card takes the target's shape; the display size is only the
+  // last-resort placeholder before any frame exists.
+  const frameDims = tap.frameSize ?? dimensions ?? threadState?.screenSize ?? undefined;
   const frameAspect =
     frameDims && frameDims.height > 0 ? frameDims.width / frameDims.height : 16 / 10;
   const fitWidth = computerPreviewCardFitWidth({
@@ -202,22 +190,6 @@ function ComputerPreviewPopoverCard(props: {
     cardHeightPx: frameDims ? fitWidth / frameAspect : fitWidth * 0.625,
   });
   const clampedFloating = float.position;
-  const containRect = useMemo(
-    () =>
-      frameDims
-        ? computerContainRect({
-            source: frameDims,
-            containerWidth: viewportSize.width,
-            containerHeight: viewportSize.height,
-          })
-        : null,
-    [frameDims, viewportSize.width, viewportSize.height],
-  );
-  const cursorPosition = computerCursorPosition({
-    cursor: threadState?.cursor,
-    screenSize: frameDims,
-    containRect,
-  });
   // The card (and its canvas) stays mounted from arm through task end so both
   // frame sources always have a decode target; visibility alone is gated on
   // content, and hidden/ended keep rendering closed for the exit animation.
@@ -246,13 +218,11 @@ function ComputerPreviewPopoverCard(props: {
       }
     >
       <ComputerPreviewViewport
-        ref={viewportRef}
         threadId={threadId}
         floating={floating !== undefined}
         frameDims={frameDims}
         frameSource={frameSource}
         streamStatus={streamStatus}
-        cursorPosition={cursorPosition}
         statusLabel={statusLabel}
         agentActive={desktopControl.agentActive}
         float={float}
@@ -290,9 +260,7 @@ function useObservedSize(
   const [size, setSize] = useState({ width: 0, height: 0 });
   const measureParent = options?.offsetParent === true;
   useEffect(() => {
-    const element = measureParent
-      ? (ref.current?.offsetParent as HTMLElement | null)
-      : ref.current;
+    const element = measureParent ? (ref.current?.offsetParent as HTMLElement | null) : ref.current;
     if (!element) return;
     const update = () => {
       setSize((previous) => {
@@ -312,34 +280,29 @@ function useObservedSize(
 }
 
 function ComputerPreviewViewport(props: {
-  readonly ref: RefObject<HTMLDivElement | null>;
   readonly children: ReactNode;
   readonly threadId: ThreadId;
   readonly floating: boolean;
   readonly frameDims: { readonly width: number; readonly height: number } | undefined;
   readonly frameSource: ComputerPreviewFrameSource;
   readonly streamStatus: ReturnType<typeof useComputerImageStream>["status"];
-  readonly cursorPosition: { readonly left: number; readonly top: number } | null;
   readonly statusLabel: string | null;
   readonly agentActive: boolean;
   readonly float: ComputerPreviewFloat;
 }) {
   const {
-    ref,
     children,
     threadId,
     floating,
     frameDims,
     frameSource,
     streamStatus,
-    cursorPosition,
     statusLabel,
     agentActive,
     float,
   } = props;
   return (
     <div
-      ref={ref}
       className={cn(
         "relative w-full overflow-hidden bg-muted/60",
         floating && "cursor-grab touch-none select-none active:cursor-grabbing",
@@ -349,9 +312,7 @@ function ComputerPreviewViewport(props: {
       onPointerUp={float.onFloatPointerEnd}
       onPointerCancel={float.onFloatPointerEnd}
       style={{
-        aspectRatio: frameDims
-          ? `${frameDims.width} / ${frameDims.height}`
-          : FALLBACK_ASPECT_RATIO,
+        aspectRatio: frameDims ? `${frameDims.width} / ${frameDims.height}` : FALLBACK_ASPECT_RATIO,
       }}
     >
       {children}
@@ -371,19 +332,6 @@ function ComputerPreviewViewport(props: {
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center">
           <ComputerPreviewStreamStatus status={streamStatus} />
         </div>
-      ) : null}
-      {cursorPosition && frameSource !== "tap" ? (
-        // The dot stands in for the pane's ghost cursor at this scale; the
-        // violet halo is the same "this is the agent's" signal. It maps
-        // desktop coordinates, so it is suppressed while the tap's
-        // window-cropped frames own the canvas. The positional transition
-        // glides it between updates at the same cadence the native compact
-        // cursor glides on screen, instead of teleporting per event.
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_3px_rgba(124,58,237,0.9),0_0_7px_rgba(124,58,237,0.65)] transition-[left,top] duration-150 ease-out motion-reduce:transition-none"
-          style={{ left: cursorPosition.left, top: cursorPosition.top }}
-        />
       ) : null}
       {statusLabel ? (
         <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%_-_1rem)] items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-[10px] font-medium text-white shadow-sm backdrop-blur-md">
@@ -466,5 +414,9 @@ function ComputerPreviewStreamStatus(props: {
   if (props.status.kind === "error") {
     return <span className="text-[10px] text-muted-foreground">{props.status.message}</span>;
   }
-  return <span className="text-[10px] text-muted-foreground">Waiting for the desktop…</span>;
+  return (
+    <span className="text-[10px] text-muted-foreground">
+      Waiting for the window the agent is using…
+    </span>
+  );
 }

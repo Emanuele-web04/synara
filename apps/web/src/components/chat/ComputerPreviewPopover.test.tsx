@@ -225,6 +225,15 @@ describe("ComputerPreviewPopover", () => {
     expect(markup).toContain("opacity-100");
   });
 
+  it("shows the waiting state, never a picture, when no window frame exists yet", () => {
+    // The stills source is window/tab-scoped and the server publishes nothing
+    // without a target, so the card must present the calm waiting label
+    // instead of drawing anything.
+    const markup = render({ session: session("live"), state: threadState(), frame: false });
+    expect(markup).toContain("Waiting for the window the agent is using…");
+    expect(markup).not.toContain("Waiting for the desktop");
+  });
+
   it("offers only close: the pane is disabled and stopping lives in the composer", () => {
     const markup = render({
       session: session("live"),
