@@ -22,6 +22,7 @@ import {
 } from "@synara/shared/githubRepository";
 
 import { runProcess } from "../../processRunner";
+import { makeKeyedSingleFlightCache } from "../../pullRequests/KeyedSingleFlightCache";
 import { GitHubCliError } from "../Errors.ts";
 import {
   GitHubCli,
@@ -1100,7 +1101,34 @@ export function decodePullRequestListJson(
   );
 }
 
-const makeGitHubCli = Effect.sync(() => {
+// Git status and thread PR badges are re-read on every file-change/turn invalidation, and each
+// read is a GraphQL-backed `gh` call. A short shared TTL keeps those event storms from draining
+// the account's hourly GitHub budget while staying fresher than any client poll interval.
+const PULL_REQUEST_LOOKUP_CACHE_TTL_MS = 20_000;
+const PULL_REQUEST_LOOKUP_CACHE_MAX_ENTRIES = 256;
+
+const makeGitHubCli = Effect.gen(function* () {
+  const pullRequestLookupCache = yield* makeKeyedSingleFlightCache<
+    GitHubPullRequestSummary,
+    GitHubCliError
+  >({
+    maxEntries: PULL_REQUEST_LOOKUP_CACHE_MAX_ENTRIES,
+    ttlMs: PULL_REQUEST_LOOKUP_CACHE_TTL_MS,
+  });
+  const pullRequestHeadListCache = yield* makeKeyedSingleFlightCache<
+    ReadonlyArray<GitHubPullRequestSummary>,
+    GitHubCliError
+  >({
+    maxEntries: PULL_REQUEST_LOOKUP_CACHE_MAX_ENTRIES,
+    ttlMs: PULL_REQUEST_LOOKUP_CACHE_TTL_MS,
+  });
+  // Mutations can change any cached summary (state, draft, base), so they drop everything rather
+  // than guess which references and head selectors alias the mutated pull request.
+  const invalidatePullRequestLookups = Effect.all(
+    [pullRequestLookupCache.invalidateAll, pullRequestHeadListCache.invalidateAll],
+    { discard: true },
+  );
+
   const execute: GitHubCliShape["execute"] = (input) =>
     Effect.tryPromise({
       try: (signal) =>
@@ -2045,7 +2073,25 @@ const makeGitHubCli = Effect.sync(() => {
       }).pipe(Effect.asVoid),
   } satisfies GitHubCliShape;
 
-  return service;
+  // `listOpenPullRequests` stays uncached: it backs the create-PR flow, which must observe the
+  // pull request it just created.
+  return {
+    ...service,
+    listPullRequests: (input) =>
+      pullRequestHeadListCache.get(
+        [input.cwd, input.headSelector, input.limit ?? ""].join("\u0000"),
+        service.listPullRequests(input),
+      ),
+    getPullRequest: (input) =>
+      pullRequestLookupCache.get(
+        [input.cwd, input.reference].join("\u0000"),
+        service.getPullRequest(input),
+      ),
+    runPullRequestAction: (input) =>
+      service.runPullRequestAction(input).pipe(Effect.ensuring(invalidatePullRequestLookups)),
+    createPullRequest: (input) =>
+      service.createPullRequest(input).pipe(Effect.ensuring(invalidatePullRequestLookups)),
+  } satisfies GitHubCliShape;
 });
 
 export const GitHubCliLive = Layer.effect(GitHubCli, makeGitHubCli);

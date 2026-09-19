@@ -83,6 +83,44 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  it.effect("serves repeated pull request lookups from cache until a mutation", () =>
+    Effect.gen(function* () {
+      const processResult = (stdout: string) => ({
+        stdout,
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+      const viewOutput = JSON.stringify({
+        number: 77,
+        title: "Cached lookup",
+        url: "https://github.com/example-org/sample-repo/pull/77",
+        baseRefName: "main",
+        headRefName: "feature/cached-lookup",
+        state: "OPEN",
+      });
+      mockedRunProcess.mockResolvedValue(processResult(viewOutput));
+      const gh = yield* GitHubCli;
+      const lookup = gh.getPullRequest({ cwd: "/repo-cache", reference: "#77" });
+
+      yield* lookup;
+      yield* lookup;
+      expect(mockedRunProcess).toHaveBeenCalledTimes(1);
+
+      mockedRunProcess.mockResolvedValueOnce(processResult(""));
+      yield* gh.createPullRequest({
+        cwd: "/repo-cache",
+        baseBranch: "main",
+        headSelector: "feature/other",
+        title: "Other",
+        bodyFile: "/tmp/body.md",
+      });
+      yield* lookup;
+      expect(mockedRunProcess).toHaveBeenCalledTimes(3);
+    }),
+  );
+
   it.effect("lists any-state pull requests with the shared field list", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({
