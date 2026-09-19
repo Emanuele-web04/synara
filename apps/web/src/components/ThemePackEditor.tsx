@@ -203,6 +203,8 @@ export function ThemePackEditor({
           style={
             {
               ...previewVariables,
+              "--chat-heading-color": theme.chatHeadingColor ?? "initial",
+              "--chat-bold-color": theme.chatBoldColor ?? "initial",
               backgroundColor: "var(--color-background-surface)",
               color: "var(--color-text-foreground)",
               borderColor: "var(--color-border)",
@@ -210,7 +212,12 @@ export function ThemePackEditor({
             } as CSSProperties
           }
         >
-          <span className="text-sm font-medium">{codeThemeLabel}</span>
+          <div className="chat-markdown text-sm">
+            <h3>{codeThemeLabel}</h3>
+            <p>
+              Regular text with <strong>bold emphasis</strong>.
+            </p>
+          </div>
           <span
             className="rounded-md px-3 py-1 text-xs"
             style={{
@@ -271,6 +278,33 @@ export function ThemePackEditor({
             }
           />
         </ThemeRow>
+
+        {(
+          [
+            ["chatHeadingColor", "Chat headings"],
+            ["chatBoldColor", "Bold text"],
+          ] as const
+        ).map(([key, label]) => (
+          <ThemeRow key={key} label={label}>
+            <span
+              className="text-[11px] text-muted-foreground"
+              aria-label={`${titleLabel} ${label.toLowerCase()} mode`}
+            >
+              {theme[key] == null ? "Follow theme" : "Custom"}
+            </span>
+            <ColorPill
+              color={theme[key] ?? theme.ink}
+              ariaLabel={`${titleLabel} ${label.toLowerCase()} color`}
+              onChange={(next) => updateThemePack(variant, { [key]: next })}
+              onReset={
+                theme[key] != null ? () => updateThemePack(variant, { [key]: null }) : undefined
+              }
+            />
+          </ThemeRow>
+        ))}
+        <p className="px-4 py-3 text-xs text-muted-foreground">
+          Custom text colors stay when switching presets. Reset a color to follow the theme.
+        </p>
 
         <ThemeRow label="UI font">
           <div className="flex flex-col items-end gap-1">
