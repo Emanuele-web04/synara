@@ -228,6 +228,11 @@ try {
     // flag signature is also killed at exec on recent macOS (the staged
     // binary must present a plain adhoc signature).
     run("codesign", ["--force", "--sign", "-", join(destination, "cua-driver")]);
+    // Signing rewrites the executable bytes, so record the digest of the
+    // final staged file. The reuse path verifies binarySha256 against exactly
+    // these bytes; recording the pre-sign digest forced every consumer to
+    // patch provenance.json and re-sign by hand.
+    provenance.binarySha256 = digest(await readFile(join(destination, "cua-driver")));
   }
   await writeFile(join(destination, "provenance.json"), JSON.stringify(provenance, null, 2) + "\n");
   await copyFile(
