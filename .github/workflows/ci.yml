@@ -347,6 +347,7 @@ jobs:
         run: >-
           bun run --cwd apps/server test
           src/platform/processTreeController.test.ts
+          src/platform/effectProcessSignals.test.ts
           src/provider/supervisedProcessTeardown.test.ts
           src/provider/providerStartupLifecycle.test.ts
           src/processRunner.test.ts

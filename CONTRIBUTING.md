@@ -78,6 +78,21 @@ typing, undo, and redo with the real editor browser tests before removing it:
 bun run --cwd apps/web test:browser src/components/codeEditor/CodeEditorPane.browser.tsx
 ```
 
+The pinned `@effect/platform-node-shared` patch preserves Windows spawn options
+and rejects invalid PIDs before converting child handles into process-group
+signals. Valid groups may outlive their leader; cleanup must continue to reach
+those descendants. When updating Effect, keep these behaviors and run
+`apps/server/src/platform/effectProcessSignals.test.ts` against the installed
+runtime, including its Windows cases.
+
+Process-tree teardown captures POSIX start times and Windows creation times for
+checking descendants during delayed cleanup and exit verification. This rejects
+observed PID reuse without depending on stable command-line text. POSIX start
+times have second resolution and observation followed by signaling is not atomic;
+these checks are not proof of arbitrary PID ownership. Root signaling still
+requires the caller to own the live process lifecycle. Direct owned-child
+cancellation must work even when external process-table tools are unavailable.
+
 ## Be Realistic
 
 Opening a PR does not create an obligation on our side.
