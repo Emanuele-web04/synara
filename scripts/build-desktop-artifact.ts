@@ -15,6 +15,7 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+import { DESKTOP_ARTIFACT_NAME_TEMPLATE } from "./lib/desktop-artifact-names.ts";
 import {
   createDesktopPlatformBuildConfig,
   MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -728,7 +729,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const buildConfig: Record<string, unknown> = {
     appId: SYNARA_PRODUCTION_BUNDLE_ID,
     productName,
-    artifactName: "Synara-${version}-${arch}.${ext}",
+    artifactName: DESKTOP_ARTIFACT_NAME_TEMPLATE,
     directories: {
       buildResources: "apps/desktop/resources",
     },
