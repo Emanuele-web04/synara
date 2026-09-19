@@ -404,16 +404,16 @@ describe("computer_launch_app hidden", () => {
     expect(refused.isError).toBe(true);
     expect(JSON.stringify(resultJson(refused))).toContain("foreground_not_requested");
     expect(backend.callsFor("launchApp")).toEqual([]);
-    // The hidden default still works: only the visible opt-out is gated.
-    const hidden = await call("computer_launch_app", {
+    // The off-screen path still works: only the visible opt-out is gated.
+    const offScreen = await call("computer_launch_app", {
       app: "TextEdit",
       wait_for_window: false,
     });
-    expect(hidden.isError).not.toBe(true);
+    expect(offScreen.isError).not.toBe(true);
     expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["TextEdit", [], { hidden: true }]);
   });
 
-  it("defaults an ordinary launch to the invisible workspace", async () => {
+  it("defaults an ordinary launch off-screen", async () => {
     const approval = vi.fn(async () => true);
     const backend = new FakeComputerBackend();
     const { call } = await setup(backend, approval);
@@ -422,8 +422,8 @@ describe("computer_launch_app hidden", () => {
       wait_for_window: false,
     });
     expect(result.isError).not.toBe(true);
-    // No `hidden` in the call still resolves hidden at the manager seam —
-    // invisible-by-default is the product behavior, visibility is opt-out.
+    // No `hidden` in the call still resolves off-screen at the manager seam;
+    // only the doctrine text moved out of the gateway.
     expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["TextEdit", [], { hidden: true }]);
     const launched = (await backend.listWindows()).find((window) => window.appName === "TextEdit");
     expect(launched).toMatchObject({ focused: false, visible: false });

@@ -362,7 +362,7 @@ function augmentBrowserResult(
     if (name !== "computer_browser_prepare" || preparedPid === undefined) return result;
     return withAppendedText(
       result,
-      `ids: prepared_pid=${preparedPid} (a bind key, not a target or tab id); next: computer_browser_state {pid: ${preparedPid}, window_id} — the bind result names target_id and each tab's tab_id.`,
+      `ids: prepared_pid=${preparedPid} (a bind key, not a target or tab id); next: computer_browser_state {pid: ${preparedPid}} — a driver-owned headless bind takes pid alone (window_id only for a native browser window); the bind result names target_id and each tab's tab_id.`,
     );
   }
   const tabs = browserTabsFrom(structuredRecord);
@@ -457,7 +457,8 @@ export function makeAgentGatewayComputerBrowserTools(
           code: "browser_tab_required",
           message:
             `no tab_id was given and this thread has no bind result for target "${targetId}" ` +
-            `to resolve one from. Bind the browser first with computer_browser_state (pid + window_id); ` +
+            `to resolve one from. Bind the browser first with computer_browser_state (pid alone for ` +
+            `a driver-owned headless browser; pid + window_id for a native window); ` +
             `its result lists every tab's tab_id.`,
         },
       };
@@ -637,18 +638,19 @@ export function makeAgentGatewayComputerBrowserTools(
     entry(
       "computer_browser_state",
       "Read browser state",
-      `Observe or bind a browser through the desktop driver's CDP route. Two modes: pass pid + window_id of a prepared browser to bind it (after computer_browser_prepare), or pass the target_id + tab_id it minted to snapshot one tab — a semantic outline, element refs, and optionally a viewport screenshot (include_screenshot). The bind result is explicit: target_id names the bound browser; each entry of tabs carries its own tab_id. tab_id may be omitted when the target has one (or one active) tab — the gateway resolves it; an ambiguous target refuses with its tab listing. Element refs stay valid until that tab navigates or a newer snapshot supersedes them. This is NOT the integrated browser_* surface: use it when the browser was launched or attached through the driver.`,
+      `Observe or bind a browser through the desktop driver's CDP route. Two modes: pass pid to bind a prepared browser — window_id only for a native browser window; a driver-owned browser launched by computer_browser_prepare is headless and binds from pid alone with binding_route "driver_owned_headless" — or pass the target_id + tab_id it minted to snapshot one tab: a semantic outline, element refs, and optionally a viewport screenshot (include_screenshot). The bind result is explicit: target_id names the bound browser; each entry of tabs carries its own tab_id. tab_id may be omitted when the target has one (or one active) tab — the gateway resolves it; an ambiguous target refuses with its tab listing. Element refs stay valid until that tab navigates or a newer snapshot supersedes them. This is NOT the integrated browser_* surface: use it when the browser was launched or attached through the driver.`,
       {
         type: "object",
         properties: {
           pid: {
             type: "integer",
             description:
-              "Browser process id to bind (from computer_list_windows / prepare result).",
+              "Browser process id to bind: the prepare result's prepared_pid for a driver-owned headless browser, or a native browser window's process.",
           },
           window_id: {
             type: "integer",
-            description: "Native window id owned by pid — required with pid for bind mode.",
+            description:
+              "Native window id owned by pid — bind mode for a native browser window. Omit it for a driver-owned headless browser (prepared with an isolated profile); the bind is minted from the driver's own CDP endpoint.",
           },
           target_id: TARGET_ID_PROPERTY,
           tab_id: TAB_ID_PROPERTY,
@@ -681,7 +683,7 @@ export function makeAgentGatewayComputerBrowserTools(
     entry(
       "computer_browser_prepare",
       "Prepare browser",
-      `Prepare a driver-owned isolated Chromium for CDP control (profile.mode "isolated_new" or "isolated_named" with allow_launch true), or detect an existing debug endpoint on pid (+ window_id). Returns the endpoint's prepared_pid for binding via computer_browser_state. Attaching to an existing user profile (strategy existing_profile) requires a consent grant this embedding does not host and is refused by the driver with browser_consent_required.`,
+      `Prepare a driver-owned isolated Chromium for CDP control (profile.mode "isolated_new" or "isolated_named" with allow_launch true), or detect an existing debug endpoint on pid (+ window_id). The driver-owned launch is headless by default — no window and no Dock entry — and windowed:true is the explicit opt-in to a visible browser window. For multi-step work prefer "isolated_named": the named profile survives the browser process restarting, while an "isolated_new" profile starts empty every launch. Returns the endpoint's prepared_pid for binding via computer_browser_state. Attaching to an existing user profile (strategy existing_profile) requires a consent grant this embedding does not host and is refused by the driver with browser_consent_required.`,
       {
         type: "object",
         properties: {
@@ -694,10 +696,20 @@ export function makeAgentGatewayComputerBrowserTools(
             type: "boolean",
             description: "Permit launching a separate driver-owned isolated Chromium.",
           },
+          windowed: {
+            type: "boolean",
+            description:
+              "Opt in to a visible windowed isolated launch. Default false: the driver-owned isolated browser runs headless with no window and no Dock entry. Set true only when a visible browser window is explicitly needed.",
+          },
           profile: {
             type: "object",
             properties: {
-              mode: { type: "string", enum: ["isolated_new", "isolated_named"] },
+              mode: {
+                type: "string",
+                enum: ["isolated_new", "isolated_named"],
+                description:
+                  '"isolated_named" keeps a named profile across browser restarts — recommended for multi-step work such as a cart; "isolated_new" starts from an empty profile every launch.',
+              },
               name: {
                 type: "string",
                 description: "Required for isolated_named; 1-64 path-safe ASCII characters.",
@@ -746,7 +758,7 @@ export function makeAgentGatewayComputerBrowserTools(
     entry(
       "computer_browser_type",
       "Type into browser field",
-      `Type text into an element by ref inside a bound tab. "insert_text" (default) is a bulk insert; "keystrokes" sends per-character key events. Set replace true to select the field's whole content first — with empty text this clears it.`,
+      `Type text into an element by ref inside a bound tab. "insert_text" (default) is a bulk insert; "keystrokes" sends per-character key events. input_route "trusted" (default) uses CDP input; "dom_event" is the background-safe synthetic insertion (insert_text mode only) that cannot raise a standalone browser window — dispatch is read back from the element, so verify the page's own postcondition with a fresh snapshot. Set replace true to select the field's whole content first — with empty text this clears it.`,
       {
         type: "object",
         properties: {
@@ -755,6 +767,12 @@ export function makeAgentGatewayComputerBrowserTools(
           ref: REF_PROPERTY,
           text: { type: "string", description: "Text to type." },
           mode: { type: "string", enum: ["insert_text", "keystrokes"] },
+          input_route: {
+            type: "string",
+            enum: ["trusted", "dom_event"],
+            description:
+              '"trusted" (default): CDP Input events. "dom_event": synthetic full-background DOM insertion for input, textarea, and contenteditable refs (insert_text only); dispatch is proven by a live element read-back, not by the application accepting the text — verify with a fresh snapshot.',
+          },
           replace: {
             type: "boolean",
             description: "Select existing field content first so text replaces it.",

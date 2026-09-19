@@ -123,6 +123,37 @@ describe("computer_browser_* gateway tools", () => {
     }
   });
 
+  it("states the rev-30/31 browser contract: headless default, pid-only bind, isolated_named", () => {
+    const tools = makeAgentGatewayComputerBrowserTools({
+      manager: new ComputerManager({ backend: new FakeComputerBackend({ browser: true }) }),
+    });
+    const byName = new Map(tools.map((tool) => [tool.definition.name, tool]));
+    const prepare = byName.get("computer_browser_prepare");
+    expect(prepare?.definition.description).toContain("headless by default");
+    expect(prepare?.definition.description).toContain("windowed:true");
+    expect(prepare?.definition.description).toContain("isolated_named");
+    // The existing-profile attach wording stays the consent-gated contract.
+    expect(prepare?.definition.description).toContain("browser_consent_required");
+    const prepareSchema = prepare?.definition.inputSchema as {
+      properties?: Record<string, unknown>;
+    };
+    expect(prepareSchema.properties?.windowed).toBeDefined();
+    const state = byName.get("computer_browser_state");
+    expect(state?.definition.description).toContain("driver_owned_headless");
+    const stateSchema = state?.definition.inputSchema as {
+      properties?: { window_id?: { description?: string } };
+    };
+    expect(stateSchema.properties?.window_id?.description).toContain(
+      "Omit it for a driver-owned headless browser",
+    );
+    expect(stateSchema.properties?.window_id?.description).not.toContain("required with pid");
+    const type = byName.get("computer_browser_type");
+    const typeSchema = type?.definition.inputSchema as {
+      properties?: { input_route?: { enum?: readonly string[] } };
+    };
+    expect(typeSchema.properties?.input_route?.enum).toEqual(["trusted", "dom_event"]);
+  });
+
   it("covers every gateway name with a driver name", () => {
     expect(Object.keys(COMPUTER_BROWSER_DRIVER_NAMES).toSorted()).toEqual(
       [...COMPUTER_BROWSER_TOOL_NAMES].toSorted(),
@@ -554,6 +585,7 @@ describe("browser id ergonomics", () => {
     });
     expect(textOf(prepared)).toContain("prepared_pid=33526");
     expect(textOf(prepared)).toContain("computer_browser_state");
+    expect(textOf(prepared)).toContain("takes pid alone");
     for (const name of [
       "computer_browser_navigate",
       "computer_browser_click",

@@ -194,7 +194,24 @@ describe("agent gateway computer tools", () => {
     expect(notes).toContain("browser_tab_not_found");
     expect(notes).toContain("never target_id");
     expect(notes).toContain("never tell the user computer control is off");
+    // L23: the hidden-launch choreography is deleted from the shared block.
+    expect(notes).not.toContain("relaunch visible");
+    expect(notes).not.toContain("unhide with computer_set_app_visibility");
     await manager.dispose();
+  });
+
+  it("presents launch hidden as an explicit posture, not an invisible-workspace doctrine", async () => {
+    const { byName, manager } = await setup();
+    try {
+      const hidden = schemaPropertyDescription(byName, "computer_launch_app", "hidden");
+      expect(hidden).toContain("Launch posture");
+      expect(hidden).toContain("foreground_not_requested");
+      expect(hidden).not.toContain("Defaults to true");
+      expect(hidden).not.toContain("agent launches stay invisible");
+      expect(hidden).not.toContain("invisible workspace");
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("attaches list-windows guidance to a null-window launch result", async () => {
@@ -215,15 +232,19 @@ describe("agent gateway computer tools", () => {
       const text = JSON.stringify(resultJson(result));
       expect(text).toContain("computer_list_windows");
       expect(text).toContain("never launch again");
+      // The old relaunch-visible escape hatch is gone; the browser route is
+      // the only alternative the result names.
+      expect(text).not.toContain("relaunch visible");
+      expect(text).toContain("computer_browser_prepare");
     } finally {
       await manager.dispose();
     }
   });
 
-  it("attaches the hidden-window branch to a hidden launch result", async () => {
-    // The Helium dead end starts here: activation cannot reach a hidden
-    // window and kill cannot remove a foreign process, so the result must
-    // name the survivable branch before the agent touches it.
+  it("leaves an off-screen launch result without unhide choreography", async () => {
+    // L23: a hidden launch is an ordinary off-screen workspace now, so the
+    // result must not route the model into set_app_visibility or a visible
+    // relaunch to make the app usable.
     const { call, manager } = await setup();
     try {
       const result = await call("computer_launch_app", {
@@ -233,7 +254,9 @@ describe("agent gateway computer tools", () => {
       });
       expect(result.isError).not.toBe(true);
       const text = JSON.stringify(resultJson(result));
-      expect(text).toContain("browser_prepare with allow_launch");
+      expect(text).not.toContain("unhide");
+      expect(text).not.toContain("relaunch visible");
+      expect(text).not.toContain("set_app_visibility");
     } finally {
       await manager.dispose();
     }
@@ -3196,7 +3219,7 @@ describe("computer never-raise gate", () => {
     }
   });
 
-  it("refuses a visible launch without authorization, and allows the hidden default", async () => {
+  it("refuses a visible launch without authorization, and keeps the off-screen path ungated", async () => {
     const backend = new FakeComputerBackend();
     const approval = vi.fn(async () => true);
     const { call, manager } = await setup(backend, approval, refusing);
@@ -3210,11 +3233,11 @@ describe("computer never-raise gate", () => {
       expect(JSON.stringify(resultJson(refused))).toContain("foreground_not_requested");
       expect(backend.callsFor("launchApp")).toEqual([]);
 
-      const hidden = await call("computer_launch_app", {
+      const offScreen = await call("computer_launch_app", {
         app: "TextEdit",
         wait_for_window: false,
       });
-      expect(hidden.isError).not.toBe(true);
+      expect(offScreen.isError).not.toBe(true);
       expect(backend.callsFor("launchApp").at(-1)?.args).toEqual([
         "TextEdit",
         [],
@@ -4182,9 +4205,27 @@ describe("second-app consent", () => {
     it("invokes a windowless app's menu from its live pid, attributed to the app", async () => {
       const backend = new FakeComputerBackend({
         apps: [
-          { pid: 6_001, name: "Helium", bundleId: "net.imput.helium", running: true, active: false },
-          { pid: 1_001, name: "Terminal", bundleId: "org.kde.konsole", running: true, active: true },
-          { pid: 1_002, name: "Calculator", bundleId: "org.kde.kcalc", running: true, active: false },
+          {
+            pid: 6_001,
+            name: "Helium",
+            bundleId: "net.imput.helium",
+            running: true,
+            active: false,
+          },
+          {
+            pid: 1_001,
+            name: "Terminal",
+            bundleId: "org.kde.konsole",
+            running: true,
+            active: true,
+          },
+          {
+            pid: 1_002,
+            name: "Calculator",
+            bundleId: "org.kde.kcalc",
+            running: true,
+            active: false,
+          },
         ],
       });
       const approval = vi.fn(
@@ -4205,7 +4246,10 @@ describe("second-app consent", () => {
         expect(result.isError).not.toBe(true);
         // The app name resolved to its live pid, and no window id rides the
         // dispatch — the driver's windowless contract, exactly.
-        const dispatched = backend.callsFor("invokeMenu").at(-1)?.args[0] as Record<string, unknown>;
+        const dispatched = backend.callsFor("invokeMenu").at(-1)?.args[0] as Record<
+          string,
+          unknown
+        >;
         expect(dispatched).toEqual({ pid: 6_001 });
         expect(dispatched).not.toHaveProperty("window_id");
         expect(resultJson(result)).not.toHaveProperty("windowId");
@@ -4253,8 +4297,20 @@ describe("second-app consent", () => {
     it("runs a windowless app menu step through computer_run", async () => {
       const backend = new FakeComputerBackend({
         apps: [
-          { pid: 6_001, name: "Helium", bundleId: "net.imput.helium", running: true, active: false },
-          { pid: 1_001, name: "Terminal", bundleId: "org.kde.konsole", running: true, active: true },
+          {
+            pid: 6_001,
+            name: "Helium",
+            bundleId: "net.imput.helium",
+            running: true,
+            active: false,
+          },
+          {
+            pid: 1_001,
+            name: "Terminal",
+            bundleId: "org.kde.konsole",
+            running: true,
+            active: true,
+          },
         ],
       });
       const { call, manager } = await setup(

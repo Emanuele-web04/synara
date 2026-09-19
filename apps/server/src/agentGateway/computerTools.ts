@@ -156,15 +156,7 @@ const COMPUTER_TOOL_REFRESH_GUIDANCE =
  * matters, and the description alone does not stop a relaunch loop.
  */
 const LAUNCH_NULL_WINDOW_GUIDANCE =
-  "No window yet — this is not a failure. Call computer_list_windows with the app name next; never launch again. For a browser task that needs clicks, either relaunch visible with hidden:false or drive the hidden app through computer_browser_prepare with allow_launch.";
-
-/**
- * Attached to every hidden-window launch result: a hidden window is where
- * the Helium dead end starts — activation cannot reach it and a foreign
- * process cannot be killed — so the result must name the survivable branch.
- */
-const LAUNCH_HIDDEN_WINDOW_GUIDANCE =
-  "The window is hidden: activation cannot reach hidden windows and kill cannot remove a foreign process. Either drive it through computer_browser_prepare with allow_launch and an isolated profile, or unhide with computer_set_app_visibility and verify it turned visible before anything else.";
+  "No window yet — this is not a failure. Call computer_list_windows with the app name next; never launch again. For a browser task that needs clicks, bind the driver-owned headless browser with computer_browser_prepare and computer_browser_state.";
 
 /**
  * Re-exported so a caller reaching for the computer family's gate finds it, and
@@ -2924,9 +2916,9 @@ export function makeAgentGatewayComputerTools(
         const app = readStringArg(step, "app", { required: true })!;
         const appArgs = readStringArrayArg(step, "arguments") ?? [];
         const waitMs = readBooleanArg(step, "wait_for_window") === false ? 0 : 2_000;
-        // Three states: absent lets the manager's invisible-by-default apply,
-        // explicit false is the only way to ask for a visible launch — and it
-        // takes the same never-raise authorization as the standalone tool.
+        // hidden:false is the only visible posture and it takes the same
+        // never-raise authorization as the standalone tool; everything else
+        // stays off the user's screen.
         const hidden = readBooleanArg(step, "hidden");
         return async () => {
           if (hidden === false) {
@@ -2934,7 +2926,7 @@ export function makeAgentGatewayComputerTools(
             if (!authorization.userRequestedVisibleUse) {
               throw new CuaActionError(
                 "The user's task did not ask for this app to be shown; launching it visibly " +
-                  "would take their screen. Launch hidden and work in the background, or ask " +
+                  "would take their screen. Keep the launch in the background, or ask " +
                   "the user to confirm they want to watch.",
                 "not-dispatched",
                 COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
@@ -3863,7 +3855,7 @@ export function makeAgentGatewayComputerTools(
           hidden: {
             type: "boolean",
             description:
-              "Launch the application hidden: its windows are created off-screen, it never activates, takes focus, or switches Spaces, and it still answers the semantic tools (set_value, clicks by label, get_window_state). Defaults to true — agent launches stay invisible; hidden:false shows the app and is refused unless the user's task asked to see it.",
+              "Launch posture. true keeps the app off the user's screen: its windows are created off-screen, nothing activates, focuses or switches Spaces, and the semantic tools (set_value, clicks by label, get_window_state) keep working; omitting the flag does the same. false is a visible launch — the app's window and Dock entry appear — and is refused with foreground_not_requested unless the user's own task asked to see the app.",
           },
         },
         required: ["app"],
@@ -3872,14 +3864,14 @@ export function makeAgentGatewayComputerTools(
       async (args, context) => {
         const hidden = readBooleanArg(args, "hidden");
         // A visible launch is a raise-shaped call: the same never-raise gate
-        // the activate path takes. The hidden default (absent or true) needs
-        // no authorization — it is the invisible workspace.
+        // the activate path takes. The off-screen posture (absent or true)
+        // needs no authorization.
         if (hidden === false) {
           const authorization = await foregroundAuthorization(context);
           if (!authorization.userRequestedVisibleUse) {
             throw new CuaActionError(
               "The user's task did not ask for this app to be shown; launching it visibly " +
-                "would take their screen. Launch hidden and work in the background, or ask " +
+                "would take their screen. Keep the launch in the background, or ask " +
                 "the user to confirm they want to watch.",
               "not-dispatched",
               COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
@@ -3895,9 +3887,6 @@ export function makeAgentGatewayComputerTools(
         );
         if (result.window == null) {
           return { ...result, toolGuidance: LAUNCH_NULL_WINDOW_GUIDANCE };
-        }
-        if (result.window.visible === false) {
-          return { ...result, toolGuidance: LAUNCH_HIDDEN_WINDOW_GUIDANCE };
         }
         return result;
       },
@@ -4063,7 +4052,7 @@ export function makeAgentGatewayComputerTools(
       definition: {
         name: "computer_help",
         description:
-          "The detailed Computer playbook the injected guidance points at: situational chapters on browser-tab driving, menus/frames/app exits, hidden workspaces, form work, and recording/replay. Call with no topic for the index, or pass a topic to read that chapter before touching a surface it covers.",
+          "The detailed Computer playbook the injected guidance points at: situational chapters on browser-tab driving, menus/frames/app exits, explicit visibility controls, form work, and recording/replay. Call with no topic for the index, or pass a topic to read that chapter before touching a surface it covers.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4236,7 +4225,7 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_set_app_visibility",
-        description: `Hide or unhide a running application by pid — every window stays open but leaves the screen, without activating, focusing, or switching Spaces. Hidden apps keep answering the semantic tools, so this is the workspace that stays out of the user's way. The driver reads the hidden state back; confirmed means the readback matched, anything less means observe before relying on it. ${DELIVERY_HINT}`,
+        description: `Hide or unhide a running application by pid — the explicit visibility control for when the user asks to get an app out of the way or bring it back. Every window stays open but leaves the screen, without activating, focusing, or switching Spaces, and the semantic tools keep working. The driver reads the hidden state back; confirmed means the readback matched, anything less means observe before relying on it. ${DELIVERY_HINT}`,
         inputSchema: {
           type: "object",
           properties: {
@@ -4683,7 +4672,7 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_run",
       "Run computer actions",
-      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional element target; "absent":true waits for the element to disappear), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden — launches are hidden by default; hidden:false shows the app), write_clipboard (text), paste (text). Observation steps: get_state (optional window_id + label_contains — returns a fresh elements listing and mints refs usable by later steps), verify_state (window_id + expect predicates). Any step can carry "if_element"/"unless_element" — a target object checked live at step time, skipping the step when its condition fails — and "continue_on_error":true to keep going past its own failure. Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution, and ref targets name elements from the thread's earlier listings. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen, or make the dependency a condition or a get_state step. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
+      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional element target; "absent":true waits for the element to disappear), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden — hidden:false is a visible launch and needs the user's task to have asked to see the app), write_clipboard (text), paste (text). Observation steps: get_state (optional window_id + label_contains — returns a fresh elements listing and mints refs usable by later steps), verify_state (window_id + expect predicates). Any step can carry "if_element"/"unless_element" — a target object checked live at step time, skipping the step when its condition fails — and "continue_on_error":true to keep going past its own failure. Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution, and ref targets name elements from the thread's earlier listings. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen, or make the dependency a condition or a get_state step. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
@@ -5076,7 +5065,7 @@ function hotkeyKeysNote(dialect: ComputerAgentDialect): string {
 
 function launchAppNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? "Names an application the way macOS does. The app launches in the background: it does not come to the foreground, does not take focus and does not switch Spaces — a launch never shows the app, and hidden:false is refused unless the user's own task asked to see it."
+    ? "Names an application the way macOS does. The launch stays off the user's screen: it does not come to the foreground, does not take focus and does not switch Spaces. Pass hidden:false only when the user's own task asked to see the app — a visible launch is refused otherwise."
     : "Names an executable on PATH or a desktop application id.";
 }
 
