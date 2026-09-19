@@ -685,6 +685,13 @@ function effortLevelFromOptions(options: ClaudeQueryOptions | undefined): string
 const THREAD_ID = ThreadId.makeUnsafe("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.makeUnsafe("thread-claude-resume");
 
+// `name` or `name:alias`.
+function fakeSlashCommand(entry: string) {
+  const [name = entry, alias] = entry.split(":");
+  const command = { name, description: name, argumentHint: "" };
+  return alias ? Object.assign(command, { aliases: [alias] }) : command;
+}
+
 describe("Claude Synara harness policy", () => {
   it("advertises scoped MCP additively when credentials are available", () => {
     const text = buildEmbeddedClaudeSystemPromptAppend(true);
@@ -12225,6 +12232,130 @@ describe("Claude explicit native compaction", () => {
           const [completed] = yield* Fiber.join(events);
           assert.equal(completed?.turnId, started.turnId);
           assert.equal(completed?.payload.contextCompacted, true);
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      },
+    );
+  }
+
+  it.effect("keeps concurrent discoveries for different Artifact opt-ins apart", () => {
+    const harness = makeHarness();
+    harness.query.supportedCommandList = [fakeSlashCommand("design"), fakeSlashCommand("slides")];
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const discover = (enableArtifacts: boolean) =>
+        adapter.listCommands!({ provider: "claudeAgent", cwd: "/tmp/project", enableArtifacts });
+      const [off, on] = yield* Effect.all([discover(false), discover(true)], {
+        concurrency: "unbounded",
+      });
+      assert.equal(off.artifacts, "disabled");
+      assert.equal(on.artifacts, "available");
+      // A later lookup still answers for its own opt-in.
+      assert.equal((yield* discover(false)).artifacts, "disabled");
+      assert.equal((yield* discover(true)).artifacts, "available");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("does not borrow a session spawned with a different Artifact opt-in", () => {
+    const harness = makeHarness();
+    harness.query.supportedCommandList = [fakeSlashCommand("design"), fakeSlashCommand("slides")];
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        providerOptions: { claudeAgent: { enableArtifacts: true } },
+      });
+      // The setting was turned off afterwards: a thread-less lookup describes a
+      // new session, which would not get Artifacts.
+      const result = yield* adapter.listCommands!({
+        provider: "claudeAgent",
+        cwd: "/tmp/project",
+        enableArtifacts: false,
+      });
+      assert.equal(result.artifacts, "disabled");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  for (const enableArtifacts of [false, true]) {
+    it.effect(`reports Claude artifact availability (setting ${enableArtifacts})`, () => {
+      // One session per harness: the fake query is shared, so stopping a first
+      // session would end the stream of a second one.
+      const harness = makeHarness();
+      harness.query.supportedCommandList = [fakeSlashCommand("design"), fakeSlashCommand("slides")];
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const discover = () =>
+          adapter.listCommands!({
+            provider: "claudeAgent",
+            cwd: "/tmp/project",
+            threadId: THREAD_ID,
+          });
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          providerOptions: { claudeAgent: { enableArtifacts } },
+        });
+        assert.equal(
+          harness.getLastCreateQueryInput()?.options.env?.CLAUDE_CODE_ARTIFACT,
+          enableArtifacts ? "1" : undefined,
+        );
+        assert.equal((yield* discover()).artifacts, enableArtifacts ? "available" : "disabled");
+        harness.query.supportedCommandList = [fakeSlashCommand("design")];
+        const withoutSlides = yield* discover();
+        assert.equal(withoutSlides.artifacts, enableArtifacts ? "unavailable" : "disabled");
+        // Claude stopped listing `/slides`; it stays discoverable so the composer can
+        // explain why, without duplicating the `/design` Claude still reports.
+        assert.deepEqual(
+          withoutSlides.commands.map((command) => command.name),
+          ["design", "slides"],
+        );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
+
+  for (const { input, native, known } of [
+    { input: "/design a settings screen", native: true, known: ["design"] },
+    { input: "/stats", native: true, known: ["usage:stats"] },
+    { input: "/frontend-design:frontend-design hero", native: true, known: [] },
+    { input: "/etc is an odd directory", native: true, known: [] },
+    { input: "/etc is an odd directory", native: false, known: ["design"] },
+    { input: "/Users/me/app.ts is broken", native: false, known: [] },
+  ]) {
+    it.effect(
+      `keeps native slash commands at the payload start in Plan mode: ${input} (${known.length} known)`,
+      () => {
+        const harness = makeHarness();
+        harness.query.supportedCommandList = known.map(fakeSlashCommand);
+        return Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+          yield* adapter.sendTurn({
+            threadId: THREAD_ID,
+            input,
+            attachments: [],
+            interactionMode: "plan",
+          });
+          const prompt = yield* Effect.promise(() =>
+            harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]().next(),
+          );
+          const text = prompt.value?.message.content[0]?.text ?? "";
+          if (native) {
+            assert.equal(text, input);
+          } else {
+            assert.include(text, "Synara plan mode is active.");
+          }
         }).pipe(
           Effect.provideService(Random.Random, makeDeterministicRandomService()),
           Effect.provide(harness.layer),

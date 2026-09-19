@@ -346,6 +346,9 @@ export function providerCommandsQueryOptions(input: {
     binaryPath: input.binaryPath ?? null,
     serverUrl: input.serverUrl ?? null,
     experimentalWebSockets: input.experimentalWebSockets ?? null,
+    // A Claude session fixes its Artifact opt-in at spawn, so two threads can report
+    // different commands and `artifacts` states; other providers answer per workspace.
+    threadId: input.provider === "claudeAgent" ? (input.threadId ?? null) : null,
   });
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.commands(
@@ -373,7 +376,14 @@ export function providerCommandsQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: 30_000,
-    placeholderData: (previous) => previous ?? EMPTY_COMMANDS_RESULT,
+    // Keeps the menu populated while refetching. `artifacts` is dropped because the
+    // previous entry can belong to another Claude thread, whose session may have a
+    // different Artifact opt-in; the warning waits for this thread's own answer.
+    placeholderData: (previous) => {
+      if (!previous) return EMPTY_COMMANDS_RESULT;
+      const { artifacts: _previousArtifacts, ...rest } = previous;
+      return rest;
+    },
   });
 }
 

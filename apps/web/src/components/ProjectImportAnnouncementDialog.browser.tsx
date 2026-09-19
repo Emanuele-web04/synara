@@ -5,6 +5,7 @@ import { page } from "vitest/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
 import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
@@ -28,6 +29,7 @@ beforeEach(() => {
     startupGateSettled: true,
   });
   useProjectImportDialogStore.setState({ isOpen: false, initialProviders: null });
+  useAnnouncementSheetSlotStore.setState({ owner: null, handedOff: false });
 });
 afterEach(() => {
   for (const client of clients.splice(0)) client.clear();

@@ -214,6 +214,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     canOfferSideCommand: false,
     canOfferExportCommand: false,
     surfaceAppSlashCommands: KANBAN_SUPPORTED_APP_SLASH_COMMANDS,
+    providerArtifacts: providerCommandsQuery.data?.artifacts,
     dynamicAgents,
   });
   const composerMenuItems = rawComposerMenuItems.filter(

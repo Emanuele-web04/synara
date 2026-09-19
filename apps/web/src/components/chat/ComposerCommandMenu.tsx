@@ -14,6 +14,7 @@ import {
   BotIcon,
   BrainIcon,
   ChangesIcon,
+  CircleAlertIcon,
   DeviceLaptopIcon,
   GitBranchIcon,
   type LucideIcon,
@@ -22,11 +23,13 @@ import {
   TerminalIcon,
   WorktreeIcon,
 } from "~/lib/icons";
+import { type ProviderCommandNotice } from "~/lib/claudeArtifactCommands";
 import { slashCommandIcon } from "~/lib/slashCommandIcons";
 import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { ProviderIcon } from "../ProviderIcon";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME,
   COMPOSER_MENU_PANEL_GROUP_LABEL_CLASS_NAME,
@@ -116,6 +119,12 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
 }
 
 function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
+  // The menu is driven from the composer, so focus never reaches the warning icon:
+  // the row itself has to say why the command will not work.
+  if (item.type === "provider-native-command" && item.notice) {
+    return item.notice.summary;
+  }
+
   if (item.type === "slash-command" || item.type === "provider-native-command") {
     return item.description;
   }
@@ -166,6 +175,8 @@ export type ComposerCommandItem =
       command: ProviderNativeCommandDescriptor["name"];
       label: string;
       description: string;
+      /** Why the command cannot fully work right now: row text plus a warning tooltip. */
+      notice?: ProviderCommandNotice | null;
     }
   | {
       id: string;
@@ -297,6 +308,25 @@ export function groupCommandItems(
   return groups;
 }
 
+function CommandNoticeBadge(props: { notice: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<span role="img" aria-label={props.notice} className="inline-flex items-center" />}
+      >
+        <CircleAlertIcon className="size-3.5 text-warning" />
+      </TooltipTrigger>
+      <TooltipPopup
+        side="top"
+        align="end"
+        className="max-w-72 whitespace-normal text-ui-sm leading-snug"
+      >
+        {props.notice}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 export function ComposerCommandMenu(props: {
   items: ComposerCommandItem[];
   resolvedTheme: "light" | "dark";
@@ -324,7 +354,15 @@ export function ComposerCommandMenu(props: {
           ? commandMenuTitle(item)
           : item.label,
       secondary: commandMenuSecondaryText(item),
-      trailing: commandMenuTrailingMeta(item),
+      trailing:
+        item.type === "provider-native-command" && item.notice ? (
+          <span className="inline-flex items-center gap-1.5">
+            {commandMenuTrailingMeta(item)}
+            <CommandNoticeBadge notice={item.notice.detail} />
+          </span>
+        ) : (
+          commandMenuTrailingMeta(item)
+        ),
     })),
   }));
   const itemsById = new Map(props.items.map((item) => [item.id, item]));

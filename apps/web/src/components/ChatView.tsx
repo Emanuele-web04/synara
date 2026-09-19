@@ -1859,6 +1859,7 @@ export default function ChatView({
     isLocalFolderBrowserOpen,
     providerPlugins,
     providerNativeCommands,
+    providerArtifacts,
     providerSkills,
     workspaceEntries,
     effectiveComposerTrigger,
@@ -2043,6 +2044,7 @@ export default function ChatView({
     canOfferForkCommand,
     canOfferSideCommand,
     canOfferExportCommand,
+    providerArtifacts,
     dynamicAgents,
     threadMentionSources: {
       threads: composerThreadSummaries,

@@ -197,6 +197,17 @@ keeps the message on hold. If delivery is uncertain, Synara does not automatical
 See [cache recovery behavior and verification](claude-cache-recovery.md) for the implementation
 boundaries and remaining live validation.
 
+### Claude Artifacts, `/design` and `/slides`
+
+Claude Code keeps [Artifacts](https://code.claude.com/docs/en/artifacts) off by default for Agent
+SDK sessions, so `/design` and `/slides` cannot publish until the host opts in. Turn on **Settings →
+Providers → Claude → Artifacts, /design and /slides** and start a new session; Synara then launches
+Claude with `CLAUDE_CODE_ARTIFACT=1`. Claude's own requirements still apply: a claude.ai login on a
+Pro, Max, Team, or Enterprise plan, Claude Code 2.1.234 or later, and an organization policy that
+allows Artifacts. While Artifacts are off or unavailable, the composer marks both commands with a
+warning that explains what is missing. Published pages are hosted on claude.ai; Claude returns the
+link in its reply.
+
 ## Switching providers
 
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) allows another provider to

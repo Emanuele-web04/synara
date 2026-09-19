@@ -211,7 +211,18 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      return yield* adapter.listCommands(parsed);
+      if (parsed.provider !== "claudeAgent") {
+        return yield* adapter.listCommands(parsed);
+      }
+      // Server-owned like the session start options, so discovery lists the
+      // same commands a new Claude session will actually have.
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.orElseSucceed(() => DEFAULT_SERVER_SETTINGS),
+      );
+      return yield* adapter.listCommands({
+        ...parsed,
+        enableArtifacts: settings.providers.claudeAgent.enableArtifacts,
+      });
     });
 
   const listPlugins: ProviderDiscoveryServiceShape["listPlugins"] = (input) =>
