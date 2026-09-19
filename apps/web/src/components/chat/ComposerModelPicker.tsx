@@ -95,6 +95,7 @@ type ComposerModelPickerProps = {
   // and/or the effort/status label; both remain available to assistive tech.
   hideModelLabel?: boolean;
   hideStatusLabel?: boolean;
+  contextWindowLabel?: string | null;
   disabled?: boolean;
   // "menu" (default) lists effort as a footer row; "slider" renders the ladder as a
   // stepped slider card in the footer instead.
@@ -382,6 +383,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         provider={activeProvider}
         modelLabel={modelLabel}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
+        contextWindowLabel={activeProvider === "claudeAgent" ? props.contextWindowLabel : null}
         showsFastBadge={showsComposerFastModeBadge(currentTraitSelection)}
         hideModelLabel={props.hideModelLabel}
         hideStatusLabel={props.hideStatusLabel}

@@ -127,9 +127,10 @@ import {
 } from "../lib/composerSend";
 import {
   deriveContextWindowSelectionStatus,
+  deriveComposerContextWindowLabel,
+  deriveAppliedContextWindowSelection,
   deriveCumulativeCostUsd,
   deriveLatestContextWindowState,
-  deriveSelectedContextWindowSnapshot,
 } from "../lib/contextWindow";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import {
@@ -4062,30 +4063,34 @@ export default function ChatView({
     selectedProviderModelOptions,
     selectedRuntimeModel,
   );
-  const runtimeUsageContextWindow = useMemo(
-    () =>
-      activeContextWindowState.invalidatedByCompaction
-        ? null
-        : (activeContextWindow ??
-          (selectedProvider === "claudeAgent"
-            ? deriveSelectedContextWindowSnapshot(composerTraitSelection.contextWindow)
-            : null)),
-    [
-      activeContextWindow,
-      activeContextWindowState.invalidatedByCompaction,
-      composerTraitSelection.contextWindow,
-      selectedProvider,
-    ],
+  const runtimeUsageContextWindow = activeContextWindow;
+  const appliedContextWindowSelection = useMemo(
+    () => deriveAppliedContextWindowSelection(threadActivities),
+    [threadActivities],
   );
   const contextWindowSelectionStatus = useMemo(
     () =>
       deriveContextWindowSelectionStatus({
         activeSnapshot: runtimeUsageContextWindow,
+        ...(selectedProvider === "claudeAgent"
+          ? { appliedValue: appliedContextWindowSelection }
+          : {}),
         selectedValue:
           selectedProvider === "claudeAgent" ? composerTraitSelection.contextWindow : null,
       }),
-    [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
+    [
+      runtimeUsageContextWindow,
+      composerTraitSelection.contextWindow,
+      selectedProvider,
+      appliedContextWindowSelection,
+    ],
   );
+  const composerContextWindowLabel = deriveComposerContextWindowLabel({
+    provider: selectedProvider,
+    model: selectedModel,
+    snapshot: runtimeUsageContextWindow,
+    status: contextWindowSelectionStatus,
+  });
   const composerFooterControlsPlan = useMemo(
     () => composerFooterPlanForTier(composerFooterTier, Boolean(runtimeUsageContextWindow)),
     [composerFooterTier, runtimeUsageContextWindow],
@@ -4110,6 +4115,7 @@ export default function ChatView({
   const composerFooterPlanInputsKey = [
     composerFooterModelLabel,
     composerFooterTraitsSummary.summaryText,
+    composerContextWindowLabel,
     Boolean(runtimeUsageContextWindow),
   ].join(":");
   useLayoutEffect(() => {
@@ -4151,6 +4157,7 @@ export default function ChatView({
     <ComposerModelPicker
       hideModelLabel={!composerFooterControlsPlan.showModelLabel}
       hideStatusLabel={!composerFooterControlsPlan.showTraitsLabel}
+      contextWindowLabel={composerContextWindowLabel}
       effortControl={settings.composerEffortSlider ? "slider" : "menu"}
       provider={selectedProvider}
       model={selectedModelForPickerWithCustomFallback}
