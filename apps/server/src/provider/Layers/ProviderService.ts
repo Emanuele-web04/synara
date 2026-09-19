@@ -14,6 +14,8 @@ import {
   ProviderCompactThreadInput,
   ProviderForkThreadInput,
   ModelSelection,
+  RuntimeMode,
+  TrimmedNonEmptyString,
   NonNegativeInt,
   ThreadId,
   ProviderInterruptTurnInput,
@@ -186,6 +188,17 @@ const ClearSessionResumeCursorInput = Schema.Struct({
 
 const CompletePriorTranscriptBootstrapInput = Schema.Struct({
   threadId: ThreadId,
+});
+
+const ImportExternalThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  provider: Schema.Literals(["codex", "claudeAgent"]),
+  externalThreadId: TrimmedNonEmptyString,
+  sourceCwd: TrimmedNonEmptyString,
+  cwd: Schema.optional(TrimmedNonEmptyString),
+  modelSelection: ModelSelection,
+  providerOptions: Schema.optional(ProviderStartOptions),
+  runtimeMode: RuntimeMode,
 });
 
 type StopRuntimeSession = NonNullable<ProviderServiceShape["stopRuntimeSession"]>;
@@ -2147,6 +2160,158 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         return forked;
       });
 
+    const importExternalThread: NonNullable<ProviderServiceShape["importExternalThread"]> = (
+      rawInput,
+    ) =>
+      Effect.gen(function* () {
+        const operation = "ProviderService.importExternalThread";
+        const input = yield* decodeInputOrValidationError({
+          operation,
+          schema: ImportExternalThreadInput,
+          payload: rawInput,
+        });
+        if (input.modelSelection.provider !== input.provider) {
+          return yield* toValidationError(
+            operation,
+            "Import model and source provider must match.",
+          );
+        }
+        yield* ensureProviderEnabled(input.provider, operation);
+        yield* validateAutoRuntimeMode(operation, input.provider, input.runtimeMode);
+        yield* waitForCurrentInterruptionFence(input.threadId);
+        clearRuntimeIdleTimer(input.threadId);
+        yield* waitForRuntimeIdleStop(input.threadId);
+        return yield* lifecycle.run(input.threadId, (lease) =>
+          Effect.gen(function* () {
+            const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+            if (binding) {
+              const payload = runtimePayloadRecord(binding.runtimePayload);
+              if (
+                binding.provider === input.provider &&
+                payload.importExternalThreadId === input.externalThreadId &&
+                payload.importSourceCwd === input.sourceCwd &&
+                hasResumeCursor(binding.resumeCursor)
+              ) {
+                lease.adopt(binding.lifecycleGeneration ?? "legacy");
+                return { threadId: input.threadId, resumeCursor: binding.resumeCursor };
+              }
+              return yield* toValidationError(
+                operation,
+                "The target conversation already has a different provider binding.",
+              );
+            }
+            yield* ensureProviderEnabled(input.provider, operation);
+            const adapter = yield* registry.getByProvider(input.provider);
+            if (!adapter.forkThread) {
+              return yield* toValidationError(
+                operation,
+                "This provider cannot copy native conversations.",
+              );
+            }
+            // An earlier interrupted import may still own a subprocess even when
+            // it never managed to persist a directory binding.
+            yield* adapter.stopSession(input.threadId);
+            return yield* Effect.gen(function* () {
+              const forkedOption = yield* adapter.forkThread!({
+                threadId: input.threadId,
+                sourceThreadId: ThreadId.makeUnsafe(input.externalThreadId),
+                sourceResumeCursor:
+                  input.provider === "codex"
+                    ? { threadId: input.externalThreadId }
+                    : { resume: input.externalThreadId },
+                sourceCwd: input.sourceCwd,
+                ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+                modelSelection: input.modelSelection,
+                runtimeMode: input.runtimeMode,
+                ...(input.providerOptions !== undefined
+                  ? { providerOptions: input.providerOptions }
+                  : {}),
+                lifecycleGeneration: lease.generation,
+                requireCompletedSource: true,
+              }).pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));
+              if (Option.isNone(forkedOption)) {
+                return yield* toValidationError(
+                  operation,
+                  "The native conversation copy timed out.",
+                );
+              }
+              const forked = forkedOption.value;
+              const nativeCopyId = runtimePayloadRecord(forked.resumeCursor)[
+                input.provider === "codex" ? "threadId" : "resume"
+              ];
+              if (
+                forked.threadId !== input.threadId ||
+                typeof nativeCopyId !== "string" ||
+                nativeCopyId.length === 0 ||
+                nativeCopyId === input.externalThreadId
+              ) {
+                return yield* toValidationError(
+                  operation,
+                  "The provider returned an invalid conversation copy.",
+                );
+              }
+              const session = (yield* adapter.listSessions()).find(
+                (candidate) => candidate.threadId === input.threadId,
+              );
+              if (session && session.provider !== input.provider) {
+                return yield* toValidationError(
+                  operation,
+                  "The copied session belongs to a different provider.",
+                );
+              }
+              const runtimePayload = {
+                importExternalThreadId: input.externalThreadId,
+                importSourceCwd: input.sourceCwd,
+                cwd: input.cwd ?? input.sourceCwd,
+                modelSelection: input.modelSelection,
+                model: input.modelSelection.model,
+                ...(input.providerOptions !== undefined
+                  ? { providerOptions: input.providerOptions }
+                  : {}),
+                activeTurnId: null,
+                lastError: null,
+                lastRuntimeEvent: "provider.thread.imported",
+                lastRuntimeEventAt: new Date().toISOString(),
+              };
+              // Persist the native copy's cursor, even if the runtime is already
+              // stopped (Claude forks transcript files without starting a query).
+              yield* withBindingWriteLock(
+                input.threadId,
+                directory.upsert({
+                  threadId: input.threadId,
+                  provider: input.provider,
+                  runtimeMode: input.runtimeMode,
+                  status: session ? toRuntimeStatus(session) : "stopped",
+                  lifecycleGeneration: lease.generation,
+                  resumeCursor: forked.resumeCursor,
+                  runtimePayload,
+                }),
+              );
+              lease.commit();
+              return forked;
+            }).pipe(
+              Effect.onExit((exit) =>
+                Exit.isSuccess(exit)
+                  ? Effect.void
+                  : adapter.stopSession(input.threadId).pipe(
+                      Effect.timeoutOption(PROVIDER_STOP_SESSION_TIMEOUT),
+                      Effect.flatMap((stopped) =>
+                        Option.isSome(stopped)
+                          ? Effect.void
+                          : Effect.fail(
+                              toValidationError(
+                                operation,
+                                "The failed import runtime did not finish stopping.",
+                              ),
+                            ),
+                      ),
+                    ),
+              ),
+            );
+          }),
+        );
+      });
+
     const sendTurn: ProviderServiceShape["sendTurn"] = (rawInput) =>
       Effect.gen(function* () {
         const parsed = yield* decodeInputOrValidationError({
@@ -3216,6 +3381,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       startSessionWithOutcome,
       completePriorTranscriptBootstrap,
       forkThread,
+      importExternalThread,
       sendTurn,
       steerTurn,
       startReview,

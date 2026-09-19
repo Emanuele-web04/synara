@@ -24,7 +24,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { assessClaudeCache } from "@synara/shared/claudeCache";
 import { Deferred, Effect, Exit, Fiber, Layer, Queue, Random, Stream } from "effect";
 import { TestClock } from "effect/testing";
-import { vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
@@ -11529,7 +11529,101 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 });
 
 describe("ClaudeAdapterLive forkThread", () => {
+  let configDir: string;
+  beforeEach(() => {
+    configDir = mkdtempSync(path.join(os.tmpdir(), "claude-fork-config-"));
+    vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(configDir, { recursive: true, force: true });
+  });
   const SOURCE_SESSION_ID = "7f9c2f60-1111-4a2b-9c3d-8e5f6a7b8c9d";
+
+  it.effect.each(["end_turn", "stop_sequence", "max_tokens", undefined])(
+    "pins external imports to the completed assistant uuid (%s)",
+    (stopReason) => {
+      const forkNativeSession = vi.fn(async () => ({ sessionId: "independent-copy" }));
+      const layer = makeClaudeAdapterLive({
+        forkNativeSession,
+        readNativeSessionMessages: async () => [
+          {
+            type: "assistant",
+            uuid: "completed-uuid",
+            session_id: SOURCE_SESSION_ID,
+            message: {
+              ...(stopReason === undefined ? {} : { stop_reason: stopReason }),
+              content: [{ type: "text", text: "Finished" }],
+            },
+            parent_tool_use_id: null,
+            parent_agent_id: null,
+          },
+        ],
+      }).pipe(
+        Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const copied = yield* adapter.forkThread!({
+          sourceThreadId: THREAD_ID,
+          threadId: RESUME_THREAD_ID,
+          sourceCwd: "/repo/source",
+          sourceResumeCursor: { resume: SOURCE_SESSION_ID },
+          runtimeMode: "full-access",
+          requireCompletedSource: true,
+        });
+        assert.deepEqual(forkNativeSession.mock.calls[0], [
+          SOURCE_SESSION_ID,
+          { dir: "/repo/source", upToMessageId: "completed-uuid" },
+        ]);
+        assert.equal((copied.resumeCursor as { resume: string }).resume, "independent-copy");
+        assert.equal((yield* adapter.listSessions()).length, 0);
+      }).pipe(Effect.provide(layer));
+    },
+  );
+
+  it.effect.each([
+    ...["tool_use", "pause_turn", "max_tokens", null, undefined].map((stopReason) => ({
+      stopReason,
+      content: [{ type: "tool_use", id: "pending" }],
+    })),
+    { stopReason: null, content: [{ type: "text", text: "Still streaming" }] },
+    { stopReason: undefined, content: [] },
+  ])("rejects external import at an unfinished boundary (%j)", ({ stopReason, content }) => {
+    const forkNativeSession = vi.fn(async () => ({ sessionId: "unexpected" }));
+    const layer = makeClaudeAdapterLive({
+      forkNativeSession,
+      readNativeSessionMessages: async () => [
+        {
+          type: "assistant",
+          uuid: "unfinished-uuid",
+          session_id: SOURCE_SESSION_ID,
+          message: { stop_reason: stopReason, content },
+          parent_tool_use_id: null,
+          parent_agent_id: null,
+        },
+      ],
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const result = yield* Effect.result(
+        adapter.forkThread!({
+          sourceThreadId: THREAD_ID,
+          threadId: RESUME_THREAD_ID,
+          sourceCwd: "/repo/source",
+          sourceResumeCursor: { resume: SOURCE_SESSION_ID },
+          runtimeMode: "full-access",
+          requireCompletedSource: true,
+        }),
+      );
+      assert.equal(result._tag, "Failure");
+      assert.equal(forkNativeSession.mock.calls.length, 0);
+    }).pipe(Effect.provide(layer));
+  });
 
   function makeForkLayer(
     forkNativeSession: NonNullable<ClaudeAdapterLiveOptions["forkNativeSession"]>,

@@ -6874,6 +6874,13 @@ describe("ChatView transcript geometry (full app)", () => {
         .element()
         .querySelector<HTMLElement>("[class*='transition-opacity']");
       expect(inlineFolderIcon).not.toBeNull();
+      // Opening the draft autofocuses the composer on a later frame; let that settle so it
+      // cannot steal focus back between focusing the trigger and pressing Tab.
+      await vi.waitFor(() => {
+        expect(page.getByTestId("composer-editor").element().contains(document.activeElement)).toBe(
+          true,
+        );
+      });
       projectPickerTrigger.element().focus();
       await vi.waitFor(() => {
         expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");

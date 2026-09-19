@@ -31,20 +31,84 @@ function readCodexSnapshotMessageText(value: unknown): string {
   return readTranscriptTextParts(candidate.content).join("");
 }
 
+interface CodexImportTurn {
+  readonly id?: string;
+  readonly startedAt?: unknown;
+  readonly completedAt?: unknown;
+  readonly items: ReadonlyArray<unknown>;
+}
+
+type ClaudeImportMessage = ClaudeSessionMessage & {
+  // The SDK omits timestamps; the import reader can recover these by UUID from JSONL.
+  readonly timestamp?: unknown;
+  readonly createdAt?: unknown;
+  readonly updatedAt?: unknown;
+};
+
+interface PendingImportMessage {
+  readonly messageId: MessageId;
+  readonly role: "user" | "assistant";
+  readonly text: string;
+  readonly createdAt: number | undefined;
+  readonly updatedAt: number | undefined;
+}
+
+function readTimestamp(value: unknown): number | undefined {
+  // Codex turn times are Unix seconds; enriched local records may use milliseconds.
+  const milliseconds =
+    typeof value === "number"
+      ? Math.abs(value) < 1e12
+        ? value * 1_000
+        : value
+      : typeof value === "string" && value.trim().length > 0
+        ? Date.parse(value)
+        : Number.NaN;
+  const timestamp = new Date(milliseconds).getTime();
+  return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function finalizeImportedMessages(
+  messages: ReadonlyArray<PendingImportMessage>,
+  importedAt: string,
+): ReadonlyArray<ThreadHandoffImportedMessage> {
+  const firstDatedIndex = messages.findIndex((message) => message.createdAt !== undefined);
+  const firstDatedMessage = messages[firstDatedIndex];
+  let previousTimestamp =
+    firstDatedMessage?.createdAt !== undefined
+      ? firstDatedMessage.createdAt - firstDatedIndex - 1
+      : Date.parse(importedAt) - 1;
+
+  return messages.map((message) => {
+    // Projections sort by timestamp and ID. Distinct milliseconds preserve source order
+    // when native records have absent/equal times, without depending on UUID ordering.
+    const createdAt = Math.max(message.createdAt ?? previousTimestamp + 1, previousTimestamp + 1);
+    previousTimestamp = createdAt;
+    return {
+      messageId: message.messageId,
+      role: message.role,
+      text: message.text,
+      createdAt: new Date(createdAt).toISOString(),
+      updatedAt: new Date(Math.max(createdAt, message.updatedAt ?? createdAt)).toISOString(),
+    };
+  });
+}
+
 export function mapCodexSnapshotMessages(input: {
   readonly importedAt: string;
   readonly threadId: ThreadId;
-  readonly turns: ReadonlyArray<{
-    readonly items: ReadonlyArray<unknown>;
-  }>;
+  readonly turns: ReadonlyArray<CodexImportTurn>;
 }): ReadonlyArray<ThreadHandoffImportedMessage> {
-  return input.turns.flatMap((turn, turnIndex) =>
-    turn.items.flatMap((item, itemIndex) => {
+  const messages = input.turns.flatMap((turn, turnIndex) =>
+    turn.items.flatMap((item, itemIndex): ReadonlyArray<PendingImportMessage> => {
       if (!item || typeof item !== "object") return [];
 
       const candidate = item as {
+        readonly id?: unknown;
         readonly type?: unknown;
         readonly content?: unknown;
+        readonly createdAt?: unknown;
+        readonly updatedAt?: unknown;
+        readonly timestamp?: unknown;
       };
       const role =
         candidate.type === "userMessage"
@@ -55,21 +119,30 @@ export function mapCodexSnapshotMessages(input: {
       if (role === null) return [];
 
       const text = readCodexSnapshotMessageText(candidate);
-      if (text.length === 0) return [];
+      if (text.trim().length === 0) return [];
+      const sourceId =
+        typeof candidate.id === "string" && candidate.id.length > 0
+          ? candidate.id
+          : `${turn.id ?? turnIndex}:${itemIndex}`;
+      const turnTimestamp =
+        (role === "assistant" ? readTimestamp(turn.completedAt) : undefined) ??
+        readTimestamp(turn.startedAt);
 
       return [
         {
-          messageId: MessageId.makeUnsafe(
-            `import:${String(input.threadId)}:${turnIndex}:${itemIndex}`,
-          ),
+          messageId: MessageId.makeUnsafe(`import:${String(input.threadId)}:codex:${sourceId}`),
           role,
           text,
-          createdAt: input.importedAt,
-          updatedAt: input.importedAt,
+          createdAt:
+            readTimestamp(candidate.createdAt) ??
+            readTimestamp(candidate.timestamp) ??
+            turnTimestamp,
+          updatedAt: readTimestamp(candidate.updatedAt),
         },
       ];
     }),
   );
+  return finalizeImportedMessages(messages, input.importedAt);
 }
 
 function readClaudeSessionMessageText(value: unknown): string {
@@ -88,26 +161,28 @@ function readClaudeSessionMessageText(value: unknown): string {
 export function mapClaudeSessionMessages(input: {
   readonly importedAt: string;
   readonly threadId: ThreadId;
-  readonly messages: ReadonlyArray<ClaudeSessionMessage>;
+  readonly messages: ReadonlyArray<ClaudeImportMessage>;
 }): ReadonlyArray<ThreadHandoffImportedMessage> {
-  return input.messages.flatMap((message, messageIndex) => {
-    if (message.type !== "user" && message.type !== "assistant") return [];
+  const messages = input.messages.flatMap(
+    (message, messageIndex): ReadonlyArray<PendingImportMessage> => {
+      if (message.type !== "user" && message.type !== "assistant") return [];
 
-    const text = readClaudeSessionMessageText(message.message).trim();
-    if (text.length === 0) return [];
+      const text = readClaudeSessionMessageText(message.message);
+      if (text.trim().length === 0) return [];
+      const sourceId = message.uuid.length > 0 ? message.uuid : String(messageIndex);
 
-    return [
-      {
-        messageId: MessageId.makeUnsafe(
-          `import:${String(input.threadId)}:claude:${messageIndex}:${message.uuid}`,
-        ),
-        role: message.type,
-        text,
-        createdAt: input.importedAt,
-        updatedAt: input.importedAt,
-      },
-    ];
-  });
+      return [
+        {
+          messageId: MessageId.makeUnsafe(`import:${String(input.threadId)}:claude:${sourceId}`),
+          role: message.type,
+          text,
+          createdAt: readTimestamp(message.timestamp) ?? readTimestamp(message.createdAt),
+          updatedAt: readTimestamp(message.updatedAt),
+        },
+      ];
+    },
+  );
+  return finalizeImportedMessages(messages, input.importedAt);
 }
 
 function readOpenCodeSessionMessageText(parts: ReadonlyArray<unknown>): string {
