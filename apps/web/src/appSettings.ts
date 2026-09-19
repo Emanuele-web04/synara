@@ -673,6 +673,17 @@ export function didProviderEnablementChange(
   );
 }
 
+/** Server settings that change which native commands a provider reports. */
+export function didProviderCommandDiscoverySettingsChange(
+  previous: Pick<ServerSettingsView, "providers"> | undefined,
+  next: Pick<ServerSettingsView, "providers">,
+): boolean {
+  return (
+    previous !== undefined &&
+    previous.providers.claudeAgent.enableArtifacts !== next.providers.claudeAgent.enableArtifacts
+  );
+}
+
 function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,

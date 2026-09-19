@@ -42,8 +42,9 @@ export function AnnouncementSheet(props: {
 }) {
   const sheetRef = useRef<HTMLDivElement>(null);
   // Announcements probe independently at startup; only the slot holder is shown so two
-  // sheets never stack. The other opens once this one closes.
-  const open = useAnnouncementSheetSlot(props.open);
+  // sheets never stack. The other opens once this one is dismissed, but not after a
+  // confirm, whose follow-on flow it would cover.
+  const { open, handOff } = useAnnouncementSheetSlot(props.open);
   return (
     <Dialog
       open={open}
@@ -76,7 +77,13 @@ export function AnnouncementSheet(props: {
             <Button variant="ghost" className={ACTION_BUTTON_CLASS_NAME} onClick={props.onDismiss}>
               {props.dismissLabel}
             </Button>
-            <Button className={ACTION_BUTTON_CLASS_NAME} onClick={props.onConfirm}>
+            <Button
+              className={ACTION_BUTTON_CLASS_NAME}
+              onClick={() => {
+                handOff();
+                props.onConfirm();
+              }}
+            >
               {props.confirmLabel}
             </Button>
           </DialogFooter>

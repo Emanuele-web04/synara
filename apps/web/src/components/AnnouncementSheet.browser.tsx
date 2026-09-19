@@ -17,7 +17,7 @@ function Sheet(props: { title: string }) {
       title={props.title}
       description="Body"
       dismissLabel={`Dismiss ${props.title}`}
-      confirmLabel="Confirm"
+      confirmLabel={`Confirm ${props.title}`}
       onDismiss={() => setOpen(false)}
       onConfirm={() => setOpen(false)}
     />
@@ -26,7 +26,7 @@ function Sheet(props: { title: string }) {
 
 describe("AnnouncementSheet", () => {
   afterEach(() => {
-    useAnnouncementSheetSlotStore.setState({ owner: null });
+    useAnnouncementSheetSlotStore.setState({ owner: null, handedOff: false });
     document.body.innerHTML = "";
   });
 
@@ -44,6 +44,26 @@ describe("AnnouncementSheet", () => {
       await page.getByRole("button", { name: "Dismiss First" }).click();
       await expect.element(page.getByRole("dialog", { name: "Second" })).toBeVisible();
       await expect.element(page.getByRole("dialog", { name: "First" })).not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps waiting announcements closed after a confirm starts its follow-on flow", async () => {
+    const screen = await render(
+      <>
+        <Sheet title="First" />
+        <Sheet title="Second" />
+      </>,
+    );
+    try {
+      await page.getByRole("button", { name: "Confirm First" }).click();
+      await expect.element(page.getByRole("dialog", { name: "First" })).not.toBeInTheDocument();
+      expect(useAnnouncementSheetSlotStore.getState()).toMatchObject({
+        owner: null,
+        handedOff: true,
+      });
+      await expect.element(page.getByRole("dialog", { name: "Second" })).not.toBeInTheDocument();
     } finally {
       await screen.unmount();
     }

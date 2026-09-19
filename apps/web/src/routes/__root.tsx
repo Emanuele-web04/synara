@@ -153,7 +153,11 @@ import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
 import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
-import { didProviderEnablementChange, useAppSettings } from "../appSettings";
+import {
+  didProviderCommandDiscoverySettingsChange,
+  didProviderEnablementChange,
+  useAppSettings,
+} from "../appSettings";
 import { getNavigatorPlatform } from "../lib/utils";
 import {
   getNotifiableProviderUpdateStatuses,
@@ -2400,6 +2404,9 @@ function EventRouter() {
       if (didProviderEnablementChange(previousSettings, payload.settings)) {
         void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
         void invalidateProviderUsageQueries(queryClient);
+      } else if (didProviderCommandDiscoverySettingsChange(previousSettings, payload.settings)) {
+        // Another window toggled it; the local patch path already invalidates its own.
+        void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
       }
       void queryClient.invalidateQueries({
         queryKey: serverSettingsQueryOptions().queryKey,
