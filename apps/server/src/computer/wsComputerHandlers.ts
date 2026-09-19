@@ -125,8 +125,11 @@ export function makeWsComputerHandlers(
 
   const manager = computerService.manager;
   return {
-    [COMPUTER_WS_METHODS.getStatus]: () =>
-      attempt(() => manager.getStatus(), "Failed to read computer status"),
+    [COMPUTER_WS_METHODS.getStatus]: (input) =>
+      attempt(
+        () => manager.getStatus(input.engage === true ? { engage: true } : {}),
+        "Failed to read computer status",
+      ),
     [COMPUTER_WS_METHODS.provision]: () =>
       attempt(() => manager.provision(), "Failed to set up computer control"),
     [COMPUTER_WS_METHODS.getState]: (input) =>

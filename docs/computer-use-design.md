@@ -294,3 +294,47 @@ Installs go under the user's Qt plugin root, `~/.local/lib64/qt6/plugins/kwin/pl
 ### Testing
 
 `tests/pointer_cleanup_test.py` compiles `sendButton`, `releasePressedButtons`, and `clearPointerDelivery` against a fixture and checks that buttons are released before delivery is cleared. `authprobe.cpp` (built with `-DSYNARA_BUILD_AUTH_PROBE=ON`) is the fixture for `computerAuth.integration.test.ts`. Everything about seat delivery, the same-client rule, the guard, the shortcut, and lock refusal needs a live KWin and is exercised against a disposable nested `kwin_wayland`, never the developer's desktop.
+
+## Backend: headless nested KWin
+
+`nestedComputerBackend.ts` is `KWinComputerBackend` pointed at a private `kwin_wayland` this server boots on demand. It is the default on every Wayland desktop that is not KWin or Hyprland, and the only tier there. Reports backend `nested-kwin` and `visibleDesktop: false`, so the Computer pane opens automatically and is the only screen the desktop has.
+
+### Session
+
+`nestedKWinSession.ts` starts a private `dbus-daemon --session --print-address=1 --nofork`, then `kwin_wayland --virtual --xwayland --no-global-shortcuts --socket <name> --width W --height H` on that bus, waits for `org.kde.KWin` to appear, unloads every loaded Synara plugin id, and loads the newest installed one. Size comes from `SYNARA_COMPUTER_NESTED_SIZE` (default 1920x1080, clamped to 64 to 16384 a side).
+
+The compositor's environment:
+
+- `DBUS_SESSION_BUS_ADDRESS` is the private bus.
+- `SYNARA_COMPUTER_USE_OWNS_COMPOSITOR=1` selects the owned-compositor input mode described below.
+- `QT_PLUGIN_PATH` includes the user's plugin root, so no env script or relogin is involved.
+- `DISPLAY` and `WAYLAND_DISPLAY` are dropped, so a virtual compositor can never attach to the session the human is sitting in.
+- `XDG_RUNTIME_DIR` is a private 0700 directory when the server has none, removed on dispose.
+
+With `SYNARA_COMPUTER_USE_OWNS_COMPOSITOR=1` the plugin adds a `SynaraVirtualInputDevice` (a `KWin::InputDevice`) to the compositor's input pipeline instead of creating a second seat. Events then follow KWin's normal routing: focus follows clicks, KWin owns the xkb state, real activation replaces borrowed activation, Xwayland forwards to X11 clients, and the human-activity guard is off because no human sits in that compositor. The plugin still draws the agent cursor and hides KWin's native one so the pointer looks the same on every machine. This mode is enabled only through the environment variable so nothing reachable over the bus can switch it on.
+
+Launched applications get `nestedSessionEnv` on top of the scrubbed `desktopAppEnvironment`: the nested `WAYLAND_DISPLAY`, the private `DBUS_SESSION_BUS_ADDRESS`, `QT_QPA_PLATFORM=wayland`, and `DISPLAY` set to the nested Xwayland display read from `healthJson.xDisplay`. `DISPLAY` is always set, empty when unknown, so an X11 client with nowhere to go fails instead of opening on the human's screen.
+
+The compositor, the bus, Xwayland, and every launched application belong to one process group tied to the server's lifetime. Teardown goes through `platform/supervisedProcessTeardown.ts` (TERM then KILL over the tree), runs from the server's signal handlers as well as `dispose()`, and a startup sweep reaps sessions a crashed server left behind. When either the compositor or the bus exits, the whole session is killed so the backend's bus disconnect fires and the engine sees a real invalidation.
+
+### Lifecycle
+
+Construction and `probeAvailability()` touch nothing. First real use boots the session, installing the plugin into the home directory first when it is missing. `provision()` from Set up is the only step that installs system packages (`kwin`, `wl-clipboard`, and the build toolchain in one `pkexec` authorization); it then provisions the plugin and boots the session.
+
+A dead compositor is never restarted on a timer. The backend reaps the session, reports `dormant`, and the reconnect loop stands down. The next real use (an agent action, a pane attach, Refresh or Set up) boots a fresh session exactly as first use did. `ensureSession` distinguishes "died" from "never booted" so a first-use failure is reported as a failure, not as dormancy. `dispose()` awaits an in-flight boot before tearing down so no compositor leaks.
+
+When the installed plugin generation is incompatible with the installed `kwin_wayland` (after a package upgrade), boot fails with KWin's load refusal, and the backend rebuilds once for that identified failure before booting again. It does not loop.
+
+### Windowed debugging mode
+
+`SYNARA_COMPUTER_NESTED=window` (or `SYNARA_COMPUTER_BACKEND=nested-window`) drops `--virtual` and keeps the host `WAYLAND_DISPLAY`, so the nested desktop maps as an ordinary window on the developer's desktop. It refuses to start without a host `WAYLAND_DISPLAY` rather than falling back to virtual. This mode fails the product rule (a window appears on the host) and exists only for debugging.
+
+### Perception and clipboard
+
+Clipboard works unchanged because wl-clipboard follows `WAYLAND_DISPLAY` into the nested seat. AT-SPI is off by default (`unavailableAtspiReader`); `SYNARA_COMPUTER_NESTED_ATSPI=1` runs the helper on the private bus for hosts that start an accessibility registry there, such as a CI container with no ambient desktop.
+
+### Limits and testing
+
+The nested desktop is isolated from the human's applications and files that are not in the home directory's shared view; it meets the floor, not the bar. Plasma X11 hosts, which own `org.kde.KWin` but cannot load the plugin into a Wayland compositor, are refused with a message saying so.
+
+`nestedKWinSession.integration.test.ts` runs behind `SYNARA_NESTED_KWIN_TEST=1`: boot, geometry, window listing, launch, capture, clipboard round-trip, and health after killing the compositor. Unit tests cover the pure parts (mode and size parsing, environment construction, load planning, dormancy) with fake spawners.

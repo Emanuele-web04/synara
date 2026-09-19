@@ -13,20 +13,51 @@ function exitError(code: number | string, stderr = ""): Error & { code: unknown;
   return Object.assign(new Error(`Command failed`), { code, stderr });
 }
 
+const EVERY_MANAGER = () => true;
+
 describe("planSystemPackageInstall", () => {
-  it("picks the first manager that resolves", () => {
-    const plan = planSystemPackageInstall((command) => command === "dnf");
-    expect(plan?.manager).toBe("dnf");
+  it("packages for the distribution's own manager, not the first one on PATH", () => {
+    // The failure this replaces: a Debian container's dnf, or a pacman
+    // installed on Ubuntu to build an AUR package, decided which manager ran
+    // as root. That is not a failed install — it is a package database being
+    // written by a manager that does not own it.
+    expect(planSystemPackageInstall(EVERY_MANAGER, { id: "debian" })?.manager).toBe("apt-get");
+    expect(planSystemPackageInstall(EVERY_MANAGER, { id: "fedora" })?.manager).toBe("dnf");
+    expect(planSystemPackageInstall(EVERY_MANAGER, { id: "arch" })?.manager).toBe("pacman");
+    expect(planSystemPackageInstall(EVERY_MANAGER, { id: "opensuse-tumbleweed" })?.manager).toBe(
+      "zypper",
+    );
+  });
+
+  it("knows the derivatives by name rather than guessing from a family", () => {
+    expect(planSystemPackageInstall(EVERY_MANAGER, { id: "linuxmint" })?.manager).toBe("apt-get");
+    expect(planSystemPackageInstall(EVERY_MANAGER, { id: "Manjaro" })?.manager).toBe("pacman");
+    expect(planSystemPackageInstall(EVERY_MANAGER, { id: "rocky" })?.manager).toBe("dnf");
+  });
+
+  it("falls back to PATH order for a distribution nobody here has heard of", () => {
+    expect(
+      planSystemPackageInstall((command) => command === "dnf", { id: "gentoo" })?.manager,
+    ).toBe("dnf");
+    expect(planSystemPackageInstall(EVERY_MANAGER, undefined)?.manager).toBe("pacman");
+  });
+
+  it("falls back to PATH when a derivative swapped the manager out from under it", () => {
+    // Named as apt-get, but this machine has no apt-get: an identity that
+    // cannot run is worse than no identity at all.
+    expect(
+      planSystemPackageInstall((command) => command === "dnf", { id: "ubuntu" })?.manager,
+    ).toBe("dnf");
+  });
+
+  it("names the packages for the manager it picked", () => {
+    const plan = planSystemPackageInstall(EVERY_MANAGER, { id: "fedora" });
     expect(plan?.packages).toContain("kwin-wayland");
     expect(plan?.packages).toContain("kwin-devel");
   });
 
-  it("prefers pacman when several managers exist", () => {
-    const plan = planSystemPackageInstall(() => true);
-    expect(plan?.manager).toBe("pacman");
-  });
-
-  it("answers undefined on an unknown distribution", () => {
+  it("answers undefined when no manager it knows is installed at all", () => {
+    expect(planSystemPackageInstall(() => false, { id: "arch" })).toBeUndefined();
     expect(planSystemPackageInstall(() => false)).toBeUndefined();
   });
 

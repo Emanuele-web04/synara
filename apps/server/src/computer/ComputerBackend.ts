@@ -262,6 +262,8 @@ export interface ComputerBackend {
    * user the feature.
    */
   probeAvailability(): Promise<ComputerAvailability>;
+  /** Passive status after engagement, for backends that must not respawn on polling. */
+  statusAvailability?(): Promise<ComputerAvailability>;
   /**
    * Availability as established, not as guessed: this may connect, install, and
    * load whatever the backend needs, so it belongs on paths that are about to

@@ -16,17 +16,15 @@
  * already present, so over-asking costs nothing but covers the second failure
  * in the same authorization.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { constants, accessSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
 import { ComputerBackendError } from "../ComputerBackend.ts";
+import { detectLinuxDistribution, type LinuxDistribution } from "./linuxDistribution.ts";
 
-const execFileAsync = promisify(execFile);
-
-/** apt alone can sit on a slow mirror for a while; the dialog is already answered. */
-const PACKAGE_INSTALL_TIMEOUT_MS = 15 * 60 * 1_000;
+/** Enough of the manager's own transcript to quote a failure, never the whole log. */
+const MAX_INSTALL_OUTPUT_BYTES = 16 * 1024;
 const PKEXEC_DISMISSED_EXIT = 126;
 const PKEXEC_AUTHORIZATION_ERROR_EXIT = 127;
 
@@ -115,14 +113,61 @@ function isExecutableFile(path: string): boolean {
 }
 
 /**
- * The plan for this machine, or `undefined` on a distribution whose package
- * manager none of the plans know. First match wins; a machine with two of
- * these managers installed (Arch with `pacman` plus a container's `dnf`) is
- * ordered so the distribution's native one is found first.
+ * Which package manager each distribution's packages are named for.
+ *
+ * Identity, not PATH order, because PATH order gets this wrong in exactly the
+ * cases that hurt most: a Debian container's `dnf`, a `pacman` installed on
+ * Ubuntu to build an AUR package in a chroot, a workstation with Homebrew-style
+ * side installs. Running the wrong manager as root is not a failed install —
+ * it is a package database being written by a manager that does not own it.
+ *
+ * Derivatives are listed by name rather than resolved through `ID_LIKE`: a
+ * derivative that renames `kwin-wayland` would be silently mispackaged by a
+ * `like` rule, and one listed here has been looked at.
+ */
+const MANAGER_BY_DISTRIBUTION: Readonly<Record<string, string>> = {
+  arch: "pacman",
+  cachyos: "pacman",
+  endeavouros: "pacman",
+  garuda: "pacman",
+  manjaro: "pacman",
+  debian: "apt-get",
+  elementary: "apt-get",
+  kali: "apt-get",
+  linuxmint: "apt-get",
+  neon: "apt-get",
+  pop: "apt-get",
+  raspbian: "apt-get",
+  ubuntu: "apt-get",
+  zorin: "apt-get",
+  almalinux: "dnf",
+  centos: "dnf",
+  fedora: "dnf",
+  nobara: "dnf",
+  rhel: "dnf",
+  rocky: "dnf",
+  opensuse: "zypper",
+  "opensuse-leap": "zypper",
+  "opensuse-tumbleweed": "zypper",
+  sles: "zypper",
+};
+
+/**
+ * The plan for this machine, or `undefined` when no manager any plan knows is
+ * installed at all.
+ *
+ * The distribution's own identity decides first, and only a distribution this
+ * module has never heard of — or one whose named manager is genuinely missing,
+ * which is what a derivative that swapped managers looks like — falls back to
+ * PATH order.
  */
 export function planSystemPackageInstall(
   hasCommand: (command: string) => boolean = (command) => commandOnPath(command),
+  distribution: LinuxDistribution | undefined = detectLinuxDistribution(),
 ): SystemPackagePlan | undefined {
+  const named = distribution ? MANAGER_BY_DISTRIBUTION[distribution.id.toLowerCase()] : undefined;
+  const byIdentity = named ? PLANS.find((plan) => plan.manager === named) : undefined;
+  if (byIdentity && hasCommand(byIdentity.manager)) return byIdentity;
   return PLANS.find((plan) => hasCommand(plan.manager));
 }
 
@@ -140,18 +185,84 @@ export async function installClipboardSystemPackage(
   return installSystemPackages({ ...plan, packages: ["wl-clipboard"] }, run);
 }
 
+export interface PrivilegedRunResult {
+  readonly stdout: string;
+  readonly stderr: string;
+}
+
 export type PrivilegedRunner = (
   command: string,
   args: readonly string[],
-) => Promise<{ readonly stdout: string; readonly stderr: string }>;
+) => Promise<PrivilegedRunResult>;
 
+/** A pkexec exit that carries the manager's own words, in execFile's shape. */
+class PrivilegedRunFailure extends Error {
+  readonly code: number | string;
+  readonly stdout: string;
+  readonly stderr: string;
+
+  constructor(code: number | string, stdout: string, stderr: string) {
+    super(`pkexec exited with ${code}`);
+    this.name = "PrivilegedRunFailure";
+    this.code = code;
+    this.stdout = stdout;
+    this.stderr = stderr;
+  }
+}
+
+/**
+ * Runs one privileged command, streaming its output instead of buffering it.
+ *
+ * Neither a timeout nor an output limit belongs here, and the previous
+ * `execFile` had both. Both kill `pkexec`, and `pkexec` is not the process
+ * doing the work: the package manager runs as root, as a *child* of pkexec, and
+ * it keeps running with its transaction half applied and its lock file held.
+ * The user is then left with a dpkg that demands `--configure -a`, or a pacman
+ * whose db.lck no unprivileged process can remove, and Synara's own message
+ * says the install timed out. There is no deadline this side of the
+ * authorization dialog that is better than letting a slow mirror be slow.
+ *
+ * Output is streamed and only its tail is kept, so a manager that prints a
+ * hundred megabytes of progress cannot grow this process's heap either.
+ */
 const pkexecRunner: PrivilegedRunner = (command, args) =>
-  execFileAsync("pkexec", [command, ...args], {
-    timeout: PACKAGE_INSTALL_TIMEOUT_MS,
-    maxBuffer: 8 * 1024 * 1024,
+  new Promise<PrivilegedRunResult>((resolve, reject) => {
     // pkexec strips the environment anyway; DEBIAN_FRONTEND rides the argv
     // through `env` below when apt is the manager.
+    const child = spawn("pkexec", [command, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = new OutputTail();
+    const stderr = new OutputTail();
+    child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.once("error", (error: NodeJS.ErrnoException) => {
+      reject(new PrivilegedRunFailure(error.code ?? "spawn-failed", stdout.text(), stderr.text()));
+    });
+    child.once("close", (code, signal) => {
+      if (code === 0) {
+        resolve({ stdout: stdout.text(), stderr: stderr.text() });
+        return;
+      }
+      reject(new PrivilegedRunFailure(code ?? signal ?? "unknown", stdout.text(), stderr.text()));
+    });
   });
+
+/** The tail of one stream: enough to quote a failure, bounded against a flood. */
+class OutputTail {
+  private readonly chunks: Buffer[] = [];
+  private bytes = 0;
+
+  push(chunk: Buffer): void {
+    this.chunks.push(chunk);
+    this.bytes += chunk.byteLength;
+    while (this.bytes > MAX_INSTALL_OUTPUT_BYTES && this.chunks.length > 1) {
+      this.bytes -= this.chunks.shift()?.byteLength ?? 0;
+    }
+  }
+
+  text(): string {
+    return Buffer.concat(this.chunks).toString("utf8");
+  }
+}
 
 /**
  * Installs the plan's packages through one polkit authorization, and returns

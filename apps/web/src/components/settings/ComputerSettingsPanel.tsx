@@ -17,7 +17,7 @@ import {
   COMPUTER_PERMISSION_LABELS,
   listComputerPermissions,
 } from "@synara/shared/computerPermissions";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { AppSettingsBinding } from "~/appSettings";
 import {
@@ -34,6 +34,7 @@ import { useProvisionComputer } from "~/hooks/useProvisionComputer";
 import {
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
   computerStatusQueryOptions,
+  refreshComputerStatus,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { SettingResetButton } from "./SettingControls";
@@ -95,6 +96,16 @@ export function ComputerSettingsPanel({
     enabled: active,
     // Health can flip (reconnecting, recovered) while the panel is open.
     refetchInterval: active ? COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS : false,
+  });
+
+  const queryClient = useQueryClient();
+  /**
+   * Refresh is a person asking for the desktop, not the poll looking at it: a
+   * backend that boots on demand has to be told the difference, or Refresh is
+   * the one control that cannot restart the desktop it reports as dormant.
+   */
+  const refresh = useMutation({
+    mutationFn: () => refreshComputerStatus(queryClient),
   });
 
   const status = statusQuery.data;
@@ -210,10 +221,10 @@ export function ComputerSettingsPanel({
             <Button
               size="xs"
               variant="outline"
-              disabled={statusQuery.isFetching || setup.isPending}
-              onClick={() => void statusQuery.refetch()}
+              disabled={refresh.isPending || statusQuery.isFetching || setup.isPending}
+              onClick={() => refresh.mutate()}
             >
-              {statusQuery.isFetching ? "Checking…" : "Refresh"}
+              {refresh.isPending || statusQuery.isFetching ? "Checking…" : "Refresh"}
             </Button>
           </div>
         }

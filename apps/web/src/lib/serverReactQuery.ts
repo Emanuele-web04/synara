@@ -1,5 +1,6 @@
 import type {
   ComputerProvisionResult,
+  ComputerStatusResult,
   ProviderKind,
   ServerConfig,
   ServerConsumeCodexResetCreditInput,
@@ -68,6 +69,27 @@ export function computerStatusQueryOptions() {
     },
     staleTime: LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
   });
+}
+
+/**
+ * The settings panel's Refresh, which is a person asking for the desktop.
+ *
+ * The polled query must stay passive — it runs every ten seconds while the
+ * panel is open, and a poll that boots a compositor is a poll that boots one
+ * nobody asked for. Refresh is the opposite, so it is a separate request that
+ * engages the backend and writes its answer into the same cache the panel
+ * renders from.
+ */
+export async function refreshComputerStatus(
+  queryClient: QueryClient,
+): Promise<ComputerStatusResult> {
+  const api = ensureNativeApi();
+  if (!api.computer) {
+    throw new Error("This app build cannot read computer status.");
+  }
+  const status = await api.computer.getStatus({ engage: true });
+  queryClient.setQueryData(serverQueryKeys.computerStatus(), status);
+  return status;
 }
 
 /** Share one setup request across the settings panel and transcript cards. */

@@ -513,18 +513,26 @@ export class ComputerManager {
    * probe itself failed" is an answer to that question, not a failure to
    * answer it.
    */
-  async getStatus(): Promise<ComputerStatusResult> {
+  async getStatus(options: { readonly engage?: boolean } = {}): Promise<ComputerStatusResult> {
     // Asked by the settings screen. Once something real has engaged the
     // backend it gets the establishing read, because the screen exists to
     // report what the desktop really is — but merely opening settings must
     // not be the thing that installs and loads compositor code on a machine
     // where nothing has ever used the feature, so before first engagement it
     // answers from the side-effect-free probe.
+    //
+    // `engage` is the panel's Refresh button, which is a person asking for the
+    // desktop rather than a timer looking at it. Without it, a backend that
+    // boots on demand answers Refresh from the same passive read the poll uses,
+    // and Refresh becomes the one control that cannot restart the dormant
+    // desktop it is reporting on.
+    if (options.engage) this.engageBackend();
     let availability: ComputerAvailability;
     try {
-      availability = this.backendEngaged
-        ? await this.backend.availability()
-        : await this.backend.probeAvailability();
+      availability =
+        options.engage === true || (this.backendEngaged && !this.backend.statusAvailability)
+          ? await this.backend.availability()
+          : await (this.backend.statusAvailability?.() ?? this.backend.probeAvailability());
     } catch (error) {
       availability = {
         kind: "backend-unavailable",

@@ -308,6 +308,45 @@ describe("ComputerManager and FakeComputerBackend", () => {
     });
   });
 
+  it("makes Refresh a real use of the desktop rather than another look at it", async () => {
+    // A backend that boots its desktop on demand answers the passive read with
+    // "not running"; if Refresh is that same read, it is the one control in the
+    // panel that cannot restart the desktop it is reporting on.
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+
+    await manager.getStatus();
+    expect(backend.calls.map((call) => call.method)).not.toContain("availability");
+
+    await manager.getStatus({ engage: true });
+    expect(backend.calls.map((call) => call.method)).toContain("availability");
+
+    await manager.dispose();
+  });
+
+  it("keeps a status poll passive on a backend with a dedicated status read", async () => {
+    // The panel polls every ten seconds. A poll that establishes the desktop is
+    // a poll that installs a plugin and boots a compositor nobody asked for.
+    const statusReads: number[] = [];
+    const backend = Object.assign(new FakeComputerBackend(), {
+      statusAvailability: async () => {
+        statusReads.push(1);
+        return { kind: "available", backend: "fake" } as const;
+      },
+    });
+    const manager = new ComputerManager({ backend });
+
+    await manager.listWindows();
+    await manager.getStatus();
+    expect(statusReads).toHaveLength(1);
+
+    await manager.getStatus({ engage: true });
+    expect(statusReads).toHaveLength(1);
+    expect(backend.calls.map((call) => call.method)).toContain("availability");
+
+    await manager.dispose();
+  });
+
   it("provisions through the backend and answers with the engaged status", async () => {
     const backend = Object.assign(new FakeComputerBackend(), {
       provision: async () => "Installed the helper.",

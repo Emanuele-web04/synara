@@ -640,7 +640,19 @@ export const ThreadComputerState = Schema.Struct({
 });
 export type ThreadComputerState = typeof ThreadComputerState.Type;
 
-export const ComputerGetStatusInput = Schema.Struct({});
+export const ComputerGetStatusInput = Schema.Struct({
+  /**
+   * Treat this read as a real use of the desktop, not a look at it.
+   *
+   * The settings screen polls status every ten seconds, and a poll must never
+   * be the thing that installs a plugin or boots a compositor on a machine
+   * where nobody has asked for a desktop. But the panel's Refresh button is a
+   * person asking for exactly that, and on a backend that boots on demand a
+   * passive answer makes Refresh the one control that cannot restart the
+   * desktop it says is not running. This is the difference between the two.
+   */
+  engage: Schema.optional(Schema.Boolean),
+});
 export type ComputerGetStatusInput = typeof ComputerGetStatusInput.Type;
 
 /**
