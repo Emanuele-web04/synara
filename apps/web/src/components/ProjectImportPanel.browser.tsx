@@ -87,7 +87,10 @@ describe("project import panel", () => {
     expect(api.listProjectImports).not.toHaveBeenCalled();
     await page.getByRole("button", { name: "Find projects" }).click();
     expect(api.listProjectImports).toHaveBeenCalledWith({ providers: ["codex", "claudeAgent"] });
-    await page.getByRole("checkbox", { name: "Select Synara" }).click();
+    await expect.element(page.getByRole("checkbox", { name: "Select Synara" })).toBeChecked();
+    await page.getByRole("button", { name: "Remove all" }).click();
+    await expect.element(page.getByRole("button", { name: "Import selected" })).toBeDisabled();
+    await page.getByRole("button", { name: "Select all" }).click();
     api.importProject
       .mockResolvedValueOnce(imported)
       .mockRejectedValueOnce(new Error("Temporary provider failure"));
@@ -120,7 +123,6 @@ describe("project import panel", () => {
     const onBusyChange = vi.fn();
     await render(<ProjectImportPanel onBusyChange={onBusyChange} />);
     await page.getByRole("button", { name: "Find projects" }).click();
-    await page.getByRole("checkbox", { name: "Select Synara" }).click();
     await page.getByRole("button", { name: "Import selected" }).click();
     await page.getByRole("button", { name: "Stop after current" }).click();
     expect(onBusyChange).toHaveBeenLastCalledWith(true);
@@ -145,7 +147,6 @@ describe("project import panel", () => {
     });
     await render(<ProjectImportPanel onBusyChange={vi.fn()} />);
     await page.getByRole("button", { name: "Find projects" }).click();
-    await page.getByRole("checkbox", { name: "Select Synara" }).click();
     await page.getByLabelText("New folder for Synara").fill("/code/moved");
     await page.getByRole("button", { name: "Import selected" }).click();
     await expect
@@ -174,7 +175,6 @@ describe("project import dialog dismissal", () => {
     await page.viewport(1100, 850);
     await render(<ProjectImportDialog />);
     await page.getByRole("button", { name: "Find projects" }).click();
-    await page.getByRole("checkbox", { name: "Select Synara" }).click();
     await page.getByRole("button", { name: "Conversations in Synara" }).click();
     await page.getByRole("button", { name: "Import selected" }).click();
     await page.getByRole("button", { name: "Close", exact: true }).click();

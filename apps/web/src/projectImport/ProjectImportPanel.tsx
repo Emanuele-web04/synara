@@ -16,6 +16,7 @@ import { useStore } from "~/store";
 import {
   buildProjectImportQueue,
   IMPORT_PROVIDERS,
+  selectableProjectImportKeys,
   IMPORT_PROVIDER_LABELS,
   type ProjectImportQueueItem,
 } from "./logic";
@@ -84,6 +85,10 @@ export function ProjectImportPanel(props: {
     includeArchived,
     workspaceRoots,
   }).filter((item) => !completedKeys.has(item.key));
+  const selectableKeys = (catalog?.projects ?? []).flatMap((project) =>
+    selectableProjectImportKeys(project, includeArchived).filter((key) => !completedKeys.has(key)),
+  );
+  const allSelected = selectableKeys.length > 0 && selectableKeys.every((key) => selected.has(key));
   const failures = Object.entries(outcomes).filter(([, value]) => value.error !== null);
   const retryQueue = queue.filter((item) => outcomes[item.key]?.error);
   const projectCount = new Set(queue.map((item) => item.input.projectKey)).size;
@@ -95,7 +100,13 @@ export function ProjectImportPanel(props: {
       const result = await ensureNativeApi().orchestration.listProjectImports({ providers });
       if (!mountedRef.current) return;
       setCatalog(result);
-      setSelected(new Set());
+      setSelected(
+        new Set(
+          result.projects.flatMap((project) =>
+            selectableProjectImportKeys(project, includeArchived),
+          ),
+        ),
+      );
       setOutcomes({});
       setProgress(null);
     } catch (caught) {
@@ -168,8 +179,8 @@ export function ProjectImportPanel(props: {
     ) ?? [];
 
   return (
-    <div className="flex flex-col gap-3 text-ui sm:text-ui">
-      <div className="flex flex-wrap items-center gap-1.5">
+    <div className="flex min-h-0 flex-1 flex-col gap-3 text-ui sm:text-ui">
+      <div className="flex shrink-0 flex-wrap items-center gap-1.5">
         {IMPORT_PROVIDERS.map((provider) => (
           <label
             key={provider}
@@ -242,37 +253,48 @@ export function ProjectImportPanel(props: {
               />
               Include archived
             </label>
-          </div>
-          {visibleProjects.length > 0 ? (
-            <div
-              className="divide-y divide-foreground/8 overflow-hidden rounded-xl border border-foreground/10"
-              aria-label="Projects available to import"
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0 rounded-lg font-normal text-ui sm:text-ui"
+              disabled={busy || scanning || selectableKeys.length === 0}
+              onClick={() => select(selectableKeys, !allSelected)}
             >
-              {visibleProjects.map((project) => (
-                <ProjectImportProjectCard
-                  key={project.key}
-                  project={project}
-                  selected={selected}
-                  includeArchived={includeArchived}
-                  disabled={busy || scanning}
-                  completedKeys={completedKeys}
-                  workspaceRoot={workspaceRoots[project.key] ?? ""}
-                  onWorkspaceRootChange={(path) =>
-                    setWorkspaceRoots((current) => ({ ...current, [project.key]: path }))
-                  }
-                  onSelectionChange={select}
-                  onPickerBusyChange={setPicking}
-                />
-              ))}
-            </div>
-          ) : (
-            <p className="py-6 text-center text-muted-foreground">
-              {catalog.projects.length
-                ? "No projects match your search."
-                : "No local projects found for these providers."}
-            </p>
-          )}
-          <p className={cn("leading-relaxed text-muted-foreground/80", "text-ui-sm")}>
+              {allSelected ? "Remove all" : "Select all"}
+            </Button>
+          </div>
+          <div className="-mr-2 min-h-0 flex-1 overflow-y-auto pr-2">
+            {visibleProjects.length > 0 ? (
+              <div
+                className="divide-y divide-foreground/8 overflow-hidden rounded-xl border border-foreground/10"
+                aria-label="Projects available to import"
+              >
+                {visibleProjects.map((project) => (
+                  <ProjectImportProjectCard
+                    key={project.key}
+                    project={project}
+                    selected={selected}
+                    includeArchived={includeArchived}
+                    disabled={busy || scanning}
+                    completedKeys={completedKeys}
+                    workspaceRoot={workspaceRoots[project.key] ?? ""}
+                    onWorkspaceRootChange={(path) =>
+                      setWorkspaceRoots((current) => ({ ...current, [project.key]: path }))
+                    }
+                    onSelectionChange={select}
+                    onPickerBusyChange={setPicking}
+                  />
+                ))}
+              </div>
+            ) : (
+              <p className="py-6 text-center text-muted-foreground">
+                {catalog.projects.length
+                  ? "No projects match your search."
+                  : "No local projects found for these providers."}
+              </p>
+            )}
+          </div>
+          <p className={cn("shrink-0 leading-relaxed text-muted-foreground/80", "text-ui-sm")}>
             {queue.length > 0 && !running
               ? `${queue.filter((item) => item.input.threadKey !== null).length} conversations across ${projectCount} project${projectCount === 1 ? "" : "s"} selected. `
               : null}
@@ -320,7 +342,7 @@ export function ProjectImportPanel(props: {
         </ul>
       ) : null}
       {catalog ? (
-        <div className="sticky bottom-0 -mt-1 flex items-center justify-end gap-2 border-t border-foreground/8 bg-popover pt-2.5 pb-3">
+        <div className="flex shrink-0 items-center justify-end gap-2 border-t border-foreground/8 pt-2.5">
           {running ? (
             <Button
               variant="outline"

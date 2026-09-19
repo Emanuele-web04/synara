@@ -29,7 +29,7 @@ export function ProjectImportDialog() {
             Continue your Codex and Claude Code projects in Synara.
           </DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 overflow-y-auto px-5 pb-2 pt-3.5">
+        <div className="flex min-h-0 flex-1 flex-col px-5 pt-3.5 pb-3">
           {open ? (
             <ProjectImportPanel
               onBusyChange={setBusy}
