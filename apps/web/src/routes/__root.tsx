@@ -41,6 +41,7 @@ import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoord
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
+import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
@@ -329,6 +330,7 @@ function RootRouteView() {
             <AppSnapWelcomeDialog />
           </SafariAccessOnboarding>
           <GlobalOnboardingDialog />
+          <ProjectImportAnnouncementDialog />
           <GlobalProjectImportDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
