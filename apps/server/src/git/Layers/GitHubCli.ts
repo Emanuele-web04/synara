@@ -9,6 +9,7 @@ import {
   type PullRequestCheck,
   type PullRequestComment,
   type PullRequestCommit,
+  type PullRequestCommitAuthor,
   type PullRequestLabel,
   type PullRequestMergeCapabilities,
   type PullRequestStack,
@@ -200,6 +201,17 @@ const RawActorSchema = Schema.Struct({
   url: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+// Commit authors are the one GitHub actor shape that may be anonymous. `gh`
+// emits empty or null logins for commits authored with a local git identity;
+// keep that exception local to commits so PR users, reviewers, and comments
+// continue to reject malformed actor payloads.
+const RawCommitAuthorSchema = Schema.Struct({
+  login: Schema.optional(Schema.NullOr(Schema.String)),
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  url: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 const RawLabelSchema = Schema.Struct({
   name: TrimmedNonEmptyString,
   color: Schema.optional(Schema.NullOr(Schema.String)),
@@ -229,7 +241,7 @@ const RawCommitSchema = Schema.Struct({
   messageHeadline: Schema.optional(Schema.NullOr(Schema.String)),
   messageBody: Schema.optional(Schema.NullOr(Schema.String)),
   committedDate: TrimmedNonEmptyString,
-  authors: Schema.optional(Schema.NullOr(Schema.Array(RawActorSchema))),
+  authors: Schema.optional(Schema.NullOr(Schema.Array(RawCommitAuthorSchema))),
 });
 
 const RawRepositoryMergeCapabilitiesSchema = Schema.Struct({
@@ -639,16 +651,34 @@ function normalizeActor(
   raw: Schema.Schema.Type<typeof RawActorSchema> | null | undefined,
 ): PullRequestActor | null {
   if (!raw) return null;
-  const login = raw.login ?? raw.slug;
+  const login = raw.login?.trim() || raw.slug?.trim() || null;
   if (!login) return null;
+  const rawLogin = raw.login?.trim() || null;
   return {
     login,
     name: raw.name?.trim() || null,
     // gh's JSON never includes avatar URLs, so derive the canonical login-addressed one —
     // but only from a real user login. A team's slug is not a username, and deriving from it
     // could show an unrelated user who happens to share the name.
-    avatarUrl: raw.avatarUrl?.trim() || (raw.login ? githubAvatarUrlForLogin(raw.login) : null),
+    avatarUrl: raw.avatarUrl?.trim() || (rawLogin ? githubAvatarUrlForLogin(rawLogin) : null),
     url: raw.url?.trim() || null,
+  };
+}
+
+function normalizeCommitAuthor(
+  raw: Schema.Schema.Type<typeof RawCommitAuthorSchema>,
+): PullRequestCommitAuthor | null {
+  const login = raw.login?.trim() || null;
+  const name = raw.name?.trim() || null;
+  if (!login && !name) return null;
+  return {
+    login,
+    name,
+    avatarUrl: login ? raw.avatarUrl?.trim() || githubAvatarUrlForLogin(login) : null,
+    url: login
+      ? raw.url?.trim() ||
+        (login.startsWith("app/") ? null : `https://github.com/${encodeURIComponent(login)}`)
+      : null,
   };
 }
 
@@ -681,9 +711,11 @@ function normalizePullRequestListItem(
     reviewDecision: raw.reviewDecision?.trim() || null,
     // Only User review requests have a login. A Team slug is not a viewer identity and
     // comparing it with the current user's login would create false-positive badges.
-    reviewRequestLogins: (raw.reviewRequests ?? []).flatMap((actor) =>
-      actor.login ? [actor.login] : [],
-    ),
+    reviewRequestLogins: (raw.reviewRequests ?? []).flatMap((actor) => {
+      if (actor.__typename === "Team") return [];
+      const login = actor.login?.trim() || null;
+      return login ? [login] : [];
+    }),
     labels: normalizeLabels(raw.labels),
     mergeability: normalizePullRequestMergeability(raw.mergeable),
     stack: null,
@@ -778,7 +810,7 @@ function normalizePullRequestDetail(
         messageBody: commit.messageBody ?? "",
         committedDate: commit.committedDate,
         authors: (commit.authors ?? []).flatMap((actor) => {
-          const normalized = normalizeActor(actor);
+          const normalized = normalizeCommitAuthor(actor);
           return normalized ? [normalized] : [];
         }),
       }),
