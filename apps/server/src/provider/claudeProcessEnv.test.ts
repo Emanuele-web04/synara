@@ -9,6 +9,7 @@ import {
   hasUsableClaudeCliCredentials,
   readClaudeCliCredentialsContentSummary,
   resolveClaudeCredentialsPaths,
+  withClaudeArtifactOptIn,
 } from "./claudeProcessEnv.ts";
 
 describe("claudeProcessEnv", () => {
@@ -189,5 +190,15 @@ describe("claudeProcessEnv", () => {
       "/tmp/custom-claude/.credentials.json",
       "/home/tester/.claude/.credentials.json",
     ]);
+  });
+
+  it("opts Claude into Artifacts only when the setting is on", () => {
+    const env = { PATH: "/usr/bin" };
+    assert.strictEqual(withClaudeArtifactOptIn(env, false), env);
+    assert.strictEqual(withClaudeArtifactOptIn(env, undefined), env);
+    assert.deepStrictEqual(withClaudeArtifactOptIn(env, true), {
+      PATH: "/usr/bin",
+      CLAUDE_CODE_ARTIFACT: "1",
+    });
   });
 });

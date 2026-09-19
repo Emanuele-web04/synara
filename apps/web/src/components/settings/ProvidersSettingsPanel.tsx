@@ -88,7 +88,7 @@ type ProviderInstallTextKey =
   | "piAgentDir";
 type ProviderInstallPasswordKey = "openCodeServerPassword";
 type ProviderInstallPasswordConfiguredKey = "openCodeServerPasswordConfigured";
-type ProviderInstallBooleanKey = "openCodeExperimentalWebSockets";
+type ProviderInstallBooleanKey = "claudeEnableArtifacts" | "openCodeExperimentalWebSockets";
 
 type ProviderInstallTextField = {
   readonly kind: "text";
@@ -172,6 +172,18 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         description: (
           <>
             Leave blank to use <code>claude</code> from your PATH.
+          </>
+        ),
+      },
+      {
+        kind: "boolean",
+        settingsKey: "claudeEnableArtifacts",
+        label: "Artifacts, /design and /slides",
+        description: (
+          <>
+            Claude Code keeps Artifacts off in embedded sessions. Turn this on so{" "}
+            <code>/design</code> and <code>/slides</code> publish to claude.ai. Needs a claude.ai
+            login on a Pro, Max, Team or Enterprise plan, and applies to new sessions.
           </>
         ),
       },

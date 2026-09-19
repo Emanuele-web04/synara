@@ -21,6 +21,12 @@ import {
 } from "./logic";
 import { ProjectImportProjectCard } from "./ProjectImportProjectCard";
 
+// Body copy follows the UI font size chosen in Settings; only dialog titles stay fixed.
+const UI_TEXT =
+  "text-[length:var(--app-font-size-ui,12px)] sm:text-[length:var(--app-font-size-ui,12px)]";
+const UI_TEXT_SM = "text-[length:var(--app-font-size-ui-sm,11px)]";
+const ACTION_BUTTON = cn("h-8 rounded-lg px-3 font-normal", UI_TEXT);
+
 interface ImportOutcome {
   readonly title: string;
   readonly error: string | null;
@@ -166,20 +172,16 @@ export function ProjectImportPanel(props: {
     ) ?? [];
 
   return (
-    <div className="flex flex-col gap-4">
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        Projects use their existing folders. Conversations become independent copies in Synara.
-        Existing projects keep their settings and conversations.
-      </p>
-      <div className="grid grid-cols-2 gap-2">
+    <div className={cn("flex flex-col gap-3", UI_TEXT)}>
+      <div className="flex flex-wrap items-center gap-1.5">
         {IMPORT_PROVIDERS.map((provider) => (
           <label
             key={provider}
             className={cn(
-              "flex cursor-pointer items-center gap-3 rounded-xl border px-3.5 py-3",
+              "flex h-8 cursor-pointer items-center gap-2 rounded-lg border px-2.5 transition-colors motion-reduce:transition-none",
               providers.includes(provider)
-                ? "border-primary/35 bg-primary/5"
-                : "border-foreground/10",
+                ? "border-foreground/14 bg-foreground/[0.05] text-foreground"
+                : "border-foreground/8 text-muted-foreground hover:bg-foreground/[0.03]",
             )}
           >
             <Checkbox
@@ -195,18 +197,14 @@ export function ProjectImportPanel(props: {
                 setProgress(null);
               }}
             />
-            <ProviderIcon provider={provider} className="size-5 shrink-0" />
-            <span className="text-sm font-medium">{IMPORT_PROVIDER_LABELS[provider]}</span>
+            <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
+            <span>{IMPORT_PROVIDER_LABELS[provider]}</span>
           </label>
         ))}
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <span className="text-xs text-muted-foreground">
-          Reads local conversation archives on this server.
-        </span>
         <Button
           variant="outline"
           size="sm"
+          className={cn("ml-auto h-8 rounded-lg font-normal", UI_TEXT)}
           disabled={busy || scanning || providers.length === 0}
           onClick={() => void scan()}
         >
@@ -214,14 +212,18 @@ export function ProjectImportPanel(props: {
           {scanning ? "Finding projects…" : catalog ? "Scan again" : "Find projects"}
         </Button>
       </div>
+      <p className={cn("leading-relaxed text-muted-foreground", UI_TEXT_SM)}>
+        Projects keep their existing folders, and conversations are copied into Synara. Nothing in
+        your current projects changes.
+      </p>
       {error ? (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className={cn("text-destructive", UI_TEXT_SM)}>
           {error}
         </p>
       ) : null}
       {catalog?.sources.map((source) =>
         source.error ? (
-          <p key={source.provider} role="alert" className="text-xs text-destructive">
+          <p key={source.provider} role="alert" className={cn("text-destructive", UI_TEXT_SM)}>
             {IMPORT_PROVIDER_LABELS[source.provider]}: {source.error}
           </p>
         ) : null,
@@ -234,9 +236,9 @@ export function ProjectImportPanel(props: {
               placeholder="Search projects or folders…"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              className="h-8 min-w-40 flex-1 text-xs"
+              className={cn("h-8 min-w-40 flex-1 rounded-lg", UI_TEXT)}
             />
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <label className={cn("flex items-center gap-2 text-muted-foreground", UI_TEXT_SM)}>
               <Checkbox
                 checked={includeArchived}
                 disabled={busy || scanning}
@@ -245,46 +247,45 @@ export function ProjectImportPanel(props: {
               Include archived
             </label>
           </div>
-          <div className="flex flex-col gap-2" aria-label="Projects available to import">
-            {visibleProjects.map((project) => (
-              <ProjectImportProjectCard
-                key={project.key}
-                project={project}
-                selected={selected}
-                includeArchived={includeArchived}
-                disabled={busy || scanning}
-                completedKeys={completedKeys}
-                workspaceRoot={workspaceRoots[project.key] ?? ""}
-                onWorkspaceRootChange={(path) =>
-                  setWorkspaceRoots((current) => ({ ...current, [project.key]: path }))
-                }
-                onSelectionChange={select}
-                onPickerBusyChange={setPicking}
-              />
-            ))}
-            {visibleProjects.length === 0 ? (
-              <p className="rounded-xl border border-dashed border-foreground/12 p-6 text-center text-sm text-muted-foreground">
-                {catalog.projects.length
-                  ? "No projects match your search."
-                  : "No local projects found for these providers."}
-              </p>
-            ) : null}
-          </div>
-          {queue.length > 0 && !running ? (
-            <p className="text-xs text-muted-foreground">
-              {queue.filter((item) => item.input.threadKey !== null).length} conversations across{" "}
-              {projectCount} project{projectCount === 1 ? "" : "s"} selected. Archived conversations
-              stay archived. Folder contents are never copied.
+          {visibleProjects.length > 0 ? (
+            <div
+              className="divide-y divide-foreground/8 overflow-hidden rounded-xl border border-foreground/10"
+              aria-label="Projects available to import"
+            >
+              {visibleProjects.map((project) => (
+                <ProjectImportProjectCard
+                  key={project.key}
+                  project={project}
+                  selected={selected}
+                  includeArchived={includeArchived}
+                  disabled={busy || scanning}
+                  completedKeys={completedKeys}
+                  workspaceRoot={workspaceRoots[project.key] ?? ""}
+                  onWorkspaceRootChange={(path) =>
+                    setWorkspaceRoots((current) => ({ ...current, [project.key]: path }))
+                  }
+                  onSelectionChange={select}
+                  onPickerBusyChange={setPicking}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="py-6 text-center text-muted-foreground">
+              {catalog.projects.length
+                ? "No projects match your search."
+                : "No local projects found for these providers."}
             </p>
-          ) : null}
-          <p className="text-[11px] text-muted-foreground">
-            The visible history includes supported text messages. Historical tool details and
-            attachments may not be displayed.
+          )}
+          <p className={cn("leading-relaxed text-muted-foreground/80", UI_TEXT_SM)}>
+            {queue.length > 0 && !running
+              ? `${queue.filter((item) => item.input.threadKey !== null).length} conversations across ${projectCount} project${projectCount === 1 ? "" : "s"} selected. `
+              : null}
+            History shows text messages; tool details and attachments may be missing.
           </p>
         </>
       ) : null}
       {progress ? (
-        <div role="status" aria-live="polite" className="rounded-xl bg-foreground/3 p-3 text-xs">
+        <div role="status" aria-live="polite" className="rounded-lg bg-foreground/[0.04] px-3 py-2">
           {running ? (
             <>
               <div className="flex items-center gap-2">
@@ -295,7 +296,9 @@ export function ProjectImportPanel(props: {
                     : `Importing ${progress.current} of ${progress.total}`}
                 </span>
               </div>
-              <p className="mt-1 truncate text-muted-foreground">{progress.title}</p>
+              <p className={cn("mt-0.5 truncate text-muted-foreground", UI_TEXT_SM)}>
+                {progress.title}
+              </p>
             </>
           ) : (
             <p className="flex items-center gap-2">
@@ -309,7 +312,7 @@ export function ProjectImportPanel(props: {
         </div>
       ) : null}
       {failures.length > 0 ? (
-        <ul aria-label="Import failures" className="space-y-2 text-xs text-destructive">
+        <ul aria-label="Import failures" className={cn("space-y-1.5 text-destructive", UI_TEXT_SM)}>
           {failures.map(([key, failure]) => (
             <li key={key}>
               <span className="font-medium">{failure.title}</span>: {failure.error}
@@ -318,11 +321,12 @@ export function ProjectImportPanel(props: {
         </ul>
       ) : null}
       {catalog ? (
-        <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-foreground/8 bg-popover py-3">
+        <div className="sticky bottom-0 -mt-1 flex items-center justify-end gap-2 border-t border-foreground/8 bg-popover pt-2.5 pb-3">
           {running ? (
             <Button
               variant="outline"
               size="sm"
+              className={ACTION_BUTTON}
               disabled={stopRequested}
               onClick={() => {
                 stopRef.current = true;
@@ -337,6 +341,7 @@ export function ProjectImportPanel(props: {
                 <Button
                   variant="outline"
                   size="sm"
+                  className={ACTION_BUTTON}
                   disabled={busy || scanning}
                   onClick={() => void run(retryQueue)}
                 >
@@ -345,6 +350,7 @@ export function ProjectImportPanel(props: {
               ) : null}
               <Button
                 size="sm"
+                className={ACTION_BUTTON}
                 disabled={busy || scanning || queue.length === 0}
                 onClick={() => void run(queue)}
               >

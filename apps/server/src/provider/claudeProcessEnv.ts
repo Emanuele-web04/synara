@@ -147,3 +147,15 @@ export function buildClaudeProcessEnv(input?: {
   }
   return buildProviderChildEnvironment({ provider: "claude", baseEnv: env });
 }
+
+/**
+ * Claude Code turns the Artifact tool (and the `/design` and `/slides` commands
+ * built on it) off by default for Agent SDK entrypoints. `CLAUDE_CODE_ARTIFACT`
+ * is the binary's own opt-in; plan, login and organization policy still apply.
+ */
+export function withClaudeArtifactOptIn(
+  env: NodeJS.ProcessEnv,
+  enableArtifacts: boolean | undefined,
+): NodeJS.ProcessEnv {
+  return enableArtifacts === true ? { ...env, CLAUDE_CODE_ARTIFACT: "1" } : env;
+}

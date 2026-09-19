@@ -1,6 +1,7 @@
 import type {
   ProjectEntry,
   ProviderAgentDescriptor,
+  ProviderArtifactsState,
   ProviderNativeCommandDescriptor,
   ProviderKind,
   ProviderMentionReference,
@@ -32,6 +33,7 @@ import { threadMentionPathForThreadId } from "@synara/shared/threadMentions";
 
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import type { ProviderModelOption } from "../providerModelOptions";
+import { getClaudeArtifactCommandNotice } from "../lib/claudeArtifactCommands";
 import { compareProvidersByOrder } from "../providerOrdering";
 import type { ComposerThreadMentionSource, Project } from "../types";
 
@@ -278,6 +280,8 @@ export function useComposerCommandMenuItems(input: {
   canOfferSideCommand: boolean;
   canOfferExportCommand: boolean;
   surfaceAppSlashCommands?: ReadonlySet<string>;
+  /** Artifact publishing state reported by provider command discovery. */
+  providerArtifacts?: ProviderArtifactsState | undefined;
   dynamicAgents: readonly ProviderAgentDescriptor[];
   threadMentionSources?: {
     readonly threads: readonly ComposerThreadMentionSource[];
@@ -300,6 +304,7 @@ export function useComposerCommandMenuItems(input: {
     canOfferSideCommand,
     canOfferExportCommand,
     surfaceAppSlashCommands,
+    providerArtifacts,
     dynamicAgents,
     threadMentionSources,
   } = input;
@@ -436,6 +441,11 @@ export function useComposerCommandMenuItems(input: {
       command: command.name,
       label: `/${command.name}`,
       description: command.description ?? `Run ${provider} native command`,
+      notice: getClaudeArtifactCommandNotice({
+        provider,
+        command: command.name,
+        artifacts: providerArtifacts,
+      }),
     }));
     // `/` is the universal picker surface; provider dispatch can adapt the
     // visible slash token to backend-specific skill syntax when needed.

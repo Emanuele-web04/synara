@@ -205,6 +205,7 @@ export function useComposerDiscovery({
     isLocalFolderBrowserOpen,
     providerPlugins,
     providerNativeCommands,
+    providerArtifacts: providerCommandsQuery.data?.artifacts,
     providerSkills,
     workspaceEntries,
     effectiveComposerTrigger,

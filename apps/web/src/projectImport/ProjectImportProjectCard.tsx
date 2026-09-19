@@ -8,9 +8,14 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/
 import { Input } from "~/components/ui/input";
 import { isElectron } from "~/env";
 import { disclosureChevronClassName } from "~/lib/disclosureMotion";
-import { ChevronRightIcon, FolderIcon } from "~/lib/icons";
+import { ChevronRightIcon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { IMPORT_PROVIDER_LABELS, projectImportItemKey, selectableProjectImportKeys } from "./logic";
+
+const UI_TEXT =
+  "text-[length:var(--app-font-size-ui,12px)] sm:text-[length:var(--app-font-size-ui,12px)]";
+const UI_TEXT_SM = "text-[length:var(--app-font-size-ui-sm,11px)]";
 
 export function ProjectImportProjectCard(props: {
   readonly project: ProjectImportProject;
@@ -46,13 +51,11 @@ export function ProjectImportProjectCard(props: {
     }
   };
 
+  const conversationLabel = `${project.threads.length} conversation${project.threads.length === 1 ? "" : "s"}`;
+
   return (
-    <Collapsible
-      open={expanded}
-      onOpenChange={setExpanded}
-      className="rounded-xl border border-foreground/10 bg-foreground/2"
-    >
-      <div className="flex items-center gap-3 px-3 py-3">
+    <Collapsible open={expanded} onOpenChange={setExpanded} className={UI_TEXT}>
+      <div className="flex items-center gap-2.5 px-3 py-2">
         <Checkbox
           aria-label={`Select ${project.title}`}
           checked={availableKeys.length > 0 && selectedCount === availableKeys.length}
@@ -61,20 +64,29 @@ export function ProjectImportProjectCard(props: {
           onCheckedChange={(checked) => props.onSelectionChange(availableKeys, checked)}
         />
         <CollapsibleTrigger
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left"
           aria-label={`Conversations in ${project.title}`}
         >
-          <FolderIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium">{project.title}</span>
+            <span className="block truncate font-medium">{project.title}</span>
             <span
-              className="block truncate text-xs text-muted-foreground"
+              className={cn("block truncate text-muted-foreground", UI_TEXT_SM)}
               title={project.workspaceRoot}
             >
               {project.workspaceRoot}
             </span>
           </span>
-          <span className="flex shrink-0 gap-1.5">
+          <span className={cn("shrink-0 text-right text-muted-foreground", UI_TEXT_SM)}>
+            <span className="block">{conversationLabel}</span>
+            {!project.directoryExists ? (
+              <span className="block text-warning">Folder unavailable</span>
+            ) : (
+              <span className="block text-muted-foreground/70">
+                {project.existingProjectId ? "Adds to existing" : "New project"}
+              </span>
+            )}
+          </span>
+          <span className="flex shrink-0 gap-1">
             {project.providers.map((provider) => (
               <span key={provider} title={IMPORT_PROVIDER_LABELS[provider]}>
                 <ProviderIcon provider={provider} className="size-3.5" />
@@ -84,18 +96,11 @@ export function ProjectImportProjectCard(props: {
           <ChevronRightIcon className={disclosureChevronClassName(expanded)} aria-hidden />
         </CollapsibleTrigger>
       </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-1 px-10 pb-3 text-xs text-muted-foreground">
-        <span>{project.existingProjectId ? "Add to existing project" : "New project"}</span>
-        <span>
-          {project.threads.length} conversation{project.threads.length === 1 ? "" : "s"}
-        </span>
-        {!project.directoryExists ? <span className="text-warning">Folder unavailable</span> : null}
-      </div>
       {!project.directoryExists ? (
-        <div className="space-y-2 border-t border-foreground/8 px-3 py-3">
-          <p className="text-xs text-muted-foreground">
-            Keep the history, or link the folder if it has moved. A working folder is needed to
-            continue conversations.
+        <div className="space-y-2 px-3 pb-2.5 ps-[2.375rem]">
+          <p className={cn("text-muted-foreground", UI_TEXT_SM)}>
+            The folder moved or is missing. Link its new location to continue these conversations,
+            or import the history alone.
           </p>
           <div className="flex gap-2">
             <Input
@@ -104,12 +109,13 @@ export function ProjectImportProjectCard(props: {
               value={props.workspaceRoot}
               onChange={(event) => props.onWorkspaceRootChange(event.target.value)}
               disabled={props.disabled}
-              className="h-8 text-xs"
+              className={cn("h-8 rounded-lg", UI_TEXT)}
             />
             {isElectron ? (
               <Button
                 variant="outline"
                 size="sm"
+                className={cn("h-8 rounded-lg font-normal", UI_TEXT)}
                 disabled={props.disabled}
                 onClick={() => void browse()}
               >
@@ -118,16 +124,16 @@ export function ProjectImportProjectCard(props: {
             ) : null}
           </div>
           {pickerError ? (
-            <p role="alert" className="text-xs text-destructive">
+            <p role="alert" className={cn("text-destructive", UI_TEXT_SM)}>
               {pickerError}
             </p>
           ) : null}
         </div>
       ) : null}
       <CollapsiblePanel>
-        <div className="border-t border-foreground/8 px-3 py-2">
+        <div className="bg-foreground/[0.025] px-3 py-1 ps-[2.375rem]">
           {visibleThreads.length === 0 ? (
-            <p className="py-2 text-xs text-muted-foreground">
+            <p className={cn("py-1.5 text-muted-foreground", UI_TEXT_SM)}>
               {project.threads.length
                 ? "All conversations are archived. Enable archived conversations to select them."
                 : "Links the existing folder without adding conversations."}
@@ -137,10 +143,7 @@ export function ProjectImportProjectCard(props: {
             const key = projectImportItemKey(project.key, thread.key);
             const imported = thread.alreadyImported || props.completedKeys.has(key);
             return (
-              <label
-                key={thread.key}
-                className="flex cursor-pointer items-center gap-3 rounded-md px-1 py-2 hover:bg-foreground/3"
-              >
+              <label key={thread.key} className="flex cursor-pointer items-center gap-2.5 py-1.5">
                 <Checkbox
                   checked={imported || props.selected.has(key)}
                   disabled={props.disabled || imported}
@@ -148,10 +151,10 @@ export function ProjectImportProjectCard(props: {
                   aria-label={`Import ${thread.title || "Untitled conversation"}`}
                 />
                 <ProviderIcon provider={thread.provider} className="size-3.5 shrink-0" />
-                <span className="min-w-0 flex-1 truncate text-xs" title={thread.title}>
+                <span className="min-w-0 flex-1 truncate" title={thread.title}>
                   {thread.title || "Untitled conversation"}
                 </span>
-                <span className="shrink-0 text-[11px] text-muted-foreground">
+                <span className={cn("shrink-0 text-muted-foreground", UI_TEXT_SM)}>
                   {imported
                     ? "Already present"
                     : thread.archived

@@ -22,14 +22,14 @@ export function ProjectImportDialog() {
         if (!next && !busy) close();
       }}
     >
-      <DialogPopup showCloseButton className="max-h-[min(780px,90dvh)] max-w-[720px]">
-        <DialogHeader className="px-6 pb-0 pt-6">
+      <DialogPopup showCloseButton className="max-h-[min(640px,85dvh)] max-w-[520px]">
+        <DialogHeader className="gap-1 px-5 pb-0 pt-5">
           <DialogTitle>Import projects</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="text-[length:var(--app-font-size-ui,12px)]">
             Continue your Codex and Claude Code projects in Synara.
           </DialogDescription>
         </DialogHeader>
-        <div className="min-h-0 overflow-y-auto px-6 pb-2 pt-4">
+        <div className="min-h-0 overflow-y-auto px-5 pb-2 pt-3.5">
           {open ? (
             <ProjectImportPanel
               onBusyChange={setBusy}

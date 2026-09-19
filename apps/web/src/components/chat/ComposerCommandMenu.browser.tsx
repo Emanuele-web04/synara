@@ -4,18 +4,19 @@ import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { ComposerCommandMenu } from "./ComposerCommandMenu";
+import { ComposerCommandMenu, type ComposerCommandItem } from "./ComposerCommandMenu";
 
 async function mountMenu(input: {
   isLoading: boolean;
   triggerKind: "mention" | "skill" | "slash-command" | null;
   emptyStateText?: string;
+  items?: ComposerCommandItem[];
 }) {
   const host = document.createElement("div");
   document.body.append(host);
   const screen = await render(
     <ComposerCommandMenu
-      items={[]}
+      items={input.items ?? []}
       resolvedTheme="dark"
       isLoading={input.isLoading}
       triggerKind={input.triggerKind}
@@ -74,6 +75,49 @@ describe("ComposerCommandMenu empty states", () => {
         .element(page.getByText("No commands are available for this provider.", { exact: true }))
         .toBeVisible();
       expect(document.body.textContent).not.toContain("Loading commands...");
+    } finally {
+      await menu.cleanup();
+    }
+  });
+});
+
+describe("ComposerCommandMenu provider command notices", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("explains an unavailable provider command from a warning tooltip", async () => {
+    const notice = "/design needs Claude Artifacts, which are off in Synara sessions by default.";
+    const menu = await mountMenu({
+      isLoading: false,
+      triggerKind: "slash-command",
+      items: [
+        {
+          id: "provider-command:claudeAgent:design",
+          type: "provider-native-command",
+          provider: "claudeAgent",
+          command: "design",
+          label: "/design",
+          description: "Make a new Design artifact from a brief",
+          notice,
+        },
+        {
+          id: "provider-command:claudeAgent:compact",
+          type: "provider-native-command",
+          provider: "claudeAgent",
+          command: "compact",
+          label: "/compact",
+          description: "Compact context",
+        },
+      ],
+    });
+
+    try {
+      const badge = page.getByRole("img", { name: notice });
+      await expect.element(badge).toBeVisible();
+      expect(document.querySelectorAll('[role="img"][aria-label]').length).toBe(1);
+      await badge.hover();
+      await expect.element(page.getByText(notice, { exact: true })).toBeVisible();
     } finally {
       await menu.cleanup();
     }
