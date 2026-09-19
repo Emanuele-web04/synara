@@ -25,6 +25,11 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
   throw new Error("Timed out waiting for condition");
 }
 
+const makeGitCore = (
+  execute: GitCoreShape["execute"],
+  withMutation: GitCoreShape["withMutation"] = (_cwd, effect) => effect,
+): GitCoreShape => ({ execute, withMutation }) as unknown as GitCoreShape;
+
 describe("CheckpointStoreLive", () => {
   let runtime: ManagedRuntime.ManagedRuntime<CheckpointStore, unknown> | null = null;
 
@@ -63,7 +68,7 @@ describe("CheckpointStoreLive", () => {
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
-      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -132,7 +137,7 @@ describe("CheckpointStoreLive", () => {
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
-      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -192,7 +197,7 @@ describe("CheckpointStoreLive", () => {
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
-      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -229,6 +234,386 @@ describe("CheckpointStoreLive", () => {
     );
   });
 
+  it("bounds an advisory capture instead of holding the provider start path", async () => {
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "rev-parse --path-format=absolute --git-common-dir") {
+        return Effect.succeed({ code: 0, stdout: "/repo/.git\n", stderr: "" });
+      }
+      if (args === "rev-parse --git-path index") {
+        return Effect.succeed({ code: 0, stdout: "/repo/.git/index\n", stderr: "" });
+      }
+      if (args === "rev-parse --verify HEAD") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === "ls-files --cached --others --exclude-standard -z") {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === "add -A -- .") {
+        return Effect.never;
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    let mutationCalls = 0;
+    const withMutation: GitCoreShape["withMutation"] = (_cwd, effect) =>
+      Effect.sync(() => {
+        mutationCalls += 1;
+      }).pipe(Effect.andThen(effect));
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute, withMutation))),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        const input = {
+          cwd: "/repo",
+          checkpointRef: CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/advisory-budget"),
+          policy: {
+            timeoutMs: 25,
+            maxOutputBytes: 1_024,
+            unseededScanMaxOutputBytes: 4_096,
+            failureCooldownMs: 1_000,
+          },
+        };
+        const attempt = () =>
+          store.captureCheckpoint(input).pipe(
+            Effect.map(() => "completed" as const),
+            Effect.catch((error) =>
+              Effect.succeed({ tag: error._tag, reason: "reason" in error ? error.reason : null }),
+            ),
+            Effect.timeoutOption("250 millis"),
+            Effect.map(
+              Option.getOrElse(() => ({ tag: "external-timeout" as const, reason: null })),
+            ),
+          );
+        const first = yield* attempt();
+        const second = yield* attempt();
+        return { first, second };
+      }),
+    );
+
+    expect(result.first).toEqual({
+      tag: "CheckpointCaptureBudgetExceededError",
+      reason: "timeout",
+    });
+    expect(result.second).toEqual({
+      tag: "CheckpointCaptureBudgetExceededError",
+      reason: "cooldown",
+    });
+    expect(mutationCalls).toBe(1);
+    const addCalls = execute.mock.calls.filter(([call]) => call.args.join(" ") === "add -A -- .");
+    expect(addCalls).toHaveLength(1);
+    expect(addCalls[0]?.[0]).toMatchObject({
+      maxOutputBytes: 1_024,
+      outputMode: "truncate",
+    });
+  });
+
+  it("keeps authoritative captures independent from an advisory owner timeout", async () => {
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "rev-parse --git-path index") {
+        return Effect.succeed({ code: 0, stdout: "/repo/.git/index\n", stderr: "" });
+      }
+      if (args === "rev-parse --verify HEAD") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === "add -A -- .") {
+        return input.maxOutputBytes === undefined
+          ? Effect.succeed({ code: 0, stdout: "", stderr: "" })
+          : Effect.never;
+      }
+      if (args === "write-tree") {
+        return Effect.succeed({ code: 0, stdout: "tree-oid\n", stderr: "" });
+      }
+      if (args.startsWith("commit-tree ")) {
+        return Effect.succeed({ code: 0, stdout: "commit-oid\n", stderr: "" });
+      }
+      if (args.startsWith("update-ref ")) {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        const checkpointRef = CheckpointRef.makeUnsafe(
+          "refs/synara-checkpoints/thread/advisory-authoritative",
+        );
+        const advisory = yield* store
+          .captureCheckpoint({
+            cwd: "/repo",
+            checkpointRef,
+            policy: { timeoutMs: 25, maxOutputBytes: 1_024 },
+          })
+          .pipe(
+            Effect.map(() => "completed" as const),
+            Effect.catch((error) => Effect.succeed(error._tag)),
+            Effect.forkChild,
+          );
+        yield* Effect.promise(() =>
+          waitFor(() =>
+            execute.mock.calls.some(
+              ([call]) => call.args.join(" ") === "add -A -- ." && call.maxOutputBytes === 1_024,
+            ),
+          ),
+        );
+
+        const authoritative = yield* store.captureCheckpoint({ cwd: "/repo", checkpointRef }).pipe(
+          Effect.map(() => "completed" as const),
+          Effect.catch((error) => Effect.succeed(error._tag)),
+          Effect.timeoutOption("250 millis"),
+          Effect.map(Option.getOrElse(() => "external-timeout" as const)),
+        );
+        return { advisory: yield* Fiber.join(advisory), authoritative };
+      }),
+    );
+
+    expect(result).toEqual({
+      advisory: "CheckpointCaptureBudgetExceededError",
+      authoritative: "completed",
+    });
+  });
+
+  it("does not let an authoritative success clear an advisory cooldown", async () => {
+    let advisoryAddCalls = 0;
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "rev-parse --path-format=absolute --git-common-dir") {
+        return Effect.succeed({ code: 0, stdout: "/repo/.git\n", stderr: "" });
+      }
+      if (args === "rev-parse --git-path index") {
+        return Effect.succeed({ code: 0, stdout: "/repo/.git/index\n", stderr: "" });
+      }
+      if (args === "rev-parse --verify HEAD") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === "add -A -- .") {
+        if (input.maxOutputBytes !== undefined) {
+          advisoryAddCalls += 1;
+          return Effect.never;
+        }
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === "write-tree") {
+        return Effect.succeed({ code: 0, stdout: "tree-oid\n", stderr: "" });
+      }
+      if (args.startsWith("commit-tree ")) {
+        return Effect.succeed({ code: 0, stdout: "commit-oid\n", stderr: "" });
+      }
+      if (args.startsWith("update-ref ")) {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        const checkpointRef = CheckpointRef.makeUnsafe(
+          "refs/synara-checkpoints/thread/preserved-cooldown",
+        );
+        const advisoryInput = {
+          cwd: "/repo",
+          checkpointRef,
+          policy: { timeoutMs: 25, maxOutputBytes: 1_024, failureCooldownMs: 1_000 },
+        };
+        const first = yield* store.captureCheckpoint(advisoryInput).pipe(Effect.flip);
+        yield* store.captureCheckpoint({ cwd: "/repo", checkpointRef });
+        const second = yield* store.captureCheckpoint(advisoryInput).pipe(Effect.flip);
+        return { first, second };
+      }),
+    );
+
+    expect(result.first).toMatchObject({
+      _tag: "CheckpointCaptureBudgetExceededError",
+      reason: "timeout",
+    });
+    expect(result.second).toMatchObject({
+      _tag: "CheckpointCaptureBudgetExceededError",
+      reason: "cooldown",
+    });
+    expect(advisoryAddCalls).toBe(1);
+  });
+
+  it("shares advisory cooldowns across linked worktree paths", async () => {
+    const repositoryRoot = mkdtempSync(join(tmpdir(), "synara-checkpoint-common-dir-test-"));
+    try {
+      let mutationCalls = 0;
+      const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+        const args = input.args.join(" ");
+        if (args === "rev-parse --path-format=absolute --git-common-dir") {
+          return Effect.succeed({ code: 0, stdout: `${repositoryRoot}\n`, stderr: "" });
+        }
+        if (args === "rev-parse --git-path index") {
+          return Effect.succeed({
+            code: 0,
+            stdout: `${repositoryRoot}/missing-index\n`,
+            stderr: "",
+          });
+        }
+        if (args === "rev-parse --verify HEAD") {
+          return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+        }
+        if (args === "add -A -- .") {
+          return Effect.never;
+        }
+        throw new Error(`Unexpected git args: ${args}`);
+      });
+      const withMutation: GitCoreShape["withMutation"] = (_cwd, effect) =>
+        Effect.sync(() => {
+          mutationCalls += 1;
+        }).pipe(Effect.andThen(effect));
+      const layer = CheckpointStoreLive.pipe(
+        Layer.provide(Layer.succeed(GitCore, makeGitCore(execute, withMutation))),
+        Layer.provide(NodeServices.layer),
+      );
+      runtime = ManagedRuntime.make(layer);
+
+      const result = await runtime.runPromise(
+        Effect.gen(function* () {
+          const store = yield* CheckpointStore;
+          const policy = { timeoutMs: 25, maxOutputBytes: 1_024, failureCooldownMs: 1_000 };
+          const checkpointRef = CheckpointRef.makeUnsafe(
+            "refs/synara-checkpoints/thread/linked-worktree-cooldown",
+          );
+          const first = yield* store
+            .captureCheckpoint({ cwd: join(repositoryRoot, "worktree-a"), checkpointRef, policy })
+            .pipe(Effect.flip);
+          const second = yield* store
+            .captureCheckpoint({ cwd: join(repositoryRoot, "worktree-b"), checkpointRef, policy })
+            .pipe(Effect.flip);
+          return { first, second };
+        }),
+      );
+
+      expect(result.first).toMatchObject({ reason: "timeout" });
+      expect(result.second).toMatchObject({ reason: "cooldown" });
+      expect(mutationCalls).toBe(1);
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an oversized unseeded scan before git add", async () => {
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "rev-parse --git-path index") {
+        return Effect.succeed({ code: 0, stdout: "/repo/.git/index\n", stderr: "" });
+      }
+      if (args === "ls-files --cached --others --exclude-standard -z") {
+        return Effect.fail(
+          new GitCommandError({
+            operation: input.operation,
+            command: args,
+            cwd: input.cwd,
+            detail:
+              "git ls-files --cached --others --exclude-standard -z output exceeded 4096 bytes and was truncated.",
+          }),
+        );
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return yield* store
+          .captureCheckpoint({
+            cwd: "/repo",
+            checkpointRef: CheckpointRef.makeUnsafe(
+              "refs/synara-checkpoints/thread/unseeded-budget",
+            ),
+            policy: {
+              timeoutMs: 100,
+              maxOutputBytes: 1_024,
+              unseededScanMaxOutputBytes: 4_096,
+            },
+          })
+          .pipe(
+            Effect.map(() => ({ tag: "completed", message: "" })),
+            Effect.catch((error) => Effect.succeed({ tag: error._tag, message: error.message })),
+          );
+      }),
+    );
+
+    expect(result).toEqual({
+      tag: "CheckpointCaptureBudgetExceededError",
+      message:
+        "Checkpoint capture skipped (unseeded-scan): The unseeded workspace scan exceeded its advisory budget.",
+    });
+    expect(execute.mock.calls.some(([call]) => call.args.join(" ") === "add -A -- .")).toBe(false);
+  });
+
+  it("preserves non-budget Git failures from the unseeded preflight", async () => {
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "rev-parse --git-path index") {
+        return Effect.succeed({ code: 0, stdout: "/repo/.git/index\n", stderr: "" });
+      }
+      if (args === "ls-files --cached --others --exclude-standard -z") {
+        return Effect.fail(
+          new GitCommandError({
+            operation: input.operation,
+            command: args,
+            cwd: input.cwd,
+            detail: "git ls-files failed: code=128 permission denied.",
+          }),
+        );
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const error = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return yield* store
+          .captureCheckpoint({
+            cwd: "/repo",
+            checkpointRef: CheckpointRef.makeUnsafe(
+              "refs/synara-checkpoints/thread/unseeded-git-failure",
+            ),
+            policy: {
+              timeoutMs: 100,
+              maxOutputBytes: 1_024,
+              unseededScanMaxOutputBytes: 4_096,
+            },
+          })
+          .pipe(Effect.flip);
+      }),
+    );
+
+    expect(error).toMatchObject({
+      _tag: "GitCommandError",
+      detail: "git ls-files failed: code=128 permission denied.",
+    });
+    expect(execute.mock.calls.some(([call]) => call.args.join(" ") === "add -A -- .")).toBe(false);
+  });
+
   it("skips the capture when skipIfExists is set and the ref already exists", async () => {
     const existingRef = "refs/synara-checkpoints/thread/existing";
     const missingRef = "refs/synara-checkpoints/thread/missing";
@@ -261,7 +646,7 @@ describe("CheckpointStoreLive", () => {
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
-      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -328,7 +713,7 @@ describe("CheckpointStoreLive", () => {
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
-      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -368,7 +753,7 @@ describe("CheckpointStoreLive", () => {
       throw new Error(`Unexpected git args: ${args}`);
     });
     const layer = CheckpointStoreLive.pipe(
-      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -401,7 +786,7 @@ describe("CheckpointStoreLive", () => {
       Effect.succeed({ code: 0, stdout: "", stderr: "" }),
     );
     const layer = CheckpointStoreLive.pipe(
-      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(Layer.succeed(GitCore, makeGitCore(execute))),
       Layer.provide(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
