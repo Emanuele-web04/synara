@@ -205,6 +205,16 @@ and `reduced_motion: on` all snap silently with no ring. Idle-hide becomes a
 activity so the render loop wakes only while a glide, ring or fade is in
 flight — a settled compact cursor still costs zero repaints.
 
+Revision 22 fixes isolated-browser detection on modern macOS.
+`has_trusted_codesign_identity` ran `codesign --verify --strict`, which rejects
+any executable carrying an extended attribute as detritus. Gatekeeper stamps
+`com.apple.provenance` onto every app launched through LaunchServices and
+restores it when removed, so a stock signed Chrome or Edge install could never
+pass — `browser_prepare` always refused `browser_route_unavailable`. The strict
+flag is dropped; the verify + test-requirement pair still pins Apple anchoring,
+the vendor team identity and the bundle identifier, which is the security
+boundary the check exists to enforce.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records

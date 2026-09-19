@@ -768,7 +768,7 @@ index 67e123b..4cfba70 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(21);
++        metadata["synara_native_revision"] = serde_json::json!(22);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -10895,3 +10895,21 @@ index 64fdf26..06d0809 100644
  pub fn window_info_by_id(window_id: u32) -> Option<WindowInfo> {
      all_windows_any_layer()
          .into_iter()
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
+@@ -363,7 +363,13 @@ fn has_trusted_codesign_identity(
+     let requirement = format!(
+         "=anchor apple generic and certificate leaf[subject.OU] = \"{team_identifier}\" and identifier \"{identifier}\""
+     );
++    // `--strict` rejects executables carrying any extended attribute as
++    // "detritus". Gatekeeper stamps `com.apple.provenance` onto every app
++    // launched through LaunchServices on modern macOS and restores it when
++    // removed, so a strict verify can never pass for a real Chrome or Edge
++    // install. The verify + test-requirement pair still pins Apple anchoring,
++    // the vendor team identity and the bundle identifier.
+     let verified = std::process::Command::new("/usr/bin/codesign")
+-        .args(["--verify", "--strict", "--test-requirement", &requirement])
++        .args(["--verify", "--test-requirement", &requirement])
+         .arg(executable)
+         .stdin(Stdio::null())
