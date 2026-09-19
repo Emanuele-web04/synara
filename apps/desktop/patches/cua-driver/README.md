@@ -215,6 +215,14 @@ flag is dropped; the verify + test-requirement pair still pins Apple anchoring,
 the vendor team identity and the bundle identifier, which is the security
 boundary the check exists to enforce.
 
+Revision 23 keeps driver-owned isolated browsers out of the foreground.
+Chromium activates its first window even for an isolated launch, so the
+isolated spawn landed visibly in the user's space. A new
+`conceal_spawned_browser` platform hook is invoked at spawn time; the macOS
+adapter re-hides the spawned pid over the startup window so the browser
+process binds headlessly without touching its windows, profile, or input
+contract.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records
