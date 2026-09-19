@@ -68,6 +68,23 @@ describe("ChatMarkdown", () => {
     HEAVY_MODULE_TEST_TIMEOUT_MS,
   );
 
+  it("renders GitHub alert blockquotes with a title and strips the marker", async () => {
+    const markup = await renderMarkdown("> [!NOTE]\n> **Medium Risk**\n> Details");
+
+    expect(markup).toContain('data-github-alert="note"');
+    expect(markup).toContain('class="markdown-alert-title"');
+    expect(markup).toContain(">Note</p>");
+    expect(markup).not.toContain("[!NOTE]");
+    expect(markup).toContain("<strong>Medium Risk</strong>");
+  });
+
+  it("leaves blockquotes with inline text after the marker as plain quotes", async () => {
+    const markup = await renderMarkdown("> [!NOTE] not an alert");
+
+    expect(markup).not.toContain("data-github-alert");
+    expect(markup).toContain("[!NOTE] not an alert");
+  });
+
   it("renders inline math with KaTeX", async () => {
     const markup = await renderMarkdown("Euler wrote $e^{i\\\\pi} + 1 = 0$.");
 
