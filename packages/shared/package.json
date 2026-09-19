@@ -160,6 +160,10 @@
       "types": "./src/sidechatExpiry.ts",
       "import": "./src/sidechatExpiry.ts"
     },
+    "./approvalSessionGrant": {
+      "types": "./src/approvalSessionGrant.ts",
+      "import": "./src/approvalSessionGrant.ts"
+    },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"
@@ -308,9 +312,29 @@
       "types": "./src/deviceFrame.ts",
       "import": "./src/deviceFrame.ts"
     },
+    "./jsonrpc-stdio": {
+      "types": "./src/jsonrpc-stdio.ts",
+      "import": "./src/jsonrpc-stdio.ts"
+    },
+    "./frameEnvelope": {
+      "types": "./src/frameEnvelope.ts",
+      "import": "./src/frameEnvelope.ts"
+    },
+    "./frameTransport": {
+      "types": "./src/frameTransport.ts",
+      "import": "./src/frameTransport.ts"
+    },
     "./deviceHelperCache": {
       "types": "./src/deviceHelperCache.ts",
       "import": "./src/deviceHelperCache.ts"
+    },
+    "./lengthPrefixedRecords": {
+      "types": "./src/lengthPrefixedRecords.ts",
+      "import": "./src/lengthPrefixedRecords.ts"
+    },
+    "./uiTreeTargeting": {
+      "types": "./src/uiTreeTargeting.ts",
+      "import": "./src/uiTreeTargeting.ts"
     },
     "./searchQuery": {
       "types": "./src/searchQuery.ts",

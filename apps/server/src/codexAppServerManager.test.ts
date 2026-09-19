@@ -57,6 +57,7 @@ import {
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
 import {
+  AGENT_GATEWAY_NO_CAPABILITIES,
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
   acquireAgentGatewaySessionLease,
 } from "./agentGateway/sessionLease.ts";
@@ -215,6 +216,22 @@ const autoTurnOverrides = {
   approvalsReviewer: "auto_review",
   sandboxPolicy: { type: "workspaceWrite" },
 } as const;
+
+const approvalParams = (persist: ReadonlyArray<string> = ["session"]) => ({
+  threadId: "provider_parent",
+  turnId: "turn_mcp",
+  serverName: "synara",
+  mode: "form",
+  message: "Allow Synara to launch the calculator?",
+  requestedSchema: { type: "object", properties: {} },
+  _meta: {
+    codex_approval_kind: "mcp_tool_call",
+    persist,
+    tool_name: "mcp_tool",
+    tool_params: { app: "kcalc" },
+    tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
+  },
+});
 
 describe("Codex Synara harness policy", () => {
   it("keeps the same host policy exactly once in default and plan instructions", () => {
@@ -710,6 +727,7 @@ describe("Codex app-server teardown", () => {
       },
       threadId,
       "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
     const context = {
       gatewaySessionLease,
@@ -785,6 +803,7 @@ describe("Codex app-server teardown", () => {
       },
       threadId,
       "codex",
+      AGENT_GATEWAY_NO_CAPABILITIES,
     );
     const context = {
       gatewaySessionLease,
@@ -824,6 +843,135 @@ describe("Codex app-server teardown", () => {
     expect(manager.hasSession(threadId)).toBe(false);
     await vi.waitFor(() => expect(internals.sessions.has(threadId)).toBe(false));
     expect(teardownProcessTree).toHaveBeenCalledOnce();
+  });
+
+  it("settles approvals parked on an app-server that exited on its own", async () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5353;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const manager = new CodexAppServerManager(undefined, {
+      teardownProcessTree: vi.fn(async () => ({
+        escalated: false,
+        signalErrors: [],
+        capturedBeforeRootExit: false,
+      })),
+    });
+    const threadId = asThreadId("thread-codex-exit-with-approval");
+    const requestId = ApprovalRequestId.makeUnsafe("req-approval-on-exit");
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map([
+        [
+          requestId,
+          {
+            requestId,
+            jsonRpcId: 42,
+            method: "item/commandExecution/requestApproval" as const,
+            requestKind: "command" as const,
+            threadId,
+          },
+        ],
+      ]),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      attachProcessListeners: (context: unknown) => void;
+    };
+    internals.sessions.set(threadId, context);
+    internals.attachProcessListeners(context);
+
+    child.exitCode = 1;
+    child.emit("exit", 1, null);
+
+    // The child is gone, so nothing will ever answer this approval. Leaving it
+    // in the map strands the turn that is blocked on it for the life of the
+    // process.
+    await vi.waitFor(() => expect(context.pendingApprovals.size).toBe(0));
+  });
+
+  it("delivers a response that shared its stdout chunk with an undecodable line", async () => {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5454;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-codex-bad-stdout-line");
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      attachProcessListeners: (context: unknown) => void;
+      sendRequest: (context: unknown, method: string, params: unknown) => Promise<unknown>;
+    };
+    internals.sessions.set(threadId, context);
+    internals.attachProcessListeners(context);
+    vi.spyOn(
+      manager as unknown as { writeMessage: () => Promise<void> },
+      "writeMessage",
+    ).mockResolvedValue(undefined);
+
+    const response = internals.sendRequest(context, "model/list", {});
+    // A hook or a subprocess wrote non-UTF-8 bytes to the same pipe. The line
+    // is unusable; the response that arrived behind it in the same read is not.
+    child.stdout.emit(
+      "data",
+      Buffer.concat([
+        Buffer.from([0xff, 0x0a]),
+        Buffer.from(`${JSON.stringify({ id: 1, result: { models: [] } })}\n`),
+      ]),
+    );
+
+    await expect(response).resolves.toEqual({ models: [] });
+    expect(manager.hasSession(threadId)).toBe(true);
   });
 });
 
@@ -3990,6 +4138,220 @@ describe("respondToRequest", () => {
       context,
       expect.objectContaining({
         id: 101,
+      }),
+    );
+  });
+
+  it("leaves pending MCP tool approvals alone when a command is accepted for the session", async () => {
+    const { manager, context, writeMessage } = createPendingApprovalHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 100,
+      method: "mcpServer/elicitation/request",
+      params: {
+        turnId: "turn_2",
+        mode: "form",
+        message: "Approve this tool call",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: ["session"],
+          tool_name: "mcp_tool",
+          tool_params_display: [{ name: "app", value: "kcalc" }],
+        },
+      },
+    });
+
+    const mcpRequest = [...context.pendingApprovals.values()].find(
+      (request) => String(request.method) === "mcpServer/elicitation/request",
+    );
+    if (!mcpRequest) {
+      throw new Error("Expected the MCP tool approval to remain pending.");
+    }
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+
+    // The command grant is not a tool grant: the tool approval still waits for its own answer.
+    expect(context.pendingApprovals.has(mcpRequest.requestId)).toBe(true);
+    expect(writeMessage).not.toHaveBeenCalledWith(context, expect.objectContaining({ id: 100 }));
+  });
+
+  it("keeps asking for MCP tool approvals while a command session grant is active", async () => {
+    const { manager, context, writeMessage } = createPendingApprovalHarness();
+
+    await manager.respondToRequest(
+      asThreadId("thread_1"),
+      ApprovalRequestId.makeUnsafe("req-approval-1"),
+      "acceptForSession",
+    );
+    expect(context.sessionApprovalOverride).toBeDefined();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 100,
+      method: "mcpServer/elicitation/request",
+      params: {
+        turnId: "turn_2",
+        mode: "form",
+        message: "Approve this tool call",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          persist: ["session"],
+          tool_name: "mcp_tool",
+          tool_params_display: [{ name: "app", value: "kcalc" }],
+        },
+      },
+    });
+
+    const mcpRequest = [...context.pendingApprovals.values()].find(
+      (request) => String(request.method) === "mcpServer/elicitation/request",
+    );
+    expect(mcpRequest).toBeDefined();
+    expect(writeMessage).not.toHaveBeenCalledWith(context, expect.objectContaining({ id: 100 }));
+  });
+});
+
+describe("MCP tool call elicitation approvals", () => {
+  it("tracks approval elicitations as tool requests and accepts them with the MCP response shape", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 70,
+      method: "mcpServer/elicitation/request",
+      params: approvalParams(),
+    });
+
+    const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+    expect(pendingRequest).toEqual(
+      expect.objectContaining({
+        method: "mcpServer/elicitation/request",
+        requestKind: "tool",
+        mcpSessionPersistenceAdvertised: true,
+      }),
+    );
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "request",
+        requestKind: "tool",
+        payload: expect.objectContaining({
+          _meta: expect.objectContaining({
+            tool_name: "mcp_tool",
+            tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
+          }),
+        }),
+      }),
+    );
+
+    await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, "accept");
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 70,
+      result: { action: "accept", content: null, _meta: null },
+    });
+  });
+
+  it("tells the composer when session persistence was not advertised", async () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 71,
+      method: "mcpServer/elicitation/request",
+      params: approvalParams(["always"]),
+    });
+
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "request",
+        requestKind: "tool",
+        payload: expect.objectContaining({ sessionApprovalAvailable: false }),
+      }),
+    );
+
+    emitEvent.mockClear();
+    await handleServerRequestForTest(manager, context, {
+      id: 72,
+      method: "mcpServer/elicitation/request",
+      params: approvalParams(["session"]),
+    });
+    const [event] = emitEvent.mock.calls.at(-1) ?? [];
+    expect(event).toEqual(expect.objectContaining({ kind: "request", requestKind: "tool" }));
+    expect((event as { payload?: Record<string, unknown> }).payload).not.toHaveProperty(
+      "sessionApprovalAvailable",
+    );
+  });
+
+  it.each([
+    ["acceptForSession", ["session"], { persist: "session" }],
+    ["acceptForSession", ["always"], null],
+  ] as const)(
+    "maps %s with persist=%j to the protocol response",
+    async (decision, persist, meta) => {
+      const { manager, context, writeMessage } = createCollabNotificationHarness();
+
+      await handleServerRequestForTest(manager, context, {
+        id: 71,
+        method: "mcpServer/elicitation/request",
+        params: approvalParams(persist),
+      });
+      const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+      await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, decision);
+
+      expect(writeMessage).toHaveBeenCalledWith(context, {
+        id: 71,
+        result: { action: "accept", content: null, _meta: meta },
+      });
+    },
+  );
+
+  it.each(["decline", "cancel"] as const)(
+    "maps %s to the matching elicitation action",
+    async (decision) => {
+      const { manager, context, writeMessage } = createCollabNotificationHarness();
+
+      await handleServerRequestForTest(manager, context, {
+        id: 72,
+        method: "mcpServer/elicitation/request",
+        params: approvalParams(),
+      });
+      const pendingRequest = Array.from(context.pendingApprovals.values())[0];
+      await manager.respondToRequest(asThreadId("thread_1"), pendingRequest.requestId, decision);
+
+      expect(writeMessage).toHaveBeenCalledWith(context, {
+        id: 72,
+        result: { action: decision, content: null, _meta: null },
+      });
+    },
+  );
+
+  it("cancels non-approval elicitations and emits a warning instead of an unsupported-request error", async () => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 73,
+      method: "mcpServer/elicitation/request",
+      params: {
+        mode: "url",
+        message: "Authenticate with the MCP server",
+        url: "https://example.test/auth",
+      },
+    });
+
+    expect(context.pendingApprovals.size).toBe(0);
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 73,
+      result: { action: "cancel", content: null, _meta: null },
+    });
+    expect(writeMessage).not.toHaveBeenCalledWith(
+      context,
+      expect.objectContaining({ error: expect.objectContaining({ code: -32601 }) }),
+    );
+    expect(emitEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "error",
+        method: "mcpServer/elicitation/request/unrenderable",
+        message: "Synara declined an MCP elicitation it cannot render yet.",
       }),
     );
   });
