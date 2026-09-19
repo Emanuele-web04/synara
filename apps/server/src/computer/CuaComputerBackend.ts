@@ -329,14 +329,6 @@ export class CuaComputerBackend implements ComputerBackend {
   private hostPlatform: string | undefined;
   private imageGeneration = 0;
   private readonly previewTasks = new Map<string, CuaComputerTask>();
-  /**
-   * The newest window each live preview task addressed, recorded from the
-   * same `pid`/`window_id` call args the host's frame tap reads — including
-   * the browser family's bind calls. While one exists the stills stream
-   * captures that window instead of the whole desktop, so the pane preview
-   * shows what the agent drives rather than the user's screen.
-   */
-  private readonly previewWindows = new Map<string, { pid: number; windowId: number }>();
   private clearCachedImage(): void {
     this.imageGeneration += 1;
     this.cachedImage = undefined;
@@ -366,29 +358,16 @@ export class CuaComputerBackend implements ComputerBackend {
     this.semanticTextLaneGapMs = options.semanticTextLaneGapMs ?? CUA_SEMANTIC_TEXT_LANE_GAP_MS;
     this.stills = new StillFramePublisher({
       capture: async () => {
-        // Reuse a recent tool observation; idle panes spend at most one capture
-        // every two seconds and detached panes spend none. The cache only ever
-        // holds whole-desktop frames, so a scoped task window skips it rather
-        // than paint the user's screen over the driven window.
-        const target = this.previewWindowTarget();
-        if (target === undefined) {
-          const image =
-            this.cachedImage && Date.now() - Date.parse(this.cachedImage.capturedAt) < 1_500
-              ? this.cachedImage
-              : await this.captureOverview(false);
-          return Buffer.from(image.bytesBase64, "base64");
-        }
-        try {
-          const scoped = await this.captureWindowStill(target.pid, target.windowId);
-          return Buffer.from(scoped.bytesBase64, "base64");
-        } catch {
-          // A scoped miss (window closed, moved to another Space) is a stale
-          // target, not a capture failure — the overview path reports capture
-          // health honestly if the desktop itself stops producing pixels.
-          this.previewWindows.delete(target.key);
-          const image = await this.captureOverview(false);
-          return Buffer.from(image.bytesBase64, "base64");
-        }
+        // Reuse a recent tool observation; idle panes spend at most one
+        // capture every two seconds and detached panes spend none. Window
+        // frames belong to the frame tap's persistent capture — a per-still
+        // `get_window_state` would open a fresh ScreenCaptureKit session on
+        // the target every interval and flash the user's window each shot.
+        const image =
+          this.cachedImage && Date.now() - Date.parse(this.cachedImage.capturedAt) < 1_500
+            ? this.cachedImage
+            : await this.captureOverview(false);
+        return Buffer.from(image.bytesBase64, "base64");
       },
       prepare: async () => {
         await this.availability();
@@ -526,8 +505,6 @@ export class CuaComputerBackend implements ComputerBackend {
           reply.error ?? "Cua host failed.",
           reply.effect ?? "not-dispatched",
         );
-      if (task && request.method === "call")
-        this.recordPreviewWindow(task, request.args, reply.result);
       return reply;
     } catch (error) {
       if (error instanceof CuaTransportError) throw new CuaActionError(error.message, error.effect);
@@ -991,72 +968,7 @@ export class CuaComputerBackend implements ComputerBackend {
       const oldest = [...this.previewTasks.keys()].find((key) => key !== currentKey);
       if (oldest === undefined) break;
       this.previewTasks.delete(oldest);
-      this.previewWindows.delete(oldest);
     }
-  }
-  /**
-   * Same target the host's frame tap reads off the call args: a window the
-   * task just successfully addressed is what the preview should show. Only
-   * successful calls move it — a refused call proved nothing about where the
-   * task is working, so both refusal dialects (`effect:"refused"` and
-   * `status:"refused"`) leave the previous target alone.
-   */
-  private recordPreviewWindow(
-    task: CuaComputerTask,
-    args: unknown,
-    result: CuaToolResult | undefined,
-  ): void {
-    if (result?.isError === true) return;
-    const structured = result?.structuredContent;
-    if (structured?.effect === "refused" || structured?.status === "refused") return;
-    const pid = record(args).pid;
-    const windowId = record(args).window_id;
-    if (
-      typeof pid !== "number" ||
-      !Number.isSafeInteger(pid) ||
-      pid <= 0 ||
-      typeof windowId !== "number" ||
-      !Number.isSafeInteger(windowId) ||
-      windowId <= 0
-    )
-      return;
-    const currentKey = cuaComputerTaskKey(task);
-    this.previewWindows.delete(currentKey);
-    this.previewWindows.set(currentKey, { pid, windowId });
-  }
-  /**
-   * The window the stills stream should paint: the most recently addressed
-   * target across the live preview tasks, or none. Entries whose task ended
-   * are dropped alongside `previewTasks`, so the newest live entry wins.
-   */
-  private previewWindowTarget(): { key: string; pid: number; windowId: number } | undefined {
-    let newest: { key: string; pid: number; windowId: number } | undefined;
-    for (const [key, target] of this.previewWindows) {
-      if (this.previewTasks.has(key)) newest = { key, ...target };
-    }
-    return newest;
-  }
-  /**
-   * One window-scoped still for the pane preview — the same `get_window_state`
-   * screenshot {@link captureScreenshot} serves the model, at the preview's
-   * fixed bound. Callers decide what a failure means; it never writes the
-   * whole-desktop {@link cachedImage} slot.
-   */
-  private async captureWindowStill(pid: number, windowId: number): Promise<ComputerScreenshot> {
-    const result = await this.call(
-      "get_window_state",
-      {
-        pid,
-        window_id: windowId,
-        include_accessibility_tree: false,
-        include_screenshot: true,
-        max_dimension: 1536,
-      },
-      false,
-      false,
-    );
-    this.assertObservedWindow(result, pid, windowId);
-    return this.screenshot(result);
   }
   private async captureOverview(allowModelObservation = true): Promise<ComputerScreenshot> {
     const generation = this.imageGeneration;
@@ -2390,7 +2302,6 @@ export class CuaComputerBackend implements ComputerBackend {
   async stopInput() {
     this.clearCachedImage();
     this.previewTasks.clear();
-    this.previewWindows.clear();
     if (this.endpoint) {
       const result = await this.request<CuaReply>(this.endpoint, {
         method: "stop",
@@ -2445,7 +2356,6 @@ export class CuaComputerBackend implements ComputerBackend {
     if (!reply.ok) throw new Error(reply.error ?? "Computer preview did not stop.");
     for (const [key] of matches) {
       this.previewTasks.delete(key);
-      this.previewWindows.delete(key);
     }
     // Task-owned grounding ends with the task: a revoked task's window pixels
     // must not ground a later claim, so the next input re-observes first.
@@ -2590,7 +2500,7 @@ export class CuaComputerBackend implements ComputerBackend {
     };
     // Browser work is a live preview task too: an endTask must still reach
     // the host (frame tap, shields), and a bind call carrying the bound
-    // window's pid/window_id is what scopes the stills to it.
+    // window's pid/window_id is what points the frame tap at it.
     this.trackPreviewTask(task);
     try {
       const reply = await timedComputerLeg("host", () =>
@@ -2615,7 +2525,6 @@ export class CuaComputerBackend implements ComputerBackend {
           reply.error ?? "Cua host failed.",
           reply.effect ?? "not-dispatched",
         );
-      this.recordPreviewWindow(task, call.args, reply.result);
       return reply.result ?? {};
     } catch (error) {
       if (error instanceof CuaTransportError) throw new CuaActionError(error.message, error.effect);
