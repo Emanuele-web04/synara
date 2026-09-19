@@ -114,6 +114,49 @@ describe("ComposerPendingApprovalPanel", () => {
     }
   });
 
+  it("names the originating server on a tool approval and attributes reported detail", async () => {
+    const mounted = await mountApprovalPanel({
+      approval: makeApproval({
+        requestKind: "tool",
+        detail: "Allow the calculator to launch?",
+        toolName: "mcp_tool",
+        toolSource: "synara",
+        toolDetailsReported: true,
+        toolParamsDisplay: [{ name: "app", value: "kcalc" }],
+      }),
+    });
+
+    try {
+      const source = page.getByTestId("approval-tool-source");
+      await expect.element(source).toBeInTheDocument();
+      await expect.element(source).toHaveTextContent("synara");
+      await expect.element(source).toHaveAttribute("data-details-reported", "true");
+      await expect.element(page.getByText("kcalc")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the originating server without attribution when Synara derived the detail", async () => {
+    const mounted = await mountApprovalPanel({
+      approval: makeApproval({
+        requestKind: "tool",
+        detail: "Allow the calculator to launch?",
+        toolName: "mcp__synara__launch",
+        toolSource: "synara",
+        toolParamsDisplay: [{ name: "app", value: "kcalc" }],
+      }),
+    });
+
+    try {
+      await expect
+        .element(page.getByTestId("approval-tool-source"))
+        .toHaveAttribute("data-details-reported", "false");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("hides session approval when the provider cannot persist it", async () => {
     const mounted = await mountApprovalPanel({
       approval: makeApproval({ sessionApprovalAvailable: false }),

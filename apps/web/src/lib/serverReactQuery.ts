@@ -1,4 +1,6 @@
 import type {
+  ComputerProvisionResult,
+  ComputerStatusResult,
   ProviderKind,
   ServerConfig,
   ServerConsumeCodexResetCreditInput,
@@ -32,6 +34,7 @@ export const serverQueryKeys = {
     ["server", "profileTokenStats", utcOffsetMinutes] as const,
   studioThreadOutputs: (threadId: ThreadId | null) =>
     ["server", "studioThreadOutputs", threadId] as const,
+  computerStatus: () => ["server", "computerStatus"] as const,
 };
 
 export const serverMutationKeys = {
@@ -47,6 +50,59 @@ export function serverConfigQueryOptions() {
     },
     staleTime: Infinity,
   });
+}
+
+/** Polled while the Computer use settings panel is visible, so keep it refetchable. */
+export const COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS = 10_000;
+
+export function computerStatusQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.computerStatus(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      // Desktop-bridge NativeApi implementations update out of band and may
+      // predate the computer namespace.
+      if (!api.computer) {
+        throw new Error("This app build cannot read computer status.");
+      }
+      return api.computer.getStatus({});
+    },
+    staleTime: LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
+  });
+}
+
+/**
+ * The settings panel's Refresh, which is a person asking for the desktop.
+ *
+ * The polled query must stay passive — it runs every ten seconds while the
+ * panel is open, and a poll that boots a compositor is a poll that boots one
+ * nobody asked for. Refresh is the opposite, so it is a separate request that
+ * engages the backend and writes its answer into the same cache the panel
+ * renders from.
+ */
+export async function refreshComputerStatus(
+  queryClient: QueryClient,
+): Promise<ComputerStatusResult> {
+  const api = ensureNativeApi();
+  if (!api.computer) {
+    throw new Error("This app build cannot read computer status.");
+  }
+  const status = await api.computer.getStatus({ engage: true });
+  queryClient.setQueryData(serverQueryKeys.computerStatus(), status);
+  return status;
+}
+
+/** Share one setup request across the settings panel and transcript cards. */
+let computerProvisionInFlight: Promise<ComputerProvisionResult> | undefined;
+export function provisionComputer(): Promise<ComputerProvisionResult> {
+  if (computerProvisionInFlight) return computerProvisionInFlight;
+  const api = ensureNativeApi();
+  if (!api.computer?.provision)
+    return Promise.reject(new Error("This app build cannot set up computer control."));
+  computerProvisionInFlight = api.computer.provision({}).finally(() => {
+    computerProvisionInFlight = undefined;
+  });
+  return computerProvisionInFlight;
 }
 
 interface ProviderStatusSnapshot {
