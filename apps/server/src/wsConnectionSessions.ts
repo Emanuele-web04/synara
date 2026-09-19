@@ -28,6 +28,11 @@ export interface WsConnectionSession {
   readonly attachmentPrincipal: ManagedAttachmentPrincipal;
 }
 
+export const CurrentWsConnectionSession = ServiceMap.Reference<WsConnectionSession | undefined>(
+  "synara/ws/CurrentConnectionSession",
+  { defaultValue: () => undefined },
+);
+
 /**
  * Synthetic header carrying the connection-session key. It is set server-side on
  * the upgrade request (never sent to clients), and Headers.set overrides any
@@ -52,7 +57,9 @@ export const makeWsConnectionSessions = Effect.sync(() => {
     register: (session: WsConnectionSession) =>
       Effect.gen(function* () {
         const key = randomUUID();
-        sessions.set(key, session);
+        // Each connection has a distinct identity even if a caller reuses the
+        // same role/principal object across upgrades.
+        sessions.set(key, { ...session });
         yield* Effect.addFinalizer(() => Effect.sync(() => sessions.delete(key)));
         return key;
       }),
@@ -77,6 +84,7 @@ export function provideWsConnectionSession<A, E, R>(
   return session
     ? effect.pipe(
         Effect.provideService(CurrentWsSessionRole, session.role),
+        Effect.provideService(CurrentWsConnectionSession, session),
         Effect.provideService(CurrentManagedAttachmentPrincipal, session.attachmentPrincipal),
       )
     : effect;

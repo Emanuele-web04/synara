@@ -3,9 +3,12 @@
 // Layer: Component rendering tests
 // Depends on: SettingsSidebarNav, the settings search index, and React server rendering.
 
+import type { ComputerStatusResult } from "@synara/contracts";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 import { settingRowAnchorId } from "../settingsNavigation";
 import {
@@ -13,6 +16,19 @@ import {
   rankSettingsSearchEntries,
   settingsSearchEntryTarget,
 } from "../settingsSearchIndex";
+
+/** Renders the nav with whatever the Computer panel has already fetched, if anything. */
+function renderNav(cachedComputerStatus?: ComputerStatusResult) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  if (cachedComputerStatus) {
+    queryClient.setQueryData(serverQueryKeys.computerStatus(), cachedComputerStatus);
+  }
+  return renderToStaticMarkup(
+    <QueryClientProvider client={queryClient}>
+      <SettingsSidebarNav activeSection="general" onBack={vi.fn()} onSelectSection={vi.fn()} />
+    </QueryClientProvider>,
+  );
+}
 
 describe("rankSettingsSearchEntries", () => {
   it("returns nothing for an empty query", () => {
@@ -38,6 +54,42 @@ describe("rankSettingsSearchEntries", () => {
   it("surfaces the automation run threads visibility row", () => {
     const results = rankSettingsSearchEntries("automation runs", 12);
     expect(results.some((entry) => entry.id === "general:automation-run-threads")).toBe(true);
+  });
+
+  it("hides the Computer pane auto-open row on a backend that never opens one", () => {
+    // `ComputerManager.surfacePaneForAgent` returns early on a visible desktop,
+    // so the setting controls nothing there and the panel hides it. A search
+    // result for a row the panel does not draw scrolls to an anchor that is not
+    // there, and tells the user Synara has a setting it does not.
+    const offered = rankSettingsSearchEntries("open automatically", 12, {
+      computerBackendIsVisibleDesktop: false,
+    });
+    expect(offered.some((entry) => entry.id === "computer:open-automatically")).toBe(true);
+
+    const hidden = rankSettingsSearchEntries("open automatically", 12, {
+      computerBackendIsVisibleDesktop: true,
+    });
+    expect(hidden.some((entry) => entry.id === "computer:open-automatically")).toBe(false);
+  });
+
+  it("does not claim clipboard reads always ask, because a full-access chat never does", () => {
+    const entry = SETTINGS_SEARCH_ENTRIES.find(
+      (candidate) => candidate.id === "computer:how-agents-use-the-desktop",
+    );
+    expect(entry?.keywords).not.toContain("clipboard reads always ask");
+    expect(entry?.keywords).toContain("without asking");
+  });
+
+  it("indexes the computer-control default so the switch is findable", () => {
+    const results = rankSettingsSearchEntries("computer control", 12);
+    expect(results.some((entry) => entry.id === "computer:enable-by-default")).toBe(true);
+  });
+
+  it("stops claiming computer control is not a switch, now that it is one", () => {
+    const entry = SETTINGS_SEARCH_ENTRIES.find(
+      (candidate) => candidate.id === "computer:how-agents-use-the-desktop",
+    );
+    expect(entry?.keywords).not.toContain("not a switch");
   });
 
   it("includes the activity toasts notification row", () => {
@@ -76,9 +128,7 @@ describe("rankSettingsSearchEntries", () => {
 
 describe("SettingsSidebarNav", () => {
   it("renders the soft search input alongside the section list", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsSidebarNav activeSection="general" onBack={vi.fn()} onSelectSection={vi.fn()} />,
-    );
+    const markup = renderNav();
 
     expect(markup).toContain('aria-label="Search settings"');
     expect(markup).toContain('aria-label="Settings sections"');
@@ -86,9 +136,7 @@ describe("SettingsSidebarNav", () => {
   });
 
   it("groups settings by user intent instead of implementation ownership", () => {
-    const markup = renderToStaticMarkup(
-      <SettingsSidebarNav activeSection="general" onBack={vi.fn()} onSelectSection={vi.fn()} />,
-    );
+    const markup = renderNav();
 
     expect(markup).toContain("Personal");
     expect(markup).toContain("Integrations");

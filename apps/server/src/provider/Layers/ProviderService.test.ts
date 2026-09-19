@@ -22,6 +22,7 @@ import {
   EventId,
   type ProviderKind,
   ProviderSessionStartInput,
+  RuntimeRequestId,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -39,6 +40,7 @@ import {
   PubSub,
   Ref,
   Scope,
+  ServiceMap,
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
@@ -74,6 +76,13 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import { AGENT_GATEWAY_TURN_AUTHORITY_RETIRED } from "../../agentGateway/sessionLease.ts";
+import {
+  COMPUTER_SESSION_APPROVAL_UNAVAILABLE_REASON,
+  ComputerApprovalGate,
+} from "../../computer/ComputerApprovalGate.ts";
+import { ComputerManager } from "../../computer/ComputerManager.ts";
+import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
+import { ComputerService } from "../../computer/Services/ComputerService.ts";
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
@@ -1480,6 +1489,145 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(asRuntimePayloadRecord(settledBinding?.runtimePayload).activeTurnId, null);
         assert.equal(settledBinding?.status, "stopped");
         assert.equal(staleSettlementPersistedEvents.has("stale-abort-other-turn"), false);
+      }),
+    );
+
+    it.effect("settles a stale interaction resolution naming the binding's active turn", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-interaction-resolution");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
+        assert.equal(typeof activeTurnId, "string");
+
+        // A dying runtime cancels its outstanding user-input request during
+        // teardown, after the generation has already rotated. That resolution is
+        // the only signal that can settle the durable pending row, so it must
+        // pass the stale-generation gate like a terminal event does. Ordinary
+        // stale stream events stay dropped.
+        staleSettlementRouting.codex.emit({
+          type: "user-input.resolved",
+          eventId: asEventId("stale-user-input-resolved-matching-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(String(activeTurnId)),
+          requestId: RuntimeRequestId.makeUnsafe("request-cancelled-by-teardown"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { answers: { cancelled: true } },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "content.delta",
+          eventId: asEventId("stale-delta-matching-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(String(activeTurnId)),
+          createdAt: "2026-07-14T14:00:01.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { streamKind: "assistant_text", delta: "invisible" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "user-input.resolved",
+          eventId: asEventId("stale-user-input-resolved-other-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-some-other"),
+          requestId: RuntimeRequestId.makeUnsafe("request-from-another-turn"),
+          createdAt: "2026-07-14T14:00:02.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { answers: { cancelled: true } },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-user-input-resolved-matching-turn"),
+          500,
+          10,
+          "matching stale user-input.resolved to be persisted",
+        );
+        assert.equal(
+          staleSettlementPersistedEvents.get("stale-user-input-resolved-matching-turn")?.type,
+          "user-input.resolved",
+        );
+        assert.equal(staleSettlementPersistedEvents.has("stale-delta-matching-turn"), false);
+        assert.equal(
+          staleSettlementPersistedEvents.has("stale-user-input-resolved-other-turn"),
+          false,
+        );
+
+        // Accepting a resolution must not settle the turn: it is not a terminal
+        // event, so the binding keeps running the turn it still owns.
+        const bindingAfter = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(
+          asRuntimePayloadRecord(bindingAfter?.runtimePayload).activeTurnId,
+          activeTurnId,
+        );
+        assert.equal(bindingAfter?.status, "running");
+      }),
+    );
+
+    it.effect("settles a stale resolution without reviving a stopped thread's binding", () =>
+      Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-resolution-stopped-binding");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        // A stopped thread: the user stopped the turn, the generation was
+        // retired (no current generation), and `session.exited` already parked
+        // the binding. The dying runtime's cancellation still has to settle the
+        // durable pending row, but it must never flip the binding back to a
+        // live-looking "running" with a fresh liveness stamp — the UI would
+        // show "Working" for a process that no longer exists.
+        yield* directory.upsert({
+          threadId,
+          provider: "codex",
+          status: "stopped",
+          lifecycleGeneration: "old-generation",
+          runtimePayload: {
+            activeTurnId: null,
+            lastRuntimeEvent: "session.exited",
+            lastRuntimeEventAt: "2026-07-14T13:59:00.000Z",
+          },
+        });
+
+        staleSettlementRouting.codex.emit({
+          type: "user-input.resolved",
+          eventId: asEventId("stale-resolution-stopped-binding"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-stopped-by-user"),
+          requestId: RuntimeRequestId.makeUnsafe("request-cancelled-after-stop"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { answers: { cancelled: true } },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-resolution-stopped-binding"),
+          500,
+          10,
+          "stale user-input.resolved on a stopped thread to be persisted",
+        );
+        assert.equal(
+          staleSettlementPersistedEvents.get("stale-resolution-stopped-binding")?.type,
+          "user-input.resolved",
+        );
+
+        const bindingAfter = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(bindingAfter?.status, "stopped");
+        const payloadAfter = asRuntimePayloadRecord(bindingAfter?.runtimePayload);
+        assert.equal(payloadAfter.activeTurnId, null);
+        assert.equal(payloadAfter.lastRuntimeEvent, "session.exited");
+        assert.equal(payloadAfter.lastRuntimeEventAt, "2026-07-14T13:59:00.000Z");
       }),
     );
 
@@ -6484,6 +6632,151 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       assert.equal(binding?.status, "stopped");
       const payload = binding?.runtimePayload as Record<string, unknown> | undefined;
       assert.notEqual(payload?.activeTurnId, asTurnId("turn-many-settled-1"));
+    }),
+  );
+});
+
+it.effect("ProviderServiceLive relays a computer approval to the computer service's gate", () =>
+  Effect.gen(function* () {
+    const routingWithComputer = makeProviderServiceLayer();
+    const scope = yield* Scope.make("sequential");
+    const services = yield* Layer.buildWithScope(routingWithComputer.rawLayer, scope);
+    const provider = ServiceMap.get(services, ProviderService);
+    const gate = new ComputerApprovalGate();
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    const computerService = Layer.succeed(ComputerService, {
+      supported: true,
+      availability: { kind: "available" },
+      manager,
+      approvalGate: gate,
+    });
+    try {
+      const threadId = asThreadId("thread-computer-approval");
+      let requestId = "";
+      const pending = gate.request({
+        threadId,
+        signal: new AbortController().signal,
+        publish: async (id) => {
+          requestId = id;
+        },
+      });
+      yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
+      assert.match(requestId, /^computer:/);
+
+      // The response reaches the gate the computer service owns, and a
+      // session-wide grant comes back as an explicit, explained decline.
+      yield* provider
+        .respondToRequest({
+          threadId,
+          requestId: asRequestId(requestId),
+          decision: "acceptForSession",
+        })
+        .pipe(Effect.provide(computerService));
+      assert.deepEqual(yield* Effect.promise(() => pending), {
+        decision: "decline",
+        reason: COMPUTER_SESSION_APPROVAL_UNAVAILABLE_REASON,
+      });
+
+      // An id the gate does not know, or a server with no computer service at
+      // all, is a validation error rather than a silent no-op.
+      const unknown = yield* Effect.result(
+        provider
+          .respondToRequest({
+            threadId,
+            requestId: asRequestId("computer:unknown"),
+            decision: "accept",
+          })
+          .pipe(Effect.provide(computerService)),
+      );
+      assert.equal(unknown._tag, "Failure");
+      const withoutService = yield* Effect.result(
+        provider.respondToRequest({
+          threadId,
+          requestId: asRequestId(requestId),
+          decision: "accept",
+        }),
+      );
+      assert.equal(withoutService._tag, "Failure");
+    } finally {
+      yield* Effect.promise(() => manager.dispose());
+      yield* Scope.close(scope, Exit.void);
+    }
+  }),
+);
+
+routing.layer("ProviderServiceLive computer control", (it) => {
+  const computerStart = (threadId: ThreadId, enableComputerControl: boolean) => ({
+    provider: "codex" as const,
+    threadId,
+    cwd: "/tmp/computer-control",
+    runtimeMode: "full-access" as const,
+    enableComputerControl,
+  });
+
+  it.effect("lets a turn's explicit decision override the persisted flag in recovery", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-computer-control-recovery");
+      yield* provider.startSession(threadId, computerStart(threadId, true));
+      const started = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(asRuntimePayloadRecord(started?.runtimePayload).enableComputerControl, true);
+
+      // The adapter loses the session but the binding keeps its cursor, so
+      // the next turn recovers. That turn says no computer control.
+      yield* routing.codex.adapter.stopSession(threadId);
+      const startsBefore = routing.codex.startSession.mock.calls.length;
+      yield* provider.sendTurn({
+        threadId,
+        input: "continue without the desktop",
+        attachments: [],
+        enableComputerControl: false,
+      });
+      assert.equal(routing.codex.startSession.mock.calls.length, startsBefore + 1);
+      assert.equal(routing.codex.startSession.mock.calls.at(-1)?.[0]?.enableComputerControl, false);
+      const revoked = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(asRuntimePayloadRecord(revoked?.runtimePayload).enableComputerControl, false);
+
+      // A turn that says nothing recovers with whatever the binding holds.
+      yield* routing.codex.adapter.stopSession(threadId);
+      yield* provider.sendTurn({ threadId, input: "and again", attachments: [] });
+      assert.equal(routing.codex.startSession.mock.calls.at(-1)?.[0]?.enableComputerControl, false);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("drops the computer-control flag when the runtime session exits", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-computer-control-exit");
+      yield* provider.startSession(threadId, computerStart(threadId, true));
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(asRuntimePayloadRecord(binding?.runtimePayload).enableComputerControl, true);
+
+      yield* routing.codex.waitForRuntimeSubscribers();
+      routing.codex.emit({
+        type: "session.exited",
+        eventId: asEventId("computer-control-session-exited"),
+        provider: "codex",
+        threadId,
+        createdAt: "2026-09-16T00:00:00.000Z",
+        lifecycleGeneration: String(binding?.lifecycleGeneration),
+        payload: { reason: "runtime died" },
+      });
+      yield* waitUntilEffect(
+        () =>
+          directory
+            .getBinding(threadId)
+            .pipe(Effect.map((found) => Option.getOrUndefined(found)?.status === "stopped")),
+        500,
+        20,
+        "session.exited to be persisted",
+      );
+      const exited = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(exited?.status, "stopped");
+      assert.equal(asRuntimePayloadRecord(exited?.runtimePayload).enableComputerControl, false);
+      yield* provider.stopSession({ threadId });
     }),
   );
 });

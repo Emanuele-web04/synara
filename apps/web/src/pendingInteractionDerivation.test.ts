@@ -252,6 +252,42 @@ describe("derivePendingApprovals", () => {
     ]);
   });
 
+  it("preserves MCP tool approval display data", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tool-approval-open",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "approval.requested",
+        summary: "Tool approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "tool-request-1",
+          requestKind: "tool",
+          detail: "Allow Synara to launch the calculator?",
+          toolName: "computer_launch_app",
+          toolSource: "acme-tools",
+          toolDetailsReported: true,
+          toolParamsDisplay: [{ name: "app", value: "kcalc", display_name: "app" }],
+        },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([
+      {
+        requestId: "tool-request-1",
+        requestKind: "tool",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        detail: "Allow Synara to launch the calculator?",
+        toolName: "computer_launch_app",
+        // The card must be able to name who is asking and mark the runtime's
+        // own display copy as unverified.
+        toolSource: "acme-tools",
+        toolDetailsReported: true,
+        toolParamsDisplay: [{ name: "app", value: "kcalc", displayName: "app" }],
+      },
+    ]);
+  });
+
   it("clears stale pending approvals when provider reports unknown pending request", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

@@ -34,7 +34,6 @@ import {
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
-import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
@@ -57,7 +56,10 @@ import {
 } from "../../provider/terminalTurnApplicability.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
-import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
+import {
+  type ProjectionPendingInteraction,
+  ProjectionPendingInteractionRepository,
+} from "../../persistence/Services/ProjectionPendingInteractions.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
 import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/ProviderRuntimeEvents.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -74,6 +76,10 @@ import {
   OrchestrationCommandPreviouslyRejectedError,
 } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
+import {
+  buildStalePendingRequestSettlementCommand,
+  pendingInteractionRequestKind,
+} from "../stalePendingInteractions.ts";
 import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
@@ -1847,50 +1853,59 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * A `session.started` event marks a freshly (re)started provider runtime
-   * whose in-memory approval/user-input callbacks are empty, so any durable
-   * pending interaction recorded before it can never be answered. Requests
-   * from the new runtime are ingested strictly after this event, so every
-   * unsettled row seen here is provably orphaned. Settle them as stale —
-   * leaving them open kept the prompt on screen while every response was
-   * silently dropped, wedging the thread until the user abandoned it.
+   * Settles durable pending interactions whose provider callback is provably
+   * gone, reporting each one as a stale request failure.
+   *
+   * Two signals reach here:
+   *
+   *  - `session.started` marks a freshly (re)started provider runtime whose
+   *    in-memory approval/user-input callbacks are empty, so any durable
+   *    pending interaction recorded before it can never be answered. Requests
+   *    from the new runtime are ingested strictly after this event, so every
+   *    unsettled row seen here is provably orphaned (no scope filter).
+   *  - A terminal event (`turn.completed`/`turn.aborted`/`session.exited`) ends
+   *    the turn or session that owned the request. Without this, interrupting a
+   *    turn without restarting the session left the row `pending` forever:
+   *    the sidebar showed "Awaiting Input" on an idle thread and every answer
+   *    failed because no provider session was bound.
+   *
+   * `scopeFilter` narrows which rows a terminal event may settle. ProviderService
+   * permits overlapping sends on one thread, so turn-scoped events must match
+   * strictly on `turnId` — a concurrent turn in the same lifecycle generation can
+   * own its own still-live interaction. A turn-scoped settlement therefore runs
+   * even when the terminal event is not the one driving the thread lifecycle:
+   * the turn it names is over either way. Only `session.exited` (and the
+   * turnless rows a last terminal turn event drains) may scope by generation,
+   * because those kill every turn in that generation.
+   *
+   * A graceful teardown emits the runtime's own resolution event first, so the
+   * row is already `confirmed` by the time this runs. An ungraceful death
+   * (kill -9 and friends) emits no event at all, so rows that outlive the
+   * process are settled at boot instead — same rows, same command shape, via
+   * the shared builder in `../stalePendingInteractions.ts`.
    */
   const settleUnanswerablePendingInteractions = (
     threadId: ThreadId,
     event: ProviderRuntimeEvent,
     now: string,
+    scopeFilter?: (row: ProjectionPendingInteraction) => boolean,
   ) =>
     Effect.gen(function* () {
       const rows = yield* pendingInteractions.listUnsettled({ threadId });
       for (const row of rows) {
-        // An uncertain delivery is not proof that its callback was invalidated.
         if (row.status === "uncertain" && row.interactionKind === "approval") continue;
-        const isApproval = row.interactionKind === "approval";
-        const requestKind = isApproval ? ("approval" as const) : ("user-input" as const);
-        const commandId = providerCommandId(event, `stale-pending-${requestKind}`, row.requestId);
-        yield* orchestrationEngine.dispatch({
-          type: "thread.activity.append",
-          commandId,
-          threadId,
-          activity: {
-            id: EventId.makeUnsafe(commandId),
-            tone: "error",
-            kind: isApproval
-              ? "provider.approval.respond.failed"
-              : "provider.user-input.respond.failed",
-            summary: isApproval
-              ? "Provider approval response failed"
-              : "Provider user input response failed",
-            payload: {
-              detail: buildStalePendingRequestFailureDetail(requestKind, row.requestId),
-              requestId: row.requestId,
-              ...(row.lifecycleGeneration ? { lifecycleGeneration: row.lifecycleGeneration } : {}),
-            },
-            turnId: null,
-            createdAt: now,
-          },
-          createdAt: now,
-        });
+        if (scopeFilter && !scopeFilter(row)) continue;
+        const requestKind = pendingInteractionRequestKind(row.interactionKind);
+        yield* orchestrationEngine.dispatch(
+          buildStalePendingRequestSettlementCommand({
+            threadId,
+            commandId: providerCommandId(event, `stale-pending-${requestKind}`, row.requestId),
+            requestKind,
+            requestId: row.requestId,
+            lifecycleGeneration: row.lifecycleGeneration,
+            now,
+          }),
+        );
       }
     });
 
@@ -2343,6 +2358,74 @@ const make = Effect.gen(function* () {
             }
           }
         }
+      }
+
+      // A turn or session that ends without a session restart takes its
+      // provider callbacks with it, so any interaction it still owns can never
+      // be answered. Settle those rows now instead of waiting for a
+      // `session.started` that an interrupt alone never produces.
+      if (isTerminalTurnEvent && eventTurnId !== undefined) {
+        // Deliberately outside `shouldApplyThreadLifecycle`: ProviderService
+        // permits overlapping sends, so a terminal event for turn B arriving
+        // while turn A owns the thread lifecycle is classified
+        // `conflicts-with-active-turn` and applies nothing to the thread. B's
+        // callbacks are gone all the same, and nothing else would ever settle
+        // B's rows — B has already been forgotten from the outstanding-turn
+        // set by the time we get here.
+        //
+        // Exact-turn scope is the rule: a sibling turn's interaction must
+        // survive this turn's terminal event.
+        //
+        // Claude is the one provider excluded from the exact-turn clause. It
+        // settles its own foreground-turn callbacks as the turn ends, except
+        // for rows owned by a background agent that is still running past that
+        // turn — and the durable row does not record the owning agent, so
+        // settling by turn id here would cancel a live agent's question. The
+        // residual window is bounded by the turnless clause below and by
+        // `session.exited`.
+        const claudeSettlesItsOwnTurnScopedRows = event.provider === "claudeAgent";
+        // Rows with no turn id are the exception, and a strictly turn-scoped
+        // filter can never match them. A provider can open an interaction that
+        // names no turn at all — a Codex MCP elicitation carries no `turnId` in
+        // its JSON-RPC params, and Claude's `canUseTool` falls back to
+        // `undefined` when no turn state is bound — and an interrupt emits no
+        // `session.exited`, so nothing settled those rows until the next server
+        // boot: "Awaiting Input" on an idle thread, exactly what this block
+        // exists to prevent. Settle them only when this terminal event applies
+        // to the thread lifecycle, drains the thread's last outstanding turn
+        // (a sibling turn still running may be the one blocked on the request),
+        // and names the generation it belongs to. Without a generation on the
+        // event there is nothing to match a newer generation's live request
+        // against, so turnless rows are left to `session.exited` or to boot.
+        const remainingOutstandingTurns = (yield* Ref.get(outstandingTurnIdsByThreadRef)).get(
+          thread.id,
+        );
+        const terminalGeneration = event.lifecycleGeneration;
+        const settlesTurnlessRows =
+          shouldApplyThreadLifecycle &&
+          terminalGeneration !== undefined &&
+          (remainingOutstandingTurns?.size ?? 0) === 0;
+        if (!claudeSettlesItsOwnTurnScopedRows || settlesTurnlessRows) {
+          yield* settleUnanswerablePendingInteractions(thread.id, event, now, (row) =>
+            row.turnId === null
+              ? settlesTurnlessRows &&
+                (row.lifecycleGeneration === null || row.lifecycleGeneration === terminalGeneration)
+              : row.turnId === eventTurnId && !claudeSettlesItsOwnTurnScopedRows,
+          );
+        }
+      } else if (shouldApplyThreadLifecycle && event.type === "session.exited") {
+        // The whole session is gone, so every turn in its generation dies with
+        // it. Without a generation on the event, fall back to settling all rows
+        // (the same blanket scope `session.started` uses).
+        const exitedGeneration = event.lifecycleGeneration;
+        yield* settleUnanswerablePendingInteractions(
+          thread.id,
+          event,
+          now,
+          exitedGeneration === undefined
+            ? undefined
+            : (row) => row.lifecycleGeneration === exitedGeneration,
+        );
       }
 
       if (event.type === "user-input.resolved") {
