@@ -7,6 +7,7 @@ import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { useOnboardingDialogStore } from "~/onboarding/onboardingDialogStore";
 import { useProjectImportDialogStore } from "./projectImportDialogStore";
 
+export const PROJECT_IMPORT_ANNOUNCEMENT_STORAGE_KEY = "synara:project-import-announcement:v1";
 const AnnouncementSchema = Schema.Array(Schema.String);
 const EMPTY_INSTALLATIONS: readonly string[] = [];
 
@@ -16,7 +17,7 @@ export function useProjectImportAnnouncement() {
     select: (config) => config.worktreesDir,
   }).data;
   const [seen, setSeen] = useLocalStorage(
-    "synara:project-import-announcement:v1",
+    PROJECT_IMPORT_ANNOUNCEMENT_STORAGE_KEY,
     EMPTY_INSTALLATIONS,
     AnnouncementSchema,
   );
