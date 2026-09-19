@@ -12,6 +12,7 @@
 
 import { useRef, type ReactNode } from "react";
 
+import { useAnnouncementSheetSlot } from "./announcementSheetSlot";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -40,9 +41,12 @@ export function AnnouncementSheet(props: {
   onConfirm: () => void;
 }) {
   const sheetRef = useRef<HTMLDivElement>(null);
+  // Announcements probe independently at startup; only the slot holder is shown so two
+  // sheets never stack. The other opens once this one closes.
+  const open = useAnnouncementSheetSlot(props.open);
   return (
     <Dialog
-      open={props.open}
+      open={open}
       onOpenChange={(nextOpen) => {
         if (!nextOpen) props.onDismiss();
       }}

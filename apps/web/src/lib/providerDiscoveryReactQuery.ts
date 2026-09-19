@@ -346,6 +346,9 @@ export function providerCommandsQueryOptions(input: {
     binaryPath: input.binaryPath ?? null,
     serverUrl: input.serverUrl ?? null,
     experimentalWebSockets: input.experimentalWebSockets ?? null,
+    // A Claude session fixes its Artifact opt-in at spawn, so two threads can report
+    // different commands and `artifacts` states; other providers answer per workspace.
+    threadId: input.provider === "claudeAgent" ? (input.threadId ?? null) : null,
   });
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.commands(

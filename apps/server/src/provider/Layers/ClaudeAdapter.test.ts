@@ -12172,6 +12172,27 @@ describe("Claude explicit native compaction", () => {
     );
   }
 
+  it.effect("keeps concurrent discoveries for different Artifact opt-ins apart", () => {
+    const harness = makeHarness();
+    harness.query.supportedCommandList = [fakeSlashCommand("design"), fakeSlashCommand("slides")];
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const discover = (enableArtifacts: boolean) =>
+        adapter.listCommands!({ provider: "claudeAgent", cwd: "/tmp/project", enableArtifacts });
+      const [off, on] = yield* Effect.all([discover(false), discover(true)], {
+        concurrency: "unbounded",
+      });
+      assert.equal(off.artifacts, "disabled");
+      assert.equal(on.artifacts, "available");
+      // A later lookup still answers for its own opt-in.
+      assert.equal((yield* discover(false)).artifacts, "disabled");
+      assert.equal((yield* discover(true)).artifacts, "available");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("does not borrow a session spawned with a different Artifact opt-in", () => {
     const harness = makeHarness();
     harness.query.supportedCommandList = [fakeSlashCommand("design"), fakeSlashCommand("slides")];

@@ -6931,7 +6931,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       cwd: string;
       enableArtifacts: boolean;
     } | null = null;
-    let pendingCommandDiscovery: Promise<ProviderListCommandsResult> | null = null;
+    // Keyed by everything the spawned process depends on, so a lookup never joins
+    // (and then caches) a discovery started for another workspace or Artifact opt-in.
+    const pendingCommandDiscoveries = new Map<string, Promise<ProviderListCommandsResult>>();
+    let commandDiscoveryTail: Promise<unknown> = Promise.resolve();
     let pendingModelDiscovery: Promise<ProviderListModelsResult> | null = null;
 
     async function discoverViaTemporaryProcess<T>(
@@ -7066,18 +7069,37 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         // 3. Spawn a temporary process for discovery (deduplicating concurrent requests).
         const claudeSdkEnv = yield* resolveClaudeSdkEnv;
-        const discoveryPromise =
-          pendingCommandDiscovery ??
-          discoverCommandsViaTemporaryProcess(
-            input.cwd,
-            withClaudeArtifactOptIn(claudeSdkEnv, enableArtifacts),
-            input.binaryPath ?? "claude",
-            enableArtifacts,
-          );
-        pendingCommandDiscovery = discoveryPromise;
+        const binaryPath = input.binaryPath ?? "claude";
+        const discoveryKey = JSON.stringify([input.cwd, binaryPath, enableArtifacts]);
+        let discoveryPromise = pendingCommandDiscoveries.get(discoveryKey);
+        if (!discoveryPromise) {
+          // Distinct lookups queue behind each other: still one temporary Claude
+          // process at a time, as when every caller shared a single promise.
+          const previous = commandDiscoveryTail;
+          const started = previous
+            .catch(() => undefined)
+            .then(() =>
+              discoverCommandsViaTemporaryProcess(
+                input.cwd,
+                withClaudeArtifactOptIn(claudeSdkEnv, enableArtifacts),
+                binaryPath,
+                enableArtifacts,
+              ),
+            );
+          discoveryPromise = started;
+          commandDiscoveryTail = started;
+          pendingCommandDiscoveries.set(discoveryKey, started);
+          const forget = () => {
+            if (pendingCommandDiscoveries.get(discoveryKey) === started) {
+              pendingCommandDiscoveries.delete(discoveryKey);
+            }
+          };
+          void started.then(forget, forget);
+        }
+        const pendingDiscovery = discoveryPromise;
 
         const result = yield* Effect.tryPromise({
-          try: () => discoveryPromise,
+          try: () => pendingDiscovery,
           catch: (cause) =>
             new ProviderAdapterProcessError({
               provider: PROVIDER,
@@ -7085,18 +7107,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               detail: toMessage(cause, "Failed to discover Claude commands."),
               cause,
             }),
-        }).pipe(
-          Effect.tap(() =>
-            Effect.sync(() => {
-              pendingCommandDiscovery = null;
-            }),
-          ),
-          Effect.tapError(() =>
-            Effect.sync(() => {
-              pendingCommandDiscovery = null;
-            }),
-          ),
-        );
+        });
 
         commandsCache = { result, cwd: input.cwd, enableArtifacts };
         return result;
