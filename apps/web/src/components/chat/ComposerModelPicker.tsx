@@ -388,6 +388,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         hideStatusLabel={props.hideStatusLabel}
         disabled={props.disabled}
         isMenuOpen={isMenuOpen}
+        openPlaceholderLabel={usesEffortSlider ? "Select effort" : null}
         shortcutLabel={props.shortcutLabel}
       />
       <ComposerPickerMenuPopup
