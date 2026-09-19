@@ -27,16 +27,19 @@ export interface AgentGatewaySessionLeaseOptions {
  * are quietly missing. It does not (and cannot) stop a caller passing a
  * structurally wider object; it stops a caller passing an incomplete one.
  *
- * The interface is empty until a layer adds the first optional capability.
  */
-export interface AgentGatewayCapabilityInput {}
+export interface AgentGatewayCapabilityInput {
+  /** The turn or session asked for desktop control (`computer:control`). */
+  readonly enableComputerControl: boolean | undefined;
+}
 
 /**
  * Every field of `AgentGatewayCapabilityInput`, as a tuple, so the derivation
  * and the capture projection can be checked against one list.
  */
-export const AGENT_GATEWAY_CAPABILITY_FACTS =
-  [] as const satisfies readonly (keyof AgentGatewayCapabilityInput)[];
+export const AGENT_GATEWAY_CAPABILITY_FACTS = [
+  "enableComputerControl",
+] as const satisfies readonly (keyof AgentGatewayCapabilityInput)[];
 
 type AssertNever<Key extends never> = Key;
 /** Fails to compile when a field is added without listing it above. */
@@ -60,14 +63,17 @@ export type NoOptionalCapabilityFacts = AssertNever<
 >;
 
 /** Lease no optional capabilities. Spelled out so an omission reads as a choice. */
-export const AGENT_GATEWAY_NO_CAPABILITIES: AgentGatewayCapabilityInput = {};
+export const AGENT_GATEWAY_NO_CAPABILITIES: AgentGatewayCapabilityInput = {
+  enableComputerControl: false,
+};
 
 /** The single derivation from session-start facts to gateway capabilities. */
 export function agentGatewayCapabilitiesFor(
   input: AgentGatewayCapabilityInput,
 ): readonly AgentGatewayCapability[] {
-  void input;
-  return [];
+  const capabilities: AgentGatewayCapability[] = [];
+  if (input.enableComputerControl === true) capabilities.push("computer:control");
+  return capabilities;
 }
 
 export function agentGatewaySessionLeaseOptionsFor(
@@ -78,18 +84,24 @@ export function agentGatewaySessionLeaseOptionsFor(
 }
 
 /**
- * Narrow a start input to the fields a later re-lease needs.
+ * Narrow a start input to the fields a later re-lease needs. This is the one
+ * place a session-start input (where every fact is optional) becomes a
+ * capability input (where every fact is required), so a fact added to the
+ * interface must be projected here or nothing compiles.
  *
  * Adapters that re-lease from a stored session context (Antigravity mints its
  * credential per turn; Pi rotates the credential when a turn completes) no
  * longer hold the start input by then. They keep this projection instead of a
  * hand-picked flag, so the set of capability facts stays defined in one place.
  */
+export type AgentGatewayCapabilityFacts = {
+  readonly [Key in keyof AgentGatewayCapabilityInput]?: AgentGatewayCapabilityInput[Key];
+};
+
 export function captureAgentGatewayCapabilityInput(
-  input: AgentGatewayCapabilityInput,
+  input: AgentGatewayCapabilityFacts,
 ): AgentGatewayCapabilityInput {
-  void input;
-  return {};
+  return { enableComputerControl: input.enableComputerControl === true };
 }
 
 type AgentGatewaySessionLeaseCredentials = Pick<

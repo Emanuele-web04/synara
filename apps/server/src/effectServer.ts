@@ -18,6 +18,7 @@ import {
 import { remoteAccessPolicyError, ServerConfig } from "./config";
 import { resolveListeningPort } from "./startupAccess";
 import { patchBunWebSocketCloseEventCompatibility } from "./bunWebSocketCompatibility";
+import { ComputerLeaseReactor } from "./computer/Services/ComputerLeaseReactor";
 import { makeEffectHttpRouteLayer } from "./http";
 import { Keybindings } from "./keybindings";
 import {
@@ -67,6 +68,7 @@ export interface ServerShape {
     | ManagedAttachmentCleanup
     | AutomationRunReactor
     | AutomationScheduler
+    | ComputerLeaseReactor
     | AutomationService
     | ServerLifecycleEvents
     | OrchestrationEngineService
@@ -128,6 +130,7 @@ export const createEffectServer = Effect.fn(function* (
   const agentGatewayCredentials = yield* AgentGatewayCredentials;
   const automationRunReactor = yield* AutomationRunReactor;
   const automationScheduler = yield* AutomationScheduler;
+  const computerLeaseReactor = yield* ComputerLeaseReactor;
   const keybindings = yield* Keybindings;
   const managedAttachmentCleanup = yield* ManagedAttachmentCleanup;
   const lifecycleEvents = yield* ServerLifecycleEvents;
@@ -220,6 +223,7 @@ export const createEffectServer = Effect.fn(function* (
   // Restart cleanup must finish before any subscriber can replay commands or
   // start new turns whose live interactions would otherwise look orphaned.
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
+  yield* Scope.provide(computerLeaseReactor.start(), subscriptionsScope);
   yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
   yield* Scope.provide(automationScheduler.start(), subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);

@@ -40,6 +40,7 @@ import {
   PubSub,
   Ref,
   Scope,
+  ServiceMap,
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
@@ -75,6 +76,13 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import { AGENT_GATEWAY_TURN_AUTHORITY_RETIRED } from "../../agentGateway/sessionLease.ts";
+import {
+  COMPUTER_SESSION_APPROVAL_UNAVAILABLE_REASON,
+  ComputerApprovalGate,
+} from "../../computer/ComputerApprovalGate.ts";
+import { ComputerManager } from "../../computer/ComputerManager.ts";
+import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
+import { ComputerService } from "../../computer/Services/ComputerService.ts";
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
@@ -6624,6 +6632,151 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       assert.equal(binding?.status, "stopped");
       const payload = binding?.runtimePayload as Record<string, unknown> | undefined;
       assert.notEqual(payload?.activeTurnId, asTurnId("turn-many-settled-1"));
+    }),
+  );
+});
+
+it.effect("ProviderServiceLive relays a computer approval to the computer service's gate", () =>
+  Effect.gen(function* () {
+    const routingWithComputer = makeProviderServiceLayer();
+    const scope = yield* Scope.make("sequential");
+    const services = yield* Layer.buildWithScope(routingWithComputer.rawLayer, scope);
+    const provider = ServiceMap.get(services, ProviderService);
+    const gate = new ComputerApprovalGate();
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    const computerService = Layer.succeed(ComputerService, {
+      supported: true,
+      availability: { kind: "available" },
+      manager,
+      approvalGate: gate,
+    });
+    try {
+      const threadId = asThreadId("thread-computer-approval");
+      let requestId = "";
+      const pending = gate.request({
+        threadId,
+        signal: new AbortController().signal,
+        publish: async (id) => {
+          requestId = id;
+        },
+      });
+      yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
+      assert.match(requestId, /^computer:/);
+
+      // The response reaches the gate the computer service owns, and a
+      // session-wide grant comes back as an explicit, explained decline.
+      yield* provider
+        .respondToRequest({
+          threadId,
+          requestId: asRequestId(requestId),
+          decision: "acceptForSession",
+        })
+        .pipe(Effect.provide(computerService));
+      assert.deepEqual(yield* Effect.promise(() => pending), {
+        decision: "decline",
+        reason: COMPUTER_SESSION_APPROVAL_UNAVAILABLE_REASON,
+      });
+
+      // An id the gate does not know, or a server with no computer service at
+      // all, is a validation error rather than a silent no-op.
+      const unknown = yield* Effect.result(
+        provider
+          .respondToRequest({
+            threadId,
+            requestId: asRequestId("computer:unknown"),
+            decision: "accept",
+          })
+          .pipe(Effect.provide(computerService)),
+      );
+      assert.equal(unknown._tag, "Failure");
+      const withoutService = yield* Effect.result(
+        provider.respondToRequest({
+          threadId,
+          requestId: asRequestId(requestId),
+          decision: "accept",
+        }),
+      );
+      assert.equal(withoutService._tag, "Failure");
+    } finally {
+      yield* Effect.promise(() => manager.dispose());
+      yield* Scope.close(scope, Exit.void);
+    }
+  }),
+);
+
+routing.layer("ProviderServiceLive computer control", (it) => {
+  const computerStart = (threadId: ThreadId, enableComputerControl: boolean) => ({
+    provider: "codex" as const,
+    threadId,
+    cwd: "/tmp/computer-control",
+    runtimeMode: "full-access" as const,
+    enableComputerControl,
+  });
+
+  it.effect("lets a turn's explicit decision override the persisted flag in recovery", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-computer-control-recovery");
+      yield* provider.startSession(threadId, computerStart(threadId, true));
+      const started = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(asRuntimePayloadRecord(started?.runtimePayload).enableComputerControl, true);
+
+      // The adapter loses the session but the binding keeps its cursor, so
+      // the next turn recovers. That turn says no computer control.
+      yield* routing.codex.adapter.stopSession(threadId);
+      const startsBefore = routing.codex.startSession.mock.calls.length;
+      yield* provider.sendTurn({
+        threadId,
+        input: "continue without the desktop",
+        attachments: [],
+        enableComputerControl: false,
+      });
+      assert.equal(routing.codex.startSession.mock.calls.length, startsBefore + 1);
+      assert.equal(routing.codex.startSession.mock.calls.at(-1)?.[0]?.enableComputerControl, false);
+      const revoked = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(asRuntimePayloadRecord(revoked?.runtimePayload).enableComputerControl, false);
+
+      // A turn that says nothing recovers with whatever the binding holds.
+      yield* routing.codex.adapter.stopSession(threadId);
+      yield* provider.sendTurn({ threadId, input: "and again", attachments: [] });
+      assert.equal(routing.codex.startSession.mock.calls.at(-1)?.[0]?.enableComputerControl, false);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("drops the computer-control flag when the runtime session exits", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-computer-control-exit");
+      yield* provider.startSession(threadId, computerStart(threadId, true));
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(asRuntimePayloadRecord(binding?.runtimePayload).enableComputerControl, true);
+
+      yield* routing.codex.waitForRuntimeSubscribers();
+      routing.codex.emit({
+        type: "session.exited",
+        eventId: asEventId("computer-control-session-exited"),
+        provider: "codex",
+        threadId,
+        createdAt: "2026-09-16T00:00:00.000Z",
+        lifecycleGeneration: String(binding?.lifecycleGeneration),
+        payload: { reason: "runtime died" },
+      });
+      yield* waitUntilEffect(
+        () =>
+          directory
+            .getBinding(threadId)
+            .pipe(Effect.map((found) => Option.getOrUndefined(found)?.status === "stopped")),
+        500,
+        20,
+        "session.exited to be persisted",
+      );
+      const exited = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(exited?.status, "stopped");
+      assert.equal(asRuntimePayloadRecord(exited?.runtimePayload).enableComputerControl, false);
+      yield* provider.stopSession({ threadId });
     }),
   );
 });

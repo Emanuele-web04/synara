@@ -7,6 +7,7 @@ import { claudeTurnResultUsage, type ClaudeResultUsageBaseline } from "../claude
  *
  * @module ClaudeAdapterLive
  */
+import { stripDiagnosticImages } from "../stripDiagnosticImages.ts";
 import { execProcessFile, spawnProcess } from "@synara/shared/processRuntime";
 import type {
   AgentInfo,
@@ -114,6 +115,7 @@ import {
   cancelAgentGatewayTurn,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
+  captureAgentGatewayCapabilityInput,
 } from "../../agentGateway/sessionLease.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -2112,7 +2114,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       event: ProviderRuntimeEvent,
     ): Effect.Effect<void> =>
       Queue.offer(runtimeEventQueue, {
-        ...event,
+        ...stripDiagnosticImages(event),
         ...(context.lifecycleGeneration !== undefined
           ? { lifecycleGeneration: context.lifecycleGeneration }
           : {}),
@@ -3585,7 +3587,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (context.turnState) {
-          context.turnState.items.push(message.message);
+          context.turnState.items.push(stripDiagnosticImages(message.message));
         }
 
         for (const toolResult of toolResultBlocksFromUserMessage(message)) {
@@ -3945,7 +3947,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (context.turnState) {
-          context.turnState.items.push(message.message);
+          context.turnState.items.push(stripDiagnosticImages(message.message));
           yield* backfillAssistantTextBlocksFromSnapshot(context, message);
         }
 
@@ -5610,7 +5612,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           agentGatewayCredentials,
           threadId,
           PROVIDER,
-          input,
+          captureAgentGatewayCapabilityInput(input),
         );
         const queryOptions: ClaudeQueryOptions = {
           ...(input.cwd ? { cwd: input.cwd } : {}),

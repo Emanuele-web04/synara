@@ -542,7 +542,7 @@ describe("provider runtime activity projection", () => {
           args: {
             serverName: "acme-tools",
             _meta: {
-              tool_name: "mcp_tool",
+              tool_name: "computer_launch_app",
               tool_params_display: [{ name: "app", value: "kcalc", display_name: "app" }],
             },
           },
@@ -556,7 +556,7 @@ describe("provider runtime activity projection", () => {
         requestKind: "tool",
         requestType: "tool_approval",
         detail: "Allow Synara to launch the calculator?",
-        toolName: "mcp_tool",
+        toolName: "computer_launch_app",
         // The MCP server that raised the elicitation, from the request itself.
         toolSource: "acme-tools",
         // Name and parameters came from the server's own `_meta`.
@@ -624,9 +624,9 @@ describe("provider runtime activity projection", () => {
           requestId: ApprovalRequestId.makeUnsafe(`claude-${requestType}-1`),
           payload: {
             requestType,
-            detail: "mcp__synara__tool: {}",
+            detail: "mcp__synara__computer_launch_app: {}",
             args: {
-              toolName: "mcp__synara__tool",
+              toolName: "mcp__synara__computer_launch_app",
               input: { app: "kcalc", args: ["--hidpi"], headless: false },
               sessionApprovalAvailable: true,
               toolUseId: "toolu_01",
@@ -641,7 +641,7 @@ describe("provider runtime activity projection", () => {
         payload: {
           requestKind: "tool",
           requestType,
-          toolName: "mcp__synara__tool",
+          toolName: "mcp__synara__computer_launch_app",
           // Derived from the namespaced tool name, not from runtime metadata.
           toolSource: "synara",
           toolParamsDisplay: [

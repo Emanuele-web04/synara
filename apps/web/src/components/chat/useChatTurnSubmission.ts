@@ -54,6 +54,7 @@ import { getThreadFromState } from "../../threadDerivation";
 
 export function useChatTurnSubmission({
   turnDispatchSettings,
+  setComposerDraftComputerControl,
   threadId,
   hasLiveTurn,
   lateComposerSendHandlersRef,
@@ -376,6 +377,7 @@ export function useChatTurnSubmission({
       );
       const selectedModelSelectionForSend = dispatchSettingsForSend.modelSelection;
       const providerOptionsForDispatchForSend = dispatchSettingsForSend.providerOptions;
+      const enableComputerControlForSend = dispatchSettingsForSend.enableComputerControl;
       const runtimeModeForSend = dispatchSettingsForSend.runtimeMode;
       let interactionModeForSend = dispatchSettingsForSend.interactionMode;
       const envModeForSend = dispatchSettingsForSend.envMode;
@@ -827,6 +829,17 @@ export function useChatTurnSubmission({
           description: toastCopy.description,
         });
       }
+      // A chat's first send records the new-chat computer-control default as the
+      // chat's own choice, so a later change to the machine-wide setting leaves
+      // this chat as it was. Read the store, not the render closure: the draft
+      // may have been touched since this send began.
+      if (
+        enableComputerControlForSend &&
+        useComposerDraftStore.getState().draftsByThreadId[threadIdForSend]
+          ?.enableComputerControl === undefined
+      ) {
+        setComposerDraftComputerControl(threadIdForSend, true);
+      }
       // Queued turns are dispatched from their captured snapshot, so this send path
       // must not clear a separate live draft the user may already be editing.
       if (queuedChatTurn === null) {
@@ -956,6 +969,7 @@ export function useChatTurnSubmission({
       composerPullRequestContexts,
       restoredQueuedSourceProposedPlanRef,
       turnDispatchSettings,
+      setComposerDraftComputerControl,
       enqueueQueuedComposerTurn,
       setComposerDraftPrompt,
       setComposerTrigger,

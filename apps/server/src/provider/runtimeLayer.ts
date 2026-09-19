@@ -25,6 +25,7 @@ import { makeDurableProviderServiceLive } from "./Layers/ProviderService";
 import { ProviderSessionDirectoryLive } from "./Layers/ProviderSessionDirectory";
 import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/ProviderSessionRuntime";
 import { ProviderRuntimeEventRepositoryLive } from "../persistence/Layers/ProviderRuntimeEvents";
+import { ComputerServiceLive } from "../computer/Layers/ComputerService";
 
 export function makeServerProviderLayer(
   options: {
@@ -116,6 +117,10 @@ export function makeServerProviderLayer(
       Layer.provide(adapterRegistryLayer),
       Layer.provide(providerSessionDirectoryLayer),
       Layer.provide(ProviderRuntimeEventRepositoryLive),
+      // The computer approval gate the provider service relays user decisions
+      // to lives on the computer service; the layer is memoized, so this is
+      // the same instance the agent gateway asks.
+      Layer.provide(ComputerServiceLive),
     );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
