@@ -1,18 +1,7 @@
 import CoreGraphics
 import Foundation
 
-private let escapeKeyCode = CGKeyCode(0x35)
 private let eventTapRetryInterval = 5.0
-
-/// Modifiers that make an Escape keypress a chord instead of the plain key.
-/// Caps Lock and the secondary-Fn state do not change which physical key was
-/// pressed, so they do not disqualify the press.
-private let escapeDisqualifyingFlags: CGEventFlags = [
-    .maskCommand,
-    .maskAlternate,
-    .maskControl,
-    .maskShift,
-]
 
 private func escapeEventTapCallback(
     proxy: CGEventTapProxy,
@@ -37,15 +26,10 @@ private func escapeEventTapCallback(
 /// monitor, i.e. while a driver generation is live and computer input can
 /// actually be in flight.
 ///
-/// Two filters keep the signal honest:
-///
-/// - Only an unmodified Escape counts. Escape carrying Command, Option,
-///   Control, or Shift is a chord that belongs to the application (Force Quit,
-///   palette dismissal), not a stop request.
-/// - Only hardware-origin keypresses count. An event posted by a process —
-///   including the computer-use driver's own synthetic Escape — carries the
-///   posting process id in `eventSourceUnixProcessID` and is ignored, so an
-///   agent can still send Escape to a window without stopping itself.
+/// Every observed event goes through `EscapePhysicalClassifier`, which keeps
+/// the signal honest: chords that belong to the application never stop input,
+/// and a synthetic Escape posted by any process — the computer-use driver's
+/// own included — is an ordinary keystroke that cannot stop the agent.
 final class EscapeKillSwitchMonitor {
     private let emitter: NDJSONEmitter
     private let onEscape: () -> Void
@@ -97,10 +81,15 @@ final class EscapeKillSwitchMonitor {
         }
 
         guard type == .keyDown,
-              CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)) == escapeKeyCode,
-              event.flags.intersection(escapeDisqualifyingFlags).isEmpty,
-              event.getIntegerValueField(.eventSourceUnixProcessID) == 0,
-              armed
+              EscapePhysicalClassifier.isPhysicalEscape(
+                  type: type,
+                  keyCode: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
+                  flags: event.flags,
+                  sourceProcessID: event.getIntegerValueField(.eventSourceUnixProcessID),
+                  sourceStateID: event.getIntegerValueField(.eventSourceStateID),
+                  sourceUserData: event.getIntegerValueField(.eventSourceUserData),
+                  armed: armed
+              )
         else {
             return
         }
