@@ -7,6 +7,7 @@ import { cn } from "./utils";
 import { CentralIcon, type CentralIconVariant } from "./central-icons";
 import {
   IconAlertCircle,
+  IconAlertOctagon,
   IconAlertTriangle,
   IconArchive,
   IconArrowBackUp,
@@ -18,6 +19,7 @@ import {
   IconArrowUpRight,
   IconBolt,
   IconBrain,
+  IconBulb,
   IconBug,
   IconCamera,
   IconCheck,
@@ -145,6 +147,7 @@ export const ChevronRightIcon = adaptIcon(IconChevronRight);
 export const ChevronUpIcon = adaptIcon(IconChevronUp);
 export const ChevronsUpDownIcon = adaptIcon(IconSelector);
 export const CircleAlertIcon = adaptIcon(IconAlertCircle);
+export const OctagonAlertIcon = adaptIcon(IconAlertOctagon);
 export const CircleCheckIcon = adaptIcon(IconCircleCheck);
 // User-input rows: a question-mark circle while the agent waits for an answer,
 // and an up-arrow circle once the answer is submitted. Sourced from the Central
@@ -156,6 +159,7 @@ export const Columns2Icon = adaptIcon(IconColumns2);
 export const ChangesIcon = centralIconWrapper("changes");
 export const COPY_ICON_NAME = "square-behind-square-6";
 export const CopyIcon = centralIconWrapper(COPY_ICON_NAME);
+export const LightbulbIcon = adaptIcon(IconBulb);
 export const LinkIcon = centralIconWrapper("chain-link-3");
 // Pull request menu glyphs: a text page for "View PR", the Central GitHub mark for the
 // inline "Open in GitHub" button, and a plus bubble for "Add to chat".

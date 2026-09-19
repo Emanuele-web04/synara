@@ -882,6 +882,33 @@ label:has(> select#reasoning-effort) select {
   color: var(--muted-foreground);
 }
 
+/* GitHub `> [!NOTE]` alerts (tagged by remarkGithubAlerts). */
+.chat-markdown blockquote[data-github-alert] {
+  --github-alert-color: var(--info);
+  border-left-width: 3px;
+  border-left-color: var(--github-alert-color);
+  color: var(--foreground);
+}
+.chat-markdown blockquote[data-github-alert="tip"] {
+  --github-alert-color: var(--success);
+}
+.chat-markdown blockquote[data-github-alert="important"] {
+  --github-alert-color: var(--status-merged);
+}
+.chat-markdown blockquote[data-github-alert="warning"] {
+  --github-alert-color: var(--warning);
+}
+.chat-markdown blockquote[data-github-alert="caution"] {
+  --github-alert-color: var(--destructive);
+}
+.chat-markdown .markdown-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  color: var(--github-alert-color);
+  font-weight: 500;
+}
+
 .chat-markdown :not(pre) > code {
   border-radius: 0.4rem;
   background: var(--app-user-message-background);

@@ -3,11 +3,21 @@
 // Layer: Web chat presentation component
 // Exports: ChatMarkdown
 
-import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
+import {
+  CheckIcon,
+  CopyIcon,
+  InfoIcon,
+  LightbulbIcon,
+  OctagonAlertIcon,
+  TextWrapIcon,
+  TriangleAlertIcon,
+  type LucideIcon,
+} from "~/lib/icons";
 import type { ProviderMentionReference } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
 import { matchWikiLinkAt, remarkWikiLinks } from "../lib/remarkWikiLinks";
+import { remarkGithubAlerts, type GithubAlertKind } from "../lib/remarkGithubAlerts";
 import React, {
   Children,
   createContext,
@@ -207,6 +217,7 @@ const ParsedMarkdown = memo(function ParsedMarkdown(props: ParsedMarkdownProps) 
 const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
+  remarkGithubAlerts,
 ];
 // User prompts are casual typing, not authored markdown: hard-break single
 // newlines and skip math entirely (the composer chip plugin is appended per
@@ -1050,7 +1061,30 @@ interface MarkdownRenderContextValue {
 const MarkdownRenderContext = createContext<MarkdownRenderContextValue | null>(null);
 
 // Stable component types preserve code highlighting timers, copy state and image state.
+const GITHUB_ALERTS: Record<GithubAlertKind, { title: string; icon: LucideIcon }> = {
+  note: { title: "Note", icon: InfoIcon },
+  tip: { title: "Tip", icon: LightbulbIcon },
+  important: { title: "Important", icon: InfoIcon },
+  warning: { title: "Warning", icon: TriangleAlertIcon },
+  caution: { title: "Caution", icon: OctagonAlertIcon },
+};
+
 const MARKDOWN_COMPONENTS: Components = {
+  blockquote: function MarkdownBlockquote({ node: _node, children, ...props }) {
+    const kind = (props as { "data-github-alert"?: GithubAlertKind })["data-github-alert"];
+    const alert = kind ? GITHUB_ALERTS[kind] : undefined;
+    if (!alert) return <blockquote {...props}>{children}</blockquote>;
+    const Icon = alert.icon;
+    return (
+      <blockquote {...props}>
+        <p className="markdown-alert-title">
+          <Icon aria-hidden className="size-[1.1em] shrink-0" />
+          {alert.title}
+        </p>
+        {children}
+      </blockquote>
+    );
+  },
   a: function MarkdownLink({ node: _node, href, children, ...props }) {
     const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme } =
       useContext(MarkdownRenderContext)!;
