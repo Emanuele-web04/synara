@@ -124,6 +124,8 @@ export function collectDescendantProcesses(
 function captureProcessChildrenMapSync(): ProcessChildrenMap | null {
   try {
     const result = spawnProcessSync("ps", ["-eo", "pid=,ppid=,lstart=,command="], {
+      // lstart uses locale-dependent %c; the parser expects the C locale's five tokens.
+      env: { ...process.env, LC_ALL: "C" },
       encoding: "utf8",
       maxBuffer: PROCESS_TREE_SCAN_MAX_BUFFER_BYTES,
       timeout: PROCESS_TREE_SCAN_TIMEOUT_MS,
@@ -143,6 +145,7 @@ function readCurrentProcesses(pids: readonly number[]): ProcessIdentityMap | nul
       "ps",
       ["-p", uniquePids.join(","), "-o", "pid=,ppid=,lstart=,command="],
       {
+        env: { ...process.env, LC_ALL: "C" },
         encoding: "utf8",
         maxBuffer: PROCESS_COMMAND_SCAN_MAX_BUFFER_BYTES,
         timeout: PROCESS_TREE_SCAN_TIMEOUT_MS,

@@ -1,3 +1,6 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -322,3 +325,33 @@ it("rejects a different command even when second-resolution start times match", 
   expect(signalPid).not.toHaveBeenCalled();
   expect(killer.inspect?.(tree)).toEqual({ verified: true, survivors: [] });
 });
+
+it.skipIf(process.platform !== "darwin")(
+  "captures and verifies native start times independently of the parent locale",
+  async () => {
+    const previousLocale = process.env.LC_ALL;
+    const child = spawn("/bin/sleep", ["1"], { stdio: "ignore" });
+    const exited = once(child, "exit");
+    try {
+      await once(child, "spawn");
+      process.env.LC_ALL = "ja_JP.UTF-8";
+      const killer = createProcessTreeKiller();
+      const captured = killer.capture(process.pid).descendants.find((row) => row.pid === child.pid);
+      expect(captured).toBeDefined();
+      expect(captured?.command).toBe("/bin/sleep 1");
+      expect(captured?.startedAt).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) [A-Z][a-z]{2} /);
+      if (!captured) throw new Error("Owned test child was not captured");
+      // Both probes must use the same stable locale, even if the parent changes it.
+      process.env.LC_ALL = "fr_FR.UTF-8";
+      expect(killer.inspect?.({ descendants: [captured] })).toEqual({
+        verified: true,
+        survivors: [captured],
+      });
+      expect(process.env.LC_ALL).toBe("fr_FR.UTF-8");
+    } finally {
+      if (previousLocale === undefined) delete process.env.LC_ALL;
+      else process.env.LC_ALL = previousLocale;
+      await exited;
+    }
+  },
+);
