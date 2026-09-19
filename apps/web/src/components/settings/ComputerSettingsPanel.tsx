@@ -25,7 +25,13 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ensureNativeApi } from "~/nativeApi";
 
-import type { AppSettingsBinding, ComputerPreviewSize } from "~/appSettings";
+import {
+  DEFAULT_AGENT_CURSOR_COLOR_MODE,
+  normalizeCursorHexColor,
+  type AgentCursorColorMode,
+  type AppSettingsBinding,
+  type ComputerPreviewSize,
+} from "~/appSettings";
 import type { DesktopAppSnapSettingsPane, DesktopAppSnapState } from "@synara/contracts";
 import {
   computerLastFailureNote,
@@ -34,6 +40,7 @@ import {
   resolveComputerAvailabilityView,
 } from "~/components/ComputerPanel.logic";
 import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
 import { Switch } from "~/components/ui/switch";
 import { useProvisionComputer } from "~/hooks/useProvisionComputer";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
@@ -146,6 +153,66 @@ function formatRemaining(ms: number): string {
     return `${hours} ${hours === 1 ? "hour" : "hours"}`;
   }
   return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+}
+
+/**
+ * One agent-cursor color field: a validated hex input and the swatch it
+ * resolves to. Only a complete `#rrggbb` (or an intentional clear) commits to
+ * settings, so a half-typed value never reaches the stored preference.
+ */
+function CursorColorField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  // Follow a committed value that landed from elsewhere (Reset, another
+  // window) instead of stranding the field on the old draft.
+  useEffect(() => setDraft(value), [value]);
+  const resolved = normalizeCursorHexColor(value);
+  const draftIsValid = draft.trim() === "" || normalizeCursorHexColor(draft) !== "";
+  return (
+    <label className="flex items-center gap-2">
+      <span className="w-7 shrink-0 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
+        {label}
+      </span>
+      <span
+        aria-hidden
+        data-swatch={resolved || "stock"}
+        className={cn(
+          "size-4 shrink-0 rounded-full border border-[color:var(--color-border)]",
+          !resolved && "bg-transparent",
+        )}
+        style={resolved ? { backgroundColor: resolved } : undefined}
+      />
+      <Input
+        size="sm"
+        value={draft}
+        onChange={(event) => {
+          const next = event.target.value;
+          setDraft(next);
+          if (next.trim() === "") {
+            onChange("");
+            return;
+          }
+          const normalized = normalizeCursorHexColor(next);
+          if (normalized) onChange(normalized);
+        }}
+        onBlur={() => setDraft(value)}
+        placeholder="#rrggbb"
+        maxLength={7}
+        spellCheck={false}
+        autoComplete="off"
+        aria-label={`${label} color`}
+        aria-invalid={!draftIsValid}
+        className="w-24"
+      />
+    </label>
+  );
 }
 
 export function ComputerSettingsPanel({
@@ -336,6 +403,13 @@ export function ComputerSettingsPanel({
    * than reporting authority the driver does not have.
    */
   const inputStopped = status?.inputStopped === true;
+  // Stock is the default and stores no override; only an explicit Custom
+  // choice can differ from the default state.
+  const cursorColorMode = settings.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE;
+  const cursorColorsDirty =
+    cursorColorMode !== (defaults.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE) ||
+    (settings.agentCursorFillColor ?? "") !== (defaults.agentCursorFillColor ?? "") ||
+    (settings.agentCursorRimColor ?? "") !== (defaults.agentCursorRimColor ?? "");
 
   return (
     <div className="space-y-6">
@@ -546,6 +620,57 @@ export function ComputerSettingsPanel({
             />
           }
         />
+      </SettingsSection>
+
+      {/* The agent's on-screen pointer. Stock keeps the driver's monochrome
+          cursor and stores nothing beyond the default; Custom is the only
+          state that carries fill/rim overrides to the desktop cursor host. */}
+      <SettingsSection title="Agent cursor">
+        <SettingsRow
+          title="Cursor colors"
+          description="The agent pointer is stock monochrome by default — like a normal pointer. Custom colors apply to new computer sessions."
+          resetAction={
+            cursorColorsDirty ? (
+              <SettingResetButton
+                label="cursor colors"
+                onClick={() =>
+                  updateSettings({
+                    agentCursorColorMode:
+                      defaults.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE,
+                    agentCursorFillColor: defaults.agentCursorFillColor ?? "",
+                    agentCursorRimColor: defaults.agentCursorRimColor ?? "",
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl<AgentCursorColorMode>
+              value={cursorColorMode}
+              onValueChange={(value) => updateSettings({ agentCursorColorMode: value })}
+              options={[
+                { value: "stock", label: "Stock" },
+                { value: "custom", label: "Custom" },
+              ]}
+              ariaLabel="Agent cursor colors"
+            />
+          }
+        >
+          {cursorColorMode === "custom" ? (
+            <div className="flex flex-col gap-2 pt-3 sm:flex-row sm:gap-4">
+              <CursorColorField
+                label="Fill"
+                value={settings.agentCursorFillColor ?? ""}
+                onChange={(value) => updateSettings({ agentCursorFillColor: value })}
+              />
+              <CursorColorField
+                label="Rim"
+                value={settings.agentCursorRimColor ?? ""}
+                onChange={(value) => updateSettings({ agentCursorRimColor: value })}
+              />
+            </div>
+          ) : null}
+        </SettingsRow>
       </SettingsSection>
 
       <SettingsSection title="Computer control">

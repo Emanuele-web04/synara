@@ -120,6 +120,42 @@ function agentSessionLabel(task: CuaComputerTask): string {
   return `${AGENT_SESSION_LABEL_PREFIX}${label}·${threadId}`;
 }
 
+/**
+ * The agent cursor overlay's colors, pushed to the driver session as
+ * `set_agent_cursor_style`. Every field is optional: an omitted channel keeps
+ * the driver's stock treatment for it, and a style with no usable color at
+ * all means the stock monochrome cursor — no call is made.
+ */
+export interface CuaCursorStyle {
+  readonly fill?: string;
+  readonly rim?: string;
+  readonly shadow?: string;
+}
+
+const CUA_CURSOR_COLOR_PATTERN = /^#[0-9a-f]{6}$/;
+
+function normalizeCuaCursorColor(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const candidate = value.trim().toLowerCase();
+  return CUA_CURSOR_COLOR_PATTERN.test(candidate) ? candidate : undefined;
+}
+
+/** Drop unusable channels so a half-typed color never reaches the driver. */
+function normalizeCuaCursorStyle(
+  style: CuaCursorStyle | null | undefined,
+): CuaCursorStyle | undefined {
+  if (!style || typeof style !== "object") return undefined;
+  const fill = normalizeCuaCursorColor(style.fill);
+  const rim = normalizeCuaCursorColor(style.rim);
+  const shadow = normalizeCuaCursorColor(style.shadow);
+  if (!fill && !rim && !shadow) return undefined;
+  return {
+    ...(fill ? { fill } : {}),
+    ...(rim ? { rim } : {}),
+    ...(shadow ? { shadow } : {}),
+  };
+}
+
 interface HostPermissions {
   accessibility: boolean;
   screenRecording: boolean;
@@ -361,6 +397,12 @@ export class CuaDriverHost {
        * app that hosts it. Defaults to this process alone.
        */
       ownPids?: () => ReadonlySet<number>;
+      /**
+       * The agent cursor's colors, read at each session open. `undefined`
+       * (or a style with no usable `#rrggbb` channel) keeps the driver's
+       * stock monochrome cursor: no `set_agent_cursor_style` call is made.
+       */
+      cursorStyle?: () => CuaCursorStyle | null | undefined;
     },
   ) {}
 
@@ -1304,6 +1346,24 @@ export class CuaDriverHost {
       );
       if (!motion.ok || motion.result?.isError)
         throw new Error("Cua cursor initialization failed.");
+      // The user's cursor colors, at the same once-per-generation timing as
+      // the motion feel. Stock sends nothing at all, so a default install
+      // keeps the driver's own monochrome art; an unpatched upstream driver
+      // has no style tool, so a configured style stays stock there.
+      const style = normalizeCuaCursorStyle(this.options.cursorStyle?.());
+      if (style && this.observedNativeRevision !== 0) {
+        const styled = await cuaRequest<CuaReply>(
+          generation.socket,
+          {
+            method: "call",
+            name: "set_agent_cursor_style",
+            args: { session: generation.session, ...style },
+          },
+          { timeoutMs: startupTimeoutMs },
+        );
+        if (!styled.ok || styled.result?.isError)
+          throw new Error("Cua cursor style initialization failed.");
+      }
     })();
     try {
       await generation.sessionOpening;

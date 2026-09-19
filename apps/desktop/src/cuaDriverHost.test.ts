@@ -45,6 +45,7 @@ async function fixture(
     startupTimeoutMs?: number;
     deathFlag?: string;
     ownPids?: () => ReadonlySet<number>;
+    cursorStyle?: () => { fill?: string; rim?: string; shadow?: string } | null | undefined;
     checkPermissions?: () => Promise<{
       accessibility: boolean;
       screenRecording: boolean;
@@ -103,8 +104,8 @@ net.createServer(s=>{
         reply({pid:process.pid+(options.cleanup==='wrong-pid'?1:0),input_admission_closed:options.cleanup==='missing-admission'?undefined:true,cleanup_complete:options.cleanup!=='incomplete',pending_input:options.cleanup==='incomplete'?1:0});
       },30);
     }
-    else if(options.sessionDeathOnce && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); reply({isError:true, content:[{type:'text', text:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id."}], structuredContent:{effect:'not-dispatched'}}); }
-    else if(options.sessionDeathTransport && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); s.end(JSON.stringify({ok:false,error:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id.",effect:'not-dispatched'})+'\\n'); }
+    else if(options.sessionDeathOnce && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); reply({isError:true, content:[{type:'text', text:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id."}], structuredContent:{effect:'not-dispatched'}}); }
+    else if(options.sessionDeathTransport && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); s.end(JSON.stringify({ok:false,error:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id.",effect:'not-dispatched'})+'\\n'); }
     else if(r.name==='type_text') {
       write('dispatch'); action=s;
       if(options.crash) { write('crash'); process.exit(1); }
@@ -113,6 +114,7 @@ net.createServer(s=>{
     }
     else if(options.hangSession && r.name==='start_session' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag,'1'); write('session-hang'); }
     else if(r.name==='set_agent_cursor_motion') { write('motion-'+r.args.glide_duration_ms+'-'+r.args.dwell_after_click_ms); reply({}); }
+    else if(r.name==='set_agent_cursor_style') { write('style:'+JSON.stringify(r.args)); reply({}); }
     else if(r.name==='press_key') { write('key'); write('observation-budget-'+process.env.SYNARA_CUA_FOREGROUND_OBSERVATION_MS); reply({}); }
     else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:[]}}),options.delayObservation?60:0); }
     else if(r.name==='get_desktop_state') reply({content:[{type:'image',data:'fixture-image'}]});
@@ -153,6 +155,7 @@ process.stdin.resume(); process.stdin.on('end',retire);
     ...(options.startupTimeoutMs ? { startupTimeoutMs: options.startupTimeoutMs } : {}),
     ...(options.nativeRevision !== undefined ? { nativeRevision: options.nativeRevision } : {}),
     ...(options.ownPids ? { ownPids: options.ownPids } : {}),
+    ...(options.cursorStyle ? { cursorStyle: options.cursorStyle } : {}),
   });
   const events = async () =>
     (await readFile(log, "utf8"))
@@ -968,6 +971,84 @@ describe("Cua GUI host retirement", () => {
   });
 });
 
+/** The args of every `set_agent_cursor_style` call the fixture recorded. */
+function stylePayloads(events: Array<{ event: string }>): Array<Record<string, unknown>> {
+  return events
+    .filter((row) => row.event.startsWith("style:"))
+    .map((row) => JSON.parse(row.event.slice("style:".length)) as Record<string, unknown>);
+}
+
+describe("agent cursor style", () => {
+  const pressKey = (endpoint: string) =>
+    cuaRequest<CuaReply>(endpoint, {
+      method: "call",
+      name: "press_key",
+      args: { key: "enter", _synara_foreground_observation_ms: 0 },
+    });
+
+  it("pushes the custom colors once per generation, on the session open", async () => {
+    const f = await fixture(capability, {
+      cursorStyle: () => ({ fill: "#101010", rim: "#F0F0F0", shadow: "#000000" }),
+    });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+    // A second action reuses the same generation and session: the style is
+    // setup, not per-action traffic.
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+
+    const events = await f.events();
+    expect(events.filter((row) => row.event === "motion-100-0")).toHaveLength(1);
+    const payloads = stylePayloads(events);
+    expect(payloads).toHaveLength(1);
+    expect(Object.keys(payloads[0]!).toSorted()).toEqual(["fill", "rim", "session", "shadow"]);
+    expect(payloads[0]!.session).toMatch(/^synara-/);
+    // Colors are normalized to lowercase before they reach the driver.
+    expect(payloads[0]!.fill).toBe("#101010");
+    expect(payloads[0]!.rim).toBe("#f0f0f0");
+    expect(payloads[0]!.shadow).toBe("#000000");
+  });
+
+  it("sends only the channels that carry a usable color", async () => {
+    const f = await fixture(capability, {
+      cursorStyle: () => ({ fill: "#ABCDEF", rim: "not-a-color" }),
+    });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+    const payloads = stylePayloads(await f.events());
+    expect(payloads).toHaveLength(1);
+    expect(Object.keys(payloads[0]!).toSorted()).toEqual(["fill", "session"]);
+    expect(payloads[0]!.fill).toBe("#abcdef");
+  });
+
+  it("makes no style call for the stock default", async () => {
+    // No cursorStyle option at all is the packaged default: the driver keeps
+    // its stock monochrome cursor and hears nothing from the host.
+    const f = await fixture();
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+    const events = await f.events();
+    expect(events.some((row) => row.event === "motion-100-0")).toBe(true);
+    expect(stylePayloads(events)).toHaveLength(0);
+  });
+
+  it("makes no style call for a stock-resolving option", async () => {
+    const f = await fixture(capability, { cursorStyle: () => null });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+    expect(stylePayloads(await f.events())).toHaveLength(0);
+  });
+
+  it("keeps an unpatched upstream driver on its stock cursor", async () => {
+    const f = await fixture(capability, {
+      unpatched: true,
+      nativeRevision: null,
+      cursorStyle: () => ({ fill: "#101010" }),
+    });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "list_windows", args: {} }),
+    ).resolves.toMatchObject({ ok: true, driverNativeRevision: 0 });
+    const events = await f.events();
+    expect(events.some((row) => row.event === "motion-100-0")).toBe(true);
+    expect(stylePayloads(events)).toHaveLength(0);
+  });
+});
+
 describe("task-owned user stop", () => {
   const task = { threadId: "thread", turnId: "turn" };
   it("end_task succeeds without a native preview", async () => {
@@ -1517,9 +1598,7 @@ describe("browser surface", () => {
     });
     expect(other.ok).toBe(true);
     expect(
-      (await f.events()).some((row) =>
-        String(row.event).startsWith("browser:get_browser_state:"),
-      ),
+      (await f.events()).some((row) => String(row.event).startsWith("browser:get_browser_state:")),
     ).toBe(true);
   });
 });

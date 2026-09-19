@@ -15,7 +15,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AppSettingsBinding } from "~/appSettings";
+import {
+  AppSettingsSchema,
+  applyLocalAppSettingsPatch,
+  resolveAgentCursorColors,
+  type AppSettings,
+  type AppSettingsBinding,
+} from "~/appSettings";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { ComputerSettingsPanel } from "./ComputerSettingsPanel";
 
@@ -47,20 +53,24 @@ function status(overrides: Partial<ComputerStatusResult> = {}): ComputerStatusRe
   };
 }
 
-function binding(): AppSettingsBinding {
+function binding(overrides: Partial<AppSettings> = {}): AppSettingsBinding {
   return {
-    settings: { autoOpenComputerPane: true, computerControlEnabled: true },
+    settings: { autoOpenComputerPane: true, computerControlEnabled: true, ...overrides },
     defaults: { autoOpenComputerPane: true, computerControlEnabled: false },
     updateSettings: vi.fn(),
   } as unknown as AppSettingsBinding;
 }
 
-function render(input: { readonly status?: ComputerStatusResult; readonly active?: boolean }) {
+function render(input: {
+  readonly status?: ComputerStatusResult;
+  readonly active?: boolean;
+  readonly settings?: Partial<AppSettings>;
+}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (input.status) queryClient.setQueryData(serverQueryKeys.computerStatus(), input.status);
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
-      <ComputerSettingsPanel {...binding()} active={input.active ?? true} />
+      <ComputerSettingsPanel {...binding(input.settings)} active={input.active ?? true} />
     </QueryClientProvider>,
   );
 }
@@ -181,5 +191,64 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).toContain("Preview size");
     expect(markup).toContain("Compact");
     expect(markup).toContain("Large");
+  });
+
+  describe("agent cursor colors", () => {
+    it("keeps the cursor stock by default and hides the color editors", () => {
+      const markup = render({ status: status() });
+      expect(markup).toContain("Cursor colors");
+      expect(markup).toContain("Stock");
+      expect(markup).toContain("Custom");
+      // Stock is the zero-override default: no fill/rim editor renders and no
+      // stored color is read out.
+      expect(markup).not.toContain("Fill color");
+      expect(markup).not.toContain("Rim color");
+      expect(markup).not.toContain("data-swatch");
+    });
+
+    it("reveals fill and rim editors, with swatches, after Custom is chosen", () => {
+      const markup = render({
+        status: status(),
+        settings: {
+          agentCursorColorMode: "custom",
+          agentCursorFillColor: "#aabbcc",
+          agentCursorRimColor: "#112233",
+        },
+      });
+      expect(markup).toContain("Fill color");
+      expect(markup).toContain("Rim color");
+      expect(markup).toContain('value="#aabbcc"');
+      expect(markup).toContain('value="#112233"');
+      expect(markup).toContain("background-color:#aabbcc");
+      expect(markup).toContain("background-color:#112233");
+    });
+
+    it("round-trips custom colors through the settings store", () => {
+      const defaults = AppSettingsSchema.makeUnsafe({});
+      // The default is stock with no overrides stored.
+      expect(defaults.agentCursorColorMode).toBe("stock");
+      expect(defaults.agentCursorFillColor).toBe("");
+      expect(defaults.agentCursorRimColor).toBe("");
+      expect(resolveAgentCursorColors(defaults)).toBeNull();
+
+      const stored = applyLocalAppSettingsPatch(defaults, {
+        agentCursorColorMode: "custom",
+        agentCursorFillColor: "#AABBCC",
+        agentCursorRimColor: "not-a-color",
+      });
+      expect(stored.agentCursorColorMode).toBe("custom");
+      expect(stored.agentCursorFillColor).toBe("#aabbcc");
+      // A value that is not a complete hex color never becomes a preference.
+      expect(stored.agentCursorRimColor).toBe("");
+      expect(resolveAgentCursorColors(stored)).toEqual({ fill: "#aabbcc" });
+
+      // Stock means zero overrides even when colors are still remembered for
+      // a later switch back to custom.
+      const backToStock = applyLocalAppSettingsPatch(stored, {
+        agentCursorColorMode: "stock",
+      });
+      expect(backToStock.agentCursorFillColor).toBe("#aabbcc");
+      expect(resolveAgentCursorColors(backToStock)).toBeNull();
+    });
   });
 });
