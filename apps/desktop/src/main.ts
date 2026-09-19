@@ -275,6 +275,11 @@ import {
   writeCustomTitleBarPreference,
 } from "./desktopCustomTitleBar";
 import {
+  normalizeAgentCursorStylePreference,
+  readAgentCursorPreference,
+  writeAgentCursorPreference,
+} from "./agentCursorPreference";
+import {
   readDesktopWindowState,
   resolveVisibleWindowBounds,
   writeDesktopWindowState,
@@ -341,6 +346,9 @@ const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
 const DESKTOP_APP_ICON_PATH = Path.join(STATE_DIR, "desktop-app-icon");
 const DESKTOP_CUSTOM_TITLE_BAR_PATH = Path.join(STATE_DIR, "desktop-custom-title-bar.json");
+// Written by the renderer-mirrored agent cursor colors; read at each driver
+// session open so a persisted custom cursor survives app restarts.
+const AGENT_CURSOR_PREFERENCE_PATH = Path.join(STATE_DIR, "agent-cursor-colors.json");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -3665,6 +3673,9 @@ async function startCuaHost(): Promise<void> {
     // Computer use must never bind the app hosting it: the integrated
     // browser's webviews live in this app's own renderer pids.
     ownPids: () => new Set([process.pid, ...app.getAppMetrics().map((m) => m.pid)]),
+    // Stock by default: a missing preference file reads as null and the host
+    // sends no style call at all.
+    cursorStyle: () => readAgentCursorPreference(AGENT_CURSOR_PREFERENCE_PATH),
     checkPermissions: async () => {
       // The AppSnap manager owns the shared native permission helper; lazily
       // starting it here keeps the CUA host working even when AppSnap itself is
@@ -4852,6 +4863,20 @@ function registerIpcHandlers(): void {
   ipcMain.handle(IPC.customTitleBarRelaunch, async () => {
     app.relaunch();
     requestGracefulAppQuit("custom-title-bar-relaunch");
+  });
+
+  ipcMain.removeHandler(IPC.computerSetCursorStyle);
+  ipcMain.handle(IPC.computerSetCursorStyle, async (_event, rawStyle: unknown) => {
+    // The renderer's mirrored value is the authority for this preference: the
+    // normalized style is persisted first, so even a failed live push leaves
+    // the next generation correct. Stock removes the stored override.
+    const style = normalizeAgentCursorStylePreference(rawStyle);
+    writeAgentCursorPreference(AGENT_CURSOR_PREFERENCE_PATH, style);
+    if (cuaDriverHost) {
+      await cuaDriverHost.setCursorStyle(style).catch((error: unknown) => {
+        safeConsoleError("[desktop] live cursor style push failed", error);
+      });
+    }
   });
 
   ipcMain.removeHandler(IPC.updateGetState);

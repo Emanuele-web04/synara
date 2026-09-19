@@ -653,6 +653,17 @@ export interface DesktopComputerPreviewFrame {
   readonly jpeg: Uint8Array;
 }
 
+/**
+ * Agent cursor colors mirrored from the renderer to the desktop main process.
+ * Each channel is a `#rrggbb` string; an omitted channel keeps the driver's
+ * stock treatment for it, and `null` is the stock monochrome cursor.
+ */
+export interface DesktopAgentCursorStyle {
+  readonly fill?: string;
+  readonly rim?: string;
+  readonly shadow?: string;
+}
+
 export interface DesktopBridge {
   safariAccess?: {
     getInfo: () => Promise<DesktopSafariAccessInfo>;
@@ -710,6 +721,16 @@ export interface DesktopBridge {
    */
   computerPreview?: {
     onFrame: (listener: (frame: DesktopComputerPreviewFrame) => void) => () => void;
+  };
+  /**
+   * Desktop-owned computer preferences. `setCursorStyle` mirrors the agent
+   * cursor colors to the main process, which persists them for the next Cua
+   * driver session and live-pushes them when a session is already open.
+   * `null` restores the stock cursor. Plain browser clients never see this
+   * member; their settings stay local and the driver is not running there.
+   */
+  computer?: {
+    setCursorStyle: (style: DesktopAgentCursorStyle | null) => Promise<void>;
   };
   onMenuAction: (listener: (action: string) => void) => () => void;
   onQuitConfirmationRequest: (

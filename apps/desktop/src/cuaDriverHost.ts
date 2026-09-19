@@ -79,6 +79,20 @@ interface Generation {
    * shared-session death does.
    */
   endedTaskSessions: Set<string>;
+  /**
+   * The normalized cursor style (JSON) the session last acknowledged, `""`
+   * for stock. Lets a live preference change skip redundant pushes and know
+   * whether a switch back to stock must reset a customized cursor.
+   */
+  appliedCursorStyle: string;
+  /**
+   * Per task cursor session (`agent·…`), the custom style last applied, keyed
+   * by label. Task cursors are seeded from the driver's launch template and
+   * never inherit the shared session's style, so each one is styled before
+   * its first dispatch and skipped afterwards. Stock is never recorded: a
+   * task that never had custom colors sends nothing.
+   */
+  appliedSessionCursorStyles: Map<string, string>;
   retirement?: Promise<void>;
 }
 
@@ -343,6 +357,8 @@ export class CuaDriverHost {
   private observedNativeRevision: number | undefined;
   private operations: Promise<void> = Promise.resolve();
   private stopping: Promise<void> = Promise.resolve();
+  /** Serializes live cursor-style pushes so two rapid changes cannot race. */
+  private cursorStyleUpdates: Promise<void> = Promise.resolve();
   private epoch = 0;
   private readonly connections = new Set<Socket>();
   private permissions: HostPermissions | undefined;
@@ -969,9 +985,19 @@ export class CuaDriverHost {
             },
             { timeoutMs: 10_000 },
           );
-          if (revived.ok && !revived.result?.isError)
+          if (revived.ok && !revived.result?.isError) {
             generation.endedTaskSessions.delete(agentLabel);
+            // A revived cursor is re-created from the driver's launch
+            // template, so any style remembered from the previous life of
+            // this label is stale: re-apply before the first action paints.
+            generation.appliedSessionCursorStyles.delete(agentLabel);
+          }
         }
+        // The action paints under its own task session, not the shared
+        // generation session, and the driver seeds every lazily-created
+        // session cursor from its launch template. The user's colors must be
+        // applied to the session the action actually paints, once per task.
+        if (agentLabel) await this.applyCursorStyleForSession(generation, agentLabel);
         dispatched = true;
         if (label) generation.liveBrowserSessions.add(label);
         generation.inputInFlight = CUA_ACTION_TOOLS.has(name);
@@ -1243,6 +1269,8 @@ export class CuaDriverHost {
         endedBrowserSessions: new Set<string>(),
         liveBrowserSessions: new Set<string>(),
         endedTaskSessions: new Set<string>(),
+        appliedCursorStyle: "",
+        appliedSessionCursorStyles: new Map<string, string>(),
       };
       this.generation = generation;
       this.updateInputMonitorArmed();
@@ -1346,23 +1374,33 @@ export class CuaDriverHost {
       );
       if (!motion.ok || motion.result?.isError)
         throw new Error("Cua cursor initialization failed.");
-      // The user's cursor colors, at the same once-per-generation timing as
-      // the motion feel. Stock sends nothing at all, so a default install
+      // The user's cursor colors, read at the same once-per-generation timing
+      // as the motion feel. Stock sends nothing at all, so a default install
       // keeps the driver's own monochrome art; an unpatched upstream driver
-      // has no style tool, so a configured style stays stock there.
+      // has no style tool, so a configured style stays stock there. The
+      // shared session rarely paints an action (task calls carry their own
+      // label), so this is best-effort: a cosmetic color must never retire a
+      // driver, and the per-task application below carries the real work.
       const style = normalizeCuaCursorStyle(this.options.cursorStyle?.());
       if (style && this.observedNativeRevision !== 0) {
-        const styled = await cuaRequest<CuaReply>(
-          generation.socket,
-          {
-            method: "call",
-            name: "set_agent_cursor_style",
-            args: { session: generation.session, ...style },
-          },
-          { timeoutMs: startupTimeoutMs },
-        );
-        if (!styled.ok || styled.result?.isError)
-          throw new Error("Cua cursor style initialization failed.");
+        try {
+          const styled = await cuaRequest<CuaReply>(
+            generation.socket,
+            {
+              method: "call",
+              name: "set_agent_cursor_style",
+              args: { session: generation.session, ...style },
+            },
+            { timeoutMs: startupTimeoutMs },
+          );
+          if (!styled.ok || styled.result?.isError) {
+            log("shared cursor session style was refused; keeping the stock cursor");
+          } else {
+            generation.appliedCursorStyle = JSON.stringify(style);
+          }
+        } catch (error) {
+          log(`shared cursor session style failed: ${String(error)}`);
+        }
       }
     })();
     try {
@@ -1517,6 +1555,97 @@ export class CuaDriverHost {
       () => undefined,
     );
     return generation.retirement;
+  }
+
+  /**
+   * Mirror a cursor-color change onto the live driver session. The preference
+   * itself is durable in the caller; this only pushes it to a generation whose
+   * session is already open, so changing a setting never spawns a driver. A
+   * failed push is logged and never fatal — the next session open reads the
+   * preference again. Passing null/undefined restores the stock cursor.
+   */
+  setCursorStyle(style: CuaCursorStyle | null | undefined): Promise<void> {
+    const next = normalizeCuaCursorStyle(style);
+    const nextJson = next ? JSON.stringify(next) : "";
+    const apply = async (): Promise<void> => {
+      const generation = this.generation;
+      if (!generation || generation.retired || generation.didExit) return;
+      // A generation without an opened session takes the preference at its
+      // next open; a settings change must not warm or spawn a driver.
+      if (!generation.sessionOpening) return;
+      await generation.sessionOpening.catch(() => undefined);
+      if (
+        this.closed ||
+        generation.retired ||
+        generation.didExit ||
+        generation.appliedCursorStyle === nextJson ||
+        this.observedNativeRevision === 0
+      )
+        return;
+      try {
+        const reply = await cuaRequest<CuaReply>(
+          generation.socket,
+          {
+            method: "call",
+            name: "set_agent_cursor_style",
+            args: next ? { session: generation.session, ...next } : { session: generation.session },
+          },
+          { timeoutMs: 5_000 },
+        );
+        if (!reply.ok || reply.result?.isError) {
+          log("live cursor style push was refused; keeping the previous style");
+          return;
+        }
+        generation.appliedCursorStyle = nextJson;
+      } catch (error) {
+        log(`live cursor style push failed: ${String(error)}`);
+      }
+    };
+    this.cursorStyleUpdates = this.cursorStyleUpdates.then(apply, apply);
+    return this.cursorStyleUpdates;
+  }
+
+  /**
+   * Apply the current cursor preference to one task cursor session before its
+   * first dispatch. Task sessions never inherit the shared generation
+   * session's style — the driver seeds every lazily-created session cursor
+   * from its launch template — so the user's colors must be sent to the
+   * session the action actually paints under. Failures are logged and cost
+   * the action nothing: the cursor keeps the style it already had.
+   */
+  private async applyCursorStyleForSession(generation: Generation, session: string): Promise<void> {
+    const style = normalizeCuaCursorStyle(this.options.cursorStyle?.());
+    const previous = generation.appliedSessionCursorStyles.get(session);
+    // Stock with no prior override: the template default is already correct,
+    // so nothing is sent (a default install never talks to the style tool).
+    if (!style && previous === undefined) return;
+    const styleJson = style ? JSON.stringify(style) : "";
+    if (previous === styleJson) return;
+    if (this.observedNativeRevision === 0) return;
+    try {
+      const reply = await cuaRequest<CuaReply>(
+        generation.socket,
+        {
+          method: "call",
+          name: "set_agent_cursor_style",
+          args: style ? { session, ...style } : { session },
+        },
+        { timeoutMs: 5_000 },
+      );
+      if (!reply.ok || reply.result?.isError) {
+        log("task cursor style was refused; keeping the previous cursor");
+        return;
+      }
+      if (style) generation.appliedSessionCursorStyles.set(session, styleJson);
+      else generation.appliedSessionCursorStyles.delete(session);
+      while (generation.appliedSessionCursorStyles.size > 256) {
+        generation.appliedSessionCursorStyles.delete(
+          generation.appliedSessionCursorStyles.keys().next().value!,
+        );
+      }
+    } catch (error) {
+      log(`task cursor style setup failed: ${String(error)}`);
+    }
   }
 
   stop(): Promise<void> {

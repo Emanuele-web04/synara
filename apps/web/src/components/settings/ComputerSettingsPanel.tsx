@@ -57,6 +57,7 @@ import {
   serverQueryKeys,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
+import { useAgentCursorDesktopSync } from "./agentCursorDesktopSync";
 import { SettingResetButton, SettingsSegmentedControl } from "./SettingControls";
 import {
   SettingsCard,
@@ -269,6 +270,11 @@ export function ComputerSettingsPanel({
     void statusQuery.refetch({ cancelRefetch: false });
     refreshPermissionState();
   }, active);
+
+  // Mirror the cursor colors to the desktop app on mount and on every change,
+  // including while this panel is not the active section (the hooks above the
+  // `!active` return stay mounted). A plain browser has no bridge: no-op.
+  useAgentCursorDesktopSync(settings);
 
   // Panel-level on purpose: hooks above the `!active` return stay mounted while
   // the surface is hidden, so a dismissed coach still clears the remembered

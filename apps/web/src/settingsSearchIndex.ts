@@ -326,6 +326,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Let the agent use the desktop in any chat. Approval gates and Stop still apply. enable toggle permission desktop agent computer use control",
   },
   {
+    id: "computer:cursor-colors",
+    section: "computer",
+    title: "Cursor colors",
+    keywords:
+      "The agent pointer's colors: stock monochrome by default, or custom fill and rim. agent cursor arrow pointer color hex custom",
+  },
+  {
     id: "computer:always-allowed",
     section: "computer",
     title: "Always allowed",

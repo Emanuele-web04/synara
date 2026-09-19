@@ -361,6 +361,9 @@ function SettingsRouteView() {
     ...(settings.autoOpenComputerPane !== defaults.autoOpenComputerPane
       ? ["Computer preview auto-open"]
       : []),
+    ...(settings.agentCursorColorMode !== defaults.agentCursorColorMode
+      ? ["Agent cursor colors"]
+      : []),
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
       ? ["Provider update checks"]
       : []),

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   BrowserAnnotationEvent,
   BrowserUseOpenPanelRequest,
+  DesktopAgentCursorStyle,
   DesktopBridge,
   DesktopComputerPreviewFrame,
 } from "@synara/contracts";
@@ -159,6 +160,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         ipcRenderer.removeListener(IPC.computerPreviewFrame, wrappedListener);
       };
     },
+  },
+  // The renderer mirrors the agent cursor colors on change; the main process
+  // owns persistence and the live push to a running driver generation.
+  computer: {
+    setCursorStyle: (style: DesktopAgentCursorStyle | null) =>
+      ipcRenderer.invoke(IPC.computerSetCursorStyle, style),
   },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {

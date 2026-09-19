@@ -41,6 +41,7 @@ export const DESKTOP_IPC_CHANNELS = {
   wsUrl: "desktop:get-ws-url",
   transcribeVoice: "desktop:server-transcribe-voice",
   computerPreviewFrame: "computerPreview.frame",
+  computerSetCursorStyle: "desktop:computer-set-cursor-style",
   storageMigration: {
     read: "desktop:storage-migration-read",
     acknowledge: "desktop:storage-migration-acknowledge",

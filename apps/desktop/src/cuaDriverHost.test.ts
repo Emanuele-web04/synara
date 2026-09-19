@@ -1047,6 +1047,108 @@ describe("agent cursor style", () => {
     expect(events.some((row) => row.event === "motion-100-0")).toBe(true);
     expect(stylePayloads(events)).toHaveLength(0);
   });
+
+  it("live-pushes a preference change to the warm session, once", async () => {
+    let style: { fill?: string; rim?: string } | null = { fill: "#101010" };
+    const f = await fixture(capability, { cursorStyle: () => style });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+
+    style = { fill: "#101010", rim: "#f0f0f0" };
+    await f.host.setCursorStyle(style);
+    // An unchanged value is already applied: the second push is skipped.
+    await f.host.setCursorStyle(style);
+
+    const payloads = stylePayloads(await f.events());
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]).toMatchObject({ fill: "#101010", rim: "#f0f0f0" });
+    expect(payloads[1]!.session).toBe(payloads[0]!.session);
+  });
+
+  it("resets a warm session to stock when the preference clears", async () => {
+    let style: { fill?: string } | null = { fill: "#101010" };
+    const f = await fixture(capability, { cursorStyle: () => style });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+
+    style = null;
+    await f.host.setCursorStyle(null);
+
+    const payloads = stylePayloads(await f.events());
+    expect(payloads).toHaveLength(2);
+    // A stock change carries the session and no colors, so the driver's
+    // omitted-channel stock treatment is what repaints the cursor.
+    expect(Object.keys(payloads[1]!).toSorted()).toEqual(["session"]);
+  });
+
+  it("never spawns a driver just to apply a settings change", async () => {
+    const f = await fixture(capability, { cursorStyle: () => ({ fill: "#101010" }) });
+    await f.host.setCursorStyle({ fill: "#101010" });
+    // No generation was ever spawned or warmed by the settings change; the
+    // next real call opens its session with the preference from the getter.
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+    expect(stylePayloads(await f.events())).toHaveLength(1);
+  });
+
+  it("styles a task's own cursor session before its first action, once", async () => {
+    const f = await fixture(capability, { cursorStyle: () => ({ fill: "#101010" }) });
+    const task = { threadId: "thread", turnId: "turn" };
+    const press = () =>
+      cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        args: { key: "enter", _synara_foreground_observation_ms: 0 },
+        task,
+      });
+    for (let i = 0; i < 2; i++) await expect(press()).resolves.toMatchObject({ ok: true });
+
+    const payloads = stylePayloads(await f.events());
+    // Two calls: the shared session at open, then the task cursor session the
+    // action actually paints under. The second action reuses both.
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]!.session).toBe("agent·thread");
+    expect(payloads[1]!.fill).toBe("#101010");
+  });
+
+  it("resets a task cursor session to stock on its next action", async () => {
+    let style: { fill?: string } | null = { fill: "#101010" };
+    const f = await fixture(capability, { cursorStyle: () => style });
+    const task = { threadId: "thread", turnId: "turn" };
+    const press = () =>
+      cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        args: { key: "enter", _synara_foreground_observation_ms: 0 },
+        task,
+      });
+    await expect(press()).resolves.toMatchObject({ ok: true });
+
+    style = null;
+    await f.host.setCursorStyle(null);
+    // The live change resets the shared session and forgets what each task
+    // session had, so the task's next action repaints it stock.
+    await expect(press()).resolves.toMatchObject({ ok: true });
+    // A third action has nothing left to reset.
+    await expect(press()).resolves.toMatchObject({ ok: true });
+
+    const payloads = stylePayloads(await f.events());
+    expect(payloads).toHaveLength(4);
+    expect(Object.keys(payloads[2]!).toSorted()).toEqual(["session"]); // shared session reset
+    expect(payloads[3]!.session).toBe("agent·thread");
+    expect(Object.keys(payloads[3]!).toSorted()).toEqual(["session"]);
+  });
+
+  it("sends no style call for a stock task session", async () => {
+    const f = await fixture();
+    await expect(
+      cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        args: { key: "enter", _synara_foreground_observation_ms: 0 },
+        task: { threadId: "thread", turnId: "turn" },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(stylePayloads(await f.events())).toHaveLength(0);
+  });
 });
 
 describe("task-owned user stop", () => {
