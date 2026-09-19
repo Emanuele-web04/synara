@@ -1337,13 +1337,13 @@ export class DesktopAppSnapManager {
       return;
     }
 
-    // Register the durable recovery copy synchronously before resolving the
-    // renderer promise. No timeout callback can interleave between this call
-    // and settlement, so a capture cannot become pending after its caller was
-    // already told that the request failed.
+    // Register the durable recovery copy before resolving the renderer promise,
+    // and remove the helper's temporary file first so a settled request has the
+    // pending copy as the only remaining owner. A timeout that interleaves
+    // during the unlink still cleans the pending copy through `settled`.
     const recordPromise = this.#recordPendingCapture(pendingRecord);
-    const settled = this.#settleCaptureRequest(capture.id, capture);
     await FS.promises.unlink(capturePath).catch(() => undefined);
+    const settled = this.#settleCaptureRequest(capture.id, capture);
     await recordPromise;
     if (!settled) {
       this.#pendingCaptures = this.#pendingCaptures.filter(
