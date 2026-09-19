@@ -53,7 +53,7 @@ index ef089ba10..7f955d172 100644
      "invoke_menu",
      "browser_click",
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
-index 18004509d..cd1766bf1 100644
+index 18004509d..8a546eb7d 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
 @@ -629,7 +629,10 @@ fn browser_refusal_escalation(code: &str) -> Option<ActionEscalation> {
@@ -100,7 +100,22 @@ index 18004509d..cd1766bf1 100644
                      ActionTransport::LinuxAtSpiValue
                  } else {
                      ActionTransport::LinuxAtSpiAction
-@@ -802,7 +814,7 @@ fn transport_from_legacy(
+@@ -766,7 +778,13 @@ fn transport_from_legacy(
+                 ActionTransport::BrowserCdpInputMouse
+             }
+         }
+-        "" if tool_name == "browser_type" => ActionTransport::BrowserCdpInputKey,
++        "" if tool_name == "browser_type" => {
++            if args.get("input_route").and_then(serde_json::Value::as_str) == Some("dom_event") {
++                ActionTransport::BrowserCdpRuntimeFunction
++            } else {
++                ActionTransport::BrowserCdpInputKey
++            }
++        }
+         "" if tool_name == "move_cursor"
+             && args.get("scope").and_then(serde_json::Value::as_str) != Some("desktop") =>
+         {
+@@ -802,7 +820,7 @@ fn transport_from_legacy(
                  ActionTransport::LinuxXSendEvent
              }
          }
@@ -109,7 +124,60 @@ index 18004509d..cd1766bf1 100644
              if cfg!(target_os = "macos") {
                  ActionTransport::MacosAxValue
              } else if cfg!(target_os = "windows") {
-@@ -1871,6 +1883,7 @@ mod tests {
+@@ -1658,6 +1676,52 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn browser_type_dom_route_projects_through_the_closed_contract() {
++        let args = serde_json::json!({
++            "session": "browser-test",
++            "target_id": "secret-target",
++            "tab_id": "secret-tab",
++            "ref": "secret-ref",
++            "text": "secret typed text",
++            "input_route": "dom_event",
++        });
++        let structured = serde_json::json!({
++            "status": "ok",
++            "effect": "unverifiable",
++            "route": "dom_event",
++            "target_id": "secret-target",
++            "tab_id": "secret-tab",
++            "ref": "secret-ref",
++            "chars": 3,
++        });
++        let public = ActionExecutionRecord::from_legacy("browser_type", &args, &structured)
++            .expect("browser type action record")
++            .public_result()
++            .expect("public browser type result");
++        assert_eq!(public.route, cua_driver_contract::ActionRoute::Dom);
++        assert_eq!(
++            public.effect,
++            cua_driver_contract::ActionEffect::Unverifiable
++        );
++        assert_eq!(
++            public.delivery.as_ref().map(|delivery| delivery.mode),
++            Some(cua_driver_contract::ActionDeliveryMode::Background)
++        );
++        let rendered = serde_json::to_string(&public).expect("serialize ActionResult");
++        for forbidden in [
++            "secret-target",
++            "secret-tab",
++            "secret-ref",
++            "secret typed text",
++        ] {
++            assert!(
++                !rendered.contains(forbidden),
++                "browser type ActionResult leaked {forbidden}: {rendered}"
++            );
++        }
++    }
++
+     #[test]
+     fn browser_refusals_and_partial_delivery_survive_projection() {
+         let refused = ActionExecutionRecord::from_legacy(
+@@ -1871,6 +1935,7 @@ mod tests {
              "press_key",
              "hotkey",
              "set_value",
@@ -620,14 +688,16 @@ index 1d10b3195..72a1a4cfc 100644
              Ok(endpoint) => {
                  match attest_spawned_endpoint(self, i64::from(child.id()), endpoint).await {
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
-index e7be28523..70d4553f5 100644
+index e7be28523..69e9bf635 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
-@@ -17,7 +17,10 @@ use crate::tool_args::ArgsExt;
+@@ -16,8 +16,11 @@ use crate::tool_args::ArgsExt;
+ 
  use super::cdp_ws::CdpConnection;
  use super::download::BrowserDownloadTool;
- use super::engine::{BrowserEngine, BrowserTabScreenshot};
+-use super::engine::{BrowserEngine, BrowserTabScreenshot};
 -use super::platform::{BrowserVisualActionKind, PrepareProfile, PrepareRequest, PrepareStrategy};
++use super::engine::{BrowserEngine, BrowserTabScreenshot, ValidatedTab};
 +use super::platform::{
 +    standalone_trusted_input_limitation, BrowserVisualActionKind, PrepareProfile, PrepareRequest,
 +    PrepareStrategy,
@@ -655,49 +725,564 @@ index e7be28523..70d4553f5 100644
                  return BrowserRefusal::new(
                      BrowserRefusalCode::BrowserInputTrustUnavailable,
                      format!(
-@@ -1596,6 +1600,37 @@ impl Tool for BrowserTypeTool {
+@@ -1476,6 +1480,95 @@ async fn enter_focus_emulation(
+     ))
+ }
+ 
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++enum TypeRoute {
++    Trusted,
++    DomEvent,
++}
++
++impl TypeRoute {
++    fn parse(value: &str) -> Result<Self, String> {
++        match value {
++            "trusted" => Ok(Self::Trusted),
++            "dom_event" => Ok(Self::DomEvent),
++            _ => Err(format!(
++                "input_route must be \"trusted\" or \"dom_event\", got {value:?}"
++            )),
++        }
++    }
++
++    fn as_str(self) -> &'static str {
++        match self {
++            Self::Trusted => "trusted",
++            Self::DomEvent => "dom_event",
++        }
++    }
++}
++
++/// Synthetic, fully background text insertion for one editable ref.
++///
++/// The page-side function focuses the element, applies the text through the
++/// element's own native value setter (input/textarea) or
++/// `document.execCommand('insertText')` (contenteditable), dispatches
++/// `input`/`change`, and returns only the element kind, a dispatch proof and
++/// the expected post-state. Element text itself is never returned to the
++/// driver, so it can never reach a log or a tool result. The marker comment
++/// lets test fixtures recognize the call.
++const DOM_INSERT_TEXT: &str = r#"function(text, replace) {
++    /*cua-dom-insert*/
++    const tag = this.tagName;
++    const kind = tag === 'INPUT' ? 'input' : tag === 'TEXTAREA' ? 'textarea' : (this.isContentEditable ? 'contenteditable' : 'unsupported');
++    if (kind === 'unsupported') return { kind: kind, dispatched: false, expected: '', before: 0 };
++    if (typeof this.focus === 'function') this.focus();
++    if (kind === 'contenteditable') {
++        const before = Array.from(this.textContent || '').length;
++        if (replace) {
++            const doc = this.ownerDocument;
++            const range = doc.createRange();
++            range.selectNodeContents(this);
++            const selection = doc.getSelection();
++            if (!selection) return { kind: kind, dispatched: false, expected: '', before: before };
++            selection.removeAllRanges();
++            selection.addRange(range);
++        }
++        const ok = this.ownerDocument.execCommand('insertText', false, text);
++        this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
++        this.dispatchEvent(new Event('change', { bubbles: true }));
++        return { kind: kind, dispatched: !!ok, expected: replace ? text : '', before: before };
++    }
++    const proto = kind === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
++    const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
++    if (!descriptor || typeof descriptor.set !== 'function') return { kind: kind, dispatched: false, expected: '', before: 0 };
++    const value = this.value || '';
++    const before = Array.from(value).length;
++    let next;
++    if (replace) {
++        next = text;
++    } else {
++        const start = typeof this.selectionStart === 'number' ? this.selectionStart : value.length;
++        const end = typeof this.selectionEnd === 'number' ? this.selectionEnd : start;
++        next = value.slice(0, start) + text + value.slice(end);
++    }
++    descriptor.set.call(this, next);
++    this.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
++    this.dispatchEvent(new Event('change', { bubbles: true }));
++    return { kind: kind, dispatched: this.value === next, expected: next, before: before };
++}"#;
++
++/// Live read-back of the synthetic insertion, evaluated on the same node.
++/// Booleans and a length only — never the element's text.
++const DOM_READBACK_TEXT: &str = r#"function(expected, text, replace) {
++    /*cua-dom-readback*/
++    const tag = this.tagName;
++    const kind = tag === 'INPUT' ? 'input' : tag === 'TEXTAREA' ? 'textarea' : (this.isContentEditable ? 'contenteditable' : 'unsupported');
++    if (kind === 'unsupported') return { kind: kind, matched: false, length: 0 };
++    const actual = kind === 'contenteditable' ? (this.textContent || '') : (this.value || '');
++    const matched = kind === 'contenteditable'
++        ? (replace ? actual === expected : actual.indexOf(text) !== -1)
++        : actual === expected;
++    return { kind: kind, matched: matched, length: Array.from(actual).length };
++}"#;
++
+ pub struct BrowserTypeTool {
+     def: ToolDef,
+     engine: Arc<BrowserEngine>,
+@@ -1485,13 +1578,17 @@ impl BrowserTypeTool {
+     pub fn new(engine: Arc<BrowserEngine>) -> Self {
+         let def = ToolDef {
+             name: "browser_type".into(),
+-            description: "Type text into an exactly-bound tab via the Input domain. \
+-                mode=\"insert_text\" (default) uses Input.insertText; \
+-                mode=\"keystrokes\" dispatches per-character key events. Both insert \
+-                at the caret, so typing into a field that already holds text appends \
+-                to it; pass replace=true to set the field instead, or to clear it by \
+-                typing an empty string. Pass a ref to an editable element from the \
+-                latest snapshot. A ref is required; heuristic bindings are refused."
++            description: "Type text into an exactly-bound tab. Default route is trusted \
++                input: mode=\"insert_text\" uses the CDP Input domain's \
++                Input.insertText; mode=\"keystrokes\" dispatches per-character key \
++                events. That route refuses where it cannot preserve standalone-browser \
++                background posture; input_route=\"dom_event\" (synthetic full-background \
++                DOM insertion, insert_text only, ref required) is then the explicit \
++                alternative, used only when requested. Both modes insert at the caret, \
++                so typing into a field that already holds text appends to it; pass \
++                replace=true to set the field instead, or to clear it by typing an \
++                empty string. Pass a ref to an editable element from the latest \
++                snapshot. A ref is required; heuristic bindings are refused."
+                 .into(),
+             input_schema: json!({
+                 "type": "object",
+@@ -1504,8 +1601,21 @@ impl BrowserTypeTool {
+                     "mode": {
+                         "type": "string",
+                         "enum": ["insert_text", "keystrokes"],
+-                        "description": "insert_text (default): bulk Input.insertText. \
+-                            keystrokes: per-character Input.dispatchKeyEvent."
++                        "description": "insert_text (default): trusted Input.insertText \
++                            or the explicit dom_event insertion. keystrokes: \
++                            per-character Input.dispatchKeyEvent (trusted route only)."
++                    },
++                    "input_route": {
++                        "type": "string",
++                        "enum": ["trusted", "dom_event"],
++                        "default": "trusted",
++                        "description": "\"trusted\" (default): CDP Input events. It \
++                            refuses rather than foregrounding a standalone browser. \
++                            \"dom_event\": synthetic full-background DOM insertion for \
++                            input, textarea, and contenteditable refs (mode must be \
++                            insert_text). Dispatch is read back from the live element, \
++                            but it does not prove the application accepted the text; \
++                            refresh page state and verify the expected postcondition."
+                     },
+                     "replace": {
+                         "type": "boolean",
+@@ -1527,6 +1637,210 @@ impl BrowserTypeTool {
+         };
+         Self { def, engine }
+     }
++
++    /// Synthetic DOM typing for one editable ref: focus + value-setter /
++    /// execCommand insertion, then a live read-back confirmation. Never sends
++    /// an Input-domain event, so it cannot raise a standalone browser window.
++    #[allow(clippy::too_many_arguments)]
++    async fn dom_event_type(
++        &self,
++        session: &str,
++        validated: &ValidatedTab,
++        ext_ref: &str,
++        backend_node_id: i64,
++        frame_kind: &str,
++        cdp: &str,
++        text: &str,
++        replace: bool,
++        requested_chars: usize,
++    ) -> ToolResult {
++        let conn = &validated.conn;
++        let object_id = match conn
++            .call(
++                Some(cdp),
++                "DOM.resolveNode",
++                json!({ "backendNodeId": backend_node_id }),
++            )
++            .await
++            .ok()
++            .and_then(|resolved| {
++                resolved
++                    .get("object")
++                    .and_then(|object| object.get("objectId"))
++                    .and_then(Value::as_str)
++                    .map(str::to_owned)
++            }) {
++            Some(object_id) => object_id,
++            None => {
++                return BrowserRefusal::new(
++                    BrowserRefusalCode::BrowserRefStale,
++                    "the ref's node no longer resolves in the live page",
++                )
++                .to_tool_result()
++            }
++        };
++
++        // Visual feedback is best-effort and never gates the insertion.
++        let _ = conn
++            .call(
++                Some(cdp),
++                "DOM.scrollIntoViewIfNeeded",
++                json!({ "backendNodeId": backend_node_id }),
++            )
++            .await;
++        if let Ok(box_model) = conn
++            .call(
++                Some(cdp),
++                "DOM.getBoxModel",
++                json!({ "backendNodeId": backend_node_id }),
++            )
++            .await
++        {
++            if let Some((x, y)) = quad_center(&box_model) {
++                self.engine
++                    .visualize_browser_action(
++                        session,
++                        validated,
++                        cdp,
++                        x,
++                        y,
++                        BrowserVisualActionKind::Type,
++                    )
++                    .await;
++            }
++        }
++
++        let inserted = conn
++            .call(
++                Some(cdp),
++                "Runtime.callFunctionOn",
++                json!({
++                    "objectId": object_id,
++                    "functionDeclaration": DOM_INSERT_TEXT,
++                    "arguments": [{ "value": text }, { "value": replace }],
++                    "returnByValue": true,
++                }),
++            )
++            .await;
++        let inserted = match inserted {
++            Ok(value) if value.get("exceptionDetails").is_none() => value,
++            Ok(_) => {
++                return BrowserRefusal::new(
++                    BrowserRefusalCode::BrowserActionUnavailable,
++                    "synthetic DOM text insertion raised a page-side exception and \
++                     delivery was not proven",
++                )
++                .to_tool_result()
++            }
++            Err(error) => {
++                return ToolResult::error(format!("synthetic DOM text insertion failed: {error}"))
++            }
++        };
++        let payload = &inserted["result"]["value"];
++        let kind = payload["kind"].as_str().unwrap_or("unsupported");
++        if kind == "unsupported" {
++            return BrowserRefusal::new(
++                BrowserRefusalCode::BrowserActionUnavailable,
++                "the ref is not an input, textarea, or contenteditable element, so no \
++                 synthetic text route exists",
++            )
++            .with_detail(json!({ "route": "dom_event", "element_kind": kind }))
++            .to_tool_result();
++        }
++        if payload["dispatched"].as_bool() != Some(true) {
++            return BrowserRefusal::new(
++                BrowserRefusalCode::BrowserInputIncomplete,
++                "the synthetic DOM insertion did not take, so dispatch was not proven",
++            )
++            .with_detail(json!({
++                "route": "dom_event",
++                "element_kind": kind,
++                "requested_chars": requested_chars,
++                "delivered_chars": 0,
++            }))
++            .to_tool_result();
++        }
++        let expected = payload["expected"].as_str().unwrap_or_default();
++        let replaced_chars = if replace {
++            payload["before"].as_u64().unwrap_or(0) as usize
++        } else {
++            0
++        };
++
++        // Read the field back from the live element before claiming dispatch.
++        let readback = conn
++            .call(
++                Some(cdp),
++                "Runtime.callFunctionOn",
++                json!({
++                    "objectId": object_id,
++                    "functionDeclaration": DOM_READBACK_TEXT,
++                    "arguments": [
++                        { "value": expected },
++                        { "value": text },
++                        { "value": replace },
++                    ],
++                    "returnByValue": true,
++                }),
++            )
++            .await;
++        let matched = match readback {
++            Ok(value) if value.get("exceptionDetails").is_none() => {
++                value["result"]["value"]["matched"].as_bool() == Some(true)
++            }
++            Ok(_) => false,
++            Err(_) => {
++                return BrowserRefusal::new(
++                    BrowserRefusalCode::BrowserRefStale,
++                    "the ref's node could not be read back after the synthetic insertion",
++                )
++                .to_tool_result()
++            }
++        };
++        if !matched {
++            return BrowserRefusal::new(
++                BrowserRefusalCode::BrowserInputIncomplete,
++                "the synthetic DOM insertion was not confirmed by a live read-back of \
++                 the ref's content",
++            )
++            .with_detail(json!({
++                "route": "dom_event",
++                "element_kind": kind,
++                "requested_chars": requested_chars,
++                "delivered_chars": 0,
++                "readback": "mismatch",
++            }))
++            .to_tool_result();
++        }
++
++        ToolResult::text(format!(
++            "dispatched synthetic DOM insertion of {requested_chars} char(s) into {}; \
++             application effect not verified (trust-gated controls may ignore untrusted \
++             events). Refresh page state and verify the expected postcondition",
++            validated.tab.tab_id
++        ))
++        .with_structured(json!({
++            "status": "ok",
++            "effect": "unverifiable",
++            "route": "dom_event",
++            "target_id": validated.record.target_id,
++            "tab_id": validated.tab.tab_id,
++            "ref": ext_ref,
++            "frame": frame_kind,
++            "mode": "insert_text",
++            "chars": requested_chars,
++            "requested_chars": requested_chars,
++            "delivered_chars": requested_chars,
++            "replace": replace,
++            "replaced_chars": replaced_chars,
++            "dispatched": true,
++            "readback": "matched",
++            "escalation": {
++                "recommended": "page",
++                "reason": "synthetic DOM dispatch cannot prove the application accepted the text; refresh page state and verify the expected postcondition",
++            },
++        }))
++    }
+ }
+ 
+ #[async_trait]
+@@ -1578,6 +1892,23 @@ impl Tool for BrowserTypeTool {
+                 "mode must be \"insert_text\" or \"keystrokes\", got {mode:?}"
+             ));
+         }
++        let route = match args.opt_str("input_route") {
++            None => TypeRoute::Trusted,
++            Some(value) => match TypeRoute::parse(&value) {
++                Ok(route) => route,
++                Err(error) => return ToolResult::error(error),
++            },
++        };
++        // The synthetic route replaces text through the element's own value,
++        // so per-character key semantics do not exist for it; say so instead
++        // of pretending keystrokes mode has a background route.
++        if route == TypeRoute::DomEvent && mode != "insert_text" {
++            return ToolResult::error(
++                "input_route=dom_event supports mode=insert_text only; \
++                 mode=keystrokes has no synthetic route — use insert_text, the native \
++                 element-text route, or an authorized foreground",
++            );
++        }
+         let replace = args.opt_bool("replace").unwrap_or(false);
+ 
+         let _mutation = match self
+@@ -1596,6 +1927,42 @@ impl Tool for BrowserTypeTool {
              Ok(v) => v,
              Err(refusal) => return refusal.to_tool_result(),
          };
 +        // Input.insertText and Input.dispatchKeyEvent are the trusted CDP
 +        // Input route, and on macOS that route activates a standalone
 +        // browser window. The standalone posture is background-only, so
-+        // refuse before any event reaches the tab. No synthetic typing
-+        // route exists to downgrade to, and a silent downgrade would be a
-+        // different, unverifiable action — the caller gets the honest
-+        // refusal plus the native element-text alternative.
-+        if let Some(limitation) = standalone_trusted_input_limitation(
-+            &validated.record,
-+            self.engine
-+                .platform
-+                .standalone_trusted_input_background_limitation(),
-+        ) {
-+            return BrowserRefusal::new(
-+                BrowserRefusalCode::BrowserInputTrustUnavailable,
-+                format!(
-+                    "{limitation}; no key or insert event was sent to the standalone browser, \
++        // refuse before any event reaches the tab. The explicit dom_event
++        // route below is the background alternative; it is never entered
++        // implicitly.
++        if route == TypeRoute::Trusted {
++            if let Some(limitation) = standalone_trusted_input_limitation(
++                &validated.record,
++                self.engine
++                    .platform
++                    .standalone_trusted_input_background_limitation(),
++            ) {
++                return BrowserRefusal::new(
++                    BrowserRefusalCode::BrowserInputTrustUnavailable,
++                    format!(
++                        "{limitation}; no key or insert event was sent to the standalone browser, \
 +                     because the dispatch would raise its window. Type through the native \
 +                     element-text route instead (an exact accessibility element token never \
 +                     activates the app), or have the user authorize foreground input on the \
 +                     visible window"
-+                ),
-+            )
-+            .with_detail(json!({
-+                "requested_route": "trusted",
-+                "limitation": limitation,
-+                "alternative_route": "native_element_text",
-+                "trusted_delivery_attempted": false,
-+            }))
-+            .to_tool_result();
++                    ),
++                )
++                .with_detail(json!({
++                    "requested_route": "trusted",
++                    "limitation": limitation,
++                    "alternative_route": "native_element_text",
++                    "trusted_delivery_attempted": false,
++                    // Additive rev-25 hint: the explicit synthetic background
++                    // route, for callers that have a page ref and no AX token.
++                    "alternative_route_dom": "dom_event",
++                    "alternative_route_dom_requires_ref": true,
++                }))
++                .to_tool_result();
++            }
 +        }
  
          let ext_ref = match args.require_str("ref") {
              Ok(value) => value,
+@@ -1629,6 +1996,25 @@ impl Tool for BrowserTypeTool {
+         let conn = &validated.conn;
+         let cdp = cdp_session.as_str();
+ 
++        // Explicit synthetic background route: DOM-only focus + insertion +
++        // read-back. It sends no Input-domain event, so a standalone browser
++        // stays in the background. Never entered implicitly.
++        if route == TypeRoute::DomEvent {
++            return self
++                .dom_event_type(
++                    &session,
++                    &validated,
++                    &ext_ref,
++                    entry.backend_node_id,
++                    entry.frame.kind.as_str(),
++                    cdp,
++                    &text,
++                    replace,
++                    text.chars().count(),
++                )
++                .await;
++        }
++
+         if let Err(_e) = conn
+             .call(
+                 Some(cdp),
+@@ -2980,13 +3366,49 @@ mod tests {
+             .await;
+         assert_eq!(nav.is_error, Some(true));
+ 
+-        let click = BrowserClickTool::new(e)
++        let click = BrowserClickTool::new(e.clone())
+             .invoke(json!({
+                 "target_id": "bt1", "tab_id": "tab1", "ref": "p1:0",
+                 "input_route": "sneaky", "_session_id": "run-1"
+             }))
+             .await;
+         assert_eq!(click.is_error, Some(true));
++
++        // browser_type shares the closed route vocabulary and rejects the
++        // combination that has no synthetic implementation before any
++        // binding or CDP traffic is touched.
++        let type_bad_route = BrowserTypeTool::new(e.clone())
++            .invoke(json!({
++                "target_id": "bt1", "tab_id": "tab1", "ref": "p1:0", "text": "x",
++                "input_route": "sneaky", "_session_id": "run-1"
++            }))
++            .await;
++        assert_eq!(type_bad_route.is_error, Some(true));
++        let type_dom_keystrokes = BrowserTypeTool::new(e)
++            .invoke(json!({
++                "target_id": "bt1", "tab_id": "tab1", "ref": "p1:0", "text": "x",
++                "mode": "keystrokes", "input_route": "dom_event", "_session_id": "run-1"
++            }))
++            .await;
++        assert_eq!(type_dom_keystrokes.is_error, Some(true));
++    }
++
++    #[test]
++    fn browser_type_route_is_closed_and_documented() {
++        let tool = BrowserTypeTool::new(engine());
++        assert_eq!(
++            tool.def().input_schema["properties"]["input_route"]["enum"],
++            json!(["trusted", "dom_event"])
++        );
++        assert_eq!(
++            tool.def().input_schema["properties"]["input_route"]["default"],
++            "trusted"
++        );
++        assert!(TypeRoute::parse("trusted").is_ok());
++        assert!(TypeRoute::parse("dom_event").is_ok());
++        assert!(TypeRoute::parse("sneaky").is_err());
++        assert_eq!(TypeRoute::Trusted.as_str(), "trusted");
++        assert_eq!(TypeRoute::DomEvent.as_str(), "dom_event");
+     }
+ 
+     #[tokio::test]
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
-index 2b82930cd..2dafbbbb1 100644
+index 2b82930cd..dcf1d71a5 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
-@@ -2161,6 +2161,40 @@ async fn trusted_click_refuses_when_standalone_background_posture_is_unavailable
+@@ -63,6 +63,11 @@ struct FixtureState {
+     viewport_css_width: f64,
+     viewport_css_height: f64,
+     tab_visible: bool,
++    /// Synthetic DOM typing fixture: reported element kind, dispatch proof,
++    /// and live read-back result.
++    dom_type_kind: String,
++    dom_type_dispatched: bool,
++    dom_type_readback_matched: bool,
+     /// Every incoming CDP call: (sessionId, method, params).
+     calls: Vec<(Option<String>, String, Value)>,
+ }
+@@ -89,6 +94,9 @@ impl Default for FixtureState {
+             viewport_css_width: 800.0,
+             viewport_css_height: 600.0,
+             tab_visible: true,
++            dom_type_kind: "input".into(),
++            dom_type_dispatched: true,
++            dom_type_readback_matched: true,
+             calls: Vec::new(),
+         }
+     }
+@@ -651,7 +659,29 @@ fn fixture_handler(state: SharedState) -> MockHandler {
+             "DOM.resolveNode" => MockReply::ok(json!({
+                 "object": { "objectId": format!("obj-{}", call.params["backendNodeId"]) }
+             })),
+-            "Runtime.callFunctionOn" => MockReply::ok(json!({ "result": { "value": true } })),
++            "Runtime.callFunctionOn" => {
++                let function = call.params["functionDeclaration"].as_str().unwrap_or("");
++                if function.contains("cua-dom-insert") {
++                    MockReply::ok(json!({
++                        "result": { "value": {
++                            "kind": st.dom_type_kind.as_str(),
++                            "dispatched": st.dom_type_dispatched,
++                            "expected": "fixture-expected",
++                            "before": 3,
++                        }}
++                    }))
++                } else if function.contains("cua-dom-readback") {
++                    MockReply::ok(json!({
++                        "result": { "value": {
++                            "kind": st.dom_type_kind.as_str(),
++                            "matched": st.dom_type_readback_matched,
++                            "length": 5,
++                        }}
++                    }))
++                } else {
++                    MockReply::ok(json!({ "result": { "value": true } }))
++                }
++            }
+             other => MockReply::method_not_found(other),
+         }
+     })
+@@ -2161,6 +2191,176 @@ async fn trusted_click_refuses_when_standalone_background_posture_is_unavailable
      assert!(recorded_calls(&f, "Target.activateTarget").is_empty());
  }
  
@@ -735,6 +1320,142 @@ index 2b82930cd..2dafbbbb1 100644
 +    assert!(recorded_calls(&f, "Target.activateTarget").is_empty());
 +}
 +
++#[tokio::test]
++async fn dom_type_delivers_synthetically_without_standalone_trusted_input() {
++    let f = fixture_with_platform(|_| {}, true).await;
++    let (target, tab) = bind(&f).await;
++    let snap = snapshot(&f, &target, &tab).await;
++    let input_ref = ref_of(&snap, "main", "Shadow Input");
++
++    // The explicit synthetic route delivers in full background: no
++    // Input-domain event, a live read-back, and an honest unverifiable
++    // verdict.
++    let synthetic_args = json!({
++        "target_id": target, "tab_id": tab, "ref": input_ref,
++        "text": "hello", "input_route": "dom_event", "session": SESSION
++    });
++    let synthetic = BrowserTypeTool::new(f.engine.clone())
++        .invoke(synthetic_args.clone())
++        .await;
++    let parsed = structured(&synthetic);
++    assert_eq!(parsed["status"], "ok", "{parsed}");
++    assert_eq!(parsed["route"], "dom_event");
++    assert_eq!(parsed["effect"], "unverifiable");
++    assert_eq!(parsed["dispatched"], true);
++    assert_eq!(parsed["readback"], "matched");
++    assert_eq!(parsed["delivered_chars"], 5);
++    assert_eq!(parsed["escalation"]["recommended"], "page");
++    assert!(synthetic.content.iter().any(|content| matches!(
++        content,
++        crate::protocol::Content::Text { text, .. }
++            if text.contains("application effect not verified")
++    )));
++    let functions: Vec<String> = recorded_calls(&f, "Runtime.callFunctionOn")
++        .iter()
++        .filter_map(|(_, params)| params["functionDeclaration"].as_str().map(str::to_owned))
++        .collect();
++    assert!(
++        functions
++            .iter()
++            .any(|function| function.contains("cua-dom-insert")),
++        "the synthetic insertion must run through the DOM route: {functions:?}"
++    );
++    assert!(
++        functions
++            .iter()
++            .any(|function| function.contains("cua-dom-readback")),
++        "the synthetic insertion must be read back: {functions:?}"
++    );
++    assert!(recorded_calls(&f, "Input.insertText").is_empty());
++    assert!(recorded_calls(&f, "Input.dispatchKeyEvent").is_empty());
++    assert!(recorded_calls(&f, "Emulation.setFocusEmulationEnabled").is_empty());
++    assert!(recorded_calls(&f, "DOM.focus").is_empty());
++    assert!(recorded_calls(&f, "Page.bringToFront").is_empty());
++    assert!(recorded_calls(&f, "Target.activateTarget").is_empty());
++
++    // The closed action contract projects the DOM route, background
++    // delivery, and the unverifiable effect without leaking page content.
++    let public =
++        ActionExecutionRecord::from_legacy("browser_type", &synthetic_args, structured(&synthetic))
++            .expect("browser type action record")
++            .public_result()
++            .expect("public browser type result");
++    let public = serde_json::to_value(public).expect("serialize public result");
++    assert_eq!(public["effect"], "unverifiable", "{public}");
++    assert_eq!(public["route"], "dom", "{public}");
++    assert_eq!(public["delivery"]["mode"], "background", "{public}");
++    assert_eq!(public["escalation"]["target"], "page", "{public}");
++    assert!(
++        !public.to_string().contains("hello"),
++        "text leaked: {public}"
++    );
++}
++
++#[tokio::test]
++async fn dom_type_refuses_honestly_when_dispatch_or_readback_fails() {
++    let f = fixture_with(|state| state.dom_type_readback_matched = false).await;
++    let (target, tab) = bind(&f).await;
++    let snap = snapshot(&f, &target, &tab).await;
++    let input_ref = ref_of(&snap, "main", "Shadow Input");
++
++    let mismatch = BrowserTypeTool::new(f.engine.clone())
++        .invoke(json!({
++            "target_id": target, "tab_id": tab, "ref": input_ref,
++            "text": "hello", "input_route": "dom_event", "session": SESSION
++        }))
++        .await;
++    assert_eq!(
++        structured(&mismatch)["refusal"]["code"],
++        "browser_input_incomplete"
++    );
++    assert_eq!(
++        structured(&mismatch)["refusal"]["detail"]["delivered_chars"],
++        0
++    );
++    assert_eq!(
++        structured(&mismatch)["refusal"]["detail"]["readback"],
++        "mismatch"
++    );
++    assert!(recorded_calls(&f, "Input.insertText").is_empty());
++
++    // An element kind with no synthetic insertion returns the honest
++    // browser_action_unavailable refusal instead of a false success.
++    let unsupported = fixture_with(|state| state.dom_type_kind = "unsupported".into()).await;
++    let (target, tab) = bind(&unsupported).await;
++    let snap = snapshot(&unsupported, &target, &tab).await;
++    let input_ref = ref_of(&snap, "main", "Shadow Input");
++    let refused = BrowserTypeTool::new(unsupported.engine.clone())
++        .invoke(json!({
++            "target_id": target, "tab_id": tab, "ref": input_ref,
++            "text": "hello", "input_route": "dom_event", "session": SESSION
++        }))
++        .await;
++    assert_eq!(
++        structured(&refused)["refusal"]["code"],
++        "browser_action_unavailable"
++    );
++    assert!(recorded_calls(&unsupported, "Input.insertText").is_empty());
++}
++
++#[tokio::test]
++async fn dom_type_rejects_keystrokes_mode_before_touching_the_page() {
++    let f = fixture().await;
++    let (target, tab) = bind(&f).await;
++    let snap = snapshot(&f, &target, &tab).await;
++    let input_ref = ref_of(&snap, "main", "Shadow Input");
++
++    let result = BrowserTypeTool::new(f.engine.clone())
++        .invoke(json!({
++            "target_id": target, "tab_id": tab, "ref": input_ref,
++            "text": "hello", "mode": "keystrokes", "input_route": "dom_event",
++            "session": SESSION
++        }))
++        .await;
++    assert_eq!(result.is_error, Some(true));
++    assert!(recorded_calls(&f, "Input.dispatchKeyEvent").is_empty());
++    assert!(recorded_calls(&f, "Runtime.callFunctionOn").is_empty());
++}
++
  #[tokio::test]
  async fn main_frame_navigation_invalidates_refs_via_loader_identity() {
      let f = fixture().await;
@@ -750,6 +1471,44 @@ index 3711b192f..22df2e9d2 100644
      )
  }
  
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/server.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/server.rs
+index 2f2402f5b..5f3c00627 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/server.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/server.rs
+@@ -298,6 +298,7 @@ pub enum ToolOperation {
+     BrowserClickTrusted,
+     BrowserClickDomEvent,
+     BrowserTypeInsertText,
++    BrowserTypeInsertTextDomEvent,
+     BrowserTypeKeystrokes,
+     BrowserPrepareIsolated,
+     BrowserPrepareExistingProfile,
+@@ -336,6 +337,7 @@ impl ToolOperation {
+             Self::BrowserClickTrusted => "browser_click_trusted",
+             Self::BrowserClickDomEvent => "browser_click_dom_event",
+             Self::BrowserTypeInsertText => "browser_type_insert_text",
++            Self::BrowserTypeInsertTextDomEvent => "browser_type_insert_text_dom_event",
+             Self::BrowserTypeKeystrokes => "browser_type_keystrokes",
+             Self::BrowserPrepareIsolated => "browser_prepare_isolated",
+             Self::BrowserPrepareExistingProfile => "browser_prepare_existing_profile",
+@@ -395,10 +397,13 @@ pub fn tool_operation(tool_name: &str, args: Option<&serde_json::Value>) -> Tool
+             Some("dom_event") => ToolOperation::BrowserClickDomEvent,
+             Some(_) => ToolOperation::Other,
+         },
+-        "browser_type" => match string_arg("mode") {
+-            None | Some("insert_text") => ToolOperation::BrowserTypeInsertText,
+-            Some("keystrokes") => ToolOperation::BrowserTypeKeystrokes,
+-            Some(_) => ToolOperation::Other,
++        "browser_type" => match (string_arg("mode"), string_arg("input_route")) {
++            (Some("keystrokes"), _) => ToolOperation::BrowserTypeKeystrokes,
++            (_, Some("dom_event")) => ToolOperation::BrowserTypeInsertTextDomEvent,
++            (None | Some("insert_text"), None | Some("trusted")) => {
++                ToolOperation::BrowserTypeInsertText
++            }
++            (Some(_), _) | (_, Some(_)) => ToolOperation::Other,
+         },
+         "browser_prepare" => {
+             let strategy = args
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs
 index 4fa445fb1..56c09ad44 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/session_manifest.rs
@@ -1083,7 +1842,7 @@ index a26a6bfe9..064d69170 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123bc7..fc6979fd5 100644
+index 67e123bc7..e1e790ce2 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -1098,7 +1857,7 @@ index 67e123bc7..fc6979fd5 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(24);
++        metadata["synara_native_revision"] = serde_json::json!(25);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -1263,62 +2022,636 @@ index 67e123bc7..fc6979fd5 100644
      };
      tokio::pin!(parent_liveness);
  
+diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/arc.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/arc.rs
+new file mode 100644
+index 000000000..1eb3bd0b1
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/cursor-overlay/src/arc.rs
+@@ -0,0 +1,454 @@
++//! Deterministic bow-out travel paths for the compact agent cursor.
++//!
++//! Straight line hops read as a teleport; the rebuilt cursor crosses the
++//! screen along a flat cubic bezier that bows out of the direct chord,
++//! leans into the curve, and is guaranteed to stay inside the screen frame.
++//!
++//! The builder follows the reference `CursorMotionPath` shape: a configurable
++//! number of candidate arcs (handle lengths + arc size + flow), each scored
++//! first by staying in bounds and then by turn energy, with a straight-path
++//! distance threshold below which no bow is attempted. The original control
++//! points are not statically recoverable, so the candidate set and the turn
++//! score here are an original, documented adaptation (see `L4-notebook.md`).
++
++use std::f64::consts::PI;
++
++/// Shape parameters for bezier travel paths.
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub struct ArcConfig {
++    /// Control-point offset from the start, as a fraction of the chord.
++    pub start_handle: f64,
++    /// Control-point offset from the end, as a fraction of the chord.
++    pub end_handle: f64,
++    /// Perpendicular deflection magnitude as a fraction of the chord.
++    pub arc_size: f64,
++    /// Deflection asymmetry: positive pushes the apex toward the destination.
++    pub arc_flow: f64,
++    /// Number of scored candidate arcs (alternating sides, varying size).
++    pub candidate_count: usize,
++    /// Points closer than this to the frame edge are considered unsafe.
++    pub bounds_margin: f64,
++    /// Chords shorter than this stay straight (no candidate is scored).
++    pub straight_path_distance_threshold: f64,
++}
++
++impl Default for ArcConfig {
++    fn default() -> Self {
++        // Reference `MotionConfiguration.live` values (cursor-spec.md §3)
++        // for every field the compact cursor actually consumes.
++        Self {
++            start_handle: 0.419_602_950_315_766_33,
++            end_handle: 0.15,
++            arc_size: 0.276_552_318_806_427_7,
++            arc_flow: 0.578_355_532_786_877_9,
++            candidate_count: 20,
++            bounds_margin: 20.0,
++            straight_path_distance_threshold: 10.0,
++        }
++    }
++}
++
++/// Whether a planned path bows or stays on the direct chord.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum ArcKind {
++    Straight,
++    Arc,
++}
++
++/// A planned travel path. `sample`/`tangent`/`lean` are pure functions of the
++/// path, so identical inputs always produce identical frames.
++#[derive(Debug, Clone, Copy)]
++pub struct ArcPath {
++    kind: ArcKind,
++    from: (f64, f64),
++    to: (f64, f64),
++    control1: (f64, f64),
++    control2: (f64, f64),
++    /// Straight-line start→end distance (the chord).
++    pub chord: f64,
++    /// Chord direction in radians.
++    pub chord_angle: f64,
++    /// Approximate arc length, sampled at a fixed resolution.
++    pub length: f64,
++    /// Approximate total tangent turn along the path, radians.
++    pub total_turn: f64,
++}
++
++impl ArcPath {
++    /// Plan the best-bounded/lowest-turn candidate arc, or a straight chord
++    /// when the distance is below the threshold or every candidate leaves
++    /// the frame. `bounds` is the screen size `(width, height)` in points;
++    /// `None` means no frame is known and the preferred candidate is used.
++    pub fn plan(
++        from: (f64, f64),
++        to: (f64, f64),
++        cfg: &ArcConfig,
++        bounds: Option<(f64, f64)>,
++    ) -> Self {
++        let dx = to.0 - from.0;
++        let dy = to.1 - from.1;
++        let chord = dx.hypot(dy);
++        let chord_angle = dy.atan2(dx);
++        if chord <= cfg.straight_path_distance_threshold
++            || cfg.candidate_count < 2
++            || cfg.arc_size <= 0.0
++        {
++            return Self::straight(from, to, chord, chord_angle);
++        }
++
++        let candidates = cfg.candidate_count;
++        let mut best: Option<(f64, f64, ArcPath)> = None; // (oob, score, path)
++        for index in 0..candidates {
++            let side = if index % 2 == 0 { 1.0 } else { -1.0 };
++            let scale = candidate_scale(index, candidates);
++            let path = Self::candidate(from, to, cfg, chord, chord_angle, side, scale);
++            let (oob, turn_score) = match bounds {
++                Some((width, height)) => {
++                    match path.out_of_bounds_samples(width, height, cfg.bounds_margin) {
++                        0 => (0.0, (path.total_turn - cfg.arc_size * PI / 2.0).abs()),
++                        count => (count as f64, f64::INFINITY),
++                    }
++                }
++                // Without a known frame the preferred candidate always wins;
++                // turn energy only breaks ties between identical scores.
++                None => (0.0, index as f64 * 1.0e-9),
++            };
++            if turn_score.is_finite()
++                && best.as_ref().is_none_or(|(oob_best, score, _)| {
++                    oob < *oob_best || (oob == *oob_best && turn_score < *score)
++                })
++            {
++                best = Some((oob, turn_score, path));
++            }
++        }
++        match best {
++            Some((oob, _, path)) if oob == 0.0 => path,
++            // Every candidate bowed off-frame: the direct chord between two
++            // on-screen endpoints can never leave a convex frame.
++            _ => Self::straight(from, to, chord, chord_angle),
++        }
++    }
++
++    fn straight(from: (f64, f64), to: (f64, f64), chord: f64, chord_angle: f64) -> Self {
++        Self {
++            kind: ArcKind::Straight,
++            from,
++            to,
++            control1: from,
++            control2: to,
++            chord,
++            chord_angle,
++            length: chord,
++            total_turn: 0.0,
++        }
++    }
++
++    fn candidate(
++        from: (f64, f64),
++        to: (f64, f64),
++        cfg: &ArcConfig,
++        chord: f64,
++        chord_angle: f64,
++        side: f64,
++        scale: f64,
++    ) -> Self {
++        let flow = cfg.arc_flow.clamp(-1.0, 1.0);
++        let amount = chord * cfg.arc_size * scale;
++        // Unit normal on `side` of the chord (side = +1 bows left of travel).
++        let normal_angle = chord_angle + side * PI / 2.0;
++        let (nx, ny) = (normal_angle.cos(), normal_angle.sin());
++        let chord_dir = (chord_angle.cos(), chord_angle.sin());
++        let control1 = (
++            from.0 + chord_dir.0 * chord * cfg.start_handle + nx * amount * (1.0 - flow),
++            from.1 + chord_dir.1 * chord * cfg.start_handle + ny * amount * (1.0 - flow),
++        );
++        let control2 = (
++            to.0 - chord_dir.0 * chord * cfg.end_handle + nx * amount * flow,
++            to.1 - chord_dir.1 * chord * cfg.end_handle + ny * amount * flow,
++        );
++        let mut path = Self {
++            kind: ArcKind::Arc,
++            from,
++            to,
++            control1,
++            control2,
++            chord,
++            chord_angle,
++            length: 0.0,
++            total_turn: 0.0,
++        };
++        path.measure();
++        path
++    }
++
++    /// Sample the path at `t`; values outside `[0, 1]` linearly extend along
++    /// the start/end chord so a spring overshoot does not jump.
++    pub fn sample(&self, t: f64) -> (f64, f64) {
++        match self.kind {
++            ArcKind::Straight => (
++                self.from.0 + (self.to.0 - self.from.0) * t,
++                self.from.1 + (self.to.1 - self.from.1) * t,
++            ),
++            ArcKind::Arc => {
++                if t < 0.0 {
++                    let reach = self.chord * t;
++                    (
++                        self.from.0 + self.chord_angle.cos() * reach,
++                        self.from.1 + self.chord_angle.sin() * reach,
++                    )
++                } else if t > 1.0 {
++                    let reach = self.chord * (t - 1.0);
++                    (
++                        self.to.0 + self.chord_angle.cos() * reach,
++                        self.to.1 + self.chord_angle.sin() * reach,
++                    )
++                } else {
++                    let u = 1.0 - t;
++                    let (u2, u3, t2, t3) = (u * u, u * u * u, t * t, t * t * t);
++                    (
++                        3.0 * u2 * t * self.control1.0
++                            + 3.0 * u * t2 * self.control2.0
++                            + t3 * self.to.0
++                            + u3 * self.from.0,
++                        3.0 * u2 * t * self.control1.1
++                            + 3.0 * u * t2 * self.control2.1
++                            + t3 * self.to.1
++                            + u3 * self.from.1,
++                    )
++                }
++            }
++        }
++    }
++
++    /// Tangent direction at `t`, clamped to the path domain.
++    pub fn tangent_angle(&self, t: f64) -> f64 {
++        match self.kind {
++            ArcKind::Straight => self.chord_angle,
++            ArcKind::Arc => {
++                let t = t.clamp(0.0, 1.0);
++                let u = 1.0 - t;
++                let dx = 3.0 * u * u * (self.control1.0 - self.from.0)
++                    + 6.0 * u * t * (self.control2.0 - self.control1.0)
++                    + 3.0 * t * t * (self.to.0 - self.control2.0);
++                let dy = 3.0 * u * u * (self.control1.1 - self.from.1)
++                    + 6.0 * u * t * (self.control2.1 - self.control1.1)
++                    + 3.0 * t * t * (self.to.1 - self.control2.1);
++                if dx.hypot(dy) < 1.0e-9 {
++                    self.chord_angle
++                } else {
++                    dy.atan2(dx)
++                }
++            }
++        }
++    }
++
++    /// Lean of the path relative to the chord at `t`, shortest angle in
++    /// radians (positive = turning left of the chord).
++    pub fn lean(&self, t: f64) -> f64 {
++        shortest_angle(self.tangent_angle(t) - self.chord_angle)
++    }
++
++    pub fn kind(&self) -> ArcKind {
++        self.kind
++    }
++
++    pub fn from(&self) -> (f64, f64) {
++        self.from
++    }
++
++    pub fn to(&self) -> (f64, f64) {
++        self.to
++    }
++
++    fn measure(&mut self) {
++        const SAMPLES: usize = 32;
++        let mut previous = self.sample(0.0);
++        let mut length = 0.0;
++        let mut previous_angle = self.tangent_angle(0.0);
++        let mut turn = 0.0;
++        for index in 1..=SAMPLES {
++            let t = index as f64 / SAMPLES as f64;
++            let point = self.sample(t);
++            length += (point.0 - previous.0).hypot(point.1 - previous.1);
++            let angle = self.tangent_angle(t);
++            turn += shortest_angle(angle - previous_angle).abs();
++            previous = point;
++            previous_angle = angle;
++        }
++        self.length = length;
++        self.total_turn = turn;
++    }
++
++    /// Count of sampled points (controls + curve) that sit outside the frame
++    /// minus its margin.
++    fn out_of_bounds_samples(&self, width: f64, height: f64, margin: f64) -> usize {
++        let lo_x = margin;
++        let lo_y = margin;
++        let hi_x = (width - margin).max(lo_x);
++        let hi_y = (height - margin).max(lo_y);
++        let mut outside = 0;
++        for point in [self.control1, self.control2] {
++            if point.0 < lo_x || point.0 > hi_x || point.1 < lo_y || point.1 > hi_y {
++                outside += 1;
++            }
++        }
++        for index in 0..=16 {
++            let point = self.sample(index as f64 / 16.0);
++            if point.0 < lo_x || point.0 > hi_x || point.1 < lo_y || point.1 > hi_y {
++                outside += 1;
++            }
++        }
++        outside
++    }
++}
++
++/// Candidate size multipliers in preference order: the configured arc size
++/// first, then alternating smaller/larger bows (0.4×–1.6×) as fallbacks.
++fn candidate_scale(index: usize, count: usize) -> f64 {
++    if index == 0 {
++        return 1.0;
++    }
++    let pairs = (count / 2).max(1) as f64;
++    let step = ((index + 1) / 2) as f64 * (0.6 / pairs);
++    if index % 2 == 1 {
++        (1.0 - step).max(0.4)
++    } else {
++        (1.0 + step).min(1.6)
++    }
++}
++
++/// Shortest signed difference between two angles, in `(-π, π]`.
++pub fn shortest_angle(angle: f64) -> f64 {
++    let mut value = angle % (2.0 * PI);
++    if value > PI {
++        value -= 2.0 * PI;
++    } else if value <= -PI {
++        value += 2.0 * PI;
++    }
++    value
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn config() -> ArcConfig {
++        ArcConfig::default()
++    }
++
++    #[test]
++    fn short_chords_stay_straight_and_long_chords_bow() {
++        let short = ArcPath::plan((100.0, 100.0), (104.0, 103.0), &config(), None);
++        assert_eq!(short.kind(), ArcKind::Straight);
++        assert_eq!(short.total_turn, 0.0);
++        assert!(short.sample(0.5).0 > 100.0 && short.sample(0.5).0 < 104.0);
++
++        let long = ArcPath::plan((100.0, 100.0), (700.0, 400.0), &config(), None);
++        assert_eq!(long.kind(), ArcKind::Arc);
++        assert!(long.total_turn > 0.0, "an arc must turn along its length");
++        // The bow leaves the chord: the midpoint is off the direct line.
++        let mid = long.sample(0.5);
++        let chord_mid = (400.0, 250.0);
++        assert!(
++            (mid.0 - chord_mid.0).hypot(mid.1 - chord_mid.1) > 20.0,
++            "midpoint {mid:?} must bow away from the chord midpoint {chord_mid:?}"
++        );
++    }
++
++    #[test]
++    fn endpoints_are_exact_and_the_path_is_bounded_to_the_frame() {
++        let cfg = config();
++        let frame = (1280.0, 800.0);
++        for (from, to) in [
++            ((30.0, 30.0), (1250.0, 770.0)),
++            ((1250.0, 30.0), (30.0, 770.0)),
++            ((20.0, 400.0), (1260.0, 405.0)),
++            ((640.0, 10.0), (645.0, 790.0)),
++        ] {
++            let path = ArcPath::plan(from, to, &cfg, Some(frame));
++            assert_eq!(path.sample(0.0), from);
++            assert_eq!(path.sample(1.0), to);
++            for index in 0..=32 {
++                let point = path.sample(index as f64 / 32.0);
++                assert!(
++                    point.0 >= 1.0 && point.0 <= frame.0 - 1.0,
++                    "x out of frame at {index}: {point:?}"
++                );
++                assert!(
++                    point.1 >= 1.0 && point.1 <= frame.1 - 1.0,
++                    "y out of frame at {index}: {point:?}"
++                );
++            }
++        }
++    }
++
++    #[test]
++    fn out_of_frame_candidates_fall_back_to_the_straight_chord() {
++        let cfg = ArcConfig {
++            // A bow so large that no candidate can fit in a tiny frame.
++            arc_size: 0.9,
++            ..config()
++        };
++        let path = ArcPath::plan((8.0, 8.0), (40.0, 40.0), &cfg, Some((48.0, 48.0)));
++        assert_eq!(path.kind(), ArcKind::Straight);
++        let mid = path.sample(0.5);
++        assert!((mid.0 - 24.0).abs() < 1.0e-9 && (mid.1 - 24.0).abs() < 1.0e-9);
++    }
++
++    #[test]
++    fn planning_is_deterministic_for_identical_inputs() {
++        let cfg = config();
++        let a = ArcPath::plan((10.0, 20.0), (900.0, 640.0), &cfg, Some((1280.0, 800.0)));
++        let b = ArcPath::plan((10.0, 20.0), (900.0, 640.0), &cfg, Some((1280.0, 800.0)));
++        for index in 0..=64 {
++            let t = index as f64 / 64.0;
++            assert_eq!(a.sample(t), b.sample(t), "sample {t} must be identical");
++            assert_eq!(a.tangent_angle(t), b.tangent_angle(t));
++        }
++        assert_eq!(a.length, b.length);
++        assert_eq!(a.total_turn, b.total_turn);
++    }
++
++    #[test]
++    fn prefer_bows_to_the_left_of_travel_on_both_directions() {
++        // The preferred candidate always bows to its own left, so a mirrored
++        // chord bows to the opposite side of the screen.
++        let cfg = config();
++        let forward = ArcPath::plan((0.0, 0.0), (600.0, 0.0), &cfg, None);
++        let backward = ArcPath::plan((600.0, 0.0), (0.0, 0.0), &cfg, None);
++        let f = forward.sample(0.5);
++        let b = backward.sample(0.5);
++        assert!(f.1 > 1.0, "forward travel must bow below the chord: {f:?}");
++        assert!(
++            b.1 < -1.0,
++            "backward travel must bow above the chord: {b:?}"
++        );
++        assert_eq!(forward.sample(0.0), (0.0, 0.0));
++        assert_eq!(backward.sample(1.0), (0.0, 0.0));
++    }
++
++    #[test]
++    fn lean_is_zero_on_a_straight_path_and_bounded_on_an_arc() {
++        let straight = ArcPath::plan((0.0, 0.0), (5.0, 0.0), &config(), None);
++        assert_eq!(straight.lean(0.5), 0.0);
++        let arc = ArcPath::plan((0.0, 0.0), (800.0, 200.0), &config(), None);
++        for index in 0..=16 {
++            let lean = arc.lean(index as f64 / 16.0);
++            assert!(lean.abs() <= PI / 2.0, "lean must stay a lean: {lean}");
++        }
++        assert!(arc.lean(0.5).abs() > 0.01, "an arc midpoint must lean");
++    }
++
++    #[test]
++    fn overshoot_extends_along_the_end_chord_instead_of_jumping() {
++        let path = ArcPath::plan((0.0, 0.0), (500.0, 0.0), &config(), None);
++        let end = path.sample(1.0);
++        let past = path.sample(1.05);
++        assert!(
++            (past.0 - (end.0 + 0.05 * path.chord)).abs() < 1.0e-6,
++            "overshoot must extend ~5% of the chord along the end direction, got {past:?}"
++        );
++        let before = path.sample(-0.03);
++        assert!(before.0 < 0.0, "undershoot must extend behind the start");
++    }
++}
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
 new file mode 100644
-index 000000000..16bdc9b84
+index 000000000..69b995cec
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/compact_cursor.rs
-@@ -0,0 +1,330 @@
-+//! Compact pointer arrow drawn as a vector path at the actual input hotspot:
-+//! white outline, dark fill, no badge, and no theme morph, rotation, or click
-+//! bounce.
+@@ -0,0 +1,644 @@
++//! Compact pointer artwork: a crisp layered arrow drawn as a vector path at
++//! the actual input hotspot.
++//!
++//! Three layers, painted back to front:
++//! 1. a soft offset shadow so the arrow reads on light backgrounds,
++//! 2. a light rim so it reads on dark backgrounds,
++//! 3. a near-black fill.
++//!
++//! The silhouette is a generic pointer with a short tail — original artwork,
++//! no third-party asset. The paint call takes the spring channels (uniform
++//! scale, stretch/squash, pivot, lean) so the rebuilt motion is what the user
++//! sees.
 +
 +use std::sync::OnceLock;
 +use tiny_skia::{Color, FillRule, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
++
++/// Artwork-local width used to normalize the stretch pivot.
++const ART_WIDTH: f64 = 18.4;
++/// Artwork-local vertical centre used as the pivot's y coordinate.
++const ART_PIVOT_Y: f64 = 14.6;
 +
 +fn arrow() -> &'static Path {
 +    static PATH: OnceLock<Path> = OnceLock::new();
 +    PATH.get_or_init(|| {
 +        let mut p = PathBuilder::new();
++        // Tip at the hotspot, tail down-right; a classic pointer silhouette.
 +        p.move_to(0.0, 0.0);
-+        p.line_to(0.0, 23.0);
-+        p.line_to(6.0, 17.5);
-+        p.line_to(11.0, 28.0);
-+        p.line_to(15.0, 26.0);
-+        p.line_to(10.0, 16.0);
-+        p.line_to(18.5, 16.0);
++        p.line_to(0.0, 24.8);
++        p.line_to(6.1, 18.9);
++        p.line_to(10.3, 28.2);
++        p.line_to(14.5, 26.2);
++        p.line_to(10.5, 16.8);
++        p.line_to(18.4, 16.8);
 +        p.close();
 +        p.finish().expect("static compact cursor path")
 +    })
 +}
 +
-+pub fn paint(pm: &mut Pixmap, x: f32, y: f32, scale: f32, alpha: f32, pressed: bool) {
-+    let transform = Transform::from_row(scale, 0.0, 0.0, scale, x, y);
-+    let outline = Paint {
-+        shader: tiny_skia::Shader::SolidColor(Color::from_rgba(1.0, 1.0, 1.0, alpha).unwrap()),
++/// One frame of compact-cursor paint state.
++#[derive(Debug, Clone, Copy)]
++pub struct CompactPaint {
++    /// Anchor (the hotspot/tip) in pixmap pixels.
++    pub x: f64,
++    pub y: f64,
++    /// Pixmap pixels per logical point (the display backing scale).
++    pub device_scale: f64,
++    /// Visual uniform scale from the scale spring (1.0 = authored size).
++    pub scale: f64,
++    /// Along-travel stretch multiplier (≥ 1 stretches).
++    pub stretch: f64,
++    /// Perpendicular squash multiplier (≤ 1 flattens).
++    pub squash: f64,
++    /// Normalized pivot x of the stretch, 0..1 of the artwork width.
++    pub pivot_x: f64,
++    /// Lean in radians (the travel's tangent minus its chord).
++    pub rotation: f64,
++    /// Idle-fade alpha, 0..1.
++    pub alpha: f64,
++    pub pressed: bool,
++}
++
++/// Build the artwork transform.
++///
++/// `M(P) = device * [ V * (P - pivot) + pivot ] + anchor`, with `V` the
++/// visual rotation × stretch/squash. The authored tip (art-local `0,0`) sits
++/// exactly on the anchor at rest; scale and lean pivot about the artwork
++/// centre so the shape deforms symmetrically, while the device scale maps
++/// logical points to pixmap pixels without moving the tip. The shadow is a
++/// device-space offset under the whole thing.
++fn affine(paint: &CompactPaint, shadow_offset: (f64, f64)) -> Transform {
++    let sx = paint.scale * paint.stretch;
++    let sy = paint.scale * paint.squash;
++    let (sin, cos) = paint.rotation.sin_cos();
++    let (v00, v01, v10, v11) = (cos * sx, -sin * sy, sin * sx, cos * sy);
++    let pivot = (paint.pivot_x.clamp(0.0, 1.0) * ART_WIDTH, ART_PIVOT_Y);
++    let device = paint.device_scale.max(0.0);
++    let tx =
++        paint.x + shadow_offset.0 * device + device * (pivot.0 - (v00 * pivot.0 + v01 * pivot.1));
++    let ty =
++        paint.y + shadow_offset.1 * device + device * (pivot.1 - (v10 * pivot.0 + v11 * pivot.1));
++    // Column-major: from_row(sx, ky, kx, sy, tx, ty) with
++    // x' = x*sx + y*kx + tx and y' = x*ky + y*sy + ty.
++    Transform::from_row(
++        (device * v00) as f32,
++        (device * v10) as f32,
++        (device * v01) as f32,
++        (device * v11) as f32,
++        tx as f32,
++        ty as f32,
++    )
++}
++
++pub fn paint(pm: &mut Pixmap, paint: &CompactPaint) {
++    if paint.alpha <= 0.0 || paint.scale <= 0.0 || !paint.scale.is_finite() {
++        return;
++    }
++    let alpha = paint.alpha.clamp(0.0, 1.0);
++
++    // Soft shadow: the same silhouette, offset down-right, no rim.
++    let shadow = Paint {
++        shader: tiny_skia::Shader::SolidColor(Color::from_rgba8(
++            0,
++            0,
++            0,
++            (alpha * 0.30 * 255.0) as u8,
++        )),
++        anti_alias: true,
++        ..Default::default()
++    };
++    pm.fill_path(
++        arrow(),
++        &shadow,
++        FillRule::Winding,
++        affine(paint, (1.2, 1.8)),
++        None,
++    );
++
++    // Light rim: keeps the arrow visible on dark backgrounds.
++    let rim = Paint {
++        shader: tiny_skia::Shader::SolidColor(Color::from_rgba8(
++            255,
++            255,
++            255,
++            (alpha * 0.95 * 255.0) as u8,
++        )),
 +        anti_alias: true,
 +        ..Default::default()
 +    };
 +    pm.stroke_path(
 +        arrow(),
-+        &outline,
++        &rim,
 +        &Stroke {
-+            width: 2.4,
++            width: 2.3,
 +            line_join: tiny_skia::LineJoin::Round,
++            line_cap: tiny_skia::LineCap::Round,
 +            ..Default::default()
 +        },
-+        transform,
++        affine(paint, (0.0, 0.0)),
 +        None,
 +    );
-+    let shade = if pressed { 0.25 } else { 0.06 };
++
++    // Near-black fill; the press lightens it a touch so the shrink reads.
++    let (r, g, b) = if paint.pressed {
++        (44, 47, 56)
++    } else {
++        (18, 20, 26)
++    };
 +    let fill = Paint {
-+        shader: tiny_skia::Shader::SolidColor(
-+            Color::from_rgba(shade, shade, shade, alpha).unwrap(),
-+        ),
++        shader: tiny_skia::Shader::SolidColor(Color::from_rgba8(
++            r,
++            g,
++            b,
++            (alpha * 0.97 * 255.0) as u8,
++        )),
 +        anti_alias: true,
 +        ..Default::default()
 +    };
-+    pm.fill_path(arrow(), &fill, FillRule::Winding, transform, None);
++    pm.fill_path(
++        arrow(),
++        &fill,
++        FillRule::Winding,
++        affine(paint, (0.0, 0.0)),
++        None,
++    );
 +}
 +
 +/// The click landmark: a soft violet ring that expands from the press point
@@ -1333,9 +2666,12 @@ index 000000000..16bdc9b84
 +    let Some(path) = p.finish() else { return };
 +    // violet-300, matching the in-chat preview halo's accent family.
 +    let ring = Paint {
-+        shader: tiny_skia::Shader::SolidColor(
-+            Color::from_rgba8(0xC4, 0xB5, 0xFD, (alpha.clamp(0.0, 1.0) * 255.0) as u8),
-+        ),
++        shader: tiny_skia::Shader::SolidColor(Color::from_rgba8(
++            0xC4,
++            0xB5,
++            0xFD,
++            (alpha.clamp(0.0, 1.0) * 255.0) as u8,
++        )),
 +        anti_alias: true,
 +        ..Default::default()
 +    };
@@ -1363,8 +2699,23 @@ index 000000000..16bdc9b84
 +        })
 +    }
 +
++    fn stationary_paint() -> CompactPaint {
++        CompactPaint {
++            x: 32.0,
++            y: 32.0,
++            device_scale: 1.0,
++            scale: 1.0,
++            stretch: 1.0,
++            squash: 1.0,
++            pivot_x: 0.5,
++            rotation: 0.0,
++            alpha: 1.0,
++            pressed: false,
++        }
++    }
++
 +    #[test]
-+    fn compact_moves_and_clicks_use_exact_hotspot_without_a_path_or_pulse() {
++    fn compact_moves_and_clicks_use_exact_hotspot_without_a_classic_path_or_spring() {
 +        let mut c = compact();
 +        for (x, y) in [(20.0, 30.0), (1900.0, 100.0), (3.0, 4.0)] {
 +            c.apply_command_base(
@@ -1378,6 +2729,7 @@ index 000000000..16bdc9b84
 +            );
 +            assert_eq!(c.pos, (x, y));
 +            assert!(c.path.is_none());
++            assert!(c.spring.is_none());
 +            c.apply_command_base(OverlayCommand::ClickPulse { x, y }, true, true);
 +            assert_eq!(c.pos, (x, y));
 +            assert!(c.click_t.is_none());
@@ -1386,7 +2738,7 @@ index 000000000..16bdc9b84
 +    }
 +
 +    #[test]
-+    fn compact_hops_glide_the_painted_arrow_only() {
++    fn compact_hops_travel_the_painted_arrow_only() {
 +        let mut c = compact();
 +        c.pos = (100.0, 100.0);
 +        c.apply_command_base(
@@ -1400,15 +2752,29 @@ index 000000000..16bdc9b84
 +        );
 +        // The logical position is already the hotspot — nothing waits.
 +        assert_eq!(c.pos, (600.0, 400.0));
-+        let glide = c.compact_glide.expect("a 500px hop should glide");
-+        assert_eq!(glide.from, (100.0, 100.0));
++        assert!(
++            c.compact_motion.is_some(),
++            "a 500px hop should record a travel"
++        );
 +        assert_eq!(c.compact_display_pos(), (100.0, 100.0));
 +        assert!(c.compact_animating());
-+        c.tick_compact(glide.dur / 2.0);
++        c.tick_compact(0.05);
 +        let (mx, my) = c.compact_display_pos();
-+        assert!(mx > 100.0 && mx < 600.0 && my > 100.0 && my < 400.0);
-+        c.tick_compact(glide.dur);
-+        assert!(c.compact_glide.is_none());
++        assert!(
++            (mx - 100.0).hypot(my - 100.0) > 1.0,
++            "the arrow must have left the origin"
++        );
++        assert!(
++            (mx - 600.0).hypot(my - 400.0) > 1.0,
++            "the arrow must not have arrived yet"
++        );
++        for _ in 0..600 {
++            c.tick_compact(1.0 / 120.0);
++            if c.compact_motion.is_none() {
++                break;
++            }
++        }
++        assert!(c.compact_motion.is_none(), "the travel must settle");
 +        assert_eq!(c.compact_display_pos(), (600.0, 400.0));
 +        assert!(!c.compact_animating());
 +    }
@@ -1426,7 +2792,7 @@ index 000000000..16bdc9b84
 +            true,
 +            true,
 +        );
-+        assert!(c.compact_glide.is_none());
++        assert!(c.compact_motion.is_none());
 +        // A sub-threshold hop snaps — micro-corrections must not smear.
 +        c.apply_command_base(
 +            OverlayCommand::SnapTo {
@@ -1437,7 +2803,7 @@ index 000000000..16bdc9b84
 +            true,
 +            true,
 +        );
-+        assert!(c.compact_glide.is_none());
++        assert!(c.compact_motion.is_none());
 +        // A held button keeps tracking tight to the real drag path.
 +        c.apply_command_base(OverlayCommand::SetPressed(true), true, true);
 +        c.apply_command_base(
@@ -1449,12 +2815,12 @@ index 000000000..16bdc9b84
 +            true,
 +            true,
 +        );
-+        assert!(c.compact_glide.is_none());
++        assert!(c.compact_motion.is_none());
 +        assert_eq!(c.compact_display_pos(), (900.0, 700.0));
 +    }
 +
 +    #[test]
-+    fn compact_chained_glide_continues_from_the_displayed_spot() {
++    fn compact_chained_travel_continues_from_the_displayed_spot() {
 +        let mut c = compact();
 +        c.pos = (100.0, 100.0);
 +        c.apply_command_base(
@@ -1466,9 +2832,11 @@ index 000000000..16bdc9b84
 +            true,
 +            true,
 +        );
-+        let first = c.compact_glide.unwrap();
-+        c.tick_compact(first.dur * 0.5);
++        let first = c.compact_motion.as_ref().unwrap();
++        assert_eq!(first.from, (100.0, 100.0));
++        c.tick_compact(0.1);
 +        let mid = c.compact_display_pos();
++        assert!(mid.0 > 100.0 && mid.0 < 700.0);
 +        c.apply_command_base(
 +            OverlayCommand::SnapTo {
 +                x: 700.0,
@@ -1478,15 +2846,26 @@ index 000000000..16bdc9b84
 +            true,
 +            true,
 +        );
-+        let second = c.compact_glide.expect("the retarget should re-glide");
-+        assert_eq!(second.from, mid);
++        let second = c
++            .compact_motion
++            .as_ref()
++            .expect("the retarget should record a new travel");
++        assert!(
++            (second.from.0 - mid.0).abs() < 1.0e-9 && (second.from.1 - mid.1).abs() < 1.0e-9,
++            "the retarget must chain from the painted spot: {mid:?} -> {:?}",
++            second.from
++        );
 +    }
 +
 +    #[test]
 +    fn compact_click_leaves_a_ring_that_expands_and_expires() {
 +        let mut c = compact();
 +        c.pos = (200.0, 200.0);
-+        c.apply_command_base(OverlayCommand::ClickPulse { x: 260.0, y: 240.0 }, true, true);
++        c.apply_command_base(
++            OverlayCommand::ClickPulse { x: 260.0, y: 240.0 },
++            true,
++            true,
++        );
 +        let pulse = c.compact_pulse.expect("a click should leave a ring");
 +        assert_eq!((pulse.x, pulse.y), (260.0, 240.0));
 +        let (_, _, r0, a0) = c.compact_pulse_ring().unwrap();
@@ -1500,7 +2879,7 @@ index 000000000..16bdc9b84
 +    }
 +
 +    #[test]
-+    fn compact_reduced_motion_never_glides_or_rings() {
++    fn compact_reduced_motion_never_travels_or_rings() {
 +        let mut c = RenderStateCore::new(CursorConfig {
 +            compact: true,
 +            reduced_motion: crate::ReducedMotion::On,
@@ -1516,11 +2895,44 @@ index 000000000..16bdc9b84
 +            true,
 +            true,
 +        );
-+        c.apply_command_base(OverlayCommand::ClickPulse { x: 920.0, y: 720.0 }, true, true);
-+        assert!(c.compact_glide.is_none());
++        c.apply_command_base(
++            OverlayCommand::ClickPulse { x: 920.0, y: 720.0 },
++            true,
++            true,
++        );
++        assert!(c.compact_motion.is_none());
 +        assert!(c.compact_pulse.is_none());
 +        assert!(!c.compact_animating());
 +        assert_eq!(c.compact_display_pos(), (920.0, 720.0));
++    }
++
++    #[test]
++    fn compact_loading_breath_expires_with_the_action() {
++        let mut c = compact();
++        c.pos = (100.0, 100.0);
++        // Native semantic actions announce begin/end through the cursor event
++        // sink; a held action is the cursor's loading state.
++        c.apply_command_base(
++            OverlayCommand::BeginAction {
++                action: CursorAction::Drag,
++                delivery: None,
++                target: None,
++            },
++            true,
++            true,
++        );
++        assert_eq!(c.compact_activity(), crate::CompactActivity::Loading);
++        assert!(c.compact_animating(), "the loading breath needs frames");
++        c.apply_command_base(OverlayCommand::EndAction(CursorAction::Drag), true, true);
++        for _ in 0..1200 {
++            c.tick_compact(1.0 / 120.0);
++        }
++        assert_eq!(c.compact_activity(), crate::CompactActivity::Idle);
++        c.idle_secs = 0.0;
++        assert!(
++            !c.compact_animating(),
++            "a settled compact cursor must not keep the 60 fps loop alive"
++        );
 +    }
 +
 +    #[test]
@@ -1539,27 +2951,30 @@ index 000000000..16bdc9b84
 +    }
 +
 +    #[test]
-+    fn compact_glide_and_ring_paint_pixels() {
++    fn compact_travel_and_ring_paint_pixels() {
 +        let mut c = compact();
 +        c.pos = (40.0, 40.0);
 +        c.apply_command_base(
 +            OverlayCommand::SnapTo {
-+                x: 90.0,
-+                y: 90.0,
++                x: 160.0,
++                y: 160.0,
 +                heading_radians: None,
 +            },
 +            true,
 +            true,
 +        );
-+        c.apply_command_base(OverlayCommand::ClickPulse { x: 95.0, y: 95.0 }, true, true);
-+        let glide = c.compact_glide.unwrap();
-+        c.tick_compact(glide.dur * 0.5);
-+        let mut frame = Pixmap::new(160, 160).unwrap();
++        c.apply_command_base(
++            OverlayCommand::ClickPulse { x: 165.0, y: 165.0 },
++            true,
++            true,
++        );
++        c.tick_compact(0.1);
++        let mut frame = Pixmap::new(256, 256).unwrap();
 +        crate::paint_cursor(&mut frame, &c, 0.0, 0.0, None, 1.0);
 +        assert!(frame.pixels().iter().any(|p| p.alpha() != 0));
-+        // Mid-glide the arrow sits between the two points, not on either.
++        // Mid-travel the arrow sits between the two points, not on either.
 +        let (dx, dy) = c.compact_display_pos();
-+        assert!(dx > 40.0 && dx < 95.0 && dy > 40.0 && dy < 95.0);
++        assert!(dx > 40.0 && dx < 165.0 && dy > 40.0 && dy < 165.0);
 +    }
 +
 +    #[test]
@@ -1598,32 +3013,714 @@ index 000000000..16bdc9b84
 +        crate::paint_cursor(&mut frame, &c, 0.0, 0.0, None, 2.0);
 +        assert!(frame.pixels().iter().all(|p| p.alpha() == 0));
 +    }
++
++    fn ink_bounds(pm: &Pixmap) -> Option<(u32, u32, u32, u32)> {
++        let mut min_x = u32::MAX;
++        let mut min_y = u32::MAX;
++        let mut max_x = 0;
++        let mut max_y = 0;
++        for (index, pixel) in pm.pixels().iter().enumerate() {
++            if pixel.alpha() == 0 {
++                continue;
++            }
++            let x = index as u32 % pm.width();
++            let y = index as u32 / pm.width();
++            min_x = min_x.min(x);
++            min_y = min_y.min(y);
++            max_x = max_x.max(x);
++            max_y = max_y.max(y);
++        }
++        (min_x != u32::MAX).then_some((min_x, min_y, max_x, max_y))
++    }
++
++    #[test]
++    fn paint_layers_a_shadow_rim_and_fill_at_the_anchor() {
++        let mut frame = Pixmap::new(64, 64).unwrap();
++        paint(&mut frame, &stationary_paint());
++        // The tip occupies the anchor; the rim/shadow cover more pixels below
++        // and to the right of it.
++        let opaque = frame
++            .pixels()
++            .iter()
++            .filter(|pixel| pixel.alpha() > 200)
++            .count();
++        assert!(opaque > 40, "the arrow must be solidly painted: {opaque}");
++        assert!(frame.pixel(32, 32).unwrap().alpha() >= 200);
++        assert_eq!(frame.pixel(56, 8).unwrap().alpha(), 0);
++    }
++
++    #[test]
++    fn paint_anchors_the_tip_on_every_device_scale() {
++        for device in [1.0_f64, 2.0, 3.0] {
++            let size = (64.0 * device) as u32;
++            let anchor = (32.0 * device).round() as u32;
++            let mut frame = Pixmap::new(size, size).unwrap();
++            paint(
++                &mut frame,
++                &CompactPaint {
++                    x: anchor as f64,
++                    y: anchor as f64,
++                    device_scale: device,
++                    ..stationary_paint()
++                },
++            );
++            let (min_x, min_y, max_x, max_y) = ink_bounds(&frame).expect("ink");
++            // The rim's round join sticks out about 1.2 artwork units around
++            // the tip; nothing may start further away than that.
++            let margin = (1.6 * device).ceil() as i64;
++            assert!(
++                (i64::from(min_x) - i64::from(anchor)).abs() <= margin,
++                "device {device}: tip x {min_x} is not anchored at {anchor}"
++            );
++            assert!(
++                (i64::from(min_y) - i64::from(anchor)).abs() <= margin,
++                "device {device}: tip y {min_y} is not anchored at {anchor}"
++            );
++            // The silhouette extends down-right and nothing is painted past
++            // its footprint in the bottom-right corner.
++            assert!(
++                max_x > anchor + (10.0 * device) as u32,
++                "art must extend right"
++            );
++            assert!(
++                max_y > anchor + (20.0 * device) as u32,
++                "art must extend down"
++            );
++            let corner = (size - 1, size - 1);
++            assert_eq!(
++                frame.pixel(corner.0, corner.1).unwrap().alpha(),
++                0,
++                "device {device}: paint must not leak past the artwork"
++            );
++        }
++    }
++
++    #[test]
++    fn paint_rotation_stretch_and_squash_change_the_pixels() {
++        let mut baseline = Pixmap::new(96, 96).unwrap();
++        paint(&mut baseline, &stationary_paint());
++
++        let mut rotated = Pixmap::new(96, 96).unwrap();
++        paint(
++            &mut rotated,
++            &CompactPaint {
++                rotation: 0.6,
++                ..stationary_paint()
++            },
++        );
++        assert_ne!(baseline.data(), rotated.data(), "lean must rotate the art");
++
++        let mut stretched = Pixmap::new(96, 96).unwrap();
++        let mut squash = stationary_paint();
++        squash.stretch = 1.35;
++        squash.squash = 0.85;
++        paint(&mut stretched, &squash);
++        assert_ne!(
++            baseline.data(),
++            stretched.data(),
++            "stretch/squash must deform the art"
++        );
++
++        let mut pressed = Pixmap::new(96, 96).unwrap();
++        paint(
++            &mut pressed,
++            &CompactPaint {
++                pressed: true,
++                ..stationary_paint()
++            },
++        );
++        assert_ne!(baseline.data(), pressed.data());
++    }
++}
+diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/feel.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/feel.rs
+new file mode 100644
+index 000000000..7cffbc26f
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/cursor-overlay/src/feel.rs
+@@ -0,0 +1,533 @@
++//! Compact-cursor feel: per-channel spring motion along a planned arc.
++//!
++//! One `CompactMotion` owns a travel that the logical cursor position does
++//! not wait on. `pos` is already the hotspot when the motion starts; the
++//! channels here only steer what gets painted, so input latency is
++//! unaffected and a retarget can chase (or interrupt) the picture at any
++//! time.
++//!
++//! Channels:
++//! - **progress** — scalar spring 0 → 1 along the planned path. Its response
++//!   is distance-scaled and clamped (`spring.rs::travel_response`).
++//! - **lean** — spring toward the tangent-vs-chord angle, capped by the
++//!   configured maximum rotation.
++//! - **scale** — uniform spring used for the press reaction and the loading
++//!   breath.
++//! - **stretch / squash** — springs driven by instantaneous speed; active
++//!   only for travels past the configured scoot distance.
++//!
++//! All reference numbers and the chosen adaptations are documented in the
++//! L4 notebook and in `CursorFeel::default`.
++
++use crate::arc::{ArcConfig, ArcPath};
++use crate::spring::{travel_response, SpringChannel, SpringSpec};
++
++/// Early-ack: the motion is "committed" once the progress spring passes this
++/// fraction of the path or the painted point is within this many points of
++/// the target, whichever happens first (reference `CloseEnoughConfiguration`).
++pub const EARLY_ACK_PROGRESS: f64 = 0.995;
++pub const EARLY_ACK_DISTANCE: f64 = 3.157;
++/// Reference peak speed used to translate a distance into a travel response.
++pub const DEFAULT_PEAK_SPEED: f64 = 900.0;
++
++/// What the pointer is doing right now. Paused freezes every channel and
++/// holds the current frame; Loading adds a slow breathing pulse once the
++/// pointer is settled.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum CompactActivity {
++    Idle,
++    Loading,
++    Paused,
++}
++
++/// Runtime feel constants for the rebuilt compact cursor.
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub struct CursorFeel {
++    /// Points per second used to scale distance into a travel response.
++    pub peak_speed: f64,
++    pub travel_response_scaler: f64,
++    pub travel_response_min: f64,
++    pub travel_response_max: f64,
++    pub travel_damping: f64,
++
++    /// Lean spring (`scootRotationResponse` / `scootRotationDampingFraction`).
++    pub rotation_response: f64,
++    pub rotation_damping: f64,
++    /// Reference bound on the total turn of one travel (`scootRotationMax`);
++    /// the path builder keeps every scored candidate inside it.
++    pub rotation_max_degrees: f64,
++    /// Cap on the *painted* lean, in degrees. The reference's 76° is a
++    /// path-level bound; a fixed pointer silhouette that tilts that far reads
++    /// as a spin, so the rendered lean is a deliberate, much smaller
++    /// adaptation.
++    pub painted_lean_max_degrees: f64,
++    /// Path fraction where the lean blends back to the rest orientation
++    /// (`terminalTangentBlendStart`), so the arrow lands level.
++    pub terminal_tangent_blend_start: f64,
++
++    /// Travels longer than this get the stretch/squash treatment.
++    pub scoot_distance_threshold: f64,
++    pub stretch_response: f64,
++    pub stretch_damping: f64,
++    pub stretch_x_amount: f64,
++    pub squash_y_amount: f64,
++    pub stretch_pivot_x: f64,
++    /// Reserved reference knob (`scootStretchMin`); 0.0 = no compression.
++    pub stretch_min: f64,
++
++    /// Press reaction. The reference only proves `isPressed` drives a press
++    /// animation; the numbers are an adaptation.
++    pub press_scale: f64,
++    pub press_response: f64,
++    pub press_damping: f64,
++
++    /// Loading breath (adapted; the reference states no timings).
++    pub loading_breath_amplitude: f64,
++    pub loading_breath_hz: f64,
++
++    /// Channel at-rest windows used to expire a motion.
++    pub settle_position_eps: f64,
++    pub settle_velocity_eps: f64,
++
++    pub arc: ArcConfig,
++}
++
++impl Default for CursorFeel {
++    fn default() -> Self {
++        Self {
++            peak_speed: DEFAULT_PEAK_SPEED,
++            travel_response_scaler: 0.9,
++            travel_response_min: 0.12,
++            travel_response_max: 2.2,
++            travel_damping: 0.9,
++
++            rotation_response: 0.09,
++            rotation_damping: 0.86,
++            rotation_max_degrees: 76.0,
++            painted_lean_max_degrees: 22.0,
++            terminal_tangent_blend_start: 0.99,
++
++            scoot_distance_threshold: 196.0,
++            stretch_response: 0.095,
++            stretch_damping: 0.72,
++            stretch_x_amount: 0.38,
++            squash_y_amount: 0.18,
++            stretch_pivot_x: 0.5,
++            stretch_min: 0.0,
++
++            press_scale: 0.86,
++            press_response: 0.08,
++            press_damping: 0.9,
++
++            loading_breath_amplitude: 0.022,
++            loading_breath_hz: 1.4,
++
++            settle_position_eps: 1.0e-3,
++            settle_velocity_eps: 1.0e-2,
++
++            arc: ArcConfig::default(),
++        }
++    }
++}
++
++impl CursorFeel {
++    /// Response used for a travel of `distance` points.
++    pub fn travel_spec(&self, distance: f64) -> SpringSpec {
++        SpringSpec::new(
++            travel_response(
++                distance,
++                self.travel_response_scaler,
++                self.travel_response_min,
++                self.travel_response_max,
++                self.peak_speed,
++            ),
++            self.travel_damping,
++        )
++    }
++
++    pub fn rotation_spec(&self) -> SpringSpec {
++        SpringSpec::new(self.rotation_response, self.rotation_damping)
++    }
++
++    pub fn stretch_spec(&self) -> SpringSpec {
++        SpringSpec::new(self.stretch_response, self.stretch_damping)
++    }
++
++    pub fn press_spec(&self) -> SpringSpec {
++        SpringSpec::new(self.press_response, self.press_damping)
++    }
++}
++
++/// The painted channel values for one frame.
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub struct PaintChannels {
++    /// Painted position in screen points (already includes the settle).
++    pub x: f64,
++    pub y: f64,
++    /// Uniform scale (1.0 = the authored size).
++    pub scale: f64,
++    /// Multiplier along the arrow's local x axis (≥ 1 stretches).
++    pub stretch: f64,
++    /// Multiplier along the arrow's local y axis (≤ 1 squashes).
++    pub squash: f64,
++    /// Normalized pivot x of the stretch (0..1 of the artwork width).
++    pub pivot_x: f64,
++    /// Lean in radians, positive = turning left of the chord.
++    pub rotation: f64,
++}
++
++/// One in-flight compact travel.
++#[derive(Debug, Clone)]
++pub struct CompactMotion {
++    path: ArcPath,
++    /// Painted start, kept for tests and retarget chaining.
++    pub from: (f64, f64),
++    pub target: (f64, f64),
++    distance: f64,
++    progress: SpringChannel,
++    lean: SpringChannel,
++    scale: SpringChannel,
++    stretch: SpringChannel,
++    squash: SpringChannel,
++    elapsed: f64,
++    previous: (f64, f64),
++    travel_spec: SpringSpec,
++}
++
++impl CompactMotion {
++    /// Plan a travel from `from` to `target`. `bounds` is the screen size in
++    /// points when known, so the chosen arc stays inside the frame.
++    pub fn new(
++        from: (f64, f64),
++        target: (f64, f64),
++        feel: &CursorFeel,
++        bounds: Option<(f64, f64)>,
++    ) -> Self {
++        let path = ArcPath::plan(from, target, &feel.arc, bounds);
++        let distance = path.chord;
++        Self {
++            distance,
++            travel_spec: feel.travel_spec(distance),
++            path,
++            from,
++            target,
++            progress: SpringChannel::new(0.0),
++            lean: SpringChannel::new(0.0),
++            scale: SpringChannel::new(1.0),
++            stretch: SpringChannel::new(1.0),
++            squash: SpringChannel::new(1.0),
++            elapsed: 0.0,
++            previous: from,
++        }
++    }
++
++    /// Advance every channel by `dt`. Returns true once the whole motion is
++    /// at rest (the caller then drops it). A Paused activity freezes all
++    /// channels and holds the current frame.
++    pub fn tick(
++        &mut self,
++        dt: f64,
++        feel: &CursorFeel,
++        pressed: bool,
++        activity: CompactActivity,
++    ) -> bool {
++        if activity == CompactActivity::Paused {
++            return false;
++        }
++        self.elapsed += dt.max(0.0);
++        self.progress.step(1.0, &self.travel_spec, dt);
++
++        let position = self.path.sample(self.progress.value.clamp(-0.05, 1.06));
++        let speed = if dt > 0.0 {
++            (position.0 - self.previous.0).hypot(position.1 - self.previous.1) / dt
++        } else {
++            0.0
++        };
++        self.previous = position;
++
++        // The arrow leans into the curve, then blends back to level over the
++        // last fraction of the path so it lands at its rest orientation.
++        let travel_t = self.progress.value.clamp(0.0, 1.0);
++        let blend_start = feel.terminal_tangent_blend_start.clamp(0.0, 1.0);
++        let blend = if travel_t <= blend_start {
++            1.0
++        } else {
++            (1.0 - (travel_t - blend_start) / (1.0 - blend_start).max(1.0e-9)).clamp(0.0, 1.0)
++        };
++        let lean_cap = feel
++            .painted_lean_max_degrees
++            .min(feel.rotation_max_degrees)
++            .to_radians();
++        let lean_target = (self.path.lean(travel_t) * blend).clamp(-lean_cap, lean_cap);
++        self.lean.step(lean_target, &feel.rotation_spec(), dt);
++
++        let scoot = self.distance > feel.scoot_distance_threshold && self.progress.value < 1.0;
++        let speed_ratio = (speed / feel.peak_speed.max(1.0)).clamp(0.0, 1.0);
++        let (stretch_target, squash_target) = if scoot {
++            (
++                (1.0 + feel.stretch_x_amount * speed_ratio).max(1.0 - feel.stretch_min),
++                (1.0 - feel.squash_y_amount * speed_ratio).max(1.0 - feel.squash_y_amount),
++            )
++        } else {
++            (1.0, 1.0)
++        };
++        self.stretch.step(stretch_target, &feel.stretch_spec(), dt);
++        self.squash.step(squash_target, &feel.stretch_spec(), dt);
++
++        let scale_target = if pressed { feel.press_scale } else { 1.0 };
++        self.scale.step(scale_target, &feel.press_spec(), dt);
++
++        if self.progress.value >= 1.0 - feel.settle_position_eps
++            && self.progress.velocity.abs() <= feel.settle_velocity_eps
++        {
++            self.progress.snap(1.0);
++        }
++        self.settled(feel)
++    }
++
++    /// True when the motion has come far enough on the path, or close enough
++    /// to the target, that a caller may treat it as committed (early-ack).
++    pub fn committed(&self) -> bool {
++        if self.progress.value >= EARLY_ACK_PROGRESS {
++            return true;
++        }
++        let (x, y) = self.display_pos();
++        (x - self.target.0).hypot(y - self.target.1) <= EARLY_ACK_DISTANCE
++    }
++
++    pub fn display_pos(&self) -> (f64, f64) {
++        if self.progress.value >= 1.0 {
++            return self.target;
++        }
++        self.path.sample(self.progress.value.clamp(0.0, 1.0))
++    }
++
++    /// Painted channels for the current frame. `activity` adds the loading
++    /// breath to the uniform scale while the pointer is settled.
++    pub fn channels(&self, feel: &CursorFeel, activity: CompactActivity) -> PaintChannels {
++        let (x, y) = self.display_pos();
++        let breath = if activity == CompactActivity::Loading {
++            1.0 + feel.loading_breath_amplitude
++                * (self.elapsed * feel.loading_breath_hz * std::f64::consts::TAU).sin()
++        } else {
++            1.0
++        };
++        PaintChannels {
++            x,
++            y,
++            scale: self.scale.value * breath,
++            stretch: self.stretch.value,
++            squash: self.squash.value,
++            pivot_x: feel.stretch_pivot_x,
++            rotation: self.lean.value,
++        }
++    }
++
++    pub fn path_kind(&self) -> crate::arc::ArcKind {
++        self.path.kind()
++    }
++
++    pub fn progress_value(&self) -> f64 {
++        self.progress.value
++    }
++
++    fn settled(&self, feel: &CursorFeel) -> bool {
++        self.progress
++            .settled(1.0, feel.settle_position_eps, feel.settle_velocity_eps)
++            && self.lean.settled(0.0, 1.0e-3, 1.0e-2)
++            && self.scale.settled(1.0, 1.0e-3, 1.0e-2)
++            && self.stretch.settled(1.0, 1.0e-3, 1.0e-2)
++            && self.squash.settled(1.0, 1.0e-3, 1.0e-2)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::arc::ArcKind;
++
++    fn feel() -> CursorFeel {
++        CursorFeel::default()
++    }
++
++    fn motion(from: (f64, f64), to: (f64, f64)) -> CompactMotion {
++        CompactMotion::new(from, to, &feel(), Some((1280.0, 800.0)))
++    }
++
++    #[test]
++    fn travel_settles_on_target_without_a_teleport() {
++        let mut m = motion((100.0, 100.0), (900.0, 620.0));
++        assert_eq!(m.path_kind(), ArcKind::Arc);
++        let mut previous = m.display_pos();
++        let mut settled = false;
++        for _ in 0..1200 {
++            settled = m.tick(1.0 / 120.0, &feel(), false, CompactActivity::Idle);
++            let position = m.display_pos();
++            assert!(
++                (position.0 - previous.0).hypot(position.1 - previous.1) < 40.0,
++                "a 120 Hz frame must never teleport: {previous:?} -> {position:?}"
++            );
++            previous = position;
++            if settled {
++                break;
++            }
++        }
++        assert!(settled, "a long travel must settle and expire");
++        assert_eq!(m.display_pos(), m.target);
++    }
++
++    #[test]
++    fn short_travels_are_straight_and_near_hops_floor_at_the_minimum_response() {
++        let tiny = motion((100.0, 100.0), (105.0, 103.0));
++        assert_eq!(tiny.path_kind(), ArcKind::Straight);
++
++        let hop = motion((100.0, 100.0), (200.0, 100.0));
++        assert_eq!(hop.path_kind(), ArcKind::Arc);
++        assert!(
++            (hop.travel_spec.response - 0.12).abs() < 1.0e-9,
++            "a 100 pt hop floors at the minimum response, got {}",
++            hop.travel_spec.response
++        );
++    }
++
++    #[test]
++    fn early_ack_reports_committed_before_the_settle_finishes() {
++        let mut m = motion((0.0, 0.0), (1200.0, 700.0));
++        assert!(!m.committed(), "a fresh travel is not committed yet");
++        let mut committed_frame = None;
++        let mut settled_frame = None;
++        for frame in 0..2000 {
++            let settled = m.tick(1.0 / 120.0, &feel(), false, CompactActivity::Idle);
++            if committed_frame.is_none() && m.committed() {
++                committed_frame = Some(frame);
++            }
++            if settled {
++                settled_frame = Some(frame);
++                break;
++            }
++        }
++        let committed = committed_frame.expect("early-ack must trigger");
++        let settled = settled_frame.expect("travel must settle");
++        assert!(
++            committed < settled,
++            "early-ack frame {committed} must precede settle frame {settled}"
++        );
++    }
++
++    #[test]
++    fn press_shrinks_and_release_restores_the_scale() {
++        let mut m = motion((200.0, 200.0), (600.0, 400.0));
++        for _ in 0..60 {
++            m.tick(1.0 / 120.0, &feel(), true, CompactActivity::Idle);
++        }
++        let pressed = m.channels(&feel(), CompactActivity::Idle).scale;
++        assert!(pressed < 0.92, "pressed scale must shrink, got {pressed}");
++        for _ in 0..600 {
++            m.tick(1.0 / 120.0, &feel(), false, CompactActivity::Idle);
++        }
++        let released = m.channels(&feel(), CompactActivity::Idle).scale;
++        assert!(
++            (released - 1.0).abs() < 1.0e-2,
++            "release must restore scale, got {released}"
++        );
++    }
++
++    #[test]
++    fn long_fast_travels_stretch_and_squash_but_short_ones_do_not() {
++        let mut long = motion((0.0, 0.0), (1200.0, 0.0));
++        let mut long_stretched = false;
++        for _ in 0..400 {
++            long.tick(1.0 / 120.0, &feel(), false, CompactActivity::Idle);
++            let channels = long.channels(&feel(), CompactActivity::Idle);
++            if channels.stretch > 1.01 && channels.squash < 0.99 {
++                long_stretched = true;
++            }
++        }
++        assert!(
++            long_stretched,
++            "a >scoot-distance travel must stretch then relax"
++        );
++
++        let mut short = motion((0.0, 0.0), (180.0, 0.0));
++        let mut short_stretched = false;
++        for _ in 0..400 {
++            short.tick(1.0 / 120.0, &feel(), false, CompactActivity::Idle);
++            let channels = short.channels(&feel(), CompactActivity::Idle);
++            if channels.stretch > 1.01 {
++                short_stretched = true;
++            }
++        }
++        assert!(!short_stretched, "a sub-threshold travel must not stretch");
++    }
++
++    #[test]
++    fn lean_follows_the_arc_under_the_painted_cap_and_lands_level() {
++        let mut m = motion((100.0, 100.0), (1100.0, 300.0));
++        let cap = feel().painted_lean_max_degrees.to_radians();
++        let mut peak = 0.0_f64;
++        let mut settled = false;
++        for _ in 0..1200 {
++            settled = m.tick(1.0 / 120.0, &feel(), false, CompactActivity::Idle);
++            let rotation = m.channels(&feel(), CompactActivity::Idle).rotation;
++            assert!(
++                rotation.abs() <= cap + 1.0e-9,
++                "painted lean {rotation} over cap {cap}"
++            );
++            if rotation.abs() > peak.abs() {
++                peak = rotation;
++            }
++        }
++        assert!(
++            peak.abs() > 0.02 && peak.abs() <= cap + 1.0e-9,
++            "an arc must lean the arrow within the painted cap, peaked at {peak}"
++        );
++        assert!(settled, "the travel must settle");
++        let landed = m.channels(&feel(), CompactActivity::Idle).rotation;
++        assert!(
++            landed.abs() < 0.01,
++            "the lean must blend back to level on arrival, got {landed}"
++        );
++    }
++
++    #[test]
++    fn retarget_chains_from_the_currently_painted_point() {
++        let mut m = motion((0.0, 0.0), (600.0, 0.0));
++        for _ in 0..20 {
++            m.tick(1.0 / 120.0, &feel(), false, CompactActivity::Idle);
++        }
++        let painted = m.display_pos();
++        assert!(painted.0 > 0.0 && painted.0 < 600.0);
++        let next = CompactMotion::new(painted, (600.0, 500.0), &feel(), Some((1280.0, 800.0)));
++        assert_eq!(next.from, painted, "the retarget must chain from paint");
++    }
++
++    #[test]
++    fn paused_freezes_every_channel_and_holds_the_frame() {
++        let mut m = motion((0.0, 0.0), (1200.0, 0.0));
++        for _ in 0..10 {
++            m.tick(1.0 / 120.0, &feel(), false, CompactActivity::Idle);
++        }
++        let frozen = m.channels(&feel(), CompactActivity::Idle);
++        for _ in 0..120 {
++            let settled = m.tick(1.0 / 120.0, &feel(), false, CompactActivity::Paused);
++            assert!(!settled);
++        }
++        let held = m.channels(&feel(), CompactActivity::Idle);
++        assert_eq!(held, frozen, "a paused motion must hold its exact frame");
++    }
++
++    #[test]
++    fn loading_breath_modulates_scale_but_idle_does_not() {
++        let mut m = motion((0.0, 0.0), (0.0, 0.0));
++        let idle = m.channels(&feel(), CompactActivity::Idle);
++        let loading = m.channels(&feel(), CompactActivity::Loading);
++        assert_eq!(idle, loading);
++        m.tick(1.0 / 120.0, &feel(), false, CompactActivity::Loading);
++        let loading = m.channels(&feel(), CompactActivity::Loading);
++        assert!(
++            (loading.scale - 1.0).abs() > 0.0 && (loading.scale - 1.0).abs() <= 0.022 + 1.0e-9,
++            "loading must breathe within its amplitude, got {}",
++            loading.scale
++        );
++    }
 +}
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
-index 493656b5b..fe9de5ce6 100644
+index 493656b5b..041c76b47 100644
 --- a/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/lib.rs
-@@ -9,6 +9,7 @@
+@@ -6,25 +6,34 @@
+ //! - `CubicBezier` + `PathPlanner` — Bezier path math (ported 1:1 from C#)
+ //! - `OverlayCommand` — messages sent from MCP tools to the overlay thread
+ 
++pub mod arc;
  pub mod badge_glyphs;
  pub mod bezier;
  pub mod capture_utils;
 +pub mod compact_cursor;
++pub mod feel;
  pub mod motion;
  pub mod path_planner;
  pub mod render_state;
-@@ -23,8 +24,9 @@ pub use bezier::CubicBezier;
+ pub mod session_badge;
++pub mod spring;
+ pub mod theme;
+ pub mod theme_artifact;
+ pub mod util;
+ pub mod z_order;
+ 
++pub use arc::{ArcConfig, ArcKind, ArcPath};
+ pub use badge_glyphs::{BadgeChip, BadgeGlyph};
+ pub use bezier::CubicBezier;
++pub use feel::{
++    CompactActivity, CompactMotion, CursorFeel, PaintChannels, EARLY_ACK_DISTANCE,
++    EARLY_ACK_PROGRESS,
++};
  pub use motion::{MotionConfig, Spring};
  pub use path_planner::{PathPlanner, PathState, PlannedPath};
  pub use render_state::{
 -    paint_cursor, render_frame, FocusRect, RenderStateCore, SESSION_BADGE_FADE_SECS,
 -    SESSION_BADGE_HOLD_SECS,
-+    paint_cursor, render_frame, CompactGlide, CompactPulse, FocusRect, RenderStateCore,
-+    COMPACT_FADE_SECS, COMPACT_GLIDE_BASE_SECS, COMPACT_GLIDE_MAX_SECS, COMPACT_GLIDE_MIN_DIST,
-+    COMPACT_GLIDE_SECS_PER_PX, COMPACT_PULSE_SECS, SESSION_BADGE_FADE_SECS, SESSION_BADGE_HOLD_SECS,
++    paint_cursor, render_frame, CompactPulse, FocusRect, RenderStateCore, COMPACT_FADE_SECS,
++    COMPACT_PULSE_SECS, COMPACT_TRAVEL_MIN_DIST, SESSION_BADGE_FADE_SECS, SESSION_BADGE_HOLD_SECS,
  };
  pub use session_badge::{
      paint_session_badge, sanitize_session_label, session_badge_extents, session_badge_layout,
-@@ -52,6 +54,9 @@ pub use z_order::ZOrderEnforcer;
+@@ -32,6 +41,7 @@ pub use session_badge::{
+     BADGE_CHIP_GROUP_GAP, BADGE_CHIP_SIZE, BADGE_CURSOR_GAP, BADGE_HEIGHT, BADGE_MAX_WIDTH,
+     MAX_SESSION_LABEL_CHARS,
+ };
++pub use spring::{travel_response, SpringChannel, SpringSpec};
+ pub use theme::{
+     session_fill_hex, session_fill_rgba, CursorAction, CursorVisualState, DeliveryModifier,
+     PlaybackKind, ReducedMotion, TargetModifier, DEFAULT_CURSOR_FILL, DEFAULT_THEME_ID,
+@@ -52,6 +62,9 @@ pub use z_order::ZOrderEnforcer;
  /// platform backend when it initialises the overlay window.
  #[derive(Debug, Clone)]
  pub struct CursorConfig {
@@ -1633,7 +3730,7 @@ index 493656b5b..fe9de5ce6 100644
      /// Multi-cursor instance identifier. Defaults to `"default"`.
      pub cursor_id: String,
  
-@@ -72,6 +77,7 @@ pub struct CursorConfig {
+@@ -72,6 +85,7 @@ pub struct CursorConfig {
  impl Default for CursorConfig {
      fn default() -> Self {
          Self {
@@ -1641,7 +3738,7 @@ index 493656b5b..fe9de5ce6 100644
              cursor_id: "default".into(),
              theme_id: DEFAULT_THEME_ID.into(),
              reduced_motion: ReducedMotion::Auto,
-@@ -88,6 +94,7 @@ impl CursorConfig {
+@@ -88,6 +102,7 @@ impl CursorConfig {
      /// ```text
      /// --cursor-theme <installed-theme-id>
      /// --cursor-reduced-motion <auto|on|off>
@@ -1649,7 +3746,7 @@ index 493656b5b..fe9de5ce6 100644
      /// --no-overlay                (start with overlay disabled)
      /// --glide-ms     <f64>        (glideDurationMs override)
      /// --dwell-ms     <f64>        (dwellAfterClickMs override)
-@@ -125,6 +132,7 @@ impl CursorConfig {
+@@ -125,6 +140,7 @@ impl CursorConfig {
                          i += 1;
                      }
                  }
@@ -1658,41 +3755,42 @@ index 493656b5b..fe9de5ce6 100644
                  "--glide-ms" => {
                      if let Some(v) = args.get(i + 1).and_then(|s| s.parse().ok()) {
 diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
-index cb1e39396..f3c2d7500 100644
+index cb1e39396..bcbe70f93 100644
 --- a/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
 +++ b/libs/cua-driver/rust/crates/cursor-overlay/src/render_state.rs
-@@ -36,7 +36,7 @@
+@@ -35,8 +35,10 @@
+ //!   supplies one via the optional argument).
  
  use crate::{
-     CompiledTheme, CursorAction, CursorConfig, CursorVisualState, DeliveryModifier, MotionConfig,
+-    CompiledTheme, CursorAction, CursorConfig, CursorVisualState, DeliveryModifier, MotionConfig,
 -    OverlayCommand, PathPlanner, PathState, PlannedPath, Spring, TargetModifier,
-+    OverlayCommand, PathPlanner, PathState, PlannedPath, ReducedMotion, Spring, TargetModifier,
++    CompactActivity, CompactMotion, CompiledTheme, CursorAction, CursorConfig, CursorFeel,
++    CursorVisualState, DeliveryModifier, MotionConfig, OverlayCommand, PaintChannels, PathPlanner,
++    PathState, PlannedPath, ReducedMotion, Spring, TargetModifier, EARLY_ACK_DISTANCE,
++    EARLY_ACK_PROGRESS,
  };
  use std::sync::Arc;
  
-@@ -96,8 +96,47 @@ pub struct RenderStateCore {
+@@ -96,8 +98,39 @@ pub struct RenderStateCore {
      pub badge_modifiers: Option<(Option<DeliveryModifier>, Option<TargetModifier>)>,
      /// Elapsed chip fade time after the active semantic action clears.
      pub badge_modifier_fade_secs: Option<f64>,
-+    /// Compact mode: bounded visual travel from the previously displayed
-+    /// position to `pos`. `pos` is already the logical hotspot when the glide
-+    /// starts — this only steers what `paint_cursor` draws, so input latency
-+    /// is unaffected.
-+    pub compact_glide: Option<CompactGlide>,
++    /// Compact mode: spring-driven visual travel from the previously
++    /// displayed position to `pos`. `pos` is already the logical hotspot when
++    /// the motion starts — this only steers what `paint_cursor` draws, so
++    /// input latency is unaffected.
++    pub compact_motion: Option<CompactMotion>,
 +    /// Compact mode: brief expanding ring at the last click point.
 +    pub compact_pulse: Option<CompactPulse>,
++    /// Known screen size `(width, height)` in points. The compact arc builder
++    /// keeps every candidate path inside this frame; `None` means the frame
++    /// is unknown (headless / tests) and the preferred arc is used.
++    pub screen_size: Option<(f64, f64)>,
++    /// Non-compact paths: set once the early-ack threshold has fired an
++    /// arrival signal before the path physically ended.
++    early_ack_fired: bool,
  }
  
-+/// A compact-mode visual glide: origin position, elapsed seconds, and the
-+/// distance-derived duration. The logical position never participates —
-+/// `pos` jumps instantly while the painted arrow eases from `from` to it.
-+#[derive(Clone, Copy, Debug)]
-+pub struct CompactGlide {
-+    pub from: (f64, f64),
-+    pub t: f64,
-+    pub dur: f64,
-+}
-+
 +/// A compact-mode click ring at a point, elapsed seconds since it began.
 +#[derive(Clone, Copy, Debug)]
 +pub struct CompactPulse {
@@ -1703,12 +3801,7 @@ index cb1e39396..f3c2d7500 100644
 +
 +/// Hops shorter than this snap instantly — micro-corrections and drag
 +/// tracking must not smear into visible travel.
-+pub const COMPACT_GLIDE_MIN_DIST: f64 = 48.0;
-+/// Glide duration: a fixed floor plus a distance term, capped so a
-+/// screen-wide jump still lands briskly (~190 ms).
-+pub const COMPACT_GLIDE_BASE_SECS: f64 = 0.07;
-+pub const COMPACT_GLIDE_SECS_PER_PX: f64 = 0.00018;
-+pub const COMPACT_GLIDE_MAX_SECS: f64 = 0.19;
++pub const COMPACT_TRAVEL_MIN_DIST: f64 = 48.0;
 +/// Click ring lifetime; radius and alpha derive from `t / SECS`.
 +pub const COMPACT_PULSE_SECS: f64 = 0.26;
 +/// Idle-hide fade duration, matching the non-compact `tick_idle` 180 ms fade
@@ -1718,7 +3811,7 @@ index cb1e39396..f3c2d7500 100644
  impl RenderStateCore {
      /// Build the core from a launch-time CursorConfig.
      /// `pos` starts at the off-screen sentinel `(-200, -200)` to indicate
-@@ -109,16 +148,20 @@ impl RenderStateCore {
+@@ -109,16 +142,20 @@ impl RenderStateCore {
              reduced_motion: cfg.reduced_motion,
              ..CursorVisualState::default()
          };
@@ -1749,32 +3842,81 @@ index cb1e39396..f3c2d7500 100644
          };
          Self {
              cfg,
-@@ -143,9 +186,119 @@ impl RenderStateCore {
+@@ -143,7 +180,177 @@ impl RenderStateCore {
              session_badge_hovered: false,
              badge_modifiers: None,
              badge_modifier_fade_secs: None,
-+            compact_glide: None,
++            compact_motion: None,
 +            compact_pulse: None,
++            screen_size: None,
++            early_ack_fired: false,
 +        }
 +    }
 +
-+    /// Where the compact arrow is painted right now: the logical `pos` unless
-+    /// a glide is mid-flight, in which case an ease-out-cubic interpolation
-+    /// between the glide's origin and `pos`. Never used outside compact mode.
++    /// Where the compact arrow is painted right now: the spring-driven path
++    /// sample while a travel is in flight, otherwise the logical hotspot.
++    /// Never used outside compact mode.
 +    pub fn compact_display_pos(&self) -> (f64, f64) {
-+        match &self.compact_glide {
-+            Some(g) if g.t < g.dur && g.dur > 0.0 => {
-+                let t = (g.t / g.dur).clamp(0.0, 1.0);
-+                let e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
-+                (
-+                    g.from.0 + (self.pos.0 - g.from.0) * e,
-+                    g.from.1 + (self.pos.1 - g.from.1) * e,
-+                )
++        match &self.compact_motion {
++            Some(motion) => motion.display_pos(),
++            None => self.pos,
++        }
++    }
++
++    /// True once the in-flight compact travel has come far enough on its path
++    /// (or close enough to the target) that a caller may treat it as
++    /// committed — the reference early-ack thresholds. Compact dispatch never
++    /// waits on the animation in this architecture, so this is an observable
++    /// state for tests and future callers, not an input gate.
++    pub fn compact_motion_committed(&self) -> bool {
++        match &self.compact_motion {
++            Some(motion) => motion.committed(),
++            None => true,
++        }
++    }
++
++    /// Activity of the compact pointer: frozen while hidden, breathing while
++    /// a transient input action is mid-playback, otherwise idle. Navigate is
++    /// deliberately not a busy action — a move must not keep frames alive.
++    pub fn compact_activity(&self) -> CompactActivity {
++        if !self.visible {
++            return CompactActivity::Paused;
++        }
++        let busy = matches!(
++            self.visual.resolved_action,
++            CursorAction::Click
++                | CursorAction::Drag
++                | CursorAction::Scroll
++                | CursorAction::Text
++                | CursorAction::Key
++                | CursorAction::Transfer
++        ) && self.visual.elapsed_secs <= self.visual.resolved_action.duration_secs();
++        if busy {
++            CompactActivity::Loading
++        } else {
++            CompactActivity::Idle
++        }
++    }
++
++    /// Painted channels for the compact arrow; static at rest.
++    pub fn compact_paint_channels(&self) -> PaintChannels {
++        match &self.compact_motion {
++            Some(motion) => motion.channels(&CursorFeel::default(), self.compact_activity()),
++            None => {
++                let (x, y) = self.compact_display_pos();
++                PaintChannels {
++                    x,
++                    y,
++                    scale: 1.0,
++                    stretch: 1.0,
++                    squash: 1.0,
++                    pivot_x: CursorFeel::default().stretch_pivot_x,
++                    rotation: 0.0,
++                }
 +            }
-+            _ => self.pos,
-         }
-     }
- 
++        }
++    }
++
 +    /// The active click ring as `(x, y, radius logical px, alpha)`, or None
 +    /// once it has fully expanded and faded.
 +    pub fn compact_pulse_ring(&self) -> Option<(f64, f64, f64, f64)> {
@@ -1787,28 +3929,36 @@ index cb1e39396..f3c2d7500 100644
 +        Some((p.x, p.y, 4.0 + 12.0 * ease, 0.45 * (1.0 - t)))
 +    }
 +
-+    /// True while a compact glide, click ring, or idle-hide fade can still
-+    /// change pixels — the render loop's cue to keep a frame cadence.
-+    /// Non-compact cursors always answer via the regular animation fields.
++    /// True while a compact travel, click ring, loading breath, or idle-hide
++    /// fade can still change pixels — the render loop's cue to keep a frame
++    /// cadence. A hidden (paused) cursor is quiescent. Non-compact cursors
++    /// always answer via the regular animation fields.
 +    pub fn compact_animating(&self) -> bool {
-+        if self.compact_glide.is_some() || self.compact_pulse.is_some() {
++        let activity = self.compact_activity();
++        if self.compact_pulse.is_some() || activity == CompactActivity::Loading {
++            return true;
++        }
++        if self.compact_motion.is_some() && activity != CompactActivity::Paused {
 +            return true;
 +        }
 +        let hide_ms = self.motion.idle_hide_ms;
-+        hide_ms > 0.0
-+            && self.idle_secs * 1000.0 > hide_ms
-+            && self.idle_alpha > 0.004
++        hide_ms > 0.0 && self.idle_secs * 1000.0 > hide_ms && self.idle_alpha > 0.004
 +    }
 +
-+    /// Compact-mode tick: advance the glide and click ring by `dt`, expire
-+    /// them at their durations, and run the shared idle-hide fade. Called
++    /// Compact-mode tick: advance the travel channels and click ring by `dt`,
++    /// expire them once settled, and run the shared idle-hide fade. Called
 +    /// from the platform render loop's compact branch; `idle_secs` is fed by
 +    /// the caller (macOS derives it from the last-activity Instant).
 +    pub fn tick_compact(&mut self, dt: f64) {
-+        if let Some(g) = &mut self.compact_glide {
-+            g.t += dt;
-+            if g.t >= g.dur {
-+                self.compact_glide = None;
++        // Advance the semantic action clock too: the loading breath and the
++        // press/click cues derive from it, and a one-shot action must expire
++        // so a settled cursor can go back to zero repaints.
++        self.visual.tick(dt);
++        let activity = self.compact_activity();
++        if let Some(motion) = &mut self.compact_motion {
++            let settled = motion.tick(dt, &CursorFeel::default(), self.pressed, activity);
++            if settled {
++                self.compact_motion = None;
 +            }
 +        }
 +        if let Some(p) = &mut self.compact_pulse {
@@ -1816,7 +3966,7 @@ index cb1e39396..f3c2d7500 100644
 +            if p.t >= COMPACT_PULSE_SECS {
 +                self.compact_pulse = None;
 +            }
-+        }
+         }
 +        let hide_ms = self.motion.idle_hide_ms;
 +        if hide_ms > 0.0 {
 +            let fade_start = hide_ms / 1000.0;
@@ -1831,29 +3981,32 @@ index cb1e39396..f3c2d7500 100644
 +
 +    /// Record a compact-mode travel toward `(x, y)` before the position snaps
 +    /// — called while rewriting a move/click/snap command so the visible
-+    /// arrow glides over a hop the user would otherwise miss. Skipped for
++    /// arrow travels over a hop the user would otherwise miss. Skipped for
 +    /// reduced motion, off-screen positions, sub-threshold hops, and while a
 +    /// button is held (drag tracking stays tight to the real path).
 +    fn compact_note_travel(&mut self, x: f64, y: f64) {
 +        if self.cfg.reduced_motion == ReducedMotion::On || self.pressed {
-+            self.compact_glide = None;
++            self.compact_motion = None;
 +            return;
 +        }
 +        // Chain from the currently displayed spot so a command landing
-+        // mid-glide continues smoothly instead of snapping to `pos` first.
++        // mid-flight continues smoothly instead of snapping to `pos` first.
 +        let from = self.compact_display_pos();
 +        if from.0 < -100.0 {
-+            self.compact_glide = None;
++            self.compact_motion = None;
 +            return;
 +        }
 +        let dist = (x - from.0).hypot(y - from.1);
-+        if dist < COMPACT_GLIDE_MIN_DIST {
-+            self.compact_glide = None;
++        if dist < COMPACT_TRAVEL_MIN_DIST {
++            self.compact_motion = None;
 +            return;
 +        }
-+        let dur = (COMPACT_GLIDE_BASE_SECS + dist * COMPACT_GLIDE_SECS_PER_PX)
-+            .min(COMPACT_GLIDE_MAX_SECS);
-+        self.compact_glide = Some(CompactGlide { from, t: 0.0, dur });
++        self.compact_motion = Some(CompactMotion::new(
++            from,
++            (x, y),
++            &CursorFeel::default(),
++            self.screen_size,
++        ));
 +    }
 +
 +    /// Record the click ring for a compact ClickPulse — skipped entirely
@@ -1864,12 +4017,10 @@ index cb1e39396..f3c2d7500 100644
 +        } else {
 +            Some(CompactPulse { x, y, t: 0.0 })
 +        };
-+    }
-+
-     fn cursor_is_revealed(&self) -> bool {
-         self.visible && self.pos.0 >= -100.0 && self.idle_alpha >= 0.004
      }
-@@ -202,7 +355,7 @@ impl RenderStateCore {
+ 
+     fn cursor_is_revealed(&self) -> bool {
+@@ -202,7 +409,7 @@ impl RenderStateCore {
      /// from [`Self::session_badge_needs_frame_tick`]: a faded badge needs hover
      /// hit-testing, not continuous 60 fps repainting.
      pub fn session_badge_needs_hover_poll(&self) -> bool {
@@ -1878,7 +4029,7 @@ index cb1e39396..f3c2d7500 100644
      }
  
      /// Update hover state from a platform-native hardware pointer sample.
-@@ -245,6 +398,14 @@ impl RenderStateCore {
+@@ -245,6 +452,14 @@ impl RenderStateCore {
      /// Return the theme that is actually being painted, including any
      /// non-fatal fallback from an unavailable launch-time selection.
      pub fn active_theme_metadata(&self) -> (String, String, String, Option<String>) {
@@ -1893,7 +4044,41 @@ index cb1e39396..f3c2d7500 100644
          match self.theme.as_deref() {
              Some(theme) => (
                  theme.id.clone(),
-@@ -549,6 +710,47 @@ impl RenderStateCore {
+@@ -333,6 +548,17 @@ impl RenderStateCore {
+                 // rate-limited toward it, so the tip actually tracks the
+                 // trajectory instead of lagging behind on fast/short glides.
+                 self.heading = s.heading + std::f64::consts::PI;
++                // Early-ack: a caller that waits for arrival may proceed once
++                // the path is 99.5% travelled or the tip is within ~3.2 points
++                // of the target — not only when the path physically ends.
++                if !self.early_ack_fired {
++                    let endpoint = p.sample(path_len);
++                    let close = (s.x - endpoint.x).hypot(s.y - endpoint.y) <= EARLY_ACK_DISTANCE;
++                    if self.dist >= path_len * EARLY_ACK_PROGRESS || close {
++                        self.early_ack_fired = true;
++                        fire_arrival = true;
++                    }
++                }
+             }
+         } else if let Some(mut s) = self.spring {
+             if let Some((tx, ty, th)) = self.spring_tgt {
+@@ -444,6 +670,15 @@ impl RenderStateCore {
+                 // π, so store tangent+π). Direct assignment, not rate-limited, so
+                 // the tip tracks the trajectory instead of lagging on fast moves.
+                 self.heading = s.heading + std::f64::consts::PI;
++                // Early-ack, shared with `tick_motion` — see the note there.
++                if !self.early_ack_fired {
++                    let endpoint = p.sample(path_len);
++                    let close = (s.x - endpoint.x).hypot(s.y - endpoint.y) <= EARLY_ACK_DISTANCE;
++                    if self.dist >= path_len * EARLY_ACK_PROGRESS || close {
++                        self.early_ack_fired = true;
++                        fire_arrival = true;
++                    }
++                }
+             }
+         } else if let Some(mut s) = self.spring {
+             if let Some((tx, ty, th)) = self.spring_tgt {
+@@ -549,6 +784,47 @@ impl RenderStateCore {
          move_to_snap_sentinel: bool,
          click_pulse_sentinel_only: bool,
      ) -> bool {
@@ -1941,23 +4126,45 @@ index cb1e39396..f3c2d7500 100644
          match cmd {
              OverlayCommand::MoveTo {
                  x,
-@@ -823,6 +1025,50 @@ pub fn paint_cursor(
+@@ -579,6 +855,7 @@ impl RenderStateCore {
+                 self.dist = 0.0;
+                 self.spring = None;
+                 self.spring_tgt = None;
++                self.early_ack_fired = false;
+                 if matches!(
+                     self.visual.resolved_action,
+                     CursorAction::Idle | CursorAction::Navigate
+@@ -608,6 +885,7 @@ impl RenderStateCore {
+                 self.dist = 0.0;
+                 self.spring = None;
+                 self.spring_tgt = None;
++                self.early_ack_fired = false;
+                 if matches!(
+                     self.visual.resolved_action,
+                     CursorAction::Idle | CursorAction::Navigate
+@@ -823,6 +1101,59 @@ pub fn paint_cursor(
      let heading = core.heading;
      let alpha_scale = core.idle_alpha as f32;
  
 +    if core.cfg.compact {
-+        // The arrow (and its badge anchor) rides the display position so a
-+        // recorded glide shows travel; `pos` itself already sits on the
-+        // logical hotspot for registry/visibility purposes.
-+        let (dx, dy) = core.compact_display_pos();
-+        let (dpx, dpy) = ((dx - origin_x) * s, (dy - origin_y) * s);
++        // The arrow (and its badge anchor) rides the spring-driven channel
++        // position so a recorded travel shows motion; `pos` itself already
++        // sits on the logical hotspot for registry/visibility purposes.
++        let channels = core.compact_paint_channels();
 +        crate::compact_cursor::paint(
 +            pm,
-+            dpx as f32,
-+            dpy as f32,
-+            sf,
-+            alpha_scale,
-+            core.pressed,
++            &crate::compact_cursor::CompactPaint {
++                x: (channels.x - origin_x) * s,
++                y: (channels.y - origin_y) * s,
++                device_scale: s,
++                scale: channels.scale,
++                stretch: channels.stretch,
++                squash: channels.squash,
++                pivot_x: channels.pivot_x,
++                rotation: channels.rotation,
++                alpha: alpha_scale as f64,
++                pressed: core.pressed,
++            },
 +        );
 +        if let Some((ring_x, ring_y, radius, ring_alpha)) = core.compact_pulse_ring() {
 +            crate::compact_cursor::paint_pulse(
@@ -1973,7 +4180,10 @@ index cb1e39396..f3c2d7500 100644
 +            label: core.session_label.as_deref(),
 +            delivery: None,
 +            target: None,
-+            cursor: (dpx as f32, dpy as f32),
++            cursor: (
++                ((channels.x - origin_x) * s) as f32,
++                ((channels.y - origin_y) * s) as f32,
++            ),
 +            backing_scale: sf,
 +            label_alpha: 1.0,
 +            chip_alpha: 0.0,
@@ -1992,6 +4202,226 @@ index cb1e39396..f3c2d7500 100644
      // --- Focus rect highlight (macOS only — others pass None) ---
      // Cyan glow border + faint fill, matching Swift AgentCursor.showFocusRect.
      if let Some(fr) = focus_rect {
+diff --git a/libs/cua-driver/rust/crates/cursor-overlay/src/spring.rs b/libs/cua-driver/rust/crates/cursor-overlay/src/spring.rs
+new file mode 100644
+index 000000000..9711dc976
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/cursor-overlay/src/spring.rs
+@@ -0,0 +1,214 @@
++//! Spring integrator for the compact agent cursor.
++//!
++//! Every animated channel of the rebuilt cursor (travel progress, lean,
++//! uniform scale, stretch, squash) is a scalar spring. A spring is stated the
++//! way Apple's animation API states it: a **response** (the period of one
++//! oscillation if there were no damping, in seconds) and a **damping
++//! fraction** (1.0 = critically damped).
++//!
++//! The integrator is a semi-implicit Euler step with substeps derived from
++//! the response, so a large frame gap (a wake from an idle block, a paused
++//! process) can never blow the channel up or teleport it. Every step is pure
++//! arithmetic — no clocks, no allocation, deterministic for a given
++//! `(value, velocity, target, spec, dt)` tuple.
++
++use std::f64::consts::TAU;
++
++/// A response/damping pair. Response is clamped by the caller into the
++/// configured travel window; the integrator itself only guards against a
++/// zero/negative response.
++#[derive(Debug, Clone, Copy, PartialEq)]
++pub struct SpringSpec {
++    /// Seconds per oscillation at zero damping.
++    pub response: f64,
++    /// 1.0 = critical damping, < 1.0 underdamped (overshoots).
++    pub damping_fraction: f64,
++}
++
++impl SpringSpec {
++    pub const fn new(response: f64, damping_fraction: f64) -> Self {
++        Self {
++            response,
++            damping_fraction,
++        }
++    }
++
++    /// Angular frequency (rad/s) for unit mass.
++    pub fn omega(&self) -> f64 {
++        TAU / self.response.max(0.001)
++    }
++
++    /// Damping coefficient (1/s) for unit mass.
++    pub fn damping(&self) -> f64 {
++        2.0 * self.damping_fraction.max(0.0) * self.omega()
++    }
++}
++
++impl Default for SpringSpec {
++    fn default() -> Self {
++        Self::new(0.3, 0.9)
++    }
++}
++
++/// One scalar spring channel: current value and velocity.
++#[derive(Debug, Clone, Copy, Default, PartialEq)]
++pub struct SpringChannel {
++    pub value: f64,
++    pub velocity: f64,
++}
++
++impl SpringChannel {
++    pub fn new(value: f64) -> Self {
++        Self {
++            value,
++            velocity: 0.0,
++        }
++    }
++
++    /// Advance toward `target` by `dt` seconds.
++    ///
++    /// Substepping keeps the explicit integrator stable for every configured
++    /// response (the shortest channel response is 0.055 s) and for frame gaps
++    /// up to ~0.25 s. Non-finite inputs can only come from a corrupted state;
++    /// they snap to the target instead of poisoning the whole render.
++    pub fn step(&mut self, target: f64, spec: &SpringSpec, dt: f64) {
++        if !dt.is_finite() || dt <= 0.0 {
++            return;
++        }
++        if !self.value.is_finite() || !self.velocity.is_finite() || !target.is_finite() {
++            self.snap(target);
++            return;
++        }
++        let h = spec.response.max(0.001) / 8.0;
++        let substeps = ((dt / h).ceil() as usize).clamp(1, 64);
++        let sdt = dt / substeps as f64;
++        let omega = spec.omega();
++        let damping = spec.damping();
++        for _ in 0..substeps {
++            self.velocity +=
++                (-omega * omega * (self.value - target) - damping * self.velocity) * sdt;
++            self.value += self.velocity * sdt;
++        }
++    }
++
++    /// True when the channel is close enough to `target` to be considered
++    /// at rest (used to expire a motion and stop repainting).
++    pub fn settled(&self, target: f64, position_eps: f64, velocity_eps: f64) -> bool {
++        (self.value - target).abs() <= position_eps && self.velocity.abs() <= velocity_eps
++    }
++
++    /// Jump to `target` and stop (first placement, reduced motion, expiry).
++    pub fn snap(&mut self, target: f64) {
++        self.value = target;
++        self.velocity = 0.0;
++    }
++}
++
++/// Distance-scaled travel response, adapted from the reference
++/// `springResponseScaler/min/max`: a farther target gets a longer, more
++/// composed travel, with both a floor and a ceiling so micro-hops stay brisk
++/// and screen-wide jumps never crawl.
++pub fn travel_response(distance: f64, scaler: f64, min: f64, max: f64, peak_speed: f64) -> f64 {
++    let seconds = distance.abs() / peak_speed.max(1.0) * scaler.max(0.0);
++    seconds.clamp(min.min(max), max.max(min))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn run_channel(
++        start: f64,
++        target: f64,
++        spec: SpringSpec,
++        steps: usize,
++        dt: f64,
++    ) -> SpringChannel {
++        let mut channel = SpringChannel::new(start);
++        for _ in 0..steps {
++            channel.step(target, &spec, dt);
++        }
++        channel
++    }
++
++    #[test]
++    fn channel_converges_to_its_target_at_sixty_fps() {
++        let spec = SpringSpec::new(0.24, 0.84);
++        let channel = run_channel(0.0, 1.0, spec, 240, 1.0 / 60.0);
++        assert!(
++            (channel.value - 1.0).abs() < 1.0e-4,
++            "channel must settle on target, got {}",
++            channel.value
++        );
++        assert!(channel.velocity.abs() < 1.0e-3, "velocity must decay");
++        assert!(
++            channel.settled(1.0, 1.0e-3, 1.0e-2),
++            "settle predicate must agree with the integrated state"
++        );
++    }
++
++    #[test]
++    fn underdamped_channel_overshoots_and_critically_damped_does_not() {
++        let mut soft = SpringChannel::new(0.0);
++        let spec = SpringSpec::new(0.3, 0.35);
++        let mut peak: f64 = 0.0;
++        for _ in 0..120 {
++            soft.step(1.0, &spec, 1.0 / 60.0);
++            peak = peak.max(soft.value);
++        }
++        assert!(peak > 1.0, "damping 0.35 must overshoot, peaked at {peak}");
++        let critical = run_channel(0.0, 1.0, SpringSpec::new(0.3, 1.0), 200, 1.0 / 60.0);
++        assert!(
++            critical.value <= 1.0 + 1.0e-6,
++            "critical damping must not overshoot, got {}",
++            critical.value
++        );
++    }
++
++    #[test]
++    fn a_huge_frame_gap_stays_finite_and_near_target() {
++        // A cursor that wakes from a blocked channel can see a long dt. The
++        // integrator must never explode or teleport past the target.
++        let spec = SpringSpec::new(0.055, 0.9);
++        let mut channel = SpringChannel::new(0.0);
++        channel.velocity = 40.0;
++        channel.step(1.0, &spec, 0.25);
++        assert!(channel.value.is_finite() && channel.velocity.is_finite());
++        assert!(
++            channel.value > 0.9 && channel.value < 1.1,
++            "a long gap must converge, got {}",
++            channel.value
++        );
++    }
++
++    #[test]
++    fn non_finite_state_snaps_instead_of_poisoning_the_channel() {
++        let mut channel = SpringChannel::new(f64::NAN);
++        channel.step(0.5, &SpringSpec::default(), 1.0 / 60.0);
++        assert_eq!(channel.value, 0.5);
++        assert_eq!(channel.velocity, 0.0);
++    }
++
++    #[test]
++    fn travel_response_is_distance_scaled_and_clamped() {
++        let spec = (0.9, 0.12, 2.2, 900.0);
++        let near = travel_response(10.0, spec.0, spec.1, spec.2, spec.3);
++        let mid = travel_response(500.0, spec.0, spec.1, spec.2, spec.3);
++        let far = travel_response(10_000.0, spec.0, spec.1, spec.2, spec.3);
++        assert_eq!(near, 0.12, "a micro-hop floors at the minimum response");
++        assert!(
++            (mid - 0.5).abs() < 1.0e-9,
++            "500 px at 900 px/s scaled by 0.9 must be 0.5 s, got {mid}"
++        );
++        assert_eq!(far, 2.2, "a screen-wide jump caps at the maximum response");
++    }
++
++    #[test]
++    fn snap_clears_velocity_and_value() {
++        let mut channel = SpringChannel::new(0.0);
++        channel.velocity = 12.0;
++        channel.snap(3.0);
++        assert_eq!(channel.value, 3.0);
++        assert_eq!(channel.velocity, 0.0);
++    }
++}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
 index 78981e9cc..33fe51793 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
@@ -3834,7 +6264,7 @@ index 603f2ae4e..1a08a0c5d 100644
              || action.cdp_target_id.is_empty()
              || cua_driver_core::session::is_session_ended(&action.session)
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
-index 5d74dddf5..f862f5a4a 100644
+index 5d74dddf5..cf0aac1de 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
 @@ -32,7 +32,7 @@
@@ -4033,16 +6463,26 @@ index 5d74dddf5..f862f5a4a 100644
          ) = {
              let mut guard = RENDER.lock().unwrap();
              match guard.as_mut() {
-@@ -787,7 +863,7 @@ fn render_loop(
+@@ -787,8 +863,17 @@ fn render_loop(
                      // latter lets a just-created path/click/focus rect start on
                      // this frame without waiting for the next 16ms tick.
                      let mut arrived: Vec<CursorKey> = Vec::new();
 -                    if frame_tick_needed || had_msg {
 +                    if frame_tick_needed || had_msg || compact_hide_tick {
++                        // Keep every cursor's arc bounds honest once the
++                        // AppKit window has reported the screen frame. Cheap
++                        // enough per frame; the builder only consumes it when
++                        // a compact travel is recorded.
++                        let screen =
++                            (map.win_w > 0.0 && map.win_h > 0.0).then_some((map.win_w, map.win_h));
                          for (k, rs) in map.cursors.iter_mut() {
++                            if let Some(size) = screen {
++                                rs.core.screen_size = Some(size);
++                            }
                              if rs.tick(dt) {
                                  arrived.push(k.clone());
-@@ -835,6 +911,10 @@ fn render_loop(
+                             }
+@@ -835,6 +920,10 @@ fn render_loop(
                          hover_changed,
                          next_frame_tick_needed,
                          next_hover_poll_needed,
@@ -4053,7 +6493,7 @@ index 5d74dddf5..f862f5a4a 100644
                      )
                  }
                  None => break,
-@@ -872,7 +952,12 @@ fn render_loop(
+@@ -872,7 +961,12 @@ fn render_loop(
          // Render only when a command arrived or the previous/next tick can
          // change pixels. A final frame is emitted as animations/fades finish so
          // the layer is left in the completed/cleared state before blocking.
@@ -4067,7 +6507,7 @@ index 5d74dddf5..f862f5a4a 100644
              let pixmap = {
                  let guard = RENDER.lock().unwrap();
                  if let Some(map) = guard.as_ref() {
-@@ -908,11 +993,12 @@ fn render_loop(
+@@ -908,11 +1002,12 @@ fn render_loop(
              };
  
              // Convert to CGImage and update layer on the main queue.
@@ -4081,7 +6521,7 @@ index 5d74dddf5..f862f5a4a 100644
          if frame_tick_needed {
              // Sleep remainder of frame budget.
              let elapsed = Instant::now().duration_since(last_tick);
-@@ -943,17 +1029,45 @@ fn cursor_is_externally_visible(state: &RenderState) -> bool {
+@@ -943,17 +1038,45 @@ fn cursor_is_externally_visible(state: &RenderState) -> bool {
          && state.core.idle_alpha >= 0.004
  }
  
@@ -4136,7 +6576,7 @@ index 5d74dddf5..f862f5a4a 100644
  
      // GCD symbols from libdispatch (part of the macOS system library stubs).
      // `dispatch_get_main_queue()` is an inline C function; the underlying
-@@ -972,7 +1086,14 @@ fn dispatch_set_layer_contents(layer_ptr: usize, pixmap: tiny_skia::Pixmap) {
+@@ -972,7 +1095,14 @@ fn dispatch_set_layer_contents(layer_ptr: usize, pixmap: tiny_skia::Pixmap) {
      }
  
      unsafe extern "C" fn set_contents_cb(ctx: *mut c_void) {
@@ -4152,7 +6592,7 @@ index 5d74dddf5..f862f5a4a 100644
          let layer = layer_ptr as *mut objc2::runtime::AnyObject;
          // setContents: expects an `id` (type '@'), not a raw void pointer.
          // CGImageRef is toll-free bridged to NSObject, so we cast it to *mut AnyObject.
-@@ -1137,14 +1258,13 @@ impl ZOrderEnforcer for MacZOrderEnforcer {
+@@ -1137,14 +1267,13 @@ impl ZOrderEnforcer for MacZOrderEnforcer {
  
  /// Create a `CGImage` from a `tiny_skia::Pixmap` (premultiplied RGBA).
  /// Returns a `+1` retained pointer that the caller must release.
@@ -4168,7 +6608,7 @@ index 5d74dddf5..f862f5a4a 100644
      let bytes_per_row = w * 4;
  
      // tiny-skia produces premultiplied RGBA with bytes in memory order [R, G, B, A].
-@@ -1190,21 +1310,26 @@ fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
+@@ -1190,21 +1319,26 @@ fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
              ) -> *mut c_void;
          }
  
@@ -4205,7 +6645,7 @@ index 5d74dddf5..f862f5a4a 100644
          let img = CGImageCreate(
              w,
              h,
-@@ -1221,7 +1346,7 @@ fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
+@@ -1221,7 +1355,7 @@ fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
  
          CGColorSpaceRelease(cs);
          CGDataProviderRelease(provider);
@@ -4214,7 +6654,7 @@ index 5d74dddf5..f862f5a4a 100644
  
          if img.is_null() {
              None
-@@ -1241,6 +1366,33 @@ fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
+@@ -1241,6 +1375,33 @@ fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
  #[cfg(test)]
  mod tests {
      use super::*;
@@ -4248,7 +6688,7 @@ index 5d74dddf5..f862f5a4a 100644
      use std::collections::HashMap;
  
      #[test]
-@@ -1507,6 +1659,31 @@ mod tests {
+@@ -1507,6 +1668,31 @@ mod tests {
          );
      }
  

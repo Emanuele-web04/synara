@@ -266,6 +266,46 @@ remaining trusted-input paths that could raise a standalone browser window.
 artifact directory verifies against the bytes it actually holds instead of
 the pre-sign digest.
 
+Revision 25 rebuilds the compact agent cursor and gives `browser_type` a
+background route.
+
+- Cursor motion: the compact cursor no longer eases along a straight line for
+  a fixed duration. Each channel is a spring (`spring.rs`): travel progress
+  from a distance-scaled response (scaler 0.9, clamped 0.12–2.2 s, damping
+  0.9), lean toward the path tangent (response 0.09, damping 0.86, capped at
+  76°, blended back to level over the last 1% of the path), a press/scale
+  channel, and speed-driven stretch/squash past the 196 pt scoot threshold
+  (response 0.095, damping 0.72). Travels follow a scored candidate bezier
+  (`arc.rs`): 20 candidates alternate sides and size around the configured
+  arc size/flow, the preferred one keeping every control point and sample
+  inside the screen frame minus a 20 pt margin; chords under 10 pt stay
+  straight; every path falls back to the direct chord when the frame cannot
+  fit a bow. The integrator substeps by response so a long frame gap (an
+  idle wake) can never teleport or explode a channel. Early-ack: the
+  non-compact arrival signal now fires at 99.5% of the path or within 3.157 pt
+  of the target instead of only at the physical end, and the compact motion
+  exposes the same committed state.
+- Cursor artwork: the fixed compact arrow is repainted with three layers —
+  an offset soft shadow, a light rim, and a near-black fill — and the paint
+  call consumes the channels (lean about a 0.5 pivot, stretch/squash, press
+  shrink, loading breath). Hidden cursors freeze their motion instead of
+  animating off-screen, and a settled cursor still costs zero repaints.
+  Original vector artwork, no reference assets.
+- Background typing: `browser_type` accepts
+  `input_route: "trusted" | "dom_event"`, matching `browser_click` and
+  `browser_pointer`. The trusted route is unchanged and still refuses for a
+  standalone browser on macOS. The explicit `dom_event` route (ref required,
+  `mode=insert_text` only) focuses the element in the page, inserts through
+  the element's native value setter (input/textarea) or
+  `document.execCommand('insertText')` (contenteditable), dispatches
+  `input`/`change`, and confirms the result with a live read-back of the
+  node. It sends no Input-domain event, so it cannot raise the browser
+  window. The verdict stays honest: `effect: unverifiable` with a page-state
+  escalation, a `browser_input_incomplete` refusal when the read-back does
+  not match, and `browser_action_unavailable` for a ref that is not an
+  editable element. No text ever leaves the page; results carry lengths and
+  booleans only.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records
