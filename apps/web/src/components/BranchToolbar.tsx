@@ -98,7 +98,7 @@ function RuntimeModeMenuItem({
           <span>{presentation.label}</span>
           <span
             className={cn(
-              "runtime-mode-menu-description text-xs font-normal",
+              "runtime-mode-menu-description text-ui leading-snug font-normal",
               accent ? "text-current" : "text-muted-foreground",
             )}
           >
@@ -524,7 +524,7 @@ export default function BranchToolbar({
             />
           </div>
         ) : (
-          <span className="inline-flex items-center gap-2 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)]">
+          <span className="inline-flex items-center gap-2 px-1.5 text-ui-sm font-normal text-[var(--color-text-foreground-secondary)]">
             <WorktreeGlyph className="size-3.5" />
             {environmentPresentation.shortLabel}
           </span>

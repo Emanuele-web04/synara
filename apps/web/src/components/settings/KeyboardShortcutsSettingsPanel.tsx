@@ -151,14 +151,14 @@ export function KeyboardShortcutsSettingsPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-lg bg-muted/45 px-3 py-2.5 text-[12px] leading-relaxed text-muted-foreground">
+      <div className="rounded-lg bg-muted/45 px-3 py-2.5 text-ui leading-relaxed text-muted-foreground">
         Capture up to two modifiers and one key. Changes are saved directly to{" "}
         <code>keybindings.json</code>.
       </div>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-[13px] font-medium text-foreground">Keybindings</h3>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
+          <h3 className="text-ui-lg font-medium text-foreground">Keybindings</h3>
+          <p className="mt-0.5 text-ui-sm text-muted-foreground">
             Customize built-in commands and their context conditions.
           </p>
         </div>
@@ -169,10 +169,10 @@ export function KeyboardShortcutsSettingsPanel() {
       {isAdding ? (
         <div className="space-y-2 rounded-lg border border-border/70 bg-muted/20 p-3">
           <div className="grid gap-2 sm:grid-cols-3">
-            <label className="space-y-1 text-[11px] text-muted-foreground">
+            <label className="space-y-1 text-ui-sm text-muted-foreground">
               <span className="block">Command</span>
               <select
-                className="h-8 w-full rounded-lg border border-border/80 bg-background px-2 text-xs text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
+                className="h-8 w-full rounded-lg border border-border/80 bg-background px-2 text-ui leading-snug text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
                 value={newCommand}
                 aria-label="Command for new keybinding"
                 onChange={(event) => setNewCommand(event.target.value as KeybindingCommand)}
@@ -184,7 +184,7 @@ export function KeyboardShortcutsSettingsPanel() {
                 ))}
               </select>
             </label>
-            <label className="space-y-1 text-[11px] text-muted-foreground">
+            <label className="space-y-1 text-ui-sm text-muted-foreground">
               <span className="block">Press a key or combo</span>
               <Input
                 size="sm"
@@ -197,7 +197,7 @@ export function KeyboardShortcutsSettingsPanel() {
                 onKeyDown={captureKeyDown}
               />
             </label>
-            <label className="space-y-1 text-[11px] text-muted-foreground">
+            <label className="space-y-1 text-ui-sm text-muted-foreground">
               <span className="block">Condition (optional)</span>
               <Input
                 size="sm"
@@ -210,7 +210,7 @@ export function KeyboardShortcutsSettingsPanel() {
             </label>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-ui-sm text-muted-foreground">
               {captureError ?? "Use up to two modifiers and one key."}
             </p>
             <div className="flex gap-2">
@@ -251,7 +251,7 @@ export function KeyboardShortcutsSettingsPanel() {
 
       {filteredSections.length > 0 ? (
         <SettingsCard>
-          <div className="flex items-center justify-between gap-4 px-3 py-2 text-[11px] font-medium text-muted-foreground">
+          <div className="flex items-center justify-between gap-4 px-3 py-2 text-ui-sm font-medium text-muted-foreground">
             <span>Command</span>
             <span>Keybinding</span>
           </div>

@@ -18,10 +18,7 @@ export const ENVIRONMENT_PANEL_LABEL_CLASS_NAME = cn(
 );
 
 /** Top-of-card title row. */
-export const ENVIRONMENT_PANEL_TITLE_CLASS_NAME = cn(
-  ENVIRONMENT_PANEL_LABEL_CLASS_NAME,
-  "text-[length:var(--app-font-size-ui,12px)]",
-);
+export const ENVIRONMENT_PANEL_TITLE_CLASS_NAME = cn(ENVIRONMENT_PANEL_LABEL_CLASS_NAME, "text-ui");
 
 /**
  * Section-heading typography without row padding — used inline inside the collapsible
@@ -29,7 +26,7 @@ export const ENVIRONMENT_PANEL_TITLE_CLASS_NAME = cn(
  */
 export const ENVIRONMENT_PANEL_SECTION_LABEL_INLINE_CLASS_NAME = cn(
   ENVIRONMENT_PANEL_LABEL_CLASS_NAME,
-  "text-[length:var(--app-font-size-ui-sm,11px)]",
+  "text-ui-sm",
 );
 
 /**

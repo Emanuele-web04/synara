@@ -108,7 +108,7 @@ const PR_HEADER_ICON_BUTTON_CLASS_NAME = cn(
 // font-normal, so medium made the one filled control shout a weight heavier than its whole row.
 const PR_HEADER_ACTION_BUTTON_CLASS_NAME = cn(
   CHAT_HEADER_CONTROL_CLASS_NAME,
-  "px-3 text-[length:var(--app-font-size-ui,12px)] font-normal sm:text-[length:var(--app-font-size-ui,12px)]",
+  "px-3 text-ui font-normal sm:text-ui",
 );
 
 // Lazy: the diff renderer + worker pool are heavyweight and only needed on the Code tab.
@@ -508,7 +508,7 @@ export function PullRequestDetailPanel({
                     {detail.stack && stackAssessment ? (
                       <>
                         <span>Merge stack</span>
-                        <span className="rounded-full bg-primary-foreground/16 px-1.5 text-[10px] tabular-nums">
+                        <span className="rounded-full bg-primary-foreground/16 px-1.5 text-ui-xs tabular-nums">
                           {stackAssessment.mergeTargetCount}
                         </span>
                       </>
@@ -538,7 +538,7 @@ export function PullRequestDetailPanel({
                   ) : detail.stack && stackAssessment ? (
                     <>
                       <span>Merge stack</span>
-                      <span className="rounded-full bg-primary-foreground/16 px-1.5 text-[10px] tabular-nums">
+                      <span className="rounded-full bg-primary-foreground/16 px-1.5 text-ui-xs tabular-nums">
                         {stackAssessment.mergeTargetCount}
                       </span>
                     </>

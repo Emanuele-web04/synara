@@ -122,7 +122,7 @@ export function ActiveTaskListCard({
                 <li key={`${task.task}:${occurrence}`} className="flex items-start gap-2 py-1">
                   <div
                     className={cn(
-                      "mt-[3px] flex min-w-0 shrink-0 items-center gap-1.5 text-[12px]",
+                      "mt-[3px] flex min-w-0 shrink-0 items-center gap-1.5 text-ui",
                       task.status === "completed"
                         ? "text-muted-foreground/45"
                         : task.status === "inProgress"
@@ -137,7 +137,7 @@ export function ActiveTaskListCard({
                   </div>
                   <p
                     className={cn(
-                      "min-w-0 flex-1 text-[13px] leading-5 text-foreground/85",
+                      "min-w-0 flex-1 text-ui-lg leading-5 text-foreground/85",
                       task.status === "completed" && "text-muted-foreground/50 line-through",
                     )}
                   >

@@ -268,7 +268,7 @@ function UserDispatchModeChip({
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-1.5 self-end px-0 text-[11px] font-normal tracking-[0.01em] text-muted-foreground/78",
+        "inline-flex items-center gap-1.5 self-end px-0 text-ui-sm font-normal tracking-[0.01em] text-muted-foreground/78",
         hasLeadingMedia ? "mb-3" : "mb-1.5",
       )}
     >
@@ -331,7 +331,7 @@ function WorktreeSetupCard({
         <WorktreeIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-tertiary)]" />
         <span
           ref={syncAnimationsToTimelineOrigin}
-          className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]"
+          className="shimmer text-ui-lg font-medium text-[var(--color-text-foreground-secondary)]"
         >
           Preparing worktree...
         </span>
@@ -357,7 +357,7 @@ function WorktreeSetupCard({
               </span>
               <span
                 className={cn(
-                  "text-[13px] leading-5",
+                  "text-ui-lg leading-5",
                   step.status === "active" || step.status === "done"
                     ? "text-[var(--color-text-foreground)]"
                     : step.status === "error"
@@ -2538,7 +2538,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return (
       <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-muted-foreground/30">
+        <p className="text-ui leading-snug text-muted-foreground/30">
           Send a message to start the conversation.
         </p>
       </div>

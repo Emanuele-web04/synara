@@ -105,11 +105,11 @@ export function SkillsSettingsPanel() {
           description="Skills placed here are available on every provider. When a provider already ships its own copy of a skill, that copy is used; otherwise Synara's copy is the fallback."
           status={
             synaraSkillsDir ? (
-              <code className="break-all text-[11px] text-muted-foreground">{synaraSkillsDir}</code>
+              <code className="break-all text-ui-sm text-muted-foreground">{synaraSkillsDir}</code>
             ) : null
           }
           control={
-            <span className="text-xs font-medium text-muted-foreground">
+            <span className="text-ui leading-snug font-medium text-muted-foreground">
               {catalogQuery.isLoading
                 ? "Scanning…"
                 : `${enabledSkills} of ${totalSkills} skill${totalSkills === 1 ? "" : "s"} enabled`}
@@ -158,14 +158,14 @@ export function SkillsSettingsPanel() {
                     <span className="flex min-w-0 flex-col gap-1">
                       <span className="flex min-w-0 items-center gap-1.5">
                         <SkillProviderStack providers={group.providers} />
-                        <span className="truncate text-[11px] text-muted-foreground">
+                        <span className="truncate text-ui-sm text-muted-foreground">
                           {group.sources.map((source) => source.originInfo.label).join(" · ")}
                         </span>
                       </span>
                       {group.sources.map((source) => (
                         <code
                           key={source.skill.path}
-                          className="truncate text-[11px] text-muted-foreground"
+                          className="truncate text-ui-sm text-muted-foreground"
                         >
                           {source.skill.path}
                         </code>

@@ -144,7 +144,7 @@ function CurrentHeader({
       <SynaraLogo aria-hidden className="size-8 shrink-0 text-foreground" />
       <div className="flex min-w-0 flex-col">
         <DialogTitle className="text-base">What&rsquo;s new?</DialogTitle>
-        <DialogDescription className="text-xs">
+        <DialogDescription className="text-ui leading-snug">
           v{currentVersion}
           <span aria-hidden="true"> · </span>
           {entry.date}
@@ -162,7 +162,7 @@ function ChangelogHeader({ onBack }: { readonly onBack: () => void }) {
       </Button>
       <div className="flex min-w-0 flex-col">
         <DialogTitle className="text-base">Complete changelog</DialogTitle>
-        <DialogDescription className="text-xs">
+        <DialogDescription className="text-ui leading-snug">
           Every curated release, newest first.
         </DialogDescription>
       </div>

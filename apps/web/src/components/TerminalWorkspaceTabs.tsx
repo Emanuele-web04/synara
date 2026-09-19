@@ -36,7 +36,7 @@ export default function TerminalWorkspaceTabs({
   }
 
   const tabClassName =
-    "group relative -mb-px inline-flex h-7 shrink-0 items-center rounded-t-[10px] border border-b-0 px-3 text-xs transition-colors";
+    "group relative -mb-px inline-flex h-7 shrink-0 items-center rounded-t-[10px] border border-b-0 px-3 text-ui leading-snug transition-colors";
 
   return (
     <div className="relative border-b border-border/70 bg-muted/10 px-3 sm:px-5">
@@ -54,9 +54,7 @@ export default function TerminalWorkspaceTabs({
           }}
         >
           <span className="font-mono tracking-wide">Terminal</span>
-          <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">
-            {terminalCount}
-          </span>
+          <span className="ml-1.5 font-mono text-ui-xs text-muted-foreground">{terminalCount}</span>
           {terminalHasRunningActivity ? (
             <TerminalActivityIndicator className="ml-1.5 text-foreground/75" />
           ) : null}

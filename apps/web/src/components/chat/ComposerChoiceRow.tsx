@@ -71,7 +71,7 @@ export function ComposerChoiceRow({
       {shortcut !== null ? (
         <span
           className={cn(
-            "flex size-[18px] shrink-0 items-center justify-center rounded-full text-[11px] font-medium tabular-nums transition-colors duration-150",
+            "flex size-[18px] shrink-0 items-center justify-center rounded-full text-ui-sm font-medium tabular-nums transition-colors duration-150",
             selected
               ? "bg-[var(--color-text-foreground)] text-[var(--color-background-surface)]"
               : CHIP_TONE_CLASS_NAME[tone],
@@ -81,9 +81,9 @@ export function ComposerChoiceRow({
         </span>
       ) : null}
       <div className="min-w-0 flex-1 leading-snug">
-        <span className="text-[13px] font-medium text-foreground/90">{label}</span>
+        <span className="text-ui-lg font-medium text-foreground/90">{label}</span>
         {description && description !== label ? (
-          <span className="ml-1.5 text-[12px] text-muted-foreground/55">{description}</span>
+          <span className="ml-1.5 text-ui text-muted-foreground/55">{description}</span>
         ) : null}
       </div>
       {trailing}

@@ -1015,7 +1015,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     if (localPreviewGrantQuery.error) {
       return (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
-          <p className="text-left text-[11px] text-destructive/85">
+          <p className="text-left text-ui-sm text-destructive/85">
             {localPreviewGrantQuery.error instanceof Error
               ? localPreviewGrantQuery.error.message
               : "Could not create local file preview grant."}
@@ -1093,7 +1093,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       {activeEditBuffer?.error ? (
         <div
           role="alert"
-          className="flex shrink-0 items-center gap-3 border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"
+          className="flex shrink-0 items-center gap-3 border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-ui-sm text-destructive"
         >
           <span className="min-w-0 flex-1">{activeEditBuffer.error}</span>
           <button
@@ -1107,7 +1107,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       ) : editBufferExternallyChanged ? (
         <div
           role="alert"
-          className="flex shrink-0 items-center gap-3 border-b border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[11px] text-foreground/80"
+          className="flex shrink-0 items-center gap-3 border-b border-amber-500/25 bg-amber-500/5 px-3 py-2 text-ui-sm text-foreground/80"
         >
           <span className="min-w-0 flex-1">
             This file changed on disk. Your unsaved edits are preserved.
@@ -1125,8 +1125,8 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           role={fileReadCapacityError ? "status" : "alert"}
           className={
             fileReadCapacityError
-              ? "flex shrink-0 items-center border-b border-border/60 px-3 py-2 text-[11px] text-muted-foreground"
-              : "flex shrink-0 items-center border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-[11px] text-destructive"
+              ? "flex shrink-0 items-center border-b border-border/60 px-3 py-2 text-ui-sm text-muted-foreground"
+              : "flex shrink-0 items-center border-b border-destructive/25 bg-destructive/5 px-3 py-2 text-ui-sm text-destructive"
           }
         >
           {fileReadCapacityError
@@ -1168,7 +1168,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         <FilePreviewLoadingState />
       ) : !hasFileContents && fileReadError ? (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
-          <p className="text-left text-[11px] text-destructive/85">
+          <p className="text-left text-ui-sm text-destructive/85">
             {fileReadError instanceof Error ? fileReadError.message : "Could not read file."}
           </p>
         </PanelStateMessage>

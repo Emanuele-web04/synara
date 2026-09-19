@@ -367,7 +367,7 @@ export const ProjectPicker = memo(function ProjectPicker({
         {selectedFolderOption.primaryLabel}
       </span>
       {selectedFolderOption.secondaryLabel ? (
-        <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
+        <span className="min-w-0 truncate text-muted-foreground/60 text-ui leading-snug">
           {selectedFolderOption.secondaryLabel}
         </span>
       ) : null}
@@ -549,7 +549,7 @@ export const ProjectPicker = memo(function ProjectPicker({
           <FolderClosed className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
           <span className="min-w-0 truncate">{folder.primaryLabel}</span>
           {folder.secondaryLabel ? (
-            <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
+            <span className="min-w-0 truncate text-muted-foreground/60 text-ui leading-snug">
               {folder.secondaryLabel}
             </span>
           ) : null}
@@ -688,7 +688,9 @@ export const ProjectPicker = memo(function ProjectPicker({
                 </button>
               ) : null}
               {errorMessage ? (
-                <div className="px-2 pb-1 text-destructive text-xs">{errorMessage}</div>
+                <div className="px-2 pb-1 text-destructive text-ui leading-snug">
+                  {errorMessage}
+                </div>
               ) : null}
             </>
           }

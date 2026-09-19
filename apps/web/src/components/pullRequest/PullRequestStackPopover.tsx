@@ -61,10 +61,10 @@ export function PullRequestStackPopover({
         className="w-[min(26rem,calc(100vw-1rem))] p-0 [&_[data-slot=popover-viewport]]:p-0"
       >
         <div className="border-b border-border px-4 py-3">
-          <div className={cn("text-sm font-medium", ASSESSMENT_COLOR_CLASS[assessment.tone])}>
+          <div className={cn("text-ui-lg font-medium", ASSESSMENT_COLOR_CLASS[assessment.tone])}>
             {assessment.label}
           </div>
-          <div className="mt-0.5 text-xs text-muted-foreground">
+          <div className="mt-0.5 text-ui leading-snug text-muted-foreground">
             Stack #{stack.number} · targets {stack.baseBranch}
           </div>
         </div>
@@ -101,8 +101,10 @@ export function PullRequestStackPopover({
                     className="mt-0.5 bg-[var(--color-background-elevated-primary-opaque)]"
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm text-foreground">{entry.title}</span>
-                    <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                    <span className="block truncate text-ui-lg leading-snug text-foreground">
+                      {entry.title}
+                    </span>
+                    <span className="mt-0.5 block truncate text-ui leading-snug text-muted-foreground">
                       #{entry.number} · {entry.headBranch}
                     </span>
                   </span>
@@ -114,7 +116,7 @@ export function PullRequestStackPopover({
             );
           })}
 
-          <div className="relative mx-2 flex items-center gap-3 px-2 py-2 text-xs text-muted-foreground">
+          <div className="relative mx-2 flex items-center gap-3 px-2 py-2 text-ui leading-snug text-muted-foreground">
             <span aria-hidden="true" className="absolute -top-2 left-4 h-6 w-px bg-border" />
             <span
               aria-hidden="true"

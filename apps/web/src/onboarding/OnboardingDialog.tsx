@@ -151,13 +151,13 @@ function OnboardingFlow(props: {
           </span>
         ) : null}
         {hero ? null : (
-          <span className="text-[length:var(--app-font-size-ui-sm,11px)] font-medium tracking-[0.04em] text-muted-foreground/70 uppercase">
+          <span className="text-ui-sm font-medium tracking-[0.04em] text-muted-foreground/70 uppercase">
             Step {stepIndex + 1} of {ONBOARDING_STEPS.length}
           </span>
         )}
         <DialogTitle className="text-[22px] tracking-[-0.01em]">{STEP_TITLES[step]}</DialogTitle>
         {description ? (
-          <DialogDescription className="max-w-[560px] text-[length:var(--app-font-size-ui-lg,13px)] leading-normal">
+          <DialogDescription className="max-w-[560px] text-ui-lg leading-normal">
             {description}
           </DialogDescription>
         ) : null}

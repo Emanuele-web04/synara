@@ -30,9 +30,7 @@ export function TourShortcutList(props: { className?: string }) {
         if (!label) return null;
         return (
           <div key={entry.command} className="flex items-center justify-between gap-3">
-            <dt className="text-[length:var(--app-font-size-ui-lg,13px)] text-foreground/85">
-              {entry.label}
-            </dt>
+            <dt className="text-ui-lg text-foreground/85">{entry.label}</dt>
             <dd>
               <ShortcutKbd shortcutLabel={label} />
             </dd>
@@ -63,7 +61,7 @@ export function FeatureTourStep() {
               aria-controls="onboarding-tour-panel"
               id={`onboarding-tour-tab-${card.id}`}
               className={cn(
-                "flex h-[34px] items-center gap-2.5 rounded-lg px-2.5 text-start text-[length:var(--app-font-size-ui-lg,13px)] outline-none transition-colors motion-reduce:transition-none",
+                "flex h-[34px] items-center gap-2.5 rounded-lg px-2.5 text-start text-ui-lg outline-none transition-colors motion-reduce:transition-none",
                 "focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
                 selected
                   ? "bg-foreground/4 text-foreground"
@@ -93,7 +91,7 @@ export function FeatureTourStep() {
         <h3 className="text-base font-medium tracking-[-0.005em] text-foreground">
           {selectedCard.title}
         </h3>
-        <p className="text-[length:var(--app-font-size-ui-lg,13px)] leading-relaxed text-muted-foreground">
+        <p className="text-ui-lg leading-relaxed text-muted-foreground">
           {selectedCard.description}
         </p>
         {selectedCard.id === "shortcuts" ? (
@@ -103,7 +101,7 @@ export function FeatureTourStep() {
             {selectedCard.highlights.map((highlight) => (
               <li
                 key={highlight}
-                className="flex items-center gap-2.5 text-[length:var(--app-font-size-ui-lg,13px)] text-foreground/85"
+                className="flex items-center gap-2.5 text-ui-lg text-foreground/85"
               >
                 <span aria-hidden className="size-1 shrink-0 rounded-full bg-foreground/40" />
                 {highlight}
@@ -115,7 +113,7 @@ export function FeatureTourStep() {
           href={selectedCard.docsHref}
           target="_blank"
           rel="noreferrer"
-          className="mt-2 inline-flex items-center gap-1.5 self-start text-[length:var(--app-font-size-ui,12px)] text-muted-foreground transition-colors hover:text-foreground motion-reduce:transition-none"
+          className="mt-2 inline-flex items-center gap-1.5 self-start text-ui text-muted-foreground transition-colors hover:text-foreground motion-reduce:transition-none"
         >
           Read the guide
           <ExternalLinkIcon className="size-3" aria-hidden />

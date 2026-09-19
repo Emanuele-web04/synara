@@ -7,7 +7,7 @@ import { formatProviderLabel } from "./profileFormatting";
 
 export function ProfileUsageCoverage({
   unavailableProviders,
-  className = "text-xs text-muted-foreground",
+  className = "text-ui leading-snug text-muted-foreground",
 }: {
   readonly unavailableProviders: ReadonlyArray<ProviderKind>;
   readonly className?: string;

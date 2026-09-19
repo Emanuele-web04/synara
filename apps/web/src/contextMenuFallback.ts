@@ -92,8 +92,8 @@ export function showContextMenuFallback<T extends string>(
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = isDestructive
-        ? "flex w-full min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[length:var(--app-font-size-ui,12px)] text-foreground/86 transition-colors"
-        : "flex w-full min-h-7 cursor-default select-none items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[length:var(--app-font-size-ui,12px)] text-foreground/86 transition-colors";
+        ? "flex w-full min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-ui text-foreground/86 transition-colors"
+        : "flex w-full min-h-7 cursor-default select-none items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-ui text-foreground/86 transition-colors";
 
       const icon = item.icon ? createMenuIconElement(item.icon) : null;
       if (icon) {

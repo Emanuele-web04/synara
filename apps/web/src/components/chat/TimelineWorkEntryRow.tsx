@@ -406,7 +406,7 @@ function commandTooltipContent(command: string, displayText: string) {
         </div>
         <div className="space-y-0.5">
           <div className="text-muted-foreground/70">Raw call</div>
-          <code className="block whitespace-pre-wrap break-words font-chat-code text-[11px] text-foreground/92">
+          <code className="block whitespace-pre-wrap break-words font-chat-code text-chat-code text-foreground/92">
             {command}
           </code>
         </div>
@@ -914,7 +914,7 @@ function ProviderContextLifecycleDetails(props: {
     info.provider;
   return (
     <div className="space-y-3" data-provider-context-lifecycle-details="true">
-      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-[11px]">
+      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
         <dt className="text-muted-foreground/56">Provider</dt>
         <dd className="text-foreground/84">{provider}</dd>
         <dt className="text-muted-foreground/56">Previous history</dt>
@@ -934,15 +934,15 @@ function ProviderContextLifecycleDetails(props: {
       </dl>
       {info.recapPreview ? (
         <section className="space-y-2">
-          <h3 className="text-[11px] font-medium text-muted-foreground/56">Summary preview</h3>
+          <h3 className="text-ui-sm font-medium text-muted-foreground/56">Summary preview</h3>
           <pre
-            className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 font-chat-code text-[11px] leading-relaxed text-foreground/84"
+            className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 font-chat-code text-chat-code leading-relaxed text-foreground/84"
             data-session-context-recap-preview="true"
           >
             {info.recapPreview}
           </pre>
           {info.recapPreviewTruncated ? (
-            <p className="text-[10px] text-muted-foreground/56">
+            <p className="text-ui-xs text-muted-foreground/56">
               Showing a short preview of the summary sent with your message.
             </p>
           ) : null}

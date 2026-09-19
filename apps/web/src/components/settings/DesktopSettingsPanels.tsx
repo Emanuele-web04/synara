@@ -60,7 +60,7 @@ const APPSNAP_PERMISSION_LABELS: Record<DesktopAppSnapPermission, string> = {
 
 function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+    <span className="inline-flex items-center gap-1.5 text-ui leading-snug font-medium text-muted-foreground">
       <span
         aria-hidden
         className={cn(
@@ -398,7 +398,11 @@ export function AppSnapSettingsPanel({
         <SettingsRow
           title="Destination"
           description="Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Synara opens a fresh task with the capture attached."
-          control={<span className="text-xs font-medium text-muted-foreground">Automatic</span>}
+          control={
+            <span className="text-ui leading-snug font-medium text-muted-foreground">
+              Automatic
+            </span>
+          }
         />
 
         <SettingsRow

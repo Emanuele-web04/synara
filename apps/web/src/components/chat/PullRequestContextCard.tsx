@@ -96,7 +96,7 @@ export function UserMessagePullRequestContextCard({
         <PullRequestContextCardShell scope={scope} title={title} subtitle={subtitle} />
       </button>
       {expanded ? (
-        <pre className="max-h-80 w-full max-w-full overflow-auto rounded-md border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] p-2 font-mono text-[11px] leading-snug whitespace-pre-wrap break-words text-foreground">
+        <pre className="max-h-80 w-full max-w-full overflow-auto rounded-md border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] p-2 font-mono text-ui-sm leading-snug whitespace-pre-wrap break-words text-foreground">
           {text}
         </pre>
       ) : null}

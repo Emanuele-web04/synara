@@ -115,14 +115,8 @@ function LocalServersPlaceholder({
   return (
     <div className="flex flex-col items-center gap-1 px-3 py-3 text-center">
       <span className="text-muted-foreground/40">{icon}</span>
-      <span className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
-        {title}
-      </span>
-      {subtitle ? (
-        <span className="text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/60">
-          {subtitle}
-        </span>
-      ) : null}
+      <span className="text-ui text-muted-foreground">{title}</span>
+      {subtitle ? <span className="text-ui-xs text-muted-foreground/60">{subtitle}</span> : null}
     </div>
   );
 }
@@ -148,7 +142,7 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
           {serverCount > 0 ? (
             <span className="size-1.5 rounded-full bg-success" aria-hidden />
           ) : null}
-          <span className="text-[11px] tabular-nums text-[var(--color-text-foreground-secondary)]">
+          <span className="text-ui-sm tabular-nums text-[var(--color-text-foreground-secondary)]">
             {serverCount}
           </span>
         </span>
@@ -168,7 +162,7 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" side="bottom" className="w-72 min-w-72">
         <div className="flex items-center justify-between gap-2 pb-0.5 pl-2 pr-3 pt-px">
-          <span className="truncate text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/50">
+          <span className="truncate text-ui-xs font-normal text-muted-foreground/50">
             {localServersQuery.isLoading ? "Scanning ports…" : describeServerCount(serverCount)}
           </span>
           <LocalServersRefreshButton
