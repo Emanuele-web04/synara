@@ -555,11 +555,333 @@ index cfd35d264..5e16b8319 100644
      /// Minimized/hidden targets retain exact semantic AX actions; raw keys and
      /// the routed pointer refuse rather than restoring the window.
      #[test]
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
+index 5f4d1a076..84bf35ee5 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
+@@ -9,7 +9,9 @@
+ //! and [`BrowserEngine::frame_session_for_mutation`] additionally
+ //! re-proves the ref's frame/document identity (frame id + loader id,
+ //! and for OOPIFs the child target attached beneath the proven tab)
+-//! before the ref is touched.
++//! before the ref is touched. A driver-owned headless browser has no
++//! native window: its binding proves process fingerprint, endpoint
++//! ownership, and CDP page-target liveness instead.
+ //!
+ //! Snapshot composition (v2 DOM-ref slice):
+ //! - Shadow DOM is composed into the main-frame walk (`pierce: true`),
+@@ -58,7 +60,8 @@ use super::store::{
+ };
+ use super::types::{
+     BindingQuality, BrowserClassification, BrowserEngineFamily, BrowserProcessRole,
+-    EndpointAccessClass, NativeWindowInfo, OwnedEndpoint, Rect,
++    EndpointAccessClass, NativeOwnershipMethod, NativeOwnershipProof, NativeWindowInfo,
++    OwnedEndpoint, Rect,
+ };
+ 
+ /// Bounds tolerance (device pixels) for native ↔ CDP window correlation.
+@@ -215,10 +218,34 @@ pub(crate) struct ValidatedTab {
+     pub record: TargetRecord,
+     pub tab: TabRecord,
+     /// Live native metadata from this mutation's revalidation, rather than
+-    /// the bind-time geometry retained in `record`.
++    /// the bind-time geometry retained in `record`. For a driver-owned
++    /// headless binding this is the windowless placeholder — there is no
++    /// native window to place or draw over.
+     pub native: NativeWindowInfo,
+     /// Flattened CDP session id attached to the tab's target.
+     pub cdp_session: String,
++    /// True for a driver-owned headless browser with no native window.
++    /// Native-window proofs and on-screen visualization are skipped.
++    pub windowless: bool,
++}
++
++/// The windowless placeholder native metadata for a driver-owned headless
++/// browser. It carries no geometry: every consumer must branch on
++/// [`ValidatedTab::windowless`] / [`TargetRecord::windowless`] before
++/// treating these bounds as real.
++fn windowless_native_window(pid: i64, title: &str) -> NativeWindowInfo {
++    NativeWindowInfo {
++        pid,
++        window_id: 0,
++        title: title.to_owned(),
++        bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
++        geometry_exact: false,
++        ownership: NativeOwnershipProof {
++            method: NativeOwnershipMethod::PlatformAttested,
++            owner_pid: pid,
++            detail: Some("driver-owned headless browser; no native window exists".to_owned()),
++        },
++    }
+ }
+ 
+ fn viewport_point_to_screen(
+@@ -1056,11 +1083,13 @@ impl BrowserEngine {
+         Ok(endpoint)
+     }
+ 
+-    /// List page-type CDP targets with their window geometry.
+-    async fn window_candidates(
++    /// List page-type CDP targets (id, title, url) without any Browser-domain
++    /// window proof. Used by the driver-owned headless route, where no native
++    /// or Browser-domain window exists.
++    async fn page_target_entries(
+         &self,
+         conn: &CdpConnection,
+-    ) -> Result<Vec<CdpWindowCandidate>, BrowserRefusal> {
++    ) -> Result<Vec<(String, String, String)>, BrowserRefusal> {
+         let targets = conn
+             .call(None, "Target.getTargets", json!({}))
+             .await
+@@ -1104,7 +1133,38 @@ impl BrowserEngine {
+                 .and_then(Value::as_str)
+                 .unwrap_or("")
+                 .to_owned();
++            out.push((target_id, title, url));
++        }
++        Ok(out)
++    }
++
++    /// Page targets for a windowless binding: the tab list is the CDP target
++    /// list, with no Browser-domain window geometry at all.
++    async fn windowless_candidates(
++        &self,
++        conn: &CdpConnection,
++    ) -> Result<Vec<CdpWindowCandidate>, BrowserRefusal> {
++        Ok(self
++            .page_target_entries(conn)
++            .await?
++            .into_iter()
++            .map(|(cdp_target_id, title, url)| CdpWindowCandidate {
++                cdp_target_id,
++                cdp_window_id: None,
++                title,
++                url,
++                bounds: None,
++            })
++            .collect())
++    }
+ 
++    /// List page-type CDP targets with their window geometry.
++    async fn window_candidates(
++        &self,
++        conn: &CdpConnection,
++    ) -> Result<Vec<CdpWindowCandidate>, BrowserRefusal> {
++        let mut out = Vec::new();
++        for (target_id, title, url) in self.page_target_entries(conn).await? {
+             let window_geometry = match conn
+                 .call(
+                     None,
+@@ -1363,6 +1423,7 @@ impl BrowserEngine {
+             native_bounds: native.bounds,
+             cdp_target_id: candidate.cdp_target_id.clone(),
+             cdp_window_id: candidate.cdp_window_id,
++            windowless: false,
+             quality,
+             tabs,
+         };
+@@ -1371,6 +1432,108 @@ impl BrowserEngine {
+         Ok((target_id, record))
+     }
+ 
++    /// Bind a driver-owned headless browser with no native window. The
++    /// capability is minted from the CDP endpoint the driver itself launched:
++    /// process fingerprint + attested endpoint ownership + live CDP page
++    /// targets are the whole proof. The caller may only name a pid that this
++    /// session (or its transport owner) has a live headless lifecycle for;
++    /// everything else keeps the native-window bind contract.
++    pub(crate) async fn bind_driver_owned_headless(
++        &self,
++        session: &str,
++        transport_session: Option<&str>,
++        pid: i64,
++    ) -> Result<(String, TargetRecord), BrowserRefusal> {
++        let owned = self.is_driver_owned_headless_pid_for_session(session, pid)
++            || transport_session
++                .is_some_and(|owner| self.is_driver_owned_headless_pid_for_session(owner, pid));
++        if !owned {
++            return Err(refuse(
++                BrowserRefusalCode::BrowserWrongTargetRefused,
++                format!(
++                    "pid {pid} is not a live driver-owned headless browser for this session; \
++                     bind a native browser window with pid + window_id instead"
++                ),
++            )
++            .with_detail(json!({ "headless_driver_owned": false })));
++        }
++        let fingerprint = self.platform.process_fingerprint(pid).await?;
++        let endpoint = self.owned_endpoint(pid).await?;
++        self.bind_windowless_endpoint(session, transport_session, pid, fingerprint, endpoint)
++            .await
++    }
++
++    /// The CDP half of a windowless bind, split out so the proof is testable
++    /// against a live endpoint without a spawned process.
++    pub(crate) async fn bind_windowless_endpoint(
++        &self,
++        session: &str,
++        transport_session: Option<&str>,
++        pid: i64,
++        fingerprint: super::types::ProcessFingerprint,
++        endpoint: OwnedEndpoint,
++    ) -> Result<(String, TargetRecord), BrowserRefusal> {
++        let conn = self.connect(&endpoint.ws_url).await?;
++        let candidates = self.windowless_candidates(&conn).await?;
++        if candidates.is_empty() {
++            return Err(refuse(
++                BrowserRefusalCode::BrowserTabNotFound,
++                format!("the driver-owned headless browser (pid {pid}) exposed no page targets"),
++            ));
++        }
++        let native_title = candidates
++            .iter()
++            .map(|candidate| candidate.title.as_str())
++            .find(|title| !title.is_empty())
++            .unwrap_or("")
++            .to_owned();
++
++        // Tabs = every page target. No native-window selection proof exists,
++        // so each tab's `active` stays unproven (None) rather than guessed.
++        let mut tabs = HashMap::new();
++        for candidate in &candidates {
++            let tab_id = self.store.mint_tab_id();
++            tabs.insert(
++                tab_id.clone(),
++                TabRecord {
++                    tab_id,
++                    cdp_target_id: candidate.cdp_target_id.clone(),
++                    title: candidate.title.clone(),
++                    url: candidate.url.clone(),
++                    active: None,
++                    generation: 0,
++                    snapshots: HashMap::new(),
++                },
++            );
++        }
++
++        let record = TargetRecord {
++            target_id: String::new(),
++            pid,
++            // No native window exists; zero is the explicit windowless marker.
++            window_id: 0,
++            ws_url: endpoint.ws_url.clone(),
++            endpoint_owner_pid: endpoint.ownership.owner_pid,
++            endpoint_transport: endpoint.transport,
++            endpoint_access_class: EndpointAccessClass::DriverOwned,
++            generation: 0,
++            transport_session: transport_session.map(str::to_owned),
++            fingerprint,
++            native_title,
++            native_bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
++            cdp_target_id: candidates[0].cdp_target_id.clone(),
++            cdp_window_id: None,
++            windowless: true,
++            // The proof is direct: the driver minted this endpoint for this
++            // process and the tab ids are live CDP page targets. No guessing.
++            quality: BindingQuality::Exact,
++            tabs,
++        };
++        let target_id = self.store.mint_target(session, record.clone());
++        let record = self.store.get_target(session, &target_id)?;
++        Ok((target_id, record))
++    }
++
+     pub(crate) async fn native_window_checked(
+         &self,
+         pid: i64,
+@@ -1499,10 +1662,15 @@ impl BrowserEngine {
+             ));
+         }
+ 
+-        // 2. Native window still exists and is still owned by the pid.
+-        let native = self
+-            .native_window_checked(record.pid, record.window_id)
+-            .await?;
++        // 2. Native window still exists and is still owned by the pid — or,
++        //    for a driver-owned headless browser, the explicit windowless
++        //    placeholder stands in for the window this route never had.
++        let native = if record.windowless {
++            windowless_native_window(record.pid, &record.native_title)
++        } else {
++            self.native_window_checked(record.pid, record.window_id)
++                .await?
++        };
+ 
+         // 3. Endpoint still owned and unchanged.
+         let endpoint = if record.generation > 0 {
+@@ -1526,9 +1694,15 @@ impl BrowserEngine {
+         }
+ 
+         // 4. CDP target still a page in the bound CDP window, with either
+-        //    matching geometry or the same singleton cardinality proof.
++        //    matching geometry or the same singleton cardinality proof. A
++        //    windowless binding proves the target id alone: there is no
++        //    window geometry and no native cardinality to correlate.
+         let conn = self.connection_for_record(session, &record).await?;
+-        let candidates = self.window_candidates(&conn).await?;
++        let candidates = if record.windowless {
++            self.windowless_candidates(&conn).await?
++        } else {
++            self.window_candidates(&conn).await?
++        };
+         let live = candidates
+             .iter()
+             .find(|c| c.cdp_target_id == tab.cdp_target_id)
+@@ -1538,7 +1712,9 @@ impl BrowserEngine {
+                     format!("tab {tab_id} no longer has a live CDP page target"),
+                 )
+             })?;
+-        if let Some(bound_window_id) = record.cdp_window_id {
++        if record.windowless {
++            // The target exists and belongs to the proven process endpoint.
++        } else if let Some(bound_window_id) = record.cdp_window_id {
+             if live.cdp_window_id != Some(bound_window_id) {
+                 return Err(refuse(
+                     BrowserRefusalCode::BrowserWrongTargetRefused,
+@@ -1601,12 +1777,14 @@ impl BrowserEngine {
+                 .capability_manifest();
+             authorize_live_browser_origin(manifest, &live_url)?;
+         }
++        let windowless = record.windowless;
+         Ok(ValidatedTab {
+             conn,
+             record,
+             tab,
+             native,
+             cdp_session,
++            windowless,
+         })
+     }
+ 
+@@ -1663,6 +1841,12 @@ impl BrowserEngine {
+         viewport_y: f64,
+         kind: BrowserVisualActionKind,
+     ) {
++        // A driver-owned headless browser has no on-screen surface, so the
++        // platform cursor overlay has nothing to draw on and no window to
++        // re-hide. Skip it entirely.
++        if validated.windowless {
++            return;
++        }
+         // `document.visibilityState` distinguishes the selected tab without
+         // focusing its native window or invoking any CDP activation command.
+         // Treat an unavailable or malformed proof as inactive: omitting
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs
-index bf0912f4b..429098fcb 100644
+index bf0912f4b..94af336eb 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/platform.rs
-@@ -258,6 +258,25 @@ pub struct PrepareSideEffects {
+@@ -112,6 +112,10 @@ pub struct PrepareRequest {
+     /// Allows launching a separate driver-owned isolated browser process.
+     /// It never authorizes terminating or modifying the requested process.
+     pub allow_launch: bool,
++    /// Explicit opt-in to a visible windowed isolated launch. Default false:
++    /// driver-owned isolated launches run `--headless=new` with no native
++    /// window, no Dock entry, and no concealment/offscreen handling.
++    pub windowed: bool,
+ }
+ 
+ /// What a platform adapter actually did (or found) during prepare.
+@@ -258,6 +262,31 @@ pub struct PrepareSideEffects {
      pub injected_global_input: bool,
  }
  
@@ -571,11 +893,17 @@ index bf0912f4b..429098fcb 100644
 +/// browsers bound without a Browser-domain window id: a tiling compositor or
 +/// an endpoint that omits `Browser.getWindowForTarget` still owns a native
 +/// window the dispatch would raise. Embedded Chromium endpoints keep the
-+/// exact pre-existing cdp_window_id behavior.
++/// exact pre-existing cdp_window_id behavior. A driver-owned headless record
++/// (`windowless`) has no native window, so the limitation does not apply.
 +pub(crate) fn standalone_trusted_input_limitation(
 +    record: &super::store::TargetRecord,
 +    platform_limitation: Option<&'static str>,
 +) -> Option<&'static str> {
++    // A driver-owned headless browser has no native window, so a trusted CDP
++    // Input dispatch cannot raise one.
++    if record.windowless {
++        return None;
++    }
 +    let limitation = platform_limitation?;
 +    let standalone = record.cdp_window_id.is_some()
 +        || record.endpoint_access_class != super::types::EndpointAccessClass::EmbeddedApplication;
@@ -585,24 +913,7 @@ index bf0912f4b..429098fcb 100644
  /// OS-identity services a platform crate provides to the browser-tool
  /// core. All methods are point-in-time queries; core re-invokes them
  /// for revalidation before every mutation rather than caching.
-@@ -286,6 +305,16 @@ pub trait BrowserPlatform: Send + Sync {
-         None
-     }
- 
-+    /// Keep a freshly spawned driver-owned browser out of the user's
-+    /// foreground for the whole life of that process. Chromium activates its
-+    /// first window even for an isolated launch and can re-show or
-+    /// re-activate later; platforms where that activation can be withdrawn
-+    /// implement a persistent conceal that re-hides on activation, on window
-+    /// creation, and after actions until the process exits. The default is a
-+    /// no-op. This is visual posture only — it must never touch the process,
-+    /// its profile, or any input contract.
-+    fn conceal_spawned_browser(&self, _pid: i64) {}
-+
-     /// Best-effort, visual-only feedback for an authorized browser action.
-     /// The default is a no-op so platforms without an agent-cursor overlay do
-     /// not change behavior. Implementations must not deliver input or alter
-@@ -483,4 +512,81 @@ mod tests {
+@@ -483,4 +512,103 @@ mod tests {
              super::super::refusal::BrowserRefusalCode::BrowserRouteUnavailable
          );
      }
@@ -632,7 +943,29 @@ index bf0912f4b..429098fcb 100644
 +            cdp_window_id,
 +            quality: super::super::types::BindingQuality::Exact,
 +            tabs: std::collections::HashMap::new(),
++            windowless: false,
 +        }
++    }
++
++    fn windowless_record() -> super::super::store::TargetRecord {
++        super::super::store::TargetRecord {
++            windowless: true,
++            cdp_window_id: None,
++            ..standalone_record(super::super::types::EndpointAccessClass::DriverOwned, None)
++        }
++    }
++
++    #[test]
++    fn trusted_input_limitation_does_not_apply_to_a_headless_browser() {
++        // A driver-owned headless browser has no window to raise, so the
++        // trusted CDP Input route stays available for click/type.
++        assert_eq!(
++            super::standalone_trusted_input_limitation(
++                &windowless_record(),
++                Some("fixture limitation")
++            ),
++            None
++        );
 +    }
 +
 +    #[test]
@@ -749,271 +1082,154 @@ index ad80763bb..42f72f7d4 100644
          None
      }
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
-index 1d10b3195..4f95b7e7e 100644
+index 1d10b3195..7c157e7b1 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
-@@ -357,11 +357,15 @@ fn isolated_browser_command(executable: &str, profile: &Path) -> Command {
-         .arg("--disable-background-networking")
+@@ -232,6 +232,10 @@ pub(crate) struct ManagedBrowser {
+     delete_profile: bool,
+     marker: ProfileMarker,
+     owner_sessions: Vec<String>,
++    /// True when this process was launched with `--headless=new`. A headless
++    /// driver-owned browser has no native window, so binding and revalidation
++    /// must not require one.
++    headless: bool,
+ }
+ 
+ impl Drop for ManagedBrowser {
+@@ -342,7 +346,7 @@ fn configure_linux_isolated_browser_command(
+     }
+ }
+ 
+-fn isolated_browser_command(executable: &str, profile: &Path) -> Command {
++fn isolated_browser_command(executable: &str, profile: &Path, headless: bool) -> Command {
+     let mut command = Command::new(executable);
+     #[cfg(unix)]
+     {
+@@ -358,10 +362,20 @@ fn isolated_browser_command(executable: &str, profile: &Path) -> Command {
          .arg("--disable-component-update")
          .arg("--disable-default-apps")
--        .arg("--disable-extensions");
-+        .arg("--disable-extensions")
-+        // Create the first window off every display so the spawn race can
-+        // never show a browser frame before concealment lands. Chromium
-+        // accepts negative window positions on all three platforms; the
-+        // process-lifetime conceal watcher then hides it from the first sweep
-+        // and nothing in the driver ever re-shows it.
-+        .arg("--window-position=-32000,-32000");
+         .arg("--disable-extensions");
++    // Headless is the default posture for every driver-owned launch: no
++    // window, no Dock entry, no conceal/offscreen dance — CDP is the whole
++    // surface. The windowed opt-in deliberately creates a visible browser
++    // window at Chromium's default position and is not moved or hidden.
++    if headless {
++        command
++            .arg("--headless=new")
++            .arg("--hide-scrollbars")
++            .arg("--mute-audio");
++    }
      #[cfg(target_os = "windows")]
 -    command
 -        .arg("--window-position=40,40")
 -        .arg("--window-size=900,640");
-+    command.arg("--window-size=900,640");
++    if !headless {
++        command.arg("--window-size=900,640");
++    }
      #[cfg(target_os = "linux")]
      {
          let native_wayland = std::env::var("XDG_SESSION_TYPE")
-@@ -643,6 +647,176 @@ fn spawned_runtime_pid(ownership: &EndpointOwnershipProof) -> i64 {
-     ownership.listener_pid.unwrap_or(ownership.owner_pid)
- }
+@@ -650,6 +664,46 @@ impl BrowserEngine {
+         })
+     }
  
-+// ── Real offscreen placement for the just-spawned browser ───────────────────
-+//
-+// `--window-position=-32000,-32000` is a Chromium switch that Windows and
-+// Linux honor and macOS ignores: macOS Chrome creates its first window on
-+// screen whatever the switch says (verified live: bounds (0,30,1200,1006)
-+// while the switch was present). The launch switch stays as the cheap
-+// first line for the platforms that honor it; now that the driver owns an
-+// attested DevTools endpoint it also writes the position through the
-+// browser's own protocol and reads the bounds back. Nothing here unhides:
-+// the process-lifetime conceal watcher stays armed and remains the backstop.
-+
-+/// Window origin the driver writes for a just-spawned browser window.
-+const OFFSCREEN_WINDOW_POSITION: i64 = -32000;
-+/// A window origin at or beyond this coordinate is off every display.
-+const OFFSCREEN_ORIGIN_LIMIT: i64 = -10_000;
-+/// How long the write-back/readback proof may take before the driver gives up
-+/// and relies on the conceal watcher.
-+const OFFSCREEN_PROOF_DEADLINE: Duration = Duration::from_secs(5);
-+const OFFSCREEN_PROOF_POLL: Duration = Duration::from_millis(100);
-+
-+/// One spawned CDP window, as `Browser.getWindowBounds` reports it.
-+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-+pub(crate) struct SpawnedWindowBounds {
-+    pub window_id: i64,
-+    pub left: i64,
-+    pub top: i64,
-+    pub width: i64,
-+    pub height: i64,
-+}
-+
-+impl SpawnedWindowBounds {
-+    pub(crate) fn is_offscreen(&self) -> bool {
-+        self.left <= OFFSCREEN_ORIGIN_LIMIT || self.top <= OFFSCREEN_ORIGIN_LIMIT
++    /// True when `pid` is a driver-owned browser launched headless for this
++    /// session (or its transport owner). Such a browser has no native window,
++    /// so the bind path mints capabilities from the CDP endpoint directly.
++    pub(crate) fn is_driver_owned_headless_pid_for_session(&self, session: &str, pid: i64) -> bool {
++        self.managed_browsers.lock().unwrap().iter().any(|browser| {
++            browser.headless
++                && browser.owned_pid == pid
++                && browser.owner_sessions.iter().any(|owner| owner == session)
++        })
 +    }
 +
-+    pub(crate) fn describe(&self) -> String {
-+        format!(
-+            "window {} at ({},{}) {}x{}",
-+            self.window_id, self.left, self.top, self.width, self.height
-+        )
++    /// Test-only: register a driver-owned lifecycle entry backed by a real,
++    /// harmless child process so the Drop reap path runs for real and the
++    /// session-end ownership check has something to prove against.
++    #[cfg(all(test, unix))]
++    pub(crate) fn register_test_managed_browser(&self, pid: i64, session: &str, headless: bool) {
++        use std::os::unix::process::CommandExt;
++        let child = Command::new("sleep")
++            .arg("600")
++            .process_group(0)
++            .stdin(Stdio::null())
++            .stdout(Stdio::null())
++            .stderr(Stdio::null())
++            .spawn()
++            .expect("spawn a harmless test-browser stand-in");
++        self.managed_browsers.lock().unwrap().push(ManagedBrowser {
++            child,
++            owned_pid: pid,
++            profile: PathBuf::new(),
++            delete_profile: false,
++            marker: ProfileMarker {
++                schema: PROFILE_SCHEMA.to_owned(),
++                mode: PrepareProfileMode::IsolatedNew,
++                name: None,
++            },
++            owner_sessions: vec![session.to_owned()],
++            headless,
++        });
 +    }
-+}
 +
-+/// Parse one `Browser.getWindowBounds` reply. Position is what the proof
-+/// needs; size is informational and defaults to zero when omitted.
-+fn cdp_window_bounds(window_id: i64, reply: &serde_json::Value) -> Option<SpawnedWindowBounds> {
-+    let bounds = reply.get("bounds")?;
-+    let field = |name: &str| bounds.get(name).and_then(serde_json::Value::as_i64);
-+    Some(SpawnedWindowBounds {
-+        window_id,
-+        left: field("left")?,
-+        top: field("top")?,
-+        width: field("width").unwrap_or(0),
-+        height: field("height").unwrap_or(0),
-+    })
-+}
-+
-+/// Push every page target's window offscreen through CDP and read the bounds
-+/// back. Returns whatever the browser reported; the caller decides how to
-+/// describe an unproven result. Never unhides and never activates.
-+async fn conceal_spawned_windows(
-+    connection: &super::cdp_ws::CdpConnection,
-+    deadline: Duration,
-+) -> Result<Vec<SpawnedWindowBounds>, String> {
-+    let started = Instant::now();
-+    let mut last: Vec<SpawnedWindowBounds> = Vec::new();
-+    loop {
-+        let mut observed = Vec::new();
-+        let mut write_supported = false;
-+        let targets = connection
-+            .call(None, "Target.getTargets", serde_json::json!({}))
-+            .await
-+            .map_err(|error| error.to_string())?;
-+        let page_targets: Vec<String> = targets
-+            .get("targetInfos")
-+            .and_then(serde_json::Value::as_array)
-+            .into_iter()
-+            .flatten()
-+            .filter(|target| target.get("type").and_then(serde_json::Value::as_str) == Some("page"))
-+            .filter_map(|target| {
-+                target
-+                    .get("targetId")
-+                    .and_then(serde_json::Value::as_str)
-+                    .map(str::to_owned)
-+            })
-+            .take(8)
-+            .collect();
-+        for target_id in page_targets {
-+            let Ok(window) = connection
-+                .call(
-+                    None,
-+                    "Browser.getWindowForTarget",
-+                    serde_json::json!({ "targetId": target_id }),
-+                )
-+                .await
-+            else {
-+                // No window yet: the endpoint preceded the first window.
-+                continue;
-+            };
-+            let Some(window_id) = window.get("windowId").and_then(serde_json::Value::as_i64) else {
-+                continue;
-+            };
-+            // Move the window off every display first; the readback below is
-+            // the only thing the driver reports.
-+            if connection
-+                .call(
-+                    None,
-+                    "Browser.setWindowBounds",
-+                    serde_json::json!({
-+                        "windowId": window_id,
-+                        "bounds": {
-+                            "left": OFFSCREEN_WINDOW_POSITION,
-+                            "top": OFFSCREEN_WINDOW_POSITION,
-+                        }
-+                    }),
-+                )
-+                .await
-+                .is_ok()
-+            {
-+                write_supported = true;
-+            }
-+            if let Ok(reply) = connection
-+                .call(
-+                    None,
-+                    "Browser.getWindowBounds",
-+                    serde_json::json!({ "windowId": window_id }),
-+                )
-+                .await
-+            {
-+                if let Some(bounds) = cdp_window_bounds(window_id, &reply) {
-+                    observed.push(bounds);
-+                }
-+            }
-+        }
-+
-+        if !observed.is_empty() {
-+            last = observed.clone();
-+            if observed.iter().all(SpawnedWindowBounds::is_offscreen) {
-+                return Ok(observed);
-+            }
-+            // The endpoint cannot move windows at all (the write itself
-+            // failed): stop retrying and report the honest readback.
-+            if !write_supported {
-+                return Ok(observed);
-+            }
-+        }
-+        if started.elapsed() >= deadline {
-+            return Ok(last);
-+        }
-+        tokio::time::sleep(OFFSCREEN_PROOF_POLL).await;
-+    }
-+}
-+
-+impl BrowserEngine {
-+    /// Run the CDP offscreen write-back against a just-attested spawned
-+    /// endpoint. Best-effort by design: an unreachable or unsupported
-+    /// endpoint returns the error for the caller to report, and the conceal
-+    /// watcher remains the active backstop.
-+    async fn conceal_spawned_windows_via_cdp(
-+        &self,
-+        ws_url: &str,
-+    ) -> Result<Vec<SpawnedWindowBounds>, String> {
-+        let connection = self
-+            .connect(ws_url)
-+            .await
-+            .map_err(|error| format!("{}: {}", error.code.as_str(), error.message))?;
-+        conceal_spawned_windows(&connection, OFFSCREEN_PROOF_DEADLINE).await
-+    }
-+}
-+
- impl BrowserEngine {
-     pub(crate) fn is_driver_owned_pid_for_session(&self, session: &str, pid: i64) -> bool {
-         self.managed_browsers.lock().unwrap().iter().any(|browser| {
-@@ -735,6 +909,10 @@ impl BrowserEngine {
-                 format!("could not launch an isolated browser process: {error}"),
-             )
-         })?;
-+        // The driver's own browser is background posture: concealment starts
-+        // at spawn so the launcher's first window never reaches the user's
-+        // foreground ahead of the endpoint attestation.
-+        self.platform.conceal_spawned_browser(i64::from(child.id()));
-         let endpoint = match wait_for_spawned_endpoint(&mut child, &prepared_profile.path).await {
-             Ok(endpoint) => {
-                 match attest_spawned_endpoint(self, i64::from(child.id()), endpoint).await {
-@@ -754,6 +932,40 @@ impl BrowserEngine {
+     pub(crate) fn cleanup_prepared_session(&self, session: &str) {
+         self.protected_resource_ownership.remove_session(session);
+         self.managed_browsers
+@@ -727,7 +781,8 @@ impl BrowserEngine {
+             self.platform.isolated_browser_executable()?
+         };
+         let prepared_profile = prepare_profile(profile_request)?;
+-        let mut command = isolated_browser_command(&executable, &prepared_profile.path);
++        let headless = !request.windowed;
++        let mut command = isolated_browser_command(&executable, &prepared_profile.path, headless);
+         let mut child = command.spawn().map_err(|error| {
+             cleanup_created_profile(&prepared_profile);
+             refusal(
+@@ -754,6 +809,16 @@ impl BrowserEngine {
                  return Err(error);
              }
          };
-+        // The endpoint is attested, so the browser is driver-owned and the
-+        // CDP surface is trusted. Put the window truly offscreen before any
-+        // content can render and report exactly what the browser says. This
-+        // can never unhide: the conceal watcher stays armed regardless.
-+        let offscreen_note = match self.conceal_spawned_windows_via_cdp(&endpoint.ws_url).await {
-+            Ok(bounds)
-+                if !bounds.is_empty() && bounds.iter().all(SpawnedWindowBounds::is_offscreen) =>
-+            {
-+                format!(
-+                    " CDP reports the spawned window offscreen ({}).",
-+                    bounds
-+                        .iter()
-+                        .map(SpawnedWindowBounds::describe)
-+                        .collect::<Vec<_>>()
-+                        .join(", ")
-+                )
-+            }
-+            Ok(bounds) if bounds.is_empty() => " CDP saw no window to place before the proof \
-+                 deadline; the conceal watcher is the active backstop."
-+                .to_owned(),
-+            Ok(bounds) => format!(
-+                " CDP could not prove offscreen bounds ({}); the conceal watcher is the active \
-+                 backstop.",
-+                bounds
-+                    .iter()
-+                    .map(SpawnedWindowBounds::describe)
-+                    .collect::<Vec<_>>()
-+                    .join(", ")
-+            ),
-+            Err(error) => format!(
-+                " CDP offscreen write-back was unavailable ({error}); the conceal watcher is the \
-+                 active backstop."
-+            ),
++        // Nothing here hides, moves, or dresses a window. The default launch
++        // is headless: no native window and no Dock entry exist to manage.
++        // The explicit windowed opt-in creates a real browser window, which
++        // is what the caller asked for.
++        let posture_note = if headless {
++            " The spawned browser is headless: no native window and no Dock entry."
++        } else {
++            " The spawned browser is windowed as explicitly requested: it creates a visible \
++             browser window (and the browser's Dock entry)."
 +        };
          let prepared_pid = endpoint.ownership.owner_pid;
          let mut owner_sessions = vec![request.session];
          if let Some(transport_session) = request.transport_session {
-@@ -778,7 +990,10 @@ impl BrowserEngine {
+@@ -774,11 +839,15 @@ impl BrowserEngine {
+             delete_profile: prepared_profile.delete_on_cleanup,
+             marker: prepared_profile.marker,
+             owner_sessions,
++            headless,
+         });
          Ok(PrepareOutcome {
              action: PrepareAction::LaunchedIsolatedBrowser,
              endpoint: Some(endpoint),
 -            message: "Launched a separate driver-owned isolated Chromium process; no existing browser process was modified or terminated.".to_owned(),
 +            message: format!(
 +                "Launched a separate driver-owned isolated Chromium process; no existing browser \
-+                 process was modified or terminated.{offscreen_note}"
++                 process was modified or terminated.{posture_note}"
 +            ),
              prepared_pid: Some(prepared_pid),
              side_effects: PrepareSideEffects {
                  launched_browser: true,
-@@ -1416,13 +1631,221 @@ mod tests {
+@@ -1396,7 +1465,7 @@ mod tests {
+     #[test]
+     fn isolated_launch_uses_a_deterministic_clean_profile() {
+         let profile = Path::new("profile-under-test");
+-        let command = isolated_browser_command("chromium-under-test", profile);
++        let command = isolated_browser_command("chromium-under-test", profile, false);
+         let args = command
+             .get_args()
+             .map(|arg| arg.to_string_lossy().into_owned())
+@@ -1416,13 +1485,65 @@ mod tests {
              assert!(args.iter().any(|arg| arg == required), "missing {required}");
          }
          #[cfg(target_os = "windows")]
@@ -1026,218 +1242,85 @@ index 1d10b3195..4f95b7e7e 100644
      }
  
 +    #[test]
-+    fn isolated_launch_never_creates_an_on_screen_window() {
-+        // The spawn must be offscreen on every platform: the conceal watcher
-+        // is the second line of defense, not the first. A regression here is
-+        // exactly the visible browser flash this revision exists to prevent.
-+        let command = isolated_browser_command("chromium-under-test", Path::new("profile"));
++    fn headless_launch_has_no_window_and_no_offscreen_switch() {
++        // Default driver-owned launch: a real headless browser. No native
++        // window, no Dock entry, nothing to conceal or move offscreen.
++        let command = isolated_browser_command("chromium-under-test", Path::new("profile"), true);
++        let args = command
++            .get_args()
++            .map(|arg| arg.to_string_lossy().into_owned())
++            .collect::<Vec<_>>();
++        for required in [
++            "--headless=new",
++            "--hide-scrollbars",
++            "--mute-audio",
++            "--remote-debugging-port=0",
++            "--user-data-dir=profile",
++        ] {
++            assert!(args.iter().any(|arg| arg == required), "missing {required}");
++        }
++        assert!(
++            !args.iter().any(|arg| arg.starts_with("--window-position")),
++            "a headless launch must not carry a window position: {args:?}"
++        );
++        assert!(
++            !args.iter().any(|arg| arg.starts_with("--window-size")),
++            "a headless launch must not carry a window size: {args:?}"
++        );
++        assert!(
++            !args.iter().any(|arg| arg == "--headless=old"),
++            "the legacy headless mode is not the supported route: {args:?}"
++        );
++    }
++
++    #[test]
++    fn windowed_opt_in_creates_a_plain_visible_window() {
++        // Explicit windowed opt-in (browser_prepare windowed=true): the caller
++        // asked for a visible browser. No headless flags, no offscreen
++        // placement, no concealment — the window is what was requested.
++        let command = isolated_browser_command("chromium-under-test", Path::new("profile"), false);
 +        let args = command
 +            .get_args()
 +            .map(|arg| arg.to_string_lossy().into_owned())
 +            .collect::<Vec<_>>();
 +        assert!(
-+            args.iter()
-+                .any(|arg| arg == "--window-position=-32000,-32000"),
-+            "the spawned browser window must be created offscreen: {args:?}"
++            !args.iter().any(|arg| arg.starts_with("--window-position")),
++            "a visible request must not be moved offscreen: {args:?}"
 +        );
 +        assert!(
-+            !args
-+                .iter()
-+                .any(|arg| arg.starts_with("--window-position=40,40")),
-+            "the old on-screen launch position must be gone: {args:?}"
++            !args.iter().any(|arg| arg.starts_with("--headless")),
++            "the windowed opt-in must not run headless: {args:?}"
 +        );
-+    }
-+
-+    #[test]
-+    fn cdp_bounds_replies_parse_and_the_offscreen_rule_is_explicit() {
-+        let reply = serde_json::json!({
-+            "windowId": 7,
-+            "bounds": {"left": -32000, "top": -32000, "width": 1200, "height": 1006}
-+        });
-+        let bounds = cdp_window_bounds(7, &reply).expect("parsed bounds");
-+        assert_eq!(
-+            bounds,
-+            SpawnedWindowBounds {
-+                window_id: 7,
-+                left: -32000,
-+                top: -32000,
-+                width: 1200,
-+                height: 1006,
-+            }
-+        );
-+        assert!(bounds.is_offscreen());
-+        assert!(
-+            SpawnedWindowBounds {
-+                left: 0,
-+                top: 30,
-+                ..bounds
-+            }
-+            .is_offscreen()
-+                == false
-+        );
-+
-+        // A reply without a position cannot prove anything.
-+        let missing = serde_json::json!({"bounds": {"width": 800}});
-+        assert!(cdp_window_bounds(7, &missing).is_none());
-+        assert!(cdp_window_bounds(7, &serde_json::json!({})).is_none());
-+    }
-+
-+    #[test]
-+    fn offscreen_window_position_is_off_every_display() {
-+        assert!(OFFSCREEN_WINDOW_POSITION <= OFFSCREEN_ORIGIN_LIMIT);
-+    }
-+
-+    fn mock_call_log() -> Arc<Mutex<Vec<(String, serde_json::Value)>>> {
-+        Arc::new(Mutex::new(Vec::new()))
-+    }
-+
-+    #[tokio::test]
-+    async fn cdp_offscreen_write_back_is_proven_by_the_browser_readback() {
-+        use crate::browser::cdp_ws::CdpConnection;
-+        use crate::browser::mock_cdp::{MockCall, MockCdpServer, MockReply};
-+
-+        let calls = mock_call_log();
-+        let log = calls.clone();
-+        let server = MockCdpServer::start(Arc::new(move |call: &MockCall| {
-+            log.lock()
-+                .unwrap()
-+                .push((call.method.clone(), call.params.clone()));
-+            match call.method.as_str() {
-+                "Target.getTargets" => MockReply::ok(serde_json::json!({
-+                    "targetInfos": [
-+                        {"targetId": "T1", "type": "page", "url": "about:blank"}
-+                    ]
-+                })),
-+                "Browser.getWindowForTarget" => MockReply::ok(serde_json::json!({"windowId": 11})),
-+                "Browser.setWindowBounds" => MockReply::ok(serde_json::json!({})),
-+                "Browser.getWindowBounds" => {
-+                    let moved = log
-+                        .lock()
-+                        .unwrap()
-+                        .iter()
-+                        .any(|(method, _)| method == "Browser.setWindowBounds");
-+                    MockReply::ok(serde_json::json!({
-+                        "bounds": {
-+                            "left": if moved { -32000 } else { 0 },
-+                            "top": if moved { -32000 } else { 30 },
-+                            "width": 1200,
-+                            "height": 1006,
-+                        }
-+                    }))
-+                }
-+                other => MockReply::method_not_found(other),
-+            }
-+        }))
-+        .await;
-+
-+        let connection = CdpConnection::connect(&server.ws_url()).await.unwrap();
-+        let bounds = conceal_spawned_windows(&connection, Duration::from_millis(500))
-+            .await
-+            .unwrap();
-+        assert_eq!(bounds.len(), 1);
-+        assert!(bounds[0].is_offscreen());
-+        assert_eq!((bounds[0].left, bounds[0].top), (-32000, -32000));
-+
-+        let calls = calls.lock().unwrap();
-+        let write_index = calls
-+            .iter()
-+            .position(|(method, params)| {
-+                method == "Browser.setWindowBounds" && params["bounds"]["left"] == -32000
-+            })
-+            .expect("the offscreen write must be issued");
-+        let read_index = calls
-+            .iter()
-+            .rposition(|(method, _)| method == "Browser.getWindowBounds")
-+            .expect("a readback must be issued");
-+        assert!(
-+            write_index < read_index,
-+            "the proof readback must follow the write: {calls:?}"
-+        );
-+    }
-+
-+    #[tokio::test]
-+    async fn cdp_offscreen_never_claims_bounds_it_could_not_read_back() {
-+        use crate::browser::cdp_ws::CdpConnection;
-+        use crate::browser::mock_cdp::{MockCall, MockCdpServer, MockReply};
-+
-+        // macOS Chrome before this fix: the write is accepted (or silently
-+        // ignored) and the readback stays on screen. The driver must report
-+        // the real readback and leave concealment to the watcher.
-+        let server = MockCdpServer::start(Arc::new(move |call: &MockCall| {
-+            match call.method.as_str() {
-+                "Target.getTargets" => MockReply::ok(serde_json::json!({
-+                    "targetInfos": [
-+                        {"targetId": "T1", "type": "page", "url": "about:blank"}
-+                    ]
-+                })),
-+                "Browser.getWindowForTarget" => MockReply::ok(serde_json::json!({"windowId": 11})),
-+                "Browser.setWindowBounds" => MockReply::ok(serde_json::json!({})),
-+                "Browser.getWindowBounds" => MockReply::ok(serde_json::json!({
-+                    "bounds": {"left": 0, "top": 30, "width": 1200, "height": 1006}
-+                })),
-+                other => MockReply::method_not_found(other),
-+            }
-+        }))
-+        .await;
-+
-+        let connection = CdpConnection::connect(&server.ws_url()).await.unwrap();
-+        let bounds = conceal_spawned_windows(&connection, Duration::from_millis(250))
-+            .await
-+            .unwrap();
-+        assert_eq!(bounds.len(), 1);
-+        assert!(
-+            !bounds[0].is_offscreen(),
-+            "an unchanged window must never be reported as offscreen"
-+        );
-+        assert_eq!((bounds[0].left, bounds[0].top), (0, 30));
-+    }
-+
-+    #[tokio::test]
-+    async fn cdp_offscreen_gives_up_immediately_when_the_endpoint_cannot_move_windows() {
-+        use crate::browser::cdp_ws::CdpConnection;
-+        use crate::browser::mock_cdp::{MockCall, MockCdpServer, MockReply};
-+
-+        let write_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-+        let attempts = write_attempts.clone();
-+        let server = MockCdpServer::start(Arc::new(move |call: &MockCall| {
-+            match call.method.as_str() {
-+                "Target.getTargets" => MockReply::ok(serde_json::json!({
-+                    "targetInfos": [
-+                        {"targetId": "T1", "type": "page", "url": "about:blank"}
-+                    ]
-+                })),
-+                "Browser.getWindowForTarget" => MockReply::ok(serde_json::json!({"windowId": 11})),
-+                "Browser.setWindowBounds" => {
-+                    attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-+                    MockReply::method_not_found("Browser.setWindowBounds")
-+                }
-+                "Browser.getWindowBounds" => MockReply::ok(serde_json::json!({
-+                    "bounds": {"left": 0, "top": 30, "width": 1200, "height": 1006}
-+                })),
-+                other => MockReply::method_not_found(other),
-+            }
-+        }))
-+        .await;
-+
-+        let connection = CdpConnection::connect(&server.ws_url()).await.unwrap();
-+        let started = Instant::now();
-+        let bounds = conceal_spawned_windows(&connection, Duration::from_secs(30))
-+            .await
-+            .unwrap();
-+        assert!(
-+            started.elapsed() < Duration::from_secs(2),
-+            "an endpoint without Browser.setWindowBounds must not stall the prepare"
-+        );
-+        assert_eq!(write_attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
-+        assert_eq!(bounds.len(), 1);
-+        assert!(!bounds[0].is_offscreen());
 +    }
 +
      #[test]
      fn clean_launcher_exit_is_only_deferred_on_windows() {
          let mut command = if cfg!(target_os = "windows") {
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/store.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/store.rs
+index 68f2099f6..413b4698a 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/store.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/store.rs
+@@ -227,6 +227,10 @@ pub struct TargetRecord {
+     pub cdp_target_id: String,
+     /// CDP browser window id, or None for the exact single-page embedded route.
+     pub cdp_window_id: Option<i64>,
++    /// True when this capability was minted against a driver-owned headless
++    /// browser. No native window exists: revalidation proves process
++    /// fingerprint, endpoint ownership, and CDP target liveness only.
++    pub windowless: bool,
+     pub quality: BindingQuality,
+     pub tabs: HashMap<String, TabRecord>,
+ }
+@@ -487,6 +491,7 @@ mod tests {
+             native_bounds: Rect::new(0.0, 0.0, 800.0, 600.0),
+             cdp_target_id: "CDP1".into(),
+             cdp_window_id: Some(11),
++            windowless: false,
+             quality: BindingQuality::Exact,
+             tabs: HashMap::new(),
+         }
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
-index e7be28523..69e9bf635 100644
+index e7be28523..8313eaa54 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/tools.rs
 @@ -16,8 +16,11 @@ use crate::tool_args::ArgsExt;
@@ -1254,7 +1337,128 @@ index e7be28523..69e9bf635 100644
  use super::pointer::BrowserPointerTool;
  use super::refusal::{BrowserRefusal, BrowserRefusalCode};
  use super::session_schema as schema_session;
-@@ -997,12 +1000,13 @@ impl Tool for BrowserClickTool {
+@@ -246,7 +249,10 @@ impl GetBrowserStateTool {
+             description: "Read-only browser inspection. Mode 1 (bind): pass pid + \
+                 window_id of a native browser window to classify it, correlate it to \
+                 a CDP target (exact-or-refuse), and mint a session-scoped target id \
+-                plus tab ids. Mode 2 (snapshot): pass target_id + tab_id. The \
++                plus tab ids. For a driver-owned headless browser (browser_prepare \
++                with an isolated profile; no window exists) pass pid alone: the \
++                target and tabs are minted from the CDP endpoint directly. Mode 2 \
++                (snapshot): pass target_id + tab_id. The \
+                 dom_refs_v1 compatibility format returns composed DOM refs. \
+                 semantic_v2 joins accessibility, DOM, layout, and viewport state; \
+                 ranks visible content before retained/offscreen state; and returns a \
+@@ -259,7 +265,7 @@ impl GetBrowserStateTool {
+                 "type": "object",
+                 "properties": {
+                     "pid": { "type": "integer", "description": "Native browser process id (bind mode)." },
+-                    "window_id": { "type": "integer", "description": "Native window id owned by pid (bind mode)." },
++                    "window_id": { "type": "integer", "description": "Native window id owned by pid (bind mode). Omit only for a driver-owned headless browser." },
+                     "target_id": schema_target_id(),
+                     "tab_id": schema_tab_id(),
+                     "session": schema_session(),
+@@ -508,14 +514,20 @@ impl Tool for GetBrowserStateTool {
+             return snapshot;
+         }
+ 
+-        // Bind mode: pid + window_id.
++        // Bind mode: pid + window_id, or pid alone for a driver-owned
++        // headless browser.
+         let pid = match args.require_i64("pid") {
+             Ok(v) => v,
+             Err(e) => return e,
+         };
+-        let window_id = match args.require_u64("window_id") {
+-            Ok(v) => v,
+-            Err(e) => return e,
++        // A driver-owned headless browser has no window: the window anchor is
++        // optional there and the bind mints from the CDP endpoint directly.
++        let window_id = match args.get("window_id") {
++            None | Some(Value::Null) => None,
++            Some(_) => match args.require_u64("window_id") {
++                Ok(v) => Some(v),
++                Err(e) => return e,
++            },
+         };
+         let session = match require_explicit_session(&args) {
+             Ok(s) => s,
+@@ -523,11 +535,19 @@ impl Tool for GetBrowserStateTool {
+         };
+ 
+         let transport_session = args.opt_str("_transport_session_id");
+-        match self
+-            .engine
+-            .bind_native(&session, transport_session.as_deref(), pid, window_id)
+-            .await
+-        {
++        let binding = match window_id {
++            Some(window_id) => {
++                self.engine
++                    .bind_native(&session, transport_session.as_deref(), pid, window_id)
++                    .await
++            }
++            None => {
++                self.engine
++                    .bind_driver_owned_headless(&session, transport_session.as_deref(), pid)
++                    .await
++            }
++        };
++        match binding {
+             Ok((target_id, record)) => {
+                 let tabs: Vec<Value> = record
+                     .tabs
+@@ -545,7 +565,9 @@ impl Tool for GetBrowserStateTool {
+                     BindingQuality::Exact => "exact",
+                     BindingQuality::Heuristic => "heuristic",
+                 };
+-                let binding_route = if record.cdp_window_id.is_some() {
++                let binding_route = if record.windowless {
++                    "driver_owned_headless"
++                } else if record.cdp_window_id.is_some() {
+                     "native_cdp_window"
+                 } else {
+                     "embedded_single_page"
+@@ -589,7 +611,10 @@ impl BrowserPrepareTool {
+                 endpoints are detected without side effects. Acting setup \
+                 for an isolated profile follows the runtime permission mode and optional \
+                 capability manifest. It requires allow_launch=true, launches a separate browser, and never \
+-                copies, modifies, or terminates the requested user profile. Without pid, only a \
++                copies, modifies, or terminates the requested user profile. Driver-owned isolated \
++                launches are headless by default: no native window, no Dock entry, and full CDP \
++                control (bind, navigate, snapshot, click, type, screenshot). Pass windowed=true \
++                only when the caller explicitly needs a visible browser window. Without pid, only a \
+                 platform-attested system Chrome/Edge installation (or a root-owned package \
+                 payload on Linux) is eligible; redirects and user-controlled locations fail closed. Existing-profile \
+                 attachment is explicit and follows the runtime's immutable permission mode: \
+@@ -612,6 +637,10 @@ impl BrowserPrepareTool {
+                         "type": "boolean",
+                         "description": "Allow a separate driver-owned isolated Chromium process to be launched (default false)."
+                     },
++                    "windowed": {
++                        "type": "boolean",
++                        "description": "Opt in to a visible windowed isolated launch. Default false: the driver-owned isolated browser runs headless with no window and no Dock entry."
++                    },
+                     "profile": {
+                         "type": "object",
+                         "properties": {
+@@ -678,6 +707,7 @@ impl Tool for BrowserPrepareTool {
+             },
+         };
+         let allow_launch = args.opt_bool("allow_launch").unwrap_or(false);
++        let windowed = args.opt_bool("windowed").unwrap_or(false);
+         let pid = match args.get("pid") {
+             None => None,
+             Some(_) => match args.require_i64("pid") {
+@@ -700,6 +730,7 @@ impl Tool for BrowserPrepareTool {
+             strategy,
+             profile,
+             allow_launch,
++            windowed,
+         };
+         match self.engine.prepare_browser(request).await {
+             Ok(outcome) => {
+@@ -997,12 +1028,13 @@ impl Tool for BrowserClickTool {
              Ok(v) => v,
              Err(refusal) => return refusal.to_tool_result(),
          };
@@ -1274,7 +1478,7 @@ index e7be28523..69e9bf635 100644
                  return BrowserRefusal::new(
                      BrowserRefusalCode::BrowserInputTrustUnavailable,
                      format!(
-@@ -1476,6 +1480,95 @@ async fn enter_focus_emulation(
+@@ -1476,6 +1508,95 @@ async fn enter_focus_emulation(
      ))
  }
  
@@ -1370,7 +1574,7 @@ index e7be28523..69e9bf635 100644
  pub struct BrowserTypeTool {
      def: ToolDef,
      engine: Arc<BrowserEngine>,
-@@ -1485,13 +1578,17 @@ impl BrowserTypeTool {
+@@ -1485,13 +1606,17 @@ impl BrowserTypeTool {
      pub fn new(engine: Arc<BrowserEngine>) -> Self {
          let def = ToolDef {
              name: "browser_type".into(),
@@ -1395,7 +1599,7 @@ index e7be28523..69e9bf635 100644
                  .into(),
              input_schema: json!({
                  "type": "object",
-@@ -1504,8 +1601,21 @@ impl BrowserTypeTool {
+@@ -1504,8 +1629,21 @@ impl BrowserTypeTool {
                      "mode": {
                          "type": "string",
                          "enum": ["insert_text", "keystrokes"],
@@ -1419,7 +1623,7 @@ index e7be28523..69e9bf635 100644
                      },
                      "replace": {
                          "type": "boolean",
-@@ -1527,6 +1637,210 @@ impl BrowserTypeTool {
+@@ -1527,6 +1665,210 @@ impl BrowserTypeTool {
          };
          Self { def, engine }
      }
@@ -1630,7 +1834,7 @@ index e7be28523..69e9bf635 100644
  }
  
  #[async_trait]
-@@ -1578,6 +1892,23 @@ impl Tool for BrowserTypeTool {
+@@ -1578,6 +1920,23 @@ impl Tool for BrowserTypeTool {
                  "mode must be \"insert_text\" or \"keystrokes\", got {mode:?}"
              ));
          }
@@ -1654,7 +1858,7 @@ index e7be28523..69e9bf635 100644
          let replace = args.opt_bool("replace").unwrap_or(false);
  
          let _mutation = match self
-@@ -1596,6 +1927,42 @@ impl Tool for BrowserTypeTool {
+@@ -1596,6 +1955,42 @@ impl Tool for BrowserTypeTool {
              Ok(v) => v,
              Err(refusal) => return refusal.to_tool_result(),
          };
@@ -1697,7 +1901,7 @@ index e7be28523..69e9bf635 100644
  
          let ext_ref = match args.require_str("ref") {
              Ok(value) => value,
-@@ -1629,6 +1996,25 @@ impl Tool for BrowserTypeTool {
+@@ -1629,6 +2024,25 @@ impl Tool for BrowserTypeTool {
          let conn = &validated.conn;
          let cdp = cdp_session.as_str();
  
@@ -1723,7 +1927,7 @@ index e7be28523..69e9bf635 100644
          if let Err(_e) = conn
              .call(
                  Some(cdp),
-@@ -2980,13 +3366,49 @@ mod tests {
+@@ -2980,13 +3394,49 @@ mod tests {
              .await;
          assert_eq!(nav.is_error, Some(true));
  
@@ -1774,11 +1978,65 @@ index e7be28523..69e9bf635 100644
      }
  
      #[tokio::test]
+@@ -3032,6 +3482,7 @@ mod tests {
+                 native_bounds: Rect::new(0.0, 0.0, 800.0, 600.0),
+                 cdp_target_id: "CDPX".into(),
+                 cdp_window_id: Some(5),
++                windowless: false,
+                 quality: BindingQuality::Heuristic,
+                 tabs,
+             },
+@@ -3093,6 +3544,7 @@ mod tests {
+                 native_bounds: Rect::new(0.0, 0.0, 800.0, 600.0),
+                 cdp_target_id: "CDPX".into(),
+                 cdp_window_id: Some(5),
++                windowless: false,
+                 quality: BindingQuality::Exact,
+                 tabs,
+             },
+@@ -3139,6 +3591,7 @@ mod tests {
+                 native_bounds: Rect::new(0.0, 0.0, 1.0, 1.0),
+                 cdp_target_id: "C".into(),
+                 cdp_window_id: Some(1),
++                windowless: false,
+                 quality: BindingQuality::Exact,
+                 tabs: HashMap::new(),
+             },
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
-index 2b82930cd..dcf1d71a5 100644
+index 2b82930cd..4326b88e6 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/v2_tests.rs
-@@ -63,6 +63,11 @@ struct FixtureState {
+@@ -6,7 +6,7 @@
+ 
+ use std::io::Cursor;
+ use std::sync::{
+-    atomic::{AtomicBool, Ordering},
++    atomic::{AtomicBool, AtomicUsize, Ordering},
+     Arc, Mutex as StdMutex,
+ };
+ 
+@@ -26,15 +26,16 @@ use super::platform::{
+     ExistingProfileSetupRequest, PrepareAction, PrepareOutcome, PrepareRequest,
+ };
+ use super::pointer::BrowserPointerTool;
+-use super::refusal::BrowserRefusal;
++use super::refusal::{BrowserRefusal, BrowserRefusalCode};
+ use super::tools::{
+     browser_protected_resource_scope, BrowserClickTool, BrowserNavigateTool, BrowserPrepareTool,
+     BrowserTypeTool, GetBrowserStateTool,
+ };
+ use super::types::{
+-    BrowserClassification, BrowserEngineFamily, BrowserProcessRole, BrowserProduct,
+-    EndpointOwnershipMethod, EndpointOwnershipProof, EndpointTransport, NativeOwnershipMethod,
+-    NativeOwnershipProof, NativeWindowInfo, OwnedEndpoint, ProcessFingerprint, Rect,
++    BindingQuality, BrowserClassification, BrowserEngineFamily, BrowserProcessRole, BrowserProduct,
++    EndpointAccessClass, EndpointOwnershipMethod, EndpointOwnershipProof, EndpointTransport,
++    NativeOwnershipMethod, NativeOwnershipProof, NativeWindowInfo, OwnedEndpoint,
++    ProcessFingerprint, Rect,
+ };
+ 
+ // ── Scripted Chromium fixture ────────────────────────────────────────────────
+@@ -63,6 +64,11 @@ struct FixtureState {
      viewport_css_width: f64,
      viewport_css_height: f64,
      tab_visible: bool,
@@ -1790,7 +2048,7 @@ index 2b82930cd..dcf1d71a5 100644
      /// Every incoming CDP call: (sessionId, method, params).
      calls: Vec<(Option<String>, String, Value)>,
  }
-@@ -89,6 +94,9 @@ impl Default for FixtureState {
+@@ -89,6 +95,9 @@ impl Default for FixtureState {
              viewport_css_width: 800.0,
              viewport_css_height: 600.0,
              tab_visible: true,
@@ -1800,7 +2058,7 @@ index 2b82930cd..dcf1d71a5 100644
              calls: Vec::new(),
          }
      }
-@@ -651,7 +659,29 @@ fn fixture_handler(state: SharedState) -> MockHandler {
+@@ -651,7 +660,29 @@ fn fixture_handler(state: SharedState) -> MockHandler {
              "DOM.resolveNode" => MockReply::ok(json!({
                  "object": { "objectId": format!("obj-{}", call.params["backendNodeId"]) }
              })),
@@ -1831,7 +2089,281 @@ index 2b82930cd..dcf1d71a5 100644
              other => MockReply::method_not_found(other),
          }
      })
-@@ -2161,6 +2191,176 @@ async fn trusted_click_refuses_when_standalone_background_posture_is_unavailable
+@@ -669,6 +700,9 @@ struct FixturePlatform {
+     setup_invoked: Arc<AtomicBool>,
+     setup_aborted: Arc<AtomicBool>,
+     stall_consent: bool,
++    /// How many times the native-window proof was requested. Windowless
++    /// bindings must leave this at zero.
++    native_window_calls: Arc<AtomicUsize>,
+ }
+ 
+ #[async_trait]
+@@ -697,6 +731,7 @@ impl BrowserPlatform for FixturePlatform {
+         pid: i64,
+         window_id: u64,
+     ) -> Result<NativeWindowInfo, BrowserRefusal> {
++        self.native_window_calls.fetch_add(1, Ordering::SeqCst);
+         Ok(NativeWindowInfo {
+             pid,
+             window_id,
+@@ -859,6 +894,8 @@ struct Fixture {
+     _server: MockCdpServer,
+     engine: Arc<BrowserEngine>,
+     setup_invoked: Arc<AtomicBool>,
++    ws_url: String,
++    native_window_calls: Arc<AtomicUsize>,
+ }
+ 
+ async fn fixture_with(configure: impl FnOnce(&mut FixtureState)) -> Fixture {
+@@ -874,8 +911,10 @@ async fn fixture_with_platform(
+     let state = Arc::new(StdMutex::new(initial));
+     let server = MockCdpServer::start(fixture_handler(state.clone())).await;
+     let setup_invoked = Arc::new(AtomicBool::new(false));
++    let native_window_calls = Arc::new(AtomicUsize::new(0));
++    let ws_url = server.ws_url();
+     let engine = BrowserEngine::new(Arc::new(FixturePlatform {
+-        ws_url: server.ws_url(),
++        ws_url: ws_url.clone(),
+         trusted_input_limited,
+         managed_endpoint_visible: true,
+         process_role: BrowserProcessRole::EmbeddedApplication,
+@@ -884,12 +923,15 @@ async fn fixture_with_platform(
+         setup_invoked: setup_invoked.clone(),
+         setup_aborted: Arc::new(AtomicBool::new(false)),
+         stall_consent: false,
++        native_window_calls: native_window_calls.clone(),
+     }));
+     Fixture {
+         state,
+         _server: server,
+         engine,
+         setup_invoked,
++        ws_url,
++        native_window_calls,
+     }
+ }
+ 
+@@ -926,9 +968,11 @@ async fn protected_existing_profile_fixture() -> (Fixture, Arc<FixtureProtectedP
+     let provider = Arc::new(FixtureProtectedProvider {
+         consent_seen: AtomicBool::new(false),
+     });
++    let native_window_calls = Arc::new(AtomicUsize::new(0));
++    let ws_url = server.ws_url();
+     let engine = BrowserEngine::new_with_protected_consent_provider(
+         Arc::new(FixturePlatform {
+-            ws_url: server.ws_url(),
++            ws_url: ws_url.clone(),
+             trusted_input_limited: false,
+             managed_endpoint_visible: false,
+             process_role: BrowserProcessRole::StandaloneConsumer,
+@@ -937,6 +981,7 @@ async fn protected_existing_profile_fixture() -> (Fixture, Arc<FixtureProtectedP
+             setup_invoked: setup_invoked.clone(),
+             setup_aborted: Arc::new(AtomicBool::new(false)),
+             stall_consent: false,
++            native_window_calls: native_window_calls.clone(),
+         }),
+         Some(provider.clone()),
+     );
+@@ -946,6 +991,8 @@ async fn protected_existing_profile_fixture() -> (Fixture, Arc<FixtureProtectedP
+             _server: server,
+             engine,
+             setup_invoked,
++            ws_url,
++            native_window_calls,
+         },
+         provider,
+     )
+@@ -955,9 +1002,11 @@ async fn existing_profile_setup_fixture() -> (Fixture, Arc<AtomicBool>) {
+     let state = Arc::new(StdMutex::new(FixtureState::default()));
+     let server = MockCdpServer::start(fixture_handler(state.clone())).await;
+     let setup_invoked = Arc::new(AtomicBool::new(false));
++    let native_window_calls = Arc::new(AtomicUsize::new(0));
++    let ws_url = server.ws_url();
+     let engine = BrowserEngine::new_with_protected_consent_provider(
+         Arc::new(FixturePlatform {
+-            ws_url: server.ws_url(),
++            ws_url: ws_url.clone(),
+             trusted_input_limited: false,
+             managed_endpoint_visible: false,
+             process_role: BrowserProcessRole::StandaloneConsumer,
+@@ -966,6 +1015,7 @@ async fn existing_profile_setup_fixture() -> (Fixture, Arc<AtomicBool>) {
+             setup_invoked: setup_invoked.clone(),
+             setup_aborted: Arc::new(AtomicBool::new(false)),
+             stall_consent: false,
++            native_window_calls: native_window_calls.clone(),
+         }),
+         Some(Arc::new(FixtureProtectedProvider {
+             consent_seen: AtomicBool::new(false),
+@@ -977,6 +1027,8 @@ async fn existing_profile_setup_fixture() -> (Fixture, Arc<AtomicBool>) {
+             _server: server,
+             engine,
+             setup_invoked: setup_invoked.clone(),
++            ws_url,
++            native_window_calls,
+         },
+         setup_invoked,
+     )
+@@ -1004,6 +1056,134 @@ async fn bind(f: &Fixture) -> (String, String) {
+     (target_id, tab_id)
+ }
+ 
++/// The attested driver-owned-headless endpoint of the fixture, exactly as
++/// `browser_prepare` would hand it to the bind path.
++fn windowless_endpoint(f: &Fixture) -> OwnedEndpoint {
++    OwnedEndpoint {
++        ws_url: f.ws_url.clone(),
++        http_port: None,
++        // The revalidation route re-discovers the endpoint through
++        // `discover_owned_endpoint`, which reports this transport.
++        transport: EndpointTransport::LegacyJsonVersion,
++        ownership: EndpointOwnershipProof {
++            method: EndpointOwnershipMethod::SpawnedByDriver,
++            owner_pid: 1,
++            listener_pid: None,
++            detail: Some("fixture driver-spawned headless endpoint".to_owned()),
++        },
++    }
++}
++
++async fn bind_windowless(f: &Fixture) -> (String, String) {
++    let fingerprint = ProcessFingerprint {
++        pid: 1,
++        start_time: Some(1),
++        executable: None,
++    };
++    let (target_id, record) = f
++        .engine
++        .bind_windowless_endpoint(SESSION, None, 1, fingerprint, windowless_endpoint(f))
++        .await
++        .expect("windowless bind must succeed against the fixture endpoint");
++    assert!(record.windowless);
++    assert_eq!(record.cdp_window_id, None);
++    assert_eq!(record.window_id, 0);
++    assert_eq!(record.quality, BindingQuality::Exact);
++    assert_eq!(record.endpoint_access_class, EndpointAccessClass::DriverOwned);
++    assert_eq!(record.tabs.len(), 1);
++    assert!(
++        record.tabs.values().all(|tab| tab.active.is_none()),
++        "a windowless bind never guesses tab selection"
++    );
++    let tab_id = record.tabs.keys().next().unwrap().clone();
++    (target_id, tab_id)
++}
++
++#[tokio::test]
++async fn windowless_bind_mints_tabs_from_cdp_without_a_native_window() {
++    let f = fixture().await;
++    let (target_id, _tab_id) = bind_windowless(&f).await;
++    assert!(target_id.starts_with("bt-"), "{target_id}");
++    assert_eq!(
++        recorded_calls(&f, "Browser.getWindowForTarget").len(),
++        0,
++        "a windowless bind must not probe the Browser-domain window surface"
++    );
++    assert_eq!(
++        f.native_window_calls.load(Ordering::SeqCst),
++        0,
++        "a windowless bind must not require a native window"
++    );
++    assert_eq!(recorded_calls(&f, "Target.getTargets").len(), 1);
++}
++
++#[tokio::test]
++async fn windowless_mutation_revalidates_without_a_native_window() {
++    let f = fixture().await;
++    f.engine.register_test_managed_browser(1, SESSION, true);
++    let (target_id, tab_id) = bind_windowless(&f).await;
++    let tool = BrowserNavigateTool::new(f.engine.clone());
++    let result = tool
++        .invoke(json!({
++            "target_id": target_id,
++            "tab_id": tab_id,
++            "url": "https://fixture.test/next",
++            "session": SESSION,
++        }))
++        .await;
++    let body = structured(&result);
++    assert_eq!(body["status"], "ok", "{body}");
++    assert_eq!(
++        f.native_window_calls.load(Ordering::SeqCst),
++        0,
++        "windowless revalidation must never ask the platform for a window"
++    );
++    assert!(
++        !recorded_calls(&f, "Page.navigate").is_empty(),
++        "the navigation must reach the CDP target"
++    );
++}
++
++#[tokio::test]
++async fn windowless_screenshot_uses_cdp_page_capture() {
++    let f = fixture().await;
++    let (target_id, tab_id) = bind_windowless(&f).await;
++    let shot = f
++        .engine
++        .capture_tab_screenshot(SESSION, &target_id, &tab_id)
++        .await
++        .expect("the headless screenshot path must stay on CDP");
++    assert!(shot.width > 0 && shot.height > 0);
++    let captures = recorded_calls(&f, "Page.captureScreenshot");
++    assert_eq!(captures.len(), 1, "exactly one CDP capture");
++    assert_eq!(
++        captures[0].1["fromSurface"], true,
++        "the capture must come from the page surface, not a native window"
++    );
++}
++
++#[tokio::test]
++async fn driver_owned_headless_bind_refuses_an_unmanaged_pid() {
++    let f = fixture().await;
++    let refusal = f
++        .engine
++        .bind_driver_owned_headless(SESSION, None, 1)
++        .await
++        .expect_err("an unmanaged pid must not bind through the headless route");
++    assert_eq!(refusal.code, BrowserRefusalCode::BrowserWrongTargetRefused);
++    assert_eq!(refusal.detail.as_ref().unwrap()["headless_driver_owned"], false);
++
++    // The tool layer keeps the same refusal and never falls back to the
++    // native-window proof for a pid it cannot prove.
++    let result = GetBrowserStateTool::new(f.engine.clone())
++        .invoke(json!({ "pid": 1, "session": SESSION }))
++        .await;
++    let body = structured(&result);
++    assert_eq!(body["status"], "refused");
++    assert_eq!(body["refusal"]["code"], "browser_wrong_target_refused");
++    assert_eq!(f.native_window_calls.load(Ordering::SeqCst), 0);
++}
++
+ #[tokio::test]
+ async fn standalone_consumer_bind_without_grant_refuses_before_endpoint_discovery() {
+     let state = Arc::new(StdMutex::new(FixtureState::default()));
+@@ -1020,6 +1200,7 @@ async fn standalone_consumer_bind_without_grant_refuses_before_endpoint_discover
+         setup_invoked: setup_invoked.clone(),
+         setup_aborted: Arc::new(AtomicBool::new(false)),
+         stall_consent: false,
++        native_window_calls: Arc::new(AtomicUsize::new(0)),
+     }));
+ 
+     let result = GetBrowserStateTool::new(engine)
+@@ -1266,6 +1447,7 @@ async fn refused_consent_cancels_stalled_claim_before_revoking_grant() {
+             setup_invoked: Arc::new(AtomicBool::new(false)),
+             setup_aborted: Arc::new(AtomicBool::new(false)),
+             stall_consent: false,
++            native_window_calls: Arc::new(AtomicUsize::new(0)),
+         }),
+         Some(Arc::new(FixtureProtectedProvider {
+             consent_seen: AtomicBool::new(false),
+@@ -1310,6 +1492,7 @@ async fn cancelled_prepare_aborts_the_exact_pending_setup() {
+             setup_invoked: Arc::new(AtomicBool::new(false)),
+             setup_aborted: setup_aborted.clone(),
+             stall_consent: true,
++            native_window_calls: Arc::new(AtomicUsize::new(0)),
+         }),
+         Some(Arc::new(FixtureProtectedProvider {
+             consent_seen: AtomicBool::new(false),
+@@ -2161,6 +2344,176 @@ async fn trusted_click_refuses_when_standalone_background_posture_is_unavailable
      assert!(recorded_calls(&f, "Target.activateTarget").is_empty());
  }
  
@@ -2560,7 +3092,7 @@ index a26a6bfe9..696aabb02 100644
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
              cursor: cursor_overlay::CursorConfig {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123bc7..b0b7c5eee 100644
+index 67e123bc7..efe2124d6 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -676,10 +676,49 @@ fn permission_gate_response_for_state(
@@ -2575,7 +3107,7 @@ index 67e123bc7..b0b7c5eee 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(28);
++        metadata["synara_native_revision"] = serde_json::json!(30);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -7848,323 +8380,8 @@ index 4ca69d9ab..12ab3d7c2 100644
      #[tokio::test]
      async fn nested_lease_proof_is_task_local_and_pid_bound() {
          assert!(!held_by_current_task(-91_004));
-diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/conceal.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/conceal.rs
-new file mode 100644
-index 000000000..5134d8e7c
---- /dev/null
-+++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/conceal.rs
-@@ -0,0 +1,297 @@
-+//! Process-lifetime concealment for driver-owned standalone browsers.
-+//!
-+//! Revision 23 hid a spawned isolated Chromium with a bounded loop of
-+//! `NSRunningApplication.hide()` calls: fifty attempts at 100 ms, so roughly
-+//! five seconds. Chromium activates its first window *after* `spawn()`
-+//! returns, and it can re-show or re-activate that window later — first
-+//! paint, popups, debugger attach, a Dock click. A bounded loop leaves the
-+//! rest of the session uncovered, and the incident this revision answers
-+//! had the browser re-front while the user was typing.
-+//!
-+//! Revision 24 replaces the bounded loop with a registry-backed watcher that
-+//! runs for the concealed process's whole lifetime:
-+//!
-+//! - [`conceal`] registers the pid and hides it immediately.
-+//! - a watcher thread sweeps fast ([`SPAWN_TICK`]) for the first seconds to
-+//!   cover the spawn/first-window race, then slowly ([`IDLE_TICK`]) for the
-+//!   rest of the process lifetime. A new registration, an activation, or an
-+//!   explicit sweep ([`reconceal_now`], called around browser actions) wakes
-+//!   it immediately.
-+//! - an `NSWorkspace.didActivateApplicationNotification` observer hides a
-+//!   concealed pid the moment it becomes frontmost, so a re-activation
-+//!   cannot outlive the notification.
-+//!
-+//! The module only ever calls `hide()`. It never unhides, never activates,
-+//! and never touches the process, its profile, its windows, or any input
-+//! contract — this is visual posture only.
-+
-+use std::collections::HashMap;
-+use std::sync::mpsc::{Receiver, Sender};
-+use std::sync::{Mutex, OnceLock};
-+use std::time::{Duration, Instant};
-+
-+use objc2_app_kit::{
-+    NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
-+    NSWorkspaceDidActivateApplicationNotification,
-+};
-+use objc2_foundation::NSOperationQueue;
-+
-+/// Sweep cadence while a concealed browser is inside its spawn race window
-+/// (Chromium activates its first window shortly after `spawn()` returns).
-+pub(crate) const SPAWN_TICK: Duration = Duration::from_millis(50);
-+
-+/// Steady-state sweep cadence for the rest of the process lifetime. One
-+/// LaunchServices query per registered pid, with a hide only when the app
-+/// is actually visible.
-+pub(crate) const IDLE_TICK: Duration = Duration::from_millis(250);
-+
-+/// How long after registration the spawn-race cadence applies.
-+pub(crate) const SPAWN_RACE: Duration = Duration::from_secs(5);
-+
-+/// One concealed process. `registered_at` anchors the spawn-race cadence;
-+/// `seen_running` distinguishes "LaunchServices has not registered the
-+/// freshly spawned process yet" (keep watching) from "the app exited"
-+/// (drop the entry).
-+#[derive(Debug)]
-+struct Entry {
-+    registered_at: Instant,
-+    seen_running: bool,
-+}
-+
-+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-+enum Sweep {
-+    /// The app is registered; hide it if it is visible.
-+    Hide,
-+    /// No app registered and the process is still starting; keep watching.
-+    Keep,
-+    /// The app exited; drop the entry.
-+    Drop,
-+}
-+
-+/// Pure sweep decision, split out so the bookkeeping is testable without
-+/// Cocoa.
-+fn sweep_action(app_registered: bool, seen_running: bool, process_exists: bool) -> Sweep {
-+    if app_registered {
-+        return Sweep::Hide;
-+    }
-+    if seen_running || !process_exists {
-+        Sweep::Drop
-+    } else {
-+        Sweep::Keep
-+    }
-+}
-+
-+fn tick_interval(in_spawn_race: bool) -> Duration {
-+    if in_spawn_race {
-+        SPAWN_TICK
-+    } else {
-+        IDLE_TICK
-+    }
-+}
-+
-+fn registry() -> &'static Mutex<HashMap<i32, Entry>> {
-+    static REGISTRY: OnceLock<Mutex<HashMap<i32, Entry>>> = OnceLock::new();
-+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
-+}
-+
-+/// Register `pid` as concealed. The watcher sweeps the moment it is woken
-+/// and keeps hiding the process for as long as it lives; nothing here ever
-+/// unhides. Registration itself performs no process lookup or hide IPC, so
-+/// the caller's thread is not blocked on LaunchServices round-trips.
-+pub(crate) fn conceal(pid: i32) {
-+    if pid <= 0 {
-+        return;
-+    }
-+    registry().lock().unwrap().insert(
-+        pid,
-+        Entry {
-+            registered_at: Instant::now(),
-+            seen_running: false,
-+        },
-+    );
-+    ensure_activation_observer();
-+    let _ = watcher().send(());
-+}
-+
-+/// Hide every concealed pid again right now — the "after any action" half of
-+/// the concealment contract. Also prunes entries whose process has exited.
-+pub(crate) fn reconceal_now() {
-+    sweep_once();
-+}
-+
-+/// Whether any pid is currently registered as concealed.
-+pub(crate) fn has_concealed() -> bool {
-+    !registry().lock().unwrap().is_empty()
-+}
-+
-+/// The watcher thread's wake channel. The thread is created once and lives
-+/// for the process; it parks on the channel when nothing is registered and
-+/// costs nothing while idle.
-+fn watcher() -> &'static Sender<()> {
-+    static WATCHER: OnceLock<Sender<()>> = OnceLock::new();
-+    WATCHER.get_or_init(|| {
-+        let (tx, rx) = std::sync::mpsc::channel::<()>();
-+        let _ = std::thread::Builder::new()
-+            .name("cua-browser-conceal".to_owned())
-+            .spawn(move || watcher_loop(rx));
-+        tx
-+    })
-+}
-+
-+fn watcher_loop(rx: Receiver<()>) {
-+    loop {
-+        sweep_once();
-+        let (empty, in_spawn_race) = {
-+            let guard = registry().lock().unwrap();
-+            (
-+                guard.is_empty(),
-+                guard
-+                    .values()
-+                    .any(|entry| entry.registered_at.elapsed() < SPAWN_RACE),
-+            )
-+        };
-+        if empty {
-+            // Park until a new registration (or an explicit sweep) wakes
-+            // the watcher.
-+            if rx.recv().is_err() {
-+                return;
-+            }
-+            continue;
-+        }
-+        let _ = rx.recv_timeout(tick_interval(in_spawn_race));
-+    }
-+}
-+
-+/// One sweep: hide every registered, visible, still-running app and prune
-+/// entries whose process is gone.
-+fn sweep_once() {
-+    let pids: Vec<i32> = registry().lock().unwrap().keys().copied().collect();
-+    for pid in pids {
-+        match running_application(pid) {
-+            Some(app) => {
-+                {
-+                    let mut guard = registry().lock().unwrap();
-+                    if let Some(entry) = guard.get_mut(&pid) {
-+                        entry.seen_running = true;
-+                    }
-+                }
-+                unsafe {
-+                    if !app.isHidden() {
-+                        let _ = app.hide();
-+                    }
-+                }
-+            }
-+            None => {
-+                let mut guard = registry().lock().unwrap();
-+                let should_drop = guard.get(&pid).is_some_and(|entry| {
-+                    sweep_action(false, entry.seen_running, process_exists(pid)) == Sweep::Drop
-+                });
-+                if should_drop {
-+                    guard.remove(&pid);
-+                }
-+            }
-+        }
-+    }
-+}
-+
-+fn running_application(pid: i32) -> Option<objc2::rc::Retained<NSRunningApplication>> {
-+    unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(pid) }
-+}
-+
-+fn hide_if_visible(pid: i32) -> Option<()> {
-+    let app = running_application(pid)?;
-+    unsafe {
-+        if !app.isHidden() {
-+            let _ = app.hide();
-+        }
-+    }
-+    Some(())
-+}
-+
-+fn process_exists(pid: i32) -> bool {
-+    let result = unsafe { libc::kill(pid, 0) };
-+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-+}
-+
-+/// The activated pid carried by an `NSWorkspace` activation notification.
-+fn activated_pid(note: &objc2_foundation::NSNotification) -> Option<i32> {
-+    use objc2::msg_send;
-+    use objc2::runtime::AnyObject;
-+    unsafe {
-+        let info = note.userInfo()?;
-+        // userInfo[NSWorkspaceApplicationKey] -> NSRunningApplication*.
-+        let app_ptr: *mut AnyObject = msg_send![&*info, objectForKey: NSWorkspaceApplicationKey];
-+        if app_ptr.is_null() {
-+            return None;
-+        }
-+        let pid: libc::pid_t = msg_send![app_ptr, processIdentifier];
-+        Some(pid as i32)
-+    }
-+}
-+
-+/// Install the process-lifetime `didActivateApplicationNotification`
-+/// observer. Fires on any app activation; a concealed pid is hidden again
-+/// immediately. Mirrors the observer pattern already used by `focus_steal`
-+/// (fresh background queue, leaked token and queue).
-+fn ensure_activation_observer() {
-+    static INSTALLED: OnceLock<()> = OnceLock::new();
-+    INSTALLED.get_or_init(|| {
-+        use block2::RcBlock;
-+        use objc2_foundation::NSNotification;
-+        use std::ptr::NonNull;
-+
-+        let workspace = unsafe { NSWorkspace::sharedWorkspace() };
-+        let center = unsafe { workspace.notificationCenter() };
-+        let queue = unsafe { NSOperationQueue::new() };
-+        unsafe { queue.setMaxConcurrentOperationCount(1) };
-+
-+        let block = RcBlock::new(move |note_ptr: NonNull<NSNotification>| {
-+            let note = unsafe { note_ptr.as_ref() };
-+            if let Some(pid) = activated_pid(note) {
-+                if registry().lock().unwrap().contains_key(&pid) {
-+                    let _ = hide_if_visible(pid);
-+                }
-+            }
-+        });
-+
-+        let observer = unsafe {
-+            center.addObserverForName_object_queue_usingBlock(
-+                Some(NSWorkspaceDidActivateApplicationNotification),
-+                None,
-+                Some(&queue),
-+                &block,
-+            )
-+        };
-+
-+        // The observer and queue must outlive this call for the life of the
-+        // process; the singleton registration never tears them down.
-+        std::mem::forget(observer);
-+        std::mem::forget(queue);
-+    });
-+}
-+
-+#[cfg(test)]
-+mod tests {
-+    use super::*;
-+
-+    #[test]
-+    fn sweep_keeps_a_freshly_spawned_process_until_launchservices_registers_it() {
-+        // The process exists but has no NSRunningApplication yet: keep.
-+        assert_eq!(sweep_action(false, false, true), Sweep::Keep);
-+        // Once registered, hide.
-+        assert_eq!(sweep_action(true, false, true), Sweep::Hide);
-+        assert_eq!(sweep_action(true, true, true), Sweep::Hide);
-+        // First sighting then gone: the app exited, drop it even if a
-+        // zombie still answers kill(pid, 0).
-+        assert_eq!(sweep_action(false, true, false), Sweep::Drop);
-+        assert_eq!(sweep_action(false, true, true), Sweep::Drop);
-+        // Process truly gone before it ever registered: drop it.
-+        assert_eq!(sweep_action(false, false, false), Sweep::Drop);
-+    }
-+
-+    #[test]
-+    fn spawn_race_uses_the_fast_tick() {
-+        assert_eq!(tick_interval(true), SPAWN_TICK);
-+        assert_eq!(tick_interval(false), IDLE_TICK);
-+    }
-+}
-diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/mod.rs
-index 859243557..b37dc630d 100644
---- a/libs/cua-driver/rust/crates/platform-macos/src/browser/mod.rs
-+++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/mod.rs
-@@ -1,6 +1,7 @@
- pub mod ax_page_reader;
- pub mod browser_js;
- pub mod cdp_client;
-+mod conceal;
- mod consent_ui;
- pub mod electron_js;
- pub mod platform;
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
-index 603f2ae4e..7959fcbfd 100644
+index 603f2ae4e..5b4afe0a0 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
 @@ -273,13 +273,22 @@ fn is_chromium(name: &str, bundle_id: &str) -> bool {
@@ -8207,32 +8424,7 @@ index 603f2ae4e..7959fcbfd 100644
          .arg(executable)
          .stdin(Stdio::null())
          .stdout(Stdio::null())
-@@ -759,7 +774,24 @@ impl BrowserPlatform for MacOsBrowserPlatform {
-         Some("Chromium's trusted CDP Input route activates its standalone browser window on macOS")
-     }
- 
-+    fn conceal_spawned_browser(&self, pid: i64) {
-+        // Chromium activates its first window after spawn returns and can
-+        // re-show or re-activate later, so a bounded re-hide loop leaves the
-+        // rest of the session uncovered. `browser::conceal` arms a
-+        // process-lifetime watcher instead: it hides at spawn, re-hides on
-+        // activation, on window creation, and after actions, and never
-+        // unhides. Visual posture only — the process, its profile, and every
-+        // input contract are untouched.
-+        crate::browser::conceal::conceal(pid as i32);
-+    }
-+
-     async fn visualize_browser_action(&self, action: BrowserVisualAction) {
-+        // Re-hide any concealed driver-owned browser around every action so
-+        // an action that could re-show or re-activate one never leaves it in
-+        // the user's foreground.
-+        if crate::browser::conceal::has_concealed() {
-+            let _ = tokio::task::spawn_blocking(crate::browser::conceal::reconceal_now);
-+        }
-         if action.session.is_empty()
-             || action.cdp_target_id.is_empty()
-             || cua_driver_core::session::is_session_ended(&action.session)
-@@ -1675,6 +1707,27 @@ mod tests {
+@@ -1675,6 +1690,27 @@ mod tests {
          assert!(!is_chromium("Operator", "com.example.Operator"));
      }
  
@@ -13182,10 +13374,21 @@ index ff2f7d450..953790911 100644
 +    }
  }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
-index 6085da994..ac54cc7cb 100644
+index 6085da994..8eef0e77c 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
-@@ -30,7 +30,11 @@ fn def() -> &'static ToolDef {
+@@ -15,6 +15,10 @@ fn def() -> &'static ToolDef {
+         name: "launch_app".into(),
+         description:
+             "Launch a macOS app in the background — the target does NOT come to the foreground.\n\n\
++             The launch always requests `activates=false`: nothing we start may change focus. \
++             This tool never hides, moves, or conceals windows of its own accord; a visible \
++             launch (hidden:false or omitted) creates the app's normal window and Dock entry, \
++             so treat it as an explicitly requested visible action only.\n\n\
+              Provide either `bundle_id` (preferred — unambiguous, e.g. `com.apple.calculator`) \
+              or `name` (e.g. \"Calculator\"). If both are given, bundle_id wins.\n\n\
+              Optional `urls` are handed to the app as open targets — for Finder, pass a folder \
+@@ -30,7 +34,11 @@ fn def() -> &'static ToolDef {
               window so each session acts on its own isolated window instead of clobbering one \
               shared instance. Without it, single-instance apps (Calculator, many utilities) hand \
               every caller the same window, so two sessions fight over it.\n\n\
@@ -13198,18 +13401,18 @@ index 6085da994..ac54cc7cb 100644
               Returns the launched app's pid, bundle_id, name, and a `windows` array \
               (same shape as `list_windows`) so callers can skip an extra round-trip before \
               `get_window_state(pid, window_id)`. `launch_state` distinguishes whether the \
-@@ -64,6 +68,10 @@ fn def() -> &'static ToolDef {
+@@ -64,6 +72,10 @@ fn def() -> &'static ToolDef {
                      "type": "boolean",
                      "description": "When true, force a new app instance even if already running (open -n). Use for concurrent multi-agent/multi-session work so each session gets an isolated instance + window instead of sharing one — on single-instance apps (e.g. Calculator) every caller otherwise gets the same window and the sessions clobber each other."
                  },
 +                "hidden": {
 +                    "type": "boolean",
-+                    "description": "Launch the application hidden (open -j): its windows are created but never render on screen, and nothing activates or switches Spaces. A hidden app's windows remain addressable for background semantic actions (set_value, element click, semantic type_text) — the hidden-workspace launch. Unhide later with set_app_visibility."
++                    "description": "Launch the application hidden (open -j): its windows are created but never render on screen, and nothing activates or switches Spaces. A hidden app's windows remain addressable for background semantic actions (set_value, element click, semantic type_text) — the hidden-workspace launch. Unhide later with set_app_visibility. A visible launch (hidden:false or omitted) creates the app's normal window and Dock entry; use it only when the user explicitly asked to see the app."
 +                },
                  "additional_arguments": {
                      "type": "array",
                      "items": { "type": "string" },
-@@ -103,6 +111,7 @@ impl Tool for LaunchAppTool {
+@@ -103,6 +115,7 @@ impl Tool for LaunchAppTool {
          }
          let webkit_inspector_port = args.opt_u64("webkit_inspector_port").map(|v| v as u16);
          let creates_new_instance = args.bool_or("creates_new_application_instance", false);
@@ -13217,7 +13420,7 @@ index 6085da994..ac54cc7cb 100644
          let additional_arguments: Vec<String> = args.str_array("additional_arguments");
          if additional_arguments
              .iter()
-@@ -233,7 +242,7 @@ impl Tool for LaunchAppTool {
+@@ -233,7 +246,7 @@ impl Tool for LaunchAppTool {
                      && env.is_empty()
                      && !creates_new_instance
                  {
@@ -13226,7 +13429,7 @@ index 6085da994..ac54cc7cb 100644
                  } else {
                      crate::apps::launch_with_urls_by_bundle(
                          bid,
-@@ -241,6 +250,7 @@ impl Tool for LaunchAppTool {
+@@ -241,6 +254,7 @@ impl Tool for LaunchAppTool {
                          &additional_arguments,
                          &env,
                          creates_new_instance,
@@ -13234,7 +13437,7 @@ index 6085da994..ac54cc7cb 100644
                      )?
                  }
              } else {
-@@ -250,7 +260,7 @@ impl Tool for LaunchAppTool {
+@@ -250,7 +264,7 @@ impl Tool for LaunchAppTool {
                      && env.is_empty()
                      && !creates_new_instance
                  {
@@ -13243,7 +13446,7 @@ index 6085da994..ac54cc7cb 100644
                  } else {
                      crate::apps::launch_with_urls_by_name(
                          n,
-@@ -258,6 +268,7 @@ impl Tool for LaunchAppTool {
+@@ -258,6 +272,7 @@ impl Tool for LaunchAppTool {
                          &additional_arguments,
                          &env,
                          creates_new_instance,
@@ -13251,24 +13454,26 @@ index 6085da994..ac54cc7cb 100644
                      )?
                  }
              };
-@@ -452,8 +463,14 @@ impl Tool for LaunchAppTool {
+@@ -452,8 +467,16 @@ impl Tool for LaunchAppTool {
                      response_requested_name.as_deref(),
                  );
  
 -                let mut summary =
 -                    format!("Launched {app_name} (pid {pid}) in background.{port_summary}");
 +                let mut summary = format!(
-+                    "Launched {app_name} (pid {pid}) in background{}.{port_summary}",
++                    "Launched {app_name} (pid {pid}) {}",
 +                    if hidden {
-+                        ", hidden (windows never rendered; unhide with set_app_visibility)"
++                        "hidden (its windows are created but never rendered; it did not activate or switch Spaces)"
 +                    } else {
-+                        ""
++                        "with its normal window(s), as an explicitly requested visible launch: \
++                         a visible app launch creates the app's window and Dock entry"
 +                    }
 +                );
++                summary.push_str(&port_summary);
  
                  if !windows.is_empty() {
                      summary.push_str("\n\nWindows:");
-@@ -480,6 +497,7 @@ impl Tool for LaunchAppTool {
+@@ -480,6 +503,7 @@ impl Tool for LaunchAppTool {
                      "bundle_id": bid,
                      "name": app_name,
                      "windows": windows_json,

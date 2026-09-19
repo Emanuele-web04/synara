@@ -410,6 +410,53 @@ Revision 28 recognizes Helium as a macOS Chromium-family browser.
   present before the run stayed alive, and `end_session` reaped the spawned
   process group and its isolated profile.
 
+Revision 30 makes every driver-owned launch windowless by default and deletes
+the hide/offscreen machinery it needed.
+
+- Headless default: `browser_prepare` with `allow_launch=true` and an
+  isolated profile now launches the Chromium-family browser with
+  `--headless=new` (plus `--hide-scrollbars` and `--mute-audio`). The
+  spawn creates no native window and no Dock entry, so there is nothing to
+  conceal, re-hide, or move offscreen. A single explicit opt-in,
+  `windowed: true`, keeps the pre-existing visible-browser launch; that
+  route creates a normal window at Chromium's default position and says so
+  in its result — it is not hidden, moved, or dressed.
+- Deleted for every launch we perform: the macOS process-lifetime
+  concealment watcher (`platform-macos/src/browser/conceal.rs`, the
+  `conceal_spawned_browser` platform hook, and the re-hide pass inside
+  `visualize_browser_action`), the `--window-position=-32000,-32000`
+  switch, and the `Browser.setWindowBounds`/`getWindowBounds` offscreen
+  write-back. Nothing we start hides, moves, or dresses a window any
+  more.
+- Bind without a window: `get_browser_state` accepts `pid` alone for a
+  driver-owned headless browser and mints `target_id`/`tab_id` from the
+  CDP endpoint directly (fingerprint + attested endpoint ownership + live
+  page targets). `window_id` stays required for every native-window bind,
+  and the existing-profile attach path keeps its exact window anchor and
+  approval contract unchanged. Windowless capabilities revalidate
+  process identity, endpoint ownership, and CDP target liveness; the
+  trusted CDP input route is allowed because a headless browser has no
+  window a dispatch could raise, and the on-screen agent-cursor overlay
+  is skipped because there is no surface to draw on. Screenshots stay on
+  `Page.captureScreenshot` for both routes.
+- General-app launches (`launch_app`) never activate and never hide, move,
+  or conceal windows of their own; a visible launch states in its result
+  that it creates the app's window and Dock entry and is an explicitly
+  requested visible action.
+- Live-verified (`.unlazy/synara-cu-codex-parity/L21-notebook.md`,
+  `evidence/l21-headless/`): a driver-owned isolated headless launch (pid-free
+  system Chrome and a Helium-backed launch) registers only a
+  `BackgroundOnly` LaunchServices entry — no Dock tile, no menu bar — keeps
+  the prior frontmost app unchanged, and exposes no on-screen window:
+  `list_windows` reports every spawned-pid window with `is_on_screen=false`,
+  no Space membership, and `CGWindowListCopyWindowInfo` agrees. macOS
+  Chrome's new-headless still creates off-Space WindowServer helper windows
+  for a live page (five under Chrome 153, one under Helium); they are never
+  on screen, on a Space, or activated. Bind → navigate → snapshot → trusted
+  type → trusted click → screenshot all succeed over CDP; `end_session`
+  reaps the process group and isolated profile with no leak across repeated
+  prepare/close cycles, and the user's running Helium is untouched.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records
