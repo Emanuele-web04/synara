@@ -34,6 +34,7 @@ import {
   MenuTrigger,
 } from "../../ui/menu";
 import { toastManager } from "../../ui/toast";
+import { DEFAULT_TOAST_TIMEOUT_MS } from "../../ui/toast.logic";
 import { PullRequestAvatar } from "../../pullRequest/PullRequestAvatar";
 import {
   copyPullRequestLink,
@@ -125,6 +126,19 @@ const ACTION_SUCCESS_TITLES: Record<PullRequestAction, string> = {
   draft: "Converted to draft",
   close: "Pull request closed",
   reopen: "Pull request reopened",
+};
+
+const ACTION_PENDING_TITLES: Record<Exclude<PullRequestAction, "merge">, string> = {
+  ready: "Marking ready for review...",
+  draft: "Converting to draft...",
+  close: "Closing pull request...",
+  reopen: "Reopening pull request...",
+};
+
+const MERGE_PENDING_TITLES: Record<PullRequestMergeMethod, string> = {
+  merge: "Merging pull request...",
+  squash: "Squashing and merging...",
+  rebase: "Rebasing and merging...",
 };
 
 function checksToneIcon(tone: PullRequestChecksTone) {
@@ -411,11 +425,20 @@ export function EnvironmentPullRequestSection({
     if (!actionInput || actionMutation.isPending) {
       return;
     }
+    const toastId = toastManager.add({
+      type: "loading",
+      title:
+        action === "merge"
+          ? MERGE_PENDING_TITLES[method ?? "merge"]
+          : ACTION_PENDING_TITLES[action],
+      timeout: 0,
+    });
     void actionMutation
       .mutateAsync({ ...actionInput, action, ...(method ? { mergeMethod: method } : {}) })
       .then((result) => {
-        toastManager.add({
+        toastManager.update(toastId, {
           type: "success",
+          timeout: DEFAULT_TOAST_TIMEOUT_MS,
           title:
             action === "merge" && result.mergeOutcome === "enqueued"
               ? "Pull request added to merge queue"
@@ -423,8 +446,9 @@ export function EnvironmentPullRequestSection({
         });
       })
       .catch((error: unknown) => {
-        toastManager.add({
+        toastManager.update(toastId, {
           type: "error",
+          timeout: DEFAULT_TOAST_TIMEOUT_MS,
           title: "Pull request action failed",
           description: error instanceof Error ? error.message : "GitHub CLI action failed.",
         });
