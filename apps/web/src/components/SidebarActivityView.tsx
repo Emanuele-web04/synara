@@ -26,6 +26,7 @@ import {
   Undo2Icon,
   WorktreeIcon,
 } from "~/lib/icons";
+import { beginThreadDrag, endThreadDrag } from "~/lib/threadDrag";
 import { cn } from "~/lib/utils";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
@@ -177,6 +178,11 @@ function ActivityThreadRow({
         <button
           type="button"
           onClick={onOpen}
+          // Same native drag as the classic thread rows: drop on a chat pane to
+          // split, or on a composer to @mention the chat.
+          draggable
+          onDragStart={(event) => beginThreadDrag(event, thread.id)}
+          onDragEnd={endThreadDrag}
           data-testid={`activity-thread-${thread.id}`}
           className={cn(
             "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 py-2 text-left select-none",

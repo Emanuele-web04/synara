@@ -7,14 +7,16 @@ import { useEffect, useRef, type DragEvent as ReactDragEvent, type ReactNode } f
 import { type ThreadId } from "@synara/contracts";
 
 import { type SplitDirection, type SplitDropSide } from "../../splitViewStore";
+import {
+  getActiveThreadDragId,
+  isThreadDragTransfer,
+  isWithinThreadMentionDropzone,
+  readThreadDragPayload,
+  type ThreadDragPayload,
+} from "../../lib/threadDrag";
 import { cn } from "../../lib/utils";
 
-// Custom MIME so external file drops on the composer (which listen for `Files`) cannot trigger us.
-export const THREAD_DRAG_MIME = "application/x-synara-thread";
-
-export interface ThreadDragPayload {
-  threadId: ThreadId;
-}
+export { THREAD_DRAG_MIME, type ThreadDragPayload } from "../../lib/threadDrag";
 
 export type DropZone = "top" | "bottom" | "left" | "right";
 
@@ -113,27 +115,11 @@ export function dropZoneToDirectionSide(zone: DropZone): {
 }
 
 function isThreadDrag(event: ReactDragEvent): boolean {
-  const types = event.dataTransfer.types;
-  for (let index = 0; index < types.length; index += 1) {
-    if (types[index] === THREAD_DRAG_MIME) return true;
-  }
-  return false;
+  return isThreadDragTransfer(event.dataTransfer);
 }
 
 function parseThreadDragPayload(event: ReactDragEvent): ThreadDragPayload | null {
-  try {
-    const raw = event.dataTransfer.getData(THREAD_DRAG_MIME);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<ThreadDragPayload>;
-    if (typeof parsed.threadId === "string") {
-      return {
-        threadId: parsed.threadId as ThreadId,
-      };
-    }
-  } catch {
-    return null;
-  }
-  return null;
+  return readThreadDragPayload(event.dataTransfer);
 }
 
 // Applies the same thread constraints for hover feedback and the final drop.
@@ -203,7 +189,10 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   const getAllowedZoneForEvent = (event: ReactDragEvent<HTMLDivElement>) => {
     const zone = getZoneForEvent(event);
     if (!zone) return null;
-    const payload = parseThreadDragPayload(event);
+    // Drag data is unreadable until `drop`; fall back to the in-app drag source.
+    const activeThreadId = getActiveThreadDragId();
+    const payload =
+      parseThreadDragPayload(event) ?? (activeThreadId ? { threadId: activeThreadId } : null);
     if (
       payload &&
       !isThreadDragPayloadAllowed(payload, {
@@ -215,8 +204,17 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
     return zone;
   };
 
+  // The composer turns a thread drop into an @mention; it owns the event there,
+  // so only drop the split preview left over from the surrounding pane.
+  const deferToMentionDropzone = (event: ReactDragEvent<HTMLDivElement>): boolean => {
+    if (!isWithinThreadMentionDropzone(event.target)) return false;
+    setPreviewZone(null);
+    return true;
+  };
+
   const handleDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
     if (!isThreadDrag(event)) return;
+    if (deferToMentionDropzone(event)) return;
     event.preventDefault();
     event.stopPropagation();
     rectRef.current = wrapperRef.current?.getBoundingClientRect() ?? null;
@@ -228,6 +226,7 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
 
   const handleDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
     if (!isThreadDrag(event)) return;
+    if (deferToMentionDropzone(event)) return;
     event.preventDefault();
     event.stopPropagation();
     const zone = getAllowedZoneForEvent(event);
@@ -246,6 +245,10 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
 
   const handleDrop = (event: ReactDragEvent<HTMLDivElement>) => {
     if (!isThreadDrag(event)) return;
+    if (deferToMentionDropzone(event)) {
+      resetOverlayState();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     const zone = getZoneForEvent(event);

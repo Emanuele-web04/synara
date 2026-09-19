@@ -367,6 +367,7 @@ import {
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { beginThreadDrag, endThreadDrag } from "../lib/threadDrag";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { normalizeSettingsSection } from "../settingsNavigation";
 import {
@@ -389,7 +390,6 @@ import {
 import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "./chat/composerPickerStyles";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
-import { THREAD_DRAG_MIME } from "./chat-drop-overlay/ChatPaneDropOverlay";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
 import {
@@ -4791,22 +4791,8 @@ export default function Sidebar() {
                       }),
                 )}
                 draggable
-                onDragStart={(event) => {
-                  const dragImage = event.currentTarget as HTMLElement | null;
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData(
-                    THREAD_DRAG_MIME,
-                    JSON.stringify({ threadId: thread.id }),
-                  );
-                  if (dragImage) {
-                    const rect = dragImage.getBoundingClientRect();
-                    event.dataTransfer.setDragImage(
-                      dragImage,
-                      Math.max(0, event.clientX - rect.left),
-                      Math.max(0, event.clientY - rect.top),
-                    );
-                  }
-                }}
+                onDragStart={(event) => beginThreadDrag(event, thread.id)}
+                onDragEnd={endThreadDrag}
                 onClick={(event) => {
                   handleThreadClick(event, thread.id, orderedProjectThreadIds);
                 }}

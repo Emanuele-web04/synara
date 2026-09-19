@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ComposerThreadMentionSource, Project } from "../types";
-import { buildThreadMentionComposerItems } from "./useComposerCommandMenuItems";
+import {
+  buildThreadMentionComposerItems,
+  resolveThreadMentionForThreadId,
+} from "./useComposerCommandMenuItems";
 
 function project(id: string, kind: Project["kind"], name: string): Project {
   return {
@@ -188,5 +191,47 @@ describe("buildThreadMentionComposerItems", () => {
 
     const names = items.map((item) => (item.type === "thread" ? item.mention.name : ""));
     expect(names).toEqual(["Release (aaaaaa)", "release (bbbbbb)"]);
+  });
+});
+
+describe("resolveThreadMentionForThreadId", () => {
+  const projects = [project("project", "project", "Synara"), project("other", "project", "Other")];
+  const threads = [
+    thread({ id: "current", projectId: "project", title: "Current" }),
+    thread({ id: "dup-a", projectId: "project", title: "Release" }),
+    thread({ id: "dup-b", projectId: "other", title: "Release" }),
+    thread({ id: "archived", projectId: "project", title: "Old", archivedAt: "2026-01-02" }),
+  ];
+
+  it("resolves the same disambiguated mention the @ menu inserts", () => {
+    const menuItem = buildThreadMentionComposerItems({
+      projects,
+      threads,
+      currentThreadId: "current",
+      query: "",
+    }).find((item) => item.id === "thread:dup-b");
+
+    expect(
+      resolveThreadMentionForThreadId({
+        projects,
+        threads,
+        currentThreadId: "current",
+        threadId: "dup-b",
+      }),
+    ).toEqual({ name: "Release (Other)", path: "thread://dup-b" });
+    expect(menuItem?.type === "thread" ? menuItem.mention.name : null).toBe("Release (Other)");
+  });
+
+  it("returns null for the current, archived, or unknown chat", () => {
+    for (const threadId of ["current", "archived", "missing"]) {
+      expect(
+        resolveThreadMentionForThreadId({
+          projects,
+          threads,
+          currentThreadId: "current",
+          threadId,
+        }),
+      ).toBeNull();
+    }
   });
 });
