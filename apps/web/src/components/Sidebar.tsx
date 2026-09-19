@@ -4524,6 +4524,8 @@ export default function Sidebar() {
           sourceProjectName={hoverMetadata.sourceProjectName}
           branch={hoverMetadata.branch}
           worktreeName={hoverMetadata.worktreeName}
+          pullRequest={prByThreadId.get(thread.id) ?? null}
+          onOpenPullRequest={openPrLink}
           model={resolveThreadModelSummary(thread.modelSelection)}
           status={hoverStatus}
         />
