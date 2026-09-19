@@ -8,6 +8,10 @@ import { Effect, Option } from "effect";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ThreadDiagnosticsQueryShape } from "../diagnostics/Services/ThreadDiagnosticsQuery.ts";
 import {
+  projectedLifecycleAgeMs,
+  RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS,
+} from "../provider/providerRuntimeReconciliation.ts";
+import {
   PROVIDER_COMMAND_REACTOR_CONSUMER,
   type OrchestrationEventDeliveryRepositoryShape,
 } from "../persistence/Services/OrchestrationEventDeliveries.ts";
@@ -396,6 +400,18 @@ export function makeThreadDiagnosticTools(input: {
           }),
         ]);
         const findings = [
+          ...((detail.session?.status === "starting" || detail.session?.status === "running") &&
+          detail.session.activeTurnId === null &&
+          detail.latestTurn?.state !== "running" &&
+          projectedLifecycleAgeMs(detail, Date.now()) >= RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS
+            ? [
+                {
+                  severity: "warning",
+                  code: "provider_lifecycle_stale",
+                  detail: `Session remains '${detail.session.status}' without an active provider turn beyond the recovery grace period; latest turn is '${detail.latestTurn?.state ?? "absent"}'. Check live provider ownership before recovery.`,
+                },
+              ]
+            : []),
           ...(detail.session?.lastError
             ? [
                 {

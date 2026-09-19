@@ -42,6 +42,7 @@ const DEFAULT_RECONCILIATION_INTERVAL_MS = 5_000;
 const DEFAULT_RECONCILIATION_CANDIDATE_LIMIT = 256;
 
 export interface ProviderRuntimeReconcilerLiveOptions {
+  readonly now?: () => number;
   readonly intervalMs?: number;
   readonly staleAfterMs?: number;
   readonly candidateLimit?: number;
@@ -147,10 +148,13 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       // Nothing left to repair: the projected session already matches the plan
       // and no turn is left running. Dispatching anyway writes two fresh events
       // on every tick for as long as the thread stays a candidate.
-      if (
-        thread.latestTurn?.state !== "running" &&
-        isSameProjectedSession(thread.session, session)
-      ) {
+      const turnNeedsRepair =
+        plan.action === "align-running-turn"
+          ? thread.latestTurn?.turnId !== plan.runtimeTurnId ||
+            thread.latestTurn.state !== "running" ||
+            thread.latestTurn.completedAt !== null
+          : thread.latestTurn?.state === "running";
+      if (!turnNeedsRepair && isSameProjectedSession(thread.session, session)) {
         return;
       }
 
@@ -212,7 +216,7 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
     });
 
     const reconcileNow = Effect.gen(function* () {
-      const nowMs = Date.now();
+      const nowMs = (options?.now ?? Date.now)();
       const candidateThreadIds = yield* projectionSnapshotQuery.listStaleInFlightThreadIds({
         updatedBefore: new Date(nowMs - staleAfterMs).toISOString(),
         limit: candidateLimit,
