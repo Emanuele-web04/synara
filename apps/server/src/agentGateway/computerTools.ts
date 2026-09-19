@@ -147,7 +147,7 @@ export const COMPUTER_CONTROL_FIRST_MUTATION_DISCLOSURE =
   "Computer control ON for this turn: the agent is driving the desktop and the user can switch it off in Settings.";
 
 const COMPUTER_TOOL_REFRESH_GUIDANCE =
-  "Computer routing reminder: observe with computer_get_state and exact window_id before acting; prefer semantic labels and roles over screenshot coordinates. Exact background text is focus-neutral only when Cua proves one writable Accessibility target. Use foreground delivery only when activation is necessary, never replay uncertain delivery, and treat off-Space pixels as non-live.";
+  "Computer routing reminder: observe with computer_get_state and exact window_id before acting; prefer labels and roles over screenshot coordinates. Background text is focus-neutral only when Cua proves one writable Accessibility target. Foreground delivery only when activation is necessary; never replay uncertain delivery; off-Space pixels are not live.";
 
 /**
  * Attached to every null-window launch result, always rather than on
@@ -488,7 +488,7 @@ const SEMANTIC_TARGETING_NOTE = "Prefer label and role from computer_get_state o
 
 /** The short form the action tools carry. */
 const ACTION_SCREENSHOT_HINT =
-  'Returns a screenshot by default. See "The screenshot on every action" in the active Synara host context.';
+  'See "The screenshot on every action" in the active Synara host context.';
 
 const INCLUDE_ACTION_SCREENSHOT_PROPERTY = {
   include_screenshot: {
@@ -543,7 +543,7 @@ function textTargetProperty(): Record<string, unknown> {
     },
     role: {
       type: "string",
-      description: "Optional accessible role used to disambiguate the text control label.",
+      description: "Optional role used to disambiguate the text control label.",
     },
     ref: {
       type: "integer",
@@ -595,40 +595,40 @@ const SCREENSHOT_ID_PROPERTY = {
   screenshot_id: {
     type: "string",
     description:
-      "Frame for x/y; defaults to the latest delivered screenshot. An earlier screenshot must still be valid.",
+      "Frame for x/y; defaults to the latest screenshot. An earlier one must still be valid.",
   },
 } as const;
 
 const TARGET_PROPERTIES = {
   x: {
     type: "number",
-    description: "Pixel x from the screenshot's left edge.",
+    description: "Pixel x in the screenshot.",
   },
   y: {
     type: "number",
-    description: "Pixel y from the screenshot's top edge.",
+    description: "Pixel y in the screenshot.",
   },
   ...SCREENSHOT_ID_PROPERTY,
   label: {
     type: "string",
     description:
-      "Exact accessible label from computer_get_state; matched verbatim, including leading and trailing spaces, against fresh state.",
+      "Exact label from computer_get_state; matched verbatim against fresh state, including surrounding spaces.",
   },
   role: {
     type: "string",
-    description: "Optional accessible role used to disambiguate a label.",
+    description: "Optional role used to disambiguate the label.",
   },
   ref: {
     type: "integer",
     minimum: 0,
     description:
-      "Element ref from a computer_get_state elements listing — the compact form, cheaper than re-quoting label and role and able to name a duplicate a bare label cannot. A ref stays bound to the same element across observations while it is present; it never moves to a different element.",
+      "Element ref from a computer_get_state listing — cheaper than re-quoting label and role, and names duplicates a bare label cannot. A ref stays bound to the same element while it is present; it never moves to a different element.",
   },
   ref_ordinal: {
     type: "integer",
     minimum: 0,
     description:
-      "With label: which same-labelled control to target — 0 for the first, 1 for the second. Only needed to name a duplicate without a ref.",
+      "With label: which same-labelled control — 0 for the first, 1 for the second. Names a duplicate without a ref.",
   },
 } as const;
 
@@ -639,7 +639,7 @@ function targetProperties(): Record<string, unknown> {
     window_id: {
       type: "string",
       description:
-        "Exact window for label or x/y targeting; outside coordinates are refused. Background input may be refused. For computer_scroll, window_id alone targets that window.",
+        "Exact window for label or x/y targeting; outside coordinates are refused. For computer_scroll, window_id alone targets the window.",
     },
   };
 }
@@ -1186,6 +1186,45 @@ function withSetupNoteInText(text: string, note: string): string {
     ...(parsed as Record<string, unknown>),
     setupRequired: note,
   });
+}
+
+/**
+ * Whether every entry in a listing shares one window id. The common scoped
+ * read is exactly this case, and repeating the same 15-40 char id on all 60
+ * entries was a third of a full elements payload.
+ */
+function uniformElementWindowId(
+  items: readonly { readonly windowId?: string | null }[],
+): string | undefined {
+  const windowId = items[0]?.windowId;
+  return typeof windowId === "string" && items.every((item) => item.windowId === windowId)
+    ? windowId
+    : undefined;
+}
+
+/** The same entries without their `windowId` field, for a hoisted listing. */
+function stripElementWindowId<T extends { readonly windowId?: string | null }>(
+  items: readonly T[],
+): readonly T[] {
+  return items.map((item) => {
+    const { windowId: _windowId, ...rest } = item;
+    return rest as T;
+  });
+}
+
+/**
+ * The wire form of one elements listing: the window id is hoisted out of
+ * each entry into a single `elementWindowId` when the whole listing belongs
+ * to one window, and kept per entry when the listing spans windows — there
+ * the id is what tells the model which window an action must name. Stored
+ * digests are never touched, so refs and diffs keep their full identity.
+ */
+function hoistElementWindowId<T extends { readonly windowId?: string | null }>(
+  items: readonly T[],
+): { readonly items: readonly T[]; readonly elementWindowId?: string } {
+  const elementWindowId = uniformElementWindowId(items);
+  if (elementWindowId === undefined) return { items };
+  return { items: stripElementWindowId(items), elementWindowId };
 }
 
 function withGuidanceOnResult(
@@ -2351,7 +2390,7 @@ export function makeAgentGatewayComputerTools(
             type: "string",
             enum: ["background", "foreground"],
             description:
-              "Defaults to background. Foreground brings the target forward and restores the previous window, but is refused unless the user's task asked to see the screen. Never use it to replay an uncertain action.",
+              "Defaults to background. Foreground brings the target forward and is refused unless the user's task asked to see the screen. Never replay an uncertain action.",
           },
         },
       },
@@ -2916,9 +2955,13 @@ export function makeAgentGatewayComputerTools(
                   digestScopeKey(threadId, windowId, labelContains),
                   elements,
                 );
+          const wire = stable === undefined ? undefined : hoistElementWindowId(stable.items);
           return {
             ...(windowId !== undefined ? { windowId } : {}),
-            elements: stable?.items ?? [],
+            elements: wire?.items ?? [],
+            ...(wire?.elementWindowId === undefined
+              ? {}
+              : { elementWindowId: wire.elementWindowId }),
             // An empty listing with an unreadable tree must not look like
             // "nothing on screen" — carry the read's own status with it.
             ...(state.accessibility !== undefined ? { accessibility: state.accessibility } : {}),
@@ -3240,12 +3283,16 @@ export function makeAgentGatewayComputerTools(
           elements === undefined
             ? undefined
             : rememberDigest(threadId, digestScopeKey(threadId, lastWindowId, undefined), elements);
+        const wire = stable === undefined ? undefined : hoistElementWindowId(stable.items);
         return {
           state: {
             ...rest,
-            ...(stable
+            ...(stable !== undefined && wire !== undefined
               ? {
-                  elements: stable.items,
+                  elements: wire.items,
+                  ...(wire.elementWindowId === undefined
+                    ? {}
+                    : { elementWindowId: wire.elementWindowId }),
                   ...(stable.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
                   ...(stable.complete
                     ? {}
@@ -3332,7 +3379,7 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_get_state",
-        description: `Read labeled controls and values before acting; prefer label targeting. ${WINDOW_FOCUS_NOTE} By default returns elements without an image or duplicate text. Each element carries a stable ref you can pass as the ref argument on later actions — cheaper than re-quoting label and role, names duplicates a label cannot, and stays bound to the same element while it is present. window_id scopes inspection; include_screenshot adds ${overviewScope} (or the selected window). ${SCREENSHOT_FRAME_NOTE} include_text adds full AX text only when elements are insufficient. Use window_id or label_contains to narrow a truncated result; elementsTruncated/elementsOmitted report the remainder.`,
+        description: `Read labeled controls and values before acting; prefer label targeting. ${WINDOW_FOCUS_NOTE} By default returns elements without an image or duplicate text. Each element carries a stable ref you can pass as the ref argument on later actions — cheaper than re-quoting label and role, names duplicates a label cannot, and stays bound to the same element while it is present. A one-window listing reports its id once as elementWindowId instead of on every entry. window_id scopes inspection; include_screenshot adds ${overviewScope} (or the selected window). ${SCREENSHOT_FRAME_NOTE} include_text adds full AX text only when elements are insufficient. Use window_id or label_contains to narrow a truncated result; elementsTruncated/elementsOmitted report the remainder.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -3422,35 +3469,60 @@ export function makeAgentGatewayComputerTools(
           ...(wantText && text !== undefined ? { text } : {}),
           ...(stable
             ? wantDiff
-              ? {
-                  elementChanges: (() => {
-                    const changes = diffActionableElements(before?.items ?? [], stable.items);
-                    return {
+              ? (() => {
+                  const changes = diffActionableElements(before?.items ?? [], stable.items);
+                  // A removed entry's ref is a dead handle — the element is
+                  // gone — so showing it would make it look citable.
+                  const removed = changes.removed.map(({ ref: _ref, ...entry }) => entry);
+                  // One window id for the whole change set when every entry
+                  // names the same window; per entry otherwise, because that
+                  // is what tells the model which window to address.
+                  const elementWindowId = uniformElementWindowId([
+                    ...changes.added,
+                    ...changes.changed,
+                    ...changes.removed,
+                  ]);
+                  return {
+                    elementChanges: {
                       ...changes,
-                      // A removed entry's ref is a dead handle — the element
-                      // is gone — so showing it would make it look citable.
-                      removed: changes.removed.map(({ ref: _ref, ...entry }) => entry),
-                    };
-                  })(),
-                  // Either side reporting less than the full tree makes the
-                  // diff itself partial — removals beyond a cap are invisible.
-                  ...((before !== undefined && !before.complete) || !stable.complete
-                    ? { elementChangesIncomplete: true }
-                    : {}),
-                }
-              : {
-                  elements: stable.items,
-                  ...(stable.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
-                  // Both halves together: "there is more" is only actionable
-                  // alongside how much more, which is what decides between
-                  // looking again and narrowing the query.
-                  ...(stable.complete
-                    ? {}
-                    : {
-                        elementsTruncated: true,
-                        elementsOmitted: stable.omitted,
-                      }),
-                }
+                      added:
+                        elementWindowId === undefined
+                          ? changes.added
+                          : stripElementWindowId(changes.added),
+                      removed:
+                        elementWindowId === undefined ? removed : stripElementWindowId(removed),
+                      changed:
+                        elementWindowId === undefined
+                          ? changes.changed
+                          : stripElementWindowId(changes.changed),
+                    },
+                    ...(elementWindowId === undefined ? {} : { elementWindowId }),
+                    // Either side reporting less than the full tree makes the
+                    // diff itself partial — removals beyond a cap are invisible.
+                    ...((before !== undefined && !before.complete) || !stable.complete
+                      ? { elementChangesIncomplete: true }
+                      : {}),
+                  };
+                })()
+              : (() => {
+                  const wire = hoistElementWindowId(stable.items);
+                  return {
+                    elements: wire.items,
+                    ...(wire.elementWindowId === undefined
+                      ? {}
+                      : { elementWindowId: wire.elementWindowId }),
+                    ...(stable.sourceIncomplete ? { elementsSourceIncomplete: true } : {}),
+                    // Both halves together: "there is more" is only actionable
+                    // alongside how much more, which is what decides between
+                    // looking again and narrowing the query.
+                    ...(stable.complete
+                      ? {}
+                      : {
+                          elementsTruncated: true,
+                          elementsOmitted: stable.omitted,
+                        }),
+                  };
+                })()
             : {}),
           ...(appHint !== undefined ? { appHint } : {}),
         };

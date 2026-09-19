@@ -162,12 +162,16 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const definitions = tools.map((tool) => tool.definition);
-    // The catalog grew again — element refs added ref/ref_ordinal fields to
-    // the target schemas on top of the recording family, measuring 72,927
-    // chars of schema; the bound still trips on accidental bloat, so raise it
-    // only with the new surface measured.
-    expect(JSON.stringify(definitions).length).toBeLessThan(75_000);
+    // The 2026-09-19 L5 dedupe pass measured 70,271 chars on the linux
+    // dialect and 71,225 on the macOS dialect (the Mac surface drops region
+    // properties but adds note text) after shortening the repeated
+    // target/delivery blurbs. The bound still trips on accidental bloat, so
+    // raise it only with the new surface measured.
+    expect(JSON.stringify(definitions).length).toBeLessThan(72_000);
     const notes = computerToolInstructions();
+    // The injected block was 8,404 chars before the L5 trim; the ceiling keeps
+    // every gate string below without letting the block grow back silently.
+    expect(notes.length).toBeLessThanOrEqual(8_300);
     expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
     expect(notes).toContain("discover only the small set of tools needed next by exact names");
     expect(notes).toContain("stop on any refusal");
@@ -570,7 +574,8 @@ describe("agent gateway computer tools", () => {
     const { call } = await setup();
     const state = await call("computer_get_state", {});
     const payload = resultJson(state) as {
-      elements: { role: string; label: string; windowId: string | null }[];
+      elements: { role: string; label: string; windowId?: string | null }[];
+      elementWindowId?: string;
       text?: string;
     };
 
@@ -581,8 +586,11 @@ describe("agent gateway computer tools", () => {
     for (const element of payload.elements) {
       expect(typeof element.label).toBe("string");
       expect(element.label.length).toBeGreaterThan(0);
-      expect(element.windowId).not.toBeNull();
+      // The fixture's elements are all in one window, so the id is hoisted
+      // onto the listing instead of repeating on every entry.
+      expect(element.windowId).toBeUndefined();
     }
+    expect(payload.elementWindowId).toBe("fake-calculator");
     // The full text rendering stays opt-in; the digest always rides.
     expect(payload.text).toBeUndefined();
 
@@ -616,11 +624,15 @@ describe("agent gateway computer tools", () => {
     const { call } = await setup(new FakeComputerBackend({ root: bigTree }));
 
     const payload = resultJson(await call("computer_get_state", {})) as {
-      elements: unknown[];
+      elements: { windowId?: string }[];
+      elementWindowId?: string;
       elementsTruncated?: boolean;
     };
     expect(payload.elements).toHaveLength(60);
     expect(payload.elementsTruncated).toBe(true);
+    // One window: its id is hoisted once instead of riding all 60 entries.
+    expect(payload.elementWindowId).toBe("w1");
+    expect(payload.elements.every((element) => element.windowId === undefined)).toBe(true);
   });
 
   it("names label_contains when a truncated tree misses the label", async () => {
@@ -1397,10 +1409,13 @@ describe("agent gateway computer tools", () => {
     // And "unchanged" must not read as "your action failed": the server has
     // already looked for a window the action opened before it says this.
     expect(notes).toContain("not that the action failed");
-    // Each action still says a screenshot is attached, and points at the rest.
+    // Each action still says a screenshot is attached, and points at the rest:
+    // the description carries the pointer, the schema carries the default.
     const description = byName.get("computer_click")?.definition.description ?? "";
-    expect(description).toContain("Returns a screenshot by default");
     expect(description).toContain("The screenshot on every action");
+    expect(JSON.stringify(byName.get("computer_click")?.definition.inputSchema)).toContain(
+      "Post-action screenshot, default true",
+    );
   });
 
   it("keeps a successful action result when the post-action capture fails", async () => {
@@ -1431,8 +1446,10 @@ describe("agent gateway computer tools", () => {
       "computer_select_text",
     ]) {
       const tool = byName.get(name);
-      expect(tool?.definition.description).toContain("Returns a screenshot by default");
-      expect(JSON.stringify(tool?.definition.inputSchema)).toContain("include_screenshot");
+      expect(tool?.definition.description).toContain("The screenshot on every action");
+      const schema = JSON.stringify(tool?.definition.inputSchema);
+      expect(schema).toContain("include_screenshot");
+      expect(schema).toContain("Post-action screenshot, default true");
     }
     // Launching resolves seconds later and clipboard writes change no pixels,
     // so neither pays for a capture that would only show the previous state.
@@ -2201,17 +2218,22 @@ describe("agent gateway computer tools", () => {
   it("scopes the elements digest by window and by label, and counts what it drops", async () => {
     const { call } = await setup();
     const all = resultJson(await call("computer_get_state", {})) as {
-      elements: { label: string; windowId: string }[];
+      elements: { label: string; windowId?: string }[];
+      elementWindowId?: string;
       elementsTruncated?: boolean;
       elementsOmitted?: number;
     };
-    const windowId = all.elements[0]!.windowId;
+    // The default tree's elements are all in one window: the id is hoisted.
+    const windowId = all.elementWindowId!;
+    expect(windowId).toBe("fake-calculator");
 
     const scoped = resultJson(await call("computer_get_state", { window_id: windowId })) as {
-      elements: { windowId: string }[];
+      elements: { windowId?: string }[];
+      elementWindowId?: string;
     };
     expect(scoped.elements.length).toBeGreaterThan(0);
-    expect(scoped.elements.every((element) => element.windowId === windowId)).toBe(true);
+    expect(scoped.elementWindowId).toBe(windowId);
+    expect(scoped.elements.every((element) => element.windowId === undefined)).toBe(true);
 
     const label = all.elements[0]!.label;
     const filtered = resultJson(
@@ -2231,6 +2253,71 @@ describe("agent gateway computer tools", () => {
     ) as { elements: unknown[]; elementsTruncated?: boolean };
     expect(none.elements).toEqual([]);
     expect(none.elementsTruncated).toBeUndefined();
+  });
+
+  it("keeps per-element window ids when one listing spans windows", async () => {
+    // An unscoped read over a desktop with two windows must keep each entry's
+    // window id: that is what tells the model which window an action addresses,
+    // so the hoist applies only to a one-window listing.
+    const entry = (windowId: string, label: string): ComputerUiNode => ({
+      role: "button",
+      label,
+      value: null,
+      description: null,
+      frame: { x: 0, y: 0, width: 80, height: 30 },
+      activationPoint: null,
+      onScreen: true,
+      windowId,
+      children: [],
+    });
+    const root: ComputerUiNode = {
+      role: "desktop",
+      label: null,
+      value: null,
+      description: null,
+      frame: { x: 0, y: 0, width: 1_920, height: 1_080 },
+      activationPoint: null,
+      onScreen: true,
+      windowId: null,
+      children: [
+        {
+          role: "window",
+          label: "Terminal",
+          value: null,
+          description: null,
+          frame: { x: 40, y: 40, width: 960, height: 720 },
+          activationPoint: null,
+          onScreen: true,
+          windowId: "fake-terminal",
+          children: [entry("fake-terminal", "Run")],
+        },
+        {
+          role: "window",
+          label: "Calculator",
+          value: null,
+          description: null,
+          frame: { x: 1_050, y: 120, width: 420, height: 620 },
+          activationPoint: null,
+          onScreen: true,
+          windowId: "fake-calculator",
+          children: [entry("fake-calculator", "Calculate")],
+        },
+      ],
+    };
+    const { call, manager } = await setup(new FakeComputerBackend({ root }));
+    try {
+      const payload = resultJson(await call("computer_get_state", {})) as {
+        elements: { label: string; windowId?: string }[];
+        elementWindowId?: string;
+      };
+      expect(payload.elementWindowId).toBeUndefined();
+      expect(payload.elements.map((element) => [element.label, element.windowId])).toEqual([
+        ["Run", "fake-terminal"],
+        ["Calculate", "fake-calculator"],
+      ]);
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("brings a window forward only through the explicit tool, and refuses where it cannot", async () => {
@@ -3297,7 +3384,7 @@ describe("computer_run", () => {
         }[];
         completed: number;
         stopped: boolean;
-        state: { elements: { label: string }[] };
+        state: { elements: { label: string }[]; elementWindowId?: string };
       };
       expect(payload.completed).toBe(4);
       expect(payload.stopped).toBe(false);
@@ -3310,6 +3397,8 @@ describe("computer_run", () => {
       // computerId rides once on the envelope, not on every step.
       for (const entry of payload.steps) expect(entry.result).not.toHaveProperty("computerId");
       expect(payload.state.elements.map((element) => element.label)).toContain("Display");
+      // The closing state's listing is one window: id hoisted, as in get_state.
+      expect(payload.state.elementWindowId).toBe("fake-calculator");
       expect(backend.callsFor("click")).toHaveLength(1);
       expect(backend.callsFor("typeText").map((entry) => entry.args[0])).toEqual(["468"]);
       expect(backend.callsFor("selectText").map((entry) => entry.args[1])).toEqual([
@@ -3692,6 +3781,7 @@ describe("computer_get_state diff", () => {
         }),
       ) as {
         elements?: unknown;
+        elementWindowId?: string;
         elementChanges: {
           added: unknown[];
           removed: unknown[];
@@ -3699,6 +3789,9 @@ describe("computer_get_state diff", () => {
         };
       };
       expect(diff.elements).toBeUndefined();
+      // The changed entries all belong to one window, so its id is reported
+      // once instead of on every entry.
+      expect(diff.elementWindowId).toBe("fake-calculator");
       expect(diff.elementChanges).toEqual({
         added: [],
         removed: [],
@@ -3707,7 +3800,6 @@ describe("computer_get_state diff", () => {
             ref: 1,
             role: "text-field",
             label: "Display",
-            windowId: "fake-calculator",
             was: "0",
             value: "468",
           },
@@ -4515,10 +4607,14 @@ describe("computer_run observation steps", () => {
           ],
         }),
       ) as {
-        steps: { type: string; result?: { elements?: { ref: number; label: string }[] } }[];
+        steps: {
+          type: string;
+          result?: { elements?: { ref: number; label: string }[]; elementWindowId?: string };
+        }[];
       };
       const listed = run.steps[0]!.result?.elements ?? [];
       expect(listed.map((element) => element.label)).toContain("Calculate");
+      expect(run.steps[0]!.result?.elementWindowId).toBe("fake-calculator");
       // The listing's refs are real bindings: citing one right after the run resolves it.
       const calculate = listed.find((element) => element.label === "Calculate")!;
       const followup = await call("computer_click", { ref: calculate.ref });
