@@ -31,6 +31,7 @@ import {
   type AgentGatewayComputerToolsOptions,
 } from "./computerTools.ts";
 import type { McpToolCallResult } from "./protocol.ts";
+import { secondAppApprovalDecision } from "./secondAppApproval.ts";
 import { GatewayToolError, type ToolContext } from "./toolRuntime.ts";
 
 const THREAD = "thread-computer";
@@ -187,6 +188,11 @@ describe("agent gateway computer tools", () => {
     expect(notes).toContain("browser_requires_setup");
     expect(notes).toContain("foreign_process_termination_denied");
     expect(notes).toContain("input_target_unavailable");
+    // Id-contract gate: the E2E passed the target id in the tab_id slot and
+    // then retried the refusal. The refusal map must name the fix.
+    expect(notes).toContain("browser_tab_required");
+    expect(notes).toContain("browser_tab_not_found");
+    expect(notes).toContain("never target_id");
     expect(notes).toContain("never tell the user computer control is off");
     await manager.dispose();
   });
@@ -4173,6 +4179,104 @@ describe("second-app consent", () => {
       }
     });
 
+    it("invokes a windowless app's menu from its live pid, attributed to the app", async () => {
+      const backend = new FakeComputerBackend({
+        apps: [
+          { pid: 6_001, name: "Helium", bundleId: "net.imput.helium", running: true, active: false },
+          { pid: 1_001, name: "Terminal", bundleId: "org.kde.konsole", running: true, active: true },
+          { pid: 1_002, name: "Calculator", bundleId: "org.kde.kcalc", running: true, active: false },
+        ],
+      });
+      const approval = vi.fn(
+        async (
+          _name: string,
+          _args: Record<string, unknown>,
+          _context: unknown,
+          _signal: unknown,
+          _grantContext: unknown,
+        ) => true,
+      );
+      const { call, manager } = await setup(backend, approval);
+      try {
+        const result = await call("computer_invoke_menu", {
+          app: "Helium",
+          path: ["File", "New Window"],
+        });
+        expect(result.isError).not.toBe(true);
+        // The app name resolved to its live pid, and no window id rides the
+        // dispatch — the driver's windowless contract, exactly.
+        const dispatched = backend.callsFor("invokeMenu").at(-1)?.args[0] as Record<string, unknown>;
+        expect(dispatched).toEqual({ pid: 6_001 });
+        expect(dispatched).not.toHaveProperty("window_id");
+        expect(resultJson(result)).not.toHaveProperty("windowId");
+        // The grant scope offered to the user names the app this call drives.
+        const grantContext = approval.mock.calls[0]?.[4] as {
+          apps: readonly { name?: string }[];
+          includesUnattributedTarget: boolean;
+          classes: readonly string[];
+        };
+        expect(grantContext.includesUnattributedTarget).toBe(false);
+        expect(grantContext.apps).toEqual([expect.objectContaining({ name: "Helium" })]);
+        expect(grantContext.classes).toEqual(["lifecycle"]);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("refuses a menu call that names no target or two different routes", async () => {
+      const backend = new FakeComputerBackend();
+      const { call, manager } = await setup(
+        backend,
+        vi.fn(async () => true),
+      );
+      const textOf = (result: McpToolCallResult) => {
+        const text = result.content.find((entry) => entry.type === "text");
+        return text?.type === "text" ? text.text : "";
+      };
+      try {
+        const none = await call("computer_invoke_menu", { path: ["File"] });
+        expect(none.isError).toBe(true);
+        expect(textOf(none)).toContain("Name the target one way");
+        const two = await call("computer_invoke_menu", {
+          window_id: "fake-terminal",
+          app: "Terminal",
+          path: ["File"],
+        });
+        expect(two.isError).toBe(true);
+        expect(textOf(two)).toContain("exactly one");
+        expect(backend.callsFor("invokeMenu")).toHaveLength(0);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
+    it("runs a windowless app menu step through computer_run", async () => {
+      const backend = new FakeComputerBackend({
+        apps: [
+          { pid: 6_001, name: "Helium", bundleId: "net.imput.helium", running: true, active: false },
+          { pid: 1_001, name: "Terminal", bundleId: "org.kde.konsole", running: true, active: true },
+        ],
+      });
+      const { call, manager } = await setup(
+        backend,
+        vi.fn(async () => true),
+      );
+      try {
+        const result = await call("computer_run", {
+          steps: [{ type: "invoke_menu", app: "Helium", path: ["File", "New Window"] }],
+        });
+        expect(result.isError).not.toBe(true);
+        const payload = resultJson(result) as { completed: number };
+        expect(payload.completed).toBe(1);
+        expect(backend.callsFor("invokeMenu").at(-1)?.args).toEqual([
+          { pid: 6_001 },
+          ["File", "New Window"],
+        ]);
+      } finally {
+        await manager.dispose();
+      }
+    });
+
     it("refuses run steps with missing or oversized arguments whole", async () => {
       const backend = new FakeComputerBackend();
       const { call, manager } = await setup(
@@ -4872,6 +4976,7 @@ describe("computer_help", () => {
       const json = resultJson(result) as { topic: string; text: string };
       expect(json.topic).toBe("browser");
       expect(json.text).toContain("computer_browser_prepare");
+      expect(json.text).toContain("never pass one for the other");
       expect(json.text).not.toContain("computer_recording_start");
     } finally {
       await manager.dispose();
@@ -4917,5 +5022,113 @@ describe("computer_help", () => {
     expect(notes).not.toContain("set_window_minimized");
     expect(notes).toContain("Never replay an uncertain action");
     expect(notes).toContain("delivery.verified");
+  });
+});
+
+describe("secondAppApprovalDecision", () => {
+  // The packaged E2E's thread was full-access and still surfaced "Allow the
+  // agent to drive Google Chrome?" for the isolated Chromium it had launched
+  // itself. Full access is the broader consent; the second-app card only
+  // remains for threads that have not given it.
+  it("covers a full-access thread without touching the card path", async () => {
+    let asked = 0;
+    const approved = await secondAppApprovalDecision({
+      readRuntimeMode: async () => "full-access",
+      requestApproval: async () => {
+        asked += 1;
+        return false;
+      },
+    });
+    expect(approved).toBe(true);
+    expect(asked).toBe(0);
+  });
+
+  it("asks the card on approval-required threads and honors its answer", async () => {
+    let asked = 0;
+    const requestApproval = async () => {
+      asked += 1;
+      return false;
+    };
+    await expect(
+      secondAppApprovalDecision({
+        readRuntimeMode: async () => "approval-required",
+        requestApproval,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      secondAppApprovalDecision({
+        readRuntimeMode: async () => "approval-required",
+        requestApproval: async () => true,
+      }),
+    ).resolves.toBe(true);
+    expect(asked).toBe(1);
+  });
+
+  it("fails toward the card when the runtime mode cannot be read", async () => {
+    // Failing open to silence would be the one wrong answer: a mode that
+    // cannot be read must never become consent the user did not give.
+    let asked = 0;
+    const approved = await secondAppApprovalDecision({
+      readRuntimeMode: async () => {
+        throw new Error("snapshot unavailable");
+      },
+      requestApproval: async () => {
+        asked += 1;
+        return true;
+      },
+    });
+    expect(approved).toBe(true);
+    expect(asked).toBe(1);
+  });
+
+  it("keeps the manager's second-app refusal honest when the decision denies", async () => {
+    // Integration shape: the helper is the handler AgentGateway installs, so
+    // a denial still stops the call before the queue and names the app.
+    const backend = new FakeComputerBackend();
+    const { call, manager } = await setup(backend);
+    const asked: string[] = [];
+    manager.setSecondAppApprovalHandler(async ({ app }) =>
+      secondAppApprovalDecision({
+        readRuntimeMode: async () => "approval-required",
+        requestApproval: async () => {
+          asked.push(app);
+          return false;
+        },
+      }),
+    );
+    try {
+      await call("computer_launch_app", { app: "kcalc" });
+      const denied = await call("computer_launch_app", { app: "Google Chrome" });
+      expect(denied.isError).toBe(true);
+      expect(JSON.stringify(denied)).toMatch(/refused pending approval/);
+      expect(asked).toEqual(["Google Chrome"]);
+      expect(backend.callsFor("launchApp")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("lets a full-access thread drive a second app without a card or a refusal", async () => {
+    const backend = new FakeComputerBackend();
+    const { call, manager } = await setup(backend);
+    const asked: string[] = [];
+    manager.setSecondAppApprovalHandler(async ({ app }) =>
+      secondAppApprovalDecision({
+        readRuntimeMode: async () => "full-access",
+        requestApproval: async () => {
+          asked.push(app);
+          return false;
+        },
+      }),
+    );
+    try {
+      await call("computer_launch_app", { app: "kcalc" });
+      const second = await call("computer_launch_app", { app: "Google Chrome" });
+      expect(second.isError).not.toBe(true);
+      expect(asked).toEqual([]);
+      expect(backend.callsFor("launchApp")).toHaveLength(2);
+    } finally {
+      await manager.dispose();
+    }
   });
 });

@@ -287,7 +287,7 @@ describe("computer_invoke_menu", () => {
     expect(payload.action).toBe("computer_invoke_menu");
     expect(payload.windowId).toBe("fake-terminal");
     expect(backend.callsFor("invokeMenu").at(-1)?.args).toEqual([
-      "fake-terminal",
+      { windowId: "fake-terminal" },
       ["File", "Save"],
     ]);
   });
@@ -561,7 +561,10 @@ describe("computer_run step coverage", () => {
       "fake-calculator",
       { x: 10, y: 10, width: 500, height: 400 },
     ]);
-    expect(backend.callsFor("invokeMenu").at(-1)?.args).toEqual(["fake-terminal", ["File"]]);
+    expect(backend.callsFor("invokeMenu").at(-1)?.args).toEqual([
+      { windowId: "fake-terminal" },
+      ["File"],
+    ]);
   });
 
   it("refuses a run step missing its window or a menu path that is too deep", async () => {

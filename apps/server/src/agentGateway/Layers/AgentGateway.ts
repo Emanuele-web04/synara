@@ -83,6 +83,7 @@ import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayComputerBrowserTools } from "../computerBrowserTools.ts";
 import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
+import { secondAppApprovalDecision } from "../secondAppApproval.ts";
 import { DeviceService } from "../../device/Services/DeviceService.ts";
 import {
   COMPUTER_CONTROL_CAPABILITY,
@@ -1219,48 +1220,62 @@ export const makeAgentGateway = Effect.gen(function* () {
       : []),
   ];
 
-  // Second-app consent asks through the same card path as tool approvals.
-  // The manager calls this before the desktop queue — never inside it — so a
-  // prompt the user is still reading cannot stall every other computer call.
+  // Second-app consent asks through the same card path as tool approvals,
+  // except on a full-access thread: the tool-level approval already covered
+  // every computer action in the turn, and the packaged E2E showed a
+  // full-access run stalling behind a "drive Google Chrome" card raised for
+  // the driver-owned isolated Chromium it had launched itself. The manager
+  // calls this before the desktop queue — never inside it — so a prompt the
+  // user is still reading cannot stall every other computer call.
   if (computerService?.supported === true) {
     computerService.manager.setSecondAppApprovalHandler(
       ({ threadId, turnId, app, toolName, signal }) =>
-        computerApprovalGate.request({
-          threadId,
-          turnId,
-          signal,
-          publish: async (requestId, decision) => {
-            const createdAt = isoNow();
-            const eventKey = `${requestId}:${decision === undefined ? "open" : "resolved"}`;
-            await Effect.runPromise(
-              orchestrationEngine.dispatch({
-                type: "thread.activity.append",
-                commandId: CommandId.makeUnsafe(eventKey),
-                threadId: ThreadId.makeUnsafe(threadId),
-                activity: {
-                  id: EventId.makeUnsafe(eventKey),
-                  tone: "info",
-                  kind: decision === undefined ? "approval.requested" : "approval.resolved",
-                  summary:
-                    decision === undefined
-                      ? `Allow the agent to drive ${app}?`
-                      : "Computer approval resolved",
-                  payload: {
-                    requestId,
-                    requestKind: "tool",
-                    requestType: "tool",
-                    toolName: toolName ?? "computer_launch_app",
-                    toolParamsDisplay: JSON.stringify({ app }),
-                    sessionApprovalAvailable: false,
-                    ...(decision === undefined ? {} : { decision }),
-                  },
-                  turnId: turnId ? TurnId.makeUnsafe(turnId) : null,
-                  createdAt,
-                },
-                createdAt,
-              }),
+        secondAppApprovalDecision({
+          readRuntimeMode: async () => {
+            const caller = await Effect.runPromise(
+              snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(threadId)),
+              { signal },
             );
+            return Option.isNone(caller) ? null : caller.value.runtimeMode;
           },
+          requestApproval: () =>
+            computerApprovalGate.request({
+              threadId,
+              turnId,
+              signal,
+              publish: async (requestId, decision) => {
+                const createdAt = isoNow();
+                const eventKey = `${requestId}:${decision === undefined ? "open" : "resolved"}`;
+                await Effect.runPromise(
+                  orchestrationEngine.dispatch({
+                    type: "thread.activity.append",
+                    commandId: CommandId.makeUnsafe(eventKey),
+                    threadId: ThreadId.makeUnsafe(threadId),
+                    activity: {
+                      id: EventId.makeUnsafe(eventKey),
+                      tone: "info",
+                      kind: decision === undefined ? "approval.requested" : "approval.resolved",
+                      summary:
+                        decision === undefined
+                          ? `Allow the agent to drive ${app}?`
+                          : "Computer approval resolved",
+                      payload: {
+                        requestId,
+                        requestKind: "tool",
+                        requestType: "tool",
+                        toolName: toolName ?? "computer_launch_app",
+                        toolParamsDisplay: JSON.stringify({ app }),
+                        sessionApprovalAvailable: false,
+                        ...(decision === undefined ? {} : { decision }),
+                      },
+                      turnId: turnId ? TurnId.makeUnsafe(turnId) : null,
+                      createdAt,
+                    },
+                    createdAt,
+                  }),
+                );
+              },
+            }),
         }),
     );
   }

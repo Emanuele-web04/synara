@@ -85,6 +85,26 @@ function textOf(result: McpToolCallResult): string {
     .join("\n");
 }
 
+/** A driver reply that binds target bt-1 with the given tabs. */
+function bindingResult(tabs: ReadonlyArray<Record<string, unknown>>) {
+  return {
+    content: [
+      {
+        type: "text",
+        text: `bound target bt-1 (exact) with ${tabs.length} tab(s)`,
+      },
+    ],
+    structuredContent: {
+      status: "ok",
+      mode: "bind",
+      binding_quality: "exact",
+      native_title: "about:blank",
+      target_id: "bt-1",
+      tabs,
+    },
+  };
+}
+
 describe("computer_browser_* gateway tools", () => {
   it("registers the whole family on the computer:control capability with active-turn dispatch", () => {
     const tools = makeAgentGatewayComputerBrowserTools({
@@ -353,5 +373,199 @@ describe("computer_browser_* gateway tools", () => {
     await call("computer_browser_state", { target_id: "t", tab_id: "tab" });
     await manager.handleThreadRemoved(THREAD);
     expect(backend.callsFor("browser.endThread").map((entry) => entry.args[0])).toEqual([THREAD]);
+  });
+});
+
+describe("browser id ergonomics", () => {
+  const oneTab = [{ tab_id: "tab-1", active: true, title: "about:blank", url: "about:blank" }];
+
+  it("labels target_id and tab_id in the bind result instead of leaving the model to guess", async () => {
+    const backend = new FakeComputerBackend({
+      browser: (call) =>
+        call.name === "get_browser_state"
+          ? bindingResult(oneTab)
+          : { structuredContent: { status: "ok" } },
+    });
+    const { call } = await setup({ backend });
+    const result = await call("computer_browser_state", { pid: 33_526, window_id: 8_196 });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({ target_id: "bt-1", tab_id: "tab-1" });
+    expect(textOf(result)).toContain("target_id=bt-1");
+    expect(textOf(result)).toContain("tab_id=tab-1");
+  });
+
+  it("resolves an omitted tab_id in navigate from the last bind", async () => {
+    const backend = new FakeComputerBackend({
+      browser: (call) =>
+        call.name === "get_browser_state"
+          ? bindingResult(oneTab)
+          : { structuredContent: { status: "ok" } },
+    });
+    const { call } = await setup({ backend, authorizeAction: async () => true });
+    await call("computer_browser_state", { pid: 33_526, window_id: 8_196 });
+    const result = await call("computer_browser_navigate", {
+      target_id: "bt-1",
+      url: "https://www.newegg.com/",
+    });
+    expect(result.isError).not.toBe(true);
+    const navigations = backend.callsFor("browser.browser_navigate");
+    expect(navigations).toHaveLength(1);
+    expect(navigations[0]?.args[0]).toMatchObject({ target_id: "bt-1", tab_id: "tab-1" });
+  });
+
+  it("resolves an omitted tab_id in a snapshot from the same bind", async () => {
+    const backend = new FakeComputerBackend({
+      browser: (call) =>
+        call.name === "get_browser_state"
+          ? bindingResult(oneTab)
+          : { structuredContent: { status: "ok" } },
+    });
+    const { call } = await setup({ backend });
+    await call("computer_browser_state", { pid: 33_526, window_id: 8_196 });
+    await call("computer_browser_state", { target_id: "bt-1" });
+    const states = backend.callsFor("browser.get_browser_state");
+    expect(states).toHaveLength(2);
+    expect(states[1]?.args[0]).toMatchObject({ target_id: "bt-1", tab_id: "tab-1" });
+  });
+
+  it("defaults to the single active tab when several are open", async () => {
+    const backend = new FakeComputerBackend({
+      browser: (call) =>
+        call.name === "get_browser_state"
+          ? bindingResult([
+              { tab_id: "tab-a", active: false },
+              { tab_id: "tab-b", active: true },
+            ])
+          : { structuredContent: { status: "ok" } },
+    });
+    const { call } = await setup({ backend, authorizeAction: async () => true });
+    const bound = await call("computer_browser_state", { pid: 1, window_id: 2 });
+    expect(bound.structuredContent).toMatchObject({ tab_id: "tab-b" });
+    await call("computer_browser_navigate", { target_id: "bt-1", url: "https://example.com/" });
+    expect(backend.callsFor("browser.browser_navigate")[0]?.args[0]).toMatchObject({
+      tab_id: "tab-b",
+    });
+  });
+
+  it("refuses an ambiguous target with its tab listing and dispatches nothing", async () => {
+    const backend = new FakeComputerBackend({
+      browser: (call) =>
+        call.name === "get_browser_state"
+          ? bindingResult([
+              { tab_id: "tab-a", active: false },
+              { tab_id: "tab-b", active: false },
+            ])
+          : { structuredContent: { status: "ok" } },
+    });
+    const { call } = await setup({ backend, authorizeAction: async () => true });
+    await call("computer_browser_state", { pid: 1, window_id: 2 });
+    const result = await call("computer_browser_navigate", {
+      target_id: "bt-1",
+      url: "https://example.com/",
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      status: "refused",
+      refusal: { code: "browser_tab_required" },
+    });
+    expect(textOf(result)).toContain("tab-a");
+    expect(textOf(result)).toContain("tab-b");
+    expect(backend.callsFor("browser.browser_navigate")).toHaveLength(0);
+  });
+
+  it("refuses an omitted tab_id for a target this thread never bound", async () => {
+    const backend = new FakeComputerBackend({ browser: true });
+    const { call } = await setup({ backend, authorizeAction: async () => true });
+    const result = await call("computer_browser_navigate", {
+      target_id: "bt-never-bound",
+      url: "https://example.com/",
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      status: "refused",
+      refusal: { code: "browser_tab_required" },
+    });
+    expect(backend.callsFor("browser.browser_navigate")).toHaveLength(0);
+  });
+
+  it("does not resolve a target that belongs to another thread", async () => {
+    const backend = new FakeComputerBackend({
+      browser: (call) =>
+        call.name === "get_browser_state"
+          ? bindingResult(oneTab)
+          : { structuredContent: { status: "ok" } },
+    });
+    const { call } = await setup({ backend, authorizeAction: async () => true });
+    await call("computer_browser_state", { pid: 1, window_id: 2 }, THREAD);
+    const result = await call(
+      "computer_browser_navigate",
+      { target_id: "bt-1", url: "https://example.com/" },
+      "other-thread",
+    );
+    expect(result.structuredContent).toMatchObject({ refusal: { code: "browser_tab_required" } });
+    expect(backend.callsFor("browser.browser_navigate")).toHaveLength(0);
+  });
+
+  it("explains a swapped target/tab id when the driver cannot find the tab", async () => {
+    const backend = new FakeComputerBackend({
+      browser: () => ({
+        structuredContent: {
+          status: "refused",
+          refusal: {
+            code: "browser_tab_not_found",
+            message: "tab bt-85991064 is not known for target bt-85991064",
+          },
+        },
+      }),
+    });
+    const { call } = await setup({ backend, authorizeAction: async () => true });
+    const result = await call("computer_browser_navigate", {
+      target_id: "bt-85991064",
+      tab_id: "bt-85991064",
+      url: "https://example.com/",
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      status: "refused",
+      refusal: { code: "browser_tab_not_found" },
+    });
+    expect(textOf(result)).toContain("is a target id, not a tab id");
+    expect(textOf(result)).toContain("tab-");
+  });
+
+  it("labels the bind key on a prepare result and leaves tab_id optional on target tools", async () => {
+    const backend = new FakeComputerBackend({
+      browser: (call) =>
+        call.name === "browser_prepare"
+          ? {
+              structuredContent: {
+                status: "ok",
+                prepared: true,
+                prepared_pid: 33_526,
+                action: "launched_isolated_browser",
+              },
+            }
+          : { structuredContent: { status: "ok" } },
+    });
+    const { call, byName } = await setup({ backend, authorizeAction: async () => true });
+    const prepared = await call("computer_browser_prepare", {
+      allow_launch: true,
+      profile: { mode: "isolated_new" },
+    });
+    expect(textOf(prepared)).toContain("prepared_pid=33526");
+    expect(textOf(prepared)).toContain("computer_browser_state");
+    for (const name of [
+      "computer_browser_navigate",
+      "computer_browser_click",
+      "computer_browser_type",
+      "computer_browser_dialog",
+      "computer_browser_upload",
+      "computer_browser_download",
+      "computer_browser_pointer",
+    ]) {
+      const required = byName.get(name)?.definition.inputSchema.required as string[];
+      expect(required).toContain("target_id");
+      expect(required).not.toContain("tab_id");
+    }
   });
 });

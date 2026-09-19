@@ -47,6 +47,7 @@ import {
   ComputerBackendError,
   type ComputerAgentDialect,
   type ComputerCaptureRequest,
+  type ComputerMenuTarget,
   type ComputerTextRange,
 } from "../computer/ComputerBackend.ts";
 import {
@@ -734,6 +735,44 @@ function hasTargetFields(target: ComputerTarget): boolean {
 /** Accepts both spellings, because models emit the camelCase one either way. */
 function readWindowIdArg(args: Record<string, unknown>): string | undefined {
   return readStringArg(args, "window_id") ?? readStringArg(args, "windowId");
+}
+
+/**
+ * The target a menu invocation names — `window_id` (one exact window, with
+ * the driver's focus-sensitive exact-window semantics), or `app`/`pid` (the
+ * application-level menu bar of a running process, no window needed, the
+ * only route for an app that has none). Exactly one form is required: they
+ * are different routes, so mixing them is refused rather than silently
+ * preferring one.
+ */
+function readMenuTargetArg(args: Record<string, unknown>): ComputerMenuTarget {
+  const windowId = readWindowIdArg(args);
+  const app = readStringArg(args, "app");
+  const pid = readNumberArg(args, "pid");
+  const forms = [windowId !== undefined, app !== undefined, pid !== undefined].filter(Boolean);
+  if (forms.length === 0) {
+    throw new ToolInputError(
+      'Name the target one way: "window_id" (one exact window), or "app"/"pid" (that running app\'s menu bar, no window needed).',
+    );
+  }
+  if (forms.length > 1) {
+    throw new ToolInputError(
+      'Pass exactly one of "window_id", "app", or "pid" — they name different menu routes.',
+    );
+  }
+  if (windowId !== undefined) return { windowId };
+  if (app !== undefined) return { app };
+  if (pid !== undefined && Number.isSafeInteger(pid) && pid > 0) return { pid };
+  throw new ToolInputError('"pid" must be a positive integer.');
+}
+
+/** The one-to-six-title menu path both the tool and a run step accept. */
+function readMenuPathArg(args: Record<string, unknown>, subject: string): readonly string[] {
+  const path = readStringArrayArg(args, "path");
+  if (!path?.length || path.length > 6 || path.some((title) => title.trim().length === 0)) {
+    throw new ToolInputError(`${subject} needs a path of one to six non-empty menu titles.`);
+  }
+  return path;
 }
 
 function readScreenshotIdArg(args: Record<string, unknown>): string | undefined {
@@ -1608,12 +1647,26 @@ export function makeAgentGatewayComputerTools(
     if (
       name === "computer_activate_window" ||
       name === "computer_set_window_frame" ||
-      name === "computer_invoke_menu" ||
       name === "computer_kill_app" ||
       name === "computer_set_window_minimized"
     ) {
       return typeof args.window_id === "string" && args.window_id.length > 0
         ? drivenAppsForWindows(new Set([args.window_id]))
+        : new Set();
+    }
+    if (name === "computer_invoke_menu") {
+      // Three target forms, three consent keys — the window id names its
+      // owning app, the app spelling is its own key, and the pid resolves
+      // through the process list like set_app_visibility.
+      const windowId = args.window_id;
+      if (typeof windowId === "string" && windowId.length > 0) {
+        return drivenAppsForWindows(new Set([windowId]));
+      }
+      const app = args.app;
+      if (typeof app === "string" && app.trim().length > 0) return new Set([app]);
+      const pid = args.pid;
+      return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0
+        ? drivenAppsForPids(new Set([pid]))
         : new Set();
     }
     if (name === "computer_set_app_visibility") {
@@ -1632,10 +1685,24 @@ export function makeAgentGatewayComputerTools(
         if (type === "launch_app") {
           const app = Reflect.get(step, "app");
           if (typeof app === "string" && app.trim().length > 0) apps.add(app);
+        } else if (type === "invoke_menu") {
+          // The windowless forms consent under the app or pid they name; the
+          // window form resolves through the window's owner like the others.
+          const windowId = Reflect.get(step, "window_id");
+          if (typeof windowId === "string" && windowId.length > 0) {
+            windowIds.add(windowId);
+          } else {
+            const app = Reflect.get(step, "app");
+            if (typeof app === "string" && app.trim().length > 0) {
+              apps.add(app);
+            } else {
+              const pid = Reflect.get(step, "pid");
+              if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0) pids.add(pid);
+            }
+          }
         } else if (
           type === "activate_window" ||
           type === "set_window_frame" ||
-          type === "invoke_menu" ||
           type === "kill_app" ||
           type === "set_window_minimized"
         ) {
@@ -1808,7 +1875,21 @@ export function makeAgentGatewayComputerTools(
 
     const addLifecycleStep = async (step: Record<string, unknown>): Promise<void> => {
       const windowId = readStringArg(step, "window_id") ?? readStringArg(step, "windowId");
-      if (!(await addWindow(windowId))) unattributed = true;
+      if (windowId !== undefined) {
+        if (!(await addWindow(windowId))) unattributed = true;
+        return;
+      }
+      // The windowless menu form: an app spelling resolves to its stable
+      // identity when the inventory knows it, and a pid resolves through the
+      // same pid → identity helper set_app_visibility uses. An unresolvable
+      // spelling stays unattributed, exactly like an unknown launch app.
+      const app = readStringArg(step, "app");
+      if (app !== undefined) {
+        if (!addIdentity(computerGrantIdentityForAppArg(app, await apps()))) unattributed = true;
+        return;
+      }
+      const pid = readNumberArg(step, "pid");
+      if (!(await addPid(pid))) unattributed = true;
     };
 
     if (name === "computer_launch_app") {
@@ -2640,7 +2721,7 @@ export function makeAgentGatewayComputerTools(
     write_clipboard: ["text"],
     paste: ["text", "window_id", "windowId"],
     set_window_frame: ["window_id", "windowId", "x", "y", "width", "height"],
-    invoke_menu: ["window_id", "windowId", "path"],
+    invoke_menu: ["window_id", "windowId", "app", "pid", "path"],
     kill_app: ["window_id", "windowId"],
     set_window_minimized: ["window_id", "windowId", "minimized"],
     set_app_visibility: ["pid", "hidden"],
@@ -2894,12 +2975,9 @@ export function makeAgentGatewayComputerTools(
         return () => manager.setWindowFrame(threadId, windowId, frame);
       }
       case "invoke_menu": {
-        const windowId = readWindowIdArg(step);
-        if (!windowId) throw new ToolInputError('Step "invoke_menu" requires "window_id".');
-        const path = readStringArrayArg(step, "path");
-        if (!path?.length || path.length > 6 || path.some((title) => title.trim().length === 0))
-          throw new ToolInputError('Step "invoke_menu" needs a path of one to six titles.');
-        return () => manager.invokeMenu(threadId, windowId, path);
+        const target = readMenuTargetArg(step);
+        const path = readMenuPathArg(step, 'Step "invoke_menu"');
+        return () => manager.invokeMenu(threadId, target, path);
       }
       case "kill_app": {
         const windowId = readWindowIdArg(step);
@@ -4058,13 +4136,23 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_invoke_menu",
       "Invoke menu item",
-      `Invoke a menu-bar item on the exact window's app by path — ["File", "Save"] or ["Edit", "Copy"]. One to six levels; disabled or absent items are refused rather than clicked blindly. Menu commands can mutate the app or open dialogs, so read the result's verification and observe afterwards. ${DELIVERY_HINT}`,
+      `Invoke a menu-bar item by path — ["File", "Save"] or ["Edit", "Copy"]. Name the target one way: window_id (that exact window's app, focus-sensitive semantics preserved) or app/pid (the running app's own menu bar — no window needed, so this is the route for an app with no windows yet). One to six levels; disabled or absent items are refused rather than clicked blindly. Menu commands can mutate the app or open dialogs, so read the result's verification and observe afterwards. ${DELIVERY_HINT}`,
       {
         type: "object",
         properties: {
           window_id: {
             type: "string",
             description: "A window owned by the app whose menu to invoke.",
+          },
+          app: {
+            type: "string",
+            description:
+              "App name or bundle id, from computer_list_apps. Invokes the app's own menu bar without a window; pass either app or pid, not both.",
+          },
+          pid: {
+            type: "number",
+            description:
+              "Running app's process id, from computer_list_apps. Invokes the app's own menu bar without a window; pass either app or pid, not both.",
           },
           path: {
             type: "array",
@@ -4074,16 +4162,13 @@ export function makeAgentGatewayComputerTools(
             description: 'Menu titles from the menu bar down, e.g. ["File", "Export As…"].',
           },
         },
-        required: ["window_id", "path"],
+        required: ["path"],
         additionalProperties: false,
       },
       async (args, context) => {
-        const windowId = readWindowIdArg(args);
-        if (!windowId) throw new ToolInputError("window_id is required.");
-        const path = readStringArrayArg(args, "path");
-        if (!path?.length || path.length > 6 || path.some((title) => title.trim().length === 0))
-          throw new ToolInputError("path must name one to six non-empty menu titles.");
-        return manager.invokeMenu(context.callerThreadId, windowId, path);
+        const target = readMenuTargetArg(args);
+        const path = readMenuPathArg(args, "computer_invoke_menu");
+        return manager.invokeMenu(context.callerThreadId, target, path);
       },
     ),
     actionEntry(

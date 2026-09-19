@@ -348,6 +348,7 @@ const VALID_TOKENS: Record<string, string> = {
   "token-parent": "thread-parent",
   "token-parent-claude": "thread-parent",
   "token-parent-readonly": "thread-parent",
+  "token-parent-computer": "thread-parent",
   "token-ghost": "thread-ghost",
 };
 
@@ -457,12 +458,14 @@ function makeHarnessLayer(
             capabilities:
               token === "token-parent-readonly"
                 ? new Set(["thread:read"] as const)
-                : new Set([
-                    "thread:read",
-                    "thread:write",
-                    "automation:write",
-                    "diagnostics:read",
-                  ] as const),
+                : token === "token-parent-computer"
+                  ? new Set(["thread:read", "computer:control"] as const)
+                  : new Set([
+                      "thread:read",
+                      "thread:write",
+                      "automation:write",
+                      "diagnostics:read",
+                    ] as const),
           }
         : null;
     },
@@ -1877,6 +1880,46 @@ describe("AgentGateway", () => {
       };
       assert.equal(error.code, "capability_denied");
       assert.equal(error.details.requiredCapability, "diagnostics:read");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("drives a second app on a full-access thread without a second-app card", () => {
+    // The packaged E2E was full-access and stalled behind "Allow the agent to
+    // drive Google Chrome?" for the driver-owned isolated Chromium it had
+    // launched itself. Full access is the broader consent; the wiring must
+    // not publish an approval card for the second app.
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      baseThreads.map((thread) =>
+        thread.id === "thread-parent"
+          ? makeThreadShell("thread-parent", { runtimeMode: "full-access" })
+          : thread,
+      ),
+      [],
+      {
+        computerService: makeComputerServiceLayer({
+          backend: new FakeComputerBackend(),
+          supported: true,
+        }),
+      },
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const launch = (app: string) =>
+        harness.callTool({
+          token: "token-parent-computer",
+          name: "computer_launch_app",
+          args: { app, wait_for_window: false },
+        });
+      const first = yield* launch("kcalc");
+      assert.isFalse(isToolError(first.result), toolErrorText(first.result));
+      const second = yield* launch("Google Chrome");
+      assert.isFalse(isToolError(second.result), toolErrorText(second.result));
+      const cards = harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "approval.requested",
+      );
+      assert.equal(cards.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
