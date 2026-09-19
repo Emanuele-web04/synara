@@ -6,7 +6,7 @@ export type GithubAlertKind = (typeof GITHUB_ALERT_KINDS)[number];
 // GitHub only recognizes the marker alone on the first line of a blockquote.
 const ALERT_MARKER_PATTERN = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:\r?\n|$)/i;
 
-function toGithubAlert(node: Blockquote): void {
+function toGithubAlert(node: Blockquote, source: string): void {
   const paragraph = node.children[0];
   if (paragraph?.type !== "paragraph") return;
   const text = paragraph.children[0];
@@ -25,16 +25,26 @@ function toGithubAlert(node: Blockquote): void {
   }
 
   text.value = text.value.slice(match[0].length);
-  // Keep find offsets aligned with the source after dropping the marker.
+  // Keep find/wiki-link offsets aligned with the source after dropping the
+  // marker; the next line's `>` continuation prefix is not in the text value.
   const start = text.position?.start;
   if (start && start.offset !== undefined) {
     const removed = match[0];
-    const newlineIndex = removed.lastIndexOf("\n");
-    text.position!.start = {
-      line: start.line + (newlineIndex === -1 ? 0 : 1),
-      column: newlineIndex === -1 ? start.column + removed.length : 1,
-      offset: start.offset + removed.length,
-    };
+    if (removed.endsWith("\n")) {
+      const lineStart = start.offset + removed.length;
+      const prefix = /^[ \t]*(?:>[ \t]?)*/.exec(source.slice(lineStart))![0];
+      text.position!.start = {
+        line: start.line + 1,
+        column: prefix.length + 1,
+        offset: lineStart + prefix.length,
+      };
+    } else {
+      text.position!.start = {
+        ...start,
+        column: start.column + removed.length,
+        offset: start.offset + removed.length,
+      };
+    }
   }
   if (!text.value) paragraph.children.shift();
   if (paragraph.children.length === 0) node.children.shift();
@@ -48,15 +58,15 @@ function toGithubAlert(node: Blockquote): void {
   };
 }
 
-function visit(node: Parent): void {
+function visit(node: Parent, source: string): void {
   for (const child of node.children) {
-    if (child.type === "blockquote") toGithubAlert(child);
-    if ("children" in child) visit(child);
+    if (child.type === "blockquote") toGithubAlert(child, source);
+    if ("children" in child) visit(child, source);
   }
 }
 
 // Renders GitHub's `> [!NOTE]` blockquote alerts; the marker is left as plain
 // text by remark-gfm, so tag the blockquote for the renderer and strip it.
 export function remarkGithubAlerts() {
-  return (tree: Root) => visit(tree);
+  return (tree: Root, file: { value: unknown }) => visit(tree, String(file.value));
 }
