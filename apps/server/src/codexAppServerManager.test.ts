@@ -3429,6 +3429,122 @@ describe("CodexAppServerManager discovery", () => {
 });
 
 describe("thread checkpoint control", () => {
+  it("uses the requested binary and archive for stopped external history reads", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    const discovery = vi
+      .spyOn(
+        manager as unknown as {
+          getOrCreateDiscoverySession: (...args: unknown[]) => Promise<unknown>;
+        },
+        "getOrCreateDiscoverySession",
+      )
+      .mockResolvedValue(context);
+    const providerOptions = { codex: { binaryPath: "/custom/codex", homePath: "/custom/archive" } };
+    sendRequest.mockResolvedValue({ thread: { id: "external", turns: [] } });
+    await manager.readExternalThread({
+      externalThreadId: "external",
+      cwd: "/repo",
+      providerOptions,
+    });
+    expect(discovery).toHaveBeenCalledWith("/repo", providerOptions);
+  });
+  it("does not spawn a fork runtime after import cancellation during version discovery", async () => {
+    const { manager, sendRequest } = createThreadControlHarness();
+    let releaseVersionCheck!: () => void;
+    let versionCheckStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      versionCheckStarted = resolve;
+    });
+    vi.spyOn(
+      manager as unknown as { assertSupportedCodexCliVersion: () => Promise<void> },
+      "assertSupportedCodexCliVersion",
+    ).mockImplementation(() => {
+      versionCheckStarted();
+      return new Promise<void>((resolve) => {
+        releaseVersionCheck = resolve;
+      });
+    });
+    const controller = new AbortController();
+    const copied = manager.forkThread(
+      {
+        sourceThreadId: asThreadId("source"),
+        threadId: asThreadId("target"),
+        sourceResumeCursor: { threadId: "source" },
+        cwd: os.tmpdir(),
+        runtimeMode: "full-access",
+      },
+      controller.signal,
+    );
+    const failure = expect(copied).rejects.toThrow();
+    await started;
+    controller.abort();
+    releaseVersionCheck();
+    await failure;
+    expect(manager.listSessions()).toEqual([]);
+    expect(sendRequest).not.toHaveBeenCalled();
+  });
+  it("reads full paginated history and preserves native turn timestamps", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    sendRequest
+      .mockRejectedValueOnce(
+        new Error("includeTurns is not supported for paginated threads; use thread/turns/list"),
+      )
+      .mockResolvedValueOnce({ thread: { id: "thread_1", cwd: "/repo/source" } })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: "turn_1",
+            itemsView: "full",
+            status: "completed",
+            startedAt: 1700000000,
+            completedAt: 1700000005,
+            items: [{ type: "userMessage" }],
+          },
+        ],
+        nextCursor: "page-2",
+      })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: "turn_2",
+            itemsView: "full",
+            status: "completed",
+            items: [{ type: "agentMessage", text: "done" }],
+          },
+        ],
+        nextCursor: null,
+      });
+    const result = await manager.readThread(asThreadId("thread_1"));
+    expect(result.cwd).toBe("/repo/source");
+    expect(result.turns).toEqual([
+      {
+        id: "turn_1",
+        status: "completed",
+        startedAt: 1700000000,
+        completedAt: 1700000005,
+        items: [{ type: "userMessage" }],
+      },
+      { id: "turn_2", status: "completed", items: [{ type: "agentMessage", text: "done" }] },
+    ]);
+    expect(sendRequest).toHaveBeenNthCalledWith(4, context, "thread/turns/list", {
+      threadId: "thread_1",
+      itemsView: "full",
+      sortDirection: "asc",
+      limit: 100,
+      cursor: "page-2",
+    });
+  });
+
+  it("rejects repeated native history cursors instead of looping or truncating silently", async () => {
+    const { manager, sendRequest } = createThreadControlHarness();
+    sendRequest
+      .mockRejectedValueOnce(new Error("full history is unavailable for paginated threads"))
+      .mockResolvedValueOnce({ thread: { id: "thread_1" } })
+      .mockResolvedValue({ data: [], nextCursor: "same-page" });
+    await expect(manager.readThread(asThreadId("thread_1"))).rejects.toThrow("repeated");
+    expect(sendRequest).toHaveBeenCalledTimes(4);
+  });
+
   it("reads thread turns from thread/read", async () => {
     const { manager, context, requireSession, sendRequest } = createThreadControlHarness();
     sendRequest.mockResolvedValue({
@@ -3492,62 +3608,113 @@ describe("thread checkpoint control", () => {
     });
   });
 
-  it("forks a provider thread with an explicitly selected Standard tier", async () => {
-    const homePath = mkdtempSync(path.join(os.tmpdir(), "synara-codex-fork-tier-"));
-    writeFileSync(path.join(homePath, "app-server"), "process.stdin.resume();\n");
-    const previousSynaraHome = process.env.SYNARA_HOME;
-    process.env.SYNARA_HOME = path.join(homePath, "synara-home");
-    const { manager, sendRequest } = createThreadControlHarness();
-    vi.spyOn(
-      manager as unknown as { assertSupportedCodexCliVersion: () => Promise<void> },
-      "assertSupportedCodexCliVersion",
-    ).mockResolvedValue(undefined);
-    sendRequest.mockResolvedValue({
-      thread: {
-        id: "thread_forked",
-      },
-    });
+  it.each([
+    "ordinary",
+    "completed",
+    "interrupted",
+    "failed",
+    "empty",
+    "inProgress",
+    "legacy-completed",
+    "legacy-unknown",
+    "legacy-invalid-date",
+  ])(
+    "forks a provider thread with an explicitly selected Standard tier (%s)",
+    async (sourceStatus) => {
+      const requireCompletedSource = sourceStatus !== "ordinary";
+      const homePath = mkdtempSync(path.join(os.tmpdir(), "synara-codex-fork-tier-"));
+      writeFileSync(path.join(homePath, "app-server"), "process.stdin.resume();\n");
+      const previousSynaraHome = process.env.SYNARA_HOME;
+      process.env.SYNARA_HOME = path.join(homePath, "synara-home");
+      const { manager, sendRequest } = createThreadControlHarness();
+      vi.spyOn(
+        manager as unknown as { assertSupportedCodexCliVersion: () => Promise<void> },
+        "assertSupportedCodexCliVersion",
+      ).mockResolvedValue(undefined);
+      sendRequest.mockResolvedValue({
+        thread: {
+          id: "thread_forked",
+          turns:
+            sourceStatus === "empty"
+              ? []
+              : [
+                  {
+                    id: "completed-source-turn",
+                    ...(sourceStatus.startsWith("legacy-")
+                      ? {}
+                      : { status: sourceStatus === "ordinary" ? "completed" : sourceStatus }),
+                    ...(sourceStatus === "legacy-completed" ? { completedAt: 1700000005 } : {}),
+                    ...(sourceStatus === "legacy-invalid-date" ? { completedAt: "invalid" } : {}),
+                    items: [],
+                  },
+                ],
+        },
+      });
 
-    try {
-      const result = await manager.forkThread({
-        sourceThreadId: asThreadId("thread_1"),
-        sourceResumeCursor: {
+      try {
+        const fork = manager.forkThread({
+          sourceThreadId: asThreadId("thread_1"),
+          sourceResumeCursor: {
+            threadId: "thread_1",
+          },
+          threadId: asThreadId("thread_2"),
+          lifecycleGeneration: "import-generation",
+          requireCompletedSource,
+          cwd: homePath,
+          providerOptions: { codex: { binaryPath: process.execPath, homePath } },
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+            options: { fastMode: false },
+          },
+          runtimeMode: "full-access",
+        });
+        if (["inProgress", "legacy-unknown", "legacy-invalid-date"].includes(sourceStatus)) {
+          await expect(fork).rejects.toThrow("finish its turn");
+          expect(sendRequest.mock.calls.some(([, method]) => method === "thread/fork")).toBe(false);
+          return;
+        }
+        const result = await fork;
+
+        const forkRequest = sendRequest.mock.calls.find(([, method]) => method === "thread/fork");
+        expect(forkRequest?.[2]).toMatchObject({
           threadId: "thread_1",
-        },
-        threadId: asThreadId("thread_2"),
-        cwd: homePath,
-        providerOptions: { codex: { binaryPath: process.execPath, homePath } },
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.4",
-          options: { fastMode: false },
-        },
-        runtimeMode: "full-access",
-      });
-
-      const forkRequest = sendRequest.mock.calls.find(([, method]) => method === "thread/fork");
-      expect(forkRequest?.[2]).toMatchObject({
-        threadId: "thread_1",
-        serviceTier: "default",
-        approvalPolicy: "never",
-        sandbox: "danger-full-access",
-      });
-      expect(result).toEqual({
-        threadId: "thread_2",
-        resumeCursor: {
-          threadId: "thread_forked",
-        },
-      });
-    } finally {
-      await manager.stopAll();
-      if (previousSynaraHome === undefined) {
-        delete process.env.SYNARA_HOME;
-      } else {
-        process.env.SYNARA_HOME = previousSynaraHome;
+          deferGoalContinuation: true,
+          serviceTier: "default",
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+        });
+        expect(forkRequest?.[2]).toMatchObject(
+          requireCompletedSource
+            ? {
+                ...(sourceStatus === "empty" ? {} : { lastTurnId: "completed-source-turn" }),
+                excludeTurns: true,
+              }
+            : {},
+        );
+        expect(forkRequest?.[0]).toMatchObject({ lifecycleGeneration: "import-generation" });
+        expect(
+          sendRequest.mock.calls.some(
+            ([, method]) => method === "thread/resume" || method === "turn/start",
+          ),
+        ).toBe(false);
+        expect(result).toEqual({
+          threadId: "thread_2",
+          resumeCursor: {
+            threadId: "thread_forked",
+          },
+        });
+      } finally {
+        await manager.stopAll();
+        if (previousSynaraHome === undefined) {
+          delete process.env.SYNARA_HOME;
+        } else {
+          process.env.SYNARA_HOME = previousSynaraHome;
+        }
+        rmSync(homePath, { recursive: true, force: true });
       }
-      rmSync(homePath, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("rolls back turns via thread/rollback and resets session running state", async () => {
     const { manager, context, sendRequest, updateSession } = createThreadControlHarness();

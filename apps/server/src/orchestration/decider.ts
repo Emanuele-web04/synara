@@ -768,7 +768,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           const remainingThreads = listThreadsByProjectId(readModel, existingProject.id).filter(
             (thread) => thread.deletedAt === null,
           );
-          if (remainingThreads.length > 0) {
+          if (remainingThreads.length > 0 || command.preserveExistingProject) {
             return yield* new OrchestrationCommandInvariantError({
               commandType: command.type,
               detail: `Project '${existingProject.id}' already uses workspace root '${existingProject.workspaceRoot}'.`,

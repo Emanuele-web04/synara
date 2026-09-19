@@ -85,6 +85,10 @@ at custom binary locations.
 
 ## Provider sessions
 
+Use [Import projects](project-import.md) to bring local Codex and Claude Code projects and
+conversations into Synara. The flow links existing folders, merges matching project destinations,
+and creates independent conversation copies without replacing your existing Synara work.
+
 Each task owns a provider session.
 
 The session may preserve provider-specific behavior such as:

@@ -3,9 +3,10 @@ import "../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { expect, it, vi } from "vitest";
+import { useState } from "react";
 import { render } from "vitest-browser-react";
 
-import { SidebarSearchPalette } from "./SidebarSearchPalette";
+import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
 import type { SidebarSearchThread } from "./SidebarSearchPalette.logic";
 
 const thread: SidebarSearchThread = {
@@ -43,6 +44,7 @@ async function renderPalette(searchThread: SidebarSearchThread = thread) {
         onOpenThread={onOpenThread}
         importProviders={[]}
         onImportThread={vi.fn().mockResolvedValue(undefined)}
+        onImportProjects={vi.fn()}
       />
     </QueryClientProvider>,
   );
@@ -95,4 +97,58 @@ it("shows only unique matching metadata so a space match is not buried behind pr
   await input.fill("  cLiEnT   work  ");
   await expect.element(result).toHaveTextContent("Client work");
   expect(result.element().textContent?.match(/Dashboard/g)).toHaveLength(1);
+});
+
+it("opens a source page for importing projects and hands the chosen source to the caller", async () => {
+  const onImportProjects = vi.fn();
+  const onOpenChange = vi.fn();
+  function StatefulPalette() {
+    const [mode, setMode] = useState<SidebarSearchPaletteMode>("search");
+    return (
+      <QueryClientProvider client={new QueryClient()}>
+        <SidebarSearchPalette
+          open
+          mode={mode}
+          onModeChange={setMode}
+          onOpenChange={onOpenChange}
+          actions={[
+            {
+              id: "import-projects",
+              label: "Import projects from…",
+              description: "Bring Codex and Claude Code projects into Synara.",
+              keywords: ["import"],
+            },
+          ]}
+          projects={[]}
+          threads={[]}
+          onCreateChat={vi.fn()}
+          onCreateThread={vi.fn()}
+          onAddProjectPath={vi.fn().mockResolvedValue(undefined)}
+          homeDir={null}
+          onOpenSettings={vi.fn()}
+          onOpenFeedback={vi.fn()}
+          onOpenUsageSettings={vi.fn()}
+          onOpenProject={vi.fn()}
+          onOpenThread={vi.fn()}
+          importProviders={[]}
+          onImportThread={vi.fn().mockResolvedValue(undefined)}
+          onImportProjects={onImportProjects}
+        />
+      </QueryClientProvider>
+    );
+  }
+  await render(<StatefulPalette />);
+
+  await page.getByRole("option", { name: "Import projects from…" }).click();
+  // Entering the page must not close the palette or start an import yet.
+  expect(onOpenChange).not.toHaveBeenCalled();
+  await expect.element(page.getByPlaceholder("Import projects from…")).toBeVisible();
+  await expect.element(page.getByRole("option", { name: "From Codex", exact: true })).toBeVisible();
+  await expect
+    .element(page.getByRole("option", { name: "From Claude Code and Codex" }))
+    .toBeVisible();
+
+  await page.getByRole("option", { name: "From Claude Code", exact: true }).click();
+  expect(onImportProjects).toHaveBeenCalledWith(["claudeAgent"]);
+  expect(onOpenChange).toHaveBeenCalledWith(false);
 });

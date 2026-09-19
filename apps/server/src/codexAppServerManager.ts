@@ -206,6 +206,7 @@ interface CodexSessionContext {
   teardownError?: Error;
   teardownCapturedBeforeExit?: boolean;
   discovery?: boolean;
+  discoveryKey?: string;
 }
 
 function historicalOpenTerminalError(context: CodexSessionContext): Error | undefined {
@@ -312,6 +313,9 @@ export interface CodexAppServerStartSessionInput {
 export interface CodexThreadTurnSnapshot {
   id: TurnId;
   items: unknown[];
+  startedAt?: number | string;
+  completedAt?: number | string;
+  status?: string;
 }
 
 export interface CodexThreadSnapshot {
@@ -1917,32 +1921,91 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("Session is missing a provider resume thread id.");
     }
 
-    const response = await this.sendRequest(context, "thread/read", {
-      threadId: providerThreadId,
-      includeTurns: true,
-    });
-    return this.parseThreadSnapshot("thread/read", response);
+    return this.readThreadSnapshot(context, providerThreadId);
   }
 
   async readExternalThread(input: {
     externalThreadId: string;
     cwd?: string;
+    providerOptions?: ProviderSessionStartInput["providerOptions"];
   }): Promise<CodexThreadSnapshot> {
-    const context = await this.resolveContextForDiscovery(undefined, input.cwd);
-    const response = await this.sendRequest(context, "thread/read", {
-      threadId: input.externalThreadId,
-      includeTurns: true,
-    });
-    return this.parseThreadSnapshot("thread/read", response);
+    const context = await this.resolveContextForDiscovery(
+      undefined,
+      input.cwd,
+      input.providerOptions,
+    );
+    return this.readThreadSnapshot(context, input.externalThreadId);
   }
 
-  async forkThread(input: ProviderForkThreadInput): Promise<ProviderForkThreadResult> {
+  private async readThreadSnapshot(
+    context: CodexSessionContext,
+    providerThreadId: string,
+  ): Promise<CodexThreadSnapshot> {
+    try {
+      const response = await this.sendRequest(context, "thread/read", {
+        threadId: providerThreadId,
+        includeTurns: true,
+      });
+      return this.parseThreadSnapshot("thread/read", response);
+    } catch (error) {
+      // Older app-servers expose only thread/read. New paginated stores reject
+      // its full-history flag, requiring full items on every turns page.
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/include.?turns|paginated|thread\/turns\/list|full.history/i.test(message)) {
+        throw error;
+      }
+    }
+    const metadata = await this.sendRequest(context, "thread/read", {
+      threadId: providerThreadId,
+      includeTurns: false,
+    });
+    const snapshot = this.parseThreadSnapshot("thread/read", metadata);
+    const turns: CodexThreadTurnSnapshot[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 1_000; page += 1) {
+      const response = await this.sendRequest(context, "thread/turns/list", {
+        threadId: providerThreadId,
+        itemsView: "full",
+        sortDirection: "asc",
+        limit: 100,
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+      const record = this.readObject(response);
+      const data = this.readArray(record, "data");
+      if (!data) throw new Error("thread/turns/list response did not include turns.");
+      if (
+        data.some((turn) => {
+          const view = this.readString(this.readObject(turn), "itemsView");
+          return view !== undefined && view !== "full";
+        })
+      )
+        throw new Error("Codex did not return full conversation items.");
+      turns.push(
+        ...this.parseThreadSnapshot("thread/turns/list", {
+          threadId: snapshot.threadId,
+          turns: data,
+        }).turns,
+      );
+      cursor = this.readString(record, "nextCursor");
+      if (!cursor) return { ...snapshot, turns };
+      if (seenCursors.has(cursor)) throw new Error("Codex repeated a conversation page cursor.");
+      seenCursors.add(cursor);
+    }
+    throw new Error("Codex conversation exceeds the supported import page limit.");
+  }
+
+  async forkThread(
+    input: ProviderForkThreadInput,
+    signal?: AbortSignal,
+  ): Promise<ProviderForkThreadResult> {
     const threadId = input.threadId;
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
     let gatewaySessionLease: AgentGatewaySessionLease | undefined;
 
     try {
+      signal?.throwIfAborted();
       const existing = this.sessions.get(threadId);
       if (existing) {
         await this.stopSession(threadId);
@@ -1991,18 +2054,24 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
+      signal?.throwIfAborted();
       gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
+      const processEnv = await this.buildSessionProcessEnv(
+        codexHomePath,
+        gatewaySessionLease?.connection.bearerToken,
+      );
+      signal?.throwIfAborted();
       const child = this.spawnAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: await this.buildSessionProcessEnv(
-          codexHomePath,
-          gatewaySessionLease?.connection.bearerToken,
-        ),
+        env: processEnv,
       });
 
       context = {
         ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
+        ...(input.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: input.lifecycleGeneration }
+          : {}),
         session,
         account: {
           type: "unknown",
@@ -2045,9 +2114,34 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
             )
           : undefined;
       const serviceTier = resolveCodexServiceTier(input.modelSelection);
+      signal?.throwIfAborted();
+      let lastTurnId: TurnId | undefined;
+      if (input.requireCompletedSource) {
+        const source = await this.readThreadSnapshot(context, sourceProviderThreadId);
+        const lastTurn = source.turns.at(-1);
+        // Historical payloads can omit status. Require affirmative completion
+        // evidence instead of treating missing metadata as an idle source.
+        const completedAt = lastTurn?.completedAt;
+        const hasCompletionDate =
+          typeof completedAt === "number"
+            ? Number.isFinite(completedAt) && completedAt > 0
+            : typeof completedAt === "string" && Number.isFinite(Date.parse(completedAt));
+        const completed =
+          lastTurn?.status === undefined
+            ? hasCompletionDate
+            : ["completed", "interrupted", "failed"].includes(lastTurn.status);
+        if (lastTurn && !completed) {
+          throw new Error(
+            "Wait for the source Codex conversation to finish its turn before importing it.",
+          );
+        }
+        lastTurnId = lastTurn?.id;
+      }
       const forkParams = {
         threadId: sourceProviderThreadId,
         excludeTurns: true,
+        deferGoalContinuation: true,
+        ...(lastTurnId !== undefined ? { lastTurnId } : {}),
         ...(normalizedModel ? { model: normalizedModel } : {}),
         ...(serviceTier !== undefined ? { serviceTier } : {}),
         cwd: resolvedCwd,
@@ -2059,6 +2153,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         "session/threadOpenRequested",
         `Forking Codex thread ${sourceProviderThreadId}.`,
       );
+      signal?.throwIfAborted();
       const response = await this.sendRequest(context, "thread/fork", forkParams);
       const forkedProviderThreadId = this.readThreadIdFromResponse("thread/fork", response);
 
@@ -2736,9 +2831,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async resolveContextForDiscovery(
     threadId?: string,
     cwd?: string,
+    providerOptions?: ProviderSessionStartInput["providerOptions"],
   ): Promise<CodexSessionContext> {
     const normalizedThreadId = threadId?.trim();
     const normalizedCwd = cwd?.trim() || undefined;
+    // Explicit archive/profile selection cannot borrow an unrelated runtime
+    // merely because it happens to use the same working directory.
+    if (providerOptions !== undefined) {
+      return this.getOrCreateDiscoverySession(normalizedCwd ?? process.cwd(), providerOptions);
+    }
     if (normalizedThreadId) {
       try {
         const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
@@ -2854,49 +2955,67 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
   }
 
-  private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
+  private async getOrCreateDiscoverySession(
+    cwd: string,
+    providerOptions?: ProviderSessionStartInput["providerOptions"],
+  ): Promise<CodexSessionContext> {
     const normalizedCwd = cwd.trim() || process.cwd();
-    const startup = this.discoverySessionStartups.get(normalizedCwd);
+    const discoveryKey =
+      providerOptions === undefined
+        ? normalizedCwd
+        : JSON.stringify([
+            normalizedCwd,
+            providerOptions.codex?.binaryPath ?? "codex",
+            providerOptions.codex?.homePath ?? null,
+          ]);
+    const startup = this.discoverySessionStartups.get(discoveryKey);
     if (startup) {
       return startup;
     }
-    const existing = this.discoverySessions.get(normalizedCwd);
+    const existing = this.discoverySessions.get(discoveryKey);
     if (
       existing &&
       existing.session.status === "ready" &&
       !existing.stopping &&
       !existing.child.killed
     ) {
-      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
+      this.scheduleDiscoverySessionIdleStop(discoveryKey);
       return existing;
     }
 
-    const nextStartup = this.createDiscoverySession(normalizedCwd);
-    this.discoverySessionStartups.set(normalizedCwd, nextStartup);
+    const nextStartup = this.createDiscoverySession(normalizedCwd, discoveryKey, providerOptions);
+    this.discoverySessionStartups.set(discoveryKey, nextStartup);
     try {
       return await nextStartup;
     } finally {
-      if (this.discoverySessionStartups.get(normalizedCwd) === nextStartup) {
-        this.discoverySessionStartups.delete(normalizedCwd);
+      if (this.discoverySessionStartups.get(discoveryKey) === nextStartup) {
+        this.discoverySessionStartups.delete(discoveryKey);
       }
     }
   }
 
-  private async createDiscoverySession(normalizedCwd: string): Promise<CodexSessionContext> {
-    const existing = this.discoverySessions.get(normalizedCwd);
+  private async createDiscoverySession(
+    normalizedCwd: string,
+    discoveryKey = normalizedCwd,
+    providerOptions?: ProviderSessionStartInput["providerOptions"],
+  ): Promise<CodexSessionContext> {
+    const existing = this.discoverySessions.get(discoveryKey);
     if (existing) {
-      await this.stopDiscoverySession(normalizedCwd);
+      await this.stopDiscoverySession(discoveryKey);
     }
 
     const now = new Date().toISOString();
     await this.assertSupportedCodexCliVersion({
-      binaryPath: "codex",
+      binaryPath: providerOptions?.codex?.binaryPath ?? "codex",
       cwd: normalizedCwd,
+      ...(providerOptions?.codex?.homePath ? { homePath: providerOptions.codex.homePath } : {}),
     });
     const child = this.spawnAppServer({
-      binaryPath: "codex",
+      binaryPath: providerOptions?.codex?.binaryPath ?? "codex",
       cwd: normalizedCwd,
-      env: await buildCodexProcessEnv(),
+      env: await buildCodexProcessEnv(
+        providerOptions?.codex?.homePath ? { homePath: providerOptions.codex.homePath } : {},
+      ),
     });
     const context: CodexSessionContext = {
       session: {
@@ -2905,7 +3024,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         runtimeMode: "full-access",
         model: CODEX_DEFAULT_MODEL,
         cwd: normalizedCwd,
-        threadId: ThreadId.makeUnsafe(`__codex_discovery__:${normalizedCwd}`),
+        threadId: ThreadId.makeUnsafe(`__codex_discovery__:${discoveryKey}`),
         createdAt: now,
         updatedAt: now,
       },
@@ -2927,9 +3046,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       stopping: false,
       sessionAttemptId: randomUUID(),
       discovery: true,
+      discoveryKey,
     };
 
-    this.discoverySessions.set(normalizedCwd, context);
+    this.discoverySessions.set(discoveryKey, context);
     this.attachProcessListeners(context);
     try {
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
@@ -2942,10 +3062,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         // Discovery can still function without account metadata.
       }
       this.updateSession(context, { status: "ready" });
-      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
+      this.scheduleDiscoverySessionIdleStop(discoveryKey);
       return context;
     } catch (error) {
-      await this.stopDiscoverySession(normalizedCwd);
+      await this.stopDiscoverySession(discoveryKey);
       throw error;
     }
   }
@@ -2983,7 +3103,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context.discovery || context.stopping) {
       return;
     }
-    const discoveryKey = context.session.cwd?.trim();
+    const discoveryKey = context.discoveryKey ?? context.session.cwd?.trim();
     if (!discoveryKey || this.discoverySessions.get(discoveryKey) !== context) {
       return;
     }
@@ -3887,13 +4007,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const turnsRaw =
       this.readArray(threadRecord, "turns") ?? this.readArray(responseRecord, "turns") ?? [];
     const turns = turnsRaw.map((turnValue, index) => {
-      const turn = this.readObject(turnValue);
+      const turn = this.readObject(turnValue) ?? {};
       const turnIdRaw = this.readString(turn, "id") ?? `${threadIdRaw}:turn:${index + 1}`;
       const turnId = TurnId.makeUnsafe(turnIdRaw);
       const items = this.readArray(turn, "items") ?? [];
       return {
         id: turnId,
         items,
+        ...(typeof turn.startedAt === "number" || typeof turn.startedAt === "string"
+          ? { startedAt: turn.startedAt }
+          : {}),
+        ...(typeof turn.completedAt === "number" || typeof turn.completedAt === "string"
+          ? { completedAt: turn.completedAt }
+          : {}),
+        ...(typeof turn.status === "string" ? { status: turn.status } : {}),
       };
     });
 

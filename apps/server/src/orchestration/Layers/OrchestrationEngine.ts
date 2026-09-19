@@ -783,6 +783,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
       let command: OrchestrationCommand = envelope.command;
       if (command.type === "thread.turn.start") {
+        const pendingImport = yield* sql<{ readonly thread_id: string }>`
+          SELECT thread_id FROM project_import_origins
+          WHERE thread_id = ${command.threadId} AND status = 'pending'
+          LIMIT 1
+        `.pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEngine.pendingProjectImport")));
+        if (pendingImport.length > 0) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "This conversation is still being imported. Finish or retry its import before sending a message.",
+          });
+        }
         const startCommand = command;
         const attachments = yield* Effect.forEach(
           startCommand.message.attachments,

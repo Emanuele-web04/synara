@@ -10,6 +10,7 @@ import path from "node:path";
 import type {
   ProviderApprovalDecision,
   ProviderForkThreadInput,
+  ProviderForkThreadResult,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
@@ -283,10 +284,7 @@ function makeFakeCodexAdapter(
   const forkThread = vi.fn(
     (
       input: ProviderForkThreadInput,
-    ): Effect.Effect<
-      { readonly threadId: ThreadId; readonly resumeCursor: { readonly opaque: string } },
-      ProviderAdapterError
-    > =>
+    ): Effect.Effect<ProviderForkThreadResult, ProviderAdapterError> =>
       Effect.succeed({
         threadId: input.threadId,
         resumeCursor: { opaque: `fork-${String(input.threadId)}` },
@@ -1195,6 +1193,147 @@ routing.layer("ProviderServiceLive routing", (it) => {
       );
 
       yield* provider.stopSession({ threadId: targetThreadId });
+    }),
+  );
+
+  it.effect("imports a native copy once and preserves it across runtime stop and retries", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("external-import-copy");
+      const forkCallCount = routing.codex.forkThread.mock.calls.length;
+      const starts = routing.codex.startSession.mock.calls.length;
+      const input = {
+        threadId,
+        provider: "codex" as const,
+        externalThreadId: "external-original",
+        sourceCwd: "/repo/original",
+        cwd: "/repo/original",
+        modelSelection: { provider: "codex" as const, model: "gpt-5.4" },
+        providerOptions: { codex: { homePath: "/custom/codex", binaryPath: "/custom/bin/codex" } },
+        runtimeMode: "full-access" as const,
+      };
+      routing.codex.forkThread.mockImplementationOnce(() =>
+        Effect.succeed({
+          threadId,
+          resumeCursor: { threadId: "independent-copy" },
+        }),
+      );
+      const first = yield* provider.importExternalThread!(input);
+      const firstBinding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(typeof firstBinding.lifecycleGeneration, "string");
+      assert.deepEqual(routing.codex.forkThread.mock.calls.at(-1)?.[0], {
+        threadId,
+        sourceThreadId: asThreadId("external-original"),
+        sourceResumeCursor: { threadId: "external-original" },
+        sourceCwd: input.sourceCwd,
+        cwd: input.cwd,
+        modelSelection: input.modelSelection,
+        providerOptions: input.providerOptions,
+        runtimeMode: input.runtimeMode,
+        lifecycleGeneration: firstBinding.lifecycleGeneration,
+        requireCompletedSource: true,
+      });
+      yield* provider.stopRuntimeSession!({ threadId });
+      const second = yield* provider.importExternalThread!(input);
+      assert.deepEqual(second, first);
+      assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 1);
+      assert.equal(routing.codex.startSession.mock.calls.length, starts);
+      const stopped = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(stopped.status, "stopped");
+      assert.deepEqual(stopped.resumeCursor, { threadId: "independent-copy" });
+      assert.equal(asRuntimePayloadRecord(stopped.runtimePayload).cwd, input.cwd);
+      assert.deepEqual(
+        asRuntimePayloadRecord(stopped.runtimePayload).providerOptions,
+        input.providerOptions,
+      );
+      const mismatch = yield* Effect.result(
+        provider.importExternalThread!({ ...input, externalThreadId: "different-source" }),
+      );
+      assert.equal(mismatch._tag, "Failure");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("fails native imports without transcript fallback and retires failed runtimes", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("external-import-failure");
+      const stops = routing.codex.stopSession.mock.calls.length;
+      routing.codex.forkThread.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "thread/fork",
+            detail: "native copy failed",
+          }),
+        ),
+      );
+      const result = yield* Effect.result(
+        provider.importExternalThread!({
+          threadId,
+          provider: "codex",
+          externalThreadId: "source",
+          sourceCwd: "/missing/project",
+          modelSelection: { provider: "codex", model: "gpt-5.4" },
+          runtimeMode: "full-access",
+        }),
+      );
+      assert.equal(result._tag, "Failure");
+      assert.equal(routing.codex.stopSession.mock.calls.length - stops, 2);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
+  it.effect("retires an interrupted native import before releasing its lifecycle lock", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("external-import-interrupted");
+      const started = yield* Deferred.make<void>();
+      const stops = routing.codex.stopSession.mock.calls.length;
+      routing.codex.forkThread.mockImplementationOnce(() =>
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      );
+      const fiber = yield* provider.importExternalThread!({
+        threadId,
+        provider: "codex",
+        externalThreadId: "source",
+        sourceCwd: "/repo/source",
+        modelSelection: { provider: "codex", model: "gpt-5.4" },
+        runtimeMode: "full-access",
+      }).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(fiber);
+      assert.equal(routing.codex.stopSession.mock.calls.length - stops, 2);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
+  it.effect("rejects native imports that accidentally return the original cursor", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("external-import-original-cursor");
+      routing.claude.forkThread.mockImplementationOnce(() =>
+        Effect.succeed({
+          threadId,
+          resumeCursor: { resume: "source" },
+        }),
+      );
+      const result = yield* Effect.result(
+        provider.importExternalThread!({
+          threadId,
+          provider: "claudeAgent",
+          externalThreadId: "source",
+          sourceCwd: "/repo/project",
+          modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+          runtimeMode: "full-access",
+        }),
+      );
+      assert.equal(result._tag, "Failure");
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
     }),
   );
 
@@ -6196,6 +6335,23 @@ const disabledProviderStart = makeProviderServiceLayer({
   providerIsEnabled: (provider) => Effect.succeed(provider !== "codex"),
 });
 disabledProviderStart.layer("ProviderServiceLive enablement", (it) => {
+  it.effect("rejects native imports for disabled providers before touching the source", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const result = yield* Effect.result(
+        provider.importExternalThread!({
+          threadId: asThreadId("disabled-import"),
+          provider: "codex",
+          externalThreadId: "source",
+          sourceCwd: "/repo/source",
+          modelSelection: { provider: "codex", model: "gpt-5.4" },
+          runtimeMode: "full-access",
+        }),
+      );
+      assert.equal(result._tag, "Failure");
+      assert.equal(disabledProviderStart.codex.forkThread.mock.calls.length, 0);
+    }),
+  );
   it.effect("rejects session starts for disabled providers before reaching the adapter", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

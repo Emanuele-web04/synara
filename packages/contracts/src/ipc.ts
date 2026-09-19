@@ -1,4 +1,10 @@
 import { Schema } from "effect";
+import type {
+  ImportProjectInput,
+  ImportProjectResult,
+  ListProjectImportsInput,
+  ListProjectImportsResult,
+} from "./projectImport";
 
 import type {
   AuthBearerBootstrapResult,
@@ -923,6 +929,8 @@ export interface NativeApi {
     importThread: (
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;
+    listProjectImports: (input: ListProjectImportsInput) => Promise<ListProjectImportsResult>;
+    importProject: (input: ImportProjectInput) => Promise<ImportProjectResult>;
     regenerateThreadTitle: (
       input: OrchestrationRegenerateThreadTitleInput,
     ) => Promise<OrchestrationRegenerateThreadTitleResult>;

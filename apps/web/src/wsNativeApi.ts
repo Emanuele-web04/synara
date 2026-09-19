@@ -770,6 +770,9 @@ export function createWsNativeApi(): NativeApi {
         });
       },
       importThread: (input) => transport.request(ORCHESTRATION_WS_METHODS.importThread, input),
+      listProjectImports: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.listProjectImports, input),
+      importProject: (input) => transport.request(ORCHESTRATION_WS_METHODS.importProject, input),
       regenerateThreadTitle: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.regenerateThreadTitle, input, {
           timeoutMs: null,

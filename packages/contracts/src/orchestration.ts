@@ -1,5 +1,11 @@
 import { Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
 import {
+  ImportProjectInput,
+  ImportProjectResult,
+  ListProjectImportsInput,
+  ListProjectImportsResult,
+} from "./projectImport";
+import {
   AntigravityModelOptions,
   ClaudeModelOptions,
   CodexModelOptions,
@@ -37,6 +43,8 @@ export const ORCHESTRATION_WS_METHODS = {
   getThreadDetailSnapshot: "orchestration.getThreadDetailSnapshot",
   dispatchCommand: "orchestration.dispatchCommand",
   importThread: "orchestration.importThread",
+  listProjectImports: "orchestration.listProjectImports",
+  importProject: "orchestration.importProject",
   regenerateThreadTitle: "orchestration.regenerateThreadTitle",
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
@@ -1080,6 +1088,8 @@ export const ProjectCreateCommand = Schema.Struct({
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
+  /** Importing into an existing folder must preserve even an empty project shell. */
+  preserveExistingProject: Schema.optional(Schema.Boolean),
   createWorkspaceRootIfMissing: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
@@ -2738,6 +2748,8 @@ export const OrchestrationRpcSchemas = {
     input: OrchestrationImportThreadInput,
     output: OrchestrationImportThreadResult,
   },
+  listProjectImports: { input: ListProjectImportsInput, output: ListProjectImportsResult },
+  importProject: { input: ImportProjectInput, output: ImportProjectResult },
   regenerateThreadTitle: {
     input: OrchestrationRegenerateThreadTitleInput,
     output: OrchestrationRegenerateThreadTitleResult,
