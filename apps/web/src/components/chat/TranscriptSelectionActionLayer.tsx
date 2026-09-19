@@ -8,6 +8,10 @@ import { createPortal } from "react-dom";
 
 import { toastManager } from "../ui/toast";
 import type { TranscriptAssistantSelection } from "./chatSelectionActions";
+import {
+  SelectionCommentComposer,
+  type SelectionCommentComposerVoice,
+} from "./SelectionCommentComposer";
 import { SelectionNewChatComposer } from "./SelectionNewChatComposer";
 
 import { type PendingTranscriptSelectionAction } from "./useTranscriptAssistantSelectionAction";
@@ -18,8 +22,9 @@ interface TranscriptSelectionActionLayerProps {
   defaultEnvMode: ThreadEnvironmentMode;
   canUseWorktree: boolean;
   canAddToSide: boolean;
+  voice?: SelectionCommentComposerVoice | undefined;
   onDismiss: () => void;
-  onAddToChat: () => void;
+  onAddToChat: (selection: TranscriptAssistantSelection, comment: string) => void;
   onAddToSide: (selection: TranscriptAssistantSelection) => Promise<void>;
   onNewChat: (
     selection: TranscriptAssistantSelection,
@@ -33,8 +38,21 @@ export function TranscriptSelectionActionLayer(props: TranscriptSelectionActionL
   const [composerAction, setComposerAction] = useState<PendingTranscriptSelectionAction | null>(
     null,
   );
+  const [commentAction, setCommentAction] = useState<PendingTranscriptSelectionAction | null>(null);
   const [sideBusy, setSideBusy] = useState(false);
   const sideInFlightRef = useRef(false);
+
+  if (commentAction) {
+    return createPortal(
+      <SelectionCommentComposer
+        action={commentAction}
+        voice={props.voice}
+        onSubmit={(comment) => props.onAddToChat(commentAction.selection, comment)}
+        onClose={() => setCommentAction(null)}
+      />,
+      document.body,
+    );
+  }
 
   if (composerAction) {
     return createPortal(
@@ -61,7 +79,11 @@ export function TranscriptSelectionActionLayer(props: TranscriptSelectionActionL
       left={action.left}
       top={action.top}
       placement={action.placement}
-      onAddToChat={props.onAddToChat}
+      onAddToChat={() => {
+        setCommentAction(action);
+        props.onDismiss();
+        window.getSelection()?.removeAllRanges();
+      }}
       disabled={sideBusy}
       sideDisabled={!props.canAddToSide}
       onAddToSide={() => {

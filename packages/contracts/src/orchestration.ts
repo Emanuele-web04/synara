@@ -329,6 +329,7 @@ export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 25 * 1024 * 1024;
 export const MAX_PINNED_PROJECTS = 3;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 export const CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS = 4_000;
+export const CHAT_ASSISTANT_SELECTION_COMMENT_MAX_CHARS = 4_000;
 export const THREAD_NOTES_MAX_CHARS = 16_384;
 export const THREAD_GOAL_MAX_CHARS = 4_096;
 export const PINNED_MESSAGES_MAX_COUNT = 100;
@@ -361,11 +362,16 @@ export const ChatFileAttachment = Schema.Struct({
 });
 export type ChatFileAttachment = typeof ChatFileAttachment.Type;
 
+const ChatAssistantSelectionComment = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(CHAT_ASSISTANT_SELECTION_COMMENT_MAX_CHARS),
+);
+
 export const ChatAssistantSelectionAttachment = Schema.Struct({
   type: Schema.Literal("assistant-selection"),
   id: ChatAttachmentId,
   assistantMessageId: MessageId,
   text: TrimmedNonEmptyString.check(Schema.isMaxLength(CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS)),
+  comment: Schema.optional(ChatAssistantSelectionComment),
 });
 export type ChatAssistantSelectionAttachment = typeof ChatAssistantSelectionAttachment.Type;
 
@@ -373,6 +379,7 @@ export const UploadChatAssistantSelectionAttachment = Schema.Struct({
   type: Schema.Literal("assistant-selection"),
   assistantMessageId: MessageId,
   text: TrimmedNonEmptyString.check(Schema.isMaxLength(CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS)),
+  comment: Schema.optional(ChatAssistantSelectionComment),
 });
 export type UploadChatAssistantSelectionAttachment =
   typeof UploadChatAssistantSelectionAttachment.Type;

@@ -94,14 +94,22 @@ runs:
       run: |
         # Hosted Windows checks out on D:, while Bun's default home cache is on C:.
         # Match the measured setup so package hardlinks can stay on one volume.
+        concurrent_scripts=()
         if [ "$RUNNER_OS" = "Windows" ]; then
           export BUN_INSTALL_CACHE_DIR="$RUNNER_TEMP/bun-install-cache"
           echo "Bun install cache: $BUN_INSTALL_CACHE_DIR"
+          # Several workspace prepare scripts run `effect-language-service patch`
+          # concurrently against the same isolated-store typescript.js. A patcher
+          # that require()s the file mid-write falls back to the @typescript/native
+          # (7.x) store entry, which has no ScriptTarget, and crashes the install.
+          # Serializing lifecycle scripts removes the race; the extra seconds are
+          # lost in the noise of Windows install timing (101-223s measured).
+          concurrent_scripts=(--concurrent-scripts=1)
         fi
         case "$WORKSPACE_SCOPE" in
-          full) bun install --frozen-lockfile ;;
-          static) bun install --frozen-lockfile --filter './' --filter '@synara/scripts' ;;
-          runtime) bun install --frozen-lockfile --filter '!@synara/marketing' ;;
+          full) bun install --frozen-lockfile "${concurrent_scripts[@]}" ;;
+          static) bun install --frozen-lockfile "${concurrent_scripts[@]}" --filter './' --filter '@synara/scripts' ;;
+          runtime) bun install --frozen-lockfile "${concurrent_scripts[@]}" --filter '!@synara/marketing' ;;
         esac
 
     - name: Install Electron test runtime

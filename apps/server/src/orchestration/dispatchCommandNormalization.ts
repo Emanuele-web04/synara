@@ -203,6 +203,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
               id: attachmentId,
               assistantMessageId: attachment.assistantMessageId,
               text: attachment.text,
+              ...(attachment.comment !== undefined ? { comment: attachment.comment } : {}),
             };
           }
 

@@ -178,16 +178,11 @@ export function useTranscriptAssistantSelectionAction(
     });
   };
 
-  const commitTranscriptAssistantSelection = () => {
-    const pendingSelection = pendingTranscriptSelectionAction;
-    if (!pendingSelection) {
-      return;
-    }
-
-    if (
-      canReferenceAssistantSelection &&
-      !canReferenceAssistantSelection(pendingSelection.selection)
-    ) {
+  const addAssistantSelectionToDraft = (
+    selection: TranscriptAssistantSelection,
+    comment?: string,
+  ) => {
+    if (canReferenceAssistantSelection && !canReferenceAssistantSelection(selection)) {
       setPendingTranscriptSelectionAction(null);
       window.getSelection()?.removeAllRanges();
       return;
@@ -207,10 +202,14 @@ export function useTranscriptAssistantSelectionAction(
       return;
     }
 
-    const nextSelection = createAssistantSelectionAttachment(pendingSelection.selection);
+    const nextSelection = createAssistantSelectionAttachment({
+      assistantMessageId: selection.assistantMessageId,
+      text: selection.text,
+      comment,
+    });
     if (!nextSelection) {
       setPendingTranscriptSelectionAction(null);
-      if (getAssistantSelectionValidationError(pendingSelection.selection) === "too-long") {
+      if (getAssistantSelectionValidationError(selection) === "too-long") {
         toastManager.add({
           type: "warning",
           title: "Selections can be up to 4,000 characters.",
@@ -270,7 +269,7 @@ export function useTranscriptAssistantSelectionAction(
 
   return {
     pendingTranscriptSelectionAction,
-    commitTranscriptAssistantSelection,
+    addAssistantSelectionToDraft,
     dismissTranscriptSelectionAction,
     onMessagesClickCapture,
     onMessagesMouseUp,

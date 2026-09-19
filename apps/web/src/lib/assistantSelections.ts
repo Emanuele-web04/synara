@@ -2,7 +2,10 @@
 // Purpose: Normalize, serialize, and strip assistant quote selections from user prompts.
 // Layer: Chat composer and transcript helpers
 
-import { CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS } from "@synara/contracts";
+import {
+  CHAT_ASSISTANT_SELECTION_COMMENT_MAX_CHARS,
+  CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS,
+} from "@synara/contracts";
 
 import type { ChatAssistantSelectionAttachment } from "../types";
 import { randomUUID } from "./utils";
@@ -20,6 +23,7 @@ export interface ExtractedAssistantSelections {
 export interface ParsedAssistantSelectionEntry {
   assistantMessageId: string;
   text: string;
+  comment?: string;
 }
 
 export type AssistantSelectionValidationError = "empty" | "too-long";
@@ -45,24 +49,46 @@ export function getAssistantSelectionValidationError(
   return null;
 }
 
+export function normalizeAssistantSelectionComment(
+  comment: string | null | undefined,
+): string | undefined {
+  if (typeof comment !== "string") {
+    return undefined;
+  }
+  const normalized = normalizeAssistantSelectionText(comment).slice(
+    0,
+    CHAT_ASSISTANT_SELECTION_COMMENT_MAX_CHARS,
+  );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export function normalizeAssistantSelectionAttachment(
-  selection: Pick<ChatAssistantSelectionAttachment, "assistantMessageId" | "text">,
-): Pick<ChatAssistantSelectionAttachment, "assistantMessageId" | "text"> | null {
+  selection: Pick<ChatAssistantSelectionAttachment, "assistantMessageId" | "text"> & {
+    comment?: string | null | undefined;
+  },
+):
+  | (Pick<ChatAssistantSelectionAttachment, "assistantMessageId" | "text"> & {
+      comment?: string;
+    })
+  | null {
   const validationError = getAssistantSelectionValidationError(selection);
   if (validationError) {
     return null;
   }
   const assistantMessageId = selection.assistantMessageId.trim();
   const text = normalizeAssistantSelectionText(selection.text);
+  const comment = normalizeAssistantSelectionComment(selection.comment);
   return {
     assistantMessageId,
     text,
+    ...(comment !== undefined ? { comment } : {}),
   };
 }
 
 export function createAssistantSelectionAttachment(input: {
   assistantMessageId: string;
   text: string;
+  comment?: string | null | undefined;
 }): ChatAssistantSelectionAttachment | null {
   const normalized = normalizeAssistantSelectionAttachment(input);
   if (!normalized) {
@@ -74,6 +100,7 @@ export function createAssistantSelectionAttachment(input: {
     id: randomUUID(),
     assistantMessageId: normalized.assistantMessageId,
     text: normalized.text,
+    ...(normalized.comment !== undefined ? { comment: normalized.comment } : {}),
   };
 }
 
@@ -88,15 +115,20 @@ export function formatAssistantSelectionTitleSeed(selectionCount: number): strin
 }
 
 export function buildAssistantSelectionsPromptBlock(
-  selections: ReadonlyArray<Pick<ChatAssistantSelectionAttachment, "assistantMessageId" | "text">>,
+  selections: ReadonlyArray<
+    Pick<ChatAssistantSelectionAttachment, "assistantMessageId" | "text"> & {
+      comment?: string | null | undefined;
+    }
+  >,
 ): string {
   const normalizedSelections = selections
     .map((selection) => normalizeAssistantSelectionAttachment(selection))
     .filter(
       (
         selection,
-      ): selection is Pick<ChatAssistantSelectionAttachment, "assistantMessageId" | "text"> =>
-        selection !== null,
+      ): selection is Pick<ChatAssistantSelectionAttachment, "assistantMessageId" | "text"> & {
+        comment?: string;
+      } => selection !== null,
     );
   if (normalizedSelections.length === 0) {
     return "";
@@ -108,13 +140,25 @@ export function buildAssistantSelectionsPromptBlock(
     for (const line of selection.text.split("\n")) {
       lines.push(`  ${line}`);
     }
+    if (selection.comment !== undefined) {
+      // Entry lines are always indented, so a column-0 "- user note:" item can
+      // never be confused for quoted text. It binds to the entry above it.
+      lines.push("- user note:");
+      for (const line of selection.comment.split("\n")) {
+        lines.push(`  ${line}`);
+      }
+    }
   }
   return ["<assistant_selection>", ...lines, "</assistant_selection>"].join("\n");
 }
 
 export function appendAssistantSelectionsToPrompt(
   prompt: string,
-  selections: ReadonlyArray<Pick<ChatAssistantSelectionAttachment, "assistantMessageId" | "text">>,
+  selections: ReadonlyArray<
+    Pick<ChatAssistantSelectionAttachment, "assistantMessageId" | "text"> & {
+      comment?: string | null | undefined;
+    }
+  >,
 ): string {
   const trimmedPrompt = prompt.trim();
   const block = buildAssistantSelectionsPromptBlock(selections);
@@ -145,15 +189,22 @@ export function stripEmbeddedAssistantSelections(prompt: string): string {
 
 function parseAssistantSelectionEntries(block: string): ParsedAssistantSelectionEntry[] {
   const entries: ParsedAssistantSelectionEntry[] = [];
-  let current: { assistantMessageId: string; lines: string[] } | null = null;
+  let current: {
+    assistantMessageId: string;
+    lines: string[];
+    commentLines: string[];
+    mode: "quote" | "comment";
+  } | null = null;
 
   const commitCurrent = () => {
     if (!current) return;
     const text = current.lines.join("\n").trimEnd();
     if (text.length > 0) {
+      const comment = current.commentLines.join("\n").trimEnd();
       entries.push({
         assistantMessageId: current.assistantMessageId,
         text,
+        ...(comment.length > 0 ? { comment } : {}),
       });
     }
     current = null;
@@ -166,18 +217,34 @@ function parseAssistantSelectionEntries(block: string): ParsedAssistantSelection
       current = {
         assistantMessageId: headerMatch[1]!.trim(),
         lines: [],
+        commentLines: [],
+        mode: "quote",
       };
+      continue;
+    }
+    if (rawLine === "- user note:") {
+      if (current) {
+        current.mode = "comment";
+      }
       continue;
     }
     if (!current) {
       continue;
     }
     if (rawLine.startsWith("  ")) {
-      current.lines.push(rawLine.slice(2));
+      if (current.mode === "comment") {
+        current.commentLines.push(rawLine.slice(2));
+      } else {
+        current.lines.push(rawLine.slice(2));
+      }
       continue;
     }
     if (rawLine.length === 0) {
-      current.lines.push("");
+      if (current.mode === "comment") {
+        current.commentLines.push("");
+      } else {
+        current.lines.push("");
+      }
     }
   }
 

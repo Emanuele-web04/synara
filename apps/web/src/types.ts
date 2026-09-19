@@ -96,6 +96,8 @@ export interface ChatAssistantSelectionAttachment {
   id: string;
   assistantMessageId: string;
   text: string;
+  /** Optional user note attached to the highlight, sent with the quote. */
+  comment?: string;
 }
 
 export type ChatAttachment =

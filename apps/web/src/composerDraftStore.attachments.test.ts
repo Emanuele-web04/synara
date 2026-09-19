@@ -163,6 +163,62 @@ describe("composerDraftStore addImages", () => {
   });
 });
 
+describe("composerDraftStore assistant selections", () => {
+  const threadId = ThreadId.makeUnsafe("thread-assistant-selections");
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("keeps a normalized comment on the selection chip", () => {
+    const store = useComposerDraftStore.getState();
+    expect(
+      store.addAssistantSelection(threadId, {
+        type: "assistant-selection",
+        id: "sel-1",
+        assistantMessageId: "assistant-1",
+        text: "quoted text",
+        comment: "  remember this  ",
+      }),
+    ).toBe(true);
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.assistantSelections,
+    ).toEqual([
+      {
+        type: "assistant-selection",
+        id: "sel-1",
+        assistantMessageId: "assistant-1",
+        text: "quoted text",
+        comment: "remember this",
+      },
+    ]);
+  });
+
+  it("deduplicates the same quote only when the comment also matches", () => {
+    const store = useComposerDraftStore.getState();
+    const base = {
+      type: "assistant-selection" as const,
+      assistantMessageId: "assistant-1",
+      text: "quoted text",
+    };
+    expect(store.addAssistantSelection(threadId, { ...base, id: "sel-1" })).toBe(true);
+    expect(store.addAssistantSelection(threadId, { ...base, id: "sel-2", comment: "a note" })).toBe(
+      true,
+    );
+    expect(store.addAssistantSelection(threadId, { ...base, id: "sel-3", comment: "a note" })).toBe(
+      false,
+    );
+    expect(store.addAssistantSelection(threadId, { ...base, id: "sel-4" })).toBe(false);
+
+    expect(
+      useComposerDraftStore
+        .getState()
+        .draftsByThreadId[threadId]?.assistantSelections.map((entry) => entry.id),
+    ).toEqual(["sel-1", "sel-2"]);
+  });
+});
+
 describe("composerDraftStore prompt history saved draft", () => {
   const threadId = ThreadId.makeUnsafe("thread-prompt-history-attachments");
 
