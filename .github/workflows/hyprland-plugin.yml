@@ -1,0 +1,109 @@
+# The Hyprland plugin's own lane.
+#
+# Two kinds of check, deliberately separated by how much they depend on a
+# moving upstream:
+#
+# - The compositor-free fixtures compile the production input, focus and
+#   capture-transform functions against stub protocol resources and assert on
+#   their behaviour. They need no Hyprland, no compositor and no seat, so they
+#   are blocking: nothing outside this repository can make them fail.
+# - Building the whole plugin needs Hyprland's development headers, and
+#   Hyprland ships them with the compositor on a rolling distribution. The
+#   install of those headers is therefore allowed to fail — a packaging change
+#   upstream is a gap in coverage to report, not a broken pull request — but if
+#   they do install, the compile has to succeed.
+#
+# The KWin pointer-cleanup fixture runs here too: both plugins compile the same
+# shape of production function body into a fixture, and one runner with one
+# toolchain is cheaper than two.
+name: Hyprland Plugin
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/hyprland-plugin.yml"
+      - "apps/server/native/computer-use-hyprland/**"
+      - "apps/server/native/computer-use-kwin/tests/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/hyprland-plugin.yml"
+      - "apps/server/native/computer-use-hyprland/**"
+      - "apps/server/native/computer-use-kwin/tests/**"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: hyprland-plugin-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  native:
+    name: Native fixtures and plugin build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    # Arch is the distribution that ships Hyprland and its headers in the same
+    # package, pinned by digest because this image decides what the plugin is
+    # compiled against. Bumping the digest is the refresh.
+    container: "archlinux:latest@sha256:4bf33b21a715aac0b48ce6e9eaed4782a898eae96f88f5da3635572129c2584a"
+    steps:
+      - name: Install the fixture toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pacman -Syu --noconfirm gcc make pkgconf python git sdbus-cpp coreutils util-linux gawk grep
+
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Hyprland input and capture fixtures
+        shell: bash
+        working-directory: apps/server/native/computer-use-hyprland
+        run: make test
+
+      - name: Session-auth probe
+        shell: bash
+        working-directory: apps/server/native/computer-use-hyprland
+        # Compiles the plugin's own token gate against a real sdbus-c++; the
+        # probe is what the auth tests drive over a private bus.
+        run: make authprobe
+
+      - name: KWin pointer-cleanup fixture
+        shell: bash
+        working-directory: apps/server/native/computer-use-kwin
+        run: python3 tests/pointer_cleanup_test.py
+
+      - name: Install Hyprland's development headers
+        id: headers
+        shell: bash
+        # Allowed to fail: Hyprland moves on Arch's schedule, and a renamed or
+        # split package is a gap to report rather than a broken pull request.
+        continue-on-error: true
+        run: |
+          set -euxo pipefail
+          pacman -S --noconfirm hyprland cairo pixman libdrm libxkbcommon
+          pkg-config --exists hyprland
+
+      - name: Report the header gap
+        if: steps.headers.outcome != 'success'
+        shell: bash
+        # continue-on-error leaves the job green, so without this the plugin
+        # build silently stops being checked at all.
+        run: |
+          echo "::warning title=No Hyprland headers::The Arch image no longer provides hyprland development headers, so this run did not compile the plugin itself. Only the compositor-free fixtures ran."
+
+      - name: Build the plugin against this Hyprland
+        if: steps.headers.outcome == 'success'
+        shell: bash
+        # Not allowed to fail: with the headers in place, a compile error is
+        # this repository's, and --build-only is the exact path the server's
+        # own provisioning takes on a user's machine.
+        run: |
+          set -euo pipefail
+          path="$(bash apps/server/native/computer-use-hyprland/scripts/install-and-load.sh --build-only | tail -n 1)"
+          [ -f "$path" ] || { echo "::error::--build-only printed no usable path"; exit 1; }
+          echo "Built $path against Hyprland $(pkg-config --modversion hyprland)"

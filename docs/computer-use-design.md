@@ -338,3 +338,47 @@ Clipboard works unchanged because wl-clipboard follows `WAYLAND_DISPLAY` into th
 The nested desktop is isolated from the human's applications and files that are not in the home directory's shared view; it meets the floor, not the bar. Plasma X11 hosts, which own `org.kde.KWin` but cannot load the plugin into a Wayland compositor, are refused with a message saying so.
 
 `nestedKWinSession.integration.test.ts` runs behind `SYNARA_NESTED_KWIN_TEST=1`: boot, geometry, window listing, launch, capture, clipboard round-trip, and health after killing the compositor. Unit tests cover the pure parts (mode and size parsing, environment construction, load planning, dormancy) with fake spawners.
+
+## Backend: Hyprland plugin
+
+`HyprlandComputerBackend.ts` driving `apps/server/native/computer-use-hyprland/` loaded into the human's own Hyprland. Reports backend `hyprland`, `visibleDesktop: true`, the full capability set, and the release hotkey. Everything below plugin management is `KWinComputerBackend`; the plugin speaks the identical `org.synara.ComputerUse` interface.
+
+### Plugin
+
+A single-file plugin (`synarahyprlandplugin.cpp`, with `sessionauth.h` and `capturetransform.h`) built with `make` against the installed Hyprland headers via `pkg-config hyprland`, plus sdbus-c++, cairo, and pixman. The Hyprland ABI changes per release, so builds are per exact version. The plugin registers with Hyprland as `synara-computer-use` and self-reports its module path in `healthJson`, because `hyprctl plugin list` reports names only while load and unload address plugins by absolute path.
+
+Input is direct per-client injection only: raw wire events on the target client's own `wl_pointer` and `wl_keyboard` resources with seat-manager serials and an xkb modifier mirror. The compositor's seat state is observed, never changed. The plugin tracks the seat's pointer focus; an enter the human's seat sends to a sibling surface of the agent's target invalidates the agent's own enter so the next motion re-enters, and every agent action ends by handing the shared pointer and keyboard back to the seat with the seat's real focus and modifiers, so the human's scroll, motion, and typing stay in their window. A button held by the agent is released to the surface that received the press, never to a sibling.
+
+The ghost cursor is drawn with cairo, pixel-matched to the KWin item (arrow, name badge, scale-aware, hold-then-fade). Capture is an offscreen GPU render of a window or of each monitor's scene, read back and composited in cairo with the ghost cursor overlaid; the human's cursor is never in the offscreen scene. The render, readback, and PNG encode are scheduled so a 500 ms still cadence does not hitch the compositor thread.
+
+The D-Bus object is served with sd-bus on Hyprland's event loop. The bus fd's poll mask and timeout are updated from `getEventLoopPollData()` after every pass, so large replies (capture PNGs) flush without waiting for the next inbound message. `Meta+Shift+Esc` is bound through the keybind hook with the same latch semantics as KWin. Window ids are stable per window lifetime and are not reused after close.
+
+### Backend
+
+`hyprlandPluginHost.ts` implements `KWinComputerDbus` on top of `hyprctl`, translating between KWin's id vocabulary and Hyprland's path vocabulary so the engine never learns the difference.
+
+- `hyprctl` always exits 0, so every answer is parsed from reply text. `plugin load` answers `ok` or `Plugin <path> could not be loaded: <reason>`, and the backend passes that reason into its refusal message (`lastLoadRefusal`).
+- An id is a basename in the plugin directory, so `SynaraComputerUsePluginV<n>` naming and the generation counter work unchanged.
+- A loaded build whose path cannot be read maps to the versionless `SynaraComputerUsePlugin`, which every installed generation outranks, so the engine plans a replace and swaps the unknown build for the current one.
+
+Availability is gated on a live Hyprland session (`HYPRLAND_INSTANCE_SIGNATURE` plus a connectable instance socket), not on a bus name. `hyprctl` calls carry a 10 s timeout. The backend always addresses the instance it detected, never one inherited from a shell.
+
+### Provisioning
+
+`hyprlandPluginProvisioning.ts` installs under `$XDG_DATA_HOME/synara/hyprland-computer-use/plugins` (default `~/.local/share/...`) as `SynaraComputerUsePluginV<n>.so`, with the stamp under `$XDG_STATE_HOME/synara/hyprland-computer-use-plugin/install.stamp`. There is no env script and no relogin: `hyprctl plugin load <absolute path>` takes effect live, and the very first install works in the session it happened in. Generation numbering, copy-install, pruning, and the checksum gate are imported from the KWin module.
+
+Provisioning rules:
+
+- A prebuild is used only when `manifest.json` has an entry matching the running Hyprland version and architecture exactly, and its SHA-256 verifies.
+- Otherwise `scripts/install-and-load.sh --build-only` builds from source, which needs `hyprland.pc`, `g++`, `make`, and `pkg-config`.
+- Nothing is installed when the installed generation already matches the running Hyprland.
+- Builds honour the turn's abort signal and are torn down through `supervisedProcessTeardown.ts`; a failed connect never triggers a recompile by itself.
+- `SYNARA_HYPRLAND_PLUGIN_DIR`, `SYNARA_HYPRLAND_PREBUILT_DIR`, `SYNARA_HYPRLAND_SOURCE_DIR`, and `SYNARA_HYPRLAND_STATE_ROOT` override the paths.
+
+`scripts/install-and-load.sh` requires an explicit `--instance <signature>`, refuses the caller's own live signature, loads the new generation before unloading older ones, and stops on an unload failure rather than deleting a file the compositor still owns the bus name through.
+
+### Testing
+
+`make test` runs `tests/focus_test.py`, which compiles production input and capture functions (`requireControlAvailable`, `captureWindow`, `captureRegion`, and the focus and injection functions) against `focus_fixture.cpp` and `capture_guard_fixture.cpp` with stub protocol resources. It checks clicks, dragging, scrolling, focus restoration to the human's surface, refusal cleanup, and that capture honours the emergency release latch. `capturetransform_test.cpp` covers the readback transform. `tests/authprobe.cpp` is the Hyprland fixture for the shared auth integration test.
+
+Development runs against a disposable Hyprland nested inside a headless `kwin_wayland --virtual` (Hyprland cannot boot headless on a busy seat), with the environment scrubbed so the nested instance never inherits the live signature. Live-seat behaviour (sibling-surface handback, the guard, the shortcut, lock refusal) is verified only there.
