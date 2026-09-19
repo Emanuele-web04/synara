@@ -120,6 +120,7 @@ describe("computer WebSocket handlers", () => {
     const { handlers } = setup();
 
     // The stream method is wired in wsRpc where the admission guard lives.
+    // `rearmInput` no longer exists anywhere — input never latches.
     const expected = Object.values(COMPUTER_WS_METHODS).filter(
       (method) => method !== COMPUTER_WS_METHODS.subscribeEvents,
     );
@@ -292,5 +293,21 @@ describe("computer WebSocket handlers", () => {
 
     expect(Exit.isFailure(exit)).toBe(true);
     expect(Exit.isFailure(selectExit)).toBe(true);
+  });
+
+  it("exposes no rearm route and treats a pane Escape as ordinary input", async () => {
+    const { backend, manager, handlers } = setup();
+    // Compile-level removal: the handler map has no rearm entry, so no
+    // client can re-arm because there is nothing to re-arm.
+    expect(
+      (handlers as unknown as Record<string, unknown>)["computer.rearmInput"],
+    ).toBeUndefined();
+
+    // The same Escape key through the pane input route is a keystroke, not a
+    // stop: it dispatches and leaves input working.
+    await Effect.runPromise(handlers[COMPUTER_WS_METHODS.inputKey]({ key: "escape" }));
+    expect(backend.callsFor("pressKey").map((call) => call.args)).toEqual([["escape"]]);
+    await expect(manager.pressKey(undefined, "enter")).resolves.toBeDefined();
+    expect(backend.callsFor("pressKey").map((call) => call.args)).toEqual([["escape"], ["enter"]]);
   });
 });

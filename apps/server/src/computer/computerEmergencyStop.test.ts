@@ -2,6 +2,7 @@ import type { ComputerEvent } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { ComputerManager } from "./ComputerManager.ts";
+import { desktopOperationSignal } from "./DesktopOperationQueue.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 
 function deferred(): { readonly promise: Promise<void>; readonly resolve: () => void } {
@@ -12,172 +13,129 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
   return { promise, resolve };
 }
 
-class StopRearmBackend extends FakeComputerBackend {
+/** Records the OS-level stop relay the manager hands to its backend. */
+class StopInputBackend extends FakeComputerBackend {
   stopCalls = 0;
-  rearmCalls = 0;
-  rearmError: Error | null = null;
   async stopInput(): Promise<void> {
     this.stopCalls += 1;
-  }
-  async rearmInput(): Promise<void> {
-    this.rearmCalls += 1;
-    if (this.rearmError) throw this.rearmError;
   }
 }
 
 describe("computer emergency stop", () => {
-  it("latches host-wide, refuses mutating admission on every thread, and re-arms explicitly", async () => {
-    const backend = new StopRearmBackend();
+  it("interrupts live work once and the next action succeeds without a re-arm", async () => {
+    const backend = new StopInputBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     const events: ComputerEvent[] = [];
     manager.onEvent((event) => events.push(event));
-    // Seed a thread record so the republish has somewhere to land.
+    // Seed a thread record so the state read has somewhere to land.
     await manager.getThreadState("esc-thread");
+
+    // Input is open before the press.
+    await manager.click("esc-thread", { x: 10, y: 10 });
+
+    // A live operation observes the stop through its operation signal, the
+    // same cancellation an ordinary stop delivers.
+    const entered = deferred();
+    const live = manager.withAgentActivity("esc-thread", async () => {
+      entered.resolve();
+      const signal = desktopOperationSignal();
+      await new Promise<never>((_, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+      return "unreachable";
+    });
+    await entered.promise;
+    const liveRejected = expect(live).rejects.toMatchObject({ controlRevoked: true });
 
     await manager.emergencyStopInput();
     expect(backend.stopCalls).toBe(1);
-    expect(events.some((event) => event.type === "computer.input-stopped" && event.stopped)).toBe(
-      true,
-    );
-    // Every mutating admission refuses — this thread, another thread, and
-    // the human's own pane input (undefined thread) alike.
-    await expect(manager.click("esc-thread", { x: 10, y: 10 })).rejects.toThrow("Escape");
-    await expect(manager.typeText("other-thread", "x")).rejects.toThrow("Escape");
-    await expect(manager.click(undefined, { x: 10, y: 10 })).rejects.toThrow("Escape");
-    // Reads are not input: state reads still answer so the re-arm gate and
-    // the panels have something to show.
-    await expect(manager.listWindows()).resolves.toBeDefined();
-    // Status and every thread snapshot carry the latch for surfaces that
-    // missed the event.
-    expect((await manager.getStatus()).inputStopped).toBe(true);
-    expect((await manager.getThreadState("esc-thread")).inputStopped).toBe(true);
-    // A second press is idempotent: the latch is already held, so no second
-    // host-wide event and no second republish storm.
-    await manager.emergencyStopInput();
-    expect(events.filter((event) => event.type === "computer.input-stopped")).toHaveLength(1);
+    await liveRejected;
+    // The interrupt is announced and closed out: one stopped, one cleared.
+    expect(
+      events.filter((event) => event.type === "computer.input-stopped" && event.stopped),
+    ).toHaveLength(1);
+    expect(
+      events.filter((event) => event.type === "computer.input-stopped" && !event.stopped),
+    ).toHaveLength(1);
 
-    const result = await manager.rearmInput();
-    expect(result).toEqual({ rearmed: true, wasStopped: true });
-    expect(backend.rearmCalls).toBe(1);
-    expect(events.some((event) => event.type === "computer.input-stopped" && !event.stopped)).toBe(
-      true,
-    );
-    expect((await manager.getStatus()).inputStopped).toBe(false);
+    // Momentary: the very next admission dispatches, with no re-arm step and
+    // no stopped state left in any surface.
+    await expect(manager.click("esc-thread", { x: 11, y: 11 })).resolves.toBeDefined();
+    expect(backend.callsFor("click")).toHaveLength(2);
+    expect((await manager.getStatus()).inputStopped).toBeUndefined();
+    expect((await manager.getThreadState("esc-thread")).inputStopped).toBeUndefined();
     await manager.dispose();
   });
 
-  it("fails queued work at its wait instead of dispatching after the press", async () => {
-    const backend = new StopRearmBackend();
+  it("fails queued work at its wait, then admits the next call", async () => {
+    const backend = new StopInputBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     const entered = deferred();
     const release = deferred();
     const active = manager.withAgentActivity("esc-queued", async () => {
       entered.resolve();
       await release.promise;
-      // Post-release work goes through the stopped gate and throws.
-      await manager.click("esc-queued", { x: 10, y: 10 });
       return "active-finished";
     });
     await entered.promise;
     const queuedWork = vi.fn(async () => "queued");
     const queued = manager.withAgentActivity("esc-queued", queuedWork);
     const queuedRejected = expect(queued).rejects.toThrow("Escape");
-    const activeRejected = expect(active).rejects.toThrow("Escape");
     await manager.emergencyStopInput();
     release.resolve();
     await queuedRejected;
-    await activeRejected;
+    // The already-admitted work is untouched; the queued admission dies at
+    // its wait rather than dispatching after the press.
+    await expect(active).resolves.toBe("active-finished");
     expect(queuedWork).not.toHaveBeenCalled();
     expect(backend.callsFor("click")).toHaveLength(0);
+    // The aborted broadcast does not poison later calls: a fresh admission
+    // after the press dispatches normally.
+    await expect(manager.click("esc-queued", { x: 1, y: 1 })).resolves.toBeDefined();
+    expect(backend.callsFor("click")).toHaveLength(1);
     await manager.dispose();
   });
 
-  it("keeps the latch when the backend stop fails — fail closed, not silent", async () => {
+  it("does not latch when the backend stop relay fails", async () => {
     class FailingStopBackend extends FakeComputerBackend {
       stopCalls = 0;
       async stopInput(): Promise<void> {
         this.stopCalls += 1;
-        // Only the first stop fails, so dispose()'s own stop does not mask
-        // the assertion that the latch outlived the failure.
+        // Only the first stop fails, so dispose()'s own stop is clean.
         if (this.stopCalls === 1) throw new Error("backend wedged");
       }
     }
     const backend = new FailingStopBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     await expect(manager.emergencyStopInput()).rejects.toThrow("backend wedged");
-    expect((await manager.getStatus()).inputStopped).toBe(true);
-    await expect(manager.click("esc-thread", { x: 1, y: 1 })).rejects.toThrow("Escape");
+    // Momentary by contract: a failed delivery is reported to the caller, but
+    // no latch survives it — the next admitted action tries again instead of
+    // demanding a manual re-arm.
+    await expect(manager.click("esc-thread", { x: 1, y: 1 })).resolves.toBeDefined();
+    expect(backend.callsFor("click")).toHaveLength(1);
     await manager.dispose();
   });
 
-  it("a press landing mid-rearm wins — the stale re-arm cannot clear the latch", async () => {
-    const pending = deferred();
-    class DeferredRearmBackend extends StopRearmBackend {
-      override async rearmInput(): Promise<void> {
-        this.rearmCalls += 1;
-        await pending.promise;
-      }
-    }
-    const backend = new DeferredRearmBackend();
+  it("treats a pane Escape as ordinary input, never as a stop", async () => {
+    const backend = new StopInputBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     const events: ComputerEvent[] = [];
     manager.onEvent((event) => events.push(event));
 
-    await manager.emergencyStopInput();
-    const rearm = manager.rearmInput();
-    await vi.waitFor(() => expect(backend.rearmCalls).toBe(1));
-    // The operator presses Escape again while the host re-arm is in flight.
-    await manager.emergencyStopInput();
-    pending.resolve();
-    await expect(rearm).resolves.toEqual({ rearmed: true, wasStopped: true });
-    // Without the epoch check this re-arm would clear a latch it never saw:
-    // the second press must keep input stopped and emit no re-arm event.
-    expect((await manager.getStatus()).inputStopped).toBe(true);
-    await expect(manager.click("esc-thread", { x: 1, y: 1 })).rejects.toThrow("Escape");
-    expect(events.some((event) => event.type === "computer.input-stopped" && !event.stopped)).toBe(
-      false,
-    );
+    await expect(manager.pressKey(undefined, "escape")).resolves.toBeDefined();
+    expect(backend.callsFor("pressKey").map((call) => call.args[0])).toEqual(["escape"]);
+    // No stop relay, no interrupt event: the key the pane sent is a keystroke.
+    expect(backend.stopCalls).toBe(0);
+    expect(events.filter((event) => event.type === "computer.input-stopped")).toHaveLength(0);
     await manager.dispose();
   });
 
-  it("keeps the latch when the backend re-arm relay fails", async () => {
-    const backend = new StopRearmBackend();
-    backend.rearmError = new Error("host unreachable");
+  it("keeps reads open through the interrupt", async () => {
+    const backend = new StopInputBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     await manager.emergencyStopInput();
-    await expect(manager.rearmInput()).rejects.toThrow("host unreachable");
-    expect(backend.rearmCalls).toBe(1);
-    // The host never confirmed, so the manager-side latch must still be held
-    // rather than reporting authority the driver does not have.
-    expect((await manager.getStatus()).inputStopped).toBe(true);
-    await expect(manager.click("esc-thread", { x: 1, y: 1 })).rejects.toThrow("Escape");
-    // A retry that reaches the host clears normally.
-    backend.rearmError = null;
-    await expect(manager.rearmInput()).resolves.toEqual({ rearmed: true, wasStopped: true });
-    expect((await manager.getStatus()).inputStopped).toBe(false);
-    await manager.dispose();
-  });
-
-  it("clears unconditionally for a backend with no re-arm route", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    await manager.emergencyStopInput();
-    expect((await manager.getStatus()).inputStopped).toBe(true);
-    // The manager latch is the only one this backend has: clearing it is the
-    // correct re-arm because nothing else can still be refusing input.
-    await expect(manager.rearmInput()).resolves.toEqual({ rearmed: true, wasStopped: true });
-    expect((await manager.getStatus()).inputStopped).toBe(false);
-    await manager.dispose();
-  });
-
-  it("re-arm with nothing stopped is a no-op that still relays to the host", async () => {
-    const backend = new StopRearmBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    const events: ComputerEvent[] = [];
-    manager.onEvent((event) => events.push(event));
-    await expect(manager.rearmInput()).resolves.toEqual({ rearmed: true, wasStopped: false });
-    expect(backend.rearmCalls).toBe(1);
-    expect(events.some((event) => event.type === "computer.input-stopped")).toBe(false);
+    await expect(manager.listWindows()).resolves.toBeDefined();
+    await expect(manager.getStatus()).resolves.toBeDefined();
     await manager.dispose();
   });
 });

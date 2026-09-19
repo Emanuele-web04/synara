@@ -466,16 +466,6 @@ export class ComputerManager {
    */
   private backendEngaged = false;
   /**
-   * The host-wide kill latch behind the physical Escape monitor. Unlike
-   * `controlDisabled` it is not thread-scoped and no generation bump can age
-   * it out: every mutating admission on every thread — pane input included —
-   * refuses until `rearmInput` runs the user's explicit re-arm. The epoch
-   * versions it so a press landing mid-rearm supersedes the re-arm instead
-   * of being cleared by it.
-   */
-  private escapeStopped = false;
-  private escapeStopEpoch = 0;
-  /**
    * When the human last drove the desktop through this server's pane-input
    * paths (`threadId === undefined` on the input methods). The foreground
    * funnels read it to refuse a raise while the user is actively interacting;
@@ -1509,22 +1499,6 @@ export class ComputerManager {
   }
 
   /**
-   * The refusal every mutating admission shares once the physical kill latch
-   * is held. Reads stay open — a stopped desktop must still be observable —
-   * but nothing may dispatch input until the user re-arms. `controlRevoked`
-   * marks it the way a per-thread disable does: the audit seam records
-   * nothing for a refusal the kill switch already owns, and the gateway's
-   * "do not retry" classification applies unchanged.
-   */
-  private assertInputNotEscapeStopped(): void {
-    if (!this.escapeStopped) return;
-    throw new ComputerBackendError(
-      "Computer input was stopped with the Escape key. It stays stopped until the user re-arms computer control; do not retry actions.",
-      { controlRevoked: true },
-    );
-  }
-
-  /**
    * The refusal every admitted input path shares for a thread whose control
    * was switched off or suspended: it hears it before the lease, the window
    * gate, or any dispatch. `undefined` is pane input, which belongs to no
@@ -1623,29 +1597,31 @@ export class ComputerManager {
   }
 
   /**
-   * The manager side of the physical Escape kill switch, relayed from the
+   * The manager side of the physical Escape interrupt, relayed from the
    * desktop's monitor route (or invoked directly by tests).
    *
-   * The desktop host has already engaged its own admission latch and posted
-   * the OS-level held-input release before this call lands, so a wedged or
-   * dead backend cannot weaken the stop — this half exists so queued work
-   * fails where it waits, and so a backend swapped in after the press still
-   * finds input closed. Repeated presses are safe: the latch is idempotent
-   * and each press re-aborts anything admitted between them.
+   * Momentary by contract: the press aborts every in-flight operation signal
+   * and every admission broadcast, so calls that were live fail with the
+   * stop's own `controlRevoked` classification (the model must not retry
+   * them) and work queued behind them fails at its wait instead of
+   * dispatching after the press. The OS-level held-input release is the
+   * backend's `stopInput`. Nothing latches: once the stop has been delivered
+   * the next admitted action dispatches normally, so there is no re-arm API
+   * and no stopped state that outlives this call.
    */
   async emergencyStopInput(): Promise<void> {
     if (this.disposed) return;
-    const firstPress = !this.escapeStopped;
-    this.escapeStopped = true;
-    this.escapeStopEpoch += 1;
-    // Abort every admission broadcast and every live operation signal: calls
-    // queued behind the operation queue fail at their wait instead of
-    // dispatching after the press, and in-flight native calls get the same
-    // cancellation an ordinary stop delivers.
+    // Announced before the abort so a client hears the interrupt even if the
+    // backend stop wedges; the closing event is delivered with the stop.
+    this.emit({ type: "computer.input-stopped", stopped: true });
     const stopReason = new ComputerBackendError(
       "Computer input was stopped with the Escape key; no new input may be dispatched.",
       { controlRevoked: true },
     );
+    // Abort every admission broadcast and every live operation signal: calls
+    // queued behind the operation queue fail at their wait instead of
+    // dispatching after the press, and in-flight native calls get the same
+    // cancellation an ordinary stop delivers.
     for (const authority of this.authorityRevocations.values()) {
       authority.abort(stopReason);
     }
@@ -1657,37 +1633,11 @@ export class ComputerManager {
     try {
       await this.backend.stopInput?.();
     } finally {
-      if (firstPress) {
-        // Host-wide and thread-independent: the event reaches clients even
-        // where no thread has a pane record to republish.
-        this.emit({ type: "computer.input-stopped", stopped: true });
-        this.republishAllThreads();
-      }
-    }
-  }
-
-  /**
-   * The user's explicit re-arm after an Escape stop. The relay runs first
-   * and the manager latch clears only after the host confirmed its own
-   * latch lifted: a host that cannot be reached keeps this latch held
-   * rather than reporting authority the driver does not have. A backend
-   * with no rearm route — where the manager latch is the only one — clears
-   * unconditionally, which is also the answer when the press stopped a
-   * driver that no longer exists.
-   */
-  async rearmInput(): Promise<{ rearmed: boolean; wasStopped: boolean }> {
-    const wasStopped = this.escapeStopped;
-    const epoch = this.escapeStopEpoch;
-    if (this.backend.rearmInput) await this.backend.rearmInput();
-    // A press that landed while the host re-arm was in flight supersedes the
-    // re-arm: the latch and the stopped event stay held. Without the epoch
-    // check this branch would clear a press it never saw.
-    if (wasStopped && this.escapeStopEpoch === epoch) {
-      this.escapeStopped = false;
+      // Momentary: input reopens with the stop's own delivery. No latch and
+      // no epoch survive this point — the next admitted action succeeds
+      // without any re-arm.
       this.emit({ type: "computer.input-stopped", stopped: false });
-      this.republishAllThreads();
     }
-    return { rearmed: true, wasStopped };
   }
 
   constructor(options: ComputerManagerOptions) {
@@ -1867,7 +1817,6 @@ export class ComputerManager {
       health: this.backendHealth,
       capabilities: this.backendCapabilities,
       provisionable: this.backend.provision !== undefined,
-      inputStopped: this.escapeStopped,
     };
   }
 
@@ -4225,9 +4174,6 @@ export class ComputerManager {
             "Computer browser call ran outside an operation context.",
             { retryable: false },
           );
-        // The kill latch covers mutating browser calls the same way it covers
-        // desktop input; get_browser_state stays a read.
-        if (name !== "get_browser_state") this.assertInputNotEscapeStopped();
         return browser.call({
           name,
           args,
@@ -4279,7 +4225,6 @@ export class ComputerManager {
     if (owner === undefined) this.lastUserDesktopInputAt = this.now();
     return this.operations.runScoped(windowId, async () => {
       this.assertControlAuthority(owner);
-      this.assertInputNotEscapeStopped();
       await this.assertWindowInputAllowed(threadId, windowId);
       this.assertInputNotPaused(owner);
       this.engageBackend();
@@ -4328,7 +4273,6 @@ export class ComputerManager {
     }
     return this.operations.run(async () => {
       this.assertControlAuthority(owner);
-      this.assertInputNotEscapeStopped();
       // Readiness first: a paused thread is refused before it can take the
       // lease, clear focus, or announce itself — all of which claimDesktopControl
       // would otherwise do ahead of a refusal that sends nothing.
@@ -5473,7 +5417,6 @@ export class ComputerManager {
       availability: this.correctedAvailability(state.availability),
       health: this.backendHealth,
       capabilities: this.backendCapabilities,
-      inputStopped: this.escapeStopped,
       lastError: state.reportedError ?? state.lastError,
     };
   }
