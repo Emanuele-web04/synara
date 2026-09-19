@@ -15,6 +15,11 @@ import {
 } from "./ComputerBackend.ts";
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
 import { COMPUTER_CONTROL_ENABLE_TIMEOUT_MS, ComputerManager } from "./ComputerManager.ts";
+import {
+  ComputerCallContext,
+  ComputerCallTiming,
+  withComputerCallContext,
+} from "./computerCallContext.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import type { FrameSink } from "@synara/shared/frameTransport";
 
@@ -1303,10 +1308,12 @@ describe("ComputerManager and FakeComputerBackend", () => {
       expect(asked).toEqual(["firefox", "firefox"]);
       expect(backend.callsFor("launchApp")).toHaveLength(4);
 
-      // The activation path asserts the same admission inside the queue.
-      await expect(manager.activateWindow("thread-1", "fake-terminal")).rejects.toThrow(
-        /needs its own approval/i,
-      );
+      // The activation path asserts the same admission inside the queue —
+      // after the never-raise gate, which this call clears with the task-text
+      // authorization.
+      await expect(
+        manager.activateWindow("thread-1", "fake-terminal", VISIBLE_USE_AUTHORIZED),
+      ).rejects.toThrow(/needs its own approval/i);
       expect(backend.callsFor("raiseWindow")).toHaveLength(0);
     } finally {
       computerApprovalGate.cancelThread("thread-1");
@@ -3338,6 +3345,117 @@ function foregroundRaisedIds(backend: FakeComputerBackend): readonly unknown[] {
   return backend.callsFor("raiseWindow").map((call) => call.args[0]);
 }
 
+/**
+ * The task-text authorization every raise now needs. These suites exercise the
+ * raise/restore mechanics themselves; the never-raise gate has its own tests.
+ */
+const VISIBLE_USE_AUTHORIZED = { userRequestedVisibleUse: true } as const;
+
+describe("ComputerManager foreground containment", () => {
+  it("refuses an activate with no task-text authorization, and raises nothing", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const actions = foregroundRestoreActions(manager);
+    try {
+      const refused = await manager
+        .foregroundWithRestore("thread-1", "fake-calculator")
+        .catch((error) => error);
+      expect(refused).toMatchObject({
+        code: "foreground_not_requested",
+        effect: "not-dispatched",
+      });
+      // Nothing raised, nothing aimed, no action event: the refusal is before
+      // any dispatch.
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+      expect(backend.callsFor("focusWindow")).toEqual([]);
+      expect(actions).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses an explicit false authorization the same way", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      await expect(
+        manager.foregroundWithRestore("thread-1", "fake-calculator", undefined, {
+          userRequestedVisibleUse: false,
+        }),
+      ).rejects.toMatchObject({ code: "foreground_not_requested" });
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses a foreground call and a plain activate without authorization", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      await expect(
+        manager.withForegroundRestore("thread-1", async () => "typed"),
+      ).rejects.toMatchObject({ code: "foreground_not_requested" });
+      await expect(manager.activateWindow("thread-1", "fake-calculator")).rejects.toMatchObject({
+        code: "foreground_not_requested",
+      });
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses the raise while the user was just interacting through the pane, then allows it after quiet", async () => {
+    const backend = new FakeComputerBackend();
+    let clock = 1_000_000;
+    const manager = new ComputerManager({
+      backend,
+      actionSettleMs: 0,
+      now: () => clock,
+    });
+    try {
+      // The human drives the desktop through the pane: no owning thread.
+      await manager.click(undefined, { x: 100, y: 100 });
+      const refused = await manager
+        .foregroundWithRestore("thread-1", "fake-calculator", undefined, VISIBLE_USE_AUTHORIZED)
+        .catch((error) => error);
+      expect(refused).toMatchObject({
+        code: "foreground_user_interaction",
+        effect: "not-dispatched",
+      });
+      expect(foregroundRaisedIds(backend)).toEqual([]);
+      // Quiet for the guard window: the same authorized raise now runs.
+      clock += 2_001;
+      const result = await manager.foregroundWithRestore(
+        "thread-1",
+        "fake-calculator",
+        undefined,
+        VISIBLE_USE_AUTHORIZED,
+      );
+      expect(result.windowId).toBe("fake-calculator");
+      expect(foregroundRaisedIds(backend)).toEqual(["fake-calculator", "fake-terminal"]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not let a pane raise be blocked by the pane's own interaction stamp", async () => {
+    // Pane input belongs to the human: the guard protects them from the agent,
+    // never from themselves.
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      await manager.click(undefined, { x: 100, y: 100 });
+      await expect(manager.activateWindow(undefined, "fake-calculator")).resolves.toMatchObject({
+        windowId: "fake-calculator",
+      });
+      expect(foregroundRaisedIds(backend)).toEqual(["fake-calculator"]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
 describe("ComputerManager foregroundWithRestore", () => {
   it("restores the previously frontmost window after raising the target", async () => {
     const backend = new FakeComputerBackend();
@@ -3345,7 +3463,12 @@ describe("ComputerManager foregroundWithRestore", () => {
     const actions = foregroundRestoreActions(manager);
     try {
       // The default fake listing is topmost-first: fake-terminal is frontmost.
-      const result = await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      const result = await manager.foregroundWithRestore(
+        "thread-1",
+        "fake-calculator",
+        undefined,
+        VISIBLE_USE_AUTHORIZED,
+      );
       expect(result.windowId).toBe("fake-calculator");
       expect(result.note).toBeUndefined();
       expect(foregroundRaisedIds(backend)).toEqual(["fake-calculator", "fake-terminal"]);
@@ -3362,6 +3485,32 @@ describe("ComputerManager foregroundWithRestore", () => {
     }
   });
 
+  it("counts one foreground excursion on the call timing record", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const timing = new ComputerCallTiming(() => 0);
+    const lines: string[] = [];
+    const info = console.info;
+    console.info = (message: unknown) => {
+      lines.push(String(message));
+    };
+    try {
+      await withComputerCallContext(new ComputerCallContext({ timing }), () =>
+        manager.foregroundWithRestore(
+          "thread-1",
+          "fake-calculator",
+          undefined,
+          VISIBLE_USE_AUTHORIZED,
+        ),
+      );
+      timing.finish();
+      expect(lines.join("\n")).toContain("foreground_excursion=1");
+    } finally {
+      console.info = info;
+      await manager.dispose();
+    }
+  });
+
   it("reports a missed restore as success with a note naming the unrestored window", async () => {
     const backend = new FakeComputerBackend();
     const raise = backend.raiseWindow.bind(backend);
@@ -3374,7 +3523,12 @@ describe("ComputerManager foregroundWithRestore", () => {
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     const actions = foregroundRestoreActions(manager);
     try {
-      const result = await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      const result = await manager.foregroundWithRestore(
+        "thread-1",
+        "fake-calculator",
+        undefined,
+        VISIBLE_USE_AUTHORIZED,
+      );
       // The activation itself succeeded; only the restore missed — never silent.
       expect(result.windowId).toBe("fake-calculator");
       expect(result.note).toEqual(expect.stringContaining("fake-terminal"));
@@ -3403,9 +3557,14 @@ describe("ComputerManager foregroundWithRestore", () => {
       return raise(windowId);
     };
     try {
-      await manager.foregroundWithRestore("thread-1", "fake-calculator", async () => {
-        order.push("input");
-      });
+      await manager.foregroundWithRestore(
+        "thread-1",
+        "fake-calculator",
+        async () => {
+          order.push("input");
+        },
+        VISIBLE_USE_AUTHORIZED,
+      );
       expect(order).toEqual(["raise:fake-calculator", "input", "raise:fake-terminal"]);
       // The activate approval covers the whole excursion, restore included.
       expect(request).not.toHaveBeenCalled();
@@ -3422,9 +3581,14 @@ describe("ComputerManager foregroundWithRestore", () => {
     const actions = foregroundRestoreActions(manager);
     try {
       await expect(
-        manager.foregroundWithRestore("thread-1", "fake-calculator", async () => {
-          throw new Error("input blew up");
-        }),
+        manager.foregroundWithRestore(
+          "thread-1",
+          "fake-calculator",
+          async () => {
+            throw new Error("input blew up");
+          },
+          VISIBLE_USE_AUTHORIZED,
+        ),
       ).rejects.toThrow("input blew up");
       // The desktop is put back even though the input failed — and a failed
       // action emits no computer.action event, as on every other path.
@@ -3440,7 +3604,12 @@ describe("ComputerManager foregroundWithRestore", () => {
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     const actions = foregroundRestoreActions(manager);
     try {
-      const result = await manager.foregroundWithRestore("thread-1", "fake-terminal");
+      const result = await manager.foregroundWithRestore(
+        "thread-1",
+        "fake-terminal",
+        undefined,
+        VISIBLE_USE_AUTHORIZED,
+      );
       expect(result.windowId).toBe("fake-terminal");
       expect(result.note).toBeUndefined();
       expect(foregroundRaisedIds(backend)).toEqual(["fake-terminal"]);
@@ -3477,7 +3646,12 @@ describe("ComputerManager foregroundWithRestore", () => {
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     const actions = foregroundRestoreActions(manager);
     try {
-      const result = await manager.foregroundWithRestore("thread-1", "hidden-calculator");
+      const result = await manager.foregroundWithRestore(
+        "thread-1",
+        "hidden-calculator",
+        undefined,
+        VISIBLE_USE_AUTHORIZED,
+      );
       expect(result.windowId).toBe("hidden-calculator");
       expect(result.note).toEqual(expect.stringContaining("nothing was restored"));
       expect(foregroundRaisedIds(backend)).toEqual(["hidden-calculator"]);
@@ -3528,11 +3702,15 @@ describe("ComputerManager withForegroundRestore", () => {
     const listing = { current: terminalFirst };
     scriptedListing(backend, listing);
     try {
-      const result = await manager.withForegroundRestore("thread-1", async () => {
-        // The foreground call raises its target past the user's window.
-        listing.current = calculatorFirst;
-        return "typed";
-      });
+      const result = await manager.withForegroundRestore(
+        "thread-1",
+        async () => {
+          // The foreground call raises its target past the user's window.
+          listing.current = calculatorFirst;
+          return "typed";
+        },
+        VISIBLE_USE_AUTHORIZED,
+      );
       expect(result).toBe("typed");
       expect(foregroundRaisedIds(backend)).toEqual(["fake-terminal"]);
       expect(backend.callsFor("focusWindow").map((call) => call.args[0])).toEqual([
@@ -3549,7 +3727,7 @@ describe("ComputerManager withForegroundRestore", () => {
     const listing = { current: terminalFirst };
     scriptedListing(backend, listing);
     try {
-      await manager.withForegroundRestore("thread-1", async () => "typed");
+      await manager.withForegroundRestore("thread-1", async () => "typed", VISIBLE_USE_AUTHORIZED);
       expect(foregroundRaisedIds(backend)).toEqual([]);
       expect(backend.callsFor("focusWindow")).toEqual([]);
     } finally {
@@ -3564,10 +3742,14 @@ describe("ComputerManager withForegroundRestore", () => {
     scriptedListing(backend, listing);
     try {
       await expect(
-        manager.withForegroundRestore("thread-1", async () => {
-          listing.current = calculatorFirst;
-          throw new Error("input blew up");
-        }),
+        manager.withForegroundRestore(
+          "thread-1",
+          async () => {
+            listing.current = calculatorFirst;
+            throw new Error("input blew up");
+          },
+          VISIBLE_USE_AUTHORIZED,
+        ),
       ).rejects.toThrow("input blew up");
       expect(foregroundRaisedIds(backend)).toEqual(["fake-terminal"]);
     } finally {
@@ -3581,7 +3763,7 @@ describe("ComputerManager withForegroundRestore", () => {
     const listing = { current: [] as readonly ComputerWindow[] };
     scriptedListing(backend, listing);
     try {
-      await manager.withForegroundRestore("thread-1", async () => "typed");
+      await manager.withForegroundRestore("thread-1", async () => "typed", VISIBLE_USE_AUTHORIZED);
       expect(foregroundRaisedIds(backend)).toEqual([]);
     } finally {
       await manager.dispose();
@@ -3598,10 +3780,14 @@ describe("ComputerManager withForegroundRestore", () => {
       throw new Error("listing wedged");
     };
     try {
-      await manager.withForegroundRestore("thread-1", async () => {
-        actionDone = true;
-        return "typed";
-      });
+      await manager.withForegroundRestore(
+        "thread-1",
+        async () => {
+          actionDone = true;
+          return "typed";
+        },
+        VISIBLE_USE_AUTHORIZED,
+      );
       // Whether the excursion stole the frontmost is unknown — that is the
       // warn, not silence.
       expect(warn).toHaveBeenCalledWith("[computer] foreground call left focus unverified", {
@@ -3648,7 +3834,12 @@ describe("ComputerManager masked activation", () => {
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     const actions = foregroundRestoreActions(manager);
     try {
-      const result = await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      const result = await manager.foregroundWithRestore(
+        "thread-1",
+        "fake-calculator",
+        undefined,
+        VISIBLE_USE_AUTHORIZED,
+      );
       expect(result.windowId).toBe("fake-calculator");
       // The mask goes up before the target moves and comes down only after
       // the previous window is back — the excursion is never visible.
@@ -3685,7 +3876,12 @@ describe("ComputerManager masked activation", () => {
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     const actions = foregroundRestoreActions(manager);
     try {
-      await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      await manager.foregroundWithRestore(
+        "thread-1",
+        "fake-calculator",
+        undefined,
+        VISIBLE_USE_AUTHORIZED,
+      );
       expect(backend.callsFor("engageShield")).toEqual([]);
       expect(actions[0]).not.toHaveProperty("masked");
     } finally {
@@ -3698,7 +3894,12 @@ describe("ComputerManager masked activation", () => {
     const backend = shieldedMacBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     try {
-      await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      await manager.foregroundWithRestore(
+        "thread-1",
+        "fake-calculator",
+        undefined,
+        VISIBLE_USE_AUTHORIZED,
+      );
       expect(backend.callsFor("engageShield")).toEqual([]);
     } finally {
       await manager.dispose();
@@ -3711,7 +3912,12 @@ describe("ComputerManager masked activation", () => {
     const backend = new FakeComputerBackend({ shield: true });
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     try {
-      await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      await manager.foregroundWithRestore(
+        "thread-1",
+        "fake-calculator",
+        undefined,
+        VISIBLE_USE_AUTHORIZED,
+      );
       expect(backend.callsFor("engageShield")).toEqual([]);
     } finally {
       await manager.dispose();
@@ -3766,7 +3972,12 @@ describe("ComputerManager masked activation", () => {
     });
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     try {
-      await manager.foregroundWithRestore("thread-1", "fake-calculator");
+      await manager.foregroundWithRestore(
+        "thread-1",
+        "fake-calculator",
+        undefined,
+        VISIBLE_USE_AUTHORIZED,
+      );
       expect(backend.callsFor("engageShield")).toHaveLength(1);
     } finally {
       await manager.dispose();
@@ -3780,9 +3991,14 @@ describe("ComputerManager masked activation", () => {
     const backend = new FakeComputerBackend({ agentDialect: "macos" });
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     try {
-      await expect(manager.foregroundWithRestore("thread-1", "fake-calculator")).rejects.toThrow(
-        "activation shield is unavailable",
-      );
+      await expect(
+        manager.foregroundWithRestore(
+          "thread-1",
+          "fake-calculator",
+          undefined,
+          VISIBLE_USE_AUTHORIZED,
+        ),
+      ).rejects.toThrow("activation shield is unavailable");
       expect(foregroundRaisedIds(backend)).toEqual([]);
     } finally {
       await manager.dispose();
@@ -3797,9 +4013,14 @@ describe("ComputerManager masked activation", () => {
     try {
       // A typed backend refusal surfaces as-is; only an untyped failure is
       // wrapped in the "could not be shown" message.
-      await expect(manager.foregroundWithRestore("thread-1", "fake-calculator")).rejects.toThrow(
-        "mask_unavailable",
-      );
+      await expect(
+        manager.foregroundWithRestore(
+          "thread-1",
+          "fake-calculator",
+          undefined,
+          VISIBLE_USE_AUTHORIZED,
+        ),
+      ).rejects.toThrow("mask_unavailable");
       // A lost engage reply can still leave a shield up: the minted id is
       // released before the refusal is reported, and no raise ever ran.
       const engages = backend.callsFor("engageShield");
@@ -3823,9 +4044,14 @@ describe("ComputerManager masked activation", () => {
     };
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
     try {
-      await expect(manager.foregroundWithRestore("thread-1", "fake-calculator")).rejects.toThrow(
-        "window closed",
-      );
+      await expect(
+        manager.foregroundWithRestore(
+          "thread-1",
+          "fake-calculator",
+          undefined,
+          VISIBLE_USE_AUTHORIZED,
+        ),
+      ).rejects.toThrow("window closed");
       // The raise failed under an up mask: the finally path still released
       // it — a shield outlives nothing, not even a dead excursion.
       expect(backend.callsFor("releaseShield")).toHaveLength(1);

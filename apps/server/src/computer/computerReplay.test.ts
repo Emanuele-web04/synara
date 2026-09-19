@@ -132,6 +132,9 @@ async function replayWith(backend: FakeComputerBackend) {
     ) =>
       classifyComputerReplay(manager, doc, recordedEnvironment(), {
         threadId: THREAD,
+        // These suites exercise replay mechanics; the never-raise gate has its
+        // own test below and the live tool computes this from task text.
+        foregroundAuthorization: { userRequestedVisibleUse: true },
         ...options,
       }),
   };
@@ -386,6 +389,47 @@ describe("classifyComputerReplay", () => {
     expect(report.steps[0]?.dispatch?.ok).toBe(true);
     expect(report.steps[1]?.dispatch).toMatchObject({ ok: false, code: "consent_refused" });
     expect(backend.callsFor("raiseWindow")).toHaveLength(1);
+    await manager.dispose();
+  });
+
+  it("does not re-issue a recorded activate without the never-raise authorization", async () => {
+    const backend = new FakeComputerBackend({ windows: windows() });
+    const { manager, run } = await replayWith(backend);
+    const doc = document([
+      step({
+        tool: "computer_activate_window",
+        actionClass: "window",
+        resolutions: [{ via: "window", windowId: "win-terminal", app: "org.test.terminal" }],
+      }),
+    ]);
+    const report = await run(doc, {
+      execute: true,
+      foregroundAuthorization: { userRequestedVisibleUse: false },
+    });
+    // The step is attempted, refused by the gate, and reported honestly.
+    expect(report.steps[0]?.dispatch?.ok).toBe(false);
+    expect(report.steps[0]?.dispatch?.code).toBe("foreground_not_requested");
+    expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+    await manager.dispose();
+  });
+
+  it("does not re-issue a recorded visible launch without the never-raise authorization", async () => {
+    const backend = new FakeComputerBackend({ windows: windows() });
+    const { manager, run } = await replayWith(backend);
+    const doc = document([
+      step({
+        tool: "computer_launch_app",
+        actionClass: "lifecycle",
+        args: { app: "TextEdit", hidden: false },
+        resolutions: [{ via: "app", app: "TextEdit" }],
+      }),
+    ]);
+    const report = await run(doc, {
+      execute: true,
+      foregroundAuthorization: { userRequestedVisibleUse: false },
+    });
+    expect(report.steps[0]?.dispatch?.ok).toBe(false);
+    expect(backend.callsFor("launchApp")).toHaveLength(0);
     await manager.dispose();
   });
 

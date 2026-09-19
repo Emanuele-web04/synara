@@ -99,6 +99,11 @@ import { CuaActionError } from "../computer/CuaComputerBackend.ts";
 import { cuaCaptureReuseEnabled } from "../computer/computerCallContext.ts";
 import { withModelDesktopObservation } from "../computer/modelDesktopObservation.ts";
 import { withComputerTask } from "../computer/computerTaskContext.ts";
+import {
+  COMPUTER_FOREGROUND_NOT_AUTHORIZED,
+  COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+  type ComputerForegroundAuthorization,
+} from "../computer/computerVisibleUse.ts";
 import { PROVIDERS_WITHOUT_APPROVAL_GATE } from "./approvalGate.ts";
 export { computerToolInstructions } from "./computerGuidance.ts";
 import {
@@ -143,6 +148,22 @@ export const COMPUTER_CONTROL_FIRST_MUTATION_DISCLOSURE =
 
 const COMPUTER_TOOL_REFRESH_GUIDANCE =
   "Computer routing reminder: observe with computer_get_state and exact window_id before acting; prefer semantic labels and roles over screenshot coordinates. Exact background text is focus-neutral only when Cua proves one writable Accessibility target. Use foreground delivery only when activation is necessary, never replay uncertain delivery, and treat off-Space pixels as non-live.";
+
+/**
+ * Attached to every null-window launch result, always rather than on
+ * cadence: a launch that yields no window is the exact moment the next step
+ * matters, and the description alone does not stop a relaunch loop.
+ */
+const LAUNCH_NULL_WINDOW_GUIDANCE =
+  "No window yet — this is not a failure. Call computer_list_windows with the app name next; never launch again. For a browser task that needs clicks, either relaunch visible with hidden:false or drive the hidden app through computer_browser_prepare with allow_launch.";
+
+/**
+ * Attached to every hidden-window launch result: a hidden window is where
+ * the Helium dead end starts — activation cannot reach it and a foreign
+ * process cannot be killed — so the result must name the survivable branch.
+ */
+const LAUNCH_HIDDEN_WINDOW_GUIDANCE =
+  "The window is hidden: activation cannot reach hidden windows and kill cannot remove a foreign process. Either drive it through computer_browser_prepare with allow_launch and an isolated profile, or unhide with computer_set_app_visibility and verify it turned visible before anything else.";
 
 /**
  * Re-exported so a caller reaching for the computer family's gate finds it, and
@@ -410,6 +431,16 @@ export interface AgentGatewayComputerToolsOptions {
     readonly bundleId?: string;
     readonly context: ToolContext;
   }) => Effect.Effect<void>;
+  /**
+   * Whether the thread's current task text asked to see the desktop. Read by
+   * every raise-shaped call — `computer_activate_window`, a foreground
+   * delivery, a visible launch — and absent means "not authorized", never a
+   * default yes. The layer implements it from the thread's latest user
+   * message; a resolver that fails also refuses.
+   */
+  readonly resolveForegroundAuthorization?: (
+    context: ToolContext,
+  ) => Promise<ComputerForegroundAuthorization>;
 }
 
 /**
@@ -1170,9 +1201,17 @@ function withGuidanceOnResult(
   try {
     const value: unknown = JSON.parse(part.text);
     if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      const record = value as Record<string, unknown>;
+      // A result that already carries its own next step (a null-window
+      // launch, a refusal with a branch) keeps it: the generic reminder
+      // appends instead of overwriting, or the targeted fix dies here.
+      const existing = typeof record.toolGuidance === "string" ? record.toolGuidance : undefined;
       content[index] = {
         type: "text",
-        text: JSON.stringify({ ...(value as Record<string, unknown>), toolGuidance: guidance }),
+        text: JSON.stringify({
+          ...record,
+          toolGuidance: existing ? `${existing} ${guidance}` : guidance,
+        }),
       };
       return { ...result, content };
     }
@@ -1851,6 +1890,24 @@ export function makeAgentGatewayComputerTools(
   };
 
   /**
+   * The never-raise authorization a call would carry, resolved only for the
+   * calls that can move a window in front of the user — activate, foreground
+   * delivery, a visible launch, and their replay/run-step equivalents. A
+   * resolver failure or an absent resolver is a refusal, never an inferred yes.
+   */
+  const foregroundAuthorization = async (
+    context: ToolContext,
+  ): Promise<ComputerForegroundAuthorization> => {
+    const resolve = options.resolveForegroundAuthorization;
+    if (resolve === undefined) return COMPUTER_FOREGROUND_NOT_AUTHORIZED;
+    try {
+      return await resolve(context);
+    } catch {
+      return COMPUTER_FOREGROUND_NOT_AUTHORIZED;
+    }
+  };
+
+  /**
    * Raise the chat's setup card for this call, if it earned one, and hand the
    * result back either way. A card is user-facing feedback about the tool call,
    * never a substitute for answering it.
@@ -2120,18 +2177,25 @@ export function makeAgentGatewayComputerTools(
                     abortSignal.throwIfAborted();
                     const foreground =
                       args.delivery_mode === "foreground" || name === "computer_activate_window";
+                    const authorization =
+                      foreground && name !== "computer_activate_window"
+                        ? await foregroundAuthorization(context)
+                        : undefined;
                     return withDesktopDeliveryMode(foreground ? "foreground" : "background", () =>
                       // computer_activate_window already restores via
                       // foregroundWithRestore; every other foreground call gets
                       // the same excursion treatment, so a foreground type or
                       // click cannot strand the user's window behind the target.
                       foreground && name !== "computer_activate_window"
-                        ? manager.withForegroundRestore(context.callerThreadId, () =>
-                            manager.cursorActivity.during(
-                              context.callerThreadId,
-                              cursorToolActivity(name),
-                              invoke,
-                            ),
+                        ? manager.withForegroundRestore(
+                            context.callerThreadId,
+                            () =>
+                              manager.cursorActivity.during(
+                                context.callerThreadId,
+                                cursorToolActivity(name),
+                                invoke,
+                              ),
+                            authorization,
                           )
                         : manager.cursorActivity.during(
                             context.callerThreadId,
@@ -2287,7 +2351,7 @@ export function makeAgentGatewayComputerTools(
             type: "string",
             enum: ["background", "foreground"],
             description:
-              "Defaults to background. Foreground may bring the exact target window forward within the active Computer task's consent, and the previously frontmost window is put back afterwards. Never use it to replay an uncertain action.",
+              "Defaults to background. Foreground brings the target forward and restores the previous window, but is refused unless the user's task asked to see the screen. Never use it to replay an uncertain action.",
           },
         },
       },
@@ -2727,27 +2791,44 @@ export function makeAgentGatewayComputerTools(
           throw new ToolInputError('Step "activate_window" requires "window_id".');
         }
         // Foreground promotion is scoped to this one step: the rest of the
-        // run keeps the batch's delivery mode.
-        return () =>
-          withDesktopDeliveryMode("foreground", () =>
-            manager.foregroundWithRestore(threadId, windowId),
+        // run keeps the batch's delivery mode. The same never-raise gate the
+        // standalone tool takes applies per step — a run is not a bypass.
+        return async () => {
+          const authorization = await foregroundAuthorization(context);
+          return withDesktopDeliveryMode("foreground", () =>
+            manager.foregroundWithRestore(threadId, windowId, undefined, authorization),
           );
+        };
       }
       case "launch_app": {
         const app = readStringArg(step, "app", { required: true })!;
         const appArgs = readStringArrayArg(step, "arguments") ?? [];
         const waitMs = readBooleanArg(step, "wait_for_window") === false ? 0 : 2_000;
         // Three states: absent lets the manager's invisible-by-default apply,
-        // explicit false is the only way to ask for a visible launch.
+        // explicit false is the only way to ask for a visible launch — and it
+        // takes the same never-raise authorization as the standalone tool.
         const hidden = readBooleanArg(step, "hidden");
-        return () =>
-          manager.launchApp(
+        return async () => {
+          if (hidden === false) {
+            const authorization = await foregroundAuthorization(context);
+            if (!authorization.userRequestedVisibleUse) {
+              throw new CuaActionError(
+                "The user's task did not ask for this app to be shown; launching it visibly " +
+                  "would take their screen. Launch hidden and work in the background, or ask " +
+                  "the user to confirm they want to watch.",
+                "not-dispatched",
+                COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+              );
+            }
+          }
+          return manager.launchApp(
             threadId,
             app,
             appArgs,
             waitMs,
             hidden !== undefined ? { hidden } : undefined,
           );
+        };
       }
       case "write_clipboard": {
         const text = readClipboardText(step);
@@ -3632,7 +3713,7 @@ export function makeAgentGatewayComputerTools(
           hidden: {
             type: "boolean",
             description:
-              "Launch the application hidden: its windows are created off-screen, it never activates, takes focus, or switches Spaces, and it still answers the semantic tools (set_value, clicks by label, get_window_state). Defaults to true — agent launches stay invisible; pass hidden:false only when the operator should see the app appear.",
+              "Launch the application hidden: its windows are created off-screen, it never activates, takes focus, or switches Spaces, and it still answers the semantic tools (set_value, clicks by label, get_window_state). Defaults to true — agent launches stay invisible; hidden:false shows the app and is refused unless the user's task asked to see it.",
           },
         },
         required: ["app"],
@@ -3640,13 +3721,35 @@ export function makeAgentGatewayComputerTools(
       },
       async (args, context) => {
         const hidden = readBooleanArg(args, "hidden");
-        return manager.launchApp(
+        // A visible launch is a raise-shaped call: the same never-raise gate
+        // the activate path takes. The hidden default (absent or true) needs
+        // no authorization — it is the invisible workspace.
+        if (hidden === false) {
+          const authorization = await foregroundAuthorization(context);
+          if (!authorization.userRequestedVisibleUse) {
+            throw new CuaActionError(
+              "The user's task did not ask for this app to be shown; launching it visibly " +
+                "would take their screen. Launch hidden and work in the background, or ask " +
+                "the user to confirm they want to watch.",
+              "not-dispatched",
+              COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+            );
+          }
+        }
+        const result = await manager.launchApp(
           context.callerThreadId,
           readStringArg(args, "app", { required: true })!,
           readStringArrayArg(args, "arguments") ?? [],
           readBooleanArg(args, "wait_for_window") === false ? 0 : 2_000,
           hidden !== undefined ? { hidden } : undefined,
         );
+        if (result.window == null) {
+          return { ...result, toolGuidance: LAUNCH_NULL_WINDOW_GUIDANCE };
+        }
+        if (result.window.visible === false) {
+          return { ...result, toolGuidance: LAUNCH_HIDDEN_WINDOW_GUIDANCE };
+        }
+        return result;
       },
     ),
     {
@@ -4313,7 +4416,7 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_activate_window",
       "Activate window",
-      "Bring a window into view and aim the agent keyboard at it, within the active Computer task's consent and approval mode. Ordinary background targeting does not activate a window. A desktop that cannot raise the window refuses. It returns no screenshot; observe with computer_screenshot or computer_get_state when needed.",
+      "Bring a window into view and aim the agent keyboard at it — only when the user's own task text asked to see the screen; otherwise refused with foreground_not_requested (naming an app is not asking to see it). Ordinary background targeting does not activate a window. A desktop that cannot raise the window refuses. It returns no screenshot; observe with computer_screenshot or computer_get_state when needed.",
       {
         type: "object",
         properties: {
@@ -4330,7 +4433,14 @@ export function makeAgentGatewayComputerTools(
         if (windowId === undefined) {
           throw new ToolInputError('Missing required argument "window_id".');
         }
-        return manager.foregroundWithRestore(context.callerThreadId, windowId);
+        // Never-raise default: the user's own task text must have asked to see
+        // the screen before this tool can move a window in front of them.
+        return manager.foregroundWithRestore(
+          context.callerThreadId,
+          windowId,
+          undefined,
+          await foregroundAuthorization(context),
+        );
       },
     ),
     observedActionEntry(
@@ -4731,6 +4841,10 @@ export function makeAgentGatewayComputerTools(
           ...(toSeq !== undefined ? { toSeq } : {}),
           ...(signal !== undefined ? { signal } : {}),
           ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+          // A replay is not a shortcut around the never-raise gate: a recorded
+          // activate or visible launch re-issues only under the same task-text
+          // authorization the live call needed.
+          foregroundAuthorization: await foregroundAuthorization(context),
         });
       }),
     },
@@ -4805,7 +4919,7 @@ function hotkeyKeysNote(dialect: ComputerAgentDialect): string {
 
 function launchAppNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? "Names an application the way macOS does. The app launches in the background: it does not come to the foreground, does not take focus and does not switch Spaces — call computer_activate_window on its window to bring it forward."
+    ? "Names an application the way macOS does. The app launches in the background: it does not come to the foreground, does not take focus and does not switch Spaces — a launch never shows the app, and hidden:false is refused unless the user's own task asked to see it."
     : "Names an executable on PATH or a desktop application id.";
 }
 

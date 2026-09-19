@@ -17,6 +17,8 @@ import {
   type ComputerRecordingEnvironment,
   type ComputerRecordingStep,
 } from "./computerRecording.ts";
+import { ComputerBackendError } from "./ComputerBackend.ts";
+import type { ComputerForegroundAuthorization } from "./computerVisibleUse.ts";
 
 /**
  * Replay for `computer_recording` sessions — the `computer_replay` path.
@@ -73,6 +75,14 @@ export interface ComputerReplayOptions {
   readonly signal?: AbortSignal;
   /** The turn the replay runs under, for consent bookkeeping on second apps. */
   readonly turnId?: string;
+  /**
+   * The never-raise authorization the live call would carry. A replay is not
+   * a shortcut around consent: re-issuing a recorded `computer_activate_window`
+   * or a visible launch still needs the user's own task text to have asked to
+   * see the screen, so the tool layer passes the same authorization the
+   * original call needed. Absent refuses those steps.
+   */
+  readonly foregroundAuthorization?: ComputerForegroundAuthorization;
 }
 
 export type ComputerReplayDrift = "none" | "minor" | "major";
@@ -236,7 +246,11 @@ export interface ComputerReplayManager {
     waitForWindowMs?: number,
     options?: { readonly hidden?: boolean },
   ): Promise<unknown>;
-  activateWindow(threadId: string | undefined, windowId: string): Promise<unknown>;
+  activateWindow(
+    threadId: string | undefined,
+    windowId: string,
+    authorization?: ComputerForegroundAuthorization,
+  ): Promise<unknown>;
   setWindowFrame(
     threadId: string | undefined,
     windowId: string,
@@ -391,6 +405,8 @@ interface ReplayCall {
   readonly pid: number | undefined;
   /** The drag's second endpoint, resolved the same way as `target`. */
   readonly toTarget: ComputerTarget | undefined;
+  /** The never-raise authorization a re-issued foreground step must carry. */
+  readonly foregroundAuthorization: ComputerForegroundAuthorization | undefined;
 }
 
 interface ReplayStepPlan {
@@ -510,6 +526,13 @@ const REPLAY_PLANS: Record<string, ReplayStepPlan> = {
       // Three states preserved: a recorded `hidden:false` must stay a visible
       // launch on replay; absent rides the manager's invisible-by-default.
       const hidden = argBoolean(call.args, "hidden");
+      // A recorded visible launch is a raise-shaped step: the same never-raise
+      // gate the live call needed applies, so replay cannot smuggle one in.
+      if (hidden === false && call.foregroundAuthorization?.userRequestedVisibleUse !== true) {
+        throw new ComputerBackendError(
+          "The user's task did not ask for this app to be shown; the recorded visible launch is not re-issued.",
+        );
+      }
       return call.manager.launchApp(
         call.threadId,
         argString(call.args, "app") ?? call.step.declaredTarget?.app ?? "",
@@ -524,7 +547,8 @@ const REPLAY_PLANS: Record<string, ReplayStepPlan> = {
   computer_activate_window: {
     mutating: true,
     target: "window",
-    run: (call) => call.manager.activateWindow(call.threadId, call.windowId!),
+    run: (call) =>
+      call.manager.activateWindow(call.threadId, call.windowId!, call.foregroundAuthorization),
   },
   computer_set_window_frame: {
     mutating: true,
@@ -1128,6 +1152,7 @@ export async function classifyComputerReplay(
       step,
       args: step.args,
       signal: options.signal,
+      foregroundAuthorization: options.foregroundAuthorization,
       target: reissueTarget(step, report.target),
       windowId: report.target?.windowId,
       pid:

@@ -98,6 +98,13 @@ import {
 } from "./uiTreeTargeting.ts";
 import { ComputerAuditLog, type ComputerAuditEntry } from "./computerAuditLog.ts";
 import { ComputerDenylistError, computerDenylistMatch } from "./computerDenylist.ts";
+import { CuaActionError } from "./CuaComputerBackend.ts";
+import {
+  COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+  COMPUTER_FOREGROUND_USER_INTERACTION_CODE,
+  COMPUTER_USER_INTERACTION_QUIET_MS,
+  type ComputerForegroundAuthorization,
+} from "./computerVisibleUse.ts";
 import {
   COMPUTER_GRANT_AUDIT_TOOL,
   ComputerGrantStore,
@@ -467,6 +474,13 @@ export class ComputerManager {
    */
   private escapeStopped = false;
   private escapeStopEpoch = 0;
+  /**
+   * When the human last drove the desktop through this server's pane-input
+   * paths (`threadId === undefined` on the input methods). The foreground
+   * funnels read it to refuse a raise while the user is actively interacting;
+   * it is deliberately the manager's own clock, not a second activity bus.
+   */
+  private lastUserDesktopInputAt: number | undefined;
 
   /**
    * Which desktop vocabulary the tool descriptions must speak. See
@@ -1536,6 +1550,55 @@ export class ComputerManager {
       throw new ComputerBackendError(pausedState.inputPause.message, {
         inputPause: pausedState.inputPause,
       });
+    }
+  }
+
+  /**
+   * The never-raise gate every foreground excursion passes before it can move
+   * a window in front of the user.
+   *
+   * Two refusals, both `not-dispatched` so the delivery taxonomy stays honest:
+   * the user's own task text never asked to see the app or window
+   * (`foreground_not_requested`), or the user was interacting with the desktop
+   * moments ago (`foreground_user_interaction`). Absent authorization is a
+   * refusal, not a default: the Helium incident is exactly the case where no
+   * layer should be able to infer consent to raise from the approval mode.
+   *
+   * Pane input is exempt: a human driving their own desktop through the pane
+   * is the user, not an agent, and the gate exists to protect them from us.
+   *
+   * The interaction window reads the same clock and queue as the rest of the
+   * manager — the timestamp is stamped by the pane-input paths, and both pane
+   * input and agent work serialize on the desktop queue, so the window only
+   * covers rapid interleaving, never a concurrent dispatch.
+   *
+   * The gate runs inside the queued action (dispatch time), which is what
+   * makes the stamp meaningful for an agent call that waited behind the pane
+   * input the user had just sent.
+   */
+  private assertForegroundAllowed(
+    threadId: string | undefined,
+    authorization: ComputerForegroundAuthorization | undefined,
+  ): void {
+    if (agentThreadId(threadId) === undefined) return;
+    if (authorization?.userRequestedVisibleUse !== true) {
+      throw new CuaActionError(
+        "The user's task did not ask for this app or window to be shown. Stay in the background: " +
+          "keep observing and acting through background input, or ask the user to confirm " +
+          "they want to watch — their reply that asks to see the screen authorizes the raise.",
+        "not-dispatched",
+        COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+      );
+    }
+    const lastInput = this.lastUserDesktopInputAt;
+    if (lastInput !== undefined && this.now() - lastInput < COMPUTER_USER_INTERACTION_QUIET_MS) {
+      throw new CuaActionError(
+        "The user was interacting with the desktop moments ago; bringing a window forward " +
+          "now would take their focus. Wait for the desktop to be quiet, then retry if the " +
+          "task still needs foreground delivery.",
+        "not-dispatched",
+        COMPUTER_FOREGROUND_USER_INTERACTION_CODE,
+      );
     }
   }
 
@@ -2774,10 +2837,17 @@ export class ComputerManager {
     }
   }
 
-  /** Bring the target into view and aim the agent's keyboard at it. */
+  /**
+   * Bring the target into view and aim the agent's keyboard at it.
+   *
+   * Never-raise default: without the task's explicit visible-use
+   * authorization this refuses before any raise is dispatched. See
+   * {@link assertForegroundAllowed}.
+   */
   async activateWindow(
     threadId: string | undefined,
     windowId: string,
+    authorization?: ComputerForegroundAuthorization,
   ): Promise<ComputerActionResult> {
     return this.withDesktopControl(threadId, async () => {
       markComputerCall("computer_activate_window");
@@ -2785,6 +2855,7 @@ export class ComputerManager {
       if (!raise || !this.backendCapabilities.raise) {
         throw activationUnsupportedError();
       }
+      this.assertForegroundAllowed(threadId, authorization);
       await this.resolveWindowTarget(threadId, windowId);
       await timedComputerLeg("dispatch", async () => {
         await raise(windowId);
@@ -2823,13 +2894,19 @@ export class ComputerManager {
     threadId: string | undefined,
     windowId: string,
     input?: () => Promise<unknown>,
+    authorization?: ComputerForegroundAuthorization,
   ): Promise<ComputerActionResult & { readonly note?: string }> {
+    currentComputerCall()?.timing?.count("foreground_excursion");
     return this.withDesktopControl(threadId, async () => {
       markComputerCall("computer_activate_window");
       const raise = this.backend.raiseWindow?.bind(this.backend);
       if (!raise || !this.backendCapabilities.raise) {
         throw activationUnsupportedError();
       }
+      // Inside the queued action, so the interaction stamp is read at dispatch
+      // time; before the target resolution and before any raise, so a refused
+      // excursion moves nothing and aims nothing.
+      this.assertForegroundAllowed(threadId, authorization);
       const windows = await timedComputerLeg("resolve", () => this.readWindows());
       const target = windows.find((candidate) => candidate.id === windowId);
       if (!target) {
@@ -2938,8 +3015,14 @@ export class ComputerManager {
   async withForegroundRestore<T>(
     threadId: string | undefined,
     action: () => Promise<T>,
+    authorization?: ComputerForegroundAuthorization,
   ): Promise<T> {
+    currentComputerCall()?.timing?.count("foreground_excursion");
     return this.withDesktopControl(threadId, async () => {
+      // The same never-raise gate the activate path takes: a foreground key or
+      // click is an excursion from the user's point of view, and it refuses
+      // before the wrapped action can raise anything.
+      this.assertForegroundAllowed(threadId, authorization);
       const before = await timedComputerLeg("resolve", () => this.readWindows());
       const previousId =
         before.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
@@ -4094,6 +4177,10 @@ export class ComputerManager {
   ): Promise<A> {
     assertDesktopOperationAdmission();
     const owner = agentThreadId(threadId);
+    // Pane input (no owning thread) is the human driving their own desktop:
+    // stamp it so a foreground excursion cannot raise a window into the middle
+    // of their interaction.
+    if (owner === undefined) this.lastUserDesktopInputAt = this.now();
     return this.operations.runScoped(windowId, async () => {
       this.assertControlAuthority(owner);
       this.assertInputNotEscapeStopped();
@@ -4130,6 +4217,11 @@ export class ComputerManager {
   ): Promise<A> {
     assertDesktopOperationAdmission();
     const owner = agentThreadId(threadId);
+    // Pane input (no owning thread) is the human driving their own desktop:
+    // stamp it so a foreground excursion cannot raise a window into the middle
+    // of their interaction. Stamped before the queue so a queued agent call
+    // sees the interaction that preceded it.
+    if (owner === undefined) this.lastUserDesktopInputAt = this.now();
     if (
       owner &&
       this.lease &&

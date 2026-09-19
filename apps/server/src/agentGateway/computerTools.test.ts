@@ -77,6 +77,14 @@ function makeContext(
 async function setup(
   backend = new FakeComputerBackend(),
   authorizeAction?: AgentGatewayComputerToolsOptions["authorizeAction"],
+  /**
+   * The never-raise authorization resolver. Defaults to the user having asked
+   * to see the screen: these suites exercise the raise/foreground mechanics,
+   * and the gate itself has dedicated tests that pass an explicit refusal.
+   */
+  resolveForegroundAuthorization: AgentGatewayComputerToolsOptions["resolveForegroundAuthorization"] = async () => ({
+    userRequestedVisibleUse: true,
+  }),
 ) {
   // A zero settle delay: these tests assert on what the post-action capture
   // does, not on how long the desktop is given to repaint.
@@ -84,6 +92,7 @@ async function setup(
   const tools = makeAgentGatewayComputerTools({
     manager,
     ...(authorizeAction ? { authorizeAction } : {}),
+    resolveForegroundAuthorization,
   });
   const byName = new Map(tools.map((tool) => [tool.definition.name, tool]));
   const call = async (
@@ -165,7 +174,59 @@ describe("agent gateway computer tools", () => {
     expect(notes).toContain('computer_launch_app({app:"Calculator"})');
     expect(notes).toContain("omit delivery_mode unless the user asked for visible use");
     expect(notes).not.toContain("choose delivery_mode:foreground from the first mutation");
+    // Unit-2/6 gate: the three driver refusals the DB proves real tasks hit
+    // must stay mapped to their next step, or the agent retries blindly.
+    expect(notes).toContain("same_pid_keyboard_ambiguity");
+    expect(notes).toContain("element_outside_target_window");
+    expect(notes).toContain("background_unavailable");
+    // Failure-loop gate: the dead ends two real Newegg/Helium threads hit.
+    expect(notes).toContain("browser_requires_setup");
+    expect(notes).toContain("foreign_process_termination_denied");
+    expect(notes).toContain("input_target_unavailable");
+    expect(notes).toContain("never tell the user computer control is off");
     await manager.dispose();
+  });
+
+  it("attaches list-windows guidance to a null-window launch result", async () => {
+    // A launch that yields no window is where relaunch loops start: the
+    // result itself must name the next step.
+    const backend = new FakeComputerBackend();
+    backend.launchApp = async (app: string) =>
+      ({ computerId: "desktop", app, window: null }) as Awaited<
+        ReturnType<FakeComputerBackend["launchApp"]>
+      >;
+    const { call, manager } = await setup(backend);
+    try {
+      const result = await call("computer_launch_app", {
+        app: "Aside",
+        wait_for_window: false,
+      });
+      expect(result.isError).not.toBe(true);
+      const text = JSON.stringify(resultJson(result));
+      expect(text).toContain("computer_list_windows");
+      expect(text).toContain("never launch again");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("attaches the hidden-window branch to a hidden launch result", async () => {
+    // The Helium dead end starts here: activation cannot reach a hidden
+    // window and kill cannot remove a foreign process, so the result must
+    // name the survivable branch before the agent touches it.
+    const { call, manager } = await setup();
+    try {
+      const result = await call("computer_launch_app", {
+        app: "Helium",
+        hidden: true,
+        wait_for_window: false,
+      });
+      expect(result.isError).not.toBe(true);
+      const text = JSON.stringify(resultJson(result));
+      expect(text).toContain("browser_prepare with allow_launch");
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("reserves model observation authority for explicit perception tools", async () => {
@@ -235,8 +296,10 @@ describe("agent gateway computer tools", () => {
       "Exact window for label or x/y targeting",
     );
     expect(windowIdDescription(byName, "computer_type_text")).toContain("does not activate it");
+    // The activate tool no longer promises consent-covered foreground: the
+    // user's own task text is the authorization, and the description says so.
     expect(byName.get("computer_activate_window")?.definition.description).toContain(
-      "active Computer task's consent",
+      "only when the user's own task text asked to see the screen",
     );
     expect(byName.get("computer_list_windows")?.definition.description).not.toContain(
       "into view automatically",
@@ -2955,6 +3018,181 @@ it("allows human input between conditional wait observations and stops polling w
   } finally {
     await manager.dispose();
   }
+});
+
+describe("computer never-raise gate", () => {
+  const refusing = async () => ({ userRequestedVisibleUse: false });
+
+  it("refuses activate without the user's task-text authorization, and raises nothing", async () => {
+    const backend = new FakeComputerBackend();
+    const approval = vi.fn(async () => true);
+    const { call, manager } = await setup(backend, approval, refusing);
+    try {
+      const refused = await call("computer_activate_window", { window_id: "fake-calculator" });
+      expect(refused.isError).toBe(true);
+      const payload = resultJson(refused) as { error: string; effect: string; message: string };
+      expect(payload.error).toBe("foreground_not_requested");
+      expect(payload.effect).toBe("not-dispatched");
+      expect(payload.message).toContain("did not ask");
+      expect(backend.callsFor("raiseWindow")).toEqual([]);
+      expect(backend.callsFor("focusWindow")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses an absent resolver too — never-raise is the default", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    const tools = makeAgentGatewayComputerTools({
+      manager,
+      authorizeAction: async () => true,
+    });
+    const tool = tools.find((entry) => entry.definition.name === "computer_activate_window")!;
+    try {
+      const refused = await Effect.runPromise(
+        tool.handler({ window_id: "fake-calculator" }, makeContext()),
+      );
+      expect(refused.isError).toBe(true);
+      expect(JSON.stringify(resultJson(refused))).toContain("foreground_not_requested");
+      expect(backend.callsFor("raiseWindow")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses foreground delivery without authorization and dispatches nothing", async () => {
+    const backend = new FakeComputerBackend();
+    const approval = vi.fn(async () => true);
+    const { call, manager } = await setup(backend, approval, refusing);
+    try {
+      const refused = await call("computer_press_key", {
+        key: "enter",
+        window_id: "fake-calculator",
+        delivery_mode: "foreground",
+      });
+      expect(refused.isError).toBe(true);
+      expect(JSON.stringify(resultJson(refused))).toContain("foreground_not_requested");
+      expect(backend.callsFor("pressKey")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses a run's activate step without authorization, and the run reports it", async () => {
+    const backend = new FakeComputerBackend();
+    const approval = vi.fn(async () => true);
+    const { call, manager } = await setup(backend, approval, refusing);
+    try {
+      const result = await call("computer_run", {
+        steps: [{ type: "activate_window", window_id: "fake-calculator" }],
+      });
+      const payload = resultJson(result) as {
+        completed: number;
+        stopped: boolean;
+        steps: { ok: boolean; error?: { code?: string } }[];
+      };
+      expect(payload.stopped).toBe(true);
+      expect(payload.steps[0]).toMatchObject({
+        ok: false,
+        error: { code: "foreground_not_requested", effect: "not-dispatched" },
+      });
+      expect(backend.callsFor("raiseWindow")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses a visible launch without authorization, and allows the hidden default", async () => {
+    const backend = new FakeComputerBackend();
+    const approval = vi.fn(async () => true);
+    const { call, manager } = await setup(backend, approval, refusing);
+    try {
+      const refused = await call("computer_launch_app", {
+        app: "TextEdit",
+        hidden: false,
+        wait_for_window: false,
+      });
+      expect(refused.isError).toBe(true);
+      expect(JSON.stringify(resultJson(refused))).toContain("foreground_not_requested");
+      expect(backend.callsFor("launchApp")).toEqual([]);
+
+      const hidden = await call("computer_launch_app", {
+        app: "TextEdit",
+        wait_for_window: false,
+      });
+      expect(hidden.isError).not.toBe(true);
+      expect(backend.callsFor("launchApp").at(-1)?.args).toEqual([
+        "TextEdit",
+        [],
+        { hidden: true },
+      ]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses a run's visible launch step without authorization", async () => {
+    const backend = new FakeComputerBackend();
+    const approval = vi.fn(async () => true);
+    const { call, manager } = await setup(backend, approval, refusing);
+    try {
+      const result = await call("computer_run", {
+        steps: [{ type: "launch_app", app: "TextEdit", hidden: false, wait_for_window: false }],
+      });
+      const payload = resultJson(result) as { steps: { ok: boolean; error?: { code?: string } }[] };
+      expect(payload.steps[0]).toMatchObject({
+        ok: false,
+        error: { code: "foreground_not_requested" },
+      });
+      expect(backend.callsFor("launchApp")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("allows the authorized raise, and the resolver is read per call", async () => {
+    const backend = new FakeComputerBackend();
+    const approval = vi.fn(async () => true);
+    let authorized = false;
+    const { call, manager } = await setup(backend, approval, async () => ({
+      userRequestedVisibleUse: authorized,
+    }));
+    try {
+      expect(
+        (await call("computer_activate_window", { window_id: "fake-calculator" })).isError,
+      ).toBe(true);
+      expect(backend.callsFor("raiseWindow")).toEqual([]);
+      // The user replies "yes, show me": the next read authorizes.
+      authorized = true;
+      const allowed = await call("computer_activate_window", { window_id: "fake-calculator" });
+      expect(allowed.isError).not.toBe(true);
+      expect(backend.callsFor("raiseWindow").map((entry) => entry.args[0])).toEqual([
+        "fake-calculator",
+        "fake-terminal",
+      ]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("keeps the refusal-map guidance and the foreground chapter", async () => {
+    const notes = computerToolInstructions();
+    expect(notes).toContain("foreground_not_requested");
+    expect(notes).toContain("foreground_user_interaction");
+    const { call, manager } = await setup();
+    try {
+      const chapter = await call("computer_help", { topic: "foreground" });
+      expect(chapter.isError).not.toBe(true);
+      const json = resultJson(chapter) as { text: string };
+      expect(json.text).toContain("foreground_not_requested");
+      expect(json.text).toContain("foreground_user_interaction");
+      const index = await call("computer_help", {});
+      expect((resultJson(index) as { topics: string }).topics).toContain("foreground");
+    } finally {
+      await manager.dispose();
+    }
+  });
 });
 
 describe("computer_activate_window foreground restore", () => {

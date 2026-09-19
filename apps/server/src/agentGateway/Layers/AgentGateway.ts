@@ -92,6 +92,10 @@ import {
 import { isSynaraComputerToolFamilyName } from "../computerToolPermission.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
 import { computerApprovalGate } from "../../computer/ComputerApprovalGate.ts";
+import {
+  COMPUTER_FOREGROUND_NOT_AUTHORIZED,
+  computerForegroundAuthorizationForMessages,
+} from "../../computer/computerVisibleUse.ts";
 import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserAutomationHost.ts";
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
@@ -1189,6 +1193,17 @@ export const makeAgentGateway = Effect.gen(function* () {
           manager: computerService.manager,
           onSetupRequired: surfaceComputerSetupRequired,
           authorizeAction: authorizeComputerAction,
+          // Never-raise default: the raise-shaped calls ask this whether the
+          // user's own latest task text asked to see the screen. A read
+          // failure or a thread with no user message refuses.
+          resolveForegroundAuthorization: async (context) => {
+            const detail = await Effect.runPromise(
+              snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(context.callerThreadId)),
+            );
+            return Option.isNone(detail)
+              ? COMPUTER_FOREGROUND_NOT_AUTHORIZED
+              : computerForegroundAuthorizationForMessages(detail.value.messages);
+          },
         })
       : []),
     // The driver-backed CDP browser family. Advertised only when the backend

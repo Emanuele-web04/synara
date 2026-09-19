@@ -53,11 +53,16 @@ function makeContext(provider: ProviderKind = "claudeAgent", threadId = THREAD):
 async function setup(
   backend = new FakeComputerBackend(),
   authorizeAction?: AgentGatewayComputerToolsOptions["authorizeAction"],
+  /** Defaults to the user having asked to see the screen; the gate's own tests override it. */
+  resolveForegroundAuthorization: AgentGatewayComputerToolsOptions["resolveForegroundAuthorization"] = async () => ({
+    userRequestedVisibleUse: true,
+  }),
 ) {
   const manager = new ComputerManager({ backend, actionSettleMs: 0 });
   const tools = makeAgentGatewayComputerTools({
     manager,
     ...(authorizeAction ? { authorizeAction } : {}),
+    resolveForegroundAuthorization,
   });
   const byName = new Map(tools.map((tool) => [tool.definition.name, tool]));
   const call = async (
@@ -385,6 +390,29 @@ describe("computer_launch_app hidden", () => {
     expect(backend.callsFor("raiseWindow")).toEqual([]);
   });
 
+  it("refuses a visible launch without the user's task-text authorization", async () => {
+    const approval = vi.fn(async () => true);
+    const backend = new FakeComputerBackend();
+    const { call } = await setup(backend, approval, async () => ({
+      userRequestedVisibleUse: false,
+    }));
+    const refused = await call("computer_launch_app", {
+      app: "TextEdit",
+      hidden: false,
+      wait_for_window: false,
+    });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(resultJson(refused))).toContain("foreground_not_requested");
+    expect(backend.callsFor("launchApp")).toEqual([]);
+    // The hidden default still works: only the visible opt-out is gated.
+    const hidden = await call("computer_launch_app", {
+      app: "TextEdit",
+      wait_for_window: false,
+    });
+    expect(hidden.isError).not.toBe(true);
+    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["TextEdit", [], { hidden: true }]);
+  });
+
   it("defaults an ordinary launch to the invisible workspace", async () => {
     const approval = vi.fn(async () => true);
     const backend = new FakeComputerBackend();
@@ -396,11 +424,7 @@ describe("computer_launch_app hidden", () => {
     expect(result.isError).not.toBe(true);
     // No `hidden` in the call still resolves hidden at the manager seam —
     // invisible-by-default is the product behavior, visibility is opt-out.
-    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual([
-      "TextEdit",
-      [],
-      { hidden: true },
-    ]);
+    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["TextEdit", [], { hidden: true }]);
     const launched = (await backend.listWindows()).find((window) => window.appName === "TextEdit");
     expect(launched).toMatchObject({ focused: false, visible: false });
   });
@@ -415,11 +439,7 @@ describe("computer_launch_app hidden", () => {
       wait_for_window: false,
     });
     expect(result.isError).not.toBe(true);
-    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual([
-      "TextEdit",
-      [],
-      { hidden: false },
-    ]);
+    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["TextEdit", [], { hidden: false }]);
     const launched = (await backend.listWindows()).find((window) => window.appName === "TextEdit");
     expect(launched).toMatchObject({ focused: true, visible: true });
   });
