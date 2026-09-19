@@ -539,9 +539,12 @@ export interface WorkspaceFilePreviewProps {
    * Initial markdown render mode per file. Editor and dock file panes default
    * to rendered Preview; omit (or pass false) for source-first surfaces such
    * as the Explorer pane. The header toggle still lets the user flip either
-   * way, and a per-file session override wins over this default.
+   * way. Use the controlled mode to preserve choices across preview remounts.
    */
   markdownPreviewDefault?: boolean;
+  /** Controlled mode for surfaces that preserve choices across preview remounts. */
+  markdownPreviewEnabled?: boolean;
+  onMarkdownPreviewChange?: (rendered: boolean) => void;
   /** Enables guarded editing for complete, supported files inside the workspace. */
   editable?: boolean;
   /** Keeps the file watcher bounded to a currently visible preview surface. */
@@ -607,9 +610,10 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
     rendered: boolean;
   } | null>(null);
   const markdownPreviewEnabled =
-    markdownPreviewOverride !== null && markdownPreviewOverride.filePath === filePath
+    props.markdownPreviewEnabled ??
+    (markdownPreviewOverride !== null && markdownPreviewOverride.filePath === filePath
       ? markdownPreviewOverride.rendered
-      : markdownPreviewDefault;
+      : markdownPreviewDefault);
   const localPreviewGrantQuery = useQuery(
     projectLocalPreviewGrantQueryOptions({
       path: filePath,
@@ -962,6 +966,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   };
   const handleMarkdownPreviewChange = (rendered: boolean) => {
     setMarkdownPreviewOverride({ filePath, rendered });
+    props.onMarkdownPreviewChange?.(rendered);
   };
   // Toggling a task rewrites the file, so only enable it when the preview
   // holds the complete contents (writing a truncated read would corrupt it).

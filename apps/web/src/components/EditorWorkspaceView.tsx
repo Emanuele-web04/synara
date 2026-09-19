@@ -408,6 +408,15 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
   // query lives here so it survives toggling between sidebar panes.
   const [searchPaneActive, setSearchPaneActive] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // The file preview unmounts in Diff/Edit mode. Keep explicit Markdown choices
+  // in the editor shell, scoped to the workspace and file for this session.
+  const [markdownPreviewModes, setMarkdownPreviewModes] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(),
+  );
+  const markdownPreviewKey = `${props.workspaceRoot ?? ""}\0${props.selectedFilePath ?? ""}`;
+  const handleMarkdownPreviewChange = (rendered: boolean) => {
+    setMarkdownPreviewModes((current) => new Map(current).set(markdownPreviewKey, rendered));
+  };
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const { centerMode, onCenterModeChange } = props;
@@ -708,7 +717,8 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                 <WorkspaceFilePreview
                   workspaceRoot={props.workspaceRoot}
                   filePath={props.selectedFilePath}
-                  markdownPreviewDefault
+                  markdownPreviewEnabled={markdownPreviewModes.get(markdownPreviewKey) ?? true}
+                  onMarkdownPreviewChange={handleMarkdownPreviewChange}
                   onReferenceInChat={props.onReferenceInChat}
                   onAskWhyInChat={props.onAskWhyInChat}
                   onCommentInChat={props.onCommentInChat}
