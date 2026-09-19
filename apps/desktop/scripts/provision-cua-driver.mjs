@@ -35,6 +35,9 @@ const upstreamAsset = {
 }[platform];
 const architectures = arch === "universal" ? ["arm64", "x64"] : [arch];
 const artifact = option("--artifact-dir") ?? process.env.SYNARA_CUA_ARTIFACT_DIR;
+const signIdentity = option("--sign-identity") ?? process.env.SYNARA_CUA_SIGN_IDENTITY;
+/** Stable signing identifier so macOS TCC remembers the driver across rebuilds. */
+const CUA_DRIVER_SIGN_IDENTIFIER = "com.emanueledipietro.synara.cua.driver";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const patchPath = fileURLToPath(
   new URL("../patches/cua-driver/0001-synara-native.patch", import.meta.url),
@@ -224,14 +227,23 @@ try {
     // binary (SIGKILL at exec) when that marker survives onto a new path.
     await writeFile(join(destination, "cua-driver"), await readFile(binary));
     await chmod(join(destination, "cua-driver"), 0o755);
-    // Re-stamp the adhoc signature: the linker's embedded `linker-signed`
-    // flag signature is also killed at exec on recent macOS (the staged
-    // binary must present a plain adhoc signature).
-    run("codesign", ["--force", "--sign", "-", join(destination, "cua-driver")]);
+    // Re-stamp the signature. Default is a plain adhoc signature (the linker's
+    // embedded `linker-signed` flag signature is killed at exec on recent
+    // macOS). When a signing identity is supplied, use it with a stable
+    // identifier so macOS TCC remembers this driver across rebuilds instead of
+    // prompting as a brand-new unknown app every time.
+    const signArgs = ["--force"];
+    if (signIdentity) {
+      signArgs.push("--identifier", CUA_DRIVER_SIGN_IDENTIFIER, "--sign", signIdentity);
+    } else {
+      signArgs.push("--sign", "-");
+    }
+    run("codesign", [...signArgs, join(destination, "cua-driver")]);
     // Signing rewrites the executable bytes, so record the digest of the
     // final staged file. The reuse path verifies binarySha256 against exactly
     // these bytes; recording the pre-sign digest forced every consumer to
     // patch provenance.json and re-sign by hand.
+    if (signIdentity) provenance.signedIdentity = signIdentity;
     provenance.binarySha256 = digest(await readFile(join(destination, "cua-driver")));
   }
   await writeFile(join(destination, "provenance.json"), JSON.stringify(provenance, null, 2) + "\n");

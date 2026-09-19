@@ -101,6 +101,8 @@ export function createDesktopPlatformBuildConfig(
           "Synara captures the windows you authorize for Computer use.",
         NSAccessibilityUsageDescription:
           "Synara controls the windows you authorize for Computer use.",
+        NSLocalNetworkUsageDescription:
+          "Synara connects to the browsers it drives on this Mac so agents can browse in the background.",
       },
     } satisfies Record<string, unknown>;
 
