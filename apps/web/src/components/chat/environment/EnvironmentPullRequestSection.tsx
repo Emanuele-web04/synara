@@ -187,11 +187,11 @@ function ChecksMenuRow({
     <MenuRow
       url={check.url}
       onOpenUrl={onOpenUrl}
-      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1 text-[length:var(--app-font-size-ui,12px)]"
+      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1 text-ui"
     >
       <PullRequestCheckStatusIcon status={check.status} />
       <span className="min-w-0 truncate text-[var(--color-text-foreground)]">{check.name}</span>
-      <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground">
+      <span className="shrink-0 text-ui-xs text-muted-foreground">
         {PULL_REQUEST_CHECK_STATUS_LABELS[check.status]}
       </span>
     </MenuRow>
@@ -213,18 +213,16 @@ function CommentsMenuRow({
       onOpenUrl={onOpenUrl}
       className="flex flex-col items-stretch gap-0.5 px-2 py-1.5"
     >
-      <span className="line-clamp-2 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)]">
+      <span className="line-clamp-2 text-ui text-[var(--color-text-foreground)]">
         {display.title}
       </span>
       {display.snippet ? (
-        <span className="line-clamp-2 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground">
-          {display.snippet}
-        </span>
+        <span className="line-clamp-2 text-ui-xs text-muted-foreground">{display.snippet}</span>
       ) : null}
       <span
         className={cn(
           PR_QUIET_INK_CLASS_NAME,
-          "flex items-center justify-between gap-2 text-[length:var(--app-font-size-ui-xs,10px)]",
+          "flex items-center justify-between gap-2 text-ui-xs",
         )}
       >
         {comment.author ? (
@@ -251,11 +249,7 @@ function CommentsMenuRow({
 }
 
 function MenuPlaceholder({ text }: { text: string }) {
-  return (
-    <div className="px-3 py-3 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
-      {text}
-    </div>
-  );
+  return <div className="px-3 py-3 text-center text-ui text-muted-foreground">{text}</div>;
 }
 
 /** Menu row label + optional trailing value, laid out like the reference PR menu. */

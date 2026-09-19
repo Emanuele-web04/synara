@@ -102,7 +102,7 @@ export function ComposerModelPickerRow(props: {
         {row.detail}
       </span>
       {props.shortcutHint ? (
-        <Kbd className="h-4 min-w-4 shrink-0 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground">
+        <Kbd className="h-4 min-w-4 shrink-0 px-1 text-ui-2xs text-muted-foreground">
           {props.shortcutHint}
         </Kbd>
       ) : null}

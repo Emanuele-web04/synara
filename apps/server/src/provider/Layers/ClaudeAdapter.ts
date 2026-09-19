@@ -222,6 +222,8 @@ interface ClaudeTurnState {
   // steerTurn falls back to a normal turn dispatch.
   readonly synthetic?: true;
   readonly explicitCompaction?: { readonly nativeSessionId: string; boundaryObserved: boolean };
+  // Set while a "Compacting context" progress row awaits its compact boundary.
+  compactionInProgress?: boolean;
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
@@ -2585,6 +2587,31 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
+    // Claude reports only the compact boundary, so publish the progress row the
+    // transcript shows while native compaction is still running.
+    const emitCompactionProgress = (context: ClaudeSessionContext): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const turnState = context.turnState;
+        if (!turnState || turnState.compactionInProgress) return;
+        turnState.compactionInProgress = true;
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent(context, {
+          type: "item.updated",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          turnId: asCanonicalTurnId(turnState.turnId),
+          itemId: asRuntimeItemId(`claude-compaction-${turnState.turnId}`),
+          payload: {
+            itemType: "context_compaction",
+            status: "inProgress",
+            title: "Compacting context",
+          },
+          providerRefs: nativeProviderRefs(context),
+        });
+      });
+
     // Warn once per session per threshold when the logical prompt is large. Cache
     // reads still count toward context size, but are materially cheaper than fresh
     // input, so the warning names both instead of equating all tokens with cost.
@@ -3236,6 +3263,26 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               method: "claude/result",
               payload: result ?? { status },
             },
+          });
+        }
+
+        // A compaction that ended without its boundary must not leave a spinner row.
+        if (turnState.compactionInProgress) {
+          const compactionStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "item.completed",
+            eventId: compactionStamp.eventId,
+            provider: PROVIDER,
+            createdAt: compactionStamp.createdAt,
+            threadId: context.session.threadId,
+            turnId: asCanonicalTurnId(turnState.turnId),
+            itemId: asRuntimeItemId(`claude-compaction-${turnState.turnId}`),
+            payload: {
+              itemType: "context_compaction",
+              status: "failed",
+              title: "Context compaction failed",
+            },
+            providerRefs: nativeProviderRefs(context),
           });
         }
 
@@ -4497,6 +4544,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           }
           case "status":
+            if (message.status === "compacting") yield* emitCompactionProgress(context);
             yield* offerRuntimeEvent(context, {
               ...base,
               type: "session.state.changed",
@@ -4511,6 +4559,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             if (context.turnState?.explicitCompaction?.nativeSessionId === message.session_id) {
               context.turnState.explicitCompaction.boundaryObserved = true;
             }
+            if (context.turnState) context.turnState.compactionInProgress = false;
             invalidateClaudeCache(context);
             context.lastKnownTokenUsage = undefined;
             context.tokenUsageState = "skip-compaction-call";
@@ -6429,6 +6478,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               : {},
           providerRefs: {},
         });
+
+        if (isCompaction) yield* emitCompactionProgress(context);
 
         if (hasUnfinishedClaudeTasks(context.trackedTasks)) {
           yield* emitTrackedTasksUpdated(context, {

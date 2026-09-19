@@ -71,7 +71,7 @@ export function WorkspaceFileEditorPane(props: WorkspaceFileEditorPaneProps) {
       ) : null}
       {session.loadError ? (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
-          <p className="text-left text-[11px] text-destructive/85">{session.loadError}</p>
+          <p className="text-left text-ui-sm text-destructive/85">{session.loadError}</p>
         </PanelStateMessage>
       ) : session.readOnlyReason ? (
         <PanelStateMessage density="compact" fill="flex">

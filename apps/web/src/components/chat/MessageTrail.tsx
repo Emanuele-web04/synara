@@ -593,12 +593,12 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
         {/* The sent message: dark, max two lines (matches the projects/threads card title). */}
         <div
           ref={tooltipMessageRef}
-          className="line-clamp-2 text-xs leading-snug font-medium text-foreground"
+          className="line-clamp-2 text-ui leading-snug font-medium text-foreground"
         />
         {/* The turn's first reply: muted gray, max three lines. */}
         <div
           ref={tooltipResponseRef}
-          className="mt-1 line-clamp-3 text-xs leading-snug text-muted-foreground"
+          className="mt-1 line-clamp-3 text-ui leading-snug text-muted-foreground"
         />
       </div>
     </nav>

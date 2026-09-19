@@ -19,7 +19,7 @@ export function ClaudeCacheDetails({
   const usage = observation?.lastRequest;
 
   return (
-    <div className="space-y-1.5 border-t border-border/50 pt-2 text-xs text-muted-foreground">
+    <div className="space-y-1.5 border-t border-border/50 pt-2 text-ui leading-snug text-muted-foreground">
       <div className="font-medium text-foreground">Claude prompt cache: {label}</div>
       {observation?.ttlSeconds !== undefined ? (
         <div>Observed lifetime: {formatCacheDuration(observation.ttlSeconds)}</div>

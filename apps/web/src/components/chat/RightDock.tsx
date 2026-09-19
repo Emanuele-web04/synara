@@ -108,7 +108,7 @@ function RightDockLauncher(props: {
             key={kind}
             variant="subtle"
             size="xl"
-            className="h-11 w-full justify-start gap-3 rounded-xl px-4 text-[length:var(--app-font-size-ui-lg,13px)] font-normal"
+            className="h-11 w-full justify-start gap-3 rounded-xl px-4 text-ui-lg font-normal"
             aria-label={`Open ${label}`}
             onClick={() => props.onOpen(kind)}
           >

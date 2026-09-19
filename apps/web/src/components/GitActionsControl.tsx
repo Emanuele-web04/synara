@@ -1506,7 +1506,7 @@ export default function GitActionsControl({
         isGitStatusOutOfSync ||
         gitStatusError) && <MenuSeparator className="mx-3 mt-2" />}
       {gitStatusForActions?.branch === null && (
-        <p className="px-3 py-1.5 text-xs text-warning">
+        <p className="px-3 py-1.5 text-ui leading-snug text-warning">
           Detached HEAD: create and checkout a branch to enable push and PR actions.
         </p>
       )}
@@ -1515,18 +1515,22 @@ export default function GitActionsControl({
         !gitStatusForActions.hasWorkingTreeChanges &&
         gitStatusForActions.behindCount > 0 &&
         gitStatusForActions.aheadCount === 0 && (
-          <p className="px-3 py-1.5 text-xs text-warning">Behind upstream. Pull/rebase first.</p>
+          <p className="px-3 py-1.5 text-ui leading-snug text-warning">
+            Behind upstream. Pull/rebase first.
+          </p>
         )}
       {isGitStatusOutOfSync && (
-        <p className="px-3 py-1.5 text-xs text-muted-foreground">Refreshing git status...</p>
+        <p className="px-3 py-1.5 text-ui leading-snug text-muted-foreground">
+          Refreshing git status...
+        </p>
       )}
       {isGitStatusRefreshDelayed && !isGitStatusOutOfSync && (
-        <p className="px-3 py-1.5 text-xs text-muted-foreground">
+        <p className="px-3 py-1.5 text-ui leading-snug text-muted-foreground">
           {isGitStatusFetching ? "Refreshing git status..." : "Git status refresh delayed."}
         </p>
       )}
       {gitStatusError && !isGitStatusRefreshDelayed && (
-        <p className="px-3 py-1.5 text-xs text-destructive">
+        <p className="px-3 py-1.5 text-ui leading-snug text-destructive">
           {gitStatusError instanceof Error ? gitStatusError.message : "Git status refresh failed."}
         </p>
       )}
@@ -1635,7 +1639,10 @@ export default function GitActionsControl({
               }}
             >
               <div className="space-y-1.5">
-                <label className="block font-medium text-sm" htmlFor={createBranchNameFieldId}>
+                <label
+                  className="block font-medium text-ui leading-snug"
+                  htmlFor={createBranchNameFieldId}
+                >
                   Branch name
                 </label>
                 <Input
@@ -1647,7 +1654,9 @@ export default function GitActionsControl({
                 />
               </div>
               {createBranchNameConflicts ? (
-                <p className="text-destructive text-sm">A branch with this name already exists.</p>
+                <p className="text-destructive text-ui leading-snug">
+                  A branch with this name already exists.
+                </p>
               ) : null}
               <DialogFooter variant="bare">
                 <Button

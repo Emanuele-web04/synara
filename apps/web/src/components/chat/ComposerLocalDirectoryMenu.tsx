@@ -412,7 +412,7 @@ export function ComposerLocalDirectoryMenu(props: {
           ) : (
             <FolderClosed className="size-3.5 shrink-0 text-muted-foreground/70" />
           )}
-          <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground/80">
+          <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground/80">
             {headerLabel}
           </span>
           {!isRootDirectory(directory) ? (
@@ -420,7 +420,7 @@ export function ComposerLocalDirectoryMenu(props: {
               type="button"
               onMouseDown={(event) => event.preventDefault()}
               onClick={handleSelectCurrentDirectory}
-              className={cn(DIRECTORY_MENU_HEADER_ACTION_CLASS_NAME, "px-1.5 py-0.5 text-[10.5px]")}
+              className={cn(DIRECTORY_MENU_HEADER_ACTION_CLASS_NAME, "px-1.5 py-0.5 text-ui-xs")}
             >
               Use this folder
             </button>
@@ -489,7 +489,7 @@ export function ComposerLocalDirectoryMenu(props: {
                   <CommandSeparator className="my-0.5" />
                 ) : null}
                 <CommandGroup>
-                  <CommandGroupLabel className="px-2 pt-1.5 pb-1 text-[10px] font-semibold text-muted-foreground/55">
+                  <CommandGroupLabel className="px-2 pt-1.5 pb-1 text-ui-xs font-semibold text-muted-foreground/55">
                     Matches deeper
                   </CommandGroupLabel>
                   {searchRows.map((entry, searchIndex) => {
@@ -512,23 +512,21 @@ export function ComposerLocalDirectoryMenu(props: {
           </CommandList>
         </div>
         {isAwaitingHomeDir ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+          <p className="px-2 py-1.5 text-muted-foreground/50 text-ui-sm">
             Waiting for home directory from server…
           </p>
         ) : isLoading && visibleCount === 0 ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">Loading local files…</p>
+          <p className="px-2 py-1.5 text-muted-foreground/50 text-ui-sm">Loading local files…</p>
         ) : errorMessage ? (
-          <p className="px-2 py-1.5 text-destructive/80 text-[11px]">{errorMessage}</p>
+          <p className="px-2 py-1.5 text-destructive/80 text-ui-sm">{errorMessage}</p>
         ) : isSearchPending ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
-            Searching nested files…
-          </p>
+          <p className="px-2 py-1.5 text-muted-foreground/50 text-ui-sm">Searching nested files…</p>
         ) : visibleCount === 0 ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+          <p className="px-2 py-1.5 text-muted-foreground/50 text-ui-sm">
             {filter.trim().length > 0 ? "No matches." : "No files or folders here."}
           </p>
         ) : searchQuery.data?.truncated ? (
-          <p className="px-2 py-1 text-muted-foreground/40 text-[10.5px]">
+          <p className="px-2 py-1 text-muted-foreground/40 text-ui-xs">
             Showing top matches. Keep typing to narrow.
           </p>
         ) : null}
@@ -560,10 +558,8 @@ function UseCurrentFolderRow(props: {
     >
       <FolderClosed className="size-3.5 text-muted-foreground/60" />
       <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
-        <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">
-          Use this folder
-        </span>
-        <span className="truncate text-[11px] text-muted-foreground/55">{directoryLabel}</span>
+        <span className="shrink-0 text-ui-sm font-medium text-foreground/80">Use this folder</span>
+        <span className="truncate text-ui-sm text-muted-foreground/55">{directoryLabel}</span>
       </div>
     </CommandItem>
   );
@@ -614,11 +610,11 @@ function LocalSearchRow(props: {
         <FileIcon className="size-3.5 text-muted-foreground/60" />
       )}
       <div className="min-w-0 flex flex-1 items-center gap-3">
-        <span className="min-w-0 flex-1 truncate text-[11.5px] font-medium text-foreground/80">
+        <span className="min-w-0 flex-1 truncate text-ui-sm font-medium text-foreground/80">
           {entry.name}
         </span>
         {subtitle ? (
-          <span className="shrink-0 max-w-[60%] truncate pl-2 text-right text-[10.5px] text-muted-foreground/42">
+          <span className="shrink-0 max-w-[60%] truncate pl-2 text-right text-ui-xs text-muted-foreground/42">
             {subtitle}
           </span>
         ) : null}
@@ -656,7 +652,7 @@ function LocalEntryRow(props: {
         <FileIcon className="size-3.5 text-muted-foreground/60" />
       )}
       <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
-        <span className="truncate text-[11.5px] font-medium text-foreground/80">{entry.name}</span>
+        <span className="truncate text-ui-sm font-medium text-foreground/80">{entry.name}</span>
       </div>
     </CommandItem>
   );

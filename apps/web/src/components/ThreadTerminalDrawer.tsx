@@ -97,7 +97,7 @@ function TerminalRuntimeStatusOverlay({ status }: { status: TerminalRuntimeStatu
   return (
     <div
       className={cn(
-        "pointer-events-none absolute left-1 top-1 z-10 inline-flex h-6 max-w-[calc(100%-0.5rem)] items-center gap-1.5 rounded border px-2 text-[11px] leading-none shadow-sm backdrop-blur",
+        "pointer-events-none absolute left-1 top-1 z-10 inline-flex h-6 max-w-[calc(100%-0.5rem)] items-center gap-1.5 rounded border px-2 text-ui-sm leading-none shadow-sm backdrop-blur",
         "border-destructive/30 bg-destructive/10 text-destructive",
       )}
     >

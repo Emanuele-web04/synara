@@ -146,7 +146,7 @@ export function ProjectStep(props: {
               type="button"
               disabled={picking || submitting}
               className={cn(
-                "flex h-[168px] w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-foreground/18 text-[length:var(--app-font-size-ui-lg,13px)] text-foreground transition-colors outline-none hover:bg-foreground/3 focus-visible:border-foreground/40 disabled:opacity-50 motion-reduce:transition-none",
+                "flex h-[168px] w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-foreground/18 text-ui-lg text-foreground transition-colors outline-none hover:bg-foreground/3 focus-visible:border-foreground/40 disabled:opacity-50 motion-reduce:transition-none",
                 isDropTarget &&
                   "border-solid border-[color:var(--color-border-focus)] bg-foreground/5",
               )}
@@ -200,7 +200,7 @@ export function ProjectStep(props: {
           </form>
 
           {error ? (
-            <p role="alert" className="text-[length:var(--app-font-size-ui,12px)] text-destructive">
+            <p role="alert" className="text-ui text-destructive">
               {error}
             </p>
           ) : null}
@@ -214,12 +214,12 @@ export function ProjectStep(props: {
               className="flex h-10 items-center gap-3 rounded-lg bg-foreground/3 px-3.5"
             >
               <FolderIcon className="size-[15px] shrink-0 text-foreground/70" aria-hidden />
-              <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
+              <span className="min-w-0 flex-1 truncate text-ui text-foreground">
                 {result.workspaceRoot}
               </span>
               <span
                 className={cn(
-                  "flex items-center gap-1.5 text-[length:var(--app-font-size-ui-sm,11px)]",
+                  "flex items-center gap-1.5 text-ui-sm",
                   result.created ? "text-success" : "text-muted-foreground",
                 )}
               >

@@ -121,7 +121,7 @@ export function UserInputQuestionForm({
       onKeyDown={keyboardShortcuts === "local" ? handleShortcut : undefined}
     >
       <div className="flex items-start justify-between gap-3">
-        <p className="min-w-0 text-[13px] font-medium leading-snug text-foreground/90">
+        <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
           {activeQuestion.question}
         </p>
         {showNavigation ? (
@@ -135,7 +135,7 @@ export function UserInputQuestionForm({
             >
               <ChevronLeftIcon className="size-3.5" />
             </button>
-            <span className="px-0.5 text-[11px] tabular-nums">
+            <span className="px-0.5 text-ui-sm tabular-nums">
               {progress.questionIndex + 1} of {questionCount}
             </span>
             <button
@@ -151,7 +151,7 @@ export function UserInputQuestionForm({
         ) : null}
       </div>
       {activeQuestion.multiSelect ? (
-        <p className="mt-1 text-[11px] text-muted-foreground/55">Select one or more.</p>
+        <p className="mt-1 text-ui-sm text-muted-foreground/55">Select one or more.</p>
       ) : null}
       {activeQuestion.options.length > 0 ? (
         <div className="mt-2.5 space-y-0.5">
@@ -183,7 +183,7 @@ export function UserInputQuestionForm({
             disabled={isResponding}
             onClick={onCancel}
             className={cn(
-              "rounded-md px-2 py-1 text-[12px] text-[var(--color-text-foreground-secondary)] transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+              "rounded-md px-2 py-1 text-ui text-[var(--color-text-foreground-secondary)] transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
               isResponding && "cursor-not-allowed opacity-50",
             )}
           >

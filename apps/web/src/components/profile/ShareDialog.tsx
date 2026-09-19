@@ -218,7 +218,7 @@ export function ShareDialog({
             </ShareButton>
           </div>
 
-          <p className="min-h-4 text-center text-xs leading-snug text-muted-foreground">
+          <p className="min-h-4 text-center text-ui leading-snug text-muted-foreground">
             {status ?? ""}
           </p>
         </div>
@@ -273,7 +273,7 @@ function ShareButton({ label, ariaLabel, busy, disabled, onClick, children }: Sh
       >
         {children}
       </button>
-      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="text-ui leading-snug text-muted-foreground">{label}</span>
     </div>
   );
 }

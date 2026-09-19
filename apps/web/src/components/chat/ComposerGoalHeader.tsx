@@ -144,9 +144,7 @@ export function ComposerGoalHeader({
             COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
           )}
         >
-          <p className="whitespace-pre-wrap break-words text-[12px] text-muted-foreground/80">
-            {goal}
-          </p>
+          <p className="whitespace-pre-wrap break-words text-ui text-muted-foreground/80">{goal}</p>
         </div>
       </DisclosureRegion>
     </ComposerStackedPanel>

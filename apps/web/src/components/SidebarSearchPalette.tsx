@@ -76,19 +76,16 @@ import { Input } from "./ui/input";
 // Palette skin — shared with the ⌘P workspace palette so both surfaces read as one
 // menu: 44px bare input, settings-scale type, 30px squircle rows, single keycap pills.
 const PALETTE_INPUT_CLASS =
-  "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-[length:var(--app-font-size-ui-lg,13px)] text-foreground outline-none placeholder:text-muted-foreground/70";
+  "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-ui-lg text-foreground outline-none placeholder:text-muted-foreground/70";
 const PALETTE_GROUP_LABEL_CLASS =
-  "flex items-center justify-between px-2.5 pt-2 pb-1 font-normal text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70";
+  "flex items-center justify-between px-2.5 pt-2 pb-1 font-normal text-ui-xs text-muted-foreground/70";
 const PALETTE_ITEM_CLASS =
   "palette-row min-h-[30px] cursor-pointer items-center gap-3 rounded-[20px] px-2.5 py-0 text-foreground data-highlighted:bg-zinc-500/8 data-highlighted:text-foreground sm:min-h-[30px] dark:data-highlighted:bg-zinc-400/10";
 const PALETTE_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
-const PALETTE_TEXT_CLASS = "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)]";
-const PALETTE_META_CLASS =
-  "max-w-[45%] shrink-0 truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/70";
-const PALETTE_KBD_CLASS =
-  "h-[17px] min-w-0 rounded-md px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/80";
-const PALETTE_STATUS_CLASS =
-  "px-4 pt-1 pb-3 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79";
+const PALETTE_TEXT_CLASS = "min-w-0 flex-1 truncate text-ui";
+const PALETTE_META_CLASS = "max-w-[45%] shrink-0 truncate text-ui-meta text-muted-foreground/70";
+const PALETTE_KBD_CLASS = "h-[17px] min-w-0 rounded-md px-1.5 text-ui-xs text-muted-foreground/80";
+const PALETTE_STATUS_CLASS = "px-4 pt-1 pb-3 text-ui text-muted-foreground/79";
 
 // Actions that live under the "Settings" heading when the palette is idle.
 const SETTINGS_ACTION_IDS: ReadonlySet<string> = new Set([
@@ -288,7 +285,7 @@ function CodeThemeBadge(props: { accent: string; background: string; foreground:
   return (
     <span
       aria-hidden="true"
-      className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border font-medium text-[10px] leading-none tracking-[-0.01em]"
+      className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border font-medium text-ui-xs leading-none tracking-[-0.01em]"
       style={{
         backgroundColor: props.background,
         borderColor: `${props.foreground}26`,
@@ -690,8 +687,10 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   <LuArrowLeft className="size-4" />
                 </Button>
                 <div>
-                  <p className="text-sm font-medium text-foreground">Import thread from provider</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="text-ui-lg leading-snug font-medium text-foreground">
+                    Import thread from provider
+                  </p>
+                  <p className="mt-1 text-ui leading-snug text-muted-foreground">
                     Create a local app thread and resume it from an existing provider id.
                   </p>
                 </div>
@@ -699,7 +698,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
             </div>
             <div className="space-y-4 px-4 py-4">
               <div className="space-y-2">
-                <p className="text-xs font-medium text-muted-foreground">Provider</p>
+                <p className="text-ui leading-snug font-medium text-muted-foreground">Provider</p>
                 <div className="flex gap-2">
                   {props.importProviders.map((provider) => (
                     <Button
@@ -724,13 +723,15 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   ))}
                 </div>
                 {props.importProviders.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-ui leading-snug text-muted-foreground">
                     No connected providers expose chat import in this build.
                   </p>
                 ) : null}
               </div>
               <div className="space-y-2">
-                <p className="text-xs font-medium text-muted-foreground">{importFieldLabel}</p>
+                <p className="text-ui leading-snug font-medium text-muted-foreground">
+                  {importFieldLabel}
+                </p>
                 <Input
                   autoFocus
                   nativeInput
@@ -745,7 +746,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     }
                   }}
                 />
-                <p className="text-xs text-muted-foreground">
+                <p className="text-ui leading-snug text-muted-foreground">
                   {importProvider === "claudeAgent"
                     ? "Claude resumes a persisted session by session id."
                     : importProvider === "cursor"
@@ -756,7 +757,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 </p>
               </div>
               {importError ? (
-                <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-ui leading-snug text-destructive">
                   {importError}
                 </p>
               ) : null}
@@ -1008,11 +1009,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                             </div>
                             {matchContext ? (
                               <div className="flex items-start gap-3">
-                                <div className="min-w-0 flex-1 line-clamp-1 text-[length:var(--app-font-size-ui-meta,10px)] leading-4 text-muted-foreground/78">
+                                <div className="min-w-0 flex-1 line-clamp-1 text-ui-meta leading-4 text-muted-foreground/78">
                                   <HighlightedText text={matchContext} query={query} />
                                 </div>
                                 {matchLabel ? (
-                                  <span className="shrink-0 text-[length:var(--app-font-size-ui-meta,10px)] leading-4 text-muted-foreground/58">
+                                  <span className="shrink-0 text-ui-meta leading-4 text-muted-foreground/58">
                                     {matchLabel}
                                   </span>
                                 ) : null}
@@ -1183,14 +1184,14 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                         <div className={PALETTE_STATUS_CLASS}>No matching folders.</div>
                       ) : null}
                       {willCreateMissingFolder ? (
-                        <div className="palette-row mx-3 mb-2 rounded-lg border border-dashed border-[color:var(--color-border)] px-3 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
+                        <div className="palette-row mx-3 mb-2 rounded-lg border border-dashed border-[color:var(--color-border)] px-3 py-2 text-ui text-muted-foreground">
                           Press Enter to create{" "}
                           <span className="text-foreground">{trimmedQuery}</span> and add it as a
                           project.
                         </div>
                       ) : null}
                       {addProjectError ? (
-                        <div className="palette-row mx-3 mb-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-[length:var(--app-font-size-ui,12px)] text-destructive">
+                        <div className="palette-row mx-3 mb-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-ui text-destructive">
                           {addProjectError}
                         </div>
                       ) : null}

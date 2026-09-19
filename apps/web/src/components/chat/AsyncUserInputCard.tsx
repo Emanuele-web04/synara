@@ -91,7 +91,7 @@ export function AsyncUserInputCard({
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="my-2">
-      <CollapsibleTrigger className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground">
+      <CollapsibleTrigger className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-ui leading-snug text-muted-foreground hover:bg-muted/50 hover:text-foreground">
         <CircleQuestionIcon className="size-3.5" aria-hidden="true" />
         {questions.length} {questions.length === 1 ? "question" : "questions"}
         {answered && (
@@ -104,7 +104,7 @@ export function AsyncUserInputCard({
       <CollapsiblePanel>
         <div className="pt-2">
           {acceptedAnswers ? (
-            <dl className="space-y-3 rounded-xl border border-border p-3.5 text-sm">
+            <dl className="space-y-3 rounded-xl border border-border p-3.5 text-ui leading-snug">
               {questions.map((question, index) => (
                 <div key={question.id}>
                   <dt className="font-medium">{question.question}</dt>
@@ -162,12 +162,14 @@ export function AsyncUserInputCard({
                     }}
                   />
                   {error && (
-                    <p role="alert" className="text-sm text-destructive">
+                    <p role="alert" className="text-ui leading-snug text-destructive">
                       {error}
                     </p>
                   )}
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs text-muted-foreground">Codex can keep working</span>
+                    <span className="text-ui leading-snug text-muted-foreground">
+                      Codex can keep working
+                    </span>
                     <Button
                       type="submit"
                       size="sm"

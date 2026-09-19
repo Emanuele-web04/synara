@@ -97,7 +97,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
         ) : (
           <span aria-hidden="true" className="size-6" />
         )}
-        <span className="truncate text-center font-medium text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-accent)]">
+        <span className="truncate text-center font-medium text-ui text-[var(--color-text-accent)]">
           {statusLabel}
         </span>
         <Tooltip>
@@ -138,7 +138,7 @@ export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
         />
       </div>
       {ultrathinkPromptControlled ? (
-        <div className="px-1 pt-1 text-muted-foreground/80 text-xs">
+        <div className="px-1 pt-1 text-muted-foreground/80 text-ui leading-snug">
           Remove Ultrathink from the prompt to change effort.
         </div>
       ) : null}

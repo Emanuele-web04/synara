@@ -206,7 +206,7 @@ function ActivityThreadRow({
             />
             <span
               className={cn(
-                "min-w-0 shrink truncate text-[length:var(--app-font-size-ui,12px)] leading-5 font-normal",
+                "min-w-0 shrink truncate text-ui leading-5 font-normal",
                 isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
               )}
             >
@@ -218,7 +218,7 @@ function ActivityThreadRow({
               className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
               aria-hidden
             />
-            <span className="min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/80">
+            <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
             <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
@@ -230,7 +230,7 @@ function ActivityThreadRow({
                 />
               ) : null}
               {branch ? (
-                <span className="flex min-w-0 items-center gap-1 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70">
+                <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/70">
                   <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
                   <span className="max-w-36 truncate">{branch}</span>
                 </span>
@@ -406,7 +406,7 @@ function ActivityScopeMenu({
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
             Activity scope
           </div>
           <MenuRadioGroup
@@ -417,14 +417,14 @@ function ActivityScopeMenu({
               );
             }}
           >
-            <MenuRadioItem value="all" className="min-h-7 py-1 sm:text-xs">
+            <MenuRadioItem value="all" className="min-h-7 py-1 sm:text-ui leading-snug">
               All activity
             </MenuRadioItem>
             {options.map((option) => (
               <MenuRadioItem
                 key={option.kind === "project" ? option.projectId : "chats"}
                 value={option.kind === "project" ? option.projectId : "chats"}
-                className="min-h-7 py-1 sm:text-xs"
+                className="min-h-7 py-1 sm:text-ui leading-snug"
               >
                 <span className="min-w-0 flex-1 truncate">
                   {option.kind === "project"
@@ -469,22 +469,24 @@ function ActivityFilterMenu({
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Group by</div>
+          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+            Group by
+          </div>
           <MenuRadioGroup
             value={groupMode}
             onValueChange={(value) => onChangeGroupMode(value as ActivityGroupMode)}
           >
-            <MenuRadioItem value="time" className="min-h-7 py-1 sm:text-xs">
+            <MenuRadioItem value="time" className="min-h-7 py-1 sm:text-ui leading-snug">
               Time
             </MenuRadioItem>
-            <MenuRadioItem value="project" className="min-h-7 py-1 sm:text-xs">
+            <MenuRadioItem value="project" className="min-h-7 py-1 sm:text-ui leading-snug">
               Project
             </MenuRadioItem>
           </MenuRadioGroup>
         </MenuGroup>
         <MenuSeparator />
         <MenuItem
-          className="min-h-7 py-1 sm:text-xs"
+          className="min-h-7 py-1 sm:text-ui leading-snug"
           disabled={markAllReadDisabled}
           onClick={onMarkAllRead}
         >
@@ -508,7 +510,7 @@ function ActivityShowMoreRow({
 }) {
   if (!canShowMore && !canShowLess) return null;
   const buttonClassName =
-    "h-7 cursor-pointer rounded-lg px-2.5 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:text-foreground";
+    "h-7 cursor-pointer rounded-lg px-2.5 text-left text-ui text-muted-foreground/79 hover:text-foreground";
   return (
     <div className="flex w-full items-center gap-1">
       {canShowMore ? (
@@ -807,7 +809,7 @@ export function SidebarActivityView({
       </div>
 
       {isEmpty ? (
-        <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+        <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
           {threadsHydrated ? emptyLabel : "Loading activity..."}
         </div>
       ) : groupMode === "project" ? (

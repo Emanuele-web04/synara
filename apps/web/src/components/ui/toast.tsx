@@ -89,7 +89,7 @@ const ARCHIVE_UNDO_TOAST_SURFACE_CLASS_NAME = cn(
 const TOAST_ACTION_BUTTON_SIZE = "xs";
 const TOAST_ACTION_BUTTON_VARIANT = "ghost";
 const TOAST_ACTION_BUTTON_CLASS_NAME =
-  "self-start rounded-md px-2 font-sans font-medium text-[length:var(--app-font-size-ui,12px)] text-[var(--notification-fg)]/80 sm:text-[length:var(--app-font-size-ui,12px)] [:hover,[data-pressed]]:bg-[var(--notification-fg)]/10 [:hover,[data-pressed]]:text-[var(--notification-fg)] data-pressed:bg-[var(--notification-fg)]/10 data-pressed:text-[var(--notification-fg)] focus-visible:ring-[var(--notification-fg)]/35";
+  "self-start rounded-md px-2 font-sans font-medium text-ui text-[var(--notification-fg)]/80 sm:text-ui [:hover,[data-pressed]]:bg-[var(--notification-fg)]/10 [:hover,[data-pressed]]:text-[var(--notification-fg)] data-pressed:bg-[var(--notification-fg)]/10 data-pressed:text-[var(--notification-fg)] focus-visible:ring-[var(--notification-fg)]/35";
 
 const ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME =
   "rounded-sm font-medium text-[var(--info-foreground)] underline-offset-2 transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--info-foreground)]/35 disabled:pointer-events-none disabled:opacity-55";
@@ -414,7 +414,7 @@ function ArchiveUndoToastSurface({
       />
       <Toast.Content
         className={cn(
-          "pointer-events-auto relative flex items-center gap-2 overflow-hidden px-3.5 py-2 text-[length:var(--app-font-size-ui-sm,11px)] leading-normal transition-opacity duration-250 data-expanded:opacity-100",
+          "pointer-events-auto relative flex items-center gap-2 overflow-hidden px-3.5 py-2 text-ui-sm leading-normal transition-opacity duration-250 data-expanded:opacity-100",
           hideCollapsedContent &&
             "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
         )}
@@ -468,10 +468,10 @@ function ToastSurface({
         "pointer-events-auto relative flex overflow-hidden transition-opacity duration-250 data-expanded:opacity-100",
         compact
           ? cn(
-              "gap-2 px-3 py-1.5 pr-1.5 text-[length:var(--app-font-size-ui-sm,11px)] leading-normal",
+              "gap-2 px-3 py-1.5 pr-1.5 text-ui-sm leading-normal",
               compactContextual ? "items-start py-2" : "items-center",
             )
-          : "items-start gap-2 px-3.5 py-3 pr-10 text-[length:var(--app-font-size-ui,12px)] leading-normal",
+          : "items-start gap-2 px-3.5 py-3 pr-10 text-ui leading-normal",
         hideCollapsedContent && "not-data-expanded:pointer-events-none not-data-expanded:opacity-0",
       )}
     >
@@ -762,7 +762,7 @@ function AnchoredToasts() {
                   className={cn(
                     "relative text-balance transition-[scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0",
                     tooltipStyle
-                      ? "rounded-lg border bg-popover text-popover-foreground text-xs shadow-md/5 [-webkit-app-region:no-drag] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
+                      ? "rounded-lg border bg-popover text-popover-foreground text-ui leading-snug shadow-md/5 [-webkit-app-region:no-drag] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
                       : notificationSurfaceClassName({ compact, tone: toastTone(toast.type) }),
                   )}
                   data-slot="toast-popup"

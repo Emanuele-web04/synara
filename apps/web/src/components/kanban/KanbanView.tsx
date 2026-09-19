@@ -194,10 +194,10 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
                   <ArrowLeftIcon className="size-3.5" />
                 </Button>
               ) : null}
-              <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground">
+              <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
                 {projectBoard ? projectBoard.projectName : "Kanban"}
               </h2>
-              <span className="shrink-0 text-xs text-muted-foreground/70">
+              <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
                 {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
               </span>
               <Tooltip>

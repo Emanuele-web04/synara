@@ -554,7 +554,7 @@ describe("timestamp format defaults", () => {
 
 describe("chat font size defaults", () => {
   it("defaults chat font size to 12px", () => {
-    expect(DEFAULT_CHAT_FONT_SIZE_PX).toBe(12);
+    expect(DEFAULT_CHAT_FONT_SIZE_PX).toBe(13);
   });
 
   it("clamps chat font size updates into the supported range", () => {

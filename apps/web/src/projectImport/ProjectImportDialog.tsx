@@ -25,7 +25,7 @@ export function ProjectImportDialog() {
       <DialogPopup showCloseButton className="max-h-[min(640px,85dvh)] max-w-[520px]">
         <DialogHeader className="gap-1 px-5 pb-0 pt-5">
           <DialogTitle>Import projects</DialogTitle>
-          <DialogDescription className="text-[length:var(--app-font-size-ui,12px)]">
+          <DialogDescription className="text-ui">
             Continue your Codex and Claude Code projects in Synara.
           </DialogDescription>
         </DialogHeader>

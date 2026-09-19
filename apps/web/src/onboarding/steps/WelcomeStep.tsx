@@ -40,10 +40,8 @@ export function WelcomeStep() {
             className={cn("flex flex-col gap-2.5 p-5", ONBOARDING_TILE_CLASS_NAME)}
           >
             <Icon className="size-[18px] text-foreground/80" aria-hidden />
-            <span className="text-[length:var(--app-font-size-ui-lg,13px)] font-medium text-foreground">
-              {point.title}
-            </span>
-            <span className="text-[length:var(--app-font-size-ui,12px)] leading-normal text-muted-foreground">
+            <span className="text-ui-lg font-medium text-foreground">{point.title}</span>
+            <span className="text-ui leading-normal text-muted-foreground">
               {point.description}
             </span>
           </li>

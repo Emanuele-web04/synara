@@ -10,6 +10,18 @@
      and composer. Keep 1300ms / 26 steps equal to shimmer's 2000ms / 40 steps. */
   --animate-spin-stepped: spin-stepped 1.3s steps(26, end) infinite;
   --font-sans: var(--font-ui-family);
+  /* Font sizes that follow the size chosen in Settings (useAppTypography). */
+  --text-ui: var(--app-font-size-ui);
+  --text-ui-lg: var(--app-font-size-ui-lg);
+  --text-ui-sm: var(--app-font-size-ui-sm);
+  --text-ui-xs: var(--app-font-size-ui-xs);
+  --text-ui-2xs: var(--app-font-size-ui-2xs);
+  --text-ui-meta: var(--app-font-size-ui-meta);
+  --text-ui-timestamp: var(--app-font-size-ui-timestamp);
+  --text-chat: var(--app-font-size-chat);
+  --text-chat-code: var(--app-font-size-chat-code);
+  --text-chat-meta: var(--app-font-size-chat-meta);
+  --text-chat-tiny: var(--app-font-size-chat-tiny);
   --font-display: var(--font-display-family);
   --font-mono: var(--font-mono-family);
   --color-warning-foreground: var(--warning-foreground);
@@ -1323,7 +1335,7 @@ label:has(> select#reasoning-effort) select {
   /* Override the global `textarea { font-family: mono }` reset — this field is
      UI chrome, not code, so it must use the normal UI font. */
   font-family: var(--font-ui-family);
-  font-size: 13px;
+  font-size: var(--app-font-size-ui-lg, 13px);
   line-height: 1.5;
   color: var(--color-text-foreground);
   outline: none;
@@ -1563,13 +1575,13 @@ label:has(> select#reasoning-effort) select {
 }
 
 .local-image-error__title {
-  font-size: 0.8rem;
+  font-size: var(--app-font-size-ui, 13px);
   font-weight: 500;
   color: var(--foreground);
 }
 
 .local-image-error__subtitle {
-  font-size: 0.72rem;
+  font-size: var(--app-font-size-ui-sm, 12px);
   color: var(--muted-foreground);
 }
 
@@ -1578,7 +1590,7 @@ label:has(> select#reasoning-effort) select {
   gap: 0.35rem;
   flex: 0 0 auto;
   padding: 0.32rem 0.55rem;
-  font-size: 0.74rem;
+  font-size: var(--app-font-size-ui-sm, 12px);
   font-weight: 500;
 }
 
@@ -1689,13 +1701,13 @@ label:has(> select#reasoning-effort) select {
   padding: 16px;
   text-align: center;
   color: var(--destructive);
-  font-size: 12px;
+  font-size: var(--app-font-size-ui, 13px);
 }
 
 .pdf-viewer-page__error-detail {
   max-width: 90%;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--app-font-size-ui-sm, 12px);
   word-break: break-word;
 }
 

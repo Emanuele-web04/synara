@@ -9706,6 +9706,74 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     },
   );
 
+  it.effect.each([
+    { boundary: true, expected: ["item.updated"] },
+    { boundary: false, expected: ["item.updated", "item.completed"] },
+  ])("publishes native compaction progress (boundary: $boundary)", ({ boundary, expected }) => {
+    const harness = makeHarness();
+    harness.query.supportedCommandList = [
+      { name: "compact", description: "Compact context", argumentHint: "" },
+    ];
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const events: Array<ProviderRuntimeEvent> = [];
+      const turnCompleted = yield* Deferred.make<void>();
+      yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => {
+          if (event.type === "turn.completed") return Deferred.succeed(turnCompleted, undefined);
+          if (
+            (event.type === "item.updated" || event.type === "item.completed") &&
+            event.payload.itemType === "context_compaction"
+          ) {
+            events.push(event);
+          }
+          return Effect.void;
+        }),
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "/compact",
+        attachments: [],
+      });
+      harness.query.emit({
+        type: "system",
+        subtype: "status",
+        status: "compacting",
+        session_id: "sdk-session-progress",
+        uuid: "status-compacting-progress",
+      } as unknown as SDKMessage);
+      if (boundary) {
+        emitCompactionBoundary(harness.query, "sdk-session-progress", "progress-boundary");
+      }
+      emitSuccessResult(harness.query, "sdk-session-progress", "progress-result", {
+        total_tokens: 1,
+        input_tokens: 1,
+        output_tokens: 0,
+      });
+      yield* Deferred.await(turnCompleted);
+
+      assert.deepEqual(
+        events.map((event) => event.type),
+        expected,
+      );
+      assert.equal(events[0]?.turnId, turn.turnId);
+      const terminal = events[1];
+      if (terminal?.type === "item.completed") {
+        assert.equal(terminal.payload.status, "failed");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("invalidates compaction-call usage until the next assistant response", () => {
     const harness = makeHarness();
     harness.query.supportedCommandList = [

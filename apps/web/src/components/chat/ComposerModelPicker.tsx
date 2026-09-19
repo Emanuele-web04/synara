@@ -455,7 +455,9 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             )}
           >
             {discoveryError ? (
-              <div className="px-2 py-1.5 text-xs text-destructive">{discoveryError}</div>
+              <div className="px-2 py-1.5 text-ui leading-snug text-destructive">
+                {discoveryError}
+              </div>
             ) : null}
             {isTabLoading ? (
               <div className="space-y-2 px-2 py-2" aria-label="Loading models">
@@ -489,7 +491,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                 ))}
               </div>
             ) : (
-              <div className="px-2 py-3 text-muted-foreground text-xs leading-relaxed">
+              <div className="px-2 py-3 text-muted-foreground text-ui leading-relaxed">
                 {normalizedQuery.length > 0
                   ? "No matches"
                   : tab === STARRED_TAB

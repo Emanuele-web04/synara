@@ -157,13 +157,15 @@ function KanbanColumnComponent({
   return (
     <section className="flex min-h-0 min-w-64 flex-1 flex-col">
       <header className="flex shrink-0 items-center gap-2 px-1.5 pb-2">
-        <h3 className="text-[13px] font-medium text-foreground/90">
+        <h3 className="text-ui-lg font-medium text-foreground/90">
           {KANBAN_COLUMN_LABELS[columnKey]}
         </h3>
-        <span className="text-xs text-muted-foreground/70">{cards.length}</span>
+        <span className="text-ui leading-snug text-muted-foreground/70">{cards.length}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {dispatchTarget ? (
-            <span className="text-[11px] text-sky-600 dark:text-sky-300/90">Drop to send</span>
+            <span className="text-ui-sm leading-snug text-sky-600 dark:text-sky-300/90">
+              Drop to send
+            </span>
           ) : null}
           {onNewCard ? (
             <Button
@@ -196,7 +198,7 @@ function KanbanColumnComponent({
           cardElements
         )}
         {cards.length === 0 ? (
-          <li className="list-none rounded-lg border border-dashed border-border/60 px-3 py-4 text-center text-xs text-muted-foreground/60">
+          <li className="list-none rounded-lg border border-dashed border-border/60 px-3 py-4 text-center text-ui leading-snug text-muted-foreground/60">
             No cards
           </li>
         ) : null}
@@ -205,7 +207,7 @@ function KanbanColumnComponent({
             <button
               type="button"
               onClick={() => setShowAll(true)}
-              className="w-full rounded-lg px-3 py-1.5 text-center text-xs text-muted-foreground/80 transition-colors hover:bg-muted/40 hover:text-foreground"
+              className="w-full rounded-lg px-3 py-1.5 text-center text-ui leading-snug text-muted-foreground/80 transition-colors hover:bg-muted/40 hover:text-foreground"
             >
               Show {hiddenCount} more
             </button>

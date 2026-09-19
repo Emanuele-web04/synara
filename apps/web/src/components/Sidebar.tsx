@@ -618,7 +618,7 @@ function threadRowStatusSlotClassName(isSubagentThread: boolean, toneClassName?:
     "flex w-[15px] shrink-0 items-center justify-center leading-none tabular-nums",
     sidebarHoverRevealHideClassName("thread-row"),
     isSubagentThread
-      ? "text-[10px]"
+      ? "text-ui-xs"
       : // Nudge the timestamp a hair above the meta scale while still tracking the user's
         // typography setting (the CSS var is always set; the 11px is just an SSR fallback).
         "text-[length:calc(var(--app-font-size-ui-meta,11px)+0.5px)]",
@@ -771,7 +771,7 @@ function ProjectSortMenu({
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
             Sort projects
           </div>
           <MenuRadioGroup
@@ -782,7 +782,11 @@ function ProjectSortMenu({
           >
             {(Object.entries(SIDEBAR_SORT_LABELS) as Array<[SidebarProjectSortOrder, string]>).map(
               ([value, label]) => (
-                <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-xs">
+                <MenuRadioItem
+                  key={value}
+                  value={value}
+                  className="min-h-7 py-1 sm:text-ui leading-snug"
+                >
                   {label}
                 </MenuRadioItem>
               ),
@@ -790,7 +794,7 @@ function ProjectSortMenu({
           </MenuRadioGroup>
         </MenuGroup>
         <MenuGroup>
-          <div className="px-2 pt-2 pb-1 sm:text-xs font-medium text-muted-foreground">
+          <div className="px-2 pt-2 pb-1 sm:text-ui leading-snug font-medium text-muted-foreground">
             Sort threads
           </div>
           <ThreadSortMenuItems
@@ -845,7 +849,9 @@ function SidebarHelpMenu({
         />
         <ComposerPickerMenuPopup align="end" side="top" className="w-64 min-w-64">
           <MenuGroup>
-            <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">What’s new</div>
+            <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+              What’s new
+            </div>
             {HELP_MENU_RELEASE_ENTRIES.map((entry) => (
               <MenuItem
                 key={entry.version}
@@ -925,7 +931,7 @@ function ThreadSortMenuItems({
     >
       {(Object.entries(SIDEBAR_THREAD_SORT_LABELS) as Array<[SidebarThreadSortOrder, string]>).map(
         ([value, label]) => (
-          <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-xs">
+          <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-ui leading-snug">
             {label}
           </MenuRadioItem>
         ),
@@ -952,7 +958,9 @@ function ChatSortMenu({
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Sort chats</div>
+          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+            Sort chats
+          </div>
           <ThreadSortMenuItems
             threadSortOrder={threadSortOrder}
             onThreadSortOrderChange={onThreadSortOrderChange}
@@ -1023,7 +1031,7 @@ function SidebarPrimaryAction({
         <span className="truncate">{label}</span>
         {badge ? (
           <span
-            className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-muted px-1 text-[10px] font-medium text-muted-foreground"
+            className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-muted px-1 text-ui-xs font-medium text-muted-foreground"
             aria-label={badge.accessibleLabel}
             title={badge.accessibleLabel}
           >
@@ -1259,8 +1267,8 @@ function SidebarActivityBellButton({
       >
         {onboardingVisible ? (
           <div className="text-left">
-            <div className="text-xs font-semibold">Activity</div>
-            <div className="mt-0.5 text-[11px] leading-4 text-white/85">
+            <div className="text-ui leading-snug font-semibold">Activity</div>
+            <div className="mt-0.5 text-ui-sm leading-4 text-white/85">
               See running tasks, completed work, and anything that needs your attention.
             </div>
           </div>
@@ -1341,10 +1349,10 @@ export function SidebarSurfacePicker({
                 className="items-center rounded-[10px] data-checked:bg-[var(--color-background-button-secondary-hover)]"
               >
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="text-[13px] font-medium leading-none text-foreground">
+                  <span className="text-ui-lg font-medium leading-none text-foreground">
                     {copy.title}
                   </span>
-                  <span className="text-[11px] leading-snug text-muted-foreground">
+                  <span className="text-ui-sm leading-snug text-muted-foreground">
                     {copy.description}
                   </span>
                 </span>
@@ -4682,7 +4690,7 @@ export default function Sidebar() {
                   // touching the worktree chip. It costs no space when the row is idle.
                   <span
                     className={cn(
-                      "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out",
+                      "max-w-[40%] shrink-0 truncate text-right text-ui-meta text-muted-foreground/38 transition-[margin] duration-150 ease-out",
                       hasTrailingStatusGlyph && "mr-2",
                     )}
                   >
@@ -4996,7 +5004,7 @@ export default function Sidebar() {
               >
                 <span
                   className={cn(
-                    "min-w-0 flex-1 truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal",
+                    "min-w-0 flex-1 truncate font-system-ui text-ui font-normal",
                     SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
                   )}
                 >
@@ -5133,7 +5141,7 @@ export default function Sidebar() {
                         render={<button type="button" />}
                         data-thread-selection-safe
                         size="sm"
-                        className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                        className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                         onMouseDown={preventFocusOnMouseDown}
                         onClick={() => {
                           showMoreThreadsForProject(project.cwd, threadListExtraPages);
@@ -5148,7 +5156,7 @@ export default function Sidebar() {
                         data-thread-selection-safe
                         size="sm"
                         className={cn(
-                          "h-7 translate-x-0 justify-start rounded-lg text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                          "h-7 translate-x-0 justify-start rounded-lg text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
                           // Keep the left indent when "Show less" is the only affordance left.
                           canShowMoreThreads ? "w-auto flex-none px-2" : "flex-1 pr-2 pl-8",
                         )}
@@ -5547,7 +5555,7 @@ export default function Sidebar() {
     desktopUpdateButtonPresentation.secondaryLabel !== null;
   const desktopUpdateDownloadPercent = getDesktopUpdateDownloadPercent(desktopUpdateState);
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--info)] px-2.5 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-medium leading-none text-white transition-colors",
+    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--info)] px-2.5 font-system-ui text-ui-xs font-medium leading-none text-white transition-colors",
     desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
     desktopUpdateButtonInteractivityClasses,
   );
@@ -6055,7 +6063,7 @@ export default function Sidebar() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="h-6 px-2 text-[length:var(--app-font-size-ui,12px)] text-primary hover:text-primary"
+                        className="h-6 px-2 text-ui text-primary hover:text-primary"
                         onClick={() => setIsCustomizingNav(false)}
                       >
                         Done
@@ -6159,7 +6167,7 @@ export default function Sidebar() {
                         renderThreadRow(row.thread, studioChatThreadIds, row.depth, true),
                       )
                     ) : (
-                      <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                      <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
                         {threadsHydrated ? "No studio chats yet" : "Loading Studio..."}
                       </div>
                     )}
@@ -6305,7 +6313,7 @@ export default function Sidebar() {
                       aria-live="polite"
                       aria-label="Loading projects"
                     >
-                      <div className="text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                      <div className="text-center text-ui text-muted-foreground/58">
                         Loading projects...
                       </div>
                       <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
@@ -6353,7 +6361,7 @@ export default function Sidebar() {
                   }}
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-                    <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
+                    <span className="truncate font-system-ui text-ui font-normal text-muted-foreground/79">
                       Chats
                     </span>
                     <DisclosureChevron
@@ -6400,9 +6408,7 @@ export default function Sidebar() {
                         ),
                       )
                     ) : (
-                      <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
-                        No chats yet
-                      </div>
+                      <div className="px-2 py-2 text-ui text-muted-foreground/48">No chats yet</div>
                     )}
                     {canShowMoreChatThreads || canShowLessChatThreads ? (
                       <SidebarMenuItem className="w-full">
@@ -6410,7 +6416,7 @@ export default function Sidebar() {
                           {canShowMoreChatThreads ? (
                             <SidebarMenuButton
                               size="sm"
-                              className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                              className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                               onMouseDown={preventFocusOnMouseDown}
                               onClick={() =>
                                 setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
@@ -6423,7 +6429,7 @@ export default function Sidebar() {
                             <SidebarMenuButton
                               size="sm"
                               className={cn(
-                                "h-7 justify-start rounded-lg text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                                "h-7 justify-start rounded-lg text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
                                 // Keep the left indent when "Show less" is the only affordance left.
                                 canShowMoreChatThreads
                                   ? "w-auto flex-none px-2"
@@ -6494,13 +6500,13 @@ export default function Sidebar() {
                               {desktopUpdateButtonPresentation.label}
                             </span>
                             {desktopUpdateButtonPresentation.secondaryLabel ? (
-                              <span className="min-w-0 truncate text-center text-[length:var(--app-font-size-ui-xs,10px)] text-white/80">
+                              <span className="min-w-0 truncate text-center text-ui-xs text-white/80">
                                 {desktopUpdateButtonPresentation.secondaryLabel}
                               </span>
                             ) : null}
                           </span>
                           {desktopUpdateDownloadPercent !== null ? (
-                            <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-white/95">
+                            <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-ui-2xs font-semibold tabular-nums text-white/95">
                               {desktopUpdateDownloadPercent}%
                             </span>
                           ) : null}
@@ -6840,7 +6846,7 @@ export default function Sidebar() {
           <DialogPanel className="space-y-2">
             <label
               htmlFor="project-run-command-input"
-              className="block text-[length:var(--app-font-size-ui-xs,10px)] font-medium text-[var(--color-text-foreground-secondary)]"
+              className="block text-ui-xs font-medium text-[var(--color-text-foreground-secondary)]"
             >
               Command
             </label>
@@ -6863,9 +6869,7 @@ export default function Sidebar() {
               }}
             />
             {projectRunDialogCommandIsValid ? null : (
-              <p className="text-[length:var(--app-font-size-ui-sm,11px)] text-destructive">
-                Enter a command to run.
-              </p>
+              <p className="text-ui-sm text-destructive">Enter a command to run.</p>
             )}
           </DialogPanel>
           <DialogFooter>

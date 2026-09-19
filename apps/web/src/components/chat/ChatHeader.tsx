@@ -221,7 +221,7 @@ function EditorChatHistoryMenu(props: {
               {thread.id === props.activeThreadId ? (
                 <CheckIcon className="size-3.5 shrink-0 text-muted-foreground" />
               ) : (
-                <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                <span className="shrink-0 text-ui-xs text-muted-foreground tabular-nums">
                   {formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
                 </span>
               )}
@@ -636,7 +636,7 @@ export function ChatHeader({
           >
             {!togglesRightDock && showDiffTotals ? (
               <DiffStat
-                className="font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] sm:text-[length:var(--app-font-size-ui-xs,10px)] font-normal tracking-normal"
+                className="font-system-ui text-ui-sm sm:text-ui-xs font-normal tracking-normal"
                 insertions={diffAdditions}
                 deletions={diffDeletions}
               />
@@ -685,7 +685,7 @@ export function ChatHeader({
             )}
           >
             {threadBreadcrumbs.length > 0 ? (
-              <div className="flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-muted-foreground/55">
+              <div className="flex min-w-0 items-center gap-1 overflow-hidden text-ui-sm text-muted-foreground/55">
                 {threadBreadcrumbs.map((breadcrumb, index) => (
                   <React.Fragment key={breadcrumb.threadId}>
                     {index > 0 ? (
@@ -728,7 +728,7 @@ export function ChatHeader({
                   </span>
                 )}
                 <h2
-                  className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-foreground"
+                  className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-ui font-normal text-foreground"
                   title={activeThreadTitle}
                   onDoubleClick={() => onRenameThread()}
                 >
@@ -774,7 +774,7 @@ export function ChatHeader({
                     render={
                       <Badge
                         variant="outline"
-                        className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] sm:inline-flex"
+                        className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-ui-xs sm:inline-flex"
                       >
                         <span className="inline-flex size-4 shrink-0 items-center justify-center">
                           {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}

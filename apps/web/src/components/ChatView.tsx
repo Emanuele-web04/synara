@@ -266,6 +266,7 @@ import {
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import {
   ComposerClaudeCacheReviewPanel,
+  isClaudeCacheReviewPanelVisible,
   type ClaudeCacheReviewDecision,
 } from "./chat/ComposerClaudeCacheReviewPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
@@ -451,7 +452,7 @@ function ComposerModelLoadingControl(props: { widthClassName: string }) {
       )}
     >
       <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
-      <span className="truncate text-[length:var(--app-font-size-ui-xs,11px)]">Loading models</span>
+      <span className="truncate text-ui-xs">Loading models</span>
     </div>
   );
 }
@@ -4610,7 +4611,7 @@ export default function ChatView({
           <header className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}>
             <div className="flex items-center gap-2">
               <SidebarHeaderTrigger className="size-7 shrink-0" />
-              <span className="text-sm font-medium text-[var(--color-text-foreground)]">
+              <span className="text-ui-lg font-medium text-[var(--color-text-foreground)]">
                 Threads
               </span>
             </div>
@@ -4626,12 +4627,14 @@ export default function ChatView({
             )}
           >
             <SidebarHeaderNavigationControls />
-            <span className="text-xs text-muted-foreground/50">No active thread</span>
+            <span className="text-ui leading-snug text-muted-foreground/50">No active thread</span>
           </div>
         )}
         <div className="flex flex-1 items-center justify-center">
           <div className="text-center">
-            <p className="text-sm">Select a thread or create a new one to get started.</p>
+            <p className="text-ui leading-snug">
+              Select a thread or create a new one to get started.
+            </p>
           </div>
         </div>
       </div>
@@ -5121,7 +5124,8 @@ export default function ChatView({
                   />
                 </div>
               ) : null}
-              {activeThread?.claudeCacheReview ? (
+              {activeThread?.claudeCacheReview &&
+              isClaudeCacheReviewPanelVisible(activeThread.claudeCacheReview) ? (
                 <div className="pb-2">
                   <ComposerClaudeCacheReviewPanel
                     key={`${threadId}:${activeThread.claudeCacheReview.reviewId}`}
@@ -5246,7 +5250,7 @@ export default function ChatView({
                     pendingUserInputs.length === 0 &&
                     isPreparingComposerImages && (
                       <div
-                        className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground"
+                        className="flex items-center gap-1.5 px-1 text-ui leading-snug text-muted-foreground"
                         role="status"
                       >
                         <LoaderCircleIcon className="size-3.5 animate-spin" />

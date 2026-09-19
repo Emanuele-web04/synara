@@ -13,10 +13,6 @@ import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { IMPORT_PROVIDER_LABELS, projectImportItemKey, selectableProjectImportKeys } from "./logic";
 
-const UI_TEXT =
-  "text-[length:var(--app-font-size-ui,12px)] sm:text-[length:var(--app-font-size-ui,12px)]";
-const UI_TEXT_SM = "text-[length:var(--app-font-size-ui-sm,11px)]";
-
 export function ProjectImportProjectCard(props: {
   readonly project: ProjectImportProject;
   readonly selected: ReadonlySet<string>;
@@ -54,7 +50,7 @@ export function ProjectImportProjectCard(props: {
   const conversationLabel = `${project.threads.length} conversation${project.threads.length === 1 ? "" : "s"}`;
 
   return (
-    <Collapsible open={expanded} onOpenChange={setExpanded} className={UI_TEXT}>
+    <Collapsible open={expanded} onOpenChange={setExpanded} className="text-ui sm:text-ui">
       <div className="flex items-center gap-2.5 px-3 py-2">
         <Checkbox
           aria-label={`Select ${project.title}`}
@@ -70,13 +66,13 @@ export function ProjectImportProjectCard(props: {
           <span className="min-w-0 flex-1">
             <span className="block truncate font-medium">{project.title}</span>
             <span
-              className={cn("block truncate text-muted-foreground", UI_TEXT_SM)}
+              className={cn("block truncate text-muted-foreground", "text-ui-sm")}
               title={project.workspaceRoot}
             >
               {project.workspaceRoot}
             </span>
           </span>
-          <span className={cn("shrink-0 text-right text-muted-foreground", UI_TEXT_SM)}>
+          <span className={cn("shrink-0 text-right text-muted-foreground", "text-ui-sm")}>
             <span className="block">{conversationLabel}</span>
             {!project.directoryExists ? (
               <span className="block text-warning">Folder unavailable</span>
@@ -98,7 +94,7 @@ export function ProjectImportProjectCard(props: {
       </div>
       {!project.directoryExists ? (
         <div className="space-y-2 px-3 pb-2.5 ps-[2.375rem]">
-          <p className={cn("text-muted-foreground", UI_TEXT_SM)}>
+          <p className={cn("text-muted-foreground", "text-ui-sm")}>
             The folder moved or is missing. Link its new location to continue these conversations,
             or import the history alone.
           </p>
@@ -109,13 +105,13 @@ export function ProjectImportProjectCard(props: {
               value={props.workspaceRoot}
               onChange={(event) => props.onWorkspaceRootChange(event.target.value)}
               disabled={props.disabled}
-              className={cn("h-8 rounded-lg", UI_TEXT)}
+              className="h-8 rounded-lg text-ui sm:text-ui"
             />
             {isElectron ? (
               <Button
                 variant="outline"
                 size="sm"
-                className={cn("h-8 rounded-lg font-normal", UI_TEXT)}
+                className="h-8 rounded-lg font-normal text-ui sm:text-ui"
                 disabled={props.disabled}
                 onClick={() => void browse()}
               >
@@ -124,7 +120,7 @@ export function ProjectImportProjectCard(props: {
             ) : null}
           </div>
           {pickerError ? (
-            <p role="alert" className={cn("text-destructive", UI_TEXT_SM)}>
+            <p role="alert" className={cn("text-destructive", "text-ui-sm")}>
               {pickerError}
             </p>
           ) : null}
@@ -133,7 +129,7 @@ export function ProjectImportProjectCard(props: {
       <CollapsiblePanel>
         <div className="bg-foreground/[0.025] px-3 py-1 ps-[2.375rem]">
           {visibleThreads.length === 0 ? (
-            <p className={cn("py-1.5 text-muted-foreground", UI_TEXT_SM)}>
+            <p className={cn("py-1.5 text-muted-foreground", "text-ui-sm")}>
               {project.threads.length
                 ? "All conversations are archived. Enable archived conversations to select them."
                 : "Links the existing folder without adding conversations."}
@@ -154,7 +150,7 @@ export function ProjectImportProjectCard(props: {
                 <span className="min-w-0 flex-1 truncate" title={thread.title}>
                   {thread.title || "Untitled conversation"}
                 </span>
-                <span className={cn("shrink-0 text-muted-foreground", UI_TEXT_SM)}>
+                <span className={cn("shrink-0 text-muted-foreground", "text-ui-sm")}>
                   {imported
                     ? "Already present"
                     : thread.archived

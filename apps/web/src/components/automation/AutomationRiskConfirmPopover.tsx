@@ -37,8 +37,8 @@ export function AutomationRiskConfirmPopover({
       <PopoverPopup anchor={anchor} side="bottom" align="end" className="w-72">
         <div className="flex flex-col gap-3">
           <div className="space-y-1">
-            <PopoverTitle className="text-sm font-medium">{title}</PopoverTitle>
-            <PopoverDescription className="text-xs">{detail}</PopoverDescription>
+            <PopoverTitle className="text-ui-lg font-medium">{title}</PopoverTitle>
+            <PopoverDescription className="text-ui leading-snug">{detail}</PopoverDescription>
           </div>
           {children}
           <div className="flex justify-end gap-2">

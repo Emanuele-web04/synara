@@ -21,11 +21,7 @@ import {
 } from "./logic";
 import { ProjectImportProjectCard } from "./ProjectImportProjectCard";
 
-// Body copy follows the UI font size chosen in Settings; only dialog titles stay fixed.
-const UI_TEXT =
-  "text-[length:var(--app-font-size-ui,12px)] sm:text-[length:var(--app-font-size-ui,12px)]";
-const UI_TEXT_SM = "text-[length:var(--app-font-size-ui-sm,11px)]";
-const ACTION_BUTTON = cn("h-8 rounded-lg px-3 font-normal", UI_TEXT);
+const ACTION_BUTTON = "h-8 rounded-lg px-3 font-normal text-ui sm:text-ui";
 
 interface ImportOutcome {
   readonly title: string;
@@ -172,7 +168,7 @@ export function ProjectImportPanel(props: {
     ) ?? [];
 
   return (
-    <div className={cn("flex flex-col gap-3", UI_TEXT)}>
+    <div className="flex flex-col gap-3 text-ui sm:text-ui">
       <div className="flex flex-wrap items-center gap-1.5">
         {IMPORT_PROVIDERS.map((provider) => (
           <label
@@ -204,7 +200,7 @@ export function ProjectImportPanel(props: {
         <Button
           variant="outline"
           size="sm"
-          className={cn("ml-auto h-8 rounded-lg font-normal", UI_TEXT)}
+          className="ml-auto h-8 rounded-lg font-normal text-ui sm:text-ui"
           disabled={busy || scanning || providers.length === 0}
           onClick={() => void scan()}
         >
@@ -212,18 +208,18 @@ export function ProjectImportPanel(props: {
           {scanning ? "Finding projects…" : catalog ? "Scan again" : "Find projects"}
         </Button>
       </div>
-      <p className={cn("leading-relaxed text-muted-foreground", UI_TEXT_SM)}>
+      <p className={cn("leading-relaxed text-muted-foreground", "text-ui-sm")}>
         Projects keep their existing folders, and conversations are copied into Synara. Nothing in
         your current projects changes.
       </p>
       {error ? (
-        <p role="alert" className={cn("text-destructive", UI_TEXT_SM)}>
+        <p role="alert" className={cn("text-destructive", "text-ui-sm")}>
           {error}
         </p>
       ) : null}
       {catalog?.sources.map((source) =>
         source.error ? (
-          <p key={source.provider} role="alert" className={cn("text-destructive", UI_TEXT_SM)}>
+          <p key={source.provider} role="alert" className={cn("text-destructive", "text-ui-sm")}>
             {IMPORT_PROVIDER_LABELS[source.provider]}: {source.error}
           </p>
         ) : null,
@@ -236,9 +232,9 @@ export function ProjectImportPanel(props: {
               placeholder="Search projects or folders…"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              className={cn("h-8 min-w-40 flex-1 rounded-lg", UI_TEXT)}
+              className="h-8 min-w-40 flex-1 rounded-lg text-ui sm:text-ui"
             />
-            <label className={cn("flex items-center gap-2 text-muted-foreground", UI_TEXT_SM)}>
+            <label className={cn("flex items-center gap-2 text-muted-foreground", "text-ui-sm")}>
               <Checkbox
                 checked={includeArchived}
                 disabled={busy || scanning}
@@ -276,7 +272,7 @@ export function ProjectImportPanel(props: {
                 : "No local projects found for these providers."}
             </p>
           )}
-          <p className={cn("leading-relaxed text-muted-foreground/80", UI_TEXT_SM)}>
+          <p className={cn("leading-relaxed text-muted-foreground/80", "text-ui-sm")}>
             {queue.length > 0 && !running
               ? `${queue.filter((item) => item.input.threadKey !== null).length} conversations across ${projectCount} project${projectCount === 1 ? "" : "s"} selected. `
               : null}
@@ -296,7 +292,7 @@ export function ProjectImportPanel(props: {
                     : `Importing ${progress.current} of ${progress.total}`}
                 </span>
               </div>
-              <p className={cn("mt-0.5 truncate text-muted-foreground", UI_TEXT_SM)}>
+              <p className={cn("mt-0.5 truncate text-muted-foreground", "text-ui-sm")}>
                 {progress.title}
               </p>
             </>
@@ -312,7 +308,10 @@ export function ProjectImportPanel(props: {
         </div>
       ) : null}
       {failures.length > 0 ? (
-        <ul aria-label="Import failures" className={cn("space-y-1.5 text-destructive", UI_TEXT_SM)}>
+        <ul
+          aria-label="Import failures"
+          className={cn("space-y-1.5 text-destructive", "text-ui-sm")}
+        >
           {failures.map(([key, failure]) => (
             <li key={key}>
               <span className="font-medium">{failure.title}</span>: {failure.error}

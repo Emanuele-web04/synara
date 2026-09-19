@@ -23,8 +23,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 
-const ACTION_BUTTON_CLASS_NAME =
-  "rounded-[10px] text-[length:var(--app-font-size-ui-lg,13px)] sm:text-[length:var(--app-font-size-ui-lg,13px)]";
+const ACTION_BUTTON_CLASS_NAME = "rounded-[10px] text-ui-lg sm:text-ui-lg";
 
 export function AnnouncementSheet(props: {
   open: boolean;
@@ -68,7 +67,7 @@ export function AnnouncementSheet(props: {
 
           <DialogHeader className="gap-2 p-0">
             <DialogTitle className="text-[19px] leading-tight">{props.title}</DialogTitle>
-            <DialogDescription className="text-[length:var(--app-font-size-ui-lg,13px)] leading-normal">
+            <DialogDescription className="text-ui-lg leading-normal">
               {props.description}
             </DialogDescription>
           </DialogHeader>

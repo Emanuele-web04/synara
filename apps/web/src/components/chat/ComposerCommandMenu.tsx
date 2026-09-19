@@ -319,7 +319,7 @@ function CommandNoticeBadge(props: { notice: string }) {
       <TooltipPopup
         side="top"
         align="end"
-        className="max-w-72 whitespace-normal text-[length:var(--app-font-size-ui-sm,11px)] leading-snug"
+        className="max-w-72 whitespace-normal text-ui-sm leading-snug"
       >
         {props.notice}
       </TooltipPopup>
@@ -383,12 +383,12 @@ export function ComposerCommandMenu(props: {
             <p
               className={cn(
                 COMPOSER_MENU_PANEL_GROUP_LABEL_CLASS_NAME,
-                "px-2 py-0 font-medium text-muted-foreground text-xs",
+                "px-2 py-0 font-medium text-muted-foreground text-ui leading-snug",
               )}
             >
               Files
             </p>
-            <p className="px-2 pt-0.5 text-[11px] text-muted-foreground/55">
+            <p className="px-2 pt-0.5 text-ui-sm text-muted-foreground/55">
               Type to search for files
             </p>
           </div>
@@ -398,7 +398,7 @@ export function ComposerCommandMenu(props: {
         props.items.length === 0 ? (
           <p
             className={cn(
-              "text-muted-foreground/50 text-[11px]",
+              "text-muted-foreground/50 text-ui-sm",
               props.isLoading
                 ? "flex h-[calc(1.625rem+0.5rem)] items-center px-2 text-left"
                 : "px-2 py-1.5",
