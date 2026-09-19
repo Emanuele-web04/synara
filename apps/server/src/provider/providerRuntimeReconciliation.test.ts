@@ -768,15 +768,125 @@ describe("planProviderRuntimeReconciliation", () => {
     expect(plans[0]?.reason).toContain("runtime-event pump is recovering");
   });
 
-  it("does not treat an actively streaming turn as stale when only the session row is quiet", () => {
-    // thread.updatedAt advances on every appended message. A turn that is
-    // streaming output must never become a settle candidate just because the
-    // session lifecycle row has not moved since the turn started.
+  it("does not abandon a turn past the max age while assistant messages still advance", () => {
+    // The reconciliation query overlays the latest message activity onto the
+    // shell timestamp. A streaming turn must not become a settle candidate just
+    // because the persisted thread/session lifecycle rows have stayed quiet.
     const plans = planProviderRuntimeReconciliation({
-      threads: [threadShell({ updatedAt: "2026-07-23T20:00:28.000Z" })],
+      threads: [
+        threadShell({
+          updatedAt: "2026-07-23T20:00:28.000Z",
+          session: {
+            ...threadShell().session!,
+            updatedAt: "2026-07-23T19:00:00.000Z",
+          },
+        }),
+      ],
       bindings: [binding(null)],
       liveSessions: [liveSession({ status: "ready" })],
       pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+      maxTurnAgeMs: 30 * 60_000,
+    });
+
+    expect(plans).toEqual([]);
+  });
+
+  it("settles a start stranded without a turn on the shorter stalled-start bound", () => {
+    // Ten minutes of `starting` with no turn is not a live turn: the turn start
+    // is already bounded elsewhere, so the projection must recover before the
+    // full max turn age.
+    const stalledAt = "2026-07-23T19:50:00.000Z";
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          updatedAt: stalledAt,
+          latestTurn: {
+            ...threadShell().latestTurn!,
+            state: "completed",
+            completedAt: stalledAt,
+          },
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+            updatedAt: stalledAt,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([
+      expect.objectContaining({
+        action: "settle-interrupted",
+        threadId: THREAD_ID,
+        projectedTurnId: null,
+        runtimeTurnId: null,
+      }),
+    ]);
+    expect(plans[0]?.reason).toContain("stranded with no turn");
+  });
+
+  it("does not settle a fresh start that has no provider turn yet", () => {
+    const freshAt = "2026-07-23T20:00:00.000Z";
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          updatedAt: freshAt,
+          latestTurn: {
+            ...threadShell().latestTurn!,
+            state: "interrupted",
+            completedAt: freshAt,
+          },
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+            updatedAt: freshAt,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [],
+      pumpHealth: [],
+      nowMs: NOW,
+      staleAfterMs: 10_000,
+    });
+
+    expect(plans).toEqual([]);
+  });
+
+  it("honors a lagging runtime journal for a stalled start until the max turn age", () => {
+    // Rows sitting in the journal may hold the turn.started for this start, so
+    // the stalled-start clock must not preempt ingestion catching up.
+    const stalledAt = "2026-07-23T19:50:00.000Z";
+    const plans = planProviderRuntimeReconciliation({
+      threads: [
+        threadShell({
+          updatedAt: stalledAt,
+          latestTurn: {
+            ...threadShell().latestTurn!,
+            state: "completed",
+            completedAt: stalledAt,
+          },
+          session: {
+            ...threadShell().session!,
+            status: "starting",
+            activeTurnId: null,
+            updatedAt: stalledAt,
+          },
+        }),
+      ],
+      bindings: [binding(null)],
+      liveSessions: [],
+      pumpHealth: [],
+      runtimeJournalLagging: true,
       nowMs: NOW,
       staleAfterMs: 10_000,
     });

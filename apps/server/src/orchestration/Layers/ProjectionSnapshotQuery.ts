@@ -213,6 +213,10 @@ const ThreadTurnLookupInput = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
 });
+const ThreadMessageActivityLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  turnIds: Schema.Array(TurnId),
+});
 const ThreadMessagesByThreadLookupInput = Schema.Struct({
   threadId: ThreadId,
   maxMessages: Schema.NullOr(Schema.Number),
@@ -227,6 +231,9 @@ const FullThreadDiffContextLookupInput = Schema.Struct({
 const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
 const ProjectionThreadIdLookupRowSchema = Schema.Struct({
   threadId: ThreadId,
+});
+const ProjectionThreadActivityTimestampRowSchema = Schema.Struct({
+  updatedAt: IsoDateTime,
 });
 const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   threadId: ThreadId,
@@ -1029,33 +1036,72 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     Result: ProjectionThreadIdLookupRowSchema,
     execute: ({ updatedBefore, limit }) =>
       sql`
-        SELECT threads.thread_id AS "threadId"
-        FROM projection_threads AS threads
-        -- LEFT, not INNER: a thread whose runtime binding row was already
-        -- removed is exactly the thread most likely to be stuck running with
-        -- nothing left to settle it. Archived threads are included for the same
-        -- reason - archiving does not stop a turn.
-        LEFT JOIN provider_session_runtime AS runtime
-          ON runtime.thread_id = threads.thread_id
-        LEFT JOIN projection_thread_sessions AS sessions
-          ON sessions.thread_id = threads.thread_id
-        LEFT JOIN projection_turns AS latest_turn
-          ON latest_turn.thread_id = threads.thread_id
-         AND latest_turn.turn_id = threads.latest_turn_id
-        WHERE threads.deleted_at IS NULL
-          AND (
-            (
-              sessions.active_turn_id IS NOT NULL
-              AND sessions.status <> 'error'
+        WITH in_flight AS (
+          SELECT
+            threads.thread_id AS thread_id,
+            MAX(
+              COALESCE(sessions.updated_at, threads.updated_at),
+              threads.updated_at,
+              COALESCE(
+                (
+                  SELECT MAX(messages.updated_at)
+                  FROM projection_thread_messages AS messages
+                  WHERE messages.thread_id = threads.thread_id
+                    AND (
+                      (
+                        sessions.active_turn_id IS NOT NULL
+                        AND messages.turn_id = sessions.active_turn_id
+                      )
+                      OR (
+                        json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NOT NULL
+                        AND messages.turn_id = json_extract(
+                          runtime.runtime_payload_json,
+                          '$.activeTurnId'
+                        )
+                      )
+                      OR (
+                        latest_turn.state = 'running'
+                        AND messages.turn_id = latest_turn.turn_id
+                      )
+                    )
+                ),
+                threads.updated_at
+              )
+            ) AS observed_at
+          FROM projection_threads AS threads
+          -- LEFT, not INNER: a thread whose runtime binding row was already
+          -- removed is exactly the thread most likely to be stuck running with
+          -- nothing left to settle it. Archived threads are included for the
+          -- same reason - archiving does not stop a turn.
+          LEFT JOIN provider_session_runtime AS runtime
+            ON runtime.thread_id = threads.thread_id
+          LEFT JOIN projection_thread_sessions AS sessions
+            ON sessions.thread_id = threads.thread_id
+          LEFT JOIN projection_turns AS latest_turn
+            ON latest_turn.thread_id = threads.thread_id
+           AND latest_turn.turn_id = threads.latest_turn_id
+          WHERE threads.deleted_at IS NULL
+            AND (
+              (
+                sessions.active_turn_id IS NOT NULL
+                AND sessions.status <> 'error'
+              )
+              -- A lifecycle can be stranded before a provider turn id is bound.
+              -- Keep stale starting/running sessions visible to the planner,
+              -- which has a guarded abandoned-session recovery for this case.
+              OR sessions.status IN ('starting', 'running')
+              OR latest_turn.state = 'running'
+              OR json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NOT NULL
             )
-            OR latest_turn.state = 'running'
-            OR json_extract(runtime.runtime_payload_json, '$.activeTurnId') IS NOT NULL
-          )
-          -- Later of the session lifecycle timestamp and the thread timestamp:
-          -- threads.updated_at advances on every appended message, so a turn
-          -- that is actively streaming output is not a stale candidate.
-          AND MAX(COALESCE(sessions.updated_at, threads.updated_at), threads.updated_at) <= ${updatedBefore}
-        ORDER BY MAX(COALESCE(sessions.updated_at, threads.updated_at), threads.updated_at) ASC, threads.thread_id ASC
+        )
+        SELECT thread_id AS "threadId"
+        FROM in_flight
+        -- The message projection already advances on every assistant delta.
+        -- Read activity only from turns that still appear in flight: a newer
+        -- settled message can have a higher sequence while an older concurrent
+        -- turn continues streaming.
+        WHERE observed_at <= ${updatedBefore}
+        ORDER BY observed_at ASC, thread_id ASC
         LIMIT ${Math.max(1, Math.min(1_000, Math.floor(limit)))}
       `,
   });
@@ -1644,6 +1690,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE thread_id = ${threadId}
           AND deleted_at IS NULL
         LIMIT 1
+      `,
+  });
+
+  const getLatestThreadMessageActivityRow = SqlSchema.findOneOption({
+    Request: ThreadMessageActivityLookupInput,
+    Result: ProjectionThreadActivityTimestampRowSchema,
+    execute: ({ threadId, turnIds }) =>
+      sql`
+        SELECT MAX(updated_at) AS "updatedAt"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND turn_id IN (
+            SELECT value
+            FROM json_each(${JSON.stringify(turnIds)})
+          )
+        HAVING MAX(updated_at) IS NOT NULL
       `,
   });
 
@@ -2863,7 +2925,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         Effect.map(Option.isSome),
       );
 
-  const getThreadShellById: ProjectionSnapshotQueryShape["getThreadShellById"] = (threadId) =>
+  const getThreadShellById: ProjectionSnapshotQueryShape["getThreadShellById"] = (
+    threadId,
+    options,
+  ) =>
     sql
       .withTransaction(
         Effect.gen(function* () {
@@ -2904,16 +2969,48 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ]);
 
+          const latestTurn = Option.match(latestTurnRow, {
+            onNone: () => null,
+            onSome: (row) => toProjectedLatestTurn(row),
+          });
+          const session = Option.match(sessionRow, {
+            onNone: () => null,
+            onSome: (row) => toProjectedSession(row),
+          });
+          const inFlightTurnIds = Array.from(
+            new Set(
+              [
+                session?.activeTurnId ?? null,
+                latestTurn?.state === "running" ? latestTurn.turnId : null,
+              ].filter((turnId): turnId is TurnId => turnId !== null),
+            ),
+          );
+          const latestMessageActivityRow =
+            options?.includeLatestMessageActivity === true && inFlightTurnIds.length > 0
+              ? yield* getLatestThreadMessageActivityRow({
+                  threadId,
+                  turnIds: inFlightTurnIds,
+                }).pipe(
+                  Effect.mapError(
+                    toPersistenceSqlOrDecodeError(
+                      "ProjectionSnapshotQuery.getThreadShellById:getLatestMessageActivity:query",
+                      "ProjectionSnapshotQuery.getThreadShellById:getLatestMessageActivity:decodeRow",
+                    ),
+                  ),
+                )
+              : Option.none();
+
+          const thread = toProjectedThreadShellFromStoredSummary({
+            threadRow: threadRow.value,
+            latestTurn,
+            session,
+          });
           return Option.some(
-            toProjectedThreadShellFromStoredSummary({
-              threadRow: threadRow.value,
-              latestTurn: Option.match(latestTurnRow, {
-                onNone: () => null,
-                onSome: (row) => toProjectedLatestTurn(row),
-              }),
-              session: Option.match(sessionRow, {
-                onNone: () => null,
-                onSome: (row) => toProjectedSession(row),
+            Option.match(latestMessageActivityRow, {
+              onNone: () => thread,
+              onSome: ({ updatedAt }) => ({
+                ...thread,
+                updatedAt: maxIso(thread.updatedAt, updatedAt),
               }),
             }),
           );
