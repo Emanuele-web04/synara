@@ -176,6 +176,7 @@ export function AppSnapPermissionSection({
   onStateChange,
   guidePane,
   onGuidePaneChange,
+  showRecheck = true,
 }: {
   readonly panes: readonly AppSnapPermissionPaneDescriptor[];
   readonly permissionKinds?: readonly DesktopAppSnapPermissionKind[];
@@ -185,6 +186,12 @@ export function AppSnapPermissionSection({
   readonly onStateChange: (state: DesktopAppSnapState) => void;
   readonly guidePane: DesktopAppSnapSettingsPane | null;
   readonly onGuidePaneChange: (pane: DesktopAppSnapSettingsPane | null) => void;
+  /**
+   * Whether to render the Recheck footer row. A surface that already owns a
+   * status action (the Computer panel's Set up) passes false so the same check
+   * does not appear twice.
+   */
+  readonly showRecheck?: boolean;
 }) {
   const [recheckPending, setRecheckPending] = useState(false);
   const requestGuardRef = useRef(createLatestAppSnapRequestGuard());
@@ -335,28 +342,30 @@ export function AppSnapPermissionSection({
           </SettingsRow>
         );
       })}
-      <SettingsRow
-        title="Permission status"
-        description="Grant each permission with the steps above. If you take longer than 10 minutes, press Set up again."
-        control={
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            disabled={recheckPending}
-            onClick={() => void recheckPermissions()}
-          >
-            {recheckPending ? (
-              <>
-                <Spinner className="size-3" />
-                Rechecking…
-              </>
-            ) : (
-              "Recheck permissions"
-            )}
-          </Button>
-        }
-      />
+      {showRecheck ? (
+        <SettingsRow
+          title="Permission status"
+          description="Grant each permission with the steps above. If you take longer than 10 minutes, press Set up again."
+          control={
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={recheckPending}
+              onClick={() => void recheckPermissions()}
+            >
+              {recheckPending ? (
+                <>
+                  <Spinner className="size-3" />
+                  Rechecking…
+                </>
+              ) : (
+                "Recheck permissions"
+              )}
+            </Button>
+          }
+        />
+      ) : null}
     </SettingsSection>
   );
 }

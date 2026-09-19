@@ -303,19 +303,20 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: "computer:status",
     section: "computer",
-    title: "Desktop backend",
+    title: "Computer status",
     keywords:
-      "Whether agents can see and control this computer's desktop right now. beta availability health kwin hyprland nested wayland linux mac macos screen recording accessibility computer use control status set up install plugin repair",
-    // The status row's title is dynamic (Ready / Reconnecting / Unavailable), so
-    // link to the section rather than an anchored row.
+      "Whether agents can see and control this computer's desktop right now. desktop backend beta availability health kwin hyprland nested wayland linux mac macos screen recording accessibility computer use control status set up install plugin repair",
+    // The status row is conditional and its title is dynamic (Ready /
+    // Reconnecting / Unavailable), so link to the section rather than an
+    // anchored row.
     target: null,
   },
   {
     id: "computer:open-automatically",
     section: "computer",
-    title: "Open automatically",
+    title: "Preview",
     keywords:
-      "Show the in-chat Computer preview the first time an agent acts on the desktop. auto open computer use",
+      "Show the in-chat Computer preview the first time an agent acts on the desktop, and choose its size. open automatically compact large. auto open computer use",
     applies: () => true,
   },
   {

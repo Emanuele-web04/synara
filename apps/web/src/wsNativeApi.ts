@@ -872,7 +872,6 @@ export function createWsNativeApi(): NativeApi {
         transport.request(COMPUTER_WS_METHODS.provision, input, { timeoutMs: null }),
       getThreadState: (input) => transport.request(COMPUTER_WS_METHODS.getThreadState, input),
       setControlEnabled: (input) => transport.request(COMPUTER_WS_METHODS.setControlEnabled, input),
-      rearmInput: (input) => transport.request(COMPUTER_WS_METHODS.rearmInput, input),
       inputClick: (input) => transport.request(COMPUTER_WS_METHODS.inputClick, input),
       inputScroll: (input) => transport.request(COMPUTER_WS_METHODS.inputScroll, input),
       inputKey: (input) => transport.request(COMPUTER_WS_METHODS.inputKey, input),

@@ -1,5 +1,6 @@
 // FILE: ComputerSettingsPanel.tsx
-// Purpose: Own the Computer use settings panel: desktop backend status and computer-control preferences.
+// Purpose: Own the Computer use settings panel: one surface for the control toggle,
+//          the honest attention-only status line, cursor colors, and the preview.
 // Layer: Settings UI components
 // Exports: ComputerSettingsPanel
 
@@ -15,15 +16,9 @@ import {
   type ComputerGrantActionClass,
   type ComputerPermission,
 } from "@synara/contracts";
-import {
-  COMPUTER_PERMISSION_KINDS,
-  COMPUTER_PERMISSION_LABELS,
-  listComputerPermissions,
-} from "@synara/shared/computerGrants";
+import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
-
-import { ensureNativeApi } from "~/nativeApi";
 
 import {
   DEFAULT_AGENT_CURSOR_COLOR_MODE,
@@ -34,11 +29,12 @@ import {
 } from "~/appSettings";
 import type { DesktopAppSnapSettingsPane, DesktopAppSnapState } from "@synara/contracts";
 import {
-  computerLastFailureNote,
   computerReconnectsNote,
   computerStatusNeedsSetup,
   resolveComputerAvailabilityView,
 } from "~/components/ComputerPanel.logic";
+import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
+import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { Switch } from "~/components/ui/switch";
@@ -57,14 +53,10 @@ import {
   serverQueryKeys,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
+import { settingRowAnchorId } from "~/settingsNavigation";
 import { useAgentCursorDesktopSync } from "./agentCursorDesktopSync";
 import { SettingResetButton, SettingsSegmentedControl } from "./SettingControls";
-import {
-  SettingsCard,
-  SettingsRow,
-  SettingsSectionShell,
-  SettingsSection,
-} from "./SettingsPanelPrimitives";
+import { SettingsCard, SettingsRow, SettingsSectionShell } from "./SettingsPanelPrimitives";
 
 /** Stable identity, so the provision hook's toast copy is not rebuilt every render. */
 const EMPTY_PERMISSIONS: readonly ComputerPermission[] = [];
@@ -252,6 +244,9 @@ export function ComputerSettingsPanel({
   const status = statusQuery.data;
   const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
   const [guidePane, setGuidePane] = useState<DesktopAppSnapSettingsPane | null>(null);
+  // Advanced is details, not a default: the surface opens calm and stays that
+  // way until the user asks for permissions, grants, and abilities.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   // The native permission surface is the AppSnap helper: the same coach that
   // AppSnap's own settings drive, asked about the computer-use grant set.
   const hasNativePermissionSetup = typeof window !== "undefined" && !!window.desktopBridge?.appSnap;
@@ -305,8 +300,8 @@ export function ComputerSettingsPanel({
   }, [active]);
   /**
    * The grants the OS is withholding, named. The availability message already
-   * explains what to do; the row below is the checklist — the thing a user can
-   * glance at after flipping a switch to see whether the other one is still off.
+   * explains what to do; the attention row below names them, and the native
+   * checklist in Advanced is the per-grant walkthrough.
    */
   const missingPermissions =
     status?.availability.kind === "permission-required"
@@ -317,35 +312,6 @@ export function ComputerSettingsPanel({
   // what happened. This surface keeps that account inline rather than as a
   // toast, because it has room for it and is where the user is already looking.
   const setup = useProvisionComputer({ missing: missingPermissions });
-  /**
-   * Re-arm state for the physical-Escape kill switch. The hooks sit above the
-   * `!active` return like every other state on this panel; the relay itself is
-   * the user's explicit `computer.rearmInput`, and a failed relay keeps the
-   * stop rather than reporting authority the driver does not have.
-   */
-  const [rearmPending, setRearmPending] = useState(false);
-  const [rearmError, setRearmError] = useState<string | null>(null);
-  const rearmInput = async () => {
-    if (rearmPending) return;
-    setRearmPending(true);
-    setRearmError(null);
-    try {
-      const api = ensureNativeApi();
-      if (!api.computer?.rearmInput) {
-        throw new Error("This app build cannot re-arm computer input.");
-      }
-      await api.computer.rearmInput({});
-      await statusQuery.refetch();
-    } catch (error) {
-      setRearmError(
-        error instanceof Error && error.message
-          ? error.message
-          : "The re-arm request failed. Try again.",
-      );
-    } finally {
-      setRearmPending(false);
-    }
-  };
 
   if (!active) return null;
 
@@ -370,7 +336,7 @@ export function ComputerSettingsPanel({
   // visible plugin-backed desktop may promise it.
   const capabilitiesDescription =
     backend === COMPUTER_MAC_BACKEND || backend === "cua"
-      ? "The agent shares your Mac desktop. An authorized Computer task can switch apps and bring its target window forward. Background input may also affect focus. Stop ends desktop control; the drawn cursor is a visual indicator, not a separate keyboard focus. Pressing the physical Escape key while the agent drives stops all computer input until you re-arm it."
+      ? "The agent shares your Mac desktop. An authorized Computer task can switch apps and bring its target window forward. Background input may also affect focus. Stop ends desktop control; the drawn cursor is a visual indicator, not a separate keyboard focus. Pressing the physical Escape key while the agent drives stops its current action, and input resumes on its own."
       : backend !== null &&
           COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
           status?.capabilities.visibleDesktop === true
@@ -385,30 +351,64 @@ export function ComputerSettingsPanel({
    * proved capture works", which is also true of a backend nobody has engaged
    * yet — enough to offer Set up, not enough to accuse the OS of refusing.
    * `captureBlocked` is the refusal itself: a helper that is running and still
-   * cannot see. Only that one earns a warning, and without it the card is
+   * cannot see. Only that one earns the warning, and without it the surface is
    * entirely green while every screenshot fails.
    */
   const captureUnavailable = health?.captureAvailable === false;
   const captureBlocked = captureUnavailable && health?.status === "connected";
-  // A missing background delivery route never authorizes foreground fallback.
-  const backgroundInputDegraded = health?.backgroundInputDegraded === true;
   // Shared with the chat's setup card, which asks the same question of the same
   // status after pressing the same server-side Set up.
   const needsSetup = computerStatusNeedsSetup(status);
-  // The same two sentences the pane's health badge composes, from the same
-  // helpers: one account of a supervision state, however it is surfaced.
-  const healthNotes = [
-    computerReconnectsNote(health),
-    availabilityView.kind === "ready" ? computerLastFailureNote(health) : null,
-  ].filter((note): note is string => note !== null);
+  // The one counter worth carrying beside the status sentence; a last failure
+  // is already the reconnect sentence, so it is not repeated here.
+  const healthNotes = [computerReconnectsNote(health)].filter(
+    (note): note is string => note !== null,
+  );
   /**
-   * The physical-Escape kill is host-wide and outranks everything else on
-   * this card: while it holds, no agent call, pane click, or keystroke
-   * reaches the desktop. Re-arming is the user's explicit choice — the button
-   * relays `computer.rearmInput`, and a failed relay keeps the stop rather
-   * than reporting authority the driver does not have.
+   * The surface stays silent while the desktop is ready: the toggle's
+   * description carries the calm state, and a second green row would be
+   * chrome. One row appears only when something needs the user — a blocked
+   * backend, a missing grant, a screen-capture refusal, a reconnect in flight,
+   * or a status query that failed — and that row carries the one action that
+   * fixes or rechecks it.
    */
-  const inputStopped = status?.inputStopped === true;
+  const showAttentionRow =
+    availabilityView.kind === "blocked" ||
+    (availabilityView.kind === "checking" && (needsSetup || health?.status === "reconnecting"));
+  const attentionTitle = captureBlocked
+    ? "Screen capture is not allowed yet"
+    : availabilityView.title;
+  const attentionDescription = captureBlocked
+    ? backend === COMPUTER_MAC_BACKEND
+      ? "The agent can act on the desktop but cannot see it, so screenshots fail. Turn Synara on in System Settings › Privacy & Security › Screen Recording, then press Set up to reconnect."
+      : "The agent can act on the desktop but cannot see it, so screenshots fail. Press Set up to reconnect."
+    : availabilityView.description;
+  const attentionTone = cn(
+    "size-2 shrink-0 rounded-full",
+    availabilityView.kind === "checking"
+      ? "animate-pulse bg-amber-500"
+      : captureBlocked
+        ? "bg-amber-500"
+        : "bg-red-500",
+  );
+  const attentionAction =
+    needsSetup && !statusQuery.isError ? (
+      <Button size="xs" variant="default" disabled={setup.isPending} onClick={setup.provision}>
+        {setup.isPending ? "Setting up…" : "Set up"}
+      </Button>
+    ) : statusQuery.isError ? (
+      <Button
+        size="xs"
+        variant="outline"
+        disabled={statusQuery.isFetching}
+        onClick={() => {
+          void statusQuery.refetch();
+          refreshPermissionState();
+        }}
+      >
+        {statusQuery.isFetching ? "Checking…" : "Check again"}
+      </Button>
+    ) : null;
   // Stock is the default and stores no override; only an explicit Custom
   // choice can differ from the default state.
   const cursorColorMode = settings.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE;
@@ -416,120 +416,174 @@ export function ComputerSettingsPanel({
     cursorColorMode !== (defaults.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE) ||
     (settings.agentCursorFillColor ?? "") !== (defaults.agentCursorFillColor ?? "") ||
     (settings.agentCursorRimColor ?? "") !== (defaults.agentCursorRimColor ?? "");
+  const previewDirty =
+    settings.autoOpenComputerPane !== defaults.autoOpenComputerPane ||
+    settings.computerPreviewSize !== defaults.computerPreviewSize;
 
   return (
     <div className="space-y-6">
+      {/* The whole surface: the toggle that turns desktop control on, the one
+          attention row when the desktop cannot deliver, and the two
+          preferences that shape a session. */}
       <SettingsSectionShell
-        title="Desktop backend"
+        id={settingRowAnchorId("Computer control")}
+        title="Computer control"
         action={
-          <div className="flex items-center gap-2">
-            {/* Offered whenever the desktop is not ready. Setting up installs
-                whatever this backend still needs — on Linux, distribution
-                packages through the system's own authorization dialog and
-                Synara's compositor plugin into the user's home; on macOS, the
-                native helper plus the Accessibility and Screen Recording grants
-                macOS asks for — and boots the agent's desktop. */}
-            {needsSetup && !statusQuery.isError ? (
-              <Button
-                size="xs"
-                variant="default"
-                disabled={setup.isPending}
-                onClick={setup.provision}
-              >
-                {setup.isPending ? "Setting up…" : "Set up"}
-              </Button>
+          <div className="flex items-center gap-1.5">
+            {settings.computerControlEnabled !== defaults.computerControlEnabled ? (
+              <SettingResetButton
+                label="computer control"
+                onClick={() =>
+                  updateSettings({ computerControlEnabled: defaults.computerControlEnabled })
+                }
+              />
             ) : null}
-            <Button
-              size="xs"
-              variant="outline"
-              disabled={statusQuery.isFetching || setup.isPending}
-              onClick={() => {
-                void statusQuery.refetch();
-                refreshPermissionState();
-              }}
-            >
-              {statusQuery.isFetching ? "Checking…" : "Refresh"}
-            </Button>
+            <Switch
+              checked={settings.computerControlEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ computerControlEnabled: Boolean(checked) })
+              }
+              aria-label="Let the agent use the desktop in any chat"
+            />
           </div>
         }
       >
+        <p className="px-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
+          Let the agent use the desktop in any chat.
+        </p>
         <SettingsCard>
-          {inputStopped ? (
+          {showAttentionRow ? (
             <SettingsRow
               title={
                 <span className="flex items-center gap-2">
-                  <span aria-hidden className="size-2 shrink-0 rounded-full bg-red-500" />
-                  Input stopped — Escape was pressed
+                  <span aria-hidden className={attentionTone} />
+                  {attentionTitle}
                 </span>
               }
-              description="The physical Escape key stopped all computer input. No agent action, pane click, or keystroke reaches the desktop until you re-arm it."
-              status={rearmError ?? undefined}
-              control={
-                <Button
-                  size="xs"
-                  variant="default"
-                  disabled={rearmPending}
-                  onClick={() => void rearmInput()}
-                >
-                  {rearmPending ? "Re-arming…" : "Re-arm input"}
-                </Button>
-              }
+              description={attentionDescription}
+              status={[setup.note, ...healthNotes].filter(Boolean).join(" ") || undefined}
+              control={attentionAction}
             />
           ) : null}
+          {/* The agent's on-screen pointer. Stock keeps the driver's monochrome
+              cursor and stores nothing beyond the default; Custom is the only
+              state that carries fill/rim overrides to the desktop cursor host. */}
           <SettingsRow
-            title={
-              <span className="flex items-center gap-2">
-                <span
-                  aria-hidden
-                  className={cn(
-                    "size-2 shrink-0 rounded-full",
-                    availabilityView.kind === "ready"
-                      ? "bg-emerald-500"
-                      : availabilityView.kind === "checking"
-                        ? "animate-pulse bg-amber-500"
-                        : "bg-red-500",
-                  )}
+            title="Cursor colors"
+            description="The agent pointer is stock monochrome by default — like a normal pointer. Custom colors apply to new computer sessions."
+            resetAction={
+              cursorColorsDirty ? (
+                <SettingResetButton
+                  label="cursor colors"
+                  onClick={() =>
+                    updateSettings({
+                      agentCursorColorMode:
+                        defaults.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE,
+                      agentCursorFillColor: defaults.agentCursorFillColor ?? "",
+                      agentCursorRimColor: defaults.agentCursorRimColor ?? "",
+                    })
+                  }
                 />
-                {availabilityView.title}
-              </span>
+              ) : null
             }
-            description={
-              availabilityView.kind === "ready"
-                ? "The desktop is ready. Turn on Computer control below to let the agent use the desktop."
-                : availabilityView.description
+            control={
+              <SettingsSegmentedControl<AgentCursorColorMode>
+                value={cursorColorMode}
+                onValueChange={(value) => updateSettings({ agentCursorColorMode: value })}
+                options={[
+                  { value: "stock", label: "Stock" },
+                  { value: "custom", label: "Custom" },
+                ]}
+                ariaLabel="Agent cursor colors"
+              />
             }
-            status={[setup.note, ...healthNotes].filter(Boolean).join(" ") || undefined}
+          >
+            {cursorColorMode === "custom" ? (
+              <div className="flex flex-col gap-2 pt-3 sm:flex-row sm:gap-4">
+                <CursorColorField
+                  label="Fill"
+                  value={settings.agentCursorFillColor ?? ""}
+                  onChange={(value) => updateSettings({ agentCursorFillColor: value })}
+                />
+                <CursorColorField
+                  label="Rim"
+                  value={settings.agentCursorRimColor ?? ""}
+                  onChange={(value) => updateSettings({ agentCursorRimColor: value })}
+                />
+              </div>
+            ) : null}
+          </SettingsRow>
+          {/* On a backend that drives the visible desktop the pane defaults to
+              stills-only (interactive mode stays off — a second cursor on the
+              user's own screen is worse than none), but the preview itself is
+              wanted: watching the agent's captured view inside the app is how a
+              user follows background work in windows they are not looking at.
+              One row owns both choices: whether it opens, and how big it is. */}
+          <SettingsRow
+            title="Preview"
+            description="Show the live preview the first time an agent acts on the desktop in a chat. Compact keeps it small and glanceable; Large gives it the full wide card."
+            resetAction={
+              previewDirty ? (
+                <SettingResetButton
+                  label="preview"
+                  onClick={() =>
+                    updateSettings({
+                      autoOpenComputerPane: defaults.autoOpenComputerPane,
+                      computerPreviewSize: defaults.computerPreviewSize,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex w-full items-center gap-3 sm:w-auto sm:justify-end">
+                <Switch
+                  checked={settings.autoOpenComputerPane}
+                  onCheckedChange={(checked) =>
+                    updateSettings({ autoOpenComputerPane: Boolean(checked) })
+                  }
+                  aria-label="Show the computer preview automatically when an agent drives the desktop"
+                />
+                <SettingsSegmentedControl<ComputerPreviewSize>
+                  value={settings.computerPreviewSize}
+                  onValueChange={(value) => updateSettings({ computerPreviewSize: value })}
+                  options={[
+                    { value: "compact", label: "Compact" },
+                    { value: "large", label: "Large" },
+                  ]}
+                  ariaLabel="In-chat computer preview size"
+                />
+              </div>
+            }
           />
-          {backend ? (
-            <SettingsRow
-              title="Backend"
-              description="Which computer backend serves perception and input."
-              control={
-                <span className="text-sm text-muted-foreground">
-                  {BACKEND_DISPLAY_NAMES[backend] ?? backend}
-                </span>
-              }
-            />
-          ) : null}
-          {missingPermissions.length > 0 && !hasNativePermissionSetup ? (
-            <SettingsRow
-              title={
-                <span className="flex items-center gap-2">
-                  <span aria-hidden className="size-2 shrink-0 rounded-full bg-red-500" />
-                  {`${listComputerPermissions(missingPermissions)} ${missingPermissions.length === 1 ? "is" : "are"} not allowed yet`}
-                </span>
-              }
-              description="Turn Synara on for each of these in System Settings › Privacy & Security, then press Set up."
-              status={missingPermissions
-                .map((permission) => COMPUTER_PERMISSION_LABELS[permission])
-                .join(" · ")}
-            />
-          ) : null}
-          {hasNativePermissionSetup && appSnapState ? (
-            <div className="p-3">
-              {/* One permission section serves every surface; only the pane set
-                  differs. The coach and settings deep links live in the shared
-                  section, so Computer never grows a second guide stack. */}
+        </SettingsCard>
+      </SettingsSectionShell>
+
+      {/* Details stay out of the way until asked for: the per-grant checklist
+          the macOS helper drives, the durable consents minted by "Always
+          allow", and what this backend can actually do. */}
+      <SettingsSectionShell
+        title="Advanced"
+        action={
+          <Button
+            size="xs"
+            variant="ghost"
+            aria-expanded={advancedOpen}
+            onClick={() => setAdvancedOpen((open) => !open)}
+          >
+            <DisclosureChevron open={advancedOpen} />
+            {advancedOpen ? "Hide" : "Show"}
+          </Button>
+        }
+      >
+        <DisclosureRegion open={advancedOpen}>
+          <div className="flex flex-col gap-4">
+            {hasNativePermissionSetup && appSnapState ? (
+              // One permission section serves every surface; only the pane set
+              // differs. The coach and settings deep links live in the shared
+              // section, so Computer never grows a second guide stack. The
+              // Recheck footer is off here: the attention row's Set up is this
+              // panel's one check action.
               <AppSnapPermissionSection
                 panes={COMPUTER_PERMISSION_PANES}
                 permissionKinds={COMPUTER_PERMISSION_KINDS}
@@ -538,209 +592,50 @@ export function ComputerSettingsPanel({
                 onStateChange={setAppSnapState}
                 guidePane={guidePane}
                 onGuidePaneChange={setGuidePane}
+                showRecheck={false}
               />
-            </div>
-          ) : null}
-          {captureBlocked && missingPermissions.length === 0 ? (
-            <SettingsRow
-              title={
-                <span className="flex items-center gap-2">
-                  <span aria-hidden className="size-2 shrink-0 rounded-full bg-amber-500" />
-                  Screen capture is not allowed yet
-                </span>
-              }
-              description={
-                backend === COMPUTER_MAC_BACKEND
-                  ? "The agent can act on the desktop but cannot see it, so screenshots fail. Turn Synara on in System Settings › Privacy & Security › Screen Recording, then press Set up to reconnect."
-                  : "The agent can act on the desktop but cannot see it, so screenshots fail. Press Set up to reconnect."
-              }
-            />
-          ) : null}
-          {backgroundInputDegraded ? (
-            <SettingsRow
-              title="Background typing is limited"
-              description="Some applications may refuse background typing or leave its effect uncertain. An authorized Computer task can use foreground delivery after a confirmed refusal; uncertain input must be inspected before another action."
-            />
-          ) : null}
-          {status && availabilityView.kind === "ready" ? (
-            <SettingsRow
-              title="Capabilities"
-              description={capabilitiesDescription}
-              status={capabilitySummary(status.capabilities, !captureBlocked)}
-            />
-          ) : null}
-        </SettingsCard>
+            ) : null}
+            <SettingsCard>
+              {grantsQuery.isError ? (
+                <SettingsRow
+                  title="Always-allow grants are unavailable"
+                  description="This build cannot read the grant list. Grants still apply; they expire on their own."
+                />
+              ) : (grantsQuery.data?.grants.length ?? 0) === 0 ? (
+                <SettingsRow
+                  title="No always-allow grants"
+                  description="When a computer approval offers Always allow, the grant it creates is listed here with its expiry. Approvals otherwise ask each time."
+                />
+              ) : (
+                (grantsQuery.data?.grants ?? []).map((grant) => (
+                  <SettingsRow
+                    key={grant.id}
+                    title={computerGrantTitle(grant)}
+                    description={computerGrantDescription(grant, Date.now())}
+                    control={
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={revokeGrant.isPending}
+                        onClick={() => revokeGrant.mutate(grant.id)}
+                      >
+                        Revoke
+                      </Button>
+                    }
+                  />
+                ))
+              )}
+              {status && availabilityView.kind === "ready" ? (
+                <SettingsRow
+                  title="Desktop abilities"
+                  description={capabilitiesDescription}
+                  status={`${backend ? (BACKEND_DISPLAY_NAMES[backend] ?? backend) : "No backend"} · ${capabilitySummary(status.capabilities, !captureBlocked)}`}
+                />
+              ) : null}
+            </SettingsCard>
+          </div>
+        </DisclosureRegion>
       </SettingsSectionShell>
-
-      {/* On a backend that drives the visible desktop the pane defaults to
-          stills-only (interactive mode stays off — a second cursor on the
-          user's own screen is worse than none), but the preview itself is
-          wanted: watching the agent's captured view inside the app is how a
-          user follows background work in windows they are not looking at. */}
-      <SettingsSection title="Computer preview">
-        <SettingsRow
-          title="Open automatically"
-          description="Show the live computer preview the first time an agent acts on the desktop in a chat. Closing the preview keeps it hidden for the rest of that chat's run."
-          resetAction={
-            settings.autoOpenComputerPane !== defaults.autoOpenComputerPane ? (
-              <SettingResetButton
-                label="open automatically"
-                onClick={() =>
-                  updateSettings({ autoOpenComputerPane: defaults.autoOpenComputerPane })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.autoOpenComputerPane}
-              onCheckedChange={(checked) =>
-                updateSettings({ autoOpenComputerPane: Boolean(checked) })
-              }
-              aria-label="Show the computer preview automatically when an agent drives the desktop"
-            />
-          }
-        />
-        <SettingsRow
-          title="Preview size"
-          description="Compact keeps the in-chat preview small and glanceable; large gives it the full wide card."
-          resetAction={
-            settings.computerPreviewSize !== defaults.computerPreviewSize ? (
-              <SettingResetButton
-                label="preview size"
-                onClick={() =>
-                  updateSettings({ computerPreviewSize: defaults.computerPreviewSize })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSegmentedControl<ComputerPreviewSize>
-              value={settings.computerPreviewSize}
-              onValueChange={(value) => updateSettings({ computerPreviewSize: value })}
-              options={[
-                { value: "compact", label: "Compact" },
-                { value: "large", label: "Large" },
-              ]}
-              ariaLabel="In-chat computer preview size"
-            />
-          }
-        />
-      </SettingsSection>
-
-      {/* The agent's on-screen pointer. Stock keeps the driver's monochrome
-          cursor and stores nothing beyond the default; Custom is the only
-          state that carries fill/rim overrides to the desktop cursor host. */}
-      <SettingsSection title="Agent cursor">
-        <SettingsRow
-          title="Cursor colors"
-          description="The agent pointer is stock monochrome by default — like a normal pointer. Custom colors apply to new computer sessions."
-          resetAction={
-            cursorColorsDirty ? (
-              <SettingResetButton
-                label="cursor colors"
-                onClick={() =>
-                  updateSettings({
-                    agentCursorColorMode:
-                      defaults.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE,
-                    agentCursorFillColor: defaults.agentCursorFillColor ?? "",
-                    agentCursorRimColor: defaults.agentCursorRimColor ?? "",
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <SettingsSegmentedControl<AgentCursorColorMode>
-              value={cursorColorMode}
-              onValueChange={(value) => updateSettings({ agentCursorColorMode: value })}
-              options={[
-                { value: "stock", label: "Stock" },
-                { value: "custom", label: "Custom" },
-              ]}
-              ariaLabel="Agent cursor colors"
-            />
-          }
-        >
-          {cursorColorMode === "custom" ? (
-            <div className="flex flex-col gap-2 pt-3 sm:flex-row sm:gap-4">
-              <CursorColorField
-                label="Fill"
-                value={settings.agentCursorFillColor ?? ""}
-                onChange={(value) => updateSettings({ agentCursorFillColor: value })}
-              />
-              <CursorColorField
-                label="Rim"
-                value={settings.agentCursorRimColor ?? ""}
-                onChange={(value) => updateSettings({ agentCursorRimColor: value })}
-              />
-            </div>
-          ) : null}
-        </SettingsRow>
-      </SettingsSection>
-
-      <SettingsSection title="Computer control">
-        <SettingsRow
-          title="Computer control"
-          description="Let the agent use the desktop in any chat. Approval gates and Stop still apply."
-          resetAction={
-            settings.computerControlEnabled !== defaults.computerControlEnabled ? (
-              <SettingResetButton
-                label="computer control"
-                onClick={() =>
-                  updateSettings({ computerControlEnabled: defaults.computerControlEnabled })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.computerControlEnabled}
-              onCheckedChange={(checked) =>
-                updateSettings({ computerControlEnabled: Boolean(checked) })
-              }
-              aria-label="Let the agent use the desktop in any chat"
-            />
-          }
-        />
-      </SettingsSection>
-
-      {/* The durable consents minted by "Always allow" answers on computer
-          approval cards. Every row names the app and the action classes it
-          covers, how long it has left, and a Revoke that takes effect on the
-          next gated call — grants only ever waive the prompt, never the
-          denylist or the kill switch. */}
-      <SettingsSection title="Always allowed">
-        {grantsQuery.isError ? (
-          <SettingsRow
-            title="Always-allow grants are unavailable"
-            description="This build cannot read the grant list. Grants still apply; they expire on their own."
-          />
-        ) : (grantsQuery.data?.grants.length ?? 0) === 0 ? (
-          <SettingsRow
-            title="No always-allow grants"
-            description="When a computer approval offers Always allow, the grant it creates is listed here with its expiry. Approvals otherwise ask each time."
-          />
-        ) : (
-          (grantsQuery.data?.grants ?? []).map((grant) => (
-            <SettingsRow
-              key={grant.id}
-              title={computerGrantTitle(grant)}
-              description={computerGrantDescription(grant, Date.now())}
-              control={
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={revokeGrant.isPending}
-                  onClick={() => revokeGrant.mutate(grant.id)}
-                >
-                  Revoke
-                </Button>
-              }
-            />
-          ))
-        )}
-      </SettingsSection>
     </div>
   );
 }
