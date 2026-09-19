@@ -675,6 +675,7 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown strong,
 .chat-markdown b {
+  color: var(--chat-bold-color, inherit);
   font-weight: 500;
   font-synthesis: none;
 }
@@ -758,6 +759,7 @@ label:has(> select#reasoning-effort) select {
 .chat-markdown h4,
 .chat-markdown h5,
 .chat-markdown h6 {
+  color: var(--chat-heading-color, inherit);
   margin: 1.1em 0 0.35em;
   font-weight: 600;
   line-height: 1.25;
@@ -786,7 +788,11 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown h6 {
   font-size: 1em;
-  color: var(--muted-foreground);
+  color: var(--chat-heading-color, var(--muted-foreground));
+}
+
+.chat-markdown :is(h1, h2, h3, h4, h5, h6) :is(strong, b) {
+  color: inherit;
 }
 
 .chat-markdown h1 + h2,

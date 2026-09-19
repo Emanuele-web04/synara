@@ -25,6 +25,8 @@ export interface ThemeSemanticColors {
 }
 
 export interface ChromeTheme {
+  chatHeadingColor?: string | null;
+  chatBoldColor?: string | null;
   accent: string;
   contrast: number;
   fonts: ThemeFonts;
@@ -116,7 +118,16 @@ export interface ResolvedThemeTokens {
 }
 
 type ChromeThemeSeedPatch = Partial<
-  Pick<ChromeTheme, "accent" | "contrast" | "ink" | "opaqueWindows" | "surface">
+  Pick<
+    ChromeTheme,
+    | "accent"
+    | "contrast"
+    | "ink"
+    | "opaqueWindows"
+    | "surface"
+    | "chatHeadingColor"
+    | "chatBoldColor"
+  >
 > & {
   fonts?: Partial<ThemeFonts>;
   semanticColors?: Partial<ThemeSemanticColors>;
@@ -334,8 +345,12 @@ export function normalizeSemanticColors(
 export function normalizeChromeTheme(value: unknown, variant: ThemeVariant): ChromeTheme {
   const fallback = DEFAULT_CHROME_THEME_BY_VARIANT[variant];
   const theme = isRecord(value) ? value : {};
+  const chatHeadingColor = normalizeHexColor(theme.chatHeadingColor);
+  const chatBoldColor = normalizeHexColor(theme.chatBoldColor);
 
   return {
+    ...(chatHeadingColor ? { chatHeadingColor } : {}),
+    ...(chatBoldColor ? { chatBoldColor } : {}),
     accent: normalizeHexColor(theme.accent) ?? fallback.accent,
     contrast: normalizeStoredContrast(theme.contrast, fallback.contrast),
     fonts: normalizeThemeFonts(theme.fonts),
@@ -662,6 +677,8 @@ export function resolveThemePack(state: ThemeState, variant: ThemeVariant): Them
 export function areThemePacksEqual(left: ThemePack, right: ThemePack): boolean {
   return (
     left.codeThemeId === right.codeThemeId &&
+    (left.theme.chatHeadingColor ?? null) === (right.theme.chatHeadingColor ?? null) &&
+    (left.theme.chatBoldColor ?? null) === (right.theme.chatBoldColor ?? null) &&
     left.theme.accent === right.theme.accent &&
     left.theme.contrast === right.theme.contrast &&
     left.theme.fonts.code === right.theme.fonts.code &&
@@ -726,6 +743,8 @@ export function buildThemeCssVariables(
   // from the user-message token so code blocks pick up the bubble's color.
   const chatCodeSurface = readCodexVariable("--color-background-user-message");
   const appVariables: Record<string, string> = {
+    "--chat-heading-color": pack.theme.chatHeadingColor ?? "",
+    "--chat-bold-color": pack.theme.chatBoldColor ?? "",
     "--accent": readCodexVariable("--color-background-accent"),
     "--accent-foreground": readCodexVariable("--color-text-foreground"),
     "--app-shell-background":
@@ -1251,6 +1270,12 @@ function parseStrictChromeTheme(value: unknown): ChromeTheme {
   }
 
   return {
+    ...(value.chatHeadingColor != null
+      ? { chatHeadingColor: parseRequiredHexColor(value.chatHeadingColor, "Chat heading color") }
+      : {}),
+    ...(value.chatBoldColor != null
+      ? { chatBoldColor: parseRequiredHexColor(value.chatBoldColor, "Chat bold color") }
+      : {}),
     accent: parseRequiredHexColor(value.accent, "Theme accent"),
     contrast: parseRequiredContrast(value.contrast),
     fonts: parseStrictThemeFonts(value.fonts),

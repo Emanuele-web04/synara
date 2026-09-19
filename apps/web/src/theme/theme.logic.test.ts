@@ -8,6 +8,10 @@ import {
   CODE_THEME_OPTIONS,
   DEFAULT_CHROME_THEME_BY_VARIANT,
   DEFAULT_THEME_STATE,
+  areThemePacksEqual,
+  updateChromeTheme,
+  resetThemeVariant,
+  serializeThemeState,
   buildResolvedThemeTokens,
   buildThemeCssVariables,
   canParseThemeShareString,
@@ -517,5 +521,64 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--app-chat-code-surface"]).toBe(
       cssVariables.variables["--app-user-message-background"],
     );
+  });
+});
+
+describe("chat text colors", () => {
+  it("leaves every built-in theme unchanged until a color is customized", () => {
+    for (const option of CODE_THEME_OPTIONS) {
+      for (const variant of option.variants) {
+        const theme = getCodeThemeSeed(option.id, variant);
+        const variables = buildThemeCssVariables(
+          { codeThemeId: option.id, theme },
+          variant,
+        ).variables;
+        expect(variables["--chat-heading-color"]).toBe("");
+        expect(variables["--chat-bold-color"]).toBe("");
+      }
+    }
+  });
+
+  it("persists and shares independent variant colors, then resets to theme colors", () => {
+    const state = updateChromeTheme(DEFAULT_THEME_STATE, "light", {
+      chatHeadingColor: "#3366CC",
+      chatBoldColor: "#aa3377",
+    });
+    const restored = parseStoredThemeState(serializeThemeState(state));
+    const light = resolveThemePack(restored, "light");
+    expect(light.theme.chatHeadingColor).toBe("#3366cc");
+    expect(light.theme.chatBoldColor).toBe("#aa3377");
+    expect(restored.chromeThemes.dark).toEqual(DEFAULT_THEME_STATE.chromeThemes.dark);
+    expect(parseThemeShareString(createThemeShareString("light", light)).theme).toEqual(
+      light.theme,
+    );
+    expect(areThemePacksEqual(light, resolveThemePack(DEFAULT_THEME_STATE, "light"))).toBe(false);
+    expect(buildThemeCssVariables(light, "light").variables).toMatchObject({
+      "--chat-heading-color": "#3366cc",
+      "--chat-bold-color": "#aa3377",
+    });
+    const headingReset = updateChromeTheme(restored, "light", { chatHeadingColor: null });
+    expect(
+      buildThemeCssVariables(resolveThemePack(headingReset, "light"), "light").variables,
+    ).toMatchObject({
+      "--chat-heading-color": "",
+      "--chat-bold-color": "#aa3377",
+    });
+    expect(resetThemeVariant(restored, "light")).toEqual(DEFAULT_THEME_STATE);
+    expect(
+      setThemeCodeThemeId(restored, "light", "github").chromeThemes.light.chatHeadingColor,
+    ).toBe("#3366cc");
+  });
+
+  it("keeps old themes compatible and rejects invalid colors from imported themes", () => {
+    const old = parseThemeShareString(PROVIDED_THEME_STRING);
+    expect(old.theme.chatHeadingColor).toBeUndefined();
+    const bad = PROVIDED_THEME_STRING.replace(
+      '"accent":"#606acc"',
+      '"chatHeadingColor":"url(https://example.com)","accent":"#606acc"',
+    );
+    expect(() => parseThemeShareString(bad)).toThrow("Chat heading color");
+    const state = normalizeThemeState({ chromeThemes: { light: { chatBoldColor: "invalid" } } });
+    expect(state.chromeThemes.light.chatBoldColor).toBeUndefined();
   });
 });
