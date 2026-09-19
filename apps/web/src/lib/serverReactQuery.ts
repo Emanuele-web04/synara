@@ -384,3 +384,12 @@ export function serverAllProviderUsageQueryOptions(
     queryFn: async () => fetchAllProviderUsage(),
   });
 }
+
+export function localAutoQueryOptions() {
+  return queryOptions({
+    queryKey: ["server", "localAuto"] as const,
+    queryFn: () => ensureNativeApi().server.localAuto({ action: "status" }),
+    staleTime: 30_000,
+    retry: false,
+  });
+}

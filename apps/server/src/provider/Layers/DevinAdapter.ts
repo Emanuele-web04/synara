@@ -539,7 +539,7 @@ export function resolveRequestedModeId(input: {
       const requiredBy =
         interactionMode === "plan"
           ? "plan interaction mode"
-          : runtimeMode === "approval-required"
+          : runtimeMode === "approval-required" || runtimeMode === "auto-local"
             ? `runtime mode "${runtimeMode}"`
             : undefined;
 
@@ -557,7 +557,7 @@ export function resolveRequestedModeId(input: {
     const aliases =
       interactionMode === "plan"
         ? ACP_PLAN_MODE_ALIASES
-        : runtimeMode === "approval-required"
+        : runtimeMode === "approval-required" || runtimeMode === "auto-local"
           ? ACP_APPROVAL_MODE_ALIASES
           : ACP_FULL_ACCESS_MODE_ALIASES;
 

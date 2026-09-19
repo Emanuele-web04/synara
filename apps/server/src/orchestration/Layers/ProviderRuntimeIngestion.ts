@@ -1,3 +1,4 @@
+import { makeLocalAutoReviewer } from "../../localAuto/reviewer";
 import {
   type AssistantDeliveryMode,
   CommandId,
@@ -648,6 +649,7 @@ export function selectProviderRuntimeJournalStream(input: {
 }
 
 const make = Effect.gen(function* () {
+  const reviewLocalAuto = yield* makeLocalAutoReviewer;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
@@ -2838,6 +2840,8 @@ const make = Effect.gen(function* () {
         projectProviderRuntimeActivities(activityEvent, runtimeSequence),
         (activity) => dispatchActivityUpdate(activityEvent, thread.id, activity),
       );
+
+      if (thread.id === event.threadId) yield* reviewLocalAuto(event, runtimeSequence);
 
       if (isTerminalTurnEvent) {
         yield* settleBufferedReasoningSummaries(thread.id, event, toTurnId(event.turnId));

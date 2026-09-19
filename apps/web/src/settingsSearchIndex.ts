@@ -32,6 +32,13 @@ export function settingsSearchEntryTarget(entry: SettingsSearchEntry): string | 
 // null while inactive, so the sidebar cannot read every row at runtime; keep this list in sync
 // when rows are added, renamed, hidden conditionally, or represented as panel-level results.
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
+  {
+    id: "auto-mode:install",
+    section: "auto-mode",
+    title: "Auto 0.4b 2",
+    keywords:
+      "local classifier auto tool approval install ProCreations Apple Silicon Metal NVIDIA CUDA GPU CPU",
+  },
   // ── General ────────────────────────────────────────────────────────────────
   {
     id: "general:default-provider",

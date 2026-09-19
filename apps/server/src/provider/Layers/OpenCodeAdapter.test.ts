@@ -4040,85 +4040,109 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     ]);
   });
 
-  it("surfaces OpenCode permission asks as approvals in approval-required mode", async () => {
-    const eventQueue = createSubscribedEventQueue();
-    const runtime = createMockOpenCodeRuntime();
-    const client = runtime.runtime.createOpenCodeSdkClient({
-      baseUrl: "http://127.0.0.1:4099",
-      directory: process.cwd(),
-    }) as unknown as {
-      event: {
-        subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+  it.each(["approval-required", "auto-local"] as const)(
+    "surfaces OpenCode permission asks with full arguments in %s mode",
+    async (runtimeMode) => {
+      const eventQueue = createSubscribedEventQueue();
+      const runtime = createMockOpenCodeRuntime();
+      const client = runtime.runtime.createOpenCodeSdkClient({
+        baseUrl: "http://127.0.0.1:4099",
+        directory: process.cwd(),
+      }) as unknown as {
+        event: {
+          subscribe: () => Promise<{ stream: AsyncIterable<unknown> }>;
+        };
       };
-    };
-    client.event.subscribe = async () => ({ stream: eventQueue.stream });
+      client.event.subscribe = async () => ({ stream: eventQueue.stream });
 
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const adapter = yield* OpenCodeAdapter;
-        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
-          Effect.forkChild,
-        );
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const eventsFiber = yield* Stream.runCollect(
+            Stream.takeUntil(adapter.streamEvents, (event) => event.type === "request.opened"),
+          ).pipe(Effect.forkChild);
 
-        yield* adapter.startSession({
-          provider: "opencode",
-          threadId: asThreadId("thread-approval-required-permission"),
-          runtimeMode: "approval-required",
-        });
-
-        yield* adapter.sendTurn({
-          threadId: asThreadId("thread-approval-required-permission"),
-          input: "hello",
-          attachments: [],
-          modelSelection: {
+          yield* adapter.startSession({
             provider: "opencode",
-            model: "openai/gpt-5.4",
-          },
-        });
+            threadId: asThreadId("thread-approval-required-permission"),
+            runtimeMode,
+          });
 
-        eventQueue.push({
-          id: "evt-permission-asked",
-          type: "permission.asked",
-          properties: {
-            id: "permission-1",
-            sessionID: "opencode-session-1",
-            permission: "bash",
-            patterns: ["rm -rf *"],
-            metadata: {},
-            always: [],
-          },
-        });
+          yield* adapter.sendTurn({
+            threadId: asThreadId("thread-approval-required-permission"),
+            input: "hello",
+            attachments: [],
+            modelSelection: {
+              provider: "opencode",
+              model: "openai/gpt-5.4",
+            },
+          });
 
-        const events = Array.from(yield* Fiber.join(eventsFiber));
-        eventQueue.close();
-        return events;
-      }).pipe(
-        Effect.provide(
-          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
-            Layer.provideMerge(
-              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+          eventQueue.push({
+            type: "message.part.updated",
+            properties: {
+              sessionID: "opencode-session-1",
+              part: {
+                id: "part-auto",
+                sessionID: "opencode-session-1",
+                messageID: "message-auto",
+                type: "tool",
+                callID: "call-auto",
+                tool: "bash",
+                state: {
+                  status: "running",
+                  input: { command: "printf full\n", description: "short summary" },
+                  time: { start: Date.now() },
+                },
+              },
+            },
+          });
+          eventQueue.push({
+            id: "evt-permission-asked",
+            type: "permission.asked",
+            properties: {
+              id: "permission-1",
+              sessionID: "opencode-session-1",
+              permission: "bash",
+              tool: { messageID: "message-auto", callID: "call-auto" },
+              patterns: ["rm -rf *"],
+              metadata: {},
+              always: [],
+            },
+          });
+
+          const events = Array.from(yield* Fiber.join(eventsFiber));
+          eventQueue.close();
+          return events;
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
             ),
-            Layer.provideMerge(NodeServices.layer),
           ),
         ),
-      ),
-    );
+      );
 
-    expect(result.map((event) => event.type)).toEqual([
-      "session.started",
-      "thread.started",
-      "turn.started",
-      "request.opened",
-    ]);
-    expect(result[3]).toMatchObject({
-      type: "request.opened",
-      payload: {
-        requestType: "command_execution_approval",
-        detail: "rm -rf *",
-      },
-    });
-    expect(runtime.permissionReplyCalls).toEqual([]);
-  });
+      expect(result.find((event) => event.type === "request.opened")).toMatchObject({
+        type: "request.opened",
+        payload: {
+          requestType: "command_execution_approval",
+          detail: "rm -rf *",
+          args: {
+            localAutoTool: {
+              permission: "bash",
+              toolName: "bash",
+              input: { command: "printf full\n", description: "short summary" },
+            },
+          },
+        },
+      });
+      expect(runtime.permissionReplyCalls).toEqual([]);
+    },
+  );
 
   it("confirms a human permission reply from permission.list and continues the same turn", async () => {
     const eventQueue = createSubscribedEventQueue();

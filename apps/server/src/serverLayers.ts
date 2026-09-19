@@ -1,3 +1,4 @@
+import { LocalAutoLive } from "./localAuto/LocalAuto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
 
@@ -98,6 +99,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(runtimeServicesLayer),
   );
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
+    Layer.provideMerge(LocalAutoLive),
     Layer.provideMerge(runtimeServicesLayer),
   );
   const studioOutputReactorLayer = StudioOutputReactorLive.pipe(

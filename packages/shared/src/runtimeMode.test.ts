@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   normalizeRuntimeModeForProvider,
+  autoRuntimeModeSelectionIssue,
   providerSupportsAutoRuntimeMode,
   runtimeModeEscalatesPrivilege,
 } from "./runtimeMode";
@@ -28,3 +29,26 @@ describe("runtime mode compatibility", () => {
     expect(runtimeModeEscalatesPrivilege("auto", "approval-required")).toBe(false);
   });
 });
+
+it.each([
+  "codex",
+  "claudeAgent",
+  "opencode",
+  "cursor",
+  "grok",
+  "devin",
+  "droid",
+  "pi",
+  "antigravity",
+] as const)(
+  "keeps local Auto available for %s independently of native Auto capabilities",
+  (provider) => {
+    expect(normalizeRuntimeModeForProvider("auto-local", provider)).toBe("auto-local");
+    expect(
+      autoRuntimeModeSelectionIssue({
+        runtimeMode: "auto-local",
+        modelSelection: { provider, model: "test", supportsAutoMode: false },
+      }),
+    ).toBeNull();
+  },
+);

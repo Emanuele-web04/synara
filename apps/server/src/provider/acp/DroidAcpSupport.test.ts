@@ -320,3 +320,24 @@ describe("resolveDroidAcpAuthMethodId", () => {
     expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
   });
 });
+
+it("uses Droid supervised permissions for local Auto and preserves Plan", async () => {
+  const calls: string[] = [];
+  const runtime = {
+    setMode: (modeId: string) => {
+      calls.push(modeId);
+      return Effect.succeed({});
+    },
+    setConfigOption: () => Effect.succeed({ configOptions: [] }),
+  };
+  for (const interactionMode of ["default", "plan"] as const)
+    await Effect.runPromise(
+      applyDroidAcpInteractionMode({
+        runtime,
+        interactionMode,
+        runtimeMode: "auto-local",
+        mapError: ({ cause }) => cause,
+      }),
+    );
+  expect(calls).toEqual(["normal", "spec"]);
+});
