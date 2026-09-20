@@ -751,7 +751,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const requestedSources =
         command.sources && command.sources.length > 0
           ? command.sources
-          : [{ id: ProjectSourceId.makeUnsafe(`src-${command.projectId}`), path: command.workspaceRoot }];
+          : [
+              {
+                id: ProjectSourceId.makeUnsafe(`src-${command.projectId}`),
+                path: command.workspaceRoot,
+              },
+            ];
       const requestedPrimarySourceId = command.primarySourceId ?? requestedSources[0]!.id;
       const sourceValidationError = validateProjectSources(
         requestedSources,

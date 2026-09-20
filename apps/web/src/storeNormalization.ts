@@ -394,9 +394,10 @@ export function normalizeProject(
   // legacy shape (expandedProjectCwds with no projectOrderCwds). It flips off for
   // good once modern order state is remembered, and is what lets an empty legacy
   // list mean "all collapsed" instead of "no preference, default expanded".
-  const sources = previous?.sources && deepEqualJson(previous.sources, incoming.sources)
-    ? previous.sources
-    : [...(incoming.sources ?? [])];
+  const sources =
+    previous?.sources && deepEqualJson(previous.sources, incoming.sources)
+      ? previous.sources
+      : [...(incoming.sources ?? [])];
   const expanded =
     (previous && projectCwdKey(previous.cwd) === workspaceRootKey
       ? previous.expanded

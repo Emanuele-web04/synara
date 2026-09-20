@@ -5840,12 +5840,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           env: withClaudeArtifactOptIn(claudeSdkEnv, providerOptions?.enableArtifacts),
           spawnClaudeCodeProcess: bindClaudeProcessOwner(processOwner),
           ...(() => {
-            const directories = [input.cwd, ...(input.additionalRoots ?? []).map((root) => root.path)]
-              .filter((entry): entry is string => typeof entry === "string");
+            const directories = [
+              input.cwd,
+              ...(input.additionalRoots ?? []).map((root) => root.path),
+            ].filter((entry): entry is string => typeof entry === "string");
             const uniqueDirectories = [...new Set(directories)];
-            return uniqueDirectories.length > 0
-              ? { additionalDirectories: uniqueDirectories }
-              : {};
+            return uniqueDirectories.length > 0 ? { additionalDirectories: uniqueDirectories } : {};
           })(),
           ...(agentGatewayCredentials
             ? {

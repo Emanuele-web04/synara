@@ -145,8 +145,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       // exist, and comparing lexical paths instead would mis-handle symlinked roots. A rejected
       // command can therefore leave an empty directory behind, but never scaffolding: the
       // subdirectory prepare is deferred until the dispatch is accepted (see wsRpc).
-      const createWorkspaceRootIfMissing =
-        input.command.createWorkspaceRootIfMissing === true;
+      const createWorkspaceRootIfMissing = input.command.createWorkspaceRootIfMissing === true;
       const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
         input.command.workspaceRoot,
         {

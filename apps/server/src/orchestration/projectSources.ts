@@ -8,7 +8,9 @@ export function legacyProjectSourceId(projectId: ProjectId): ProjectSourceId {
 export function deriveProjectSourcesFromCreated(payload: {
   readonly projectId: ProjectId;
   readonly workspaceRoot: string;
-  readonly sources?: ReadonlyArray<{ readonly id: ProjectSourceId; readonly path: string }> | undefined;
+  readonly sources?:
+    | ReadonlyArray<{ readonly id: ProjectSourceId; readonly path: string }>
+    | undefined;
   readonly primarySourceId?: ProjectSourceId | null | undefined;
   readonly createdAt: string;
   readonly updatedAt: string;
