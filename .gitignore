@@ -46,3 +46,5 @@ __screenshots__/
 
 # Unlazy pipeline state (machine-local ledgers, dispatch, approvals log)
 .unlazy/
+# Claude Code worktrees are local scratch checkouts, not part of the repo.
+.claude/worktrees/

@@ -4,6 +4,7 @@ import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
   shouldUpdateDesktopAppIcon,
+  usesMacBundleAppIcon,
 } from "./desktopAppIcon";
 
 describe("desktop app icons", () => {
@@ -57,6 +58,27 @@ describe("desktop app icons", () => {
     expect(
       desktopAppIconResourceName({ icon: "default", platform: "win32", isDarkAppearance: true }),
     ).toBe("icon.ico");
+  });
+
+  it("leaves the Liquid Glass bundle icon alone for the macOS default preference", () => {
+    expect(
+      usesMacBundleAppIcon({ icon: "default", platform: "darwin", usesLegacyDockIcon: false }),
+    ).toBe(true);
+    expect(
+      usesMacBundleAppIcon({ icon: "default", platform: "darwin", usesLegacyDockIcon: true }),
+    ).toBe(false);
+    expect(
+      usesMacBundleAppIcon({ icon: "icon", platform: "darwin", usesLegacyDockIcon: false }),
+    ).toBe(false);
+    expect(
+      usesMacBundleAppIcon({ icon: "dark", platform: "darwin", usesLegacyDockIcon: false }),
+    ).toBe(false);
+    expect(
+      usesMacBundleAppIcon({ icon: "default", platform: "linux", usesLegacyDockIcon: false }),
+    ).toBe(false);
+    expect(
+      usesMacBundleAppIcon({ icon: "default", platform: "win32", usesLegacyDockIcon: false }),
+    ).toBe(false);
   });
 
   it("does not reapply the icon when renderer hydration matches native state", () => {

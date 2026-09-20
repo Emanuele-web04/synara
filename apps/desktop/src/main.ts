@@ -104,6 +104,7 @@ import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
   shouldUpdateDesktopAppIcon,
+  usesMacBundleAppIcon,
 } from "./desktopAppIcon";
 import {
   applyWindowsTaskbarIcon,
@@ -2406,6 +2407,19 @@ async function applyDesktopAppIconUnlocked(
   ) {
     return;
   }
+  if (
+    usesMacBundleAppIcon({
+      icon,
+      platform: process.platform,
+      usesLegacyDockIcon: usesLegacyMacDockIcon(),
+    })
+  ) {
+    // Clear any override applied earlier in this session so the Liquid Glass
+    // bundle icon comes back; AppKit restores it when the image is null.
+    app.dock?.setIcon(null as unknown as Electron.NativeImage);
+    return;
+  }
+
   const resourceName = desktopAppIconResourceName({
     icon,
     platform: process.platform,
@@ -2493,7 +2507,9 @@ function applyInitialMacDockIcon(): void {
     return;
   }
   const icon = readDesktopAppIcon();
-  if (icon === "default" && !usesLegacyMacDockIcon() && !nativeTheme.shouldUseDarkColors) {
+  if (
+    usesMacBundleAppIcon({ icon, platform: "darwin", usesLegacyDockIcon: usesLegacyMacDockIcon() })
+  ) {
     return;
   }
   applyDesktopAppIcon(icon);
@@ -2503,9 +2519,9 @@ function registerMacAppearanceIconSync(): void {
   if (process.platform !== "darwin") {
     return;
   }
-  // The bundled ICNS is the light artwork; macOS does not swap third-party dock
-  // icons when the system appearance changes, so re-apply the persisted
-  // preference so the default icon follows light/dark mode at runtime.
+  // macOS does not swap a runtime dock image when the system appearance
+  // changes, so re-apply the persisted preference. On macOS 26 the default
+  // preference short-circuits to the bundle icon, which adapts on its own.
   nativeTheme.on("updated", () => {
     applyDesktopAppIcon(readDesktopAppIcon());
   });

@@ -314,7 +314,7 @@ describe("EnvironmentPullRequestSection", () => {
       await expect.element(prRow).toBeVisible();
       await expect
         .element(page.getByText(`${stateLabel} on GitHub`, { exact: true }))
-        .toBeVisible();
+        .not.toBeInTheDocument();
       expect(queryClient.isFetching()).toBe(0);
       expect(getPullRequestSnapshot).not.toHaveBeenCalled();
 
@@ -347,7 +347,10 @@ describe("EnvironmentPullRequestSection", () => {
     await expect
       .element(page.getByText("#321 Keep PR context visible", { exact: true }))
       .toBeVisible();
-    await expect.element(page.getByText("Merged on GitHub", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Merged", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByText("Merged on GitHub", { exact: true }))
+      .not.toBeInTheDocument();
     await page.getByText("#321 Keep PR context visible", { exact: true }).click();
     await expect.element(page.getByText("Repair", { exact: true })).not.toBeInTheDocument();
   });

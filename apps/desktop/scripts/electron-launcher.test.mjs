@@ -20,10 +20,11 @@ import { describe, it } from "node:test";
 
 import { buildMacLauncher, configureMacLauncher, copyMacAppBundle } from "./electron-launcher.mjs";
 
-function createLauncherFixture(t) {
+function createLauncherFixture(t, { iconComposer = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "synara-electron-signing-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const desktopDirectory = join(root, "desktop");
+  const desktopDirectory = join(root, "apps", "desktop");
+  const iconComposerPath = join(root, "assets", "prod", "Synara.icon");
   const source = join(root, "vendor", "Electron.app");
   const electronBinaryPath = join(source, "Contents", "MacOS", "Electron");
   const helperDirectory = join(source, "Contents", "Frameworks", "Electron Helper.app");
@@ -37,16 +38,31 @@ function createLauncherFixture(t) {
   writeFileSync(join(helperDirectory, "Contents", "Info.plist"), "original helper identity");
   writeFileSync(join(desktopDirectory, "resources", "icon.icns"), "synara icon");
   writeFileSync(join(desktopDirectory, "package.json"), JSON.stringify({ version: "0.8.3" }));
+  if (iconComposer) {
+    mkdirSync(iconComposerPath, { recursive: true });
+    writeFileSync(join(iconComposerPath, "icon.json"), "{}");
+  }
 
   const commands = [];
   let codeSignFailure;
+  let iconCompileFailure;
   const runCommand = (command, arguments_, options) => {
     commands.push({ command, arguments_, options });
     if (command === "ditto") {
       cpSync(arguments_[0], arguments_[1], { recursive: true, verbatimSymlinks: true });
     }
+    if (command === "xcrun") {
+      if (iconCompileFailure) return iconCompileFailure;
+      const resourcesDirectory = arguments_[arguments_.indexOf("--compile") + 1];
+      const partialPlistPath = arguments_[arguments_.indexOf("--output-partial-info-plist") + 1];
+      writeFileSync(join(resourcesDirectory, "Assets.car"), "compiled layered icon");
+      writeFileSync(partialPlistPath, "partial plist");
+    }
     if (command === "/usr/bin/codesign") {
       assert.equal(existsSync(metadataPath), false, "cache is committed only after verification");
+      const applicationDirectory = join(arguments_.at(-1), "Contents", "Resources", "app");
+      assert.equal(existsSync(join(applicationDirectory, "package.json")), true);
+      assert.equal(existsSync(join(applicationDirectory, "main.cjs")), true);
       if (codeSignFailure?.argument === arguments_[0]) return codeSignFailure.result;
     }
     return { status: 0, stdout: "", stderr: "" };
@@ -54,10 +70,14 @@ function createLauncherFixture(t) {
   return {
     source,
     metadataPath,
+    iconComposerPath,
     commands,
     build: () => buildMacLauncher(electronBinaryPath, { desktopDirectory, runCommand }),
     failSigning: (argument, result) => {
       codeSignFailure = argument ? { argument, result } : undefined;
+    },
+    failIconCompilation: (result) => {
+      iconCompileFailure = result;
     },
   };
 }
@@ -80,12 +100,29 @@ describe("macOS Electron launcher signature", () => {
         ["--verify", "--deep", "--strict", bundle],
       ],
     );
-    assert.deepEqual(fixture.commands.slice(-2), signingCommands);
+    assert.deepEqual(
+      fixture.commands.filter(({ command }) => !command.endsWith("/lsregister")).slice(-2),
+      signingCommands,
+    );
+    const registrationCommands = fixture.commands.slice(
+      fixture.commands.indexOf(signingCommands.at(-1)) + 1,
+    );
+    const launchServicesPath =
+      "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister";
+    assert.deepEqual(
+      registrationCommands.map(({ command, arguments_ }) => [command, arguments_]),
+      existsSync(launchServicesPath)
+        ? [
+            [launchServicesPath, ["-u", bundle]],
+            [launchServicesPath, ["-f", "-R", bundle]],
+          ]
+        : [],
+    );
     assert.equal(
       signingCommands.every(({ options }) => options.timeout === 60_000),
       true,
     );
-    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 5);
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 6);
     assert.equal(
       readFileSync(join(bundle, "Contents", "Resources", "icon.icns"), "utf8"),
       "synara icon",
@@ -97,6 +134,71 @@ describe("macOS Electron launcher signature", () => {
     assert.equal(
       signingCommands.some(({ arguments_ }) => arguments_.includes(fixture.source)),
       false,
+    );
+  });
+
+  it("compiles the layered icon through the injected runner before signing", (t) => {
+    const fixture = createLauncherFixture(t, { iconComposer: true });
+    const executable = fixture.build();
+    const bundle = dirname(dirname(dirname(executable)));
+    const compileIndex = fixture.commands.findIndex(({ command }) => command === "xcrun");
+    const iconNameIndex = fixture.commands.findIndex(
+      ({ command, arguments_ }) => command === "plutil" && arguments_[1] === "CFBundleIconName",
+    );
+    const signingIndex = fixture.commands.findIndex(
+      ({ command }) => command === "/usr/bin/codesign",
+    );
+
+    assert.ok(compileIndex >= 0);
+    assert.ok(iconNameIndex > compileIndex);
+    assert.ok(signingIndex > iconNameIndex);
+    assert.deepEqual(fixture.commands[compileIndex].arguments_.slice(0, 4), [
+      "actool",
+      fixture.iconComposerPath,
+      "--compile",
+      join(bundle, "Contents", "Resources"),
+    ]);
+    assert.deepEqual(fixture.commands[iconNameIndex].arguments_, [
+      "-replace",
+      "CFBundleIconName",
+      "-string",
+      "Synara",
+      join(bundle, "Contents", "Info.plist"),
+    ]);
+    assert.equal(
+      readFileSync(join(bundle, "Contents", "Resources", "Assets.car"), "utf8"),
+      "compiled layered icon",
+    );
+    assert.equal(existsSync(join(dirname(fixture.metadataPath), "icon-partial.plist")), false);
+    const metadata = JSON.parse(readFileSync(fixture.metadataPath, "utf8"));
+    assert.equal(typeof metadata.iconComposerMtimeMs, "number");
+    assert.equal(typeof metadata.bootstrapHash, "string");
+    assert.equal(metadata.appVersion, "0.8.3");
+    fixture.commands.length = 0;
+    assert.equal(fixture.build(), executable);
+    assert.deepEqual(fixture.commands, []);
+  });
+
+  it("still signs and caches the flat icon when actool is unavailable", (t) => {
+    const warn = t.mock.method(console, "warn", () => {});
+    const fixture = createLauncherFixture(t, { iconComposer: true });
+    fixture.failIconCompilation({ status: 1, stderr: "actool is unavailable" });
+
+    assert.equal(existsSync(fixture.build()), true);
+    assert.equal(existsSync(fixture.metadataPath), true);
+    assert.equal(warn.mock.calls.length, 1);
+    assert.equal(
+      fixture.commands.some(
+        ({ command, arguments_ }) => command === "plutil" && arguments_[1] === "CFBundleIconName",
+      ),
+      false,
+    );
+    assert.equal(
+      fixture.commands.some(
+        ({ command, arguments_ }) =>
+          command === "/usr/bin/codesign" && arguments_[0] === "--verify",
+      ),
+      true,
     );
   });
 
@@ -121,7 +223,7 @@ describe("macOS Electron launcher signature", () => {
       fixture.commands.some(({ command }) => command === "/usr/bin/codesign"),
       true,
     );
-    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 5);
+    assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 6);
   });
 
   for (const [argument, label, result] of [

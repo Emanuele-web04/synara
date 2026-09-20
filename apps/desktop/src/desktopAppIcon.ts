@@ -35,6 +35,20 @@ const APP_ICON_RESOURCE_NAMES = {
 
 export const isDesktopAppIcon = Schema.is(DesktopAppIcon);
 
+interface MacBundleAppIconInput {
+  readonly icon: DesktopAppIcon;
+  readonly platform: DesktopPlatform;
+  readonly usesLegacyDockIcon: boolean;
+}
+
+// macOS 26 renders the bundled Icon Composer asset with the Liquid Glass
+// material, which reacts to appearance and pointer on its own. Any runtime dock
+// image replaces that live icon with a flat bitmap, so the default preference
+// must leave the bundle icon alone instead of picking artwork here.
+export function usesMacBundleAppIcon(input: MacBundleAppIconInput): boolean {
+  return input.platform === "darwin" && input.icon === "default" && !input.usesLegacyDockIcon;
+}
+
 export function shouldUpdateDesktopAppIcon(
   currentIcon: DesktopAppIcon,
   requestedIcon: DesktopAppIcon,
