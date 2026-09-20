@@ -43,3 +43,6 @@ __screenshots__/
 
 # Generated ASAR smoke fixture (bundled from scripts/betterwright-smoke.ts)
 .smoke/
+
+# Claude Code worktrees are local scratch checkouts, not part of the repo.
+.claude/worktrees/
