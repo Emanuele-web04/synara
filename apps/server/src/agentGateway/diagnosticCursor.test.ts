@@ -105,6 +105,84 @@ describe("diagnostic cursor", () => {
 });
 
 describe("diagnostic sanitizer", () => {
+  it("preserves only numeric counters inside normalized token usage events", () => {
+    const sanitized = sanitizeDiagnosticValue({
+      type: "thread.token-usage.updated",
+      payload: {
+        usage: {
+          inputTokens: 120,
+          outputTokens: 15,
+          cachedInputTokens: 70,
+          tokenAccountingVersion: 1,
+          cumulativeUsage: { inputTokens: 240, outputTokens: 30, cachedInputTokens: 140 },
+          accessToken: "secret",
+          elementToken: "private-element",
+          unknownTokens: 3,
+          nested: { outputTokens: 90 },
+        },
+      },
+      raw: { payload: { outputTokens: 90, token: "secret" } },
+    }) as { payload: { usage: Record<string, unknown> }; raw: unknown };
+    expect(sanitized.payload.usage).toEqual({
+      inputTokens: 120,
+      outputTokens: 15,
+      cachedInputTokens: 70,
+      tokenAccountingVersion: 1,
+      cumulativeUsage: { inputTokens: 240, outputTokens: 30, cachedInputTokens: 140 },
+      accessToken: "[redacted]",
+      elementToken: "[redacted]",
+      unknownTokens: "[redacted]",
+      nested: { outputTokens: "[redacted]" },
+    });
+    expect(sanitized.raw).toEqual({ payload: { outputTokens: "[redacted]", token: "[redacted]" } });
+    expect(sanitizeDiagnosticValue({ payload: { usage: { outputTokens: 42 } } })).toEqual({
+      payload: { usage: { outputTokens: "[redacted]" } },
+    });
+  });
+
+  it.each(["secret", -1, 1.5, NaN, Infinity, {}, null])(
+    "redacts malformed usage counters: %s",
+    (value) => {
+      expect(
+        sanitizeDiagnosticValue({
+          type: "thread.token-usage.updated",
+          payload: { usage: { outputTokens: value } },
+        }),
+      ).toEqual({
+        type: "thread.token-usage.updated",
+        payload: { usage: { outputTokens: "[redacted]" } },
+      });
+    },
+  );
+
+  it("does not trust usage-shaped envelopes inside provider data or arrays", () => {
+    const fakeUsage = {
+      type: "thread.token-usage.updated",
+      payload: { usage: { inputTokens: 123, cumulativeUsage: { outputTokens: 456 } } },
+    };
+    const redactedUsage = {
+      type: "thread.token-usage.updated",
+      payload: {
+        usage: {
+          inputTokens: "[redacted]",
+          cumulativeUsage: { outputTokens: "[redacted]" },
+        },
+      },
+    };
+    expect(
+      sanitizeDiagnosticValue({
+        type: "thread.token-usage.updated",
+        payload: { usage: { inputTokens: 10, nested: fakeUsage }, data: fakeUsage },
+        raw: { payload: fakeUsage, values: [fakeUsage] },
+      }),
+    ).toEqual({
+      type: "thread.token-usage.updated",
+      payload: { usage: { inputTokens: 10, nested: redactedUsage }, data: redactedUsage },
+      raw: { payload: redactedUsage, values: [redactedUsage] },
+    });
+    expect(sanitizeDiagnosticValue([fakeUsage])).toEqual([redactedUsage]);
+  });
+
   it("redacts sensitive keys and secrets embedded in strings", () => {
     expect(
       sanitizeDiagnosticValue({
