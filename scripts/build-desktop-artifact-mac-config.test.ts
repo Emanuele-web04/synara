@@ -8,6 +8,9 @@ import {
   MAC_DEVICE_HELPER_RESOURCE_PATH,
   MAC_DEVICE_HELPER_STAGE_PATH,
   MAC_ENTITLEMENTS_PATH,
+  MAC_ICON_ASSET_NAME,
+  MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
+  MAC_ICON_ASSETS_CAR_STAGE_PATH,
   MAC_INHERITED_ENTITLEMENTS_PATH,
   MICROPHONE_USAGE_DESCRIPTION,
   NODE_PTY_ASAR_UNPACK_GLOBS,
@@ -44,7 +47,8 @@ describe("createDesktopPlatformBuildConfig", () => {
       "apps/desktop/native/appsnap/build/synara-appsnap-helper",
     );
     assert.equal(MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/native/appsnap/build/**");
-    assert.deepStrictEqual(config.files, ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION]);
+    assert.equal(config.files?.[0], "**/*");
+    assert.ok(config.files?.includes(MAC_APPSNAP_HELPER_ASAR_EXCLUSION));
     assert.deepStrictEqual(config.extraFiles, [
       {
         from: "apps/desktop/native/appsnap/build/synara-appsnap-helper",
@@ -54,7 +58,16 @@ describe("createDesktopPlatformBuildConfig", () => {
         from: MAC_DEVICE_HELPER_STAGE_PATH,
         to: MAC_DEVICE_HELPER_RESOURCE_PATH,
       },
+      {
+        from: MAC_ICON_ASSETS_CAR_STAGE_PATH,
+        to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
+      },
     ]);
+    assert.equal(MAC_ICON_ASSETS_CAR_STAGE_PATH, "apps/desktop/resources/Assets.car");
+    assert.equal(MAC_ICON_ASSETS_CAR_BUNDLE_PATH, "Resources/Assets.car");
+    // macOS 26 reads the layered icon out of Assets.car; without this key the
+    // bundle falls back to the flat ICNS and never gets the glass material.
+    assert.equal(extendInfo.CFBundleIconName, MAC_ICON_ASSET_NAME);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
     assert.equal(extendInfo.NSScreenCaptureUsageDescription, undefined);
   });
@@ -66,7 +79,17 @@ describe("createDesktopPlatformBuildConfig", () => {
       signed: false,
     });
 
-    assert.deepStrictEqual(config.dmg, { sign: false, writeUpdateInfo: false });
+    assert.deepStrictEqual(config.dmg, {
+      background: "apps/desktop/resources/dmgly/assets/dmg-background.png",
+      window: { width: 642, height: 406 },
+      iconSize: 128,
+      contents: [
+        { x: 172, y: 135, type: "file" },
+        { x: 514, y: 241, type: "link", path: "/Applications" },
+      ],
+      sign: false,
+      writeUpdateInfo: false,
+    });
   });
 
   it("leaves non-macOS platform configs unchanged", () => {
@@ -185,6 +208,7 @@ describe("createDesktopPlatformBuildConfig", () => {
 
   it("keeps separate macOS sources for solid and rounded icons", () => {
     assert.equal(BRAND_ASSET_PATHS.productionMacIconPng, "assets/prod/black-macos-1024.png");
+    assert.equal(BRAND_ASSET_PATHS.productionMacIconComposer, "assets/prod/Synara.icon");
     assert.equal(
       BRAND_ASSET_PATHS.productionMacLegacyIconPng,
       "assets/prod/black-macos-legacy-1024.png",

@@ -31,13 +31,6 @@ export interface BrowserTabStripProps {
   onCreateTab: () => void;
 }
 
-function closeButtonClassName(isActive: boolean) {
-  return cn(
-    "ml-1 size-5 shrink-0 rounded-sm p-0 text-muted-foreground/70 hover:bg-background/80 hover:text-foreground",
-    isActive ? "hover:bg-background" : "hover:bg-card",
-  );
-}
-
 // Scroll only the strip itself (not `scrollIntoView`, which would also scroll every
 // scrollable ancestor such as the dock or chat column when the pane mounts offscreen).
 function scrollTabIntoView(strip: HTMLElement, tab: HTMLElement): void {
@@ -72,11 +65,11 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
   return (
     <div
       className={cn(
-        "flex items-center gap-2 border-b border-border px-2 py-1.5",
+        "flex items-center gap-1.5 border-b border-border px-2 py-1",
         props.dragRegion && "drag-region",
       )}
     >
-      <div ref={stripRef} className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+      <div ref={stripRef} className="flex min-w-0 items-center gap-1 overflow-x-auto">
         {props.tabs.map((tab) => {
           const isActive = tab.id === activeTabId;
           const tabIsBlank = isBlankBrowserTabUrl(tab);
@@ -85,33 +78,32 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
               key={tab.id}
               data-browser-tab-active={isActive ? "true" : undefined}
               className={cn(
-                "group flex min-w-0 max-w-[14rem] items-center px-2.5 text-left transition-colors",
                 BROWSER_CHROME_CONTROL_CLASS_NAME,
+                "group flex h-7 min-w-0 max-w-[12rem] shrink-0 items-center pr-0.5 text-left text-ui transition-colors",
                 isActive
                   ? cn(BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME, "text-foreground")
                   : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-background/40 hover:text-foreground",
                 tab.status === "suspended" && !tabIsBlank ? "opacity-75" : "",
               )}
             >
-              <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm">
-                {tab.faviconUrl ? (
-                  <img alt="" src={tab.faviconUrl} className="size-3 rounded-[2px]" />
-                ) : (
-                  <GlobeIcon className="size-3 text-muted-foreground" />
-                )}
-              </span>
               <button
                 type="button"
-                className="min-w-0 flex-1 truncate text-left"
+                className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch rounded-md pl-2 pr-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-inset"
+                title={tab.title || "Untitled"}
                 onClick={() => onSelectTab(tab.id)}
               >
-                {tab.title || "Untitled"}
+                {tab.faviconUrl ? (
+                  <img alt="" src={tab.faviconUrl} className="size-3 shrink-0 rounded-xs" />
+                ) : (
+                  <GlobeIcon className="size-3 shrink-0 text-muted-foreground" />
+                )}
+                <span className="truncate">{tab.title || "Untitled"}</span>
               </button>
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
-                className={closeButtonClassName(isActive)}
+                size="icon-chip"
+                className="rounded-md text-muted-foreground/60 hover:text-foreground"
                 onClick={(event) => {
                   event.stopPropagation();
                   onCloseTab(tab.id);
@@ -123,28 +115,28 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
             </div>
           );
         })}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="size-7 shrink-0 text-muted-foreground hover:text-foreground"
-                aria-label="New tab"
-                onClick={onCreateTab}
-              />
-            }
-          >
-            <PlusIcon className="size-3.5" />
-          </TooltipTrigger>
-          <TooltipPopup>New tab</TooltipPopup>
-        </Tooltip>
       </div>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-chip"
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="New tab"
+              onClick={onCreateTab}
+            />
+          }
+        >
+          <PlusIcon className="size-3.5" />
+        </TooltipTrigger>
+        <TooltipPopup>New tab</TooltipPopup>
+      </Tooltip>
       {props.status ? (
         <div
           className={cn(
-            "max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-[11px] leading-none sm:max-w-[16rem]",
+            "ml-auto max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-ui-sm leading-none sm:max-w-[16rem]",
             props.status.tone === "error"
               ? "border-destructive/25 bg-destructive/8 text-destructive"
               : "border-border/60 bg-background/80 text-muted-foreground",

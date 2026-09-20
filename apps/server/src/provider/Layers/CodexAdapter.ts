@@ -7,6 +7,7 @@
  * @module CodexAdapterLive
  */
 import {
+  AsyncUserInputQuestions,
   type ChatAttachment,
   type CanonicalItemType,
   type CanonicalRequestType,
@@ -64,8 +65,12 @@ import {
   isCodexGeneratedImageItemType,
   sanitizeNestedCodexGeneratedImagePayloads,
 } from "../../codexGeneratedImages.ts";
-import { isNonFatalCodexErrorMessage } from "../../codexErrorClassification.ts";
+import {
+  CodexSessionStartError,
+  isNonFatalCodexErrorMessage,
+} from "../../codexErrorClassification.ts";
 import { ServerConfig } from "../../config.ts";
+import { resolveCodexServiceTier } from "../../codexServiceTier.ts";
 import { makeRuntimeTaskListItem } from "../runtimeTaskList.ts";
 import { extractProposedPlanMarkdown } from "../planMode.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -188,12 +193,13 @@ function codexModelSelectionOverrides(
     return {};
   }
 
+  const serviceTier = resolveCodexServiceTier(modelSelection);
   return {
     model: modelSelection.model,
     ...(modelSelection.options?.reasoningEffort !== undefined
       ? { effort: modelSelection.options.reasoningEffort }
       : {}),
-    ...(modelSelection.options?.fastMode ? { serviceTier: "fast" } : {}),
+    ...(serviceTier !== undefined ? { serviceTier } : {}),
   };
 }
 
@@ -291,8 +297,24 @@ function normalizeCodexTokenUsage(value: unknown): ThreadTokenUsageSnapshot | un
   const reasoningOutputTokens =
     asNumber(lastUsage?.reasoning_output_tokens) ?? asNumber(lastUsage?.reasoningOutputTokens);
 
+  const totalInput = asNumber(totalUsage?.input_tokens) ?? asNumber(totalUsage?.inputTokens);
+  const totalOutput = asNumber(totalUsage?.output_tokens) ?? asNumber(totalUsage?.outputTokens);
+  const totalCached =
+    asNumber(totalUsage?.cached_input_tokens) ?? asNumber(totalUsage?.cachedInputTokens);
+  const totalWrites =
+    asNumber(totalUsage?.cacheWriteInputTokens) ?? asNumber(totalUsage?.cache_write_input_tokens);
   return {
     usedTokens,
+    ...(totalInput !== undefined && totalOutput !== undefined
+      ? {
+          cumulativeUsage: {
+            inputTokens: totalInput,
+            outputTokens: totalOutput,
+            ...(totalCached !== undefined ? { cachedInputTokens: totalCached } : {}),
+            ...(totalWrites !== undefined ? { cacheCreationInputTokens: totalWrites } : {}),
+          },
+        }
+      : {}),
     ...(totalProcessedTokens !== undefined && totalProcessedTokens > usedTokens
       ? { totalProcessedTokens }
       : {}),
@@ -882,6 +904,19 @@ function mapItemLifecycle(
   const detail =
     itemType === "reasoning" ? reasoningSummaryDetail(source) : itemDetail(source, payload ?? {});
   const status = itemStatus(lifecycle, source.status);
+  const asyncQuestions =
+    itemType === "assistant_message" && Array.isArray(source.questions)
+      ? Schema.decodeUnknownOption(AsyncUserInputQuestions)(
+          source.questions.map((value: unknown) => {
+            const question = asObject(value);
+            return question
+              ? question.options == null
+                ? { title: question.title }
+                : { title: question.title, options: question.options }
+              : value;
+          }),
+        )
+      : Option.none();
 
   return {
     ...(generatedImageReference
@@ -894,6 +929,7 @@ function mapItemLifecycle(
     type: lifecycle,
     payload: {
       itemType: canonicalItemType,
+      ...(Option.isSome(asyncQuestions) ? { asyncQuestions: asyncQuestions.value } : {}),
       ...(status ? { status } : {}),
       ...(itemTitle(canonicalItemType) ? { title: itemTitle(canonicalItemType) } : {}),
       ...(generatedImageReference
@@ -1009,6 +1045,13 @@ function mapCodexHookEvent(
     },
   };
 }
+
+// Configuration/lifecycle bookkeeping belongs in native diagnostics, not the transcript.
+const DIAGNOSTIC_ONLY_CODEX_METHODS = new Set([
+  "remoteControl/status/changed",
+  "skills/changed",
+  "session/threadOpenRequested",
+]);
 
 function mapUnmappedCodexEvent(
   event: ProviderEvent,
@@ -2045,6 +2088,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             provider: PROVIDER,
             threadId: input.threadId,
             detail: toMessage(cause, "Failed to start Codex adapter session."),
+            ...(cause instanceof CodexSessionStartError
+              ? { reason: "startup-failed" as const }
+              : {}),
             cause,
           }),
       }).pipe(Effect.map((session) => session));
@@ -2184,7 +2230,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const forkThread: CodexAdapterShape["forkThread"] = (input) =>
       Effect.tryPromise({
-        try: () => manager.forkThread(input),
+        try: (signal) => manager.forkThread(input, signal),
         catch: (cause) => toRequestError(input.sourceThreadId, "thread/fork", cause),
       });
 
@@ -2386,7 +2432,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const sizedRuntimeEvents = mappedRuntimeEvents
             .filter(
               (runtimeEvent) =>
-                runtimeEvent.type !== "event.unmapped" || shouldSurfaceUnmappedEvent(event),
+                runtimeEvent.type !== "event.unmapped" ||
+                (!DIAGNOSTIC_ONLY_CODEX_METHODS.has(event.method) &&
+                  shouldSurfaceUnmappedEvent(event)),
             )
             .map(compactProviderRuntimeEventForIngress);
           const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
@@ -2424,7 +2472,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             turnWatchdogs.clear();
             manager.off("event", listener);
           });
-          yield* ingress.stop;
+          yield* ingress.abort;
           yield* Queue.shutdown(runtimeEventQueue);
         }),
     );

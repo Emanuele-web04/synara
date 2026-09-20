@@ -73,10 +73,6 @@ export function resolveClaudeCredentialsPaths(input?: {
   return [...new Set(paths)];
 }
 
-export function hasUsableClaudeCliCredentialsContent(content: string, nowMs = Date.now()): boolean {
-  return readClaudeCliCredentialsContentSummary(content, nowMs).usable;
-}
-
 export function readClaudeCliCredentialsContentSummary(
   content: string,
   nowMs = Date.now(),
@@ -150,4 +146,21 @@ export function buildClaudeProcessEnv(input?: {
     delete env[key];
   }
   return buildProviderChildEnvironment({ provider: "claude", baseEnv: env });
+}
+
+/**
+ * Claude Code turns the Artifact tool (and the `/design` and `/slides` commands
+ * built on it) off by default for Agent SDK entrypoints. `CLAUDE_CODE_ARTIFACT`
+ * is the binary's own opt-in; plan, login and organization policy still apply.
+ */
+export function withClaudeArtifactOptIn(
+  env: NodeJS.ProcessEnv,
+  enableArtifacts: boolean | undefined,
+): NodeJS.ProcessEnv {
+  if (enableArtifacts === true) return { ...env, CLAUDE_CODE_ARTIFACT: "1" };
+  // The setting is authoritative: a value inherited from the shell that launched
+  // Synara must not publish while Settings and discovery report Artifacts as off.
+  if (env.CLAUDE_CODE_ARTIFACT === undefined) return env;
+  const { CLAUDE_CODE_ARTIFACT: _inherited, ...rest } = env;
+  return rest;
 }

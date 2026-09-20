@@ -4,20 +4,17 @@ import {
   OrchestrationMessage,
   OrchestrationSession,
   OrchestrationThread,
+  ThreadAsyncUserInputAnsweredPayload,
+  ThreadClaudeCacheSetPayload,
   type OrchestrationMessageTextSegment,
 } from "@synara/contracts";
+import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
 import {
   addPinnedMessage,
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
-import {
-  addThreadMarker,
-  removeThreadMarker,
-  setThreadMarkerDone,
-  setThreadMarkerLabel,
-} from "@synara/shared/threadMarkers";
 import { Effect, Schema } from "effect";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
@@ -40,10 +37,6 @@ import {
   ThreadPinnedMessageDoneSetPayload,
   ThreadPinnedMessageLabelSetPayload,
   ThreadPinnedMessageRemovedPayload,
-  ThreadMarkerAddedPayload,
-  ThreadMarkerDoneSetPayload,
-  ThreadMarkerLabelSetPayload,
-  ThreadMarkerRemovedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadConversationRolledBackPayload,
   ThreadRuntimeModeSetPayload,
@@ -56,8 +49,12 @@ import {
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
-import { settleTurnStateFromSession } from "./turnLifecycle.ts";
-import { deriveTurnStartModelSelection, deriveTurnStartSession } from "./turnStartSession.ts";
+import { maxIso, settleTurnStateFromSession } from "./turnLifecycle.ts";
+import {
+  canAdoptFirstTurnProvider,
+  deriveTurnStartModelSelection,
+  deriveTurnStartSession,
+} from "./turnStartSession.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
 const MAX_THREAD_MESSAGES = 2_000;
@@ -750,9 +747,7 @@ export function projectEvent(
               ...(payload.pinnedMessages !== undefined
                 ? { pinnedMessages: payload.pinnedMessages }
                 : {}),
-              ...(payload.threadMarkers !== undefined
-                ? { threadMarkers: payload.threadMarkers }
-                : {}),
+
               ...(payload.notes !== undefined ? { notes: payload.notes } : {}),
               ...(payload.goal !== undefined ? { goal: payload.goal } : {}),
               ...(payload.goalStartedAt !== undefined
@@ -859,76 +854,6 @@ export function projectEvent(
         }),
       );
 
-    case "thread.marker-added":
-      return decodeForEvent(ThreadMarkerAddedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: addThreadMarker(existingThread?.threadMarkers, payload.marker),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.marker-removed":
-      return decodeForEvent(ThreadMarkerRemovedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: removeThreadMarker(existingThread?.threadMarkers, payload.markerId),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.marker-done-set":
-      return decodeForEvent(ThreadMarkerDoneSetPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: setThreadMarkerDone(
-                existingThread?.threadMarkers,
-                payload.markerId,
-                payload.done,
-                payload.updatedAt,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.marker-label-set":
-      return decodeForEvent(ThreadMarkerLabelSetPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const existingThread =
-            nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              threadMarkers: setThreadMarkerLabel(
-                existingThread?.threadMarkers,
-                payload.markerId,
-                payload.label,
-                payload.updatedAt,
-              ),
-              updatedAt: payload.updatedAt,
-            }),
-          };
-        }),
-      );
-
     case "thread.runtime-mode-set":
       return decodeForEvent(ThreadRuntimeModeSetPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => ({
@@ -956,6 +881,17 @@ export function projectEvent(
         })),
       );
 
+    case "thread.claude-cache-set":
+      return decodeForEvent(ThreadClaudeCacheSetPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            claudeCacheReview: payload.review,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
     case "thread.turn-start-requested":
       return decodeForEvent(
         ThreadTurnStartRequestedPayload,
@@ -968,12 +904,14 @@ export function projectEvent(
           if (!thread) {
             return nextBase;
           }
-          const canAdoptFirstTurnProvider =
-            thread.latestTurn === null && thread.session === null && thread.messages.length <= 1;
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: thread.modelSelection,
             requestedModelSelection: payload.modelSelection,
-            canAdoptRequestedProvider: canAdoptFirstTurnProvider,
+            canAdoptRequestedProvider: canAdoptFirstTurnProvider({
+              hasLatestTurn: thread.latestTurn !== null,
+              hasSession: thread.session !== null,
+              messages: thread.messages,
+            }),
           });
           const modelSelectionPatch =
             projectedModelSelection !== thread.modelSelection
@@ -1002,6 +940,36 @@ export function projectEvent(
         }),
       );
 
+    case "thread.async-user-input-answered":
+      return decodeForEvent(
+        ThreadAsyncUserInputAnsweredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              messages: thread.messages.map((message) =>
+                message.id === payload.messageId && message.asyncUserInput
+                  ? {
+                      ...message,
+                      asyncUserInput: {
+                        ...message.asyncUserInput,
+                        response: payload.response,
+                        responseSequence: event.sequence,
+                      },
+                    }
+                  : message,
+              ),
+            }),
+          };
+        }),
+      );
+
     case "thread.message-sent":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -1021,9 +989,17 @@ export function projectEvent(
             id: payload.messageId,
             role: payload.role,
             text: payload.text,
+            ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
             ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
             ...(payload.mentions !== undefined ? { mentions: payload.mentions } : {}),
+            ...(payload.dispatchMode !== undefined ? { dispatchMode: payload.dispatchMode } : {}),
+            ...(payload.dispatchOrigin !== undefined
+              ? { dispatchOrigin: payload.dispatchOrigin }
+              : {}),
+            ...(payload.startsNewTurn !== undefined
+              ? { startsNewTurn: payload.startsNewTurn }
+              : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
             source: payload.source,
@@ -1064,6 +1040,7 @@ export function projectEvent(
           delete entryWithoutTextSegments.textSegments;
           nextMessages[existingIndex] = {
             ...entryWithoutTextSegments,
+            ...(message.asyncUserInput ? { asyncUserInput: message.asyncUserInput } : {}),
             text: resolvedText,
             ...(nextSegments !== undefined ? { textSegments: nextSegments } : {}),
             streaming: message.streaming,
@@ -1076,6 +1053,21 @@ export function projectEvent(
             ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
             ...(message.skills !== undefined ? { skills: message.skills } : {}),
             ...(message.mentions !== undefined ? { mentions: message.mentions } : {}),
+            ...(message.dispatchMode !== undefined
+              ? { dispatchMode: message.dispatchMode }
+              : entry.dispatchMode !== undefined
+                ? { dispatchMode: entry.dispatchMode }
+                : {}),
+            ...(message.dispatchOrigin !== undefined
+              ? { dispatchOrigin: message.dispatchOrigin }
+              : entry.dispatchOrigin !== undefined
+                ? { dispatchOrigin: entry.dispatchOrigin }
+                : {}),
+            ...(message.startsNewTurn !== undefined
+              ? { startsNewTurn: message.startsNewTurn }
+              : entry.startsNewTurn !== undefined
+                ? { startsNewTurn: entry.startsNewTurn }
+                : {}),
           };
           cappedMessages = nextMessages;
         } else {
@@ -1167,7 +1159,7 @@ export function projectEvent(
                           : null,
                     }
                 : settleLatestTurnForSessionStatus(thread.latestTurn, session),
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };
       });
@@ -1296,7 +1288,7 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
             latestTurn,
-            updatedAt: event.occurredAt,
+            updatedAt: maxIso(thread.updatedAt, event.occurredAt),
           }),
         };
       });
@@ -1314,10 +1306,15 @@ export function projectEvent(
             .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
             .slice(-MAX_THREAD_CHECKPOINTS);
           const retainedTurnIds = new Set(checkpoints.map((checkpoint) => checkpoint.turnId));
-          const messages = retainThreadMessagesAfterRevert(
+          const retainedMessages = retainThreadMessagesAfterRevert(
             thread.messages,
             retainedTurnIds,
             payload.turnCount,
+          );
+          const messages = clearRemovedAsyncUserInputResponses(
+            retainedMessages,
+            new Set(retainedMessages.map((message) => message.id)),
+            event.sequence,
           ).slice(-MAX_THREAD_MESSAGES);
           const proposedPlans = retainThreadProposedPlansAfterRevert(
             thread.proposedPlans,
@@ -1389,7 +1386,11 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               checkpoints,
-              messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
+              messages: clearRemovedAsyncUserInputResponses(
+                rollback.messages,
+                new Set(rollback.messages.map((message) => message.id)),
+                event.sequence,
+              ).slice(-MAX_THREAD_MESSAGES),
               proposedPlans,
               activities,
               latestTurn:

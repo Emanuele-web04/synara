@@ -3,7 +3,7 @@
 // Layer: Chat transcript shell
 // Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
-import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@synara/contracts";
+import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   useEffect,
@@ -61,7 +61,6 @@ interface ChatTranscriptPaneProps {
   canPinMessage?: (messageId: MessageId) => boolean;
   onTogglePinMessage?: (messageId: MessageId) => void;
   onForkFromMessage?: (messageId: MessageId) => void;
-  threadMarkers?: readonly ThreadMarker[];
   goalAchievements?: ComponentProps<typeof MessagesTimeline>["goalAchievements"];
   enteringUserMessageIds?: ComponentProps<typeof MessagesTimeline>["enteringUserMessageIds"];
   tailAnchorMessageId?: ComponentProps<typeof MessagesTimeline>["tailAnchorMessageId"];
@@ -83,6 +82,7 @@ interface ChatTranscriptPaneProps {
   onMessagesTouchStart: TouchEventHandler<HTMLDivElement>;
   onMessagesWheel: WheelEventHandler<HTMLDivElement>;
   onIsAtEndChange: (isAtEnd: boolean) => void;
+  onNavigate?: () => void;
   onCloseAgentActivityDetail?: () => void;
   onOpenAgentActivity?: ComponentProps<typeof MessagesTimeline>["onOpenAgentActivity"];
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -90,6 +90,7 @@ interface ChatTranscriptPaneProps {
   onOpenAutomation?: ComponentProps<typeof MessagesTimeline>["onOpenAutomation"];
   onRevertUserMessage: (messageId: MessageId) => void;
   onUndoTurnFiles?: ComponentProps<typeof MessagesTimeline>["onUndoTurnFiles"];
+  onRespondToAsyncUserInput?: ComponentProps<typeof MessagesTimeline>["onRespondToAsyncUserInput"];
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   editableUserMessageId?: MessageId | null;
   onScrollToBottom: () => void;
@@ -99,6 +100,7 @@ interface ChatTranscriptPaneProps {
   scrollButtonVisible: boolean;
   terminalWorkspaceTerminalTabActive: boolean;
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
+  messageChangeSignal?: ComponentProps<typeof MessagesTimeline>["messageChangeSignal"];
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   workspaceRoot: string | undefined;
@@ -137,7 +139,6 @@ export function ChatTranscriptPane({
   canPinMessage,
   onTogglePinMessage,
   onForkFromMessage,
-  threadMarkers,
   goalAchievements,
   enteringUserMessageIds,
   tailAnchorMessageId,
@@ -157,6 +158,7 @@ export function ChatTranscriptPane({
   onMessagesTouchStart,
   onMessagesWheel,
   onIsAtEndChange,
+  onNavigate,
   onCloseAgentActivityDetail,
   onOpenAgentActivity,
   onOpenTurnDiff,
@@ -165,6 +167,7 @@ export function ChatTranscriptPane({
   onRevertUserMessage,
   onUndoTurnFiles,
   onEditUserMessage,
+  onRespondToAsyncUserInput,
   editableUserMessageId,
   onScrollToBottom,
   onToggleWorkGroup,
@@ -173,6 +176,7 @@ export function ChatTranscriptPane({
   scrollButtonVisible,
   terminalWorkspaceTerminalTabActive,
   timelineEntries,
+  messageChangeSignal,
   timestampFormat,
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
@@ -254,7 +258,6 @@ export function ChatTranscriptPane({
             {...(canPinMessage ? { canPinMessage } : {})}
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
             {...(onForkFromMessage ? { onForkFromMessage } : {})}
-            {...(threadMarkers ? { threadMarkers } : {})}
             {...(goalAchievements ? { goalAchievements } : {})}
             {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
             tailAnchorMessageId={tailAnchorMessageId ?? null}
@@ -263,6 +266,7 @@ export function ChatTranscriptPane({
             {...(forkSource ? { forkSource } : {})}
             isTemporaryThread={isTemporaryThread ?? false}
             timelineEntries={timelineEntries}
+            messageChangeSignal={messageChangeSignal}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
@@ -271,11 +275,13 @@ export function ChatTranscriptPane({
             onRevertUserMessage={onRevertUserMessage}
             {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}
             {...(onEditUserMessage ? { onEditUserMessage } : {})}
+            {...(onRespondToAsyncUserInput ? { onRespondToAsyncUserInput } : {})}
             editableUserMessageId={editableUserMessageId ?? null}
             isRevertingCheckpoint={isRevertingCheckpoint}
             onImageExpand={onExpandTimelineImage}
             followLiveOutput={followLiveOutput}
             onIsAtEndChange={onIsAtEndChange}
+            {...(onNavigate ? { onNavigate } : {})}
             onTrailHighlightsChange={activeTrailStore.set}
             onMessagesScroll={onMessagesScroll}
             onMessagesClickCapture={onMessagesClickCapture}

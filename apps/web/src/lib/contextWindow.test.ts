@@ -3,10 +3,11 @@ import { EventId, type OrchestrationThreadActivity, TurnId } from "@synara/contr
 
 import {
   deriveContextWindowSelectionStatus,
+  deriveComposerContextWindowLabel,
+  deriveAppliedContextWindowSelection,
   deriveContextWindowMeterDisplay,
   deriveCumulativeCostUsd,
   deriveLatestContextWindowState,
-  deriveLatestContextWindowSnapshot,
   deriveSelectedContextWindowSnapshot,
   formatContextWindowSelectionLabel,
   formatContextWindowTokens,
@@ -30,8 +31,90 @@ function makeActivity(
 }
 
 describe("contextWindow", () => {
+  it("does not label a runtime threshold as the target when configuration history is missing", () => {
+    expect(
+      deriveContextWindowSelectionStatus({
+        activeSnapshot: deriveSelectedContextWindowSnapshot("1m"),
+        appliedValue: null,
+        selectedValue: "auto",
+      }),
+    ).toEqual({ activeLabel: null, selectedLabel: "Auto", pendingSelectedLabel: null });
+  });
+
+  it("uses persisted applied modes so Auto is not permanently pending", () => {
+    for (const [payload, appliedValue] of [
+      [{ cleared: true }, "auto"],
+      [{ maxTokens: 200_000 }, "200k"],
+      [{ maxTokens: 1_000_000 }, "1m"],
+    ] as const) {
+      const applied = deriveAppliedContextWindowSelection([
+        makeActivity("configured", "context-window.configured", payload),
+      ]);
+      expect(applied).toBe(appliedValue);
+      expect(
+        deriveContextWindowSelectionStatus({
+          activeSnapshot: deriveSelectedContextWindowSnapshot("1m"),
+          appliedValue: applied,
+          selectedValue: appliedValue,
+        }).pendingSelectedLabel,
+      ).toBeNull();
+    }
+  });
+
+  it("keeps the runtime denominator with its percentage", () => {
+    const snapshot = deriveLatestContextWindowState([
+      makeActivity("configured", "context-window.configured", { maxTokens: 1_000_000 }),
+      makeActivity("usage", "context-window.updated", {
+        usedTokens: 500_000,
+        maxTokens: 967_000,
+        usedPercent: 51.7,
+      }),
+    ]).snapshot;
+    expect(snapshot?.maxTokens).toBe(967_000);
+    expect(snapshot?.usedPercentage).toBe(51.7);
+  });
+
+  it("preserves validated Claude cache evidence from the latest usage snapshot", () => {
+    const claudeCache = {
+      observedAt: "2026-03-23T00:00:00.000Z",
+      state: "unknown",
+      source: "request-usage",
+      contextTokens: 887_036,
+      lastRequest: { messageId: "request-1", cacheCreationInputTokens: 887_036 },
+    };
+    const derive = (value: OrchestrationThreadActivity["payload"] | undefined) =>
+      deriveLatestContextWindowState([
+        makeActivity("cache", "context-window.updated", {
+          usedTokens: 887_036,
+          ...(value === undefined ? {} : { claudeCache: value }),
+        }),
+      ]).snapshot;
+    expect(derive(claudeCache)?.claudeCache).toEqual(claudeCache);
+    expect(derive(undefined)?.claudeCache).toBeNull();
+    expect(derive({ ...claudeCache, state: "warm" })?.claudeCache).toBeNull();
+    expect(derive({ ...claudeCache, contextTokens: -1 })?.claudeCache).toBeNull();
+  });
+
+  it("withholds old Claude processed totals while preserving context and other providers", () => {
+    for (const provider of ["claudeAgent", "codex"]) {
+      const payload = { provider, usedTokens: 100, totalProcessedTokens: 400 };
+      const legacy = deriveLatestContextWindowState([
+        makeActivity("legacy", "context-window.updated", payload),
+      ]).snapshot;
+      expect(legacy?.usedTokens).toBe(100);
+      expect(legacy?.totalProcessedTokens).toBe(provider === "claudeAgent" ? null : 400);
+      const corrected = deriveLatestContextWindowState([
+        makeActivity("corrected", "context-window.updated", {
+          ...payload,
+          tokenAccountingVersion: 1,
+        }),
+      ]).snapshot;
+      expect(corrected?.totalProcessedTokens).toBe(400);
+    }
+  });
+
   it("derives the latest valid context window snapshot", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.updated", {
         usedTokens: 1000,
       }),
@@ -41,7 +124,7 @@ describe("contextWindow", () => {
         maxTokens: 258_000,
         compactsAutomatically: true,
       }),
-    ]);
+    ]).snapshot;
 
     expect(snapshot).not.toBeNull();
     expect(snapshot?.usedTokens).toBe(14_000);
@@ -69,36 +152,36 @@ describe("contextWindow", () => {
       }),
     ];
 
-    expect(deriveLatestContextWindowSnapshot(beforeCompaction)).toBeNull();
+    expect(deriveLatestContextWindowState(beforeCompaction).snapshot).toBeNull();
     expect(deriveLatestContextWindowState(beforeCompaction).invalidatedByCompaction).toBe(true);
 
-    const afterFreshUsage = deriveLatestContextWindowSnapshot([
+    const afterFreshUsage = deriveLatestContextWindowState([
       ...beforeCompaction,
       makeActivity("activity-5", "context-window.updated", {
         usedTokens: 20_000,
         maxTokens: 200_000,
       }),
-    ]);
+    ]).snapshot;
 
     expect(afterFreshUsage?.usedTokens).toBe(20_000);
   });
 
   it("ignores malformed payloads", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.updated", {}),
-    ]);
+    ]).snapshot;
 
     expect(snapshot).toBeNull();
   });
 
   it("derives percent-only context window snapshots", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.updated", {
         usedTokens: 0,
         usedPercent: 5.8,
         compactsAutomatically: true,
       }),
-    ]);
+    ]).snapshot;
 
     expect(snapshot?.usedTokens).toBe(0);
     expect(snapshot?.usedPercent).toBe(5.8);
@@ -108,13 +191,13 @@ describe("contextWindow", () => {
   });
 
   it("derives real zero-percent context window snapshots", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.updated", {
         usedTokens: 0,
         usedPercent: 0,
         compactsAutomatically: true,
       }),
-    ]);
+    ]).snapshot;
 
     expect(snapshot?.usedTokens).toBe(0);
     expect(snapshot?.usedPercent).toBe(0);
@@ -122,14 +205,14 @@ describe("contextWindow", () => {
   });
 
   it("keeps zero-token usage reliable when runtime reports max tokens", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.updated", {
         usedTokens: 0,
         usedPercent: 0,
         maxTokens: 128_000,
         compactsAutomatically: true,
       }),
-    ]);
+    ]).snapshot;
 
     expect(snapshot?.remainingTokens).toBe(128_000);
     expect(deriveContextWindowMeterDisplay(snapshot!)).toMatchObject({
@@ -140,7 +223,7 @@ describe("contextWindow", () => {
   });
 
   it("does not infer remaining tokens from percent-only usage", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.configured", {
         contextWindow: "1m",
         maxTokens: 1_000_000,
@@ -150,11 +233,11 @@ describe("contextWindow", () => {
         usedPercent: 5.8,
         compactsAutomatically: true,
       }),
-    ]);
+    ]).snapshot;
 
     expect(snapshot?.usedTokens).toBe(0);
     expect(snapshot?.usedPercentage).toBe(5.8);
-    expect(snapshot?.maxTokens).toBe(1_000_000);
+    expect(snapshot?.maxTokens).toBeNull();
     expect(snapshot?.remainingTokens).toBeNull();
   });
 
@@ -166,21 +249,21 @@ describe("contextWindow", () => {
   });
 
   it("includes total processed tokens when available", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.updated", {
         usedTokens: 81_659,
         totalProcessedTokens: 748_126,
         maxTokens: 258_400,
         lastUsedTokens: 81_659,
       }),
-    ]);
+    ]).snapshot;
 
     expect(snapshot?.usedTokens).toBe(81_659);
     expect(snapshot?.totalProcessedTokens).toBe(748_126);
   });
 
-  it("uses the configured session max tokens when usage snapshots lag behind", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+  it("uses runtime reporting instead of the configured target", () => {
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.configured", {
         contextWindow: "1m",
         maxTokens: 1_000_000,
@@ -189,14 +272,14 @@ describe("contextWindow", () => {
         usedTokens: 23_000,
         maxTokens: 200_000,
       }),
-    ]);
+    ]).snapshot;
 
     expect(snapshot?.usedTokens).toBe(23_000);
-    expect(snapshot?.maxTokens).toBe(1_000_000);
+    expect(snapshot?.maxTokens).toBe(200_000);
   });
 
-  it("falls back to runtime usage after the configured window is cleared", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+  it("invalidates old usage when Auto is applied", () => {
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.configured", {
         contextWindow: "1m",
         maxTokens: 1_000_000,
@@ -206,22 +289,20 @@ describe("contextWindow", () => {
         maxTokens: 200_000,
       }),
       makeActivity("activity-3", "context-window.configured", { cleared: true }),
-    ]);
+    ]).snapshot;
 
-    expect(snapshot?.usedTokens).toBe(23_000);
-    expect(snapshot?.maxTokens).toBe(200_000);
+    expect(snapshot).toBeNull();
   });
 
-  it("returns a session snapshot from configured max tokens before usage arrives", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+  it("waits for runtime usage instead of presenting the target as a measurement", () => {
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.configured", {
         contextWindow: "1m",
         maxTokens: 1_000_000,
       }),
-    ]);
+    ]).snapshot;
 
-    expect(snapshot?.usedTokens).toBe(0);
-    expect(snapshot?.maxTokens).toBe(1_000_000);
+    expect(snapshot).toBeNull();
   });
 
   it("creates an initial selected context window snapshot before runtime usage arrives", () => {
@@ -233,7 +314,7 @@ describe("contextWindow", () => {
   });
 
   it("derives meter display labels without inventing token ratios", () => {
-    const percentOnly = deriveLatestContextWindowSnapshot([
+    const percentOnly = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.configured", {
         contextWindow: "1m",
         maxTokens: 1_000_000,
@@ -242,7 +323,7 @@ describe("contextWindow", () => {
         usedTokens: 0,
         usedPercent: 5.8,
       }),
-    ]);
+    ]).snapshot;
 
     expect(percentOnly).not.toBeNull();
     expect(deriveContextWindowMeterDisplay(percentOnly!)).toMatchObject({
@@ -280,12 +361,12 @@ describe("contextWindow", () => {
   });
 
   it("marks a selected Claude context window as pending when the live session differs", () => {
-    const snapshot = deriveLatestContextWindowSnapshot([
+    const snapshot = deriveLatestContextWindowState([
       makeActivity("activity-1", "context-window.updated", {
         usedTokens: 23_000,
         maxTokens: 200_000,
       }),
-    ]);
+    ]).snapshot;
 
     expect(
       deriveContextWindowSelectionStatus({
@@ -298,4 +379,50 @@ describe("contextWindow", () => {
       pendingSelectedLabel: "1M",
     });
   });
+});
+
+describe("composer context budget label", () => {
+  const model = "claude-fable-5-1";
+  it.each([
+    ["auto", "auto", 967000, model, "(1M)"],
+    ["1m", "1m", 967000, `${model}[1m]`, "(1M)"],
+    ["1m", "1m", 167000, model, "(200k)"],
+    ["200k", "1m", 167000, model, "(200k · 1M next)"],
+    ["1m", "auto", 967000, model, "(1M · Auto next)"],
+    [null, "1m", null, null, "(1M next)"],
+    [null, "auto", null, null, null],
+    ["1m", "1m", 967000, "claude-opus-4-7", "(1M next)"],
+    ["1m", "1m", 967000, null, "(1M next)"],
+    ["1m", "1m", 50000, model, "(1M target)"],
+  ])(
+    "applied %s, selected %s, budget %s, model %s",
+    (applied, selected, maxTokens, observedModel, expected) => {
+      const snapshot =
+        maxTokens === null
+          ? null
+          : {
+              ...deriveSelectedContextWindowSnapshot("1m")!,
+              maxTokens,
+              claudeCache: observedModel
+                ? {
+                    model: observedModel,
+                    observedAt: "2026-09-17T00:00:00.000Z",
+                    state: "unknown" as const,
+                    source: "request-usage" as const,
+                  }
+                : null,
+            };
+      const status = deriveContextWindowSelectionStatus({
+        activeSnapshot: snapshot,
+        appliedValue: applied,
+        selectedValue: selected,
+      });
+      expect(
+        deriveComposerContextWindowLabel({ provider: "claudeAgent", model, snapshot, status }),
+      ).toBe(expected);
+      expect(
+        deriveComposerContextWindowLabel({ provider: "codex", model, snapshot, status }),
+      ).toBeNull();
+    },
+  );
 });

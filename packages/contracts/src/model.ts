@@ -29,9 +29,6 @@ export const PI_THINKING_LEVEL_OPTIONS = [
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
 // Union of every Grok CLI ladder. Per-model capabilities pick a subset:
 // grok-build keeps none/low/medium/high, Grok 4.5 drops none, Grok 4.6 adds xhigh.
-export const GROK_BUILD_REASONING_EFFORTS = ["none", "low", "medium", "high"] as const;
-export const GROK_4_5_REASONING_EFFORTS = ["low", "medium", "high"] as const;
-export const GROK_4_6_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 export const GROK_REASONING_EFFORT_OPTIONS = ["none", "low", "medium", "high", "xhigh"] as const;
 export type GrokReasoningEffort = (typeof GROK_REASONING_EFFORT_OPTIONS)[number];
 export const DROID_REASONING_EFFORT_OPTIONS = [
@@ -237,6 +234,20 @@ const CODEX_GPT_5_5_CAPABILITIES: ModelCapabilities = {
     { value: "medium", label: "Medium", isDefault: true },
     { value: "high", label: "High" },
     { value: "xhigh", label: "Extra High" },
+  ],
+};
+
+// GPT-6 Astra is the Codex app-server default. Its ladder extends past xhigh with
+// max/ultra and defaults to medium, mirroring `model/list`.
+const CODEX_GPT_6_CAPABILITIES: ModelCapabilities = {
+  ...CODEX_GPT_5_CAPABILITIES,
+  reasoningEffortLevels: [
+    { value: "low", label: "Low" },
+    { value: "medium", label: "Medium", isDefault: true },
+    { value: "high", label: "High" },
+    { value: "xhigh", label: "Extra High" },
+    { value: "max", label: "Max" },
+    { value: "ultra", label: "Ultra" },
   ],
 };
 
@@ -453,8 +464,9 @@ const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
 // generations, so declare them once and let each model entry override only the
 // fields that genuinely differ (mirrors the CODEX_GPT_5_* pattern above).
 const CLAUDE_AUTO_COMPACT_WINDOWS: readonly ContextWindowOption[] = [
-  { value: "200k", label: "200k", isDefault: true },
-  { value: "1m", label: "1M (model default)" },
+  { value: "auto", label: "Auto (Claude Code)", isDefault: true },
+  { value: "200k", label: "200k" },
+  { value: "1m", label: "1M" },
 ];
 
 function claudeApiEffortOption(
@@ -566,6 +578,11 @@ export const DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL = "deepseek-v4-flash-0731" 
 
 export const MODEL_OPTIONS_BY_PROVIDER = {
   codex: [
+    {
+      slug: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      capabilities: CODEX_GPT_6_CAPABILITIES,
+    },
     {
       slug: "gpt-5.5",
       name: "GPT-5.5",
@@ -822,17 +839,17 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     },
     {
       slug: "glm-5.2",
-      name: "GLM-5.2",
+      name: "GLM 5.2",
       capabilities: DROID_CORE_HIGH_CAPABILITIES,
     },
     {
       slug: "glm-5.2-fast",
-      name: "GLM-5.2 Fast",
+      name: "GLM 5.2 Fast",
       capabilities: DROID_CORE_HIGH_CAPABILITIES,
     },
     {
       slug: "glm-5.1",
-      name: "GLM-5.1",
+      name: "GLM 5.1",
       capabilities: DROID_CORE_HIGH_CAPABILITIES,
     },
     {
@@ -1074,7 +1091,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     },
     {
       slug: "glm-5.2",
-      name: "GLM-5.2",
+      name: "GLM 5.2",
       capabilities: cursorCapabilities({ efforts: ["high", "max"] }),
     },
   ],
@@ -1119,7 +1136,7 @@ export type ModelSlug = BuiltInModelSlug | (string & {});
 export type ProviderWithDefaultModel = Exclude<ProviderKind, "pi">;
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSlug> = {
-  codex: "gpt-5.5",
+  codex: "gpt-6-astra",
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
   devin: "adaptive",
@@ -1130,7 +1147,6 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
 };
 
 // Backward compatibility for existing Codex-only call sites.
-export const MODEL_OPTIONS = MODEL_OPTIONS_BY_PROVIDER.codex;
 export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
 export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.6-luna" as const;
 export const DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT = "high" as const;
@@ -1152,6 +1168,9 @@ export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDERS)[n
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
   codex: {
+    astra: "gpt-6-astra",
+    "6": "gpt-6-astra",
+    "gpt-6": "gpt-6-astra",
     "5.5": "gpt-5.5",
     "5.4": "gpt-5.4",
     "5.3": "gpt-5.3-codex",

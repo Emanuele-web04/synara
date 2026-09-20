@@ -71,7 +71,7 @@ const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MIN_CHAT_FONT_SIZE_PX = 11;
 export const MAX_CHAT_FONT_SIZE_PX = 18;
-export const DEFAULT_CHAT_FONT_SIZE_PX = 12;
+export const DEFAULT_CHAT_FONT_SIZE_PX = 13;
 export const MIN_TERMINAL_FONT_SIZE_PX = 10;
 export const MAX_TERMINAL_FONT_SIZE_PX = 22;
 export const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
@@ -254,6 +254,9 @@ const PersistedHiddenModels = Schema.Array(
 
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  claudeEnableArtifacts: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Server-backed first-run marker; see ServerSettings.onboardingCompletedAt.
+  onboardingCompletedAt: Schema.NullOr(Schema.String).pipe(withDefaults((): string | null => null)),
   uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
   chatWidth: ChatWidthMode.pipe(withDefaults(() => DEFAULT_CHAT_WIDTH)),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
@@ -319,11 +322,14 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentRecap: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
-  showEnvironmentMarkers: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Started threads: show reasoning effort as a stepped slider card in the composer's
+  // model menu instead of radio rows. New chats keep the split model/effort pickers.
+  composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
+  autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   desktopAppIcon: DesktopAppIcon.pipe(withDefaults(() => "default" as const)),
@@ -667,9 +673,21 @@ export function didProviderEnablementChange(
   );
 }
 
+/** Server settings that change which native commands a provider reports. */
+export function didProviderCommandDiscoverySettingsChange(
+  previous: Pick<ServerSettingsView, "providers"> | undefined,
+  next: Pick<ServerSettingsView, "providers">,
+): boolean {
+  return (
+    previous !== undefined &&
+    previous.providers.claudeAgent.enableArtifacts !== next.providers.claudeAgent.enableArtifacts
+  );
+}
+
 function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppSettings> {
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+    claudeEnableArtifacts: settings.providers.claudeAgent.enableArtifacts,
     codexBinaryPath: settings.providers.codex.binaryPath,
     codexHomePath: settings.providers.codex.homePath,
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
@@ -699,6 +717,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     disabledProviders: getServerDisabledProviders(settings),
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
+    onboardingCompletedAt: settings.onboardingCompletedAt ?? null,
   };
 }
 
@@ -719,6 +738,7 @@ function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key:
 
 function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean {
   return (
+    hasOwn(patch, "claudeEnableArtifacts") ||
     hasOwn(patch, "devinBinaryPath") ||
     hasOwn(patch, "openCodeBinaryPath") ||
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
@@ -777,6 +797,9 @@ export function appSettingsPatchToServerSettingsPatch(
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
+  if (hasOwn(patch, "onboardingCompletedAt")) {
+    serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;
+  }
   if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
     const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
     serverPatch.textGenerationModelSelection = {
@@ -802,9 +825,16 @@ export function appSettingsPatchToServerSettingsPatch(
         : {}),
     };
   }
-  if (hasOwn(patch, "claudeBinaryPath") || hasOwn(patch, "customClaudeModels")) {
+  if (
+    hasOwn(patch, "claudeBinaryPath") ||
+    hasOwn(patch, "claudeEnableArtifacts") ||
+    hasOwn(patch, "customClaudeModels")
+  ) {
     providers.claudeAgent = {
       ...(hasOwn(patch, "claudeBinaryPath") ? { binaryPath: patch.claudeBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "claudeEnableArtifacts")
+        ? { enableArtifacts: Boolean(patch.claudeEnableArtifacts) }
+        : {}),
       ...(hasOwn(patch, "customClaudeModels")
         ? { customModels: patch.customClaudeModels ?? [] }
         : {}),
@@ -924,6 +954,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
 
   for (const key of [
     "claudeBinaryPath",
+    "claudeEnableArtifacts",
     "codexBinaryPath",
     "codexHomePath",
     "cursorApiEndpoint",
@@ -1475,12 +1506,21 @@ export function useAppSettings() {
   };
 
   const resetSettings = async (): Promise<void> => {
-    setSettings(DEFAULT_APP_SETTINGS);
+    // "Restore defaults" resets preferences, not lifecycle markers: clearing the
+    // onboarding completion timestamp would replay the first-run tour on the next launch.
+    const { onboardingCompletedAt: _keepOnboardingCompletedAt, ...resettableDefaults } = defaults;
+    setSettings((prev) => ({
+      ...DEFAULT_APP_SETTINGS,
+      onboardingCompletedAt: prev.onboardingCompletedAt,
+    }));
     await enqueueServerSettingsMutation(async () => {
       const currentServerSettings =
         queryClient.getQueryData<ServerSettingsView>(serverQueryKeys.settings()) ??
         serverSettingsQuery.data;
-      const serverPatch = appSettingsPatchToServerSettingsPatch(defaults, currentServerSettings);
+      const serverPatch = appSettingsPatchToServerSettingsPatch(
+        resettableDefaults,
+        currentServerSettings,
+      );
       const providerSettingsChanged = Boolean(
         serverPatch.providers && Object.keys(serverPatch.providers).length > 0,
       );

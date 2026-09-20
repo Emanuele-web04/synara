@@ -1,6 +1,7 @@
 import {
   formatModelDisplayName,
   humanizeModelSlug,
+  normalizeModelDisplayName,
   normalizeModelSlug,
 } from "@synara/shared/model";
 import {
@@ -44,6 +45,12 @@ export interface ProviderModelOptionGroup {
   key: string;
   label: string | null;
   options: ProviderModelOption[];
+}
+
+// Normalize known families to their canonical casing, keeping the provider's
+// variant wording. Unknown or freeform names pass through unchanged.
+function normalizeCatalogModelName(name: string): string {
+  return normalizeModelDisplayName(name);
 }
 
 /**
@@ -130,7 +137,8 @@ function orderClaudeModelOptions<T extends ProviderModelOption>(
  * Folds runtime-discovered models into the static option list for a provider:
  * discovered models lead (with display names recovered from the static list when
  * possible), static built-ins fill gaps unless discovery fully owns the catalog
- * (antigravity/opencode/cursor/grok), and user-defined custom models always survive.
+ * (codex/antigravity/opencode/cursor/droid/grok/devin). Codex also owns a successful
+ * empty catalog. User-defined custom models survive except for Droid.
  * Claude is the exception: its discovered and static built-in models are merged
  * into the curated catalog order.
  */
@@ -145,7 +153,10 @@ export function mergeDynamicModelOptions(input: {
     upstreamProviderName?: string | null | undefined;
   }>;
 }): ReadonlyArray<ProviderModelOption & { isCustom?: boolean }> {
-  const staticNameBySlug = new Map(input.staticOptions.map((model) => [model.slug, model.name]));
+  // Custom and selected-model placeholders have generated names, not curated metadata.
+  const staticNameBySlug = new Map(
+    input.staticOptions.filter((model) => !model.isCustom).map((model) => [model.slug, model.name]),
+  );
   const dynamicNormalizedSlugs = new Set<string>();
   const normalizedDynamicOptions: ProviderModelOption[] = [];
 
@@ -161,7 +172,7 @@ export function mergeDynamicModelOptions(input: {
     }
 
     const normalizedSlug = normalizeDynamicModelSlug(input.provider, dynamicModel.slug);
-    const rawSlug = dynamicModel.slug.trim().toLowerCase();
+    const modelIdentifier = normalizedSlug.slice(normalizedSlug.lastIndexOf("/") + 1);
     const displayNameFallback = formatProviderModelOptionName({
       provider: input.provider,
       slug: normalizedSlug,
@@ -175,9 +186,10 @@ export function mergeDynamicModelOptions(input: {
       name:
         staticNameBySlug.get(normalizedSlug) ??
         (rawName.length > 0 &&
-        rawName.toLowerCase() !== rawSlug &&
-        rawName.toLowerCase() !== normalizedSlug.toLowerCase()
-          ? rawName
+        rawName !== dynamicModel.slug.trim() &&
+        rawName !== normalizedSlug &&
+        rawName !== modelIdentifier
+          ? normalizeCatalogModelName(rawName)
           : displayNameFallback),
       ...(dynamicModel.description?.trim() ? { description: dynamicModel.description.trim() } : {}),
       ...(dynamicModel.upstreamProviderId?.trim()
@@ -203,16 +215,18 @@ export function mergeDynamicModelOptions(input: {
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
-  const missingStaticBuiltIns =
-    (input.provider === "antigravity" ||
-      input.provider === "opencode" ||
-      input.provider === "cursor" ||
-      input.provider === "droid" ||
-      input.provider === "grok" ||
-      input.provider === "devin") &&
-    normalizedDynamicOptions.length > 0
-      ? []
-      : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
+  const hasAuthoritativeCatalog =
+    input.provider === "codex" ||
+    (normalizedDynamicOptions.length > 0 &&
+      (input.provider === "antigravity" ||
+        input.provider === "opencode" ||
+        input.provider === "cursor" ||
+        input.provider === "droid" ||
+        input.provider === "grok" ||
+        input.provider === "devin"));
+  const missingStaticBuiltIns = hasAuthoritativeCatalog
+    ? []
+    : staticBuiltInModels.filter((model) => !dynamicNormalizedSlugs.has(model.slug));
 
   if (input.provider === "claudeAgent") {
     return [

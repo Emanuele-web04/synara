@@ -207,8 +207,29 @@ export const ProjectReadFileResult = Schema.Struct({
   version: Schema.NullOr(TrimmedNonEmptyString),
   encoding: Schema.NullOr(ProjectFileEncoding),
   lineEnding: Schema.NullOr(ProjectFileLineEnding),
+  /** True when the requested path itself is a symbolic link; reads follow it, writes must not edit through it. */
+  symlink: Schema.optional(Schema.Boolean),
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
+
+export const ProjectWatchFileInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+});
+export type ProjectWatchFileInput = typeof ProjectWatchFileInput.Type;
+
+export const ProjectFileChangeEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("changed"),
+    relativePath: TrimmedNonEmptyString,
+    mtimeMs: Schema.Number,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("deleted"),
+    relativePath: TrimmedNonEmptyString,
+  }),
+]);
+export type ProjectFileChangeEvent = typeof ProjectFileChangeEvent.Type;
 
 export const ProjectResolveWorkspaceFileReferencesInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,

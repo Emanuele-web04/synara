@@ -10,6 +10,7 @@ import {
   DEFAULT_THEME_STATE,
   buildResolvedThemeTokens,
   buildThemeCssVariables,
+  canParseThemeShareString,
   createThemeShareString,
   getCodeThemeSeed,
   getCodeThemeSeedPatch,
@@ -153,6 +154,27 @@ describe("theme share strings", () => {
     expect(() => parseThemeShareStringForVariant(PROVIDED_THEME_STRING, "light")).toThrow(
       /variant mismatch/i,
     );
+  });
+
+  it("rejects malformed percent-encoding with the designed parse error", () => {
+    expect(() => parseThemeShareString("codex-theme-v1:%zz")).toThrow(
+      /does not contain valid JSON/i,
+    );
+    expect(canParseThemeShareString("codex-theme-v1:%zz")).toBe(false);
+  });
+
+  it("parses a percent-encoded payload", () => {
+    const encoded = `codex-theme-v1:${encodeURIComponent(
+      PROVIDED_THEME_STRING.slice("codex-theme-v1:".length),
+    )}`;
+    expect(parseThemeShareString(encoded)).toEqual(parseThemeShareString(PROVIDED_THEME_STRING));
+  });
+
+  it("rejects non-JSON and schema-invalid payloads with designed errors", () => {
+    expect(() => parseThemeShareString("codex-theme-v1:notjson")).toThrow(
+      /does not contain valid JSON/i,
+    );
+    expect(() => parseThemeShareString("codex-theme-v1:{}")).toThrow(/codeThemeId/i);
   });
 
   it("updates only the matching variant pack when importing", () => {
@@ -318,6 +340,29 @@ describe("code theme seeds", () => {
 });
 
 describe("buildThemeCssVariables", () => {
+  it.each([
+    { electron: true, isMac: false },
+    { electron: true, isMac: true },
+    { electron: false, isMac: false },
+  ])("projects distinct Vercel and Codex light colors on %j", (platform) => {
+    const state = setThemeCodeThemeId(DEFAULT_THEME_STATE, "light", "vercel");
+    const vercel = buildThemeCssVariables(resolveThemePack(state, "light"), "light", platform);
+    const codex = buildThemeCssVariables(
+      resolveThemePack(DEFAULT_THEME_STATE, "light"),
+      "light",
+      platform,
+    );
+    expect(vercel.variables["--codex-base-accent"]).toBe("#006aff");
+    expect(codex.variables["--codex-base-accent"]).toBe("#0169cc");
+    expect(vercel.variables["--color-text-foreground"]).toBe("#171717");
+    expect(codex.variables["--color-text-foreground"]).toBe("#0d0d0d");
+    // These two presets intentionally share a white surface in light mode.
+    expect(vercel.variables["--codex-base-surface"]).toBe(codex.variables["--codex-base-surface"]);
+    // Editing a slot must not change the user's system-mode or other-slot choices.
+    expect(state.mode).toBe("system");
+    expect(state.chromeThemes.dark).toEqual(DEFAULT_THEME_STATE.chromeThemes.dark);
+  });
+
   it("derives the renderer token map from the imported theme pack", () => {
     const importedTheme = parseThemeShareString(PROVIDED_THEME_STRING);
     const cssVariables = buildThemeCssVariables(
@@ -337,6 +382,9 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--composer-surface"]).not.toBe(cssVariables.variables["--card"]);
     expect(cssVariables.variables["--sidebar-accent"]).toBe("rgba(227, 228, 230, 0.058)");
     expect(cssVariables.variables["--sidebar-accent-active"]).toBe("rgba(227, 228, 230, 0.058)");
+    expect(cssVariables.variables["--sidebar-selected"]).toBe(
+      cssVariables.variables["--app-user-message-background"],
+    );
     expect(cssVariables.variables["--theme-font-ui-family"]).toBe("Inter");
     expect(cssVariables.variables["--theme-font-code-family"]).toBe(
       `"Jetbrains Mono", ${DEFAULT_MONOSPACE_FONT_FAMILY_STACK}`,

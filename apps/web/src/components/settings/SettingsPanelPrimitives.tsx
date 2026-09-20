@@ -109,7 +109,7 @@ export function SettingsEmptyState({
     <div
       className={cn(
         SETTINGS_EMPTY_STATE_CLASS_NAME,
-        "px-4 text-sm",
+        "px-4 text-ui leading-snug",
         layout === "block" ? "py-10 text-center" : "py-6",
         tone === "destructive"
           ? "border-destructive/30 bg-destructive/5 text-destructive"
@@ -235,7 +235,7 @@ export function SettingsRow({
             </span>
           </div>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>{description}</p>
-          {status ? <div className="pt-1 text-[11px] text-muted-foreground">{status}</div> : null}
+          {status ? <div className="pt-1 text-ui-sm text-muted-foreground">{status}</div> : null}
         </div>
         {control ? (
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">

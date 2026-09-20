@@ -9,6 +9,8 @@ import { makeAgentGatewaySessionRegistry } from "./Layers/AgentGatewaySessionReg
 import type { AgentGatewayCredentialsShape } from "./Services/AgentGatewayCredentials.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "./inFlightRequestRegistry.ts";
 import { makeAgentGatewayMcpTransport } from "./mcpTransport.ts";
+import { FALLBACK_OBJECT_DESCRIPTION } from "./sanitizeToolInputSchema.ts";
+import { countSchemaKeyOccurrences, isJsonRecord } from "./schemaTestUtils.ts";
 import { acquireAgentGatewaySessionLease, type AgentGatewaySessionLease } from "./sessionLease.ts";
 import type { ToolEntry } from "./toolRuntime.ts";
 
@@ -56,6 +58,7 @@ function makeThread(threadId: string): OrchestrationThreadShell {
 
 function makeTransport(input: {
   readonly tool: ToolEntry;
+  readonly extraTools?: ReadonlyArray<ToolEntry>;
   readonly threads: ReadonlyArray<OrchestrationThreadShell>;
 }) {
   const threads = new Map(input.threads.map((thread) => [String(thread.id), thread]));
@@ -132,7 +135,7 @@ function makeTransport(input: {
   const transport = makeAgentGatewayMcpTransport({
     credentials,
     snapshotQuery,
-    tools: [input.tool],
+    tools: [input.tool, ...(input.extraTools ?? [])],
     instructions: "test",
     requireThreadShell: (threadId) => {
       const thread = threads.get(threadId);
@@ -240,7 +243,7 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
         const hostStarted = yield* Deferred.make<void>();
         const hostAbortObserved = yield* Deferred.make<void>();
         let hostCalls = 0;
-        const browserWait = makeAgentGatewayBrowserTools({
+        const browserRun = makeAgentGatewayBrowserTools({
           available: true,
           execute: () => {
             hostCalls += 1;
@@ -264,21 +267,21 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
               catch: (error) => new BrowserHostRpcError("transport", String(error)),
             });
           },
-        }).find((tool) => tool.definition.name === "browser_wait");
-        assert.isDefined(browserWait);
+        }).find((tool) => tool.definition.name === "browser_run");
+        assert.isDefined(browserRun);
         const transport = makeTransport({
           threads: [makeThread("thread-detached")],
-          tool: browserWait!,
+          tool: browserRun!,
         });
         const body = {
           jsonrpc: "2.0",
           id: "detached-browser-wait",
           method: "tools/call",
           params: {
-            name: "browser_wait",
+            name: "browser_run",
             arguments: {
               tabId: "53756993-1de8-47a5-82c9-e00766199802",
-              conditions: [{ kind: "text", text: "STOP_SENTINEL_NEVER_APPEARS", state: "present" }],
+              code: 'await page.getByText("STOP_SENTINEL_NEVER_APPEARS").waitFor(); return true;',
               timeoutMs: 30_000,
             },
           },
@@ -454,5 +457,67 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
         assert.equal(response.status, 200);
         assert.deepEqual(response.body, [{ jsonrpc: "2.0", id: "fast-batch", result: {} }]);
       }).pipe(Effect.timeout("2 seconds")),
+  );
+});
+
+const findToolOrThrow = (tools: ReadonlyArray<unknown>, name: string): Record<string, unknown> => {
+  const found = tools.find((candidate) => isJsonRecord(candidate) && candidate.name === name);
+  if (!isJsonRecord(found)) {
+    throw new Error(`Expected tools/list to serve ${name}.`);
+  }
+  return found;
+};
+
+describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
+  it.effect("serves sanitized schemas while keeping stored definitions dirty", () =>
+    Effect.gen(function* () {
+      const recursiveTool: ToolEntry = {
+        definition: {
+          name: "synara_recursive",
+          description: "tool with a cyclic schema",
+          inputSchema: {
+            type: "object",
+            properties: { payload: { $ref: "#/$defs/JsonValue" } },
+            $defs: {
+              JsonValue: {
+                anyOf: [
+                  { type: "string" },
+                  { type: "array", items: { $ref: "#/$defs/JsonValue" } },
+                ],
+              },
+            },
+          },
+        },
+        requiredCapability: "thread:read",
+        handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "ok" }] }),
+      };
+      const transport = makeTransport({
+        threads: [makeThread("thread-schema")],
+        tool: recursiveTool,
+      });
+      const response = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "list-schemas",
+        method: "tools/list",
+      });
+      assert.equal(response.status, 200);
+      if (!isJsonRecord(response.body) || !isJsonRecord(response.body.result)) {
+        throw new Error("Expected tools/list to answer with a result object.");
+      }
+      if (!Array.isArray(response.body.result.tools)) {
+        throw new Error("Expected tools/list to answer with a tools array.");
+      }
+      const listed = findToolOrThrow(response.body.result.tools, "synara_recursive");
+      assert.deepEqual(listed.inputSchema, {
+        type: "object",
+        properties: {
+          payload: {
+            type: "object",
+            description: FALLBACK_OBJECT_DESCRIPTION,
+          },
+        },
+      });
+      assert.isAbove(countSchemaKeyOccurrences(recursiveTool.definition.inputSchema, "$ref"), 0);
+    }),
   );
 });

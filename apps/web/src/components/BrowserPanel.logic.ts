@@ -19,6 +19,34 @@ import type {
 } from "@synara/contracts";
 import type { BrowserHistoryEntry } from "../browserStateStore";
 import type { BrowserAnnotationDraft } from "../lib/browserAnnotations";
+import { resolveDesktopDipRectFromCssRect } from "@synara/shared/desktopChrome";
+
+export function resolveBrowserRuntimePresentation(input: {
+  native: boolean;
+  floating: boolean;
+  rect: { x: number; y: number; width: number; height: number };
+  desktopZoom: number;
+}) {
+  const { native, floating, rect, desktopZoom } = input;
+  const layout = floating ? resolveFloatingBrowserGuestLayout(rect) : null;
+  const scale = native && layout ? layout.scale : 1;
+  const bounds = resolveDesktopDipRectFromCssRect(
+    layout
+      ? {
+          x: rect.x + layout.x,
+          y: rect.y + layout.y,
+          width: layout.width * scale,
+          height: layout.height * scale,
+        }
+      : rect,
+    desktopZoom,
+  );
+  return {
+    surface: native ? ("native" as const) : ("renderer" as const),
+    bounds,
+    pageZoomFactor: native && floating ? scale * desktopZoom : 1,
+  };
+}
 
 const BROWSER_SUGGESTION_LIMIT = 6;
 
@@ -252,9 +280,9 @@ export interface BrowserChromeStatus {
   label: string;
 }
 
-// The address field and tab pills share one chrome-control surface so the whole row reads
-// as a single cohesive control: matching height, radius, border width, and type scale.
-export const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-xs";
+// Address and tab controls share the same radius and border treatment;
+// the tab strip overrides the height and type size for compact chrome.
+export const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-ui leading-snug";
 // The address field's filled look, reused by the active tab so the selected tab visually
 // matches the search input (same border tone + faint fill).
 export const BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME = "border-border bg-background/70";

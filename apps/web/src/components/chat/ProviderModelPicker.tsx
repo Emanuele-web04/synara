@@ -56,7 +56,7 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
   return option.available;
 }
 
-function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
+export function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
   disabled: boolean;
   label: string | null;
 } {
@@ -104,6 +104,30 @@ function filterProviderOptionsByVisibility<T extends { value: ProviderKind }>(
   }
   return options.filter(
     (option) => protectedProviders.has(option.value) || !hiddenProviders.has(option.value),
+  );
+}
+
+// Providers the picker may offer: installed ones in the user's order, minus hidden
+// providers, always keeping the active/locked provider reachable.
+export function resolveVisibleProviderOptions(input: {
+  provider: ProviderKind;
+  lockedProvider: ProviderKind | null;
+  providers: ReadonlyArray<ServerProviderStatus> | undefined;
+  hiddenProviders: ReadonlyArray<ProviderKind> | undefined;
+  providerOrder: ReadonlyArray<ProviderKind> | undefined;
+}) {
+  const protectedProviderSet = new Set<ProviderKind>([input.provider]);
+  if (input.lockedProvider !== null) {
+    protectedProviderSet.add(input.lockedProvider);
+  }
+  return filterProviderOptionsByVisibility(
+    AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
+      compareProvidersByOrder(input.providerOrder ?? [], left.value, right.value),
+    ).filter((option) =>
+      input.providers?.some((provider) => provider.provider === option.value && provider.available),
+    ),
+    new Set<ProviderKind>(input.hiddenProviders ?? []),
+    protectedProviderSet,
   );
 }
 
@@ -214,22 +238,13 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
-  const hiddenProviders = props.hiddenProviders;
-  const providerOrder = props.providerOrder;
-  const hiddenProviderSet = new Set<ProviderKind>(hiddenProviders ?? []);
-  const protectedProviderSet = new Set<ProviderKind>([props.provider]);
-  if (props.lockedProvider !== null) {
-    protectedProviderSet.add(props.lockedProvider);
-  }
-  const visibleAvailableProviderOptions = filterProviderOptionsByVisibility(
-    AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
-      compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
-    ).filter((option) =>
-      props.providers?.some((provider) => provider.provider === option.value && provider.available),
-    ),
-    hiddenProviderSet,
-    protectedProviderSet,
-  );
+  const visibleAvailableProviderOptions = resolveVisibleProviderOptions({
+    provider: props.provider,
+    lockedProvider: props.lockedProvider,
+    providers: props.providers,
+    hiddenProviders: props.hiddenProviders,
+    providerOrder: props.providerOrder,
+  });
   const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
   const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
   const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
@@ -301,7 +316,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 
     const discoveryError = props.discoveryErrorsByProvider?.[provider];
     const discoveryErrorElement = discoveryError ? (
-      <div className="px-2 py-1.5 text-xs text-destructive">{discoveryError}</div>
+      <div className="px-2 py-1.5 text-ui leading-snug text-destructive">{discoveryError}</div>
     ) : null;
 
     const content =
@@ -322,7 +337,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           />
         </MenuRadioGroup>
       ) : (
-        <div className="px-2 py-2 text-muted-foreground text-sm">
+        <div className="px-2 py-2 text-muted-foreground text-ui leading-snug">
           {provider === "pi" && normalizedModelSearchQuery.length === 0
             ? "No Pi models found"
             : "No matches"}
@@ -395,7 +410,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 )}
               />
               <span>{option.label}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80">
+              <span className="ms-auto text-ui-sm text-muted-foreground/80">
                 {availability.label}
               </span>
             </MenuItem>
@@ -561,7 +576,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
                 <span>Change model</span>
                 <ShortcutKbd
                   shortcutLabel={props.shortcutLabel}
-                  className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
+                  className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
                 />
               </span>
             </TooltipPopup>

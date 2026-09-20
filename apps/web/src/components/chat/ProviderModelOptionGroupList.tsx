@@ -5,7 +5,6 @@
 
 import { useState } from "react";
 
-import { StarFilledIcon, StarIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
   resolveModelGroupDefaultOpen,
@@ -22,8 +21,8 @@ import { MenuGroup, MenuGroupLabel, MenuRadioItem } from "../ui/menu";
 import {
   COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME,
   COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME,
-  COMPOSER_PICKER_RADIUS_CLASS_NAME,
 } from "./composerPickerStyles";
+import { ModelStarButton } from "./ModelStarButton";
 
 type FavoriteModelProvider = "cursor" | "opencode" | "pi";
 
@@ -78,37 +77,19 @@ function ProviderModelRadioItem(
       className={costMultiplierLabel ? "grid-cols-[minmax(0,1fr)_auto]" : undefined}
       trailing={
         supportsFavorites ? (
-          <button
-            type="button"
-            aria-label={
+          <ModelStarButton
+            starred={isFavorite}
+            label={
               isFavorite
                 ? `Remove ${accessibleModelName} from favourites`
                 : `Add ${accessibleModelName} to favourites`
             }
-            className={cn(
-              "inline-flex size-5 shrink-0 items-center justify-center text-muted-foreground/50 transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_5%,transparent)] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60",
-              COMPOSER_PICKER_RADIUS_CLASS_NAME,
-              isFavorite && "text-amber-400 hover:text-amber-300",
-            )}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onToggleFavorite(favoriteProvider, modelOption.slug);
-            }}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-            }}
-          >
-            {isFavorite ? (
-              <StarFilledIcon aria-hidden="true" className="size-3" />
-            ) : (
-              <StarIcon aria-hidden="true" className="size-3" />
-            )}
-          </button>
+            onToggle={() => onToggleFavorite(favoriteProvider, modelOption.slug)}
+          />
         ) : costMultiplierLabel && modelOption.description ? (
           <span
             title={modelOption.description}
-            className="shrink-0 text-[10px] font-medium tabular-nums text-muted-foreground/65"
+            className="shrink-0 text-ui-xs font-medium tabular-nums text-muted-foreground/65"
           >
             <span aria-hidden="true">{costMultiplierLabel}</span>
             <span className="sr-only">{modelOption.description}</span>
@@ -130,7 +111,7 @@ function ProviderModelRadioItem(
           {provenanceLabel ? (
             <span
               aria-hidden="true"
-              className="block min-w-0 truncate text-[10px] leading-tight text-muted-foreground/60"
+              className="block min-w-0 truncate text-ui-xs leading-tight text-muted-foreground/60"
             >
               {provenanceLabel}
             </span>
@@ -164,7 +145,7 @@ function CollapsibleModelGroup(
         <span className="col-start-2 min-w-0 truncate normal-case tracking-normal">
           {props.group.label}
         </span>
-        <span className="col-start-3 shrink-0 justify-self-end rounded-full bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] px-1.5 py-px text-[9px] font-normal tabular-nums normal-case tracking-normal text-muted-foreground/70">
+        <span className="col-start-3 shrink-0 justify-self-end rounded-full bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] px-1.5 py-px text-ui-2xs font-normal tabular-nums normal-case tracking-normal text-muted-foreground/70">
           {props.group.options.length}
         </span>
       </CollapsibleTrigger>

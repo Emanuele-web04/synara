@@ -25,6 +25,7 @@ import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts
 import * as AcpErrors from "./AcpErrors.ts";
 import { makeAcpLoadReplayGate, type AcpLoadReplayGate } from "./AcpLoadReplayGate.ts";
 import { loadAcpSdk, type AcpSdkModule } from "./AcpSdk.ts";
+import { makeAcpNotificationDispatcher } from "./AcpNotificationDispatcher.ts";
 import { SetSessionConfigOptionResponse as SetSessionConfigOptionResponseCodec } from "./AcpExtensions.ts";
 
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -167,6 +168,35 @@ type AcpIncomingFrame =
   | { readonly _tag: "chunk"; readonly chunk: Uint8Array }
   | { readonly _tag: "error"; readonly error: unknown }
   | { readonly _tag: "end" };
+
+/**
+ * Drains the child agent's stderr for the lifetime of the session scope,
+ * forwarding complete lines to the provider tap. The stream is consumed even
+ * when no tap is installed: an unread stderr pipe eventually fills and blocks
+ * the child's writes. A mid-life stream error or a throwing tap must not stop
+ * the drain, so failures are logged and swallowed.
+ */
+export const runAcpChildStderrTap = <E>(
+  stderr: Stream.Stream<Uint8Array, E>,
+  onLine: ((line: string) => void) | undefined,
+): Effect.Effect<void> =>
+  stderr.pipe(
+    Stream.decodeText,
+    Stream.splitLines,
+    Stream.runForEach((line) =>
+      Effect.sync(() => {
+        if (!onLine) return;
+        try {
+          onLine(line);
+        } catch {
+          // A broken tap must never kill the drain.
+        }
+      }),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("acp.stderr_drain_failed", { cause: Cause.pretty(cause) }),
+    ),
+  );
 
 export function normalizeAcpIncomingJsonMessages(
   input: ReadableStream<Uint8Array>,
@@ -369,6 +399,15 @@ export interface AcpSessionRuntimeOptions {
   };
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly normalizeIncomingMessage?: (message: unknown) => unknown;
+  /**
+   * Per-line tap on the child agent's stderr. The child mirrors its full log
+   * stream there (e.g. Devin's `affogato::stall_watch` warnings and exec
+   * `create_session` lifecycle lines), which is the only out-of-band liveness
+   * signal available when a child wedges while alive. The stderr stream is
+   * always drained so an unread pipe can never fill and block the child,
+   * whether or not a tap is installed.
+   */
+  readonly onChildStderrLine?: (line: string) => void;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
     readonly logOutgoing?: boolean;
@@ -605,29 +644,29 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
     const logger = options.protocolLogging?.logger;
     return logger?.({ direction, stage, payload }) ?? Effect.void;
   };
-  let sessionUpdateTail = Promise.resolve();
-  const dispatchSessionUpdate = (params: Acp.SessionNotification) => {
-    const delivery = sessionUpdateTail.then(() =>
-      Effect.runPromise(logProtocol("incoming", "decoded", params)).then(() =>
-        Promise.all(sessionUpdateHandlers.map((handler) => runHandler(handler(params)))).then(
-          () => undefined,
-        ),
+  let connection: Acp.ClientConnection | undefined;
+  let transportFailure: Error | undefined;
+  const callbackAbort = new AbortController();
+  const sessionUpdates = makeAcpNotificationDispatcher<Acp.SessionNotification>({
+    maxCount: ACP_MAX_PENDING_NOTIFICATIONS_TOTAL,
+    maxBytes: 32 * 1024 * 1024,
+    deliver: (params, signal) =>
+      Effect.runPromise(logProtocol("incoming", "decoded", params), { signal }).then(() =>
+        Promise.all(
+          sessionUpdateHandlers.map((handler) => Effect.runPromise(handler(params), { signal })),
+        ).then(() => undefined),
       ),
-    );
-    sessionUpdateTail = delivery.catch(() => undefined);
-    return delivery;
-  };
-  const awaitSessionUpdateDrain = async () => {
-    let observed: Promise<void>;
-    do {
-      observed = sessionUpdateTail;
-      await observed;
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    } while (observed !== sessionUpdateTail);
-  };
+    onOverflow: (error) => {
+      transportFailure = error;
+      callbackAbort.abort(error);
+      connection?.close(error);
+    },
+  });
+  const dispatchSessionUpdate = sessionUpdates.dispatch;
+  const awaitSessionUpdateDrain = sessionUpdates.drain;
 
   const runHandler = <A>(effect: Effect.Effect<A, AcpErrors.AcpError>): Promise<A> =>
-    Effect.runPromise(effect).catch((error) => {
+    Effect.runPromise(effect, { signal: callbackAbort.signal }).catch((error) => {
       if (error instanceof AcpErrors.AcpRequestError) {
         throw new acpSdk.RequestError(error.code, error.errorMessage, error.data);
       }
@@ -737,13 +776,27 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
         () => undefined,
       ),
     );
-  let connection: Acp.ClientConnection | undefined;
-  const getConnection = () =>
-    (connection ??= clientApp.connect(acpSdk.ndJsonStream(output, input)));
+  yield* Scope.addFinalizer(
+    runtimeScope,
+    Effect.gen(function* () {
+      sessionUpdates.close();
+      callbackAbort.abort();
+      connection?.close();
+      yield* Queue.shutdown(outgoing);
+    }),
+  );
+  const getConnection = () => {
+    if (transportFailure) throw transportFailure;
+    if (callbackAbort.signal.aborted) throw new Error("ACP runtime closed");
+    return (connection ??= clientApp.connect(acpSdk.ndJsonStream(output, input)));
+  };
   const fromPromise = <A>(
     thunk: (signal: AbortSignal) => Promise<A>,
   ): Effect.Effect<A, AcpErrors.AcpError> =>
-    Effect.tryPromise({ try: thunk, catch: (error) => officialSdkError(acpSdk, error) });
+    Effect.tryPromise({
+      try: thunk,
+      catch: (error) => officialSdkError(acpSdk, transportFailure ?? error),
+    });
   const request = <Method extends Acp.AgentRequestMethod>(
     method: Method,
     payload: Acp.AgentRequestParamsByMethod[Method],
@@ -1197,6 +1250,13 @@ const makeAcpSessionRuntime = (
         return pendingEvents.length;
       });
 
+    yield* Effect.addFinalizer(() =>
+      clearSessionEpoch().pipe(
+        Effect.andThen(Ref.set(toolCallsRef, new Map())),
+        Effect.andThen(Queue.shutdown(eventQueue)),
+      ),
+    );
+
     const setSessionEpoch = (
       sessionId: string,
       sessionSetupResult:
@@ -1413,6 +1473,12 @@ const makeAcpSessionRuntime = (
     // Registered after child teardown so LIFO scope closure releases any first
     // prompt/fork waiter before waiting for the child process to exit.
     yield* Effect.addFinalizer(() => loadReplayGate?.release ?? Effect.void);
+
+    // Always drain the child's stderr (an unread pipe eventually fills and
+    // blocks the child's writes) and forward lines to the provider tap.
+    yield* runAcpChildStderrTap(child.stderr, options.onChildStderrLine).pipe(
+      Effect.forkIn(runtimeScope),
+    );
 
     const acp = yield* makeOfficialSdkClient(child, runtimeScope, options);
 

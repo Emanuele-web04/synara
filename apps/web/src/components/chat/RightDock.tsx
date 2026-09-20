@@ -13,12 +13,13 @@ import {
 } from "react";
 
 import { cn } from "~/lib/utils";
+import { useIsMobile } from "~/hooks/useMediaQuery";
 import {
   type DockPaneRuntimeMode,
   EMPTY_PANE_ID_SET,
   reconcileKeepMountedPaneIds,
 } from "~/lib/dockPaneActivation";
-import { PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
+import { PanelCollapseIcon, PanelExpandIcon, PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
 import type {
   RightDockPane,
   RightDockPaneKind,
@@ -107,7 +108,7 @@ function RightDockLauncher(props: {
             key={kind}
             variant="subtle"
             size="xl"
-            className="h-11 w-full justify-start gap-3 rounded-xl px-4 text-[length:var(--app-font-size-ui-lg,13px)] font-normal"
+            className="h-11 w-full justify-start gap-3 rounded-xl px-4 text-ui-lg font-normal"
             aria-label={`Open ${label}`}
             onClick={() => props.onOpen(kind)}
           >
@@ -197,6 +198,51 @@ export function RightDock(props: RightDockProps) {
   // pin the dock width to exactly half of it. Mid-session drags still resize
   // freely; the next open re-centers the split.
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const expansionKey = props.motionKey ?? "dock";
+  const isMobile = useIsMobile();
+  const maximized = !isMobile && props.state.open && expandedKey === expansionKey;
+  const [expandedWidth, setExpandedWidth] = useState(0);
+  useLayoutEffect(() => {
+    if (maximized && props.state.panes.length === 0) {
+      setExpandedKey(null);
+      props.onCollapse();
+    }
+  }, [maximized, props.state.panes.length, props.onCollapse]);
+  useLayoutEffect(() => {
+    if (!maximized) return;
+    const wrapper = contentRef.current?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    const shell = wrapper?.parentElement;
+    if (!shell || !wrapper) return;
+    const update = () => setExpandedWidth(shell.getBoundingClientRect().width);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(shell);
+    // The chat stays mounted and running underneath, but must leave tab order.
+    const siblings = Array.from(shell.children).filter(
+      (element): element is HTMLElement => element instanceof HTMLElement && element !== wrapper,
+    );
+    const previous = siblings.map((element) => ({
+      inert: element.inert,
+      visibility: element.style.visibility,
+    }));
+    siblings.forEach((element) => {
+      element.inert = true;
+      // Electron drag regions can intercept clicks through an overlapping panel.
+      // Hide the covered surface as well as removing it from keyboard navigation.
+      element.style.visibility = "hidden";
+    });
+    return () => {
+      observer.disconnect();
+      siblings.forEach((element, index) => {
+        element.inert = previous[index]?.inert ?? false;
+        element.style.visibility = previous[index]?.visibility ?? "";
+      });
+    };
+  }, [maximized]);
+  useEffect(() => {
+    if (!props.state.open) setExpandedKey(null);
+  }, [props.state.open]);
   const minWidth = props.minWidth;
   const activePaneKind = activePane?.kind ?? null;
   useEffect(() => {
@@ -263,6 +309,8 @@ export function RightDock(props: RightDockProps) {
           "border-l border-[var(--app-surface-divider)] text-foreground",
           chromeMotionClass,
         )}
+        style={maximized ? { width: expandedWidth || undefined, zIndex: 30 } : undefined}
+        data-dock-maximized={maximized ? "true" : undefined}
         innerClassName={CHAT_BACKGROUND_CLASS_NAME}
         gapClassName={chromeMotionClass}
         transparentSurface
@@ -279,7 +327,7 @@ export function RightDock(props: RightDockProps) {
           <div
             className={cn(
               CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
-              "gap-1 px-1.5",
+              "gap-1 px-1.5 [-webkit-app-region:no-drag]",
               desktopTopBarWindowControlsGutterClassName,
             )}
           >
@@ -323,6 +371,19 @@ export function RightDock(props: RightDockProps) {
                   })}
                 </ComposerPickerMenuPopup>
               </Menu>
+            ) : null}
+            {!isMobile && (maximized || activePane !== null) ? (
+              <IconButton
+                variant="chrome"
+                size="icon-xs"
+                label={maximized ? "Restore panel" : "Maximize panel"}
+                tooltip={maximized ? "Restore panel" : "Maximize panel"}
+                aria-pressed={maximized}
+                className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                onClick={() => setExpandedKey(maximized ? null : expansionKey)}
+              >
+                {maximized ? <PanelCollapseIcon /> : <PanelExpandIcon />}
+              </IconButton>
             ) : null}
             <IconButton
               variant="chrome"
@@ -373,7 +434,7 @@ export function RightDock(props: RightDockProps) {
             })}
           </div>
         </div>
-        <SidebarRail />
+        {!maximized && <SidebarRail />}
       </Sidebar>
     </SidebarProvider>
   );

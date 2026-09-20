@@ -16,6 +16,8 @@ description: The full default keymap, verified against the Synara source, plus J
 | `ctrl+tab` / `ctrl+shift+tab` | Cycle recent views                                 |
 | `mod+shift+o`                 | Add a project                                      |
 | `mod+i`                       | Import a thread                                    |
+| `mod+alt+u`                   | Toggle the Activity panel                          |
+| `mod+shift+c`                 | Copy the active thread ID                          |
 | `mod+o`                       | Open the favorite file in the editor               |
 | `mod+p`                       | Search files by name in the active project         |
 | `mod+shift+f`                 | Search matching source lines in the active project |
@@ -44,15 +46,19 @@ description: The full default keymap, verified against the Synara source, plus J
 
 ## Panels and terminals
 
-| Shortcut           | Action                                                               | Context              |
-| ------------------ | -------------------------------------------------------------------- | -------------------- |
-| `mod+j`            | Toggle the terminal drawer                                           | Anywhere             |
-| `mod+shift+j`      | Full-width terminal workspace (`mod+1`/`mod+2` switch terminal/chat) | Anywhere             |
-| `mod+d`            | Toggle the diff panel                                                | Outside the terminal |
-| `mod+d`            | Split the terminal                                                   | Terminal focused     |
-| `mod+shift+arrows` | Directional terminal splits                                          | Terminal focused     |
-| `mod+t` / `mod+w`  | New / close terminal tab                                             | Terminal focused     |
-| `mod+shift+b`      | Toggle the browser preview                                           | Outside the terminal |
+| Shortcut                     | Action                                                                 | Context                 |
+| ---------------------------- | ---------------------------------------------------------------------- | ----------------------- |
+| `mod+j`                      | Toggle the terminal drawer                                             | Anywhere                |
+| `mod+shift+j`                | Full-width terminal workspace (`ctrl+1`/`ctrl+2` switch terminal/chat) | Anywhere                |
+| `mod+w`                      | Close the active workspace panel                                       | Terminal workspace open |
+| `mod+d`                      | Toggle the diff panel                                                  | Outside the terminal    |
+| `alt+↓` / `alt+↑`            | Next / previous diff change                                            | Outside the terminal    |
+| `mod+s`                      | Save the active file editor immediately                                | Outside the terminal    |
+| `mod+d`                      | Split the terminal                                                     | Terminal focused        |
+| `mod+shift+arrows`           | Directional terminal splits                                            | Terminal focused        |
+| `mod+t` / `mod+w`            | New / close terminal tab                                               | Terminal focused        |
+| `mod+shift+b`                | Toggle the browser preview                                             | Outside the terminal    |
+| `meta+ctrl+p` / `ctrl+alt+p` | Commit and push (macOS / Windows-Linux)                                | Outside the terminal    |
 
 Opening a file or source match sends it to the current task's file pane. Content search requires at least two characters and shows the matching path, line number, and source excerpt. The iOS Simulator exposes a customizable `device.toggle` command but has no default shortcut; open it from the right-dock add menu or assign a key in Settings.
 

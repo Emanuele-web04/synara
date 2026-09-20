@@ -4,6 +4,7 @@
 
 import {
   DEFAULT_SERVER_SETTINGS,
+  MODEL_OPTIONS_BY_PROVIDER,
   type ProviderKind,
   type ProviderModelDescriptor,
 } from "@synara/contracts";
@@ -17,7 +18,13 @@ import { useProviderModelCatalog } from "./useProviderModelCatalog";
 const mocks = vi.hoisted(() => ({
   useAppSettings: vi.fn(),
   useQuery: vi.fn(),
+  useEffect: vi.fn(),
 }));
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return { ...actual, useEffect: mocks.useEffect };
+});
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-query")>();
@@ -42,6 +49,7 @@ interface QueryResultLike {
     readonly models?: ReadonlyArray<ProviderModelDescriptor>;
     readonly source?: string;
   };
+  readonly error?: unknown;
   readonly isFetching: boolean;
   readonly isLoading: boolean;
   readonly isPlaceholderData: boolean;
@@ -77,12 +85,13 @@ const SETTINGS = {
 
 function readCatalogRenders(
   input: Parameters<typeof useProviderModelCatalog>[0],
+  nextInput = input,
 ): ProviderModelCatalog[] {
   const results: ProviderModelCatalog[] = [];
 
   function Probe() {
     const [renderIndex, setRenderIndex] = useState(0);
-    results.push(useProviderModelCatalog(input));
+    results.push(useProviderModelCatalog(renderIndex === 0 ? input : nextInput));
     if (renderIndex === 0) {
       setRenderIndex(1);
     }
@@ -111,6 +120,7 @@ function readModelQueryEnabled(provider: ProviderKind): boolean | undefined {
 }
 
 beforeEach(() => {
+  mocks.useEffect.mockClear();
   modelQueries.clear();
   agentQueries.clear();
   mocks.useAppSettings
@@ -129,6 +139,89 @@ beforeEach(() => {
 });
 
 describe("useProviderModelCatalog", () => {
+  it.each([{ models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }] }, { models: [] }])(
+    "uses the Codex catalog without restoring retired built-ins: %j",
+    ({ models }) => {
+      mocks.useAppSettings.mockReturnValue({
+        settings: { ...SETTINGS, customCodexModels: ["private-model"] },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      });
+      modelQueries.set("codex", {
+        ...EMPTY_QUERY,
+        data: { models, source: "codex-app-server", cached: false },
+      });
+
+      const [catalog] = readCatalogRenders({
+        selectedProvider: "codex",
+        discoveryEnabled: true,
+        modelHintByProvider: { codex: "gpt-5.4" },
+      });
+
+      expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual([
+        ...models.map((model) => model.slug),
+        "private-model",
+      ]);
+    },
+  );
+
+  it.each([
+    { ...EMPTY_QUERY, error: new Error("Codex unavailable") },
+    {
+      ...EMPTY_QUERY,
+      isLoading: true,
+      isPlaceholderData: true,
+      data: { models: [], source: "empty", cached: false },
+    },
+  ])("keeps the Codex fallback until discovery succeeds: %j", (query) => {
+    modelQueries.set("codex", query);
+
+    const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
+
+    expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual(
+      MODEL_OPTIONS_BY_PROVIDER.codex.map((model) => model.slug),
+    );
+  });
+
+  it("keeps the last Codex catalog when a background refresh fails", () => {
+    modelQueries.set("codex", {
+      ...EMPTY_QUERY,
+      data: {
+        models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+        source: "codex-app-server",
+        cached: true,
+      },
+      error: new Error("Codex unavailable"),
+    });
+
+    const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
+
+    expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual([
+      "gpt-5.6-sol",
+    ]);
+  });
+
+  it("keeps the foreground effect dependency stable across unrelated renders", () => {
+    readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: true });
+    const [first, second] = mocks.useEffect.mock.calls;
+    // React uses Object.is on each dependency: an equal-but-new query key
+    // would release/reacquire ownership and reorder split-view selections.
+    expect(first?.[1][0]).toBe(second?.[1][0]);
+    expect(first?.[1][1]).toBe(second?.[1][1]);
+    expect(mocks.useEffect).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { selectedProvider: "cursor", discoveryEnabled: true, cwd: "/first" },
+    { selectedProvider: "pi", discoveryEnabled: true, cwd: "/second" },
+  ] as const)("changes foreground ownership when the selected query changes: %j", (nextInput) => {
+    readCatalogRenders(
+      { selectedProvider: "pi", discoveryEnabled: true, cwd: "/first" },
+      nextInput,
+    );
+    const [first, second] = mocks.useEffect.mock.calls;
+    expect(first?.[1][0]).not.toEqual(second?.[1][0]);
+  });
+
   it("keeps aggregate identities stable when inputs and query data are unchanged", () => {
     const [first, second] = readCatalogRenders({
       selectedProvider: "cursor",
@@ -313,5 +406,23 @@ describe("useProviderModelCatalog", () => {
     }).at(-1);
 
     expect(catalog?.discoveryErrorsByProvider.devin).toBe("Devin CLI failed");
+  });
+
+  it("surfaces a rejected discovery after retries are exhausted", () => {
+    modelQueries.set("opencode", {
+      error: new Error("OpenCode model discovery temporarily unavailable"),
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "opencode",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.discoveryErrorsByProvider.opencode).toBe(
+      "OpenCode model discovery temporarily unavailable",
+    );
   });
 });

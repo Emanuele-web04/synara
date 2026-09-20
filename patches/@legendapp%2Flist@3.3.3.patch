@@ -1,0 +1,44 @@
+diff --git a/react.js b/react.js
+--- a/react.js
++++ b/react.js
+@@ -1392,7 +1392,7 @@
+       const activeState = maintainScrollAtEnd.animated ? "animated" : "instant";
+       state.maintainingScrollAtEnd = pendingState;
+       requestAnimationFrame(() => {
+-        if (peek$(ctx, "isWithinMaintainScrollAtEndThreshold")) {
++        if (state.props.maintainScrollAtEnd && peek$(ctx, "isWithinMaintainScrollAtEndThreshold")) {
+           state.maintainingScrollAtEnd = activeState;
+           const scroller = refScroller.current;
+           if (state.props.horizontal && isHorizontalRTL(state)) {
+@@ -4072,7 +4072,8 @@
+ function getIdsInVisibleRange(state, range) {
+   var _a3, _b;
+   const idsInView = [];
+-  const firstVisibleAnchorIndex = (_a3 = range.firstFullyOnScreenIndex) != null ? _a3 : range.startNoBuffer;
++  // Preserve the partially visible row being read, even when a later row is fully visible.
++  const firstVisibleAnchorIndex = (_a3 = range.startNoBuffer) != null ? _a3 : range.firstFullyOnScreenIndex;
+   if (firstVisibleAnchorIndex !== null && firstVisibleAnchorIndex !== void 0 && range.endNoBuffer !== null) {
+     for (let i = firstVisibleAnchorIndex; i <= range.endNoBuffer; i++) {
+       const id = (_b = state.idCache[i]) != null ? _b : getId(state, i);
+diff --git a/react.mjs b/react.mjs
+--- a/react.mjs
++++ b/react.mjs
+@@ -1371,7 +1371,7 @@
+       const activeState = maintainScrollAtEnd.animated ? "animated" : "instant";
+       state.maintainingScrollAtEnd = pendingState;
+       requestAnimationFrame(() => {
+-        if (peek$(ctx, "isWithinMaintainScrollAtEndThreshold")) {
++        if (state.props.maintainScrollAtEnd && peek$(ctx, "isWithinMaintainScrollAtEndThreshold")) {
+           state.maintainingScrollAtEnd = activeState;
+           const scroller = refScroller.current;
+           if (state.props.horizontal && isHorizontalRTL(state)) {
+@@ -4051,7 +4051,8 @@
+ function getIdsInVisibleRange(state, range) {
+   var _a3, _b;
+   const idsInView = [];
+-  const firstVisibleAnchorIndex = (_a3 = range.firstFullyOnScreenIndex) != null ? _a3 : range.startNoBuffer;
++  // Preserve the partially visible row being read, even when a later row is fully visible.
++  const firstVisibleAnchorIndex = (_a3 = range.startNoBuffer) != null ? _a3 : range.firstFullyOnScreenIndex;
+   if (firstVisibleAnchorIndex !== null && firstVisibleAnchorIndex !== void 0 && range.endNoBuffer !== null) {
+     for (let i = firstVisibleAnchorIndex; i <= range.endNoBuffer; i++) {
+       const id = (_b = state.idCache[i]) != null ? _b : getId(state, i);

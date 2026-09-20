@@ -3,7 +3,7 @@
 // Layer: Web orchestration helper
 // Exports: dispatchQueuedComposerTurnHeadless
 
-import type { AssistantDeliveryMode, ThreadId } from "@synara/contracts";
+import type { AssistantDeliveryMode, MessageId, ThreadId } from "@synara/contracts";
 
 import { persistModelSelectionBeforeRuntimeMode } from "../components/ChatView.logic";
 import { useComposerDraftStore, type QueuedComposerTurn } from "../composerDraftStore";
@@ -23,6 +23,7 @@ import {
   filterPromptSkillReferences,
 } from "./composerMentions";
 import { appendPastedTextsToPrompt, filterPastedTextsWithText } from "./composerPastedText";
+import { appendPullRequestContextsToPrompt } from "./pullRequestContext";
 import { formatOutgoingComposerPrompt, stageUploadComposerAttachments } from "./composerSend";
 import { appendFileCommentsToPrompt } from "./fileComments";
 import {
@@ -37,6 +38,7 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   queuedTurn: QueuedComposerTurn;
   dispatchMode: "queue" | "steer";
   assistantDeliveryMode: AssistantDeliveryMode;
+  messageId?: MessageId;
 }): Promise<boolean> {
   const api = readNativeApi();
   if (!api) {
@@ -44,12 +46,12 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   }
 
   const thread = getThreadFromState(useStore.getState(), input.threadId);
-  if (!thread) {
+  if (!thread || thread.claudeCacheReview != null) {
     return false;
   }
 
   const createdAt = new Date().toISOString();
-  const messageId = newMessageId();
+  const messageId = input.messageId ?? newMessageId();
   const queuedTurn = input.queuedTurn;
 
   if (queuedTurn.kind === "plan-follow-up") {
@@ -109,6 +111,12 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
       });
       return true;
     } catch {
+      if (
+        getThreadFromState(useStore.getState(), input.threadId)?.claudeCacheReview?.messageId ===
+        messageId
+      ) {
+        return true;
+      }
       clearPendingTurnDispatch(input.threadId);
       return false;
     }
@@ -117,15 +125,18 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
   const sendableTerminalContexts = filterTerminalContextsWithText(queuedTurn.terminalContexts);
   const sendablePastedTexts = filterPastedTextsWithText(queuedTurn.pastedTexts);
   const messageText = appendBrowserAnnotationsToPrompt(
-    appendPastedTextsToPrompt(
-      appendFileCommentsToPrompt(
-        appendTerminalContextsToPrompt(
-          appendAssistantSelectionsToPrompt(queuedTurn.prompt, queuedTurn.assistantSelections),
-          sendableTerminalContexts,
+    appendPullRequestContextsToPrompt(
+      appendPastedTextsToPrompt(
+        appendFileCommentsToPrompt(
+          appendTerminalContextsToPrompt(
+            appendAssistantSelectionsToPrompt(queuedTurn.prompt, queuedTurn.assistantSelections),
+            sendableTerminalContexts,
+          ),
+          queuedTurn.fileComments,
         ),
-        queuedTurn.fileComments,
+        sendablePastedTexts,
       ),
-      sendablePastedTexts,
+      queuedTurn.pullRequestContexts,
     ),
     queuedTurn.browserAnnotations,
     messageId,
@@ -167,31 +178,40 @@ export async function dispatchQueuedComposerTurnHeadless(input: {
     });
     const stagedTurnAttachments = await turnAttachmentsPromise;
     await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
-      api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
-        commandId: newCommandId(),
-        threadId: input.threadId,
-        message: {
-          messageId,
-          role: "user",
-          text: outgoingMessageText,
-          attachments: turnAttachments,
-          ...(mentionedSkills.length > 0 ? { skills: mentionedSkills } : {}),
-          ...(mentionedMentions.length > 0 ? { mentions: mentionedMentions } : {}),
-        },
-        modelSelection: queuedTurn.modelSelection,
-        ...(queuedTurn.providerOptionsForDispatch
-          ? { providerOptions: queuedTurn.providerOptionsForDispatch }
-          : {}),
-        assistantDeliveryMode: input.assistantDeliveryMode,
-        dispatchMode: input.dispatchMode,
-        runtimeMode: queuedTurn.runtimeMode,
-        interactionMode: queuedTurn.interactionMode,
-        ...(queuedTurn.sourceProposedPlan
-          ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
-          : {}),
-        createdAt,
-      }),
+      api.orchestration
+        .dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: input.threadId,
+          message: {
+            messageId,
+            role: "user",
+            text: outgoingMessageText,
+            attachments: turnAttachments,
+            ...(mentionedSkills.length > 0 ? { skills: mentionedSkills } : {}),
+            ...(mentionedMentions.length > 0 ? { mentions: mentionedMentions } : {}),
+          },
+          modelSelection: queuedTurn.modelSelection,
+          ...(queuedTurn.providerOptionsForDispatch
+            ? { providerOptions: queuedTurn.providerOptionsForDispatch }
+            : {}),
+          assistantDeliveryMode: input.assistantDeliveryMode,
+          dispatchMode: input.dispatchMode,
+          runtimeMode: queuedTurn.runtimeMode,
+          interactionMode: queuedTurn.interactionMode,
+          ...(queuedTurn.sourceProposedPlan
+            ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
+            : {}),
+          createdAt,
+        })
+        .catch((error: unknown) => {
+          if (
+            getThreadFromState(useStore.getState(), input.threadId)?.claudeCacheReview
+              ?.messageId !== messageId
+          ) {
+            throw error;
+          }
+        }),
     );
     return true;
   } catch {

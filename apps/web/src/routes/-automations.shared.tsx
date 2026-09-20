@@ -311,15 +311,6 @@ export function unresolvedTriageRuns(runs: readonly AutomationRun[]): Automation
   return runs.filter((run) => isTriageRun(run));
 }
 
-export function allVisibleTriageRuns(runs: readonly AutomationRun[]): AutomationRun[] {
-  return runs.filter((run) => {
-    if (run.result) {
-      return run.finishedAt !== null && run.result.archivedAt === null;
-    }
-    return isTriageRun(run);
-  });
-}
-
 export function automationAttentionCount(runs: readonly AutomationRun[]): number {
   return unresolvedTriageRuns(runs).length;
 }
@@ -451,26 +442,6 @@ export function automationListRowIcon(
     return { name: "clock", className: "size-4 text-foreground/70" };
   }
   return { name: "circle-placeholder-on", className: "size-4 text-foreground/70" };
-}
-
-/**
- * Tint for the list row's leading status glyph: dimmed when paused, blue while a run is
- * live, amber when the latest run needs attention, otherwise neutral.
- */
-export function automationStatusDotClass(
-  definition: AutomationDefinition,
-  latestRun: AutomationRun | null,
-): string {
-  if (!definition.enabled) return "text-muted-foreground/40";
-  if (
-    latestRun?.status === "running" ||
-    latestRun?.status === "pending" ||
-    latestRun?.status === "claimed"
-  ) {
-    return "text-blue-500";
-  }
-  if (latestRun && automationAttentionLabel(latestRun) !== null) return "text-amber-500";
-  return "text-foreground/70";
 }
 
 const deletedAutomationIdsInCache = new Set<string>();
@@ -859,7 +830,7 @@ export function AutomationApprovalBanner({
         </span>
         <ul className="flex flex-col gap-1.5">
           {warnings.map((warning) => (
-            <li key={warning.id} className="text-xs">
+            <li key={warning.id} className="text-ui leading-snug">
               <span className="font-medium text-foreground/90">{warning.title}</span>
               <span className="block">{warning.detail}</span>
             </li>
@@ -1136,7 +1107,7 @@ export function AutomationDialog({
             }}
             placeholder="Add prompt e.g. look for crashes in $sentry"
             aria-label="Automation prompt"
-            className="min-h-[15rem] w-full flex-1 resize-none overflow-y-auto bg-transparent font-system-ui text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/50"
+            className="min-h-[15rem] w-full flex-1 resize-none overflow-y-auto bg-transparent font-system-ui text-ui leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/50"
           />
 
           {warnings.length > 0 ? (
@@ -1144,7 +1115,7 @@ export function AutomationDialog({
               {warnings.map((warning) => (
                 <label
                   key={warning.id}
-                  className="flex items-start gap-2 text-xs text-muted-foreground"
+                  className="flex items-start gap-2 text-ui leading-snug text-muted-foreground"
                 >
                   {warning.requiresAcknowledgement ? (
                     <input
@@ -1165,7 +1136,7 @@ export function AutomationDialog({
             </div>
           ) : null}
           {fastIntervalLimitMessage ? (
-            <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-700 dark:text-amber-300">
+            <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-ui leading-snug text-amber-700 dark:text-amber-300">
               {fastIntervalLimitMessage}
             </div>
           ) : null}
@@ -1289,7 +1260,7 @@ export function AutomationDialog({
                           step={1}
                           value={form.onceRunAt}
                           onChange={(event) => setField("onceRunAt", event.target.value)}
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         />
                       </div>
                     </MenuGroup>
@@ -1305,7 +1276,7 @@ export function AutomationDialog({
                           value={form.cronExpression}
                           onChange={(event) => setField("cronExpression", event.target.value)}
                           placeholder="0 9 * * *"
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         />
                       </div>
                     </MenuGroup>
@@ -1366,7 +1337,7 @@ export function AutomationDialog({
                           value={form.timezone}
                           onChange={(event) => setField("timezone", event.target.value)}
                           placeholder="Europe/Rome"
-                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
                         />
                       </div>
                     </MenuGroup>
@@ -1435,7 +1406,7 @@ export function AutomationDialog({
                       value={form.stopWhen}
                       onChange={(event) => setField("stopWhen", event.target.value)}
                       placeholder="PR is ready to merge"
-                      className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
                     />
                   </div>
                 </MenuGroup>
@@ -1534,7 +1505,10 @@ export function AutomationDialog({
 
           <div className="flex min-w-0 shrink-0 items-center gap-2">
             {submitBlockReason ? (
-              <span className="min-w-0 truncate text-xs text-muted-foreground" role="status">
+              <span
+                className="min-w-0 truncate text-ui leading-snug text-muted-foreground"
+                role="status"
+              >
                 {submitBlockReason}
               </span>
             ) : null}

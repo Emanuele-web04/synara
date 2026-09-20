@@ -1,10 +1,8 @@
 import { type ProviderModelDescriptor, ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
-import {
-  getComposerProviderState,
-  renderProviderTraitsMenuContent,
-  renderProviderTraitsPicker,
-} from "./composerProviderRegistry";
+import { renderToStaticMarkup } from "react-dom/server";
+import { getComposerProviderState } from "./composerProviderRegistry";
+import { TraitsPicker } from "./TraitsPicker";
 import { getComposerTraitSelection } from "./composerTraits";
 
 const OPENCODE_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
@@ -361,16 +359,18 @@ describe("getComposerProviderState", () => {
       ).effortLevels.map((effort) => effort.value),
     ).toEqual(["low", "medium", "high"]);
     expect(
-      renderProviderTraitsPicker({
-        provider: "antigravity",
-        threadId: ThreadId.makeUnsafe("thread-antigravity-effort"),
-        model: "Gemini 3.5 Flash",
-        runtimeModel: ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING,
-        modelOptions: { reasoningEffort: "high" },
-        prompt: "",
-        onPromptChange: vi.fn(),
-      }),
-    ).not.toBeNull();
+      renderToStaticMarkup(
+        <TraitsPicker
+          provider="antigravity"
+          threadId={ThreadId.makeUnsafe("thread-antigravity-effort")}
+          model="Gemini 3.5 Flash"
+          runtimeModel={ANTIGRAVITY_RUNTIME_GEMINI_WITH_REASONING}
+          modelOptions={{ reasoningEffort: "high" }}
+          prompt=""
+          onPromptChange={vi.fn()}
+        />,
+      ),
+    ).toContain('aria-label="Change effort, context, and speed"');
   });
 
   it("hides Antigravity effort controls when the selected model has only one effort", () => {
@@ -384,16 +384,18 @@ describe("getComposerProviderState", () => {
 
     expect(selection.effortLevels).toEqual([]);
     expect(
-      renderProviderTraitsPicker({
-        provider: "antigravity",
-        threadId: ThreadId.makeUnsafe("thread-antigravity-single-effort"),
-        model: "Claude Sonnet 4.6",
-        runtimeModel: ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT,
-        modelOptions: undefined,
-        prompt: "",
-        onPromptChange: vi.fn(),
-      }),
-    ).toBeNull();
+      renderToStaticMarkup(
+        <TraitsPicker
+          provider="antigravity"
+          threadId={ThreadId.makeUnsafe("thread-antigravity-single-effort")}
+          model="Claude Sonnet 4.6"
+          runtimeModel={ANTIGRAVITY_RUNTIME_CLAUDE_WITH_SINGLE_EFFORT}
+          modelOptions={undefined}
+          prompt=""
+          onPromptChange={vi.fn()}
+        />,
+      ),
+    ).toBe("");
   });
 
   it("returns codex defaults when no codex draft options exist", () => {
@@ -620,7 +622,10 @@ describe("getComposerProviderState", () => {
     });
   });
 
-  it("drops codex fast mode when runtime discovery does not advertise support", () => {
+  it.each([
+    { fastMode: true, expectedOptions: undefined },
+    { fastMode: false, expectedOptions: { fastMode: false } },
+  ])("normalizes unsupported Codex fastMode=$fastMode", ({ fastMode, expectedOptions }) => {
     const state = getComposerProviderState({
       provider: "codex",
       model: "gpt-5.4-mini",
@@ -633,7 +638,7 @@ describe("getComposerProviderState", () => {
       prompt: "",
       modelOptions: {
         codex: {
-          fastMode: true,
+          fastMode,
         },
       },
     });
@@ -641,11 +646,11 @@ describe("getComposerProviderState", () => {
     expect(state).toEqual({
       provider: "codex",
       promptEffort: "medium",
-      modelOptionsForDispatch: undefined,
+      modelOptionsForDispatch: expectedOptions,
     });
   });
 
-  it("drops explicit codex default/off overrides from dispatch while keeping the selected effort label", () => {
+  it("preserves explicit Codex Fast off for dispatch while keeping the selected effort label", () => {
     const state = getComposerProviderState({
       provider: "codex",
       model: "gpt-5.4",
@@ -661,7 +666,7 @@ describe("getComposerProviderState", () => {
     expect(state).toEqual({
       provider: "codex",
       promptEffort: "high",
-      modelOptionsForDispatch: undefined,
+      modelOptionsForDispatch: { fastMode: false },
     });
   });
 
@@ -678,6 +683,63 @@ describe("getComposerProviderState", () => {
       promptEffort: "high",
       modelOptionsForDispatch: undefined,
     });
+  });
+
+  it.each([
+    ["claude-fable-5-1", "auto"],
+    ["claude-opus-5", "auto"],
+    ["claude-opus-4-8", "auto"],
+    ["claude-sonnet-5", "auto"],
+    ["claude-opus-4-6", "auto"],
+    ["claude-sonnet-4-6", "auto"],
+  ] as const)("shows %s with the %s model-native window", (model, expectedDefault) => {
+    const selection = getComposerTraitSelection("claudeAgent", model, "", undefined);
+
+    expect(selection.defaultContextWindow).toBe(expectedDefault);
+    expect(selection.contextWindow).toBe(expectedDefault);
+    expect(
+      selection.contextWindowOptions.find((option) => option.value === expectedDefault)?.isDefault,
+    ).toBe(true);
+  });
+
+  it("shows Auto as the default auto-compact window for a 1M Claude suffix", () => {
+    const defaults = getComposerTraitSelection(
+      "claudeAgent",
+      "claude-fable-5-1[1M]",
+      "",
+      undefined,
+    );
+    const explicit200k = getComposerTraitSelection("claudeAgent", "claude-fable-5-1[1m]", "", {
+      autoCompactWindow: "200k",
+    });
+
+    expect(defaults.defaultContextWindow).toBe("auto");
+    expect(defaults.contextWindow).toBe("auto");
+    expect(defaults.contextWindowOptions).toEqual([
+      { value: "auto", label: "Auto (Claude Code)", isDefault: true },
+      { value: "200k", label: "200k" },
+      { value: "1m", label: "1M" },
+    ]);
+    expect(explicit200k.contextWindow).toBe("200k");
+  });
+
+  it("normalizes Claude auto-compact dispatch against the model-aware default", () => {
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1",
+        prompt: "",
+        modelOptions: { claudeAgent: { autoCompactWindow: "1m" } },
+      }).modelOptionsForDispatch,
+    ).toEqual({ autoCompactWindow: "1m" });
+    expect(
+      getComposerProviderState({
+        provider: "claudeAgent",
+        model: "claude-fable-5-1",
+        prompt: "",
+        modelOptions: { claudeAgent: { autoCompactWindow: "200k" } },
+      }).modelOptionsForDispatch,
+    ).toEqual({ autoCompactWindow: "200k" });
   });
 
   it("tracks Claude ultrathink from the prompt without changing dispatch effort", () => {
@@ -896,16 +958,18 @@ describe("getComposerProviderState", () => {
       prompt: "",
       modelOptions: { droid: { reasoningEffort: "xhigh" } },
     });
-    const picker = renderProviderTraitsPicker({
-      provider: "droid",
-      threadId,
-      model: "gpt-5.6-sol",
-      runtimeModel: DROID_RUNTIME_GPT_5_6_WITH_REASONING,
-      modelOptions: { reasoningEffort: "xhigh" },
-      prompt: "",
-      includeFastMode: false,
-      onPromptChange: vi.fn(),
-    });
+    const picker = renderToStaticMarkup(
+      <TraitsPicker
+        provider="droid"
+        threadId={threadId}
+        model="gpt-5.6-sol"
+        runtimeModel={DROID_RUNTIME_GPT_5_6_WITH_REASONING}
+        modelOptions={{ reasoningEffort: "xhigh" }}
+        prompt=""
+        includeFastMode={false}
+        onPromptChange={vi.fn()}
+      />,
+    );
 
     expect(selection.effortLevels.map((effort) => effort.value)).toEqual([
       "none",
@@ -921,7 +985,7 @@ describe("getComposerProviderState", () => {
       promptEffort: "xhigh",
       modelOptionsForDispatch: { reasoningEffort: "xhigh" },
     });
-    expect(picker).not.toBeNull();
+    expect(picker).toContain('aria-label="Change effort, context, and speed"');
   });
 
   it("dispatches an explicitly selected Droid effort even when ACP reports it as current", () => {
@@ -1161,27 +1225,19 @@ describe("getComposerProviderState", () => {
   it("does not render a traits picker for OpenCode models without exposed controls", () => {
     const threadId = ThreadId.makeUnsafe("thread-opencode-traits-hidden");
 
-    const picker = renderProviderTraitsPicker({
-      provider: "opencode",
-      threadId,
-      model: "openrouter/gpt-oss-120b:free",
-      modelOptions: undefined,
-      prompt: "",
-      includeFastMode: false,
-      onPromptChange: vi.fn(),
-    });
+    const picker = renderToStaticMarkup(
+      <TraitsPicker
+        provider="opencode"
+        threadId={threadId}
+        model="openrouter/gpt-oss-120b:free"
+        modelOptions={undefined}
+        prompt=""
+        includeFastMode={false}
+        onPromptChange={vi.fn()}
+      />,
+    );
 
-    const menuContent = renderProviderTraitsMenuContent({
-      provider: "opencode",
-      threadId,
-      model: "openrouter/gpt-oss-120b:free",
-      modelOptions: undefined,
-      prompt: "",
-      onPromptChange: vi.fn(),
-    });
-
-    expect(picker).toBeNull();
-    expect(menuContent).toBeNull();
+    expect(picker).toBe("");
   });
 
   it("keeps OpenCode runtime thinking selections on the variant field", () => {
@@ -1241,28 +1297,19 @@ describe("getComposerProviderState", () => {
   it("renders OpenCode thinking controls when runtime metadata exposes levels without a default", () => {
     const threadId = ThreadId.makeUnsafe("thread-opencode-runtime-thinking");
 
-    const picker = renderProviderTraitsPicker({
-      provider: "opencode",
-      threadId,
-      model: "opencode/gpt-5-nano",
-      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
-      modelOptions: undefined,
-      prompt: "",
-      includeFastMode: false,
-      onPromptChange: vi.fn(),
-    });
+    const picker = renderToStaticMarkup(
+      <TraitsPicker
+        provider="opencode"
+        threadId={threadId}
+        model="opencode/gpt-5-nano"
+        runtimeModel={OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT}
+        modelOptions={undefined}
+        prompt=""
+        includeFastMode={false}
+        onPromptChange={vi.fn()}
+      />,
+    );
 
-    const menuContent = renderProviderTraitsMenuContent({
-      provider: "opencode",
-      threadId,
-      model: "opencode/gpt-5-nano",
-      runtimeModel: OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT,
-      modelOptions: undefined,
-      prompt: "",
-      onPromptChange: vi.fn(),
-    });
-
-    expect(picker).not.toBeNull();
-    expect(menuContent).not.toBeNull();
+    expect(picker).toContain('aria-label="Change effort, context, and speed"');
   });
 });

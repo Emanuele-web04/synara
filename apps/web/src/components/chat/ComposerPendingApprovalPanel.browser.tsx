@@ -18,6 +18,13 @@ import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 const APPROVAL_REQUEST_ID = ApprovalRequestId.makeUnsafe("approval-test-1");
 const LIFECYCLE_GENERATION = "generation-test-1";
 
+type ApprovalResponder = (
+  requestId: ApprovalRequestId,
+  decision: ProviderApprovalDecision,
+  lifecycleGeneration?: string,
+  requestKind?: ProviderRequestKind,
+) => Promise<void>;
+
 function makeApproval(overrides: Partial<PendingApproval> = {}): PendingApproval {
   return {
     requestId: APPROVAL_REQUEST_ID,
@@ -29,26 +36,40 @@ function makeApproval(overrides: Partial<PendingApproval> = {}): PendingApproval
   };
 }
 
-async function mountApprovalPanel(input?: { approval?: PendingApproval; isResponding?: boolean }) {
-  const onRespond = vi.fn(
-    async (
-      _requestId: ApprovalRequestId,
-      _decision: ProviderApprovalDecision,
-      _lifecycleGeneration?: string,
-      _requestKind?: ProviderRequestKind,
-    ) => undefined,
-  );
-  const screen = await render(
+async function mountApprovalPanel(input?: {
+  approval?: PendingApproval;
+  isResponding?: boolean;
+  onRespond?: ApprovalResponder;
+}) {
+  const onRespond =
+    input?.onRespond ??
+    vi.fn(
+      async (
+        _requestId: ApprovalRequestId,
+        _decision: ProviderApprovalDecision,
+        _lifecycleGeneration?: string,
+        _requestKind?: ProviderRequestKind,
+      ) => undefined,
+    );
+  let approval = input?.approval ?? makeApproval();
+  let isResponding = input?.isResponding ?? false;
+  const renderPanel = () => (
     <ComposerPendingApprovalPanel
-      approval={input?.approval ?? makeApproval()}
+      approval={approval}
       pendingCount={1}
-      isResponding={input?.isResponding ?? false}
+      isResponding={isResponding}
       onRespond={onRespond}
-    />,
+    />
   );
+  const screen = await render(renderPanel());
 
   return {
     onRespond,
+    rerender: async (update: { approval?: PendingApproval; isResponding?: boolean }) => {
+      approval = update.approval ?? approval;
+      isResponding = update.isResponding ?? isResponding;
+      await screen.rerender(renderPanel());
+    },
     cleanup: async () => {
       await screen.unmount();
     },
@@ -103,6 +124,90 @@ describe("ComposerPendingApprovalPanel", () => {
       await expect
         .element(page.getByRole("button", { name: /Always allow this session/u }))
         .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("submits a request only once while its first response is still pending", async () => {
+    let resolveResponse: (() => void) | undefined;
+    const pendingResponse = new Promise<void>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const onRespond = vi.fn(() => pendingResponse);
+    const mounted = await mountApprovalPanel({ onRespond });
+
+    try {
+      const approve = page.getByRole("button", { name: /Approve once/u });
+      await approve.click();
+      await approve.click();
+
+      expect(onRespond).toHaveBeenCalledTimes(1);
+    } finally {
+      resolveResponse?.();
+      await pendingResponse;
+      await mounted.cleanup();
+    }
+  });
+
+  it("shares the same synchronous claim between keyboard and click", async () => {
+    let resolveResponse: (() => void) | undefined;
+    const pendingResponse = new Promise<void>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const onRespond = vi.fn(() => pendingResponse);
+    const mounted = await mountApprovalPanel({ onRespond });
+
+    try {
+      const approve = document.querySelector<HTMLButtonElement>("button");
+      expect(approve).not.toBeNull();
+      approve!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+      approve!.click();
+
+      expect(onRespond).toHaveBeenCalledTimes(1);
+    } finally {
+      resolveResponse?.();
+      await pendingResponse;
+      await mounted.cleanup();
+    }
+  });
+
+  it("allows a retry after the response callback rejects", async () => {
+    const onRespond = vi
+      .fn<ApprovalResponder>()
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const mounted = await mountApprovalPanel({ onRespond });
+
+    try {
+      const approve = page.getByRole("button", { name: /Approve once/u });
+      await approve.click();
+      await expect.poll(() => onRespond.mock.calls.length).toBe(1);
+      await approve.click();
+
+      expect(onRespond).toHaveBeenCalledTimes(2);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("allows one new submission when a newer durable attempt becomes retryable", async () => {
+    const onRespond = vi.fn<ApprovalResponder>().mockResolvedValue(undefined);
+    const mounted = await mountApprovalPanel({ onRespond });
+
+    try {
+      const approve = page.getByRole("button", { name: /Approve once/u });
+      await approve.click();
+      await approve.click();
+      expect(onRespond).toHaveBeenCalledTimes(1);
+
+      await mounted.rerender({
+        approval: makeApproval({ responseAttemptKey: "response-attempt-2" }),
+      });
+      await approve.click();
+      await approve.click();
+
+      expect(onRespond).toHaveBeenCalledTimes(2);
     } finally {
       await mounted.cleanup();
     }

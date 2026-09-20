@@ -19,8 +19,11 @@ import {
   createDesktopPlatformBuildConfig,
   MAC_APPSNAP_HELPER_STAGE_PATH,
   MAC_DEVICE_HELPER_RESOURCE_PATH,
+  MAC_ICON_ASSET_NAME,
+  MAC_ICON_COMPOSER_DEPLOYMENT_TARGET,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
 import { finalizeSignedMacDmg } from "./lib/mac-dmg-finalize.ts";
@@ -49,6 +52,11 @@ const ProductionMacIconSource = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconPng),
+);
+const ProductionMacIconComposerSource = Effect.zipWith(
+  RepoRoot,
+  Effect.service(Path.Path),
+  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconComposer),
 );
 const ProductionMacLegacyIconSource = Effect.zipWith(
   RepoRoot,
@@ -422,6 +430,12 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
         message: `Production legacy macOS icon source is missing at ${legacyIconSource}`,
       });
     }
+    const iconComposerSource = yield* ProductionMacIconComposerSource;
+    if (!(yield* fs.exists(iconComposerSource))) {
+      return yield* new BuildScriptError({
+        message: `Production macOS Icon Composer source is missing at ${iconComposerSource}`,
+      });
+    }
 
     const tmpRoot = yield* fs.makeTempDirectoryScoped({
       prefix: "synara-icon-build-",
@@ -445,6 +459,22 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     );
 
     yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
+
+    // macOS 26 renders the Liquid Glass material only from a layered Icon
+    // Composer asset, so compile one into the asset catalog that ships beside
+    // the ICNS. Older releases ignore Assets.car and keep the solid mark.
+    yield* runCommand(
+      ChildProcess.make({
+        ...commandOutputOptions(verbose),
+      })`xcrun actool ${iconComposerSource} --compile ${stageResourcesDir} --platform macosx --minimum-deployment-target ${MAC_ICON_COMPOSER_DEPLOYMENT_TARGET} --app-icon ${MAC_ICON_ASSET_NAME} --include-all-app-icons --output-partial-info-plist ${path.join(tmpRoot, "icon-partial.plist")} --output-format human-readable-text`,
+    );
+
+    const assetCatalogPath = path.join(stageResourcesDir, "Assets.car");
+    if (!(yield* fs.exists(assetCatalogPath))) {
+      return yield* new BuildScriptError({
+        message: `actool completed but the icon asset catalog was not found at ${assetCatalogPath}`,
+      });
+    }
   });
 }
 
@@ -1039,8 +1069,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
   }
 
-  // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
-  yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
+  yield* stageDesktopRuntimeResources(
+    stageResourcesDir,
+    path.join(stageAppDir, "apps/desktop/prod-resources"),
+  );
 
   const resolvedBuildConfig = yield* createBuildConfig(
     options.platform,

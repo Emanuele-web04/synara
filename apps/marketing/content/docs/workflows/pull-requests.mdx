@@ -31,6 +31,16 @@ The pull-request workspace can aggregate results across available projects or fo
 
 A partial refresh failure in one repository should not erase usable results from another. Check per-repository status when expected pull requests are missing.
 
+## Keep PR context beside the task
+
+A task's PR badge opens its pull request in the right dock. PR status stays visible after a merge or close and refreshes after GitHub operations. Verify the current remote head and checks when an action depends on freshness.
+
+Hover over a chat in the sidebar to see its linked PR number, title, and status alongside the folder, branch, worktree, and model. Click the PR link in the hover card to open it in your browser.
+
+**Add to chat** and repair actions attach a PR context card to the composer. A card can cover the reference, review comments, failing checks, conflicts, or the combined repair context. Remove the card to omit that context. After sending, click the transcript card to inspect the exact prompt it supplied.
+
+For working-tree review, see [Workspace editor & diffs](/docs/features/workspace-editor), including compare-with-ref, line blame, and partial-diff warnings.
+
 ## Establish the exact PR state
 
 Before asking an agent to fix anything, verify:

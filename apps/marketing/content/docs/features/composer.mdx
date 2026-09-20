@@ -23,17 +23,31 @@ From file previews you can leave focused, line-level comments and send them with
 
 ## Reuse assistant output
 
-Select part of an assistant response and send it back as a structured attachment in your next prompt — useful for "take this plan and implement step 2".
+Select text within one assistant response to open **Add to Chat**, **Add to Side**, and **Add to new Chat**. The selection becomes structured context instead of requiring you to paste it manually.
+
+**Add to new Chat** opens a small composer that keeps the quote attached while you write a prompt and choose **Local** or **Worktree** when available. Send from that composer to start the task, or choose **Open in chat** to continue preparing its draft. Selecting a quote alone does not send a new instruction.
+
+## Reuse rendered Markdown and model preferences
+
+Select text in a rendered Markdown file preview and choose **Add to chat** to attach that selection to the composer. New chats restore the last-used model and its saved options; confirm the selection when changing providers or accounts.
 
 ## AppSnap: capture any window
 
 On macOS, press **both Option keys** to capture the active window of any app and attach it to the current task. It is opt-in with a setup panel and permission guidance; captures persist through navigation and restarts until you send them. Perfect for "make it look like this" or attaching an error dialog from another app.
 
+Use the composer **+** panel to attach a visible app window without using the keyboard trigger. The **Attach [app name]** row captures the frontmost available app; its **Choose another window** arrow opens the full window list. AppSnap must be enabled and ready with its requested macOS permissions. A closed or unavailable window produces an error instead of attaching a different window.
+
+## Effort and composer extras
+
+Choose a model, then set reasoning with the effort slider. The available stops and default depend on that provider and model; selecting another model keeps the slider available so you can review the new options. Fast mode remains a separate capability where supported.
+
+The **+** panel groups attachments, AppSnap, goals, and supported composer actions in one keyboard-navigable menu. Use the arrow keys to move, Enter to activate, and Escape to close.
+
 ## Thread modes
 
 - **`/plan`** switches the thread into plan mode: the agent proposes an approach before executing, and can pause to ask you multi-select questions you answer with "Submit answers". `/default` returns to normal mode.
 - **`/fast`** toggles fast mode for the thread; **`/compact`** frees context; **`/status`** shows context usage and rate limits.
-- **`/side [provider] [prompt]`** opens a guarded side chat. Put an available provider name first when the child task should use a different runtime.
+- **`/side [provider] [prompt]`** opens a guarded side chat. Put an available provider name first when the child task should use a different runtime. An empty side chat lets you choose its provider and model before the first turn; that first send establishes its session.
 - **Checkpoints** let you revert a thread to an earlier state — Synara refuses the revert while a turn is still running, so you can't pull the rug out from under an active agent.
 
 The full command list is in the [slash-commands reference](/docs/reference/slash-commands).

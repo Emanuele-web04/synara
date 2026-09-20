@@ -52,6 +52,7 @@ import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
+import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
 import {
   isThreadDetailEventFor,
   THREAD_DETAIL_EVENT_TYPES,
@@ -88,9 +89,15 @@ import {
   LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
 } from "./managedAttachmentPrincipal";
 import { Open, resolveAvailableEditors } from "./open";
+import {
+  OrchestrationCommandInvariantError,
+  OrchestrationCommandPreviouslyRejectedError,
+} from "./orchestration/Errors";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
 import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
+import { makeProjectImportHandlers } from "./orchestration/projectImportRoute";
+import { makeProjectImportRepository } from "./persistence/projectImportRepository";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommandReactor";
 import { SidechatExpiryReactor } from "./orchestration/Services/SidechatExpiryReactor";
@@ -104,7 +111,7 @@ import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegi
 import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
-import { listProviderUsage } from "./providerUsage";
+import { consumeCodexResetCreditEffect, listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
@@ -117,6 +124,7 @@ import { isLoopbackHost } from "./startupAccess";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { resolveOutOfRootFileReference } from "./workspace/outOfRootFileReference";
+import { watchWorkspaceFile } from "./workspaceFileChanges";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import {
   WorkspaceFileConflictError,
@@ -286,9 +294,20 @@ function readDescendantProcesses(rootPid: number): Promise<ProcessTableRow[]> {
   });
 }
 
-function toWsRpcError(cause: unknown, fallbackMessage: string) {
+export function toWsRpcError(cause: unknown, fallbackMessage: string) {
   if (Schema.is(WsRpcError)(cause)) {
     return cause;
+  }
+  if (
+    cause instanceof OrchestrationCommandInvariantError ||
+    cause instanceof OrchestrationCommandPreviouslyRejectedError
+  ) {
+    return new WsRpcError({
+      message: cause.message,
+      code: "ORCHESTRATION_COMMAND_REJECTED",
+      retryable: false,
+      cause,
+    });
   }
   // Missing projector cursors make the snapshot fence underivable. Mark the
   // failure non-retryable with its own code so clients surface a diagnosable
@@ -620,6 +639,13 @@ const makeWsRpcHandlersLayer = () =>
         providerService,
         serverSettings,
       });
+      const projectImports = makeProjectImportHandlers({
+        repository: yield* makeProjectImportRepository,
+        orchestrationEngine,
+        providerService,
+        providerAdapterRegistry,
+        serverSettings,
+      });
 
       const dispatchOrchestrationCommand = (command: OrchestrationCommand) =>
         Effect.gen(function* () {
@@ -890,6 +916,15 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [ORCHESTRATION_WS_METHODS.importThread]: (input) =>
           rpcEffect(importThread(input), "Failed to import thread"),
+        [ORCHESTRATION_WS_METHODS.listProjectImports]: (input) =>
+          rpcEffect(projectImports.listProjectImports(input), "Failed to find local projects"),
+        [ORCHESTRATION_WS_METHODS.importProject]: (input) =>
+          rpcEffect(projectImports.importProject(input), "Failed to import project"),
+        [ORCHESTRATION_WS_METHODS.regenerateThreadTitle]: (input) =>
+          rpcEffect(
+            providerCommandReactor.regenerateThreadTitle(input),
+            "Failed to regenerate thread title",
+          ),
         [ORCHESTRATION_WS_METHODS.getSnapshot]: () =>
           rpcEffect(
             projectionReadModelQuery.getSnapshot(),
@@ -1169,6 +1204,25 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsReadFile]: (input) =>
           rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
+        [WS_METHODS.projectsSubscribeFileChange]: (input, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: `projects.file-change:${input.cwd}\0${input.relativePath}` },
+            watchWorkspaceFile(input).pipe(
+              Stream.mapError(
+                (cause) =>
+                  new WsRpcError({
+                    message:
+                      cause instanceof Error && cause.message.length > 0
+                        ? cause.message
+                        : "Failed to watch workspace file",
+                    code: "PROJECT_FILE_WATCH_FAILED",
+                    retryable: false,
+                    cause,
+                  }),
+              ),
+            ),
+          ),
         [WS_METHODS.projectsResolveWorkspaceFileReferences]: (input) =>
           rpcEffect(
             workspaceEntries.resolveFileReferences(input),
@@ -1196,7 +1250,7 @@ const makeWsRpcHandlersLayer = () =>
               cause instanceof WorkspaceFileConflictError
                 ? new WsRpcError({
                     message: cause.message,
-                    code: "WORKSPACE_FILE_CONFLICT",
+                    code: WORKSPACE_FILE_WRITE_CONFLICT_CODE,
                     retryable: false,
                   })
                 : cause instanceof WorkspaceFileDeletedError
@@ -1395,6 +1449,10 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(gitStatusBroadcaster.getStatus(input), "Failed to read git status"),
         [WS_METHODS.gitReadWorkingTreeDiff]: (input) =>
           rpcEffect(gitManager.readWorkingTreeDiff(input), "Failed to read working tree diff"),
+        [WS_METHODS.gitBlameLine]: (input) =>
+          rpcEffect(gitManager.blameLine(input), "Failed to read git blame"),
+        [WS_METHODS.gitReadFileAtRev]: (input) =>
+          rpcEffect(gitManager.readFileAtRev(input), "Failed to read file at revision"),
         [WS_METHODS.gitWorkingTreeDiffStats]: (input) =>
           rpcEffect(
             gitManager.readWorkingTreeDiffStats(input),
@@ -1462,6 +1520,8 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(pullRequests.setPinned(input), "Failed to update pull request pin"),
         [WS_METHODS.gitListBranches]: (input) =>
           rpcEffect(git.listBranches(input), "Failed to list branches"),
+        [WS_METHODS.gitListRecentCommits]: (input) =>
+          rpcEffect(git.listRecentCommits(input), "Failed to list recent commits"),
         [WS_METHODS.gitCreateWorktree]: (input) =>
           rpcEffect(
             refreshGitStatusAfter(
@@ -1715,6 +1775,8 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
           rpcEffect(listProviderUsage(input), "Failed to load provider usage"),
+        [WS_METHODS.serverConsumeCodexResetCredit]: (input) =>
+          rpcEffect(consumeCodexResetCreditEffect(input), "Failed to use Codex reset"),
         [WS_METHODS.serverGetDiagnostics]: () =>
           rpcEffect(
             Effect.gen(function* () {

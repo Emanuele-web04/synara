@@ -1,11 +1,13 @@
 import {
   CheckpointRef,
+  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   ThreadId,
   TurnId,
   type GitWorktreeSetupProgressEvent,
   type ModelSlug,
+  type PendingClaudeCacheReview,
   type RuntimeMode,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -14,7 +16,6 @@ import type { WorkLogEntry } from "../session-logic";
 
 import {
   appendVoiceTranscriptToPrompt,
-  buildComposerMenuSelectionKey,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
   commitAfterRuntimeModePersistence,
@@ -26,6 +27,8 @@ import {
   derivePromptHistoryFromMessages,
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
+  threadHasProviderLockingActivity,
+  threadHasProviderLockingMessages,
   hasFileUndoSettled,
   isComposerCursorOnFirstLine,
   isComposerCursorOnLastLine,
@@ -388,60 +391,6 @@ describe("file undo completion", () => {
         },
       }),
     ).toBe(false);
-  });
-});
-
-describe("composer menu selection", () => {
-  const items = [{ id: "skill:check-code" }, { id: "skill:sanity-check" }] as const;
-
-  it("builds a stable key from query and displayed item order", () => {
-    const baseKey = buildComposerMenuSelectionKey({
-      menuOpen: true,
-      picker: null,
-      triggerKind: "slash-command",
-      triggerQuery: "check",
-      items,
-    });
-
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items: [...items],
-      }),
-    ).toBe(baseKey);
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "chec",
-        items,
-      }),
-    ).not.toBe(baseKey);
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: true,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items: [...items].reverse(),
-      }),
-    ).not.toBe(baseKey);
-  });
-
-  it("returns null while the menu is closed", () => {
-    expect(
-      buildComposerMenuSelectionKey({
-        menuOpen: false,
-        picker: null,
-        triggerKind: "slash-command",
-        triggerQuery: "check",
-        items,
-      }),
-    ).toBeNull();
   });
 });
 
@@ -900,6 +849,56 @@ describe("voice helpers", () => {
       "message-imported",
       "message-native",
     ]);
+  });
+
+  it("does not lock Side chat providers on fork-import history alone", () => {
+    const importedOnly = {
+      sidechatSourceThreadId: ThreadId.makeUnsafe("source-thread"),
+      latestTurn: null,
+      session: null,
+      messages: [
+        {
+          id: "message-imported" as never,
+          role: "assistant" as const,
+          text: "Previous context",
+          turnId: null,
+          streaming: false,
+          source: "fork-import" as const,
+          createdAt: "2026-05-02T10:00:00.000Z",
+          completedAt: "2026-05-02T10:00:00.000Z",
+        },
+      ],
+    };
+
+    expect(threadHasProviderLockingMessages(importedOnly)).toBe(false);
+    expect(threadHasProviderLockingActivity(importedOnly)).toBe(false);
+
+    const withNative = {
+      ...importedOnly,
+      messages: [
+        ...importedOnly.messages,
+        {
+          id: "message-native" as never,
+          role: "user" as const,
+          text: "Fresh side question",
+          turnId: null,
+          streaming: false,
+          source: "native" as const,
+          createdAt: "2026-05-02T10:01:00.000Z",
+          completedAt: "2026-05-02T10:01:00.000Z",
+        },
+      ],
+    };
+
+    expect(threadHasProviderLockingMessages(withNative)).toBe(true);
+    expect(threadHasProviderLockingActivity(withNative)).toBe(true);
+
+    expect(
+      threadHasProviderLockingMessages({
+        sidechatSourceThreadId: null,
+        messages: importedOnly.messages,
+      }),
+    ).toBe(true);
   });
 
   it("appends a transcript to the existing prompt without disturbing spacing", () => {
@@ -1552,6 +1551,7 @@ describe("deriveComposerSendState", () => {
         },
       ],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("");
@@ -1581,6 +1581,7 @@ describe("deriveComposerSendState", () => {
         },
       ],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("yoo  waddup");
@@ -1598,6 +1599,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1613,6 +1615,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 1,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1628,6 +1631,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1643,6 +1647,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -2134,6 +2139,49 @@ describe("runWorktreeCreationFlow", () => {
   });
 });
 
+describe("Claude cache review dispatch acknowledgement", () => {
+  it.each([
+    { expectedId: "held-message", reviewedId: "held-message", acknowledged: true },
+    { expectedId: "new-message", reviewedId: "old-message", acknowledged: false },
+    { expectedId: null, reviewedId: "held-message", acknowledged: false },
+  ])(
+    "only acknowledges the exact held message ($expectedId / $reviewedId)",
+    ({ expectedId, reviewedId, acknowledged }) => {
+      const localDispatch = createLocalDispatchSnapshot(
+        undefined,
+        expectedId === null
+          ? undefined
+          : { expectedUserMessageId: MessageId.makeUnsafe(expectedId) },
+      );
+      const claudeCacheReview: PendingClaudeCacheReview = {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe(reviewedId),
+        sourceEventSequence: 8,
+        assessment: {
+          observedAt: "2026-09-16T10:00:00.000Z",
+          state: "likely-expired",
+          source: "session-start",
+        },
+        status: "pending",
+        createdAt: "2026-09-16T10:00:00.000Z",
+      };
+      const input = {
+        localDispatch,
+        claudeCacheReview,
+        phase: "ready" as const,
+        latestTurn: null,
+        session: null,
+        messages: [],
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      };
+      expect(hasServerAcknowledgedLocalDispatch(input)).toBe(acknowledged);
+      expect(hasLiveTurnTakenOver(input)).toBe(acknowledged);
+    },
+  );
+});
+
 describe("hasServerAcknowledgedLocalDispatch", () => {
   const localDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
@@ -2484,6 +2532,39 @@ describe("resolveWorkingLabel", () => {
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: false })).toBe("Loading");
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: true })).toBe("Thinking");
     expect(resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false })).toBe("Thinking");
+  });
+
+  it("shows Starting provider… during the connecting phase", () => {
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: false,
+        turnTakenOver: false,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Starting Pi…");
+
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: false,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Loading");
+
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: true,
+        turnTakenOver: true,
+        isConnecting: true,
+        providerName: "Pi",
+      }),
+    ).toBe("Starting Pi…");
+
+    expect(
+      resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false, isConnecting: true }),
+    ).toBe("Thinking");
   });
 });
 
@@ -2954,7 +3035,7 @@ describe("resolveDraftFallbackModelSelection", () => {
         projectDefault: null,
         settingsDefaultProvider: "pi",
       }),
-    ).toEqual({ provider: "codex", model: "gpt-5.5" });
+    ).toEqual({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
   });
 
   it("uses the settings provider default model when no project default exists", () => {
