@@ -19,7 +19,6 @@ import {
 import { remoteAccessPolicyError, ServerConfig } from "./config";
 import { resolveListeningPort } from "./startupAccess";
 import { patchBunWebSocketCloseEventCompatibility } from "./bunWebSocketCompatibility";
-import { ComputerLeaseReactor } from "./computer/Services/ComputerLeaseReactor";
 import { makeEffectHttpRouteLayer } from "./http";
 import { Keybindings } from "./keybindings";
 import {
@@ -69,7 +68,6 @@ export interface ServerShape {
     | ManagedAttachmentCleanup
     | AutomationRunReactor
     | AutomationScheduler
-    | ComputerLeaseReactor
     | AutomationService
     | ServerLifecycleEvents
     | OrchestrationEngineService
@@ -131,7 +129,6 @@ export const createEffectServer = Effect.fn(function* (
   const agentGatewayCredentials = yield* AgentGatewayCredentials;
   const automationRunReactor = yield* AutomationRunReactor;
   const automationScheduler = yield* AutomationScheduler;
-  const computerLeaseReactor = yield* ComputerLeaseReactor;
   const keybindings = yield* Keybindings;
   const managedAttachmentCleanup = yield* ManagedAttachmentCleanup;
   const lifecycleEvents = yield* ServerLifecycleEvents;
@@ -215,7 +212,6 @@ export const createEffectServer = Effect.fn(function* (
   yield* Scope.provide(automationScheduler.start(), subscriptionsScope);
   yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
-  yield* Scope.provide(computerLeaseReactor.start(), subscriptionsScope);
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
   yield* Scope.provide(providerRuntimeReconciler.start(), subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
