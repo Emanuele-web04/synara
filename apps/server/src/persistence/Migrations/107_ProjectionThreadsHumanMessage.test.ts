@@ -44,7 +44,10 @@ it.layer(NodeSqliteClient.layerMemory())("human-message summary migration", (it)
         yield* sql`INSERT INTO project_import_origins
           (source_key, provider, source_home, external_id, project_id, thread_id, status, created_at)
           VALUES ('source', 'codex', '/home', 'external', 'project', 'mixed', 'completed', ${at(0)})`;
-        assert.deepStrictEqual(yield* runMigrations(), [[107, "ProjectionThreadsHumanMessage"]]);
+        assert.deepStrictEqual(yield* runMigrations(), [
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "ProjectSources"],
+        ]);
         assert.deepStrictEqual(yield* sql`SELECT source_key, status FROM project_import_origins`, [
           { source_key: "source", status: "completed" },
         ]);

@@ -166,6 +166,8 @@ export function makeProject(
     spaceId: null,
     scripts: [],
     ...overrides,
+    sources: overrides.sources ?? [],
+    primarySourceId: overrides.primarySourceId ?? null,
   };
 }
 

@@ -69,6 +69,8 @@ import {
 } from "@synara/shared/providerDeliveryBlock";
 import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
+import { allRoots, deriveThreadRoots } from "@synara/shared/threadRoots";
+import { buildWorkspaceRootsPreamble } from "@synara/shared/workspaceRootsPreamble";
 
 import {
   checkpointRefForThreadMessageStart,
@@ -1391,6 +1393,19 @@ const make = Effect.gen(function* () {
     return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
 
+  const resolveRootsForThread = Effect.fnUntraced(function* (thread: OrchestrationThread) {
+    const project = Option.getOrUndefined(
+      yield* projectionSnapshotQuery.getProjectShellById(thread.projectId),
+    );
+    if (!project) return null;
+    const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    return deriveThreadRoots({
+      sources: project.sources ?? [],
+      primarySourceId: project.primarySourceId ?? null,
+      primaryWorktreePath: effectiveCwd ?? null,
+    });
+  });
+
   const resolveProviderSessionThread = (threadId: ThreadId) =>
     resolveProviderSessionThreadFromProjection(projectionSnapshotQuery, threadId);
 
@@ -1729,6 +1744,12 @@ const make = Effect.gen(function* () {
     }
     const resolvedProviderOptions = providerStartOptionsFromServerSettings(settings);
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
+    const threadRoots = yield* resolveRootsForThread(thread);
+    const additionalRoots = threadRoots?.extra.map((root) => ({
+      path: root.effectivePath,
+      label: root.label,
+      isGitRepo: root.isGitRepo,
+    }));
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
@@ -1743,6 +1764,7 @@ const make = Effect.gen(function* () {
     const providerSessionOptions = {
       threadId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+      ...(additionalRoots && additionalRoots.length > 0 ? { additionalRoots } : {}),
       modelSelection: desiredModelSelection,
       providerOptions: resolvedProviderOptions,
       runtimeMode: desiredRuntimeMode,
@@ -2127,12 +2149,19 @@ const make = Effect.gen(function* () {
     const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
+    // Multi-root projects get a preamble prepended to the assembled provider input. Resolve it
+    // before any budget is spent so trimmed context blocks and inlined skills leave room for it.
+    const promptRoots = yield* resolveRootsForThread(thread);
+    const rootsPreamble = promptRoots ? buildWorkspaceRootsPreamble(allRoots(promptRoots)) : null;
+    // Wire cost of the preamble, including the blank line separating it from the turn text.
+    const rootsPreambleOverheadChars = rootsPreamble === null ? 0 : rootsPreamble.length + 2;
+    const promptBudgetReservedChars = providerPromptOverheadChars + rootsPreambleOverheadChars;
     const threadMentionProjection = yield* resolveThreadMentionPromptProjection({
       mentions: input.mentions,
       snapshotQuery: projectionSnapshotQuery,
       maxTotalContextChars: availableThreadMentionContextChars(
         input.messageText,
-        providerPromptOverheadChars,
+        promptBudgetReservedChars,
       ),
     });
     const messageText = appendThreadMentionContextBlocks({
@@ -2356,7 +2385,7 @@ const make = Effect.gen(function* () {
       tag: "handoff_context",
       messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: true,
-      reservedChars: providerPromptOverheadChars,
+      reservedChars: promptBudgetReservedChars,
     });
     const handoffBootstrapText =
       shouldBootstrapHandoff && handoffBootstrapAvailableChars > 0
@@ -2368,7 +2397,9 @@ const make = Effect.gen(function* () {
         interactionMode: input.interactionMode,
         goal: activeThreadGoal(thread),
         text: bootstrapBudgetMessageText,
-      }).length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
+      }).length +
+        rootsPreambleOverheadChars >
+        PROVIDER_SEND_TURN_MAX_INPUT_CHARS
     ) {
       return yield* new ProviderAdapterValidationError({
         provider: selectedProvider as ProviderKind,
@@ -2399,7 +2430,7 @@ const make = Effect.gen(function* () {
       tag: "sidechat_context",
       messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: false,
-      reservedChars: providerPromptOverheadChars,
+      reservedChars: promptBudgetReservedChars,
     });
     const sidechatBootstrapText =
       shouldBootstrapSidechatContext && sidechatBootstrapAvailableChars > 0
@@ -2436,7 +2467,7 @@ const make = Effect.gen(function* () {
       tag: "thread_context",
       messageText: bootstrapBudgetMessageText,
       wrapLatestUserMessage: true,
-      reservedChars: providerPromptOverheadChars,
+      reservedChars: promptBudgetReservedChars,
     });
     if (
       input.reviewTarget === undefined &&
@@ -2530,7 +2561,8 @@ const make = Effect.gen(function* () {
                 0,
                 PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
                   providerInputWithMentionContext.length -
-                  PROVIDER_INPUT_SAFETY_MARGIN_CHARS,
+                  PROVIDER_INPUT_SAFETY_MARGIN_CHARS -
+                  rootsPreambleOverheadChars,
               ),
             }),
           ).pipe(
@@ -2566,7 +2598,28 @@ const make = Effect.gen(function* () {
         }),
       );
     };
-    const normalizedInput = finalizeProviderInput(selectedBootstrapContext);
+    const baseProviderInput = finalizeProviderInput(selectedBootstrapContext);
+    const normalizedInput = rootsPreamble
+      ? `${rootsPreamble}\n\n${baseProviderInput}`
+      : baseProviderInput;
+    // Every budget above reserves the preamble, so this only trips when the raw message alone
+    // cannot fit next to it (or a provider-specific normalization expanded the text). Fail with
+    // an actionable error instead of handing an over-limit prompt to the adapter. Review turns
+    // never send this text, so they stay exempt.
+    if (
+      input.reviewTarget === undefined &&
+      normalizedInput !== undefined &&
+      normalizedInput.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
+    ) {
+      return yield* new ProviderAdapterValidationError({
+        provider: selectedProvider as ProviderKind,
+        operation: "thread.turn.start",
+        issue:
+          rootsPreambleOverheadChars > 0
+            ? "The latest message is too long to include the project's additional source folders. Shorten the message and retry."
+            : "The latest message is too long for this provider. Shorten the message and retry.",
+      });
+    }
     const normalizedAttachments = yield* resolveProviderDispatchAttachments({
       attachments: input.attachments,
       attachmentsDir: serverConfig.attachmentsDir,

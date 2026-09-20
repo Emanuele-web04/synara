@@ -7628,7 +7628,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       await page.getByRole("button", { name: "New space", exact: true }).click();
       await expect.element(page.getByRole("heading", { name: "New space" })).toBeInTheDocument();
-      await page.getByLabelText("Name").fill("Focus");
+      await page.getByLabelText("Name", { exact: true }).fill("Focus");
       await page.getByRole("button", { name: "Create space", exact: true }).click();
 
       // The nested editor closes, the space.create command is dispatched, and

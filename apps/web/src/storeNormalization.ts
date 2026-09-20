@@ -49,6 +49,8 @@ export type ProjectNormalizationInput = Pick<
   | "scripts"
   | "isPinned"
   | "spaceId"
+  | "sources"
+  | "primarySourceId"
   | "createdAt"
   | "updatedAt"
 >;
@@ -392,6 +394,19 @@ export function normalizeProject(
   // legacy shape (expandedProjectCwds with no projectOrderCwds). It flips off for
   // good once modern order state is remembered, and is what lets an empty legacy
   // list mean "all collapsed" instead of "no preference, default expanded".
+  // A snapshot that predates project sources (or omits them) must not wipe sources we already
+  // know about, and identity must survive a no-op resync so downstream memoization holds.
+  const incomingSources = incoming.sources;
+  const sources =
+    incomingSources === undefined
+      ? (previous?.sources ?? [])
+      : previous?.sources && deepEqualJson(previous.sources, incomingSources)
+        ? previous.sources
+        : [...incomingSources];
+  const primarySourceId =
+    incoming.primarySourceId === undefined
+      ? (previous?.primarySourceId ?? null)
+      : incoming.primarySourceId;
   const expanded =
     (previous && projectCwdKey(previous.cwd) === workspaceRootKey
       ? previous.expanded
@@ -415,7 +430,9 @@ export function normalizeProject(
     (previous.spaceId ?? null) === (incoming.spaceId ?? null) &&
     previous.createdAt === incoming.createdAt &&
     previous.updatedAt === incoming.updatedAt &&
-    previous.scripts === scripts
+    previous.scripts === scripts &&
+    previous.sources === sources &&
+    previous.primarySourceId === primarySourceId
   ) {
     return previous;
   }
@@ -435,7 +452,9 @@ export function normalizeProject(
     createdAt: incoming.createdAt,
     updatedAt: incoming.updatedAt,
     scripts,
-  };
+    sources,
+    primarySourceId,
+  } satisfies Project;
 }
 
 export function normalizeSpace(
