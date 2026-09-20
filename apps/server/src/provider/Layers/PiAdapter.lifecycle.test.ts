@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type Tool,
+} from "@earendil-works/pi-ai";
 import type {
   AgentSession,
   AgentSessionEvent,
@@ -16,12 +20,15 @@ import {
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import type { AgentGatewayMcpFetch } from "../../agentGateway/mcpInjection.ts";
+import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
 import { ServerConfig } from "../../config.ts";
 import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import { makePiAdapterLive } from "./PiAdapter.ts";
 
 const captured = vi.hoisted(() => ({
   sessions: [] as AgentSession[],
+  modelTools: [] as Tool[][],
   extensions: [] as InlineExtension[],
   events: [] as AgentSessionEvent[],
   stream: undefined as StreamFn | undefined,
@@ -36,6 +43,8 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
     SessionManager: {
       ...sdk.SessionManager,
       create: (cwd: string) => sdk.SessionManager.create(cwd, path.join(cwd, "sessions")),
+      open: (...args: Parameters<typeof sdk.SessionManager.open>) =>
+        sdk.SessionManager.open(...args),
     },
     createAgentSessionServices: async (
       options: Parameters<typeof sdk.createAgentSessionServices>[0],
@@ -61,6 +70,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   captured.sessions.length = 0;
+  captured.modelTools.length = 0;
   captured.extensions.length = 0;
   captured.events.length = 0;
   captured.stream = undefined;
@@ -70,7 +80,8 @@ afterEach(() => {
 type ResponseKind = "success" | "error" | "overflow" | "partial-error" | "until-abort";
 function responses(...kinds: ResponseKind[]) {
   let calls = 0;
-  captured.stream = (model, _context, options) => {
+  captured.stream = (model, context, options) => {
+    captured.modelTools.push(context.tools ?? []);
     const kind = kinds[calls++] ?? "success";
     const stream = createAssistantMessageEventStream();
     const message: AssistantMessage = {
@@ -139,6 +150,7 @@ async function withAdapter(
   delayMs = 100,
   credentials?: AgentGatewayCredentialsShape,
   startSessionOverrides?: { readonly enableComputerControl?: boolean },
+  gatewayFetchOverride?: AgentGatewayMcpFetch,
 ) {
   vi.stubEnv("PI_OFFLINE", "1");
   const cwd = mkdtempSync(path.join(tmpdir(), "synara-pi-lifecycle-"));
@@ -168,7 +180,7 @@ async function withAdapter(
         ],
       },
     });
-  let layer = makePiAdapterLive({ agentGatewayFetch: gatewayFetch }).pipe(
+  let layer = makePiAdapterLive({ agentGatewayFetch: gatewayFetchOverride ?? gatewayFetch }).pipe(
     Layer.provideMerge(ServerConfig.layerTest(cwd, path.join(cwd, "server"))),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -1110,5 +1122,116 @@ it("rotates the Pi gateway credential from the dispatched computer-control fact"
     1,
     credentials,
     { enableComputerControl: true },
+  );
+});
+
+it("keeps Computer schemas out of idle model requests and refreshes them on resume", async () => {
+  responses("success", "success", "success", "success");
+  const grants = new Map<string, boolean>();
+  let sequence = 0;
+  const credentials: AgentGatewayCredentialsShape = {
+    ...gatewayCredentials(),
+    connectionForThread: (_threadId, _provider, options) => {
+      const bearerToken = `projection-${++sequence}`;
+      grants.set(
+        `Bearer ${bearerToken}`,
+        options?.additionalCapabilities?.includes("computer:control") === true,
+      );
+      return { url: "http://127.0.0.1:3773/mcp", bearerToken };
+    },
+  };
+  const computer = {
+    name: "computer_run",
+    description: "Run known desktop steps.",
+    inputSchema: {
+      type: "object",
+      properties: { steps: { type: "array", items: { type: "object" } } },
+      required: ["steps"],
+    },
+  };
+  const fetch: AgentGatewayMcpFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    const enabled = grants.get(new Headers(init?.headers).get("Authorization") ?? "") === true;
+    return Response.json({
+      jsonrpc: "2.0",
+      id: body.id,
+      result: {
+        tools: [
+          {
+            name: "synara_list_threads",
+            description: "List threads",
+            inputSchema: { type: "object", properties: {} },
+          },
+          ...(enabled ? [computer] : []),
+        ],
+      },
+    });
+  };
+  await withAdapter(
+    async (adapter, events, cwd) => {
+      const sessionId = captured.sessions[0]!.sessionId;
+      const sessionFile = captured.sessions[0]!.sessionFile;
+      expect(sessionFile).toBeTruthy();
+      for (const [index, enabled] of [false, true, true, false].entries()) {
+        if (index === 1 || index === 3) {
+          const session = (await Effect.runPromise(adapter.listSessions()))[0]!;
+          await Effect.runPromise(adapter.stopSession(threadId));
+          await Effect.runPromise(
+            adapter.startSession({
+              threadId,
+              cwd,
+              runtimeMode: "full-access",
+              providerOptions: { pi: { agentDir: cwd } },
+              modelSelection: { provider: "pi", model: "openai/gpt-4o" },
+              resumeCursor: session.resumeCursor,
+              enableComputerControl: enabled,
+            }),
+          );
+          const resumed = captured.sessions.at(-1)!;
+          expect(resumed.sessionId).toBe(sessionId);
+          expect(resumed.sessionFile).toBe(sessionFile);
+          expect(resumed.messages.filter((message) => message.role === "assistant")).toHaveLength(
+            index,
+          );
+        }
+        await send(adapter);
+        await waitFor(() => expect(completions(events)).toHaveLength(index + 1));
+        // This is the real SDK's model request, after tool installation and
+        // credential rotation, rather than the gateway's tools/list response.
+        const modelTools = captured.modelTools.at(-1)!;
+        const computerTools = modelTools.filter((tool) => tool.name.startsWith("computer_"));
+        const descriptorCharacters = computerTools
+          .map((tool) => JSON.stringify(tool))
+          .join("").length;
+        expect(computerTools.map((tool) => tool.name)).toEqual(
+          enabled
+            ? [
+                computer.name,
+                ...SYNARA_COMPUTER_TOOL_NAMES.filter((name) => name !== computer.name),
+              ]
+            : [],
+        );
+        if (enabled) {
+          expect(computerTools[0]!.parameters).toEqual(computer.inputSchema);
+          expect(descriptorCharacters).toBeGreaterThan(0);
+        } else {
+          expect(descriptorCharacters).toBe(0);
+        }
+        expect(modelTools.some((tool) => tool.name === "synara_list_threads")).toBe(true);
+      }
+      expect(captured.sessions).toHaveLength(3);
+      expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "runtime.warning" &&
+            event.payload.message.includes("gateway tool catalog changed after rotation"),
+        ),
+      ).toHaveLength(0);
+    },
+    1,
+    credentials,
+    { enableComputerControl: false },
+    fetch,
   );
 });

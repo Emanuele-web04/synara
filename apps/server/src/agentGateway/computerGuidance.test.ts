@@ -8,7 +8,7 @@ import {
 } from "./computerGuidance.ts";
 
 describe("computer guidance", () => {
-  it("matches the verbatim guidance text with the help-index last line", () => {
+  it("keeps core guidance concise and explains the callable batch route", () => {
     const notes = computerToolInstructions();
     expect(notes.startsWith("## Synara computer use\n")).toBe(true);
     for (const heading of [
@@ -22,14 +22,10 @@ describe("computer guidance", () => {
     }
     expect(notes).toContain("press_key takes one key or a chord");
     expect(notes).toContain("repeated_unverified_action");
-    expect(
-      notes.endsWith(
-        "computer_help lists chapters and the full tool index; read it before using a tool that is not in your catalog",
-      ),
-    ).toBe(true);
-    // Pins the verbatim body: GUIDANCE-v2.txt with only the last line
-    // swapped for the help/tool-index pointer.
-    expect(notes.length).toBe(3_488);
+    expect(notes).toContain("Use computer_run to batch known desktop steps in one call");
+    expect(notes).toContain('computer_help({tool:"computer_invoke_menu"})');
+    expect(notes).toContain("does not add it to your provider catalog");
+    expect(notes.length).toBeLessThanOrEqual(3_800);
     for (const retired of [
       "computer_recording",
       "computer_replay",
@@ -92,9 +88,8 @@ describe("computer guidance", () => {
     }
     expect(COMPUTER_HELP_SECTIONS.tools.length).toBeGreaterThanOrEqual(100);
     expect(COMPUTER_HELP_SECTIONS.tools.length).toBeLessThanOrEqual(300);
-    // The tools chapter is intro only; per-tool index lines are appended by
-    // the computer_help handler, so it must not name concrete tools itself.
-    expect(COMPUTER_HELP_SECTIONS.tools).not.toMatch(/computer_[a-z]/);
+    expect(COMPUTER_HELP_SECTIONS.tools).toContain("computer_run");
+    expect(COMPUTER_HELP_SECTIONS.tools).toContain("provider forwarder or direct gateway client");
 
     for (const topic of COMPUTER_HELP_TOPICS) {
       expect(COMPUTER_HELP_SECTIONS[topic].length, topic).toBeGreaterThan(0);

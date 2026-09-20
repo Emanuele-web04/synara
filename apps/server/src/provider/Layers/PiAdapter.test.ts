@@ -13,6 +13,7 @@ import path from "node:path";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
 import {
   createPiModelRuntime,
   ensurePiAnthropicCatalogModels,
@@ -146,101 +147,100 @@ describe("Pi native Synara gateway tools", () => {
     expect(controller.signal.aborted).toBe(true);
   });
 
-  it("registers Computer fallbacks only for names absent from the catalog", async () => {
-    const calls: string[] = [];
-    const catalogWithClick = [
-      {
-        name: "computer_click",
-        description: "Click.",
-        inputSchema: { type: "object", properties: { x: { type: "number" } } },
-      },
-      {
-        name: "synara_create_threads",
-        description: "Create Synara threads.",
-        inputSchema: { type: "object", properties: {} },
-      },
-    ];
-    let listCalls = 0;
-    const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      if (body.method === "tools/list") {
-        listCalls += 1;
-        return Response.json({
-          jsonrpc: "2.0",
-          id: body.id,
-          result: { tools: listCalls === 1 ? catalogWithClick : catalogWithClick.slice(1) },
-        });
-      }
-      calls.push(body.params.name);
-      return Response.json({
-        jsonrpc: "2.0",
-        id: body.id,
-        result: { content: [{ type: "text", text: `denied ${body.params.name}` }] },
-      });
-    };
-    const defineTool = (tool: any) => tool;
-    const granted = await buildPiAgentGatewayCustomTools({
-      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "t" },
-      defineTool,
-      fetch,
-    });
-    // The leased computer_click is projected once; the rest of the family
-    // still falls back so a call the lease later revokes still reaches the
-    // gateway's refusal.
-    expect(granted.filter((tool: any) => tool.name === "computer_click")).toHaveLength(1);
-    expect(
-      granted.some(
-        (tool: any) =>
-          tool.name === "computer_click" && tool.parameters.properties?.x !== undefined,
-      ),
-    ).toBe(true);
-
-    const denied = await buildPiAgentGatewayCustomTools({
-      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "t" },
-      defineTool,
-      fetch,
-    });
-    const fallback = denied.find((tool: any) => tool.name === "computer_click");
-    expect(fallback).toBeDefined();
-    const result = await fallback!.execute("call-x", { x: 1 }, undefined, undefined, {} as never);
-    expect(calls.at(-1)).toBe("computer_click");
-    expect(result).toMatchObject({ content: [{ type: "text", text: "denied computer_click" }] });
+  it("only adds specialist routes when the catalog advertises a canonical Computer tool", () => {
+    expect(piInstalledGatewayToolNames(["synara_list_threads"])).toEqual(
+      new Set(["synara_list_threads"]),
+    );
+    for (const unrelated of ["computer_future_tool", "mcp__other__computer_click"]) {
+      expect(piInstalledGatewayToolNames([unrelated])).toEqual(new Set([unrelated]));
+    }
+    expect(piInstalledGatewayToolNames(["synara_list_threads", "computer_run"])).toEqual(
+      new Set(["synara_list_threads", ...SYNARA_COMPUTER_TOOL_NAMES]),
+    );
   });
 
-  it("keeps Computer fallbacks installed across a credential rotation", async () => {
-    // The reconciler compares installed names against fresh ∪ family. A raw
-    // catalog comparison makes every fallback look spurious: each rotation
-    // reports a catalog change and setActiveToolsByName strips them after
-    // the first turn — the silent-loss gap again.
+  it("retains enabled specialist routes, no idle schemas, and gateway denials after revocation", async () => {
+    const computerTool = {
+      name: "computer_click",
+      description: "Click.",
+      inputSchema: { type: "object", properties: { x: { type: "number" } } },
+    };
+    const ordinaryTool = {
+      name: "synara_list_threads",
+      description: "List Synara threads.",
+      inputSchema: { type: "object", properties: {} },
+    };
+    let enabled = true;
+    const calls: Array<{ name: string; args: unknown; token: string | null; signal: unknown }> = [];
     const fetch = async (_input: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
+      if (body.method === "tools/call") {
+        calls.push({
+          name: body.params.name,
+          args: body.params.arguments,
+          token: new Headers(init?.headers).get("Authorization"),
+          signal: init?.signal,
+        });
+      }
       return Response.json({
         jsonrpc: "2.0",
         id: body.id,
-        result: {
-          tools: [
-            {
-              name: "synara_create_threads",
-              description: "Create Synara threads.",
-              inputSchema: { type: "object", properties: {} },
-            },
-          ],
-        },
+        result:
+          body.method === "tools/list"
+            ? { tools: enabled ? [ordinaryTool, computerTool] : [ordinaryTool] }
+            : enabled
+              ? { content: [{ type: "text", text: "ok" }] }
+              : { isError: true, content: [{ type: "text", text: "capability_denied" }] },
       });
     };
-    const installed = await buildPiAgentGatewayCustomTools({
-      connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "t" },
-      defineTool: (tool: any) => tool,
-      fetch,
-    });
-    const installedNames = new Set(installed.map((tool: any) => tool.name));
-    const expected = piInstalledGatewayToolNames(["synara_create_threads"]);
-    const sameCatalog =
-      installedNames.size === expected.size &&
-      [...expected].every((name) => installedNames.has(name));
-    expect(sameCatalog).toBe(true);
-    const removed = [...installedNames].filter((name) => !expected.has(name));
-    expect(removed).toEqual([]);
+    const connection = { url: "http://127.0.0.1:3773/mcp", bearerToken: "t" };
+    const projection = () =>
+      buildPiAgentGatewayCustomTools({
+        connection,
+        defineTool: (tool) => tool,
+        fetch,
+      });
+    const on = await projection();
+    expect(new Set(on.map((tool) => tool.name))).toEqual(
+      new Set([ordinaryTool.name, ...SYNARA_COMPUTER_TOOL_NAMES]),
+    );
+    expect(on[1]?.parameters).toEqual(computerTool.inputSchema);
+    const controller = new AbortController();
+    for (const name of [
+      "computer_read_clipboard",
+      "computer_zoom",
+      "computer_get_accessibility_tree",
+      "computer_get_cursor_position",
+    ]) {
+      const specialist = on.find((tool) => tool.name === name)!;
+      expect(specialist.description).toContain(`computer_help({tool:"${name}"})`);
+      const args = name === "computer_zoom" ? { x: 5, y: 6, width: 40, height: 30 } : {};
+      await expect(
+        specialist.execute(name, args, controller.signal, undefined, {} as never),
+      ).resolves.toMatchObject({ content: [{ type: "text", text: "ok" }] });
+      expect(calls.at(-1)).toEqual({
+        name,
+        args,
+        token: "Bearer t",
+        signal: controller.signal,
+      });
+    }
+
+    enabled = false;
+    connection.bearerToken = "revoked";
+    const off = await projection();
+    expect(off.map((tool) => tool.name)).toEqual([ordinaryTool.name]);
+    // A tool closure already issued to an earlier turn still reaches the
+    // authoritative gateway refusal; no idle model-facing stub is needed.
+    await expect(
+      on[1]!.execute("stale", { x: 1 }, undefined, undefined, {} as never),
+    ).rejects.toThrow("capability_denied");
+    await expect(
+      on
+        .find((tool) => tool.name === "computer_read_clipboard")!
+        .execute("stale-specialist", {}, undefined, undefined, {} as never),
+    ).rejects.toThrow("capability_denied");
+    expect(calls.at(-1)?.token).toBe("Bearer revoked");
   });
 });
 

@@ -334,7 +334,7 @@ type ObservedActionOutcome =
  * downscaled captures) was where clicks went astray.
  */
 const SCREENSHOT_FRAME_NOTE =
-  "Every screenshot comes back with a screenshotId and its width and height in pixels; to point at something in it, pass x/y as pixel coordinates in that image, measured from its top-left corner, and the server maps them onto the desktop.";
+  "Screenshots include screenshotId and pixel width/height; pass x/y as pixel coordinates in that image from its top-left corner. The server maps them onto the desktop.";
 
 /**
  * Both clipboard tools must say the same thing about ownership: the desktop has
@@ -345,7 +345,7 @@ const SHARED_CLIPBOARD_NOTE =
 
 /** The coordinate rule each pointer tool carries, self-contained. */
 const POINTER_COORDINATE_HINT =
-  "x/y are screenshot pixels, never desktop coordinates — pass them as they appear in the image you received.";
+  "x/y are pixels in the received screenshot, never desktop coordinates.";
 
 /**
  * The parity lever for visual grounding: when the model knows a control's
@@ -407,7 +407,7 @@ function textTargetProperty(): Record<string, unknown> {
     label: {
       type: "string",
       description:
-        "Exact writable control label from computer_get_state. With window_id, computer_type_text uses semantic insertion without activating the app.",
+        "Exact writable label from computer_get_state; window_id scopes semantic insertion without activation.",
     },
     role: {
       type: "string",
@@ -416,14 +416,13 @@ function textTargetProperty(): Record<string, unknown> {
     ref: {
       type: "integer",
       minimum: 0,
-      description:
-        "Element ref from a computer_get_state elements listing — names the text control without quoting its label.",
+      description: "Text control ref from computer_get_state.",
     },
     ref_ordinal: {
       type: "integer",
       minimum: 0,
       description:
-        "With label: which same-labelled text control to target — 0 for the first, 1 for the second. Only needed to name a duplicate without a ref.",
+        "With label: zero-based index among same-labelled text controls, when no ref is given.",
     },
   };
 }
@@ -441,8 +440,7 @@ const MODIFIERS_PROPERTY = {
     type: "array",
     items: { type: "string", enum: ["ctrl", "alt", "shift", "meta"] },
     maxItems: COMPUTER_MODIFIERS_MAX_ITEMS,
-    description:
-      'Keys held during the gesture and released afterward; "meta" is Command on macOS. Unlike a press_key chord, modifiers stay held through the click or drag.',
+    description: 'Held through the gesture, then released; "meta" is Command on macOS.',
   },
 } as const;
 
@@ -491,13 +489,12 @@ const TARGET_PROPERTIES = {
     type: "integer",
     minimum: 0,
     description:
-      "Element ref from a computer_get_state listing — cheaper than re-quoting label and role, and names duplicates a bare label cannot. A ref stays bound to the same element while it is present; it never moves to a different element.",
+      "Ref from computer_get_state; distinguishes duplicates and stays bound to that element, never another.",
   },
   ref_ordinal: {
     type: "integer",
     minimum: 0,
-    description:
-      "With label: which same-labelled control — 0 for the first, 1 for the second. Names a duplicate without a ref.",
+    description: "With label: zero-based index among same-labelled controls, when no ref is given.",
   },
 } as const;
 
@@ -1915,7 +1912,7 @@ export function makeAgentGatewayComputerTools(
             type: "string",
             enum: ["background", "foreground"],
             description:
-              "Defaults to background. Foreground brings the target forward and is refused unless the user's task asked to see the screen. Never replay an uncertain action.",
+              "Background by default. Foreground requires the user's own task to ask to see the screen. Never replay uncertain input.",
           },
         },
       },
@@ -1925,10 +1922,10 @@ export function makeAgentGatewayComputerTools(
   });
 
   /**
-   * A tool kept callable by exact name but out of the advertised catalog:
-   * the model reaches it through computer_help's tools chapter or its own
-   * memory. The mark is catalog-only — dispatch, capability, approval and
-   * audit are unchanged.
+   * Direct gateway clients may call these tools by name; provider models use
+   * advertised computer_run for supported steps. Discovery does not install a
+   * hidden definition in the provider. Capability, approval and audit remain
+   * unchanged for both routes.
    */
   const discoveryOnly = (entry: ToolEntry): ToolEntry => ({ ...entry, discoveryOnly: true });
 
@@ -2091,13 +2088,13 @@ export function makeAgentGatewayComputerTools(
         minimum: 1,
         maximum: 3,
         description:
-          "1 for a plain click, 2 for a double-click (opens an item, selects a word in text), 3 for a triple-click (selects the whole line or paragraph — the reliable way to replace a field's contents before typing; three separate clicks are not the same gesture, and a desktop that cannot send one refuses rather than approximating it).",
+          "1 plain; 2 double-click (open item/select word); 3 triple-click (select line/paragraph). A native multi-click gesture, never separate clicks; unsupported gestures are refused.",
       },
       button: {
         type: "string",
         enum: ["left", "right", "middle"],
         description:
-          '"left" is the primary button and supports every count; "right" opens the context menu at count 1 only. Other button/count pairs are refused before dispatch.',
+          '"left" supports every count; "right" opens the context menu at count 1. Other pairs are refused.',
       },
     },
     additionalProperties: false,
@@ -2812,13 +2809,12 @@ export function makeAgentGatewayComputerTools(
     }
   };
 
-  /**
-   * The tools chapter's index, generated from the catalog itself rather than
-   * written by hand — a renamed or folded tool can never leave the chapter
-   * claiming a name that no longer exists. The advertised half is what
-   * tools/list already shows; the discovery-only half answers to its exact
-   * name all the same.
-   */
+  const batchStepTypeFor = (toolName: string): string | undefined => {
+    const stepType = toolName.replace(/^computer_/, "");
+    return Object.hasOwn(RUN_STEP_FIELDS, stepType) ? stepType : undefined;
+  };
+
+  /** Describe real provider routes; an index entry does not register a tool. */
   const computerToolIndexText = (): string => {
     const line = (entry: ToolEntry): string =>
       `- ${entry.definition.name}${
@@ -2826,12 +2822,16 @@ export function makeAgentGatewayComputerTools(
           ? ` — ${entry.definition.annotations.title}`
           : ""
       }`;
+    const hidden = entries.filter((entry) => entry.discoveryOnly === true);
     return [
-      "Advertised on this session:",
+      "Advertised by the gateway:",
       ...entries.filter((entry) => entry.discoveryOnly !== true).map(line),
       "",
-      "Also callable by exact name:",
-      ...entries.filter((entry) => entry.discoveryOnly === true).map(line),
+      "Available as computer_run steps (read computer_help with tool for fields):",
+      ...hidden.filter((entry) => batchStepTypeFor(entry.definition.name) !== undefined).map(line),
+      "",
+      "Direct calls only (gateway client or provider forwarder); no computer_run step:",
+      ...hidden.filter((entry) => batchStepTypeFor(entry.definition.name) === undefined).map(line),
     ].join("\n");
   };
 
@@ -2879,18 +2879,18 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_get_state",
-        description: `Read labeled controls and values before acting; prefer label targeting. ${WINDOW_FOCUS_NOTE} By default returns elements without an image or duplicate text. Each element carries a stable ref you can pass as the ref argument on later actions — cheaper than re-quoting label and role, names duplicates a label cannot, and stays bound to the same element while it is present. A one-window listing reports its id once as elementWindowId. window_id scopes inspection; include_screenshot adds ${overviewScope} (or the selected window). ${SCREENSHOT_FRAME_NOTE} include_text adds full AX text only when elements are insufficient. Use window_id or label_contains to narrow a truncated result; elementsTruncated/elementsOmitted report the remainder.`,
+        description: `Read labeled controls and values before acting; prefer semantic targets. ${WINDOW_FOCUS_NOTE} Returns elements by default, without an image or duplicate text. Stable refs distinguish duplicates and remain bound to their original elements; use ref on later actions. A one-window listing hoists its id to elementWindowId. window_id scopes inspection; include_screenshot adds ${overviewScope} (or that window). ${SCREENSHOT_FRAME_NOTE} Use window_id or label_contains to narrow results marked elementsTruncated/elementsOmitted.`,
         inputSchema: {
           type: "object",
           properties: {
             include_screenshot: {
               type: "boolean",
-              description: `Attach a downscaled screenshot of ${overviewScope}. Defaults to false. Pass true when you need a frame to point x/y into, or when the labels are not enough to tell you what is on screen.`,
+              description: `Add a downscaled image of ${overviewScope} for x/y targeting or visual context. Default false.`,
             },
             include_text: {
               type: "boolean",
               description:
-                "Attach the whole accessibility tree rendered as text, on top of the elements list. Defaults to false; it is large, so ask only when the elements list is not enough.",
+                "Add full accessibility text only when elements are insufficient. Default false; can be large.",
             },
             window_id: {
               type: "string",
@@ -2902,12 +2902,12 @@ export function makeAgentGatewayComputerTools(
             label_contains: {
               type: "string",
               description:
-                "Restrict the elements list to controls whose label contains this text, case-insensitively. Use it when the list came back truncated, or to check whether one particular control is on screen.",
+                "Filter elements by case-insensitive label substring, including truncated results.",
             },
             diff: {
               type: "boolean",
               description:
-                "Return only what changed since your last state read in this scope (same window_id and label_contains): elementChanges with added, removed and changed entries instead of the full elements list. The first read in a scope reports every element as added. Position-only changes are not reported — use a screenshot when layout is the question.",
+                "Return elementChanges (added/removed/changed) since this scope's last read (same window_id and label_contains); the first lists all as added. Position-only changes are omitted; inspect an image for layout.",
             },
           },
           additionalProperties: false,
@@ -3486,7 +3486,7 @@ export function makeAgentGatewayComputerTools(
       definition: {
         name: "computer_help",
         description:
-          "The detailed Computer playbook the injected guidance points at: situational chapters on browser-tab driving, menus/frames/app exits, explicit visibility controls, form work, and the full tool index including the tools the advertised list does not show. Call with no topic for the index, or pass a topic to read that chapter before touching a surface it covers.",
+          "Read Computer guidance: no arguments lists chapters; topic reads one chapter. Pass tool instead for one exact desktop-tool schema and its supported computer_run step fields. Looking up a hidden tool does not register it with your provider; use its batch step when available.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3495,6 +3495,11 @@ export function makeAgentGatewayComputerTools(
               enum: [...COMPUTER_HELP_TOPICS, "all"],
               description:
                 'Which chapter to read. Omit for the index of chapters; "all" reads every chapter.',
+            },
+            tool: {
+              type: "string",
+              description:
+                'Exact desktop tool name, such as "computer_invoke_menu". Use instead of topic.',
             },
           },
           additionalProperties: false,
@@ -3505,6 +3510,39 @@ export function makeAgentGatewayComputerTools(
         },
       },
       handler: handle("computer_help", async (args) => {
+        const toolName = readStringArg(args, "tool");
+        const topic = readStringArg(args, "topic");
+        if (toolName !== undefined) {
+          if (topic !== undefined) {
+            throw new ToolInputError("Use either tool or topic, not both.");
+          }
+          const entry = entries.find((candidate) => candidate.definition.name === toolName);
+          if (!entry) {
+            throw new ToolInputError(
+              `Unknown desktop tool "${toolName}". Read topic "tools" for the index.`,
+            );
+          }
+          const stepType = batchStepTypeFor(toolName);
+          return {
+            definition: entry.definition,
+            advertised: entry.discoveryOnly !== true,
+            ...(stepType === undefined
+              ? entry.discoveryOnly === true
+                ? {
+                    availability:
+                      "No computer_run step; requires a direct gateway client or provider forwarder.",
+                  }
+                : {}
+              : {
+                  batchStep: {
+                    type: stepType,
+                    fields: [...RUN_STEP_FIELDS[stepType]!, ...RUN_CONDITION_FIELDS],
+                    instruction:
+                      "Use type plus these fields in computer_run.steps. The tool schema describes their values; per-step screenshots and delivery_mode are not supported.",
+                  },
+                }),
+          };
+        }
         // The tools chapter's static intro gains the generated catalog index
         // on the way out — same text for "tools" alone and inside "all".
         const sectionText = (name: string): string | undefined => {
@@ -3513,7 +3551,6 @@ export function makeAgentGatewayComputerTools(
             ? `${text}\n\n${computerToolIndexText()}`
             : text;
         };
-        const topic = readStringArg(args, "topic");
         if (topic === undefined || topic === "all") {
           const chapters =
             topic === "all"
@@ -3772,7 +3809,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_scroll",
       "Scroll",
-      `Scroll at an optional target, resolved before the gesture and never guessed. Distance is in pixels of the same screenshot the coordinates are in, so a scroll needs a screenshot even with no coordinates — roughly 80 pixels per wheel notch at full resolution. Both axes may scroll in one request; modifiers may be held during it. Each request is capped at half the captured width or height so observations overlap; scroll.limitedTo reports a reduced request in desktop pixels. Read the returned image before scrolling again — screenshot scales may differ. Apps may travel a different distance than the injected units; Synara measures actual movement, reports scroll.traveledY, and pre-divides later requests by what it learned (scroll.gearing). traveledY of 0 means the content did not move — usually the page is already at its edge. To hunt for a control, call computer_get_state instead: its elements list may already name it. ${POINTER_COORDINATE_HINT}`,
+      `Scroll both axes at an optional exact target. Requires a screenshot even without coordinates; distance uses its pixels (~80 per wheel notch at full resolution). Capped at half that frame's width/height for overlap; scroll.limitedTo reports reductions in desktop pixels. Read the returned image before scrolling again: scales may differ. scroll.traveledY measures actual movement (0 means none, often an edge); Synara pre-divides later requests by what it learned (scroll.gearing). To find a control, try computer_get_state first. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
@@ -3904,7 +3941,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_type_text",
       "Type text",
-      `Type text into the focused desktop control, as if typed on the keyboard. It inserts at the caret or replaces the current selection. To overwrite part of a field's contents, select it first — computer_select_text for an exact character range, computer_click with count:3 for its whole line or paragraph, or the application's own select-all shortcut through computer_press_key — or use computer_set_value to request a whole-field value change. For browser navigation use the address-bar shortcut, type the URL without a newline, then press Enter with wait_for_label for a known destination control; do not guess address-bar coordinates or repeat Enter on an unchanged page. Type the whole string in one call — a name, an email address, a URL — without splitting it; pieces only multiply the chance of a partial result. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
+      `Insert the whole string in one call at the caret, replacing any selection. To replace existing text, first select a range with computer_select_text, a line/paragraph with computer_click count:3, or all with the app's select-all shortcut; use computer_set_value for the whole field. Browser URLs: use the address-bar shortcut, type without a newline, then Enter with wait_for_label; never guess bar coordinates or repeat Enter on an unchanged page. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
       {
         type: "object",
         properties: {
@@ -4096,93 +4133,40 @@ export function makeAgentGatewayComputerTools(
           ),
       ),
     ),
-    discoveryOnly(
-      actionEntry(
-        "computer_run",
-        "Run computer actions",
-        `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click (optional count and button for double-/triple-/right-clicks), move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key — one key name or a "mod+key" chord), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional element target; "absent":true waits for the element to disappear), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden — hidden:false is a visible launch and needs the user's task to have asked to see the app), write_clipboard (text), paste (text). Observation steps: get_state (optional window_id + label_contains — returns a fresh elements listing and mints refs usable by later steps), verify_state (window_id + expect predicates). Any step can carry "if_element"/"unless_element" — a target object checked live at step time, skipping the step when its condition fails — and "continue_on_error":true to keep going past its own failure. Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution, and ref targets name elements from the thread's earlier listings. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen, or make the dependency a condition or a get_state step. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
-        {
-          type: "object",
-          properties: {
-            steps: {
-              type: "array",
-              minItems: 1,
-              maxItems: COMPUTER_RUN_MAX_STEPS,
-              items: {
-                type: "object",
-                required: ["type"],
-                additionalProperties: false,
-                properties: {
-                  type: { type: "string", enum: Object.keys(RUN_STEP_FIELDS) },
-                  x: { type: "number" },
-                  y: { type: "number" },
-                  screenshot_id: { type: "string" },
-                  label: { type: "string" },
-                  role: { type: "string" },
-                  ref: { type: "integer", minimum: 0 },
-                  ref_ordinal: { type: "integer", minimum: 0 },
-                  refOrdinal: { type: "integer", minimum: 0 },
-                  window_id: { type: "string" },
-                  windowId: { type: "string" },
-                  label_contains: { type: "string" },
-                  labelContains: { type: "string" },
-                  if_element: {
-                    type: "object",
-                    description:
-                      "Run this step only if the element resolves live; the same target fields as a step (label/role/ref/window_id).",
-                  },
-                  unless_element: {
-                    type: "object",
-                    description:
-                      "Skip this step if the element resolves live; the same target fields as a step.",
-                  },
-                  continue_on_error: { type: "boolean" },
-                  absent: { type: "boolean" },
-                  expect: { type: "array", items: { type: "object" }, minItems: 1, maxItems: 8 },
-                  modifiers: MODIFIERS_PROPERTY.modifiers,
-                  from: {
-                    type: "object",
-                    description: "Drag start; the same target fields as a step.",
-                  },
-                  to: {
-                    type: "object",
-                    description: "Drag end; the same target fields as a step.",
-                  },
-                  duration_ms: { type: "integer", minimum: 0 },
-                  delta_x: { type: "number" },
-                  delta_y: { type: "number" },
-                  text: { type: "string" },
-                  key: { type: "string" },
-                  count: { type: "integer", minimum: 1, maximum: 3 },
-                  button: { type: "string", enum: ["left", "right", "middle"] },
-                  value: { type: "string" },
-                  action: {
-                    type: "string",
-                    enum: [...semanticActionNames(dialect)],
-                  },
-                  start: { type: "integer", minimum: 0, maximum: COMPUTER_SELECT_TEXT_RANGE_MAX },
-                  length: { type: "integer", minimum: 0, maximum: COMPUTER_SELECT_TEXT_RANGE_MAX },
-                  app: { type: "string" },
-                  arguments: { type: "array", items: { type: "string" } },
-                  wait_for_window: { type: "boolean" },
-                  hidden: { type: "boolean" },
-                  minimized: { type: "boolean" },
-                  pid: { type: "integer", minimum: 1 },
-                },
+    actionEntry(
+      "computer_run",
+      "Run computer actions",
+      'Batch up to 25 known desktop steps in one call, such as {"steps":[{"type":"press_key","key":"tab","window_id":"..."}]}. Each step uses type plus the matching computer_ tool fields; computer_help({tool:"computer_" + type}) lists exact fields. All steps are validated before dispatch and keep targeting, consent and refusal checks. Read state before acting; use get_state or if_element/unless_element for changes between steps. Stops on failure unless continue_on_error:true. No per-step screenshots or browser steps; an optional final screenshot covers the affected window.',
+      {
+        type: "object",
+        properties: {
+          steps: {
+            type: "array",
+            minItems: 1,
+            maxItems: COMPUTER_RUN_MAX_STEPS,
+            items: {
+              type: "object",
+              required: ["type"],
+              properties: {
+                type: { type: "string", enum: Object.keys(RUN_STEP_FIELDS) },
               },
-              description:
-                "Ordered steps; the whole list is validated before anything runs, so a malformed step refuses the batch untouched.",
+              // Details are loaded through computer_help when needed; the
+              // existing per-kind parser still rejects unsupported fields
+              // and malformed values for the entire batch before dispatch.
+              additionalProperties: true,
             },
-            include_screenshot: {
-              type: "boolean",
-              description: "Attach a final screenshot of the affected window. Defaults to false.",
-            },
+            description:
+              "Ordered steps; read computer_help with the matching tool for allowed fields.",
           },
-          required: ["steps"],
-          additionalProperties: false,
+          include_screenshot: {
+            type: "boolean",
+            description: "Attach a final screenshot of the affected window. Defaults to false.",
+          },
         },
-        runComputerBatch,
-      ),
+        required: ["steps"],
+        additionalProperties: false,
+      },
+      runComputerBatch,
     ),
   ];
   return entries;

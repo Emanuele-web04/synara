@@ -97,28 +97,26 @@ export function qualifiedSynaraComputerToolName(
 }
 
 /**
- * Pi silent-loss fallback SPEC: namespace-insensitive Computer family matcher.
+ * Namespace-insensitive matcher for Computer calls at the gateway boundary.
  *
  * A session that was never granted computer control must still surface the
  * denial card path when the model reaches for a Computer tool, or the attempt
- * dies as a silent tool error and the user never learns control is off. Two
- * gaps used to lose it:
+ * dies as a silent tool error and the user never learns control is off.
  *
- * 1. Gateway transport (all MCP providers): `makeAgentGatewayMcpTransport`
- *    (`apps/server/src/agentGateway/mcpTransport.ts`) denies an unknown tool
- *    name with `capability_denied` plus the denial hook only when
- *    `isComputerToolName` matches. Wired in
- *    `apps/server/src/agentGateway/Layers/AgentGateway.ts` as the catalog
- *    membership test OR this family matcher, so a prefixed spelling from a
- *    session that never saw the catalog —
- *    `synara_computer_click`, `mcp__synara__computer_click` — still reaches
- *    the denial hook and the card.
- * 2. Pi native projection: `buildPiAgentGatewayCustomTools`
- *    (`apps/server/src/provider/Layers/PiAdapter.ts`) projects the leased
- *    catalog into Pi's custom-tool API and registers a forwarding fallback
- *    for every family name absent from it, so a Pi-local `computer_*` call
- *    without computer control reaches the gateway's `capability_denied`
- *    instead of failing silently inside the Pi SDK.
+ * Gateway transport (all MCP providers): `makeAgentGatewayMcpTransport`
+ * (`apps/server/src/agentGateway/mcpTransport.ts`) denies an unknown tool
+ * name with `capability_denied` plus the denial hook only when
+ * `isComputerToolName` matches. Wired in
+ * `apps/server/src/agentGateway/Layers/AgentGateway.ts` as the catalog
+ * membership test OR this family matcher, so a prefixed spelling from a
+ * session that never saw the catalog —
+ * `synara_computer_click`, `mcp__synara__computer_click` — still reaches
+ * the denial hook and the card.
+ *
+ * Pi's native projection adds specialist forwarders only when its leased
+ * catalog advertises Computer control. Disabled sessions carry no Computer
+ * fallback schemas; stale calls reaching this boundary still receive the same
+ * capability denial as other MCP clients.
  *
  * Entirely-unknown names (`computer_future_tool`, another server's
  * `mcp__other__computer_click`) must keep their current behavior — unknown

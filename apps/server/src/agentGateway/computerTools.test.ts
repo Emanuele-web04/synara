@@ -161,19 +161,29 @@ describe("agent gateway computer tools", () => {
         agentDialect: "macos" as const,
       }),
     );
-    const definitions = tools.map((tool) => tool.definition);
-    // The 2026-09-20 surface cut folded the click variants and hotkey into
-    // their primaries and retired recording/replay, so the registered catalog
-    // is far below the old ~71k. The bound still trips on accidental bloat,
-    // so raise it only with the new surface measured.
-    expect(JSON.stringify(definitions).length).toBeLessThan(72_000);
+    const definitions = tools
+      .filter((tool) => tool.discoveryOnly !== true)
+      .map((tool) => tool.definition);
+    const descriptorBytes = Buffer.byteLength(JSON.stringify(definitions), "utf8");
+    // The macOS desktop catalog was 29,792 bytes before advertising run; it is
+    // now 28,617 after trimming repeated prose. Keep the new batch route below
+    // that baseline without serializing every step schema on every turn.
+    // Browser tools, provider framing and images are separate costs.
+    expect(descriptorBytes).toBeLessThanOrEqual(29_000);
+    expect(
+      Buffer.byteLength(
+        JSON.stringify(definitions.find((tool) => tool.name === "computer_run")),
+        "utf8",
+      ),
+    ).toBeLessThanOrEqual(2_000);
     const notes = computerToolInstructions();
     // The injected block was 8,404 chars before the surface cut shrank it to
     // the every-turn core (~3.5k); the ceiling keeps the block from growing
     // back silently.
     expect(notes.length).toBeLessThanOrEqual(3_800);
+    expect(descriptorBytes + Buffer.byteLength(notes, "utf8")).toBeLessThanOrEqual(32_800);
     expect(notes).toContain("never list the whole catalog");
-    expect(notes).toContain("look them up by these exact names");
+    expect(notes).toContain("look them up by exact name");
     expect(notes).toContain("computer_launch_app");
     expect(notes).toContain("foreground_not_requested");
     // Unit-2/6 gate: the driver refusals real tasks hit must stay mapped to
@@ -374,10 +384,10 @@ describe("agent gateway computer tools", () => {
     expect(names).toEqual(["Luna"]);
   });
 
-  it("exposes the reduced surface behind computer:control, with 15 tools discovery-only", async () => {
+  it("exposes the native batch fast path behind computer:control, with 14 specialist tools hidden", async () => {
     const { byName, tools } = await setup();
-    // 31 registered desktop tools: the 16 advertised every-turn set plus the
-    // 15 exact-name-only set. The 7 recording/replay tools, the three click
+    // 31 registered desktop tools: 17 advertised, including the batch fast
+    // path, plus 14 specialists. The 7 recording/replay tools, the three click
     // variants and computer_hotkey are gone entirely — their behavior folded
     // into computer_click's count/button and computer_press_key's chord.
     expect(tools.map((tool) => tool.definition.name)).toEqual([
@@ -432,12 +442,10 @@ describe("agent gateway computer tools", () => {
       "computer_paste",
       "computer_activate_window",
       "computer_set_value",
+      "computer_run",
     ]);
-    // The advertised set fits under the 30k serialized bound only by keeping
-    // the two heaviest specialist tools — the computer_run batcher (whose
-    // schema enumerates every step field) and computer_perform_action (the
-    // named-AX-action path) — exact-name callable behind computer_help. Their
-    // seats are filled by the two cheapest observational primitives.
+    // Hidden mutations remain reachable through the advertised batch tool;
+    // computer_help returns only the specific schema a model asks for.
     expect(
       tools.filter((tool) => tool.discoveryOnly === true).map((tool) => tool.definition.name),
     ).toEqual([
@@ -455,7 +463,6 @@ describe("agent gateway computer tools", () => {
       "computer_write_clipboard",
       "computer_perform_action",
       "computer_select_text",
-      "computer_run",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "computer:control")).toBe(true);
     expect(tools.every((tool) => tool.requiresActiveTurn === true)).toBe(true);
@@ -5102,6 +5109,68 @@ describe("computer_help", () => {
     }
   });
 
+  it("returns one canonical schema and routes hidden actions through the advertised batch tool", async () => {
+    const { byName, tools, call, manager, backend } = await setup();
+    try {
+      expect(
+        tools.filter((tool) => tool.discoveryOnly !== true).map((tool) => tool.definition.name),
+      ).toContain("computer_run");
+      const help = resultJson(await call("computer_help", { tool: "computer_select_text" })) as {
+        definition: { name: string; inputSchema: unknown };
+        advertised: boolean;
+        batchStep: { type: string; fields: string[] };
+      };
+      expect(help.definition).toEqual(byName.get("computer_select_text")!.definition);
+      expect(help.advertised).toBe(false);
+      expect(help.batchStep).toMatchObject({ type: "select_text" });
+      expect(help.batchStep.fields).toEqual(
+        expect.arrayContaining(["label", "start", "length", "if_element", "continue_on_error"]),
+      );
+      expect(help.batchStep.fields).not.toContain("include_screenshot");
+      expect(JSON.stringify(help)).not.toContain("computer_drag");
+      // Form a supported hidden step from the returned route; no direct call
+      // to an unadvertised tool is needed at the provider boundary.
+      const run = await call("computer_run", {
+        steps: [
+          { type: "set_value", window_id: "fake-calculator", label: "Display", value: "12345" },
+          {
+            type: help.batchStep.type,
+            window_id: "fake-calculator",
+            label: "Display",
+            start: 1,
+            length: 2,
+          },
+        ],
+      });
+      expect(run.isError).not.toBe(true);
+      expect(resultJson(run)).toMatchObject({ completed: 2, stopped: false });
+      expect(backend.callsFor("selectText")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not invent a batch route for hidden read-only specialists", async () => {
+    const { call, manager } = await setup();
+    try {
+      const help = resultJson(await call("computer_help", { tool: "computer_zoom" }));
+      expect(help).toMatchObject({
+        advertised: false,
+        availability:
+          "No computer_run step; requires a direct gateway client or provider forwarder.",
+      });
+      expect(help).not.toHaveProperty("batchStep");
+      for (const args of [
+        { tool: "computer_future" },
+        { tool: "computer_select_text", topic: "tools" },
+      ]) {
+        expect((await call("computer_help", args)).isError).toBe(true);
+      }
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("serves every chapter under all", async () => {
     const { call, manager } = await setup();
     try {
@@ -5114,7 +5183,7 @@ describe("computer_help", () => {
       // The generated index is part of the "all" read: a discovery-only name
       // that no chapter's prose names proves the catalog joined the chapters.
       expect(json.chapters).toContain("computer_select_text");
-      expect(json.chapters).toContain("Also callable by exact name");
+      expect(json.chapters).toContain("Available as computer_run steps");
       expect(json.chapters).not.toContain("computer_recording");
       expect(json.chapters).not.toContain("computer_replay");
     } finally {
@@ -5141,7 +5210,7 @@ describe("computer_help", () => {
     // but not the chapters or the full catalog.
     const notes = computerToolInstructions();
     expect(notes).toContain("computer_help");
-    expect(notes).not.toContain("computer_invoke_menu");
+    expect(notes).toContain('computer_help({tool:"computer_invoke_menu"})');
     expect(notes).not.toContain("computer_recording_start");
     expect(notes).not.toContain("set_window_minimized");
     expect(notes).toContain("never replay it");

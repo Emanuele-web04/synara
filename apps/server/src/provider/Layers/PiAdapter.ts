@@ -521,13 +521,16 @@ function piGatewayToolResult(result: unknown): AgentToolResult<unknown> {
 }
 
 /**
- * The names a session actually installs: the fresh catalog plus the Computer
- * family fallbacks `buildPiAgentGatewayCustomTools` registers for absent
- * names. Rotation comparisons must use this set — the raw catalog alone makes
- * the fallbacks look like spurious additions to strip.
+ * Enabled Pi sessions retain direct routes to the hidden Computer specialists.
+ * Use this same projection when comparing a rotated catalog with installed
+ * tools; sessions without an advertised Computer tool get no family stubs.
  */
 export function piInstalledGatewayToolNames(freshNames: Iterable<string>): Set<string> {
-  return new Set([...freshNames, ...SYNARA_COMPUTER_TOOL_NAMES]);
+  const installed = new Set(freshNames);
+  if (SYNARA_COMPUTER_TOOL_NAMES.some((name) => installed.has(name))) {
+    for (const name of SYNARA_COMPUTER_TOOL_NAMES) installed.add(name);
+  }
+  return installed;
 }
 
 /**
@@ -547,55 +550,33 @@ export async function buildPiAgentGatewayCustomTools(input: {
   if (tools.length === 0) {
     throw new Error("Synara MCP returned an empty tool catalog.");
   }
-  const projected = tools.map((tool) =>
-    input.defineTool({
-      name: tool.name,
-      label: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema as ToolDefinition["parameters"],
+  const catalog = new Map(tools.map((tool) => [tool.name, tool]));
+  return [...piInstalledGatewayToolNames(catalog.keys())].map((name) => {
+    const tool = catalog.get(name);
+    return input.defineTool({
+      name,
+      label: name,
+      description:
+        tool?.description ??
+        (name.startsWith("computer_browser_")
+          ? 'Read computer_help({topic:"browser"}) before calling. Gateway permissions apply.'
+          : `Read computer_help({tool:"${name}"}) for arguments. Gateway permissions apply.`),
+      parameters: (tool?.inputSchema ?? {
+        type: "object",
+        properties: {},
+      }) as ToolDefinition["parameters"],
       execute: async (_toolCallId, params, signal) =>
         piGatewayToolResult(
           await callAgentGatewayMcpTool({
             connection: input.connection,
-            name: tool.name,
+            name,
             arguments: params as Record<string, unknown>,
             ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
             ...(signal === undefined ? {} : { signal }),
           }),
         ),
-    }),
-  );
-  // A session without Computer control gets no computer_* entries in the
-  // catalog; a Pi-native call to one would fail inside the SDK as a bare
-  // unknown tool instead of reaching the gateway's capability_denied (and
-  // its denial card). Discovery-only names are absent from the catalog on
-  // granted sessions too, and their calls must reach the same real handler.
-  // Register forwarders for the absent family names either way so the
-  // gateway itself produces the answer.
-  const catalog = new Set(tools.map((tool) => tool.name));
-  for (const name of SYNARA_COMPUTER_TOOL_NAMES) {
-    if (catalog.has(name)) continue;
-    projected.push(
-      input.defineTool({
-        name,
-        label: name,
-        description:
-          "Synara computer tool served by the gateway: a session with Computer control can call it — computer_help's tools chapter lists it — and a session without gets a capability denial.",
-        parameters: { type: "object", properties: {} } as ToolDefinition["parameters"],
-        execute: async (_toolCallId, params, signal) =>
-          piGatewayToolResult(
-            await callAgentGatewayMcpTool({
-              connection: input.connection,
-              name,
-              arguments: params as Record<string, unknown>,
-              ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
-              ...(signal === undefined ? {} : { signal }),
-            }),
-          ),
-      }),
-    );
-  }
-  return projected;
+    });
+  });
 }
 
 function toMessage(cause: unknown, fallback: string): string {
@@ -1839,11 +1820,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             return;
           }
           const installedNames = new Set(context.gatewayTools.map((tool) => tool.name));
-          // The installed set includes Computer fallback stubs for every
-          // family name the catalog omits, so the truthful "did anything
-          // change" comparison is against fresh ∪ family — otherwise every
-          // rotation for an ungranted session reports a catalog change and
-          // deactivates the fallbacks it just rebuilt.
+          // Include enabled-session specialist forwarders in both sides of
+          // this comparison. Off sessions still install no Computer schemas;
+          // activation changes restart/resume at the reactor's turn boundary.
           const freshNameSet = piInstalledGatewayToolNames(freshNames);
           const sameCatalog =
             installedNames.size === freshNameSet.size &&
