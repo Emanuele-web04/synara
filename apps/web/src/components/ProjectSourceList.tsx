@@ -33,7 +33,7 @@ export function ProjectSourceList(props: {
             type="button"
             disabled={props.disabled}
             className={cn(
-              "flex min-h-24 w-full flex-col items-center justify-center gap-2 rounded-xl border border-foreground/12 px-4 text-center text-[length:var(--app-font-size-ui,12px)] text-foreground transition-colors outline-none hover:bg-foreground/4 focus-visible:border-foreground/30 disabled:opacity-50",
+              "flex min-h-24 w-full flex-col items-center justify-center gap-2 rounded-xl border border-foreground/12 px-4 text-center text-ui text-foreground transition-colors outline-none hover:bg-foreground/4 focus-visible:border-foreground/30 disabled:opacity-50",
               props.isDropTarget && "border-[color:var(--color-border-focus)] bg-foreground/6",
             )}
             onClick={props.onBrowseForFolder}
@@ -76,7 +76,7 @@ export function ProjectSourceList(props: {
         {displayedPaths.map((path, index) => (
           <div
             key={path}
-            className="flex min-h-12 items-center gap-2.5 border-b border-foreground/10 px-3 text-[length:var(--app-font-size-ui,12px)]"
+            className="flex min-h-12 items-center gap-2.5 border-b border-foreground/10 px-3 text-ui"
           >
             <CentralIcon
               name="folder-2"
@@ -115,7 +115,7 @@ export function ProjectSourceList(props: {
         <button
           type="button"
           disabled={props.disabled}
-          className="flex min-h-12 w-full items-center gap-2.5 px-3 text-left text-[length:var(--app-font-size-ui,12px)] text-foreground transition-colors hover:bg-foreground/4 disabled:opacity-50"
+          className="flex min-h-12 w-full items-center gap-2.5 px-3 text-left text-ui text-foreground transition-colors hover:bg-foreground/4 disabled:opacity-50"
           onClick={props.onBrowseForFolder ?? (() => props.onChange([...displayedPaths, ""]))}
         >
           <CentralIcon
@@ -127,15 +127,12 @@ export function ProjectSourceList(props: {
         </button>
       </div>
       {validation.warnings.map((warning) => (
-        <p
-          key={warning}
-          className="text-[length:var(--app-font-size-ui-xs,10px)] text-amber-700 dark:text-amber-300"
-        >
+        <p key={warning} className="text-ui-xs text-amber-700 dark:text-amber-300">
           {warning}
         </p>
       ))}
       {validation.errors.map((error) => (
-        <p key={error} className="text-[length:var(--app-font-size-ui-xs,10px)] text-destructive">
+        <p key={error} className="text-ui-xs text-destructive">
           {error}
         </p>
       ))}

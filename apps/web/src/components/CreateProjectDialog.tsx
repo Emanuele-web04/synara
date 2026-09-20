@@ -435,11 +435,7 @@ export function CreateProjectDialog(props: {
               <div className="space-y-2">
                 <span
                   id={sourceFoldersLabelId}
-                  className={cn(
-                    "block",
-                    dialogFieldLabelClassName,
-                    "text-[length:var(--app-font-size-ui,12px)] text-foreground",
-                  )}
+                  className={cn("block", dialogFieldLabelClassName, "text-ui text-foreground")}
                 >
                   Source folders
                 </span>

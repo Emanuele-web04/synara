@@ -62,8 +62,8 @@ const makeProjectionProjectRepository = Effect.gen(function* () {
           ${JSON.stringify(row.scripts)},
           ${row.isPinned ? 1 : 0},
           ${row.spaceId},
-          ${JSON.stringify(row.sources)},
-          ${row.primarySourceId},
+          ${JSON.stringify(row.sources ?? [])},
+          ${row.primarySourceId ?? null},
           ${row.createdAt},
           ${row.updatedAt},
           ${row.deletedAt}
