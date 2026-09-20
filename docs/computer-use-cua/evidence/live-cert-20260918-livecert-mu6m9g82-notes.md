@@ -5,7 +5,7 @@
 - verdict: **PASS** — 0 pass / 0 fail / 0 skipped
 
 | Row | Verdict | Detail |
-|---|---|---|
+| --- | ------- | ------ |
 
 Skipped rows are honest gaps, not passes. Re-run with a second desktop
-Space for the space-* rows.
+Space for the space-\* rows.

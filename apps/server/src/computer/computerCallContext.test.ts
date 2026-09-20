@@ -72,7 +72,7 @@ describe("computer call env flags", () => {
     (value) => {
       process.env.SYNARA_CUA_TIMING_LOG = value;
       expect(cuaTimingLogEnabled()).toBe(false);
-      },
+    },
   );
 
   it.each(["2", "enabled", "anything"])(

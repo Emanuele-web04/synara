@@ -89,9 +89,7 @@ describe("desktopIdentity", () => {
     expect(resolveSynaraDesktopFlavor({ isDevelopment: false, requestedFlavor: "cua" })).toBe(
       "cua",
     );
-    expect(resolveSynaraDesktopFlavor({ isDevelopment: true, requestedFlavor: "CUA" })).toBe(
-      "cua",
-    );
+    expect(resolveSynaraDesktopFlavor({ isDevelopment: true, requestedFlavor: "CUA" })).toBe("cua");
   });
 
   it("isolates development and Canary homes from packaged Stable", () => {

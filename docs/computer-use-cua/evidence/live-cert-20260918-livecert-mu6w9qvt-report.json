@@ -128,23 +128,15 @@
       "verdict": "pass",
       "detail": "prompts=[\"live-cert-grants-a:Calculator\",\"live-cert-grants-c:Calculator\"] minted=2 listed=1 revoked=true",
       "evidence": {
-        "prompts": [
-          "live-cert-grants-a:Calculator",
-          "live-cert-grants-c:Calculator"
-        ],
-        "grantFor": [
-          "Calculator",
-          "Calculator"
-        ],
+        "prompts": ["live-cert-grants-a:Calculator", "live-cert-grants-c:Calculator"],
+        "grantFor": ["Calculator", "Calculator"],
         "grant": {
           "id": "cg_a252c92b-703d-4bf9-bac2-09735ca0e621",
           "app": {
             "name": "Calculator",
             "bundleId": "com.apple.calculator"
           },
-          "classes": [
-            "lifecycle"
-          ],
+          "classes": ["lifecycle"],
           "createdAt": "2026-09-18T11:48:41.148Z",
           "expiresAt": "2026-09-19T11:48:41.148Z",
           "createdByThreadId": "live-cert-grants-a"
@@ -279,10 +271,7 @@
         "bBytes": 95068,
         "changed": true,
         "frameValid": true,
-        "dims": [
-          586,
-          488
-        ],
+        "dims": [586, 488],
         "bounds": {
           "height": 488,
           "width": 586,
@@ -464,9 +453,7 @@
             "tMs": 35120,
             "durationMs": 1020,
             "sampleCount": 52,
-            "changedFields": [
-              "focusedPid"
-            ],
+            "changedFields": ["focusedPid"],
             "observed": [
               {
                 "pid": 96165,
@@ -493,9 +480,7 @@
             "tMs": 36180,
             "durationMs": 25260,
             "sampleCount": 1019,
-            "changedFields": [
-              "focusedPid"
-            ],
+            "changedFields": ["focusedPid"],
             "observed": [
               {
                 "pid": 96165,

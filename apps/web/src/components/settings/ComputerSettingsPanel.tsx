@@ -94,7 +94,6 @@ function capabilitySummary(capabilities: ComputerCapabilities, captureAvailable:
   return enabled.length > 0 ? enabled.join(", ") : "none";
 }
 
-
 /**
  * One agent-cursor color field: a validated hex input and the swatch it
  * resolves to. Only a complete `#rrggbb` (or an intentional clear) commits to
@@ -167,7 +166,6 @@ export function ComputerSettingsPanel({
     // Health can flip (reconnecting, recovered) while the panel is open.
     refetchInterval: active ? COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS : false,
   });
-
 
   const status = statusQuery.data;
   const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);

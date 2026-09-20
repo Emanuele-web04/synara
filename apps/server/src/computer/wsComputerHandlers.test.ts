@@ -258,9 +258,7 @@ describe("computer WebSocket handlers", () => {
     const { backend, manager, handlers } = setup();
     // Compile-level removal: the handler map has no rearm entry, so no
     // client can re-arm because there is nothing to re-arm.
-    expect(
-      (handlers as unknown as Record<string, unknown>)["computer.rearmInput"],
-    ).toBeUndefined();
+    expect((handlers as unknown as Record<string, unknown>)["computer.rearmInput"]).toBeUndefined();
 
     // The same Escape key through the pane input route is a keystroke, not a
     // stop: it dispatches and leaves input working.

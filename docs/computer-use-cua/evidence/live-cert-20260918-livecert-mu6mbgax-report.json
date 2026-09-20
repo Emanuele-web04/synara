@@ -256,16 +256,7 @@
       "detail": "baseline=true hostArmed=true immune=true engaged=true refused=true rearmed=true (physical key unverified — VM)",
       "evidence": {
         "armedByHost": true,
-        "escArmEvents": [
-          true,
-          false,
-          true,
-          false,
-          true,
-          false,
-          true,
-          false
-        ],
+        "escArmEvents": [true, false, true, false, true, false, true, false],
         "baseline": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confi",
         "afterSynthetic": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readbac",
         "engaged": true,

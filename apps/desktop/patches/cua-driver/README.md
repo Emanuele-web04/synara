@@ -393,7 +393,7 @@ Revision 28 recognizes Helium as a macOS Chromium-family browser.
   arguments and endpoint admission refuses that role, exactly as it does
   for Chrome's helpers. Linux and Windows are untouched.
 - Effect: `browser_prepare` with the pid of a running Helium, `allow_launch:
-  true` and `profile.mode=isolated_new` passes the classification gate and
+true` and `profile.mode=isolated_new` passes the classification gate and
   launches a driver-owned hidden isolated instance of the same Helium
   executable with `--remote-debugging-port=0`; bind, navigate, snapshot and
   the explicit `dom_event` text route then work over that endpoint. The

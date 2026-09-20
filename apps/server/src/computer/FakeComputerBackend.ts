@@ -468,7 +468,9 @@ export class FakeComputerBackend implements ComputerBackend {
     this.throwIfFailed("invokeMenu");
     if ("windowId" in target) {
       if (!this.currentWindows.some((window) => window.id === target.windowId)) {
-        throw new ComputerBackendError(`No desktop window has id ${JSON.stringify(target.windowId)}.`);
+        throw new ComputerBackendError(
+          `No desktop window has id ${JSON.stringify(target.windowId)}.`,
+        );
       }
     } else if (!this.currentApps.some((app) => app.pid === target.pid && app.running)) {
       // The windowless form proves the process, not a window — the same

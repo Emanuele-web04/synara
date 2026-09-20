@@ -26,26 +26,26 @@ prompt text is copied into this repository.
   frames references, app icons, status glyphs), `LensSequence/Lens_frame_00-44.png`
   (45 × 48 px frames), `Appshot.wav`, `SkysightSummarizer.md`,
   `SkysightMemoryInstructions.md`, `AppInstructions/{Slack,Notion,Spotify,
-  iPhone Mirroring,AppleMusic,Numbers,Clock}.md`.
+iPhone Mirroring,AppleMusic,Numbers,Clock}.md`.
 
 ## Tool vocabulary (service-side MCP)
 
 Exactly ten tools:
 
-| Tool | Contract highlights |
-|---|---|
-| `list_apps` | Running apps + anything used in last 14 days, with usage frequency |
-| `get_app_state` | Starts an app session if needed; returns key-window screenshot + AX tree; the contract requires calling it once per assistant turn before interacting |
-| `click` | Click by element index or by pixel coordinates from the screenshot; button defaults left |
-| `perform_secondary_action` | Invokes a secondary AX action an element exposes |
-| `set_value` | Set value on a settable AX element |
-| `select_text` | Select text or place cursor before/after it; exact AX text incl. Markdown; prefix/suffix disambiguation |
-| `scroll` | Direction × number of *pages* |
-| `drag` | Pixel-coordinate drag |
-| `press_key` | xdotool `key` syntax: `a`, `Return`, `super+c`, `KP_0` |
-| `type_text` | Literal keyboard input |
+| Tool                       | Contract highlights                                                                                                                                   |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_apps`                | Running apps + anything used in last 14 days, with usage frequency                                                                                    |
+| `get_app_state`            | Starts an app session if needed; returns key-window screenshot + AX tree; the contract requires calling it once per assistant turn before interacting |
+| `click`                    | Click by element index or by pixel coordinates from the screenshot; button defaults left                                                              |
+| `perform_secondary_action` | Invokes a secondary AX action an element exposes                                                                                                      |
+| `set_value`                | Set value on a settable AX element                                                                                                                    |
+| `select_text`              | Select text or place cursor before/after it; exact AX text incl. Markdown; prefix/suffix disambiguation                                               |
+| `scroll`                   | Direction × number of _pages_                                                                                                                         |
+| `drag`                     | Pixel-coordinate drag                                                                                                                                 |
+| `press_key`                | xdotool `key` syntax: `a`, `Return`, `super+c`, `KP_0`                                                                                                |
+| `type_text`                | Literal keyboard input                                                                                                                                |
 
-Notable contract choices: per-observation element *indices* (not durable
+Notable contract choices: per-observation element _indices_ (not durable
 refs), a mandatory once-per-turn `get_app_state` freshness rule, `tool_search`
 as the deferred-discovery escape hatch, and turn metrics
 (`computer_use_mcp_time_to_first_get_app_state`, `..._to_first_write`,

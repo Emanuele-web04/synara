@@ -66,7 +66,7 @@ New environment flags, all optional, all defaulting to current behavior:
 | SYNARA_CUA_WARM_ON_FIRST_TOUCH | 0       | Start the driver generation at first computer touch instead of first input |
 | SYNARA_CUA_ACTION_SETTLE_MS    | 300     | Override the fixed action settle sleep                                     |
 | SYNARA_CUA_CONDITIONAL_SETTLE  | 0       | Skip settle only when read back proves the effect                          |
-| SYNARA_CUA_AX_ONLY_GET_STATE   | removed | Retired: omitting the field selects the driver default-capture path      |
+| SYNARA_CUA_AX_ONLY_GET_STATE   | removed | Retired: omitting the field selects the driver default-capture path        |
 | SYNARA_CUA_CAPTURE_REUSE       | 0       | Reuse byte identical delivered frames instead of recapturing               |
 | SYNARA_CUA_PREVIEW_STILL_MS    | 2000    | Override the still capture cadence                                         |
 | SYNARA_CUA_TIMING_LOG          | 0       | Emit per leg resolve, dispatch, settle, capture, encode timings            |

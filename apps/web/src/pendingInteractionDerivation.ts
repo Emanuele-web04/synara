@@ -298,7 +298,6 @@ function parseUserInputQuestions(
   return parsed.length > 0 ? parsed : null;
 }
 
-
 export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   settlements?: ReadonlyArray<OrchestrationPendingInteraction>,

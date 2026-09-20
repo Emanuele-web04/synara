@@ -322,5 +322,4 @@ describe("ComputerApprovalGate", () => {
     expect(await gate.requestTask(input("pending"))).toBe(true);
     expect(prompts.get("pending")).toHaveLength(1);
   });
-
 });

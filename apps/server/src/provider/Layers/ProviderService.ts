@@ -2072,7 +2072,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               // value is fresher than the pre-switch row (the reactor just
               // admitted it against live durable intent) and wins. Otherwise the
               // previous binding's value is recycled with its generation.
-              const restoredComputerControl = input.enableComputerControl ?? previousComputerControl;
+              const restoredComputerControl =
+                input.enableComputerControl ?? previousComputerControl;
               const previousCwd = readPersistedCwd(persistedBinding.runtimePayload);
               yield* previousAdapter.stopSession(threadId);
 

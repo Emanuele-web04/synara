@@ -128,23 +128,15 @@
       "verdict": "pass",
       "detail": "prompts=[\"live-cert-grants-a:Calculator\",\"live-cert-grants-c:Calculator\"] minted=2 listed=1 revoked=true",
       "evidence": {
-        "prompts": [
-          "live-cert-grants-a:Calculator",
-          "live-cert-grants-c:Calculator"
-        ],
-        "grantFor": [
-          "Calculator",
-          "Calculator"
-        ],
+        "prompts": ["live-cert-grants-a:Calculator", "live-cert-grants-c:Calculator"],
+        "grantFor": ["Calculator", "Calculator"],
         "grant": {
           "id": "cg_873a6aff-3a51-4840-9955-19615d5d561f",
           "app": {
             "name": "Calculator",
             "bundleId": "com.apple.calculator"
           },
-          "classes": [
-            "lifecycle"
-          ],
+          "classes": ["lifecycle"],
           "createdAt": "2026-09-18T11:52:45.778Z",
           "expiresAt": "2026-09-19T11:52:45.778Z",
           "createdByThreadId": "live-cert-grants-a"
@@ -279,10 +271,7 @@
         "bBytes": 92136,
         "changed": true,
         "frameValid": true,
-        "dims": [
-          586,
-          488
-        ],
+        "dims": [586, 488],
         "bounds": {
           "height": 488,
           "width": 586,

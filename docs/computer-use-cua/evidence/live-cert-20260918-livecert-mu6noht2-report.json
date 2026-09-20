@@ -15,10 +15,7 @@
         "bBytes": 87720,
         "changed": true,
         "frameValid": true,
-        "dims": [
-          586,
-          488
-        ],
+        "dims": [586, 488],
         "bounds": {
           "height": 488,
           "width": 586,

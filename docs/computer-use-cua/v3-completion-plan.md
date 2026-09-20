@@ -106,14 +106,14 @@ change. Then the same surface on Windows and Linux.
       Design if needed: `CGEventSourceSecondsSinceLastEventType`
       heuristic + NSWorkspace activate revert.
     - CPS type-21 notifications (dead for key-window manufacture — proven).
-    `SLSHWCaptureWindowList` — **evaluated and rejected 2026-09-18**:
-    present on Darwin 25.5 (`CGSHWCaptureWindowList` too), signature
-    validated, returns CFArray<CGImage> — but it serves the same
-    retained last-composited buffer the existing `screencapture -l`/SCK
-    path already returns for off-Space windows (verified: driver emits
-    real 586×488 PNG marked `unverified_off_space`). No liveness gain,
-    no new capability. Hidden windows remain strictly better: live
-    backing store (certified `hidden-screenshot`).
+      `SLSHWCaptureWindowList` — **evaluated and rejected 2026-09-18**:
+      present on Darwin 25.5 (`CGSHWCaptureWindowList` too), signature
+      validated, returns CFArray<CGImage> — but it serves the same
+      retained last-composited buffer the existing `screencapture -l`/SCK
+      path already returns for off-Space windows (verified: driver emits
+      real 586×488 PNG marked `unverified_off_space`). No liveness gain,
+      no new capability. Hidden windows remain strictly better: live
+      backing store (certified `hidden-screenshot`).
 
 ---
 

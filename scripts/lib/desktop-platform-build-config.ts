@@ -123,11 +123,7 @@ export function createDesktopPlatformBuildConfig(
         // macOS auto-updates use the separately finalized ZIP artifact.
         writeUpdateInfo: false,
       },
-      files: [
-        ...files,
-        MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
-        "!apps/desktop/resources/cua-driver/**",
-      ],
+      files: [...files, MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/resources/cua-driver/**"],
       extraFiles: [
         { from: "apps/desktop/resources/cua-driver", to: "Resources/cua-driver" },
         {

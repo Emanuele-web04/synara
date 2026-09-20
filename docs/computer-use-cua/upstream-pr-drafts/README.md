@@ -13,20 +13,20 @@ opening PRs; the filtered mirror carries neither file.
 
 ## Drafts
 
-| Patch                          | Source rev | Upstream motivation                                                                        | Size      |
-| ------------------------------ | ---------- | ------------------------------------------------------------------------------------------ | --------- |
-| `pr-a-catch-unwind.patch`      | 9          | A panicking `cua-serve` thread leaves the main thread parked in the AppKit run loop forever. | 19 lines  |
-| `pr-b-keymap.patch`            | 19         | xdotool-style keypad / extended-function vocabulary for `key_name_to_code`.                | 102 lines |
+| Patch                          | Source rev | Upstream motivation                                                                           | Size      |
+| ------------------------------ | ---------- | --------------------------------------------------------------------------------------------- | --------- |
+| `pr-a-catch-unwind.patch`      | 9          | A panicking `cua-serve` thread leaves the main thread parked in the AppKit run loop forever.  | 19 lines  |
+| `pr-b-keymap.patch`            | 19         | xdotool-style keypad / extended-function vocabulary for `key_name_to_code`.                   | 102 lines |
 | `pr-c-host-pid-liveness.patch` | 8          | Second embedded liveness channel via `CUA_DRIVER_EMBEDDED_HOST_PID` (upstream's own env var). | 85 lines  |
-| `pr-d-ax-batch-fetch.patch`    | 6+7        | One `AXUIElementCopyMultipleAttributeValues` IPC per element + bounded sibling fetch pool.   | 995 lines |
-| `pr-e-wait-for-settle.patch`   | 18         | Read-only `wait_for_settle` tool + the AXObserver bindings it needs.                         | 686 lines |
+| `pr-d-ax-batch-fetch.patch`    | 6+7        | One `AXUIElementCopyMultipleAttributeValues` IPC per element + bounded sibling fetch pool.    | 995 lines |
+| `pr-e-wait-for-settle.patch`   | 18         | Read-only `wait_for_settle` tool + the AXObserver bindings it needs.                          | 686 lines |
 
 Suggested send order: A → B → C → E → D (increasing size and review
 burden — E before D because D is the heaviest review; A–C establish the
 relationship on low-risk diffs).
 
 **Not drafted — `select_text` (rev 20).** Unlike `wait_for_settle` it is a
-*mutation* tool: the Synara build rides the patch's own input-admission
+_mutation_ tool: the Synara build rides the patch's own input-admission
 gate, exact-target lease registry and stable-Space validation
 (`background_mutation.rs`, `input/cancellation.rs`, `sdk_adapter.rs` lease
 lists — none of which exist upstream). A faithful upstream port needs a
@@ -123,7 +123,7 @@ walk:
    (most AppKit elements) keep the dedicated `AXUIElementCopyActionNames`
    fallback.
 
-2. **Overlap siblings.** The AX server serializes requests *per element*
+2. **Overlap siblings.** The AX server serializes requests _per element_
    but serves different elements concurrently, so a bounded 4-worker pool
    prefetches each siblings array's attribute batches while all ordering,
    dedup, budget, and truncation decisions stay on the walk thread in the

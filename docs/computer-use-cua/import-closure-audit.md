@@ -19,14 +19,14 @@ a move today:
 
 ## Clean as-is (no seams)
 
-| File                                        | Imports                                                          |
-| ------------------------------------------- | ---------------------------------------------------------------- |
-| `packages/shared/src/cuaDriverProtocol.ts`  | `node:net` + `./cuaDriverRelease.json` — leaf                    |
-| `packages/shared/src/cuaDriverRelease.json` | none                                                             |
-| `apps/desktop/scripts/provision-cua-driver.mjs` | `node:*` only                                                |
-| `apps/desktop/src/computerDesktopLifecycle.ts` | **zero imports** — power monitor + host fully injected        |
-| `apps/desktop/src/cuaDriverHostStandalone.ts` | `node:*` + `./cuaDriverHost`                                   |
-| `apps/desktop/src/cuaFixtures/focusProbe.ts` | zero runtime deps                                                 |
+| File                                            | Imports                                                |
+| ----------------------------------------------- | ------------------------------------------------------ |
+| `packages/shared/src/cuaDriverProtocol.ts`      | `node:net` + `./cuaDriverRelease.json` — leaf          |
+| `packages/shared/src/cuaDriverRelease.json`     | none                                                   |
+| `apps/desktop/scripts/provision-cua-driver.mjs` | `node:*` only                                          |
+| `apps/desktop/src/computerDesktopLifecycle.ts`  | **zero imports** — power monitor + host fully injected |
+| `apps/desktop/src/cuaDriverHostStandalone.ts`   | `node:*` + `./cuaDriverHost`                           |
+| `apps/desktop/src/cuaFixtures/focusProbe.ts`    | zero runtime deps                                      |
 
 Plus the patch set, pin manifest, and docs corpus — all artifacts, no
 closure.
@@ -45,13 +45,13 @@ The fixtures use **9 backend methods**: `captureScreenshot`, `click`,
 `drag`, `getState`, `listWindows`, `pressKey`, `setValue`, `stopInput`,
 `typeText`.
 
-| Fixture                    | Backend coupling                                                                    | In narrow milestone?                          |
-| -------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------- |
-| `cancellation.ts`          | `import type` — param only                                                          | Yes, against a ~9-method package interface    |
-| `native.ts`                | `import type` — param only                                                          | Yes, same                                     |
-| `electron.ts`              | **constructs** `new CuaComputerBackend({endpoint, capability, request})` (`:218`)     | Only with an injected `backendFactory`        |
-| `live.ts`                  | via `electron.ts` + `pngDimensions` (`server/src/pngHeader.ts`, ~20 lines)           | Same — factory + move/inline `pngDimensions`   |
-| `gateway.ts`               | `ComputerManager` + `computerTools` + `toolRuntime` + Effect — the agent-facing stack | **No** — wider milestone or stays internal    |
+| Fixture           | Backend coupling                                                                      | In narrow milestone?                         |
+| ----------------- | ------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `cancellation.ts` | `import type` — param only                                                            | Yes, against a ~9-method package interface   |
+| `native.ts`       | `import type` — param only                                                            | Yes, same                                    |
+| `electron.ts`     | **constructs** `new CuaComputerBackend({endpoint, capability, request})` (`:218`)     | Only with an injected `backendFactory`       |
+| `live.ts`         | via `electron.ts` + `pngDimensions` (`server/src/pngHeader.ts`, ~20 lines)            | Same — factory + move/inline `pngDimensions` |
+| `gateway.ts`      | `ComputerManager` + `computerTools` + `toolRuntime` + Effect — the agent-facing stack | **No** — wider milestone or stays internal   |
 
 A package-side `ComputerUseBackend` interface covering the 9 methods makes
 `cancellation`/`native` compile clean; Synara's `CuaComputerBackend`
@@ -61,7 +61,7 @@ onto `cuaRequest` calls over the protocol module.
 
 ## What the audit proves about the alternative
 
-If the fixtures are *not* seamed, `cancellation.ts → CuaComputerBackend.ts`
+If the fixtures are _not_ seamed, `cancellation.ts → CuaComputerBackend.ts`
 is the single bridge that drags the product spine: **44 server files**
 (`ComputerManager`, the whole `computer/*` directory, `agentGateway/*`,
 provider plumbing) plus **44 contracts files** through the barrel. The seam

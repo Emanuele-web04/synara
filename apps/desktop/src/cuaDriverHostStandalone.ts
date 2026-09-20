@@ -75,19 +75,13 @@ async function clearStaleSocket(endpoint: string): Promise<void> {
 
 async function main(): Promise<void> {
   const driverOption = option("--driver") ?? process.env.SYNARA_CUA_DRIVER;
-  if (!driverOption)
-    usage("--driver is required (provisioned cua-driver binary or bundle dir).");
+  if (!driverOption) usage("--driver is required (provisioned cua-driver binary or bundle dir).");
 
   let binaryPath = driverOption;
   if ((await stat(driverOption).catch(() => undefined))?.isDirectory()) {
-    binaryPath = join(
-      driverOption,
-      process.platform === "win32" ? "cua-driver.exe" : "cua-driver",
-    );
+    binaryPath = join(driverOption, process.platform === "win32" ? "cua-driver.exe" : "cua-driver");
   }
-  await access(binaryPath).catch(() =>
-    usage(`driver not found or not readable: ${binaryPath}`),
-  );
+  await access(binaryPath).catch(() => usage(`driver not found or not readable: ${binaryPath}`));
 
   // The capability is the authority boundary on this socket — it must never
   // travel through argv, which every process on the machine can read.
