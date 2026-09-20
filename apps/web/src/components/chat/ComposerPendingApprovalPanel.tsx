@@ -9,8 +9,6 @@
 
 import {
   type ApprovalRequestId,
-  type ComputerApprovalGrant,
-  type ComputerGrantActionClass,
   type ProviderApprovalDecision,
 } from "@synara/contracts";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
@@ -29,7 +27,6 @@ interface ComposerPendingApprovalPanelProps {
     decision: ProviderApprovalDecision,
     lifecycleGeneration?: string,
     requestKind?: PendingApproval["requestKind"],
-    computerGrant?: ComputerApprovalGrant,
   ) => Promise<void>;
 }
 
@@ -46,11 +43,6 @@ type ApprovalAction = {
   label: string;
   description: string;
   tone: ComposerChoiceTone;
-  /**
-   * The durable always-allow choice this row mints alongside its "accept".
-   * Only computer approval cards that carried a grant offer build these.
-   */
-  computerGrant?: ComputerApprovalGrant;
 };
 
 // Order is the card-local shortcut order (1-4): recommended action first, stop-everything last.
@@ -89,61 +81,6 @@ const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
   tool: "Approve this tool call?",
 };
 
-/** How an action class reads on an always-allow row — the grant's own words. */
-const GRANT_CLASS_LABELS: Record<ComputerGrantActionClass, string> = {
-  observe: "screen reads",
-  input: "clicks and typing",
-  lifecycle: "app and window control",
-  clipboard: "clipboard use",
-  browser: "browser actions",
-};
-
-/**
- * The always-allow choices a computer approval card adds when the prompt
- * carried a grant offer — one row per scope the offer honestly supports.
- * Each still answers "accept" so this call proceeds; the grant rides along
- * to cover matching calls until it expires or is revoked in Settings.
- */
-function computerGrantActions(approval: PendingApproval): ReadonlyArray<ApprovalAction> {
-  const offer = approval.computerGrantOffer;
-  if (!offer) return [];
-  const classList = offer.classes.map((entry) => GRANT_CLASS_LABELS[entry]).join(" + ");
-  const ttl = formatGrantTtl(offer.defaultTtlMs);
-  return offer.scopes.map((scope) => ({
-    decision: "accept" as const,
-    label:
-      scope === "app" ? `Always allow in ${grantAppListLabel(offer)}` : "Always allow in any app",
-    description: `${classList} · for ${ttl}, revocable in Computer settings`,
-    tone: "neutral" as const,
-    computerGrant: { classes: [...offer.classes], scope },
-  }));
-}
-
-function grantAppListLabel(offer: NonNullable<PendingApproval["computerGrantOffer"]>): string {
-  const names = offer.apps.map((app) => app.name ?? app.bundleId ?? "an app");
-  if (names.length === 0) return "this app";
-  if (names.length <= 3) return names.join(", ");
-  return `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
-}
-
-function formatGrantTtl(ttlMs: number): string {
-  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) return "a limited time";
-  const minutes = Math.round(ttlMs / 60_000);
-  if (minutes % (7 * 24 * 60) === 0) {
-    const weeks = minutes / (7 * 24 * 60);
-    return `${weeks} ${weeks === 1 ? "week" : "weeks"}`;
-  }
-  if (minutes % (24 * 60) === 0) {
-    const days = minutes / (24 * 60);
-    return `${days} ${days === 1 ? "day" : "days"}`;
-  }
-  if (minutes % 60 === 0) {
-    const hours = minutes / 60;
-    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
-  }
-  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
-}
-
 export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPanel({
   approval,
   pendingCount,
@@ -178,17 +115,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     : approval.sessionApprovalAvailable === false
       ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession")
       : APPROVAL_ACTIONS;
-  // Grant rows sit right after the one-time approve: they accept this call
-  // the same way, only additionally pinning its scope for next time.
-  const grantRows = computerGrantActions(approval);
-  const actions =
-    grantRows.length === 0
-      ? baseActions
-      : [
-          ...baseActions.filter((action) => action.decision === "accept"),
-          ...grantRows,
-          ...baseActions.filter((action) => action.decision !== "accept"),
-        ];
+  const actions = baseActions;
 
   const respondOnce = (action: ApprovalAction) => {
     if (isResponding || submittedRequestKeyRef.current === submissionKey) return;
@@ -198,7 +125,6 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       action.decision,
       approval.lifecycleGeneration,
       approval.requestKind,
-      action.computerGrant,
     ).catch(() => {
       // Immediate command failures remain retryable. A successful dispatch keeps
       // the claim until the request disappears or a newer durable retry attempt
@@ -258,11 +184,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       <div className="mt-2.5 space-y-0.5">
         {actions.map((action, index) => (
           <ComposerChoiceRow
-            key={
-              action.computerGrant !== undefined
-                ? `grant:${action.computerGrant.scope ?? "app"}`
-                : action.decision
-            }
+            key={action.decision}
             shortcut={index + 1}
             label={action.label}
             description={action.description}

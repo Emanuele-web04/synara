@@ -875,8 +875,6 @@ export function createWsNativeApi(): NativeApi {
       inputClick: (input) => transport.request(COMPUTER_WS_METHODS.inputClick, input),
       inputScroll: (input) => transport.request(COMPUTER_WS_METHODS.inputScroll, input),
       inputKey: (input) => transport.request(COMPUTER_WS_METHODS.inputKey, input),
-      listGrants: (input) => transport.request(COMPUTER_WS_METHODS.listGrants, input),
-      revokeGrant: (input) => transport.request(COMPUTER_WS_METHODS.revokeGrant, input),
       onEvent: computerEventListeners.subscribe,
     },
     browser: {

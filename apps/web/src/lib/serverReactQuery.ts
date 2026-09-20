@@ -34,7 +34,6 @@ export const serverQueryKeys = {
   studioThreadOutputs: (threadId: ThreadId | null) =>
     ["server", "studioThreadOutputs", threadId] as const,
   computerStatus: () => ["server", "computerStatus"] as const,
-  computerGrants: () => ["server", "computerGrants"] as const,
 };
 
 export const serverMutationKeys = {
@@ -69,35 +68,6 @@ export function computerStatusQueryOptions() {
     },
     staleTime: LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
   });
-}
-
-/**
- * The durable always-allow grants minted through computer approvals. Read
- * wherever the Computer settings panel is open; revocation lands through
- * `api.computer.revokeGrant` and writes the result straight back here.
- */
-export function computerGrantsQueryOptions(input: { enabled?: boolean } = {}) {
-  return queryOptions({
-    queryKey: serverQueryKeys.computerGrants(),
-    queryFn: async () => {
-      const api = ensureNativeApi();
-      // Desktop-bridge NativeApi implementations may predate the grants surface.
-      if (!api.computer?.listGrants) {
-        throw new Error("This app build cannot read computer grants.");
-      }
-      return api.computer.listGrants({});
-    },
-    enabled: input.enabled ?? true,
-    staleTime: LOCAL_SERVERS_DEFAULT_STALE_TIME_MS,
-  });
-}
-
-export function revokeComputerGrant(grantId: string) {
-  const api = ensureNativeApi();
-  if (!api.computer?.revokeGrant) {
-    return Promise.reject(new Error("This app build cannot revoke computer grants."));
-  }
-  return api.computer.revokeGrant({ grantId });
 }
 
 /** Share one setup request across the settings panel and transcript cards. */

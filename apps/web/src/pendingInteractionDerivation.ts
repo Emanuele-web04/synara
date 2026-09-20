@@ -1,7 +1,5 @@
 import {
   ApprovalRequestId,
-  COMPUTER_GRANT_ACTION_CLASSES,
-  type ComputerGrantActionClass,
   type OrchestrationPendingInteraction,
   type OrchestrationThreadActivity,
   type TurnId,
@@ -31,23 +29,6 @@ export interface PendingApproval {
   approvalScope?: "computer-task";
   toolName?: string;
   toolParamsDisplay?: ReadonlyArray<PendingToolParamDisplay>;
-  /**
-   * The durable always-allow scope a computer approval offers to pin. When
-   * present the card may answer "accept" with a matching `computerGrant`
-   * choice; absent means this prompt can only mint a one-time answer.
-   */
-  computerGrantOffer?: PendingComputerGrantOffer;
-}
-
-export interface PendingComputerGrantOffer {
-  readonly apps: ReadonlyArray<{
-    readonly name?: string;
-    readonly bundleId?: string;
-    readonly teamId?: string;
-  }>;
-  readonly classes: ReadonlyArray<ComputerGrantActionClass>;
-  readonly scopes: ReadonlyArray<"app" | "any-app">;
-  readonly defaultTtlMs: number;
 }
 
 export interface PendingToolParamDisplay {
@@ -317,68 +298,6 @@ function parseUserInputQuestions(
   return parsed.length > 0 ? parsed : null;
 }
 
-/**
- * The offer rides the open prompt's payload untyped — a JSON string like
- * `toolParamsDisplay` on the same card, or an already-parsed object — so
- * every field is re-validated here: an offer with no classes or no scopes
- * cannot mint an honest grant and is dropped rather than partially rendered.
- */
-function parseComputerGrantOffer(value: unknown): PendingComputerGrantOffer | undefined {
-  const parsed =
-    typeof value === "string"
-      ? (() => {
-          try {
-            return JSON.parse(value) as unknown;
-          } catch {
-            return undefined;
-          }
-        })()
-      : value;
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-  const record = parsed as Record<string, unknown>;
-  const classes = Array.isArray(record.classes)
-    ? record.classes.filter(
-        (entry): entry is ComputerGrantActionClass =>
-          typeof entry === "string" &&
-          (COMPUTER_GRANT_ACTION_CLASSES as readonly string[]).includes(entry),
-      )
-    : [];
-  if (classes.length === 0) return undefined;
-  const scopes = Array.isArray(record.scopes)
-    ? [...new Set(record.scopes.filter((entry) => entry === "app" || entry === "any-app"))]
-    : [];
-  if (scopes.length === 0) return undefined;
-  const apps = Array.isArray(record.apps)
-    ? record.apps.flatMap<NonNullable<PendingComputerGrantOffer["apps"][number]>>((entry) => {
-        if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return [];
-        const identity = entry as Record<string, unknown>;
-        const app = {
-          ...(typeof identity.name === "string" && identity.name.length > 0
-            ? { name: identity.name }
-            : {}),
-          ...(typeof identity.bundleId === "string" && identity.bundleId.length > 0
-            ? { bundleId: identity.bundleId }
-            : {}),
-          ...(typeof identity.teamId === "string" && identity.teamId.length > 0
-            ? { teamId: identity.teamId }
-            : {}),
-        };
-        return app.name !== undefined || app.bundleId !== undefined ? [app] : [];
-      })
-    : [];
-  const defaultTtlMs =
-    typeof record.defaultTtlMs === "number" &&
-    Number.isSafeInteger(record.defaultTtlMs) &&
-    record.defaultTtlMs > 0
-      ? record.defaultTtlMs
-      : 0;
-  return {
-    apps,
-    classes: [...new Set(classes)],
-    scopes: scopes as Array<"app" | "any-app">,
-    defaultTtlMs,
-  };
-}
 
 export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
@@ -417,7 +336,6 @@ export function derivePendingApprovals(
             : undefined;
         const toolName = typeof payload?.toolName === "string" ? payload.toolName : undefined;
         const toolParamsDisplay = parseToolParamsDisplay(payload?.toolParamsDisplay);
-        const computerGrantOffer = parseComputerGrantOffer(payload?.computerGrantOffer);
         return {
           requestId,
           ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
@@ -431,7 +349,6 @@ export function derivePendingApprovals(
             : {}),
           ...(toolName ? { toolName } : {}),
           ...(toolParamsDisplay ? { toolParamsDisplay } : {}),
-          ...(computerGrantOffer ? { computerGrantOffer } : {}),
         };
       },
     },

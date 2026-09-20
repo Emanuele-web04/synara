@@ -11,7 +11,7 @@
 // reads out is decided at render time. Interaction (pressing Set up) belongs to
 // `useProvisionComputer.test.tsx`, which owns that mutation.
 
-import type { ComputerGrant, ComputerStatusResult } from "@synara/contracts";
+import type { ComputerStatusResult } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -66,18 +66,9 @@ function render(input: {
   readonly status?: ComputerStatusResult;
   readonly active?: boolean;
   readonly settings?: Partial<AppSettings>;
-  readonly grants?: readonly ComputerGrant[];
 }) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (input.status) queryClient.setQueryData(serverQueryKeys.computerStatus(), input.status);
-  if (input.grants) {
-    queryClient.setQueryData(serverQueryKeys.computerGrants(), {
-      grants: input.grants,
-      defaultTtlMs: 24 * 60 * 60 * 1_000,
-      minTtlMs: 60_000,
-      maxTtlMs: 7 * 24 * 60 * 60 * 1_000,
-    });
-  }
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
       <ComputerSettingsPanel {...binding(input.settings)} active={input.active ?? true} />
@@ -222,24 +213,8 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).toContain("Advanced");
     expect(markup).toContain('aria-expanded="false"');
     // The disclosure content is mounted for its animation but inert and hidden.
-    expect(markup).toContain("No always-allow grants");
     expect(markup).toContain("Desktop abilities");
     expect(markup).toContain("macOS desktop");
-  });
-
-  it("lists the durable grants with a revoke inside Advanced", () => {
-    const grant: ComputerGrant = {
-      id: "grant-1",
-      app: { name: "Safari", bundleId: "com.apple.Safari" },
-      classes: ["observe", "input"],
-      createdAt: "2026-09-19T00:00:00.000Z",
-      expiresAt: "2026-09-21T00:00:00.000Z",
-    };
-    const markup = render({ status: status(), grants: [grant] });
-    expect(markup).toContain("Safari");
-    expect(markup).toContain("screen reads + clicks and typing");
-    expect(markup).toContain("Revoke");
-    expect(markup).not.toContain("No always-allow grants");
   });
 
   describe("agent cursor colors", () => {
