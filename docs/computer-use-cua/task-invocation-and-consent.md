@@ -1,5 +1,10 @@
 # Task invocation and consent — 11 September 2026
 
+> Historical activation design. Catalog installation, task consent and visible
+> use have changed since this record. Follow the [current status](README.md)
+> and current provider/gateway code; the claims below are not current release
+> qualification or permission instructions.
+
 This supersedes the composer activation and per-foreground-action approval choices in the earlier efficiency plan. Permission setup still shares AppSnap's native guide and checks the exact running macOS bundle.
 
 ## User flow

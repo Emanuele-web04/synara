@@ -1,5 +1,10 @@
 # Session recording and replay — `computer_recording_*`, `computer_replay`
 
+> Historical design. Recording/replay and the APIs/tests described below were
+> removed from the current branch. They are not available tools or current
+> verification evidence. Reintroducing them would be new work. See the
+> [current implementation status](README.md).
+
 Structured, bounded, local-only history for computer use, built beside the
 [audit log](guardrail-gap-list.md) rather than replacing it. The audit log
 still answers "what happened across every gated call"; a recording answers
