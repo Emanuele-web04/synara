@@ -103,6 +103,8 @@ import {
 import {
   canSubmitUserMessageEdit,
   capOpenWorkEntryRenderChunks,
+  isFoldedWorkEntryChunk,
+  resolveWorkEntryChunkFold,
   chunkCollapsedTurnItems,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
@@ -1400,25 +1402,26 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             keep: "last",
           });
           const renderChunks = cappedRenderPlan.chunks;
-          const hasCollapsedChunk = renderChunks.some((chunk) => chunk.summary !== null);
+          const hasCollapsedChunk = renderChunks.some(isFoldedWorkEntryChunk);
           if (hasCollapsedChunk) {
             return (
               <div>
                 <div className="space-y-0.5">
                   {renderChunks.map((chunk) => {
-                    if (!chunk.summary) return chunk.entries.map(renderEntryRow);
-                    const summary = chunk.summary;
-                    const summaryKey = `${groupId}:${chunk.id}`;
+                    const fold = resolveWorkEntryChunkFold(chunk);
+                    if (!fold) return chunk.entries.map(renderEntryRow);
+                    const summaryKey = `${groupId}:${chunk.id}${fold.keySuffix}`;
                     return (
                       <ToolCallGroupSummaryRow
-                        key={`tool-summary:${summaryKey}`}
-                        summary={summary}
+                        key={`tool-summary:${groupId}:${chunk.id}`}
+                        summary={fold.summary}
+                        liveEntry={chunk.liveEntry}
                         open={toolGroupSummaryOverrides[summaryKey] ?? false}
                         onToggle={(open) => setToolGroupSummaryOpen(summaryKey, open)}
                         fontSizePx={normalizedChatFontSizePx}
                         renderChildren={() => (
                           <div className="space-y-0.5 pt-0.5">
-                            {chunk.entries.map(renderEntryRow)}
+                            {fold.entries.map(renderEntryRow)}
                           </div>
                         )}
                       />
@@ -1934,7 +1937,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               shouldCapEntry: (workEntry) => workEntry.tone === "tool",
             });
             const renderChunks = cappedRenderPlan.chunks;
-            const collapseAsSummary = renderChunks.some((chunk) => chunk.summary !== null);
+            const collapseAsSummary = renderChunks.some(isFoldedWorkEntryChunk);
             return (
               <>
                 {!hasCollapsedWork &&
@@ -1943,26 +1946,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     <div className={placement === "leading" ? "mb-1.5" : "mt-1.5"}>
                       <div className="space-y-px">
                         {renderChunks.map((chunk) => {
-                          if (!chunk.summary) {
+                          const fold = resolveWorkEntryChunkFold(chunk);
+                          if (!fold) {
                             // Narration-tone entries render in the status block
                             // below; here they only serve as run boundaries.
                             return chunk.entries
                               .filter((workEntry) => workEntry.tone === "tool")
                               .map(renderInlineToolRow);
                           }
-                          const summary = chunk.summary;
                           // Message ids stay stable while a live group's first-entry id can drift.
-                          const summaryOverrideKey = `${placement}:${row.message.id}:${chunk.id}`;
+                          const summaryRowKey = `${placement}:${row.message.id}:${chunk.id}`;
+                          const summaryOverrideKey = `${summaryRowKey}${fold.keySuffix}`;
                           return (
                             <ToolCallGroupSummaryRow
-                              key={`inline-tool-summary:${summaryOverrideKey}`}
-                              summary={summary}
+                              key={`inline-tool-summary:${summaryRowKey}`}
+                              summary={fold.summary}
+                              liveEntry={chunk.liveEntry}
                               open={toolGroupSummaryOverrides[summaryOverrideKey] ?? false}
                               onToggle={(open) => setToolGroupSummaryOpen(summaryOverrideKey, open)}
                               fontSizePx={normalizedChatFontSizePx}
                               renderChildren={() => (
                                 <div className="space-y-px pt-0.5">
-                                  {chunk.entries.map(renderInlineToolRow)}
+                                  {fold.entries.map(renderInlineToolRow)}
                                 </div>
                               )}
                             />

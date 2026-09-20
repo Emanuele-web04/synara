@@ -138,6 +138,7 @@ export const SortIcon: LucideIcon = centralIconWrapper("arrow-top-bottom");
 export const AGENT_ROBOT_ICON_NAME = "robot";
 export const BotIcon: LucideIcon = centralIconWrapper(AGENT_ROBOT_ICON_NAME);
 export const BookIcon: LucideIcon = centralIconWrapper("book-simple");
+export const BookOpenIcon: LucideIcon = centralIconWrapper("newspaper-2");
 export const BugIcon = adaptIcon(IconBug);
 export const CameraIcon = adaptIcon(IconCamera);
 export const CheckIcon = adaptIcon(IconCheck);
