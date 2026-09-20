@@ -206,6 +206,7 @@ import type {
   ServerConfig,
   ServerDiagnosticsResult,
   ServerReadThreadDiagnosticsInput,
+  ServerReadThreadDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -986,7 +987,9 @@ export interface NativeApi {
       input: ServerConsumeCodexResetCreditInput,
     ) => Promise<ServerConsumeCodexResetCreditResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
-    readThreadDiagnostics: (input: ServerReadThreadDiagnosticsInput) => Promise<unknown>;
+    readThreadDiagnostics: (
+      input: ServerReadThreadDiagnosticsInput,
+    ) => Promise<ServerReadThreadDiagnosticsResult>;
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;

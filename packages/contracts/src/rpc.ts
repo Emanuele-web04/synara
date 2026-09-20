@@ -235,6 +235,7 @@ import {
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
   ServerReadThreadDiagnosticsInput,
+  ServerReadThreadDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -1331,7 +1332,7 @@ export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostic
 
 export const WsServerReadThreadDiagnosticsRpc = Rpc.make(WS_METHODS.serverReadThreadDiagnostics, {
   payload: ServerReadThreadDiagnosticsInput,
-  success: Schema.Unknown,
+  success: ServerReadThreadDiagnosticsResult,
   error: WsRpcError,
 });
 

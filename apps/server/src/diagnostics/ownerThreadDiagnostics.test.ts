@@ -1,5 +1,10 @@
-import { ThreadId, type OrchestrationThreadShell } from "@synara/contracts";
-import { Effect } from "effect";
+import {
+  ThreadId,
+  WsServerReadThreadDiagnosticsRpc,
+  type OrchestrationThreadShell,
+} from "@synara/contracts";
+import { Effect, Exit, Schema } from "effect";
+import { Rpc } from "effect/unstable/rpc";
 import { describe, expect, it, vi } from "vitest";
 import {
   makeThreadDiagnosticPageReaders,
@@ -65,6 +70,9 @@ describe("owner thread diagnostic adapter", () => {
     expect(JSON.stringify(owner)).not.toContain("private-credential");
     expect(JSON.stringify(owner)).toContain('"inputTokens":100');
     expect(readThreadEvents).toHaveBeenCalledWith(expect.objectContaining({ limit: 26 }));
+    const wireCodec = Schema.toCodecJson(Rpc.exitSchema(WsServerReadThreadDiagnosticsRpc));
+    const wire = Schema.encodeUnknownSync(wireCodec)(Exit.succeed(owner));
+    expect(JSON.parse(JSON.stringify(wire))).toEqual({ _tag: "Success", value: owner });
   });
 
   it("keeps event coverage and validates existence before returning an empty page", async () => {

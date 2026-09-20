@@ -1,5 +1,8 @@
-import type { ServerReadThreadDiagnosticsInput } from "@synara/contracts";
-import { Effect } from "effect";
+import {
+  ServerReadThreadDiagnosticsResult,
+  type ServerReadThreadDiagnosticsInput,
+} from "@synara/contracts";
+import { Effect, Schema } from "effect";
 import {
   makeThreadDiagnosticPageReaders,
   type ThreadDiagnosticPageDependencies,
@@ -9,7 +12,9 @@ import {
  * readers, retention boundaries, cursor validation and payload sanitizer. */
 export function makeOwnerThreadDiagnosticReader(input: ThreadDiagnosticPageDependencies) {
   const readers = makeThreadDiagnosticPageReaders(input);
-  return (request: ServerReadThreadDiagnosticsInput): Effect.Effect<unknown, Error> => {
+  return (
+    request: ServerReadThreadDiagnosticsInput,
+  ): Effect.Effect<ServerReadThreadDiagnosticsResult, Error> => {
     const { source, ...args } = request;
     if (
       (source === "events" && (args.turnId !== undefined || args.includeDetails !== undefined)) ||
@@ -32,7 +37,8 @@ export function makeOwnerThreadDiagnosticReader(input: ThreadDiagnosticPageDepen
           return Effect.fail(new Error("Thread diagnostic request was refused."));
         }
         return Effect.try({
-          try: () => JSON.parse(content.text) as unknown,
+          try: () =>
+            Schema.decodeUnknownSync(ServerReadThreadDiagnosticsResult)(JSON.parse(content.text)),
           catch: () => new Error("Thread diagnostic response was invalid."),
         });
       }),
