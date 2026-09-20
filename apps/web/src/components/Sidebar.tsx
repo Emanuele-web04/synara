@@ -249,6 +249,7 @@ import {
   normalizeSidebarProjectThreadListCwd,
   persistSidebarUiState,
   readSidebarUiState,
+  migrateLegacyProjectThreadListExtraPages,
   resolveProjectThreadListExtraPages,
   subscribeSidebarUiState,
 } from "./Sidebar.uiState";
@@ -328,6 +329,7 @@ import {
   isThreadActivelyWorking,
   isUrgentThreadStatusPill,
   pruneProjectThreadListExtraPagesById,
+  pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
@@ -4031,7 +4033,9 @@ export default function Sidebar() {
       activeEntryId: activeChatPreviewEntry?.rowId,
       previewLimit: paging.previewLimit,
     });
-    const hiddenThreadCount = Math.max(0, visibleChatPreviewEntries.length - paging.previewLimit);
+    // Forced rows (the active chat and its ancestors) render past the page cap,
+    // so count against what is actually rendered, not against the cap.
+    const hiddenThreadCount = Math.max(0, visibleChatPreviewEntries.length - visibleEntries.length);
     return {
       // Mirror deriveSidebarProjectData: the active-chat reveal can force rows past the page
       // cap, so only offer "Show more" while rows are genuinely hidden.
@@ -4188,6 +4192,33 @@ export default function Sidebar() {
     [standardProjects],
   );
 
+  // Finish the cwd-to-id paging migration as projects resolve: legacy values move
+  // into the id map, so the id-keyed prune on collapse and id-keyed "Show less"
+  // clearing cannot resurrect a stale legacy value afterwards.
+  useEffect(() => {
+    const projects = [...standardProjects, ...studioProjects];
+    if (projects.length === 0) {
+      return;
+    }
+    const migrated = migrateLegacyProjectThreadListExtraPages({
+      extraPagesById: threadListExtraPagesByProjectId,
+      legacyExtraPagesByCwd: legacyThreadListExtraPagesByCwd,
+      projects,
+      normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
+    });
+    if (migrated.extraPagesById !== threadListExtraPagesByProjectId) {
+      setThreadListExtraPagesByProjectId(migrated.extraPagesById);
+    }
+    if (migrated.legacyExtraPagesByCwd !== legacyThreadListExtraPagesByCwd) {
+      setLegacyThreadListExtraPagesByCwd(migrated.legacyExtraPagesByCwd);
+    }
+  }, [
+    legacyThreadListExtraPagesByCwd,
+    standardProjects,
+    studioProjects,
+    threadListExtraPagesByProjectId,
+  ]);
+
   // Reset per-project preview paging when a folder closes so reopening starts at five rows again.
   useEffect(() => {
     const settle = window.setTimeout(() => {
@@ -4195,6 +4226,13 @@ export default function Sidebar() {
         pruneProjectThreadListExtraPagesById({
           threadListExtraPagesByProjectId: current,
           projects: standardProjects,
+        }),
+      );
+      setLegacyThreadListExtraPagesByCwd((current) =>
+        pruneProjectThreadListPagingForCollapsedProjects({
+          threadListExtraPagesByProjectCwd: current,
+          projects: standardProjects,
+          normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
         }),
       );
     }, 0);
@@ -4995,18 +5033,15 @@ export default function Sidebar() {
       allProjectThreadCount,
       projectStatus,
       visibleEntries,
+      hiddenRowCount,
       threadListExtraPages,
       canShowMoreThreads,
       canShowLessThreads,
     } = projectSidebarData;
-    // "Show more" reveals one page; the label names that page and the total still hidden.
-    const projectPreviewLimit =
-      THREAD_PREVIEW_LIMIT + threadListExtraPages * THREAD_PREVIEW_PAGE_SIZE;
-    const hiddenProjectThreadCount = Math.max(
-      0,
-      orderedProjectThreadIds.length - projectPreviewLimit,
-    );
-    const projectShowMoreCount = Math.min(THREAD_PREVIEW_PAGE_SIZE, hiddenProjectThreadCount);
+    // "Show more" reveals one page; the label counts what is genuinely hidden.
+    // The active-thread reveal can render rows past the page cap, so the cap alone
+    // would overstate the hidden count.
+    const projectShowMoreCount = Math.min(THREAD_PREVIEW_PAGE_SIZE, hiddenRowCount);
     const projectFolderIconClassName = isProjectPinned
       ? "opacity-0"
       : sidebarHoverRevealHideClassName("project-header");
@@ -5239,7 +5274,7 @@ export default function Sidebar() {
                         }}
                       >
                         <span>
-                          Show {projectShowMoreCount} more ({hiddenProjectThreadCount})
+                          Show {projectShowMoreCount} more ({hiddenRowCount})
                         </span>
                       </SidebarMenuSubButton>
                     )}

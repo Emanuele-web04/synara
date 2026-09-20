@@ -93,6 +93,66 @@ export function resolveProjectThreadListExtraPages(input: {
     : (input.legacyExtraPagesByCwd[normalizedCwd] ?? 0);
 }
 
+/**
+ * Completes the cwd-to-id paging migration as surface projects resolve: a legacy
+ * cwd value still in use is copied into the id map and dropped from the legacy
+ * map. From then on the id-keyed map owns the value, so collapse pruning and
+ * id-keyed "Show less" clearing cannot resurrect a stale legacy entry. Unknown
+ * cwds stay untouched for projects that have not loaded yet.
+ */
+export function migrateLegacyProjectThreadListExtraPages<Id extends string>(input: {
+  extraPagesById: ReadonlyMap<Id, number>;
+  legacyExtraPagesByCwd: ReadonlyMap<string, number>;
+  projects: readonly { id: Id; cwd: string }[];
+  normalizeProjectCwd: (cwd: string) => string;
+}): {
+  extraPagesById: ReadonlyMap<Id, number>;
+  legacyExtraPagesByCwd: ReadonlyMap<string, number>;
+} {
+  const { extraPagesById, legacyExtraPagesByCwd, normalizeProjectCwd, projects } = input;
+  if (legacyExtraPagesByCwd.size === 0 || projects.length === 0) {
+    return { extraPagesById, legacyExtraPagesByCwd };
+  }
+
+  const projectIdsByCwd = new Map<string, Id[]>();
+  for (const project of projects) {
+    const normalizedCwd = normalizeProjectCwd(project.cwd);
+    if (normalizedCwd.length === 0) {
+      continue;
+    }
+    const projectIds = projectIdsByCwd.get(normalizedCwd);
+    if (projectIds) {
+      projectIds.push(project.id);
+    } else {
+      projectIdsByCwd.set(normalizedCwd, [project.id]);
+    }
+  }
+
+  let nextById: Map<Id, number> | null = null;
+  let nextLegacy: Map<string, number> | null = null;
+  for (const [normalizedCwd, projectIds] of projectIdsByCwd) {
+    const legacyExtraPages = legacyExtraPagesByCwd.get(normalizedCwd) ?? 0;
+    if (legacyExtraPages <= 0) {
+      continue;
+    }
+    // Mirror the lookup rule: an id entry only wins while it has a positive value.
+    for (const projectId of projectIds) {
+      if ((extraPagesById.get(projectId) ?? 0) > 0) {
+        continue;
+      }
+      nextById ??= new Map(extraPagesById);
+      nextById.set(projectId, legacyExtraPages);
+    }
+    nextLegacy ??= new Map(legacyExtraPagesByCwd);
+    nextLegacy.delete(normalizedCwd);
+  }
+
+  return {
+    extraPagesById: nextById ?? extraPagesById,
+    legacyExtraPagesByCwd: nextLegacy ?? legacyExtraPagesByCwd,
+  };
+}
+
 function sanitizeProjectThreadListExtraPagesByCwd(
   value: Record<string, unknown> | undefined,
 ): Record<string, number> {

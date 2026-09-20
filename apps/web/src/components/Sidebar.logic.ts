@@ -332,6 +332,12 @@ export type SidebarDerivedProjectData = {
   projectThreads: SidebarThreadSummary[];
   orderedProjectThreadIds: ThreadId[];
   visibleEntries: SidebarProjectEntry[];
+  /**
+   * Rows the render is NOT showing: the tree total minus what is actually
+   * rendered. The active-thread reveal can force rows past the page cap, so this
+   * cannot be derived from the cap alone.
+   */
+  hiddenRowCount: number;
   /** Extra "Show more" pages currently applied, clamped to the real row count. */
   threadListExtraPages: number;
   canShowMoreThreads: boolean;
@@ -353,6 +359,15 @@ export interface ThreadStatusPill {
   pulse: boolean;
   dismissible?: boolean;
   dismissalKey?: string;
+}
+
+/**
+ * A status that still asks something of the user or is producing output right
+ * now. Surfaces that dim finished work (the Activity Done section) keep showing
+ * these pills, so a thread that restarts or asks for approval stays visible.
+ */
+export function isUrgentThreadStatusPill(pill: ThreadStatusPill): boolean {
+  return pill.label !== "Completed";
 }
 
 /**
@@ -662,7 +677,10 @@ export function formatThreadElapsed(elapsedMs: number): string {
  * Whether a running row is still waiting for its new turn (shows "Starting…").
  * A finished latest turn means the run is over even if the running flags lag a
  * frame behind — without this gate the row flashes "0s" on completion instead
- * of simply dropping the elapsed label.
+ * of simply dropping the elapsed label. The mirror case matters too: when the
+ * session is already running a *different* turn than the finished summary, the
+ * new turn has started and its summary has not arrived yet, so the row must
+ * read as starting instead of showing the previous turn's recency.
  */
 export function shouldShowThreadStartingLabel(thread: {
   hasLiveTailWork?: boolean | undefined;
@@ -671,7 +689,11 @@ export function shouldShowThreadStartingLabel(thread: {
 }): boolean {
   const turn = thread.latestTurn;
   if (turn != null && turn.completedAt != null) {
-    return false;
+    const runningTurnId =
+      thread.session?.orchestrationStatus === "running"
+        ? (thread.session.activeTurnId ?? null)
+        : null;
+    return runningTurnId !== null && runningTurnId !== turn.turnId;
   }
   return isThreadActivelyWorking(thread) || thread.session?.status === "connecting";
 }
@@ -1564,6 +1586,7 @@ export function deriveSidebarProjectData(input: {
         orderedProjectThreadIds,
         visibleEntries,
         // The thread list is hidden while the folder is closed, so paging affordances are moot.
+        hiddenRowCount: 0,
         threadListExtraPages: 0,
         canShowMoreThreads: false,
         canShowLessThreads: false,
@@ -1608,6 +1631,7 @@ export function deriveSidebarProjectData(input: {
       projectThreads,
       orderedProjectThreadIds,
       visibleEntries: renderedEntries,
+      hiddenRowCount: Math.max(0, orderedEntries.length - renderedEntries.length),
       threadListExtraPages: paging.effectiveExtraPages,
       // The active-thread reveal can force rows beyond the page cap; only offer "Show more"
       // while rows are genuinely hidden.

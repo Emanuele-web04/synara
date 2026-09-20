@@ -49,6 +49,7 @@ import {
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
+  isUrgentThreadStatusPill,
   type ThreadStatusPill,
   shouldShowDebugFeatureFlagsMenu,
   shouldUseLivePullRequestForSidebarThread,
@@ -497,6 +498,32 @@ describe("shouldShowThreadStartingLabel", () => {
         latestTurn: makeLatestTurn(),
         hasLiveTailWork: true,
         session: runningSession,
+      }),
+    ).toBe(false);
+  });
+
+  it("reads as starting when the session already runs a newer turn than the finished summary", () => {
+    // New run began; its turn summary has not replaced the finished one yet, so
+    // the old recency must not stand in for the live elapsed.
+    expect(
+      shouldShowThreadStartingLabel({
+        latestTurn: makeLatestTurn(),
+        session: {
+          ...runningSession,
+          activeTurnId: "turn-next" as never,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not flash starting while the running session still owns the finished turn", () => {
+    expect(
+      shouldShowThreadStartingLabel({
+        latestTurn: makeLatestTurn(),
+        session: {
+          ...runningSession,
+          activeTurnId: "turn-1" as never,
+        },
       }),
     ).toBe(false);
   });
@@ -1325,6 +1352,17 @@ function statusPill(label: ThreadStatusPill["label"]): ThreadStatusPill {
   return { label, colorClass: "", dotClass: "", pulse: false };
 }
 
+describe("isUrgentThreadStatusPill", () => {
+  it("treats every status but a finished turn as urgent", () => {
+    expect(isUrgentThreadStatusPill(statusPill("Pending Approval"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Awaiting Input"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Plan Ready"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Working"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Connecting"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Completed"))).toBe(false);
+  });
+});
+
 describe("resolveThreadStatusTrailingIndicator", () => {
   it("shows nothing when there is no status", () => {
     expect(resolveThreadStatusTrailingIndicator({ status: null })).toBeNull();
@@ -2093,6 +2131,8 @@ describe("deriveSidebarProjectData", () => {
       child.id,
     ]);
     expect(data.get(project.id)?.activeEntryId).toBe(child.id);
+    // The reveal renders every row, so nothing is hidden even though the page cap is 1.
+    expect(data.get(project.id)?.hiddenRowCount).toBe(0);
   });
 
   it("uses the provided thread-status resolver for project status", () => {
@@ -2142,6 +2182,7 @@ describe("deriveSidebarProjectData", () => {
 
     expect(derive(0)).toMatchObject({
       threadListExtraPages: 0,
+      hiddenRowCount: 7,
       canShowMoreThreads: true,
       canShowLessThreads: false,
     });
@@ -2149,6 +2190,7 @@ describe("deriveSidebarProjectData", () => {
 
     expect(derive(1)).toMatchObject({
       threadListExtraPages: 1,
+      hiddenRowCount: 2,
       canShowMoreThreads: true,
       canShowLessThreads: true,
     });
@@ -2157,6 +2199,7 @@ describe("deriveSidebarProjectData", () => {
     // Stale persisted paging beyond the real thread count clamps to the last useful page.
     expect(derive(7)).toMatchObject({
       threadListExtraPages: 2,
+      hiddenRowCount: 0,
       canShowMoreThreads: false,
       canShowLessThreads: true,
     });

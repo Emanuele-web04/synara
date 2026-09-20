@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  migrateLegacyProjectThreadListExtraPages,
   normalizeSidebarProjectThreadListCwd,
   persistSidebarUiState,
   readSidebarUiState,
@@ -207,5 +208,67 @@ describe("Sidebar.uiState", () => {
         projectCwd: "/Users/tester/Code/demo",
       }),
     ).toBe(0);
+  });
+
+  it("migrates a legacy cwd value into the id map and drops the cwd entry", () => {
+    const legacyCwd = normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo");
+    const migrated = migrateLegacyProjectThreadListExtraPages({
+      extraPagesById: new Map(),
+      legacyExtraPagesByCwd: new Map([[legacyCwd, 2]]),
+      projects: [{ id: "project-demo", cwd: "/Users/tester/Code/demo/" }],
+      normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
+    });
+
+    expect([...migrated.extraPagesById]).toEqual([["project-demo", 2]]);
+    expect(migrated.legacyExtraPagesByCwd.size).toBe(0);
+  });
+
+  it("keeps an existing positive id value and still consumes the legacy entry", () => {
+    const legacyCwd = normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo");
+    const extraPagesById = new Map([["project-demo", 3]]);
+    const migrated = migrateLegacyProjectThreadListExtraPages({
+      extraPagesById,
+      legacyExtraPagesByCwd: new Map([[legacyCwd, 1]]),
+      projects: [{ id: "project-demo", cwd: "/Users/tester/Code/demo" }],
+      normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
+    });
+
+    expect(migrated.extraPagesById).toBe(extraPagesById);
+    expect(migrated.legacyExtraPagesByCwd.size).toBe(0);
+  });
+
+  it("migrates a shared cwd to every project using it", () => {
+    const legacyCwd = normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo");
+    const migrated = migrateLegacyProjectThreadListExtraPages({
+      extraPagesById: new Map(),
+      legacyExtraPagesByCwd: new Map([[legacyCwd, 2]]),
+      projects: [
+        { id: "project-one", cwd: "/Users/tester/Code/demo" },
+        { id: "project-two", cwd: "/Users/tester/Code/demo/" },
+      ],
+      normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
+    });
+
+    expect([...migrated.extraPagesById]).toEqual([
+      ["project-one", 2],
+      ["project-two", 2],
+    ]);
+    expect(migrated.legacyExtraPagesByCwd.size).toBe(0);
+  });
+
+  it("leaves legacy entries for projects that are not loaded yet", () => {
+    const legacyExtraPagesByCwd = new Map([
+      [normalizeSidebarProjectThreadListCwd("/Users/tester/Code/other"), 2],
+    ]);
+    const extraPagesById = new Map<string, number>();
+    const migrated = migrateLegacyProjectThreadListExtraPages({
+      extraPagesById,
+      legacyExtraPagesByCwd,
+      projects: [{ id: "project-demo", cwd: "/Users/tester/Code/demo" }],
+      normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
+    });
+
+    expect(migrated.extraPagesById).toBe(extraPagesById);
+    expect(migrated.legacyExtraPagesByCwd).toBe(legacyExtraPagesByCwd);
   });
 });

@@ -36,6 +36,7 @@ import {
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { resolveThreadPullRequestFallback } from "../hooks/useThreadPullRequests";
+import { useNowMs } from "../hooks/useNowMs";
 import type { Project, SidebarThreadSummary } from "../types";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { FolderClosed } from "./FolderClosed";
@@ -245,7 +246,7 @@ function ActivityThreadRow({
                 </span>
               ) : null}
               {trailingStatus ? <SidebarStatusTrailingGlyph status={trailingStatus} /> : null}
-              <span className="shrink-0 text-[length:var(--app-font-size-ui-sm,11px)] tabular-nums text-muted-foreground/60">
+              <span className="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">
                 {rowTime}
               </span>
             </span>
@@ -640,7 +641,9 @@ export function SidebarActivityView({
     projectFilterIds,
   });
   const scopedPinnedThreads = model.pinned;
-  const nowMs = Date.now();
+  // Minute-granularity labels: tick so an idle Activity view does not keep showing
+  // yesterday's clock time or a stale "2h" once the hour rolls over.
+  const nowMs = useNowMs(true, 30_000);
   const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
     model.active,
     { nowMs },
