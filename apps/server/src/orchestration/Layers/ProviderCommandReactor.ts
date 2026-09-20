@@ -2344,7 +2344,7 @@ const make = Effect.gen(function* () {
     }
     const completionContext =
       input.cacheReviewSource &&
-      input.cacheReviewSource.payload.dispatchOrigin !== "agent" &&
+      (input.cacheReviewSource.payload.dispatchOrigin ?? "user") === "user" &&
       input.dispatchMode !== "steer" &&
       input.reviewTarget === undefined &&
       !input.messageText.trimStart().startsWith("/")

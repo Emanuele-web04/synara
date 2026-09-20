@@ -1030,34 +1030,37 @@ describe("ProviderCommandReactor", () => {
     expect((await harness.completionState())[0]?.context_consumed).toBe(1);
   });
 
-  it("does not give passive completion context to an agent-originated send", async () => {
-    const harness = await createHarness();
-    await harness.seedCompletion();
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        commandId: CommandId.makeUnsafe("completion-agent-send"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        dispatchOrigin: "agent",
-        message: {
-          messageId: MessageId.makeUnsafe("completion-agent-message"),
-          role: "user",
-          text: "Agent work",
-          attachments: [],
-        },
-        createdAt: new Date().toISOString(),
-      }),
-    );
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    await harness.drain();
-    expect(harness.sendTurn.mock.calls[0]?.[0].input).not.toContain("delegated result");
-    expect((await harness.completionState())[0]).toMatchObject({
-      context_consumed: 0,
-      context_event_sequence: null,
-    });
-  });
+  it.each(["agent", "automation"] as const)(
+    "does not give passive completion context to a %s-originated send",
+    async (dispatchOrigin) => {
+      const harness = await createHarness();
+      await harness.seedCompletion();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          commandId: CommandId.makeUnsafe("completion-agent-send"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          dispatchOrigin,
+          message: {
+            messageId: MessageId.makeUnsafe("completion-agent-message"),
+            role: "user",
+            text: "Agent work",
+            attachments: [],
+          },
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).not.toContain("delegated result");
+      expect((await harness.completionState())[0]).toMatchObject({
+        context_consumed: 0,
+        context_event_sequence: null,
+      });
+    },
+  );
 
   it("releases completion context after a rejected provider send", async () => {
     const harness = await createHarness();
