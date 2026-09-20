@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ComputerStatusResult, ServerProviderStatus } from "@synara/contracts";
+import {
+  ComputerWindowId,
+  type ComputerStatusResult,
+  type ServerProviderStatus,
+} from "@synara/contracts";
 import {
   analyzeFocusSamples,
   type FocusProbeRunResult,
@@ -8,9 +12,11 @@ import {
 import { assertLoopbackUrl, waitForSelectedProvider } from "./packaged-client.ts";
 import {
   assessContinuousFocus,
+  assessFixtureReportCoverage,
   assertPassiveComputerReady,
   fixtureReceiptTiming,
   parseFixtureState,
+  resolveFixtureComputerWindow,
   verifyFixtureClick,
 } from "./packaged-evidence.ts";
 
@@ -49,6 +55,59 @@ function run(): FocusProbeRunResult {
 }
 
 describe("packaged fixture evidence", () => {
+  it("requires every expected completed trial, including recovery, instead of passing empty or partial coverage", () => {
+    const passed = { kind: "click" as const, taskPassed: true, measurement: { valid: true } };
+    expect(assessFixtureReportCoverage([], 3)).toMatchObject({
+      taskRunsPassed: false,
+      measurementsValid: false,
+      observedCompletedRuns: 0,
+    });
+    expect(assessFixtureReportCoverage([passed, passed], 3).taskRunsPassed).toBe(false);
+    expect(assessFixtureReportCoverage([passed, passed, passed], 3)).toMatchObject({
+      taskRunsPassed: true,
+      measurementsValid: true,
+    });
+    expect(
+      assessFixtureReportCoverage([passed, { ...passed, taskPassed: false, measurement: null }], 2),
+    ).toMatchObject({ taskRunsPassed: false, measurementsValid: false });
+  });
+
+  it("binds only the returned opaque ID and observed app name for the exact fixture PID and native window", () => {
+    const fixture = {
+      pid: 10,
+      windowId: 20,
+      title: "Synara Native Fixture 10 A",
+      label: "A" as const,
+      clicks: 0,
+      edits: 0,
+      text: "fixture",
+    };
+    const window = {
+      id: ComputerWindowId.makeUnsafe("cua:10:20"),
+      pid: 10,
+      title: fixture.title,
+      appName: "Native Fixture Host",
+      focused: false,
+      minimized: false,
+      visible: true,
+    };
+    expect(resolveFixtureComputerWindow([window], fixture)).toEqual(window);
+    for (const candidates of [
+      [],
+      [window, window],
+      [{ ...window, pid: 11 }],
+      [{ ...window, id: ComputerWindowId.makeUnsafe("cua:10:21") }],
+      [{ ...window, id: ComputerWindowId.makeUnsafe("20") }],
+      [{ ...window, title: "A different window" }],
+      [{ ...window, appName: "" }],
+      [{ ...window, visible: false }],
+    ]) {
+      expect(() => resolveFixtureComputerWindow(candidates, fixture)).toThrow(
+        "not uniquely available",
+      );
+    }
+  });
+
   it("accepts an available fresh host with an intentionally idle listener, while refusing blocked passive probes", () => {
     const status: Pick<ComputerStatusResult, "availability" | "health"> = {
       availability: { kind: "available", backend: "cua" },

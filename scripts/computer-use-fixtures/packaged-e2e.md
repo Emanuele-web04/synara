@@ -29,6 +29,11 @@ homes may initially have an empty provider-discovery cache; setup waits up to
 45 seconds for the explicitly selected provider to appear. A known unavailable
 or unauthenticated result fails immediately. Discovery and focus setup happen
 before measured task time and before any paid provider turn.
+Each freshly created thread must also return valid, bounded diagnostic pages:
+its durable creation event, no prior turn dispatch, and explicit empty runtime
+coverage before provider startup. Missing/null pages stop before control enable
+or a paid turn. Runtime retention is always enabled by the server; the harness
+does not enable extra provider NDJSON logs or read the database directly.
 
 Use a **new, nonexistent home directory** and an unused CDP port (both IPv4 and
 IPv6 are checked). The runner launches through macOS LaunchServices, isolates the
@@ -91,6 +96,12 @@ the sampler's lower cadence. No measured interval is excluded; missing required
 fields, missing completion, excessive sample gaps, or even one observed focus
 change invalidate the focus result. Evidence omits window titles and focused
 text, including if the real user intervenes.
+The sampler reads the native current front process before its AppKit fallback;
+system-wide AX focus remains a separate required observation. Each task resolves
+the exact fixture PID, title and native window through `computer.listWindows`
+before dispatch, then passes the returned opaque string ID and observed app name
+to the provider. A missing or ambiguous target stops setup; raw CGWindowIDs are
+not provider tool IDs.
 
 The default sequence is two independent single-click tasks, one longer task
 interrupted after its first independently observed click, and a fresh-thread
@@ -112,6 +123,11 @@ change, final counter observation, and stop-request-to-terminal-observation
 intervals. These include fixture IPC, runner scheduling and (for terminal status)
 owner RPC polling delay. They are latency upper bounds, not exact OS delivery
 timestamps. Missing observations remain null.
+Early failures still save a task report after owned-turn cancellation, including
+the failure stage/code, observed terminal state, retained diagnostics when
+available, and independent fixture counter deltas. Arbitrary RPC/provider error
+strings are omitted. Empty or partial report sets cannot mark task or measurement
+coverage passed; a stop trial that never ran is `unverified`.
 
 In acceptance mode, exit 0 means this named fixture subset passed all its gates.
 With `--prepare-only`, exit 0 means only that permission setup is ready; acceptance

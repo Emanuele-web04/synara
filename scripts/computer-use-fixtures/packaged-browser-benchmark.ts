@@ -29,7 +29,11 @@ import {
 } from "./packaged-client.ts";
 import { assessContinuousFocus, assertPassiveComputerReady } from "./packaged-evidence.ts";
 import { delay, waitUntil } from "./packaged-fixture.ts";
-import { collectComputerRun, type DiagnosticToolCaller } from "./measurement.ts";
+import {
+  collectComputerRun,
+  prepareComputerRunDiagnostics,
+  type DiagnosticToolCaller,
+} from "./measurement.ts";
 import {
   assessGitHubCompletion,
   assessNeweggCompletion,
@@ -161,18 +165,22 @@ async function main() {
       ),
     );
   };
-  const stop = async (threadId: ThreadId) => {
+  const stop = async (threadId: ThreadId, dispatched = true) => {
     if (!client) return false;
     const revoked = await client
       .run(client.api[COMPUTER_WS_METHODS.setControlEnabled]({ threadId, enabled: false }))
       .then((value) => !value.enabled)
       .catch(() => false);
-    await dispatch({
-      type: "thread.turn.interrupt",
-      commandId: randomUUID(),
-      threadId,
-      createdAt: new Date().toISOString(),
-    }).catch(() => undefined);
+    if (dispatched) {
+      await dispatch({
+        type: "thread.turn.interrupt",
+        commandId: randomUUID(),
+        threadId,
+        createdAt: new Date().toISOString(),
+      }).catch(() => undefined);
+    } else if (revoked && activeThread === threadId) {
+      activeThread = undefined;
+    }
     return revoked;
   };
   try {
@@ -269,11 +277,13 @@ async function main() {
         if (!stopPromise) {
           stopReason = reason;
           stopRequestedAt = performance.now();
-          stopPromise = stop(threadId);
+          stopPromise = stop(threadId, dispatchAt > 0);
         }
         return stopPromise;
       };
       let runFailure: string | null = null;
+      let diagnosticsPreparation: Awaited<ReturnType<typeof prepareComputerRunDiagnostics>> | null =
+        null;
       try {
         await waitUntil(
           () => {
@@ -315,6 +325,10 @@ async function main() {
           createdAt: new Date().toISOString(),
         });
         activeThread = threadId;
+        diagnosticsPreparation = await prepareComputerRunDiagnostics(diagnostics, {
+          threadId,
+          runStartedAt,
+        });
         const control = await owner.run(
           owner.api[COMPUTER_WS_METHODS.setControlEnabled]({ threadId, enabled: true }),
         );
@@ -394,12 +408,35 @@ async function main() {
           await requestStop(runFailure);
         }
       } catch {
-        runFailure = "task-or-observation-failed";
+        runFailure = diagnosticsPreparation
+          ? "task-or-observation-failed"
+          : "setup-or-diagnostics-preflight-failed";
         if (activeThread) await requestStop(runFailure);
       } finally {
         if (budgetTimer) clearTimeout(budgetTimer);
         if (focusGuardTimer) clearInterval(focusGuardTimer);
         if (stopPromise) cleanupProven = (await stopPromise) && cleanupProven;
+        if (!terminal && activeThread && dispatchAt > 0) {
+          terminal = await waitUntil(
+            async () => {
+              const snapshot = await owner.run(
+                owner.api[ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]({ threadId }),
+              );
+              const thread = snapshot?.thread;
+              return thread?.latestTurn &&
+                thread.latestTurn.state !== "running" &&
+                !thread.session?.activeTurnId &&
+                thread.session?.status !== "starting" &&
+                thread.session?.status !== "running"
+                ? thread.latestTurn
+                : null;
+            },
+            15_000,
+            "Failed browser task terminal evidence",
+          ).catch(() => null);
+          if (terminal) terminalAt = performance.now();
+          else cleanupProven = false;
+        }
         if (terminal) {
           if (task === "newegg" && terminal.state === "completed" && !stopReason) {
             // The owner snapshot already proves the provider turn is idle.
@@ -487,6 +524,7 @@ async function main() {
             finalOutcomeReceiptMs === null ? null : finalOutcomeReceiptMs - dispatchAt,
         },
         measurement,
+        diagnosticsPreparation,
         mutationAuditCoverage: audit ? { coverage: audit.coverage, reason: audit.reason } : null,
         observer: observer.report(),
         focus,

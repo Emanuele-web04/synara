@@ -104,9 +104,8 @@ static void cfText(CFStringRef string, char *buffer, size_t size) {
 }
 
 static pid_t frontmostPid(void) {
-  NSRunningApplication *front = NSWorkspace.sharedWorkspace.frontmostApplication;
-  if (front)
-    return front.processIdentifier;
+  // NSWorkspace's cached frontmost application needs a serviced run loop.
+  // This sampler polls synchronously, so prefer the native current reading.
   if (gGetFront) {
     ProcessSerialNumber psn = {0, 0};
     gGetFront(&psn);
@@ -114,6 +113,11 @@ static pid_t frontmostPid(void) {
     if (GetProcessPID(&psn, &pid) == noErr && pid > 0)
       return pid;
   }
+  // Only the fallback needs AppKit's cached observation refreshed.
+  CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0, true);
+  NSRunningApplication *front = NSWorkspace.sharedWorkspace.frontmostApplication;
+  if (front)
+    return front.processIdentifier;
   return -1;
 }
 
@@ -471,7 +475,9 @@ int main(int argc, char **argv) {
         stoppedBy = "stdin";
         break;
       }
-      emitSample(elapsed, tick % (uint64_t)topWinEvery == 0);
+      @autoreleasepool {
+        emitSample(elapsed, tick % (uint64_t)topWinEvery == 0);
+      }
       samples++;
       const double emitMs = monotonicMs() - now;
       sampleMsTotal += emitMs;

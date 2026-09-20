@@ -24,7 +24,11 @@ import {
   type FocusProbeExpect,
 } from "../../apps/desktop/src/cuaFixtures/focusProbe.ts";
 import { artifactIdentity } from "./packaged-artifact.ts";
-import { collectComputerRun, type DiagnosticToolCaller } from "./measurement.ts";
+import {
+  collectComputerRun,
+  prepareComputerRunDiagnostics,
+  type DiagnosticToolCaller,
+} from "./measurement.ts";
 import {
   connectPackagedOwner,
   waitForSelectedProvider,
@@ -32,10 +36,14 @@ import {
 } from "./packaged-client.ts";
 import {
   assessContinuousFocus,
+  assessFixtureReportCoverage,
   assertPassiveComputerReady,
   fixtureReceiptTiming,
   fixtureUnchanged,
+  resolveFixtureComputerWindow,
   verifyFixtureClick,
+  type FixtureReportVerdict,
+  type FixtureState,
 } from "./packaged-evidence.ts";
 import { delay, startNativeTarget, waitUntil } from "./packaged-fixture.ts";
 
@@ -57,6 +65,22 @@ const { values } = parseArgs({
   },
   strict: true,
 });
+
+interface ActiveFixtureRun {
+  index: number;
+  kind: "click" | "stop";
+  threadId: ThreadId;
+  runStartedAt: string;
+  before: { a: FixtureState; b: FixtureState };
+  stage: string;
+  failureCode: string | null;
+  preparation: Awaited<ReturnType<typeof prepareComputerRunDiagnostics>> | null;
+  window: ReturnType<typeof resolveFixtureComputerWindow> | null;
+  dispatchStartedMs: number | null;
+  stopRequestedMs: number | null;
+  latestTurn: OrchestrationLatestTurn | null;
+  terminalObservedMs: number | null;
+}
 
 let interruptionRequested = false;
 process.once("SIGINT", () => {
@@ -174,15 +198,18 @@ async function main() {
   let human: Awaited<ReturnType<typeof startNativeTarget>> | undefined;
   let probe: NonNullable<Awaited<ReturnType<typeof startFocusProbe>>> | undefined;
   let activeThread: ThreadId | undefined;
+  let activeRun: ActiveFixtureRun | undefined;
+  let diagnostics: DiagnosticToolCaller | undefined;
   let intervalStart = Date.now();
   let intervalEnd = intervalStart;
-  const reports: unknown[] = [];
+  const reports: FixtureReportVerdict[] = [];
   let readiness: { computer: string; provider: string } | null = null;
   let verifiedHome: string | null = null;
   let preparationSucceeded = false;
   let focus: ReturnType<typeof assessContinuousFocus> | null = null;
   let phase = "desktop-owner-connection";
   let failure: string | null = null;
+  let failureDetail: { stage: string; code: string; threadId: string } | null = null;
   let taskRunsPassed = true;
   let measurementsValid = true;
   let stopPassed = false;
@@ -325,7 +352,7 @@ async function main() {
       workspaceRoot: workspace,
       createdAt: new Date().toISOString(),
     });
-    const diagnostics: DiagnosticToolCaller = (name, args) =>
+    diagnostics = (name, args) =>
       client.run(
         client.api[WS_METHODS.serverReadThreadDiagnostics]({
           ...args,
@@ -340,6 +367,22 @@ async function main() {
       const startedAt = new Date().toISOString();
       const threadId = ThreadId.makeUnsafe(randomUUID());
       activeThread = threadId;
+      const run: ActiveFixtureRun = {
+        index,
+        kind: stop ? "stop" : "click",
+        threadId,
+        runStartedAt: startedAt,
+        before,
+        stage: "thread-create",
+        failureCode: null,
+        preparation: null,
+        window: null,
+        dispatchStartedMs: null,
+        stopRequestedMs: null,
+        latestTurn: null,
+        terminalObservedMs: null,
+      };
+      activeRun = run;
       await dispatch({
         type: "thread.create",
         commandId: randomUUID(),
@@ -353,13 +396,25 @@ async function main() {
         worktreePath: null,
         createdAt: new Date().toISOString(),
       });
+      run.stage = "diagnostics-preflight";
+      run.preparation = await prepareComputerRunDiagnostics(diagnostics!, {
+        threadId,
+        runStartedAt: startedAt,
+      });
+      run.stage = "control-enable";
       const control = await client.run(
         client.api[COMPUTER_WS_METHODS.setControlEnabled]({ threadId, enabled: true }),
       );
+      run.stage = "fixture-window-binding";
+      const listing = await client.run(client.api[COMPUTER_WS_METHODS.listWindows]({}));
+      if (listing.availability.kind !== "available")
+        throw new Error("Computer window enumeration is unavailable.");
+      run.window = resolveFixtureComputerWindow(listing.windows, before.a);
       const count = stop ? 30 : 1;
       const prompt = [
         "Use Synara native Computer Use for this authorized, harmless fixture task.",
-        `In window ${JSON.stringify(before.a.title)} (PID ${before.a.pid}, window ${before.a.windowId}),`,
+        `In app ${JSON.stringify(run.window.appName)}, window ${JSON.stringify(run.window.title)},`,
+        `use the exact string windowId ${JSON.stringify(run.window.id)} returned by Computer.`,
         `click the Counter button ${count} time${count === 1 ? "" : "s"} in the background.`,
         stop
           ? "Make separate clicks and read the counter between each click."
@@ -368,7 +423,9 @@ async function main() {
         "Touch only this fixture window. Do not use a shell, code execution, AppleScript, or a browser to perform the task.",
         "Do not activate another app or switch Spaces. Stop honestly if native control refuses.",
       ].join(" ");
+      run.stage = "turn-dispatch";
       const dispatchStartedMs = performance.now();
+      run.dispatchStartedMs = dispatchStartedMs;
       await dispatch({
         type: "thread.turn.start",
         commandId: randomUUID(),
@@ -385,9 +442,13 @@ async function main() {
       });
       let stopRequestedAt: string | null = null;
       let stopRequestedMs: number | null = null;
+      run.stage = "provider-task";
       const terminal = await waitUntil<OrchestrationLatestTurn>(
         async () => {
-          if (interruptionRequested) throw new Error("Fixture runner was interrupted.");
+          if (interruptionRequested) {
+            run.failureCode = "runner-interrupted";
+            throw new Error("Fixture runner was interrupted.");
+          }
           const observed = focusProbe.samples.at(-1);
           if (
             !observed ||
@@ -396,15 +457,20 @@ async function main() {
             observed.focusedPid !== humanBaseline.a.pid ||
             observed.space !== baseline.space ||
             observed.focused !== baseline.focused
-          )
+          ) {
+            run.failureCode = "human-focus-changed-or-unobserved";
             throw new Error("Human focus changed during the fixture task.");
+          }
           const snapshot = await client.run(
             client.api[ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]({ threadId }),
           );
           const thread = snapshot?.thread;
           const turn = thread?.latestTurn;
-          if (thread?.hasPendingApprovals || thread?.hasPendingUserInput)
+          run.latestTurn = turn ?? null;
+          if (thread?.hasPendingApprovals || thread?.hasPendingUserInput) {
+            run.failureCode = "unexpected-approval-or-user-input";
             throw new Error("Fixture task requires user input or repeated approval.");
+          }
           if (
             stop &&
             !stopRequestedAt &&
@@ -413,6 +479,7 @@ async function main() {
           ) {
             stopRequestedAt = new Date().toISOString();
             stopRequestedMs = performance.now();
+            run.stopRequestedMs = stopRequestedMs;
             await interrupt(threadId);
           }
           return turn && turn.state !== "running" && !thread?.session?.activeTurnId ? turn : null;
@@ -421,11 +488,15 @@ async function main() {
         "Provider task completion",
       );
       const terminalObservedMs = performance.now();
+      run.latestTurn = terminal;
+      run.terminalObservedMs = terminalObservedMs;
+      run.stage = "control-revoke";
       const revoked = await client.run(
         client.api[COMPUTER_WS_METHODS.setControlEnabled]({ threadId, enabled: false }),
       );
       if (revoked.enabled) throw new Error("Fixture task control was not revoked.");
       activeThread = undefined;
+      run.stage = "outcome-observation";
       const settled = await target.snapshot();
       await delay(700);
       const after = await target.snapshot();
@@ -455,13 +526,15 @@ async function main() {
       if (stop) stopPassed = passed;
       else taskRunsPassed &&= passed;
       let measurement: Awaited<ReturnType<typeof collectComputerRun>> | null = null;
+      let measurementFailure: string | null = null;
       try {
-        measurement = await collectComputerRun(diagnostics, {
+        measurement = await collectComputerRun(diagnostics!, {
           threadId,
           turnId: terminal.turnId,
           runStartedAt: startedAt,
         });
       } catch {
+        measurementFailure = "diagnostics-collection-failed";
         if (!stop) measurementsValid = false;
       }
       // An intentional interruption is not a completed-task benchmark. Keep
@@ -469,13 +542,16 @@ async function main() {
       if (!stop && !measurement?.valid) measurementsValid = false;
       const report = {
         index,
-        kind: stop ? "stop" : "click",
+        kind: run.kind,
         threadId,
         turnId: terminal.turnId,
         terminalState: terminal.state,
         taskPassed: passed,
         outcome,
+        diagnosticsPreparation: run.preparation,
+        target: { windowId: run.window.id, pid: run.window.pid, appName: run.window.appName },
         measurement,
+        measurementFailure,
         benchmarkEligible: !stop,
         receiptTiming: fixtureReceiptTiming({
           dispatchStartedMs,
@@ -486,11 +562,12 @@ async function main() {
           terminalObservedMs,
         }),
       };
-      reports.push(report);
       await writeFile(join(runDirectory, `task-${index}.json`), JSON.stringify(report, null, 2), {
         mode: 0o600,
         flag: "wx",
       });
+      reports.push(report);
+      activeRun = undefined;
       console.info(
         `Task ${index}: ${passed ? "passed" : "failed"}; measurement ${measurement?.valid ? "valid" : "invalid"}`,
       );
@@ -512,6 +589,14 @@ async function main() {
   } catch {
     // Do not serialize arbitrary RPC exceptions, URLs or provider payloads.
     failure = phase;
+    if (activeRun) {
+      activeRun.failureCode ??= `${activeRun.stage}-failed`;
+      failureDetail = {
+        stage: activeRun.stage,
+        code: activeRun.failureCode,
+        threadId: activeRun.threadId,
+      };
+    }
   } finally {
     if (activeThread && owner) {
       await owner
@@ -525,32 +610,96 @@ async function main() {
           cleanup.controlRevoked = !result.enabled;
         })
         .catch(() => undefined);
-      await interrupt(activeThread).catch(() => undefined);
-      const threadId = activeThread;
-      await waitUntil(
-        async () => {
-          const snapshot = await owner!.run(
-            owner!.api[ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]({ threadId }),
-          );
-          const thread = snapshot?.thread;
-          return thread?.latestTurn &&
-            thread.latestTurn.state !== "running" &&
-            !thread.session?.activeTurnId &&
-            thread.session?.status !== "starting" &&
-            thread.session?.status !== "running"
-            ? true
-            : null;
-        },
-        15_000,
-        "Fixture cleanup cancellation",
-      )
-        .then(() => {
-          cleanup.activeTurnStopped = true;
-        })
-        .catch(() => undefined);
+      if (activeRun?.dispatchStartedMs === null) {
+        cleanup.activeTurnStopped = true;
+      } else {
+        await interrupt(activeThread).catch(() => undefined);
+        const threadId = activeThread;
+        await waitUntil(
+          async () => {
+            const snapshot = await owner!.run(
+              owner!.api[ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot]({ threadId }),
+            );
+            const thread = snapshot?.thread;
+            if (activeRun && thread?.latestTurn) activeRun.latestTurn = thread.latestTurn;
+            const terminal =
+              thread?.latestTurn &&
+              thread.latestTurn.state !== "running" &&
+              !thread.session?.activeTurnId &&
+              thread.session?.status !== "starting" &&
+              thread.session?.status !== "running";
+            if (terminal && activeRun) activeRun.terminalObservedMs = performance.now();
+            return terminal ? true : null;
+          },
+          15_000,
+          "Fixture cleanup cancellation",
+        )
+          .then(() => {
+            cleanup.activeTurnStopped = true;
+          })
+          .catch(() => undefined);
+      }
     } else {
       cleanup.activeTurnStopped = true;
       cleanup.controlRevoked = true;
+    }
+    if (activeRun) {
+      const run = activeRun;
+      let measurement: Awaited<ReturnType<typeof collectComputerRun>> | null = null;
+      let measurementFailure = "turn-not-observed";
+      if (diagnostics && run.latestTurn) {
+        measurement = await collectComputerRun(diagnostics, {
+          threadId: run.threadId,
+          turnId: run.latestTurn.turnId,
+          runStartedAt: run.runStartedAt,
+        }).catch(() => null);
+        measurementFailure = measurement ? "" : "diagnostics-collection-failed";
+      }
+      const after = await target?.snapshot().catch(() => null);
+      const report = {
+        index: run.index,
+        kind: run.kind,
+        threadId: run.threadId,
+        turnId: run.latestTurn?.turnId ?? null,
+        terminalState: run.latestTurn?.state ?? null,
+        taskPassed: false,
+        failure: failureDetail,
+        dispatchAttempted: run.dispatchStartedMs !== null,
+        diagnosticsPreparation: run.preparation,
+        target: run.window
+          ? { windowId: run.window.id, pid: run.window.pid, appName: run.window.appName }
+          : null,
+        measurement,
+        measurementFailure: measurementFailure || null,
+        outcome: {
+          passed: false,
+          status: "unverified-after-early-failure",
+          counterDelta: after ? after.a.clicks - run.before.a.clicks : null,
+          textUnchanged: after ? after.a.text === run.before.a.text : null,
+          editsUnchanged: after ? after.a.edits === run.before.a.edits : null,
+          otherTargetWindowUnchanged: after ? fixtureUnchanged(run.before.b, after.b) : null,
+        },
+        receiptTiming:
+          target && run.dispatchStartedMs !== null
+            ? fixtureReceiptTiming({
+                dispatchStartedMs: run.dispatchStartedMs,
+                beforeClicks: run.before.a.clicks,
+                changes: target.counterChanges,
+                lastObservedMs: target.lastCounterObservation(),
+                stopRequestedMs: run.stopRequestedMs,
+                terminalObservedMs: run.terminalObservedMs ?? NaN,
+              })
+            : null,
+      };
+      await writeFile(
+        join(runDirectory, `task-${run.index}.json`),
+        JSON.stringify(report, null, 2),
+        { mode: 0o600, flag: "wx" },
+      )
+        .then(() => reports.push(report))
+        .catch(() => {
+          failure = "failure-report-save-failed";
+        });
     }
     intervalEnd = Date.now();
     await delay(100);
@@ -608,6 +757,9 @@ async function main() {
     }
   }
   if (prepareOnly) return;
+  const reportCoverage = assessFixtureReportCoverage(reports, runs + (values["skip-stop"] ? 0 : 1));
+  taskRunsPassed &&= reportCoverage.taskRunsPassed;
+  measurementsValid &&= reportCoverage.measurementsValid;
   const accepted =
     !failure &&
     taskRunsPassed &&
@@ -619,6 +771,7 @@ async function main() {
     passed: accepted,
     scope: "macos-controlled-background-click-stop-and-recovery",
     failure,
+    failureDetail,
     artifact,
     readiness,
     provider: acceptanceOptions?.model.provider,
@@ -627,7 +780,13 @@ async function main() {
     cdpPort: port,
     taskRunsPassed,
     measurementsValid,
-    stop: values["skip-stop"] ? "unverified" : stopPassed ? "passed" : "failed",
+    reportCoverage,
+    stop:
+      values["skip-stop"] || !reports.some((report) => report.kind === "stop")
+        ? "unverified"
+        : stopPassed
+          ? "passed"
+          : "failed",
     recovery: !values["skip-stop"] && reports.length === runs + 2 ? "attempted" : "unverified",
     focus,
     cleanup,

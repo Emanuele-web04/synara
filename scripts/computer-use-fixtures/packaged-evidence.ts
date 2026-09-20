@@ -3,7 +3,7 @@ import {
   type FocusProbeExpect,
   type FocusProbeRunResult,
 } from "../../apps/desktop/src/cuaFixtures/focusProbe.ts";
-import type { ComputerStatusResult } from "@synara/contracts";
+import type { ComputerStatusResult, ComputerWindow } from "@synara/contracts";
 
 /** A fresh host deliberately leaves its physical-input listener idle. The
  * passive probe must be available; real task/oracle checks prove execution. */
@@ -22,6 +22,47 @@ export interface FixtureState {
   clicks: number;
   edits: number;
   text: string;
+}
+
+/** Resolve, never synthesize, the public opaque ID for this exact native target. */
+export function resolveFixtureComputerWindow(
+  windows: readonly ComputerWindow[],
+  fixture: FixtureState,
+): ComputerWindow & { appName: string } {
+  const matches = windows.filter((window) => {
+    const native = /^cua:([1-9]\d*):([1-9]\d*)$/.exec(window.id);
+    return (
+      window.pid === fixture.pid &&
+      window.title === fixture.title &&
+      Number(native?.[1]) === fixture.pid &&
+      Number(native?.[2]) === fixture.windowId
+    );
+  });
+  const window = matches[0];
+  if (matches.length !== 1 || !window?.appName?.trim() || !window.visible || window.minimized)
+    throw new Error("The exact native fixture window is not uniquely available to Computer.");
+  return { ...window, appName: window.appName };
+}
+
+export interface FixtureReportVerdict {
+  kind: "click" | "stop";
+  taskPassed: boolean;
+  measurement: { valid: boolean } | null;
+}
+
+/** Missing trials cannot satisfy universal checks over an empty result list. */
+export function assessFixtureReportCoverage(
+  reports: readonly FixtureReportVerdict[],
+  expectedCompletedRuns: number,
+) {
+  const completed = reports.filter((report) => report.kind === "click");
+  const complete = expectedCompletedRuns > 0 && completed.length === expectedCompletedRuns;
+  return {
+    expectedCompletedRuns,
+    observedCompletedRuns: completed.length,
+    taskRunsPassed: complete && completed.every((report) => report.taskPassed),
+    measurementsValid: complete && completed.every((report) => report.measurement?.valid === true),
+  };
 }
 
 export function parseFixtureState(value: unknown): FixtureState | null {

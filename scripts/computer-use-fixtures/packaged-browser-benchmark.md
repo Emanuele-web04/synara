@@ -19,6 +19,8 @@ Choose the provider/model explicitly. Optional `--model-options` accepts the mod
 
 Before spending provider tokens, setup checks passive Computer availability and complete focus observation. It accepts an available host whose input listener is intentionally idle. If the fresh isolated provider cache is empty, it waits up to 45 seconds only for the selected provider to appear; a known unavailable or unauthenticated entry still fails. This discovery wait is outside the measured turn. Each owned benchmark thread explicitly receives chat-mode Computer authority, which is revoked at completion; the harness does not depend on plain-text prompts activating `/computer-use`, and it never substitutes a different provider/model.
 
+Before control enable or dispatch, every fresh thread must expose its durable creation event and explicit empty runtime coverage through the authenticated diagnostic route. Null/malformed responses, a prior dispatch or existing provider runtime state fail setup before a paid turn. Runtime retention is already enabled; no extra NDJSON logging or direct database access is needed. Early failures collect terminal evidence after bounded cancellation so available call/usage diagnostics are retained without qualifying an interrupted run.
+
 The observer directory receives `request-synara-bench-UUID.json` immediately before each task. A trusted local operator must supply the exact matching descriptor at the `descriptorPath` in that request after the driver launches its browser:
 
 ```json

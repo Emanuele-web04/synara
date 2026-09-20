@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { collectComputerRun, type DiagnosticToolCaller } from "./measurement.ts";
+import {
+  collectComputerRun,
+  prepareComputerRunDiagnostics,
+  type DiagnosticToolCaller,
+} from "./measurement.ts";
 
 const time = (seconds: number) => new Date(Date.UTC(2026, 8, 20, 10, 0, seconds)).toISOString();
 const scope = { threadId: "fresh", turnId: "turn", runStartedAt: time(0) };
@@ -75,7 +79,11 @@ function reader(input: ReturnType<typeof fixtures>, pageSize = 25): DiagnosticTo
         highWaterSequence: all.at(-1)?.sequence ?? 0,
         pageHasOlder: start > 0,
         ...(runtime
-          ? { sourceComplete: false, oldestRetainedSequence: all[0]?.sequence ?? null }
+          ? {
+              sourceComplete: false,
+              oldestRetainedSequence: all[0]?.sequence ?? null,
+              retainedForThread: all.length,
+            }
           : { durableSourceComplete: true }),
       },
       ...(start > 0 ? { nextCursor: String(start) } : {}),
@@ -84,6 +92,37 @@ function reader(input: ReturnType<typeof fixtures>, pageSize = 25): DiagnosticTo
 }
 
 describe("computer run measurement", () => {
+  it("preflights explicit fresh-thread pages without treating empty pre-turn runtime as a completed run", async () => {
+    const data = fixtures();
+    data.journal = data.journal.slice(0, 1);
+    data.runtime = [];
+    const prepared = await prepareComputerRunDiagnostics(reader(data), scope);
+    expect(prepared.ready).toBe(true);
+    expect(prepared.runtime).toMatchObject({ highWaterSequence: 0, retainedForThread: 0 });
+    expect((await collectComputerRun(reader(data), scope)).valid).toBe(false);
+  });
+
+  it("refuses null serialization, missing creation and reused runtime before a paid turn", async () => {
+    await expect(prepareComputerRunDiagnostics(async () => null, scope)).rejects.toThrow(
+      "missing or invalid page coverage",
+    );
+    const data = fixtures();
+    data.journal = [];
+    data.runtime = [];
+    await expect(prepareComputerRunDiagnostics(reader(data), scope)).rejects.toThrow(
+      "observed fresh, undispatched thread",
+    );
+    data.journal = fixtures().journal;
+    await expect(prepareComputerRunDiagnostics(reader(data), scope)).rejects.toThrow(
+      "undispatched",
+    );
+    data.journal = data.journal.slice(0, 1);
+    data.runtime = [event(1, "session.started")];
+    await expect(prepareComputerRunDiagnostics(reader(data), scope)).rejects.toThrow(
+      "prior or unverifiable provider runtime state",
+    );
+  });
+
   it("pages to the fresh-thread boundary, deduplicates tool lifecycle, and uses cumulative deltas", async () => {
     const report = await collectComputerRun(reader(fixtures(), 2), scope);
     expect(report.valid).toBe(true);
@@ -108,6 +147,27 @@ describe("computer run measurement", () => {
     const report = await collectComputerRun(reader(data), scope);
     expect(report.valid).toBe(true);
     expect(report.usage).toMatchObject({ basis: "fresh-thread-cumulative", outputTokens: 15 });
+  });
+
+  it("retains calls and usage for an interrupted turn while refusing completed-run qualification", async () => {
+    const data = fixtures();
+    data.runtime[data.runtime.length - 1] = event(8, "turn.aborted", { state: "interrupted" });
+    data.journal.push({
+      sequence: 3,
+      eventId: "interrupted",
+      type: "thread.turn-interrupt-requested",
+      occurredAt: time(7),
+    });
+    const report = await collectComputerRun(reader(data), scope);
+    expect(report.valid).toBe(false);
+    expect(report.issues).toContain("turn-interrupted");
+    expect(report.issues).toContain("completed-turn-coverage-unproven");
+    expect(report.toolCalls.computer).toBe(1);
+    expect(report.usage).toMatchObject({
+      inputTokens: 120,
+      outputTokens: 13,
+      cachedInputTokens: 60,
+    });
   });
 
   it("reads Codex native data.item envelopes using the canonical item ID", async () => {

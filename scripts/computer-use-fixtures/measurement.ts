@@ -313,6 +313,56 @@ function summarizeAudit(scope: ComputerRunScope, calls: MeasuredCall[]) {
   };
 }
 
+/** Verify the actual diagnostic route before dispatching a paid turn. Runtime
+ * retention is always on; optional NDJSON logging is not required or enabled.
+ * Empty runtime coverage is expected only here, on a newly created idle thread. */
+export async function prepareComputerRunDiagnostics(
+  call: DiagnosticToolCaller,
+  scope: Pick<ComputerRunScope, "threadId" | "runStartedAt">,
+) {
+  const startedAt = timestamp(scope.runStartedAt);
+  if (!scope.threadId || !Number.isFinite(startedAt))
+    throw new Error("Invalid diagnostic preparation scope");
+  const journal = await collectPages(
+    call,
+    "synara_read_thread_events",
+    {
+      threadId: scope.threadId,
+      eventTypes: ["thread.created", "thread.turn-start-requested"],
+      payloadMode: "none",
+    },
+    2,
+  );
+  if (
+    journal.coverage.durableSourceComplete !== true ||
+    journal.rows.length !== 1 ||
+    journal.rows[0]?.type !== "thread.created" ||
+    timestamp(journal.rows[0].occurredAt) < startedAt ||
+    !Number.isFinite(timestamp(journal.rows[0].occurredAt))
+  )
+    throw new Error("Diagnostic preparation requires an observed fresh, undispatched thread");
+  const runtime = await collectPages(
+    call,
+    "synara_read_thread_runtime_events",
+    { threadId: scope.threadId, includeDetails: true },
+    2,
+  );
+  if (
+    runtime.rows.length !== 0 ||
+    runtime.coverage.highWaterSequence !== 0 ||
+    runtime.coverage.oldestRetainedSequence !== null ||
+    runtime.coverage.retainedForThread !== 0
+  )
+    throw new Error("Diagnostic preparation found prior or unverifiable provider runtime state");
+  return {
+    ready: true,
+    threadId: scope.threadId,
+    basis: "fresh-idle-thread-diagnostic-route; execution-and-usage-still-unverified",
+    journal: journal.coverage,
+    runtime: runtime.coverage,
+  };
+}
+
 export async function collectComputerRun(call: DiagnosticToolCaller, scope: ComputerRunScope) {
   const runStart = timestamp(scope.runStartedAt);
   const maxPages = scope.maxPages ?? 80;
