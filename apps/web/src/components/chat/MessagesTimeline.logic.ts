@@ -6,6 +6,7 @@
 import { type MessageId, type TurnId } from "@synara/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
+import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
 import {
   isSummarizableToolCallEntry,
   MIN_COLLAPSIBLE_TOOL_GROUP_SIZE,
@@ -95,11 +96,20 @@ export function chunkWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkEntr
 }
 
 // One renderable block of a work group: `summary` is non-null when the block
-// renders collapsed behind a "Ran N commands..." disclosure.
+// renders collapsed behind a "Ran N commands..." disclosure. `liveEntry` is
+// non-null while a tool run is still open: the run renders as one line wearing
+// that entry (the newest call), and the line toggles the earlier calls.
 export interface WorkEntryRenderPlanChunk {
   id: string;
   entries: WorkLogEntry[];
   summary: ToolCallGroupSummary | null;
+  liveEntry: WorkLogEntry | null;
+}
+
+// The call a live run's line wears: the newest real tool call. Iconless status
+// rows (reasoning updates) only win when the run holds nothing else.
+function pickLiveToolEntry(entries: ReadonlyArray<WorkLogEntry>): WorkLogEntry {
+  return entries.findLast((entry) => !isCodexActivityStatusWorkEntry(entry)) ?? entries.at(-1)!;
 }
 
 // Plans a work group's entries block by block. Boundaries are the entries a
@@ -107,7 +117,8 @@ export interface WorkEntryRenderPlanChunk {
 // each tool run between boundaries folds independently. A run stays expanded
 // only while it still has running work, or while it is the trailing block of
 // the live transcript tail (`tailIsLive`): the moment a new narration block
-// starts after it, it stops being the tail and collapses mid-turn.
+// starts after it, it stops being the tail and collapses mid-turn. An expanded
+// run never lists its rows: it folds to a single line for its newest call.
 export function planWorkEntryRenderChunks(
   entries: ReadonlyArray<WorkLogEntry>,
   options: { tailIsLive: boolean },
@@ -115,13 +126,43 @@ export function planWorkEntryRenderChunks(
   const chunks = chunkWorkEntries(entries);
   return chunks.map((chunk, index) => {
     if (chunk.kind === "item") {
-      return { id: chunk.id, entries: [chunk.entry], summary: null };
+      return { id: chunk.id, entries: [chunk.entry], summary: null, liveEntry: null };
     }
     const summary = summarizeToolCallGroup(chunk.entries);
     const isLiveTail = options.tailIsLive && index === chunks.length - 1;
     const collapsed = summary !== null && !summary.hasRunningEntry && !isLiveTail;
-    return { id: chunk.id, entries: chunk.entries, summary: collapsed ? summary : null };
+    return {
+      id: chunk.id,
+      entries: chunk.entries,
+      summary: collapsed ? summary : null,
+      liveEntry: summary !== null && !collapsed ? pickLiveToolEntry(chunk.entries) : null,
+    };
   });
+}
+
+// A folded chunk renders as one line (settled summary or live newest call)
+// instead of listing its rows.
+export function isFoldedWorkEntryChunk(chunk: WorkEntryRenderPlanChunk): boolean {
+  return chunk.summary !== null || chunk.liveEntry !== null;
+}
+
+// How a folded chunk renders: the line's summary, the rows its disclosure
+// reveals, and a suffix for the open-state key. A live line reveals only the
+// calls before the one it wears, and keeps its own open state so the run
+// settles collapsed even when the live line was opened.
+export function resolveWorkEntryChunkFold(
+  chunk: WorkEntryRenderPlanChunk,
+): { summary: ToolCallGroupSummary; entries: WorkLogEntry[]; keySuffix: string } | null {
+  if (chunk.summary !== null) {
+    return { summary: chunk.summary, entries: chunk.entries, keySuffix: "" };
+  }
+  const liveSummary = chunk.liveEntry ? summarizeToolCallGroup(chunk.entries) : null;
+  if (!liveSummary) return null;
+  return {
+    summary: liveSummary,
+    entries: chunk.entries.filter((entry) => entry !== chunk.liveEntry),
+    keySuffix: ":live",
+  };
 }
 
 export interface CappedWorkEntryRenderPlan {
@@ -144,7 +185,7 @@ export function capOpenWorkEntryRenderChunks(
 ): CappedWorkEntryRenderPlan {
   const shouldCapEntry = options.shouldCapEntry ?? (() => true);
   const openEntries = chunks.flatMap((chunk) =>
-    chunk.summary === null ? chunk.entries.filter(shouldCapEntry) : [],
+    isFoldedWorkEntryChunk(chunk) ? [] : chunk.entries.filter(shouldCapEntry),
   );
   const maxVisibleEntries = Math.max(0, options.maxVisibleEntries);
   const hiddenEntryCount = Math.max(0, openEntries.length - maxVisibleEntries);
@@ -164,7 +205,7 @@ export function capOpenWorkEntryRenderChunks(
 
   return {
     chunks: chunks.map((chunk) => {
-      if (chunk.summary !== null) return chunk;
+      if (isFoldedWorkEntryChunk(chunk)) return chunk;
       return {
         ...chunk,
         entries: chunk.entries.filter(
