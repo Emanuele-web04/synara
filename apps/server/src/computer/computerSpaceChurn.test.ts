@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CuaComputerBackend } from "./CuaComputerBackend.ts";
 import { withDesktopDeliveryMode } from "./DesktopOperationQueue.ts";
@@ -22,11 +22,10 @@ function spaceFixture(): {
 } {
   const calls: Array<{ name?: string }> = [];
   let onSpace = true;
-  const request = vi.fn(async (_endpoint: string, req: Record<string, unknown>) => {
+  const respond = (req: Record<string, unknown>) => {
     calls.push({ ...(typeof req.name === "string" ? { name: req.name } : {}) });
     const method = req.method as string | undefined;
-    // Spaces and background native input belong to the simulated macOS host.
-    if (method === "probe" || method === "stop") return { ok: true, hostPlatform: "darwin" };
+    if (method === "probe" || method === "stop") return { ok: true };
     if (req.name === "check_permissions")
       return {
         ok: true,
@@ -71,7 +70,13 @@ function spaceFixture(): {
         },
       };
     return { ok: true, result: { structuredContent: {} } };
-  }) as unknown as typeof cuaRequest;
+  };
+  // Captures may begin with permission/window reads, without a separate probe.
+  // Identify the macOS native host on every reply, just like the real transport.
+  const request = vi.fn(async (_endpoint: string, req: Record<string, unknown>) => ({
+    ...respond(req),
+    hostPlatform: "darwin",
+  })) as unknown as typeof cuaRequest;
   const backend = new CuaComputerBackend({ endpoint: "/space-churn", request });
   return {
     backend,
@@ -83,6 +88,15 @@ function spaceFixture(): {
 }
 
 describe("computer Space churn", () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  beforeEach(() => {
+    // Exercise a Linux backend connected to this fixture's macOS native host.
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", platformDescriptor);
+  });
+
   it("a Space change between prepare and dispatch refuses once, sends no drag, stays observable", async () => {
     const { backend, calls, moveOffSpace } = spaceFixture();
     try {

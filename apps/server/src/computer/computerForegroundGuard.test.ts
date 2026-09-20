@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ComputerApprovalGate } from "./ComputerApprovalGate.ts";
 import { CuaComputerBackend } from "./CuaComputerBackend.ts";
@@ -30,12 +30,10 @@ function guardFixture(): {
   const calls: Array<{ name?: string }> = [];
   let readinessRefusal: Record<string, unknown> | undefined;
   let inputRefusal: { code: string } | undefined;
-  const request = vi.fn(async (_endpoint: string, req: Record<string, unknown>) => {
+  const respond = (req: Record<string, unknown>) => {
     calls.push({ ...(typeof req.name === "string" ? { name: req.name } : {}) });
     const method = req.method as string | undefined;
-    // This fixture models macOS auth sheets and Secure Input, even when the
-    // backend's test runner is on Linux and talks to that host remotely.
-    if (method === "probe" || method === "stop") return { ok: true, hostPlatform: "darwin" };
+    if (method === "probe" || method === "stop") return { ok: true };
     if (req.name === "check_permissions")
       return {
         ok: true,
@@ -104,7 +102,13 @@ function guardFixture(): {
         },
       };
     return { ok: true, result: { structuredContent: {} } };
-  }) as unknown as typeof cuaRequest;
+  };
+  // The real host identifies its platform on every reply. Direct input starts
+  // with list_windows, so probe-only metadata does not describe this host yet.
+  const request = vi.fn(async (_endpoint: string, req: Record<string, unknown>) => ({
+    ...respond(req),
+    hostPlatform: "darwin",
+  })) as unknown as typeof cuaRequest;
   const backend = new CuaComputerBackend({ endpoint: "/foreground-guard", request });
   return {
     backend,
@@ -127,6 +131,15 @@ function guardFixture(): {
 }
 
 describe("computer foreground guard", () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  beforeEach(() => {
+    // The backend may run on Linux while its authenticated native host is macOS.
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", platformDescriptor);
+  });
+
   it("background never activates: raise is refused before any native call", async () => {
     const { backend, calls } = guardFixture();
     try {
