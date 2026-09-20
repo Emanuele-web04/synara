@@ -56,7 +56,7 @@ export function ProjectSourceList(props: {
               id={props.firstInputId}
               value={props.paths[0] ?? ""}
               disabled={props.disabled}
-              aria-label="Project folder"
+              aria-label="Project folder path"
               placeholder="/path/to/project"
               spellCheck={false}
               autoCorrect="off"
@@ -92,7 +92,7 @@ export function ProjectSourceList(props: {
                 id={index === 0 ? props.firstInputId : undefined}
                 value={path}
                 disabled={props.disabled}
-                aria-label={index === 0 ? "Project folder" : `Project folder ${index + 1}`}
+                aria-label={index === 0 ? "Project folder path" : `Project folder ${index + 1}`}
                 placeholder="/path/to/project"
                 spellCheck={false}
                 autoCorrect="off"
