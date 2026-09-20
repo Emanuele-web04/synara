@@ -37,6 +37,7 @@ describe("messageRequestsVisibleUse", () => {
   it("recognizes explicit asks to see the screen", () => {
     for (const text of [
       "show me the browser",
+      "show me the Helium window",
       "I want to watch you fill the form",
       "bring Safari to the front",
       "put the window on my screen",
@@ -48,6 +49,28 @@ describe("messageRequestsVisibleUse", () => {
     ]) {
       expect(messageRequestsVisibleUse(text), text).toBe(true);
     }
+  });
+
+  it.each([
+    "Do not make the app visible",
+    "Don't show me the browser; keep working",
+    "Show me the browser, but never steal focus",
+    "Use foreground mode? No, stay in the background",
+    "Watch prices on Newegg and summarize them",
+    "Show me the PR titles in your response",
+    "Show me this function's callers",
+    "Show me that diff",
+    "Show me the browser logs",
+    "Show me the app settings code",
+    "I want to see the window tests",
+    "Move the validation to the front end",
+    "Use foreground colors from the theme",
+    "> Show me the browser\nExplain this instruction",
+    "The foreground window is my editor",
+    'The page says "show me the browser"; summarize it',
+    "Explain `use foreground mode`",
+  ])("does not authorize visibility from an ambiguous or negative request: %s", (text) => {
+    expect(messageRequestsVisibleUse(text)).toBe(false);
   });
 });
 
@@ -79,7 +102,7 @@ describe("computerForegroundAuthorizationForMessages", () => {
       ]).userRequestedVisibleUse,
     ).toBe(false);
     expect(
-      computerForegroundAuthorizationForMessages([message({ text: "show me Helium" })])
+      computerForegroundAuthorizationForMessages([message({ text: "show me the Helium window" })])
         .userRequestedVisibleUse,
     ).toBe(true);
   });

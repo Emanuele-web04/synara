@@ -13,7 +13,7 @@ import type { OrchestrationMessage } from "@synara/contracts";
  * The answer is computed from the thread's latest user-authored message:
  * the same opening line the consent model already treats as the task, read
  * fresh on every foreground call so a user reply that authorizes visibility
- * ("yes, show me") takes effect immediately, and a reply that does not
+ * ("yes, show me the browser") takes effect immediately, and a reply that does not
  * ("stop") revokes it just as fast.
  */
 export interface ComputerForegroundAuthorization {
@@ -51,23 +51,36 @@ export const COMPUTER_USER_INTERACTION_QUIET_MS = 2_000;
  * toward refusing.
  */
 const VISIBLE_USE_PATTERNS: readonly RegExp[] = [
-  /\bshow me\b/i,
-  /\bshow (?:it|this|that|the (?:window|app|screen|desktop|browser|page))\b/i,
-  /\bwatch\b/i,
-  /\blet me see\b/i,
-  /\bi (?:want|would like|'d like) to see\b/i,
-  /\bon (?:my|the) screen\b/i,
-  /\bin front of me\b/i,
-  /\bvisible\b/i,
-  /\b(?:bring|put|move)\b[^.!?]{0,40}\b(?:to the )?front\b/i,
-  /\bforeground\b/i,
+  /\bshow (?:me )?(?:the |my )?(?:[\w-]+ ){0,3}(?:window|app|screen|desktop|browser|page)(?=\s*(?:[.!?,;:]|$))/i,
+  /\bshow me what you(?: are|'re) doing\b/i,
+  /\b(?:i (?:want|would like|'d like) to |let me )watch (?:you|it|the (?:app|browser|window))\b/i,
+  /\blet me see (?:it|you) work(?:ing)?\b/i,
+  /\bi (?:want|would like|'d like) to see (?:the |my )?(?:[\w-]+ ){0,3}(?:window|app|screen|desktop|browser|page)(?=\s*(?:[.!?,;:]|$))/i,
+  /\b(?:put|show|display)\b[^.!?\n]{0,40}\bon (?:my|the) screen\b/i,
+  /\b(?:make|keep) (?:it|(?:the |my )?(?:[\w-]+ ){0,3}(?:app|window|browser)) visible\b/i,
+  /\b(?:bring|put|move)\b[^.!?]{0,40}\b(?:to the )?front(?=\s*(?:[.!?,;:]|$))/i,
+  /\buse (?:the )?foreground(?: mode)?(?=\s*(?:[.!?,;:]|$))/i,
   /\btake over (?:my|the) (?:screen|desktop|computer)\b/i,
   /\bdrive (?:my|the) (?:screen|desktop|computer)\b/i,
 ];
 
+// Explicit background/negative instructions take precedence, even when the
+// message also contains a visible-use phrase. Ambiguous requests stay hidden.
+const BACKGROUND_USE_PATTERNS: readonly RegExp[] = [
+  /\b(?:do not|don['’]t|never|not|avoid|without|stop)\b[^.!?\n]{0,100}\b(?:show|watch|visible|foreground|front|focus|raise|screen|desktop)\b/i,
+  /\b(?:keep|stay|remain|work|run|use)\b[^.!?\n]{0,60}\b(?:background|hidden|invisible)\b/i,
+  /\bbackground[- ]only\b/i,
+];
+
 /** Whether one message text explicitly asks to see the desktop. Pure. */
 export function messageRequestsVisibleUse(text: string): boolean {
-  return VISIBLE_USE_PATTERNS.some((pattern) => pattern.test(text));
+  const request = text
+    .replace(/```[\s\S]*?```|`[^`]*`|"[^"\n]*"|“[^”\n]*”/g, "")
+    .replace(/^\s*>.*$/gm, "");
+  return (
+    !BACKGROUND_USE_PATTERNS.some((pattern) => pattern.test(request)) &&
+    VISIBLE_USE_PATTERNS.some((pattern) => pattern.test(request))
+  );
 }
 
 /**

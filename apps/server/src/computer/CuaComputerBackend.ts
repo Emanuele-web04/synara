@@ -143,8 +143,8 @@ function resolvableStillTab(value: unknown): string | undefined {
   const active = tabs.filter((tab) => tab.active);
   return active.length === 1 ? active[0]!.id : undefined;
 }
-/** Longest one same-window semantic text write may hold its lane before the
- * caller fails honestly. The underlying write still drains so lane order
+/** Longest a semantic text caller may wait, including its lane admission,
+ * before failing honestly. The underlying write still drains so lane order
  * survives the timeout and nothing is replayed. Same-window writes serialize
  * because the native semantic lease is per (pid, window): a second concurrent
  * lease for one exact window is refused outright (driver rev 12), and AX
@@ -237,30 +237,6 @@ function cuaKey(value: string): string {
     option_l: "alt",
   };
   return aliases[key] ?? key;
-}
-
-/**
- * Bounds one same-window lane write. Rejects past the hold while leaving the
- * raced write alone: the lane still drains in order, and the error reports
- * possible partial dispatch so no caller may replay it.
- */
-function withSemanticTextLaneTimeout<A>(write: Promise<A>, holdMs: number): Promise<A> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      reject(
-        new CuaActionError(
-          "Semantic text delivery timed out; the write may have partially dispatched. " +
-            "Observe the target before acting; never retype blindly.",
-          "dispatched-unknown",
-        ),
-      );
-    }, holdMs);
-    timer.unref?.();
-  });
-  return Promise.race([write, timeout]).finally(() => {
-    if (timer !== undefined) clearTimeout(timer);
-  });
 }
 
 /** The single macOS backend. Cua owns native actions; Synara owns admission,
@@ -1238,13 +1214,17 @@ export class CuaComputerBackend implements ComputerBackend {
         desktopDeliveryMode() !== "foreground" &&
         point === undefined);
     if (semanticLaneWrite) {
-      return this.semanticTextInLane(pid, window_id, () =>
-        this.inputDispatch(name, args, windowId, point, preparedBounds, true, {
-          pid,
-          window_id,
-          window,
-          baseline,
-        }),
+      return this.semanticTextInLane(pid, window_id, (admitMutation) =>
+        this.inputDispatch(
+          name,
+          args,
+          windowId,
+          point,
+          preparedBounds,
+          true,
+          { pid, window_id, window, baseline },
+          admitMutation,
+        ),
       );
     }
     return this.inputDispatch(name, args, windowId, point, preparedBounds, false, {
@@ -1269,38 +1249,81 @@ export class CuaComputerBackend implements ComputerBackend {
   private async semanticTextInLane(
     pid: number,
     window_id: number,
-    write: () => Promise<ComputerBackendActionResult>,
+    write: (admitMutation: () => void) => Promise<ComputerBackendActionResult>,
   ): Promise<ComputerBackendActionResult> {
     const key = `semantic-text:${pid}:${window_id}`;
     const predecessor = this.semanticTextLanes.get(key) ?? Promise.resolve();
-    let releaseLane!: () => void;
-    const laneHeld = new Promise<void>((resolve) => {
-      releaseLane = resolve;
-    });
-    this.semanticTextLanes.set(key, laneHeld);
+    const signal = desktopOperationSignal();
+    signal?.throwIfAborted();
     const laneWaitStarted = Date.now();
-    try {
-      await predecessor;
+    const deadline = laneWaitStarted + this.semanticTextLaneHoldMs;
+    let dispatched = false;
+    let abandoned = false;
+    const assertAdmission = () => {
+      // An overdue timer may lose a turn to the read's completion microtask.
+      if (abandoned || Date.now() >= deadline)
+        throw new CuaActionError(
+          "Semantic text admission expired; nothing was sent.",
+          "not-dispatched",
+        );
+      signal?.throwIfAborted();
+    };
+    const writeResult = predecessor.then(async () => {
+      // Check both queue admission and the actual mutation boundary: a web
+      // field read can outlive the caller before it has sent any input.
+      assertAdmission();
       const laneWaitMs = Date.now() - laneWaitStarted;
       const deliveryStarted = Date.now();
-      try {
-        const result = await withSemanticTextLaneTimeout(write(), this.semanticTextLaneHoldMs);
-        console.debug("[computer] semantic text lane write", {
-          pid,
-          windowId: `cua:${pid}:${window_id}`,
-          laneWaitMs,
-          deliveryMs: Date.now() - deliveryStarted,
-          verified: result.verified,
-          effect: result.effect,
-        });
-        return result;
-      } finally {
+      const result = await write(() => {
+        assertAdmission();
+        dispatched = true;
+      });
+      console.debug("[computer] semantic text lane write", {
+        pid,
+        windowId: `cua:${pid}:${window_id}`,
+        laneWaitMs,
+        deliveryMs: Date.now() - deliveryStarted,
+        verified: result.verified,
+        effect: result.effect,
+      });
+      return result;
+    });
+    const releaseLane = async () => {
+      if (dispatched)
         await new Promise((resolve) => setTimeout(resolve, this.semanticTextLaneGapMs));
-      }
-    } finally {
-      releaseLane();
-      if (this.semanticTextLanes.get(key) === laneHeld) this.semanticTextLanes.delete(key);
-    }
+      if (this.semanticTextLanes.get(key) === drained) this.semanticTextLanes.delete(key);
+    };
+    // Keep the lane tied to the actual write, never to the caller's shorter
+    // wait. Both late success and late failure release it only after the gap.
+    const drained = writeResult.then(releaseLane, releaseLane);
+    this.semanticTextLanes.set(key, drained);
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    const stoppedWaiting = new Promise<never>((_resolve, reject) => {
+      onAbort = () => {
+        abandoned = true;
+        reject(signal?.reason);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      timer = setTimeout(() => {
+        abandoned = true;
+        reject(
+          new CuaActionError(
+            dispatched
+              ? "Semantic text delivery timed out; the write may have partially dispatched. " +
+                  "Observe the target before acting; never retype blindly."
+              : "Semantic text timed out before delivery; nothing was sent.",
+            dispatched ? "dispatched-unknown" : "not-dispatched",
+          ),
+        );
+      }, this.semanticTextLaneHoldMs);
+      timer.unref?.();
+    });
+    return Promise.race([writeResult, stoppedWaiting]).finally(() => {
+      if (timer !== undefined) clearTimeout(timer);
+      if (onAbort !== undefined) signal?.removeEventListener("abort", onAbort);
+    });
   }
 
   private async inputDispatch(
@@ -1316,6 +1339,7 @@ export class CuaComputerBackend implements ComputerBackend {
       window: ComputerWindow;
       baseline: number | undefined;
     },
+    admitMutation?: () => void,
   ): Promise<ComputerBackendActionResult> {
     const { pid, window_id, window, baseline } = resolved;
     if (!window.visible && !exactSemanticText) {
@@ -1369,6 +1393,7 @@ export class CuaComputerBackend implements ComputerBackend {
       pixel = { x, y, coordinate_space: "window_points" };
     }
     assertDesktopOperationActive();
+    admitMutation?.();
     let result: CuaToolResult;
     try {
       result = await this.call(
@@ -1649,7 +1674,7 @@ export class CuaComputerBackend implements ComputerBackend {
   ): Promise<ComputerBackendActionResult> {
     const windowId = node.windowId!;
     const { pid, window_id } = await this.target(windowId);
-    return this.semanticTextInLane(pid, window_id, async () => {
+    return this.semanticTextInLane(pid, window_id, async (admitMutation) => {
       const before = await this.resolveWebField(windowId, node);
       if (!before)
         throw new CuaActionError(
@@ -1659,7 +1684,7 @@ export class CuaComputerBackend implements ComputerBackend {
         );
       const composed = (before.value ?? "") + value;
       assertDesktopOperationActive();
-      return await this.webSetValue(node, windowId, before, composed);
+      return await this.webSetValue(node, windowId, before, composed, admitMutation);
     });
   }
   /**
@@ -1673,6 +1698,7 @@ export class CuaComputerBackend implements ComputerBackend {
     windowId: string,
     field: { token: string; index: number },
     value: string,
+    admitMutation: () => void,
   ): Promise<ComputerBackendActionResult> {
     const result = await this.inputDispatch(
       "set_value",
@@ -1682,6 +1708,7 @@ export class CuaComputerBackend implements ComputerBackend {
       undefined,
       true,
       await this.target(windowId),
+      admitMutation,
     );
     assertDesktopOperationActive();
     const after = await this.resolveWebField(windowId, node);
@@ -1701,6 +1728,7 @@ export class CuaComputerBackend implements ComputerBackend {
     const result = await this.call("get_window_state", {
       pid,
       window_id,
+      include_screenshot: false,
       include_accessibility_tree: true,
       max_elements: 1024,
       max_depth: 25,
@@ -1761,7 +1789,7 @@ export class CuaComputerBackend implements ComputerBackend {
       // webContentTypeText uses — instead of racing a same-window sibling.
       const windowId = target.node.windowId;
       const { pid, window_id } = await this.target(windowId);
-      return this.semanticTextInLane(pid, window_id, async () => {
+      return this.semanticTextInLane(pid, window_id, async (admitMutation) => {
         const field = await this.resolveWebField(windowId, target.node);
         if (!field)
           throw new CuaActionError(
@@ -1769,7 +1797,7 @@ export class CuaComputerBackend implements ComputerBackend {
             "not-dispatched",
             "stale_target",
           );
-        return this.webSetValue(target.node, windowId, field, value);
+        return this.webSetValue(target.node, windowId, field, value, admitMutation);
       });
     }
     return this.input("set_value", { element_token: token, value }, target.node.windowId);

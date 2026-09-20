@@ -1114,6 +1114,19 @@ export const makeAgentGateway = Effect.gen(function* () {
     return approved;
   };
 
+  // Resolve visible-use consent from the same latest user message for native
+  // apps and driver-owned browsers. Full-access mode does not imply visibility.
+  const resolveComputerForegroundAuthorization: NonNullable<
+    AgentGatewayComputerToolsOptions["resolveForegroundAuthorization"]
+  > = async (context) => {
+    const detail = await Effect.runPromise(
+      snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(context.callerThreadId)),
+    );
+    return Option.isNone(detail)
+      ? COMPUTER_FOREGROUND_NOT_AUTHORIZED
+      : computerForegroundAuthorizationForMessages(detail.value.messages);
+  };
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -1135,17 +1148,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           manager: computerService.manager,
           onSetupRequired: surfaceComputerSetupRequired,
           authorizeAction: authorizeComputerAction,
-          // Never-raise default: the raise-shaped calls ask this whether the
-          // user's own latest task text asked to see the screen. A read
-          // failure or a thread with no user message refuses.
-          resolveForegroundAuthorization: async (context) => {
-            const detail = await Effect.runPromise(
-              snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(context.callerThreadId)),
-            );
-            return Option.isNone(detail)
-              ? COMPUTER_FOREGROUND_NOT_AUTHORIZED
-              : computerForegroundAuthorizationForMessages(detail.value.messages);
-          },
+          resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
         })
       : []),
     // The driver-backed CDP browser family. Advertised only when the backend
@@ -1156,6 +1159,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       ? makeAgentGatewayComputerBrowserTools({
           manager: computerService.manager,
           authorizeAction: authorizeComputerAction,
+          resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
           resolveWorkspaceRoot,
         })
       : []),

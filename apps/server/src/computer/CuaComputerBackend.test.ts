@@ -9,7 +9,7 @@ import {
 } from "@synara/shared/cuaDriverProtocol";
 import { ComputerManager } from "./ComputerManager.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
-import { withDesktopDeliveryMode } from "./DesktopOperationQueue.ts";
+import { withDesktopDeliveryMode, withDesktopOperationSignal } from "./DesktopOperationQueue.ts";
 import { withModelDesktopObservation } from "./modelDesktopObservation.ts";
 import { withComputerTask } from "./computerTaskContext.ts";
 
@@ -44,6 +44,7 @@ function fixture(options?: {
   let ready: Record<string, unknown> = { ready: true, pid: 10, window_id: 20 };
   let afterCapture: (() => void) | undefined;
   let overviewWait: Promise<void> | undefined;
+  let windowStateWait: Promise<void> | undefined;
   let typeGate: Promise<void> | undefined;
   // type_text requests the fake driver is holding at once, so lane tests can
   // prove writes overlapped at the native boundary rather than merely
@@ -156,6 +157,7 @@ function fixture(options?: {
       };
     }
     if (request.name === "get_window_state") {
+      if (windowStateWait) await windowStateWait;
       const result = {
         structuredContent: {
           pid: capturePid,
@@ -237,6 +239,9 @@ function fixture(options?: {
     calls,
     delayOverview: (wait: Promise<void>) => {
       overviewWait = wait;
+    },
+    delayWindowState: (wait: Promise<void> | undefined) => {
+      windowStateWait = wait;
     },
     setVisible: (value: boolean) => {
       visible = value;
@@ -670,6 +675,9 @@ describe("Cua native boundary", () => {
     });
     // The independent re-read saw the DOM value land.
     expect(result).toMatchObject({ verified: "confirmed", effect: "verified" });
+    const reads = f.calls.filter((call) => call.name === "get_window_state");
+    expect(reads).toHaveLength(3);
+    for (const read of reads) expect(read.args?.include_screenshot).toBe(false);
   });
 
   it("reports dispatched-unknown when a web set_value does not land", async () => {
@@ -704,7 +712,85 @@ describe("Cua native boundary", () => {
       verified: "unconfirmed",
       effect: "dispatched-unknown",
     });
+    const reads = f.calls.filter((call) => call.name === "get_window_state");
+    expect(reads).toHaveLength(3);
+    for (const read of reads) expect(read.args?.include_screenshot).toBe(false);
   });
+
+  it.each([
+    { action: "typeText", interruption: "timeout" },
+    { action: "typeText", interruption: "cancellation" },
+    { action: "typeText", interruption: "elapsed deadline" },
+    { action: "setValue", interruption: "timeout" },
+    { action: "setValue", interruption: "cancellation" },
+    { action: "setValue", interruption: "elapsed deadline" },
+  ] as const)(
+    "never sends web $action after $interruption while its field read was pending",
+    async ({ action, interruption }) => {
+      const f = fixture({
+        semanticTextLaneGapMs: 0,
+        semanticTextLaneHoldMs: interruption === "timeout" ? 80 : 1_000,
+      });
+      f.setElements([
+        {
+          role: "AXTextField",
+          label: "Message",
+          frame: { x: -290, y: 30, width: 120, height: 20 },
+          element_token: "web-token",
+          element_index: 2,
+          in_web_content: true,
+          value: "seed",
+        },
+      ]);
+      const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
+        .children[0]!;
+      const target = {
+        target: { label: "Message", windowId: "cua:10:20" },
+        node,
+        point: node.activationPoint!,
+      };
+      const read = Promise.withResolvers<void>();
+      f.delayWindowState(read.promise);
+      const controller = new AbortController();
+      const pending = withDesktopOperationSignal(controller.signal, () =>
+        action === "typeText"
+          ? f.backend.typeText("expired", "cua:10:20", target)
+          : f.backend.setValue(target, "expired"),
+      );
+      const rejected =
+        interruption === "cancellation"
+          ? expect(pending).rejects.toThrow("Caller cancelled")
+          : expect(pending).rejects.toMatchObject({ effect: "not-dispatched" });
+      await vi.waitFor(() =>
+        expect(f.calls.filter((call) => call.name === "get_window_state")).toHaveLength(2),
+      );
+      if (interruption === "cancellation") controller.abort(new Error("Caller cancelled"));
+      if (interruption === "elapsed deadline") {
+        // Model a blocked event loop: the pre-read completion can resume
+        // before the budget timer gets its overdue turn.
+        const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2_000);
+        read.resolve();
+        try {
+          await rejected;
+        } finally {
+          clock.mockRestore();
+        }
+      } else await rejected;
+      expect(f.calls.filter((call) => call.name === "set_value")).toHaveLength(0);
+
+      // Let the abandoned read finish after its operation scope is closed.
+      // A later write must drain that continuation without replaying its input.
+      f.delayWindowState(undefined);
+      read.resolve();
+      await expect(f.backend.setValue(target, "allowed")).resolves.toMatchObject({
+        effect: "verified",
+      });
+      expect(
+        f.calls.filter((call) => call.name === "set_value").map((call) => call.args?.value),
+      ).toEqual(["allowed"]);
+      expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(0);
+    },
+  );
 
   it("semantic text lane serializes same-window writes", async () => {
     const f = fixture({ semanticTextLaneGapMs: 0 });
@@ -1053,7 +1139,53 @@ describe("Cua native boundary", () => {
     await expect(Promise.all([first, second])).resolves.toHaveLength(2);
   });
 
-  it("semantic text lane times out a stuck write honestly", async () => {
+  it.each(["success", "failure"])(
+    "keeps a timed-out semantic write in its lane until late %s",
+    async (outcome) => {
+      const f = fixture({ semanticTextLaneGapMs: 0, semanticTextLaneHoldMs: 80 });
+      f.setElements([
+        {
+          role: "AXTextField",
+          label: "Message",
+          frame: { x: -290, y: 30, width: 120, height: 20 },
+          element_token: "message-token",
+        },
+      ]);
+      const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
+        .children[0]!;
+      const target = {
+        target: { label: "Message", windowId: "cua:10:20" },
+        node,
+        point: node.activationPoint!,
+      };
+      let releaseGate!: () => void;
+      let rejectGate!: (error: Error) => void;
+      f.gateTypeText(
+        new Promise<void>((resolve, reject) => {
+          releaseGate = resolve;
+          rejectGate = reject;
+        }),
+      );
+      const typeTexts = () => f.calls.filter((call) => call.name === "type_text");
+
+      await expect(f.backend.typeText("alpha", "cua:10:20", target)).rejects.toMatchObject({
+        effect: "dispatched-unknown",
+      });
+      const second = f.backend.typeText("beta", "cua:10:20", target);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(typeTexts()).toHaveLength(1);
+      expect(f.typingMaxInFlight()).toBe(1);
+
+      f.gateTypeText(undefined);
+      if (outcome === "success") releaseGate();
+      else rejectGate(new Error("Late native failure"));
+      await expect(second).resolves.toMatchObject({ windowId: "cua:10:20" });
+      expect(typeTexts().map((call) => call.args?.text)).toEqual(["alpha", "beta"]);
+      expect(f.typingMaxInFlight()).toBe(1);
+    },
+  );
+
+  it("expires a queued semantic write without dispatching it after the lane drains", async () => {
     const f = fixture({ semanticTextLaneGapMs: 0, semanticTextLaneHoldMs: 40 });
     f.setElements([
       {
@@ -1077,13 +1209,60 @@ describe("Cua native boundary", () => {
       effect: "dispatched-unknown",
       code: "cua_action_failed",
     });
-    await expect(f.backend.typeText("alpha", "cua:10:20", target)).rejects.toThrow(
-      /partially dispatched/,
-    );
+    await expect(f.backend.typeText("expired", "cua:10:20", target)).rejects.toMatchObject({
+      effect: "not-dispatched",
+    });
+    expect(f.calls.filter((call) => call.name === "type_text")).toHaveLength(1);
+    f.gateTypeText(undefined);
     releaseGate();
     await expect(f.backend.typeText("beta", "cua:10:20", target)).resolves.toMatchObject({
       windowId: "cua:10:20",
     });
+    expect(
+      f.calls.filter((call) => call.name === "type_text").map((call) => call.args?.text),
+    ).toEqual(["alpha", "beta"]);
+    expect(f.typingMaxInFlight()).toBe(1);
+  });
+
+  it("cancels a queued semantic write without waiting for or bypassing its predecessor", async () => {
+    const f = fixture({ semanticTextLaneGapMs: 0 });
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Message",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "message-token",
+      },
+    ]);
+    const node = (await f.backend.getState({ windowId: "cua:10:20", includeTree: true })).root!
+      .children[0]!;
+    const target = {
+      target: { label: "Message", windowId: "cua:10:20" },
+      node,
+      point: node.activationPoint!,
+    };
+    let releaseGate!: () => void;
+    f.gateTypeText(new Promise<void>((resolve) => (releaseGate = resolve)));
+    const typeTexts = () => f.calls.filter((call) => call.name === "type_text");
+    const first = f.backend.typeText("alpha", "cua:10:20", target);
+    await vi.waitFor(() => expect(typeTexts()).toHaveLength(1));
+
+    const controller = new AbortController();
+    const second = withDesktopOperationSignal(controller.signal, () =>
+      f.backend.typeText("cancelled", "cua:10:20", target),
+    );
+    const cancelled = expect(second).rejects.toThrow("Caller cancelled");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort(new Error("Caller cancelled"));
+    await cancelled;
+    expect(typeTexts()).toHaveLength(1);
+
+    f.gateTypeText(undefined);
+    releaseGate();
+    await first;
+    await expect(f.backend.typeText("beta", "cua:10:20", target)).resolves.toBeDefined();
+    expect(typeTexts().map((call) => call.args?.text)).toEqual(["alpha", "beta"]);
+    expect(f.typingMaxInFlight()).toBe(1);
   });
 
   it("semantic text lane holds the gap between consecutive writes", async () => {

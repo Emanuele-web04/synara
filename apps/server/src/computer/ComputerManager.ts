@@ -3516,6 +3516,7 @@ export class ComputerManager {
     name: string,
     args: Record<string, unknown>,
     signal?: AbortSignal,
+    beforeDispatch?: () => Promise<void>,
   ): Promise<ComputerBrowserCallResult> {
     const browser = this.backend.browser;
     if (!browser)
@@ -3524,13 +3525,19 @@ export class ComputerManager {
       });
     return this.withAgentActivity(
       threadId,
-      () => {
+      async () => {
         const operationSignal = desktopOperationSignal();
         if (!operationSignal)
           throw new ComputerBackendError(
             "Computer browser call ran outside an operation context.",
             { retryable: false },
           );
+        operationSignal.throwIfAborted();
+        // Authorization can change while the thread's browser lane is busy.
+        // Recheck after admission, then fence the native call against a stop
+        // that arrives while this asynchronous check is still running.
+        if (beforeDispatch) await beforeDispatch();
+        operationSignal.throwIfAborted();
         return browser.call({
           name,
           args,

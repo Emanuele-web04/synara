@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { Effect } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { COMPUTER_BROWSER_DRIVER_NAMES, COMPUTER_BROWSER_TOOL_NAMES } from "@synara/contracts";
 
@@ -54,6 +54,7 @@ async function workspace() {
 async function setup(options?: {
   backend?: FakeComputerBackend;
   authorizeAction?: AgentGatewayComputerBrowserToolsOptions["authorizeAction"];
+  resolveForegroundAuthorization?: AgentGatewayComputerBrowserToolsOptions["resolveForegroundAuthorization"];
   resolveWorkspaceRoot?: AgentGatewayComputerBrowserToolsOptions["resolveWorkspaceRoot"];
 }) {
   const backend = options?.backend ?? new FakeComputerBackend({ browser: true });
@@ -61,6 +62,9 @@ async function setup(options?: {
   const tools = makeAgentGatewayComputerBrowserTools({
     manager,
     ...(options?.authorizeAction ? { authorizeAction: options.authorizeAction } : {}),
+    ...(options?.resolveForegroundAuthorization
+      ? { resolveForegroundAuthorization: options.resolveForegroundAuthorization }
+      : {}),
     ...(options?.resolveWorkspaceRoot
       ? { resolveWorkspaceRoot: options.resolveWorkspaceRoot }
       : {}),
@@ -208,6 +212,224 @@ describe("computer_browser_* gateway tools", () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("denied");
     expect(backend.callsFor("browser.browser_type")).toHaveLength(0);
+  });
+
+  it.each(["missing", "not requested", "failed"] as const)(
+    "refuses a visible browser launch despite full action access when visibility is %s",
+    async (state) => {
+      const authorizeAction = vi.fn(async () => true);
+      const { backend, manager, call } = await setup({
+        authorizeAction,
+        ...(state !== "missing"
+          ? {
+              resolveForegroundAuthorization: async () => {
+                if (state === "failed") throw new Error("Thread state unavailable");
+                return { userRequestedVisibleUse: false };
+              },
+            }
+          : {}),
+      });
+      const audit = vi.spyOn(manager, "recordComputerAudit");
+      const result = await call("computer_browser_prepare", {
+        allow_launch: true,
+        windowed: true,
+        profile: { mode: "isolated_new" },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("foreground_not_requested");
+      expect(authorizeAction).not.toHaveBeenCalled();
+      expect(backend.callsFor("browser.browser_prepare")).toHaveLength(0);
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          effect: "not-dispatched",
+          code: "foreground_not_requested",
+        }),
+      );
+    },
+  );
+
+  it("allows an explicitly requested visible browser and checks the next call again", async () => {
+    let userRequestedVisibleUse = true;
+    const visibility = vi.fn(async () => ({ userRequestedVisibleUse }));
+    const { backend, call } = await setup({
+      authorizeAction: async () => true,
+      resolveForegroundAuthorization: visibility,
+    });
+    const args = { allow_launch: true, windowed: true, profile: { mode: "isolated_new" } };
+    const allowed = await call("computer_browser_prepare", args);
+    expect(allowed.isError).not.toBe(true);
+    expect(backend.callsFor("browser.browser_prepare")).toHaveLength(1);
+    expect(visibility).toHaveBeenCalledWith(
+      expect.objectContaining({ callerThreadId: THREAD, callerTurnId: "turn-browser" }),
+    );
+
+    userRequestedVisibleUse = false;
+    const revoked = await call("computer_browser_prepare", args);
+    expect(textOf(revoked)).toContain("foreground_not_requested");
+    expect(backend.callsFor("browser.browser_prepare")).toHaveLength(1);
+    expect(visibility).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses when visible-use authorization changes while ordinary approval is pending", async () => {
+    let userRequestedVisibleUse = true;
+    const approval = Promise.withResolvers<boolean>();
+    const approvalStarted = Promise.withResolvers<void>();
+    const visibility = vi.fn(async () => ({ userRequestedVisibleUse }));
+    const { backend, call } = await setup({
+      authorizeAction: async () => {
+        approvalStarted.resolve();
+        return approval.promise;
+      },
+      resolveForegroundAuthorization: visibility,
+    });
+    const pending = call("computer_browser_prepare", {
+      allow_launch: true,
+      windowed: true,
+      profile: { mode: "isolated_new" },
+    });
+    await approvalStarted.promise;
+    userRequestedVisibleUse = false;
+    approval.resolve(true);
+
+    const result = await pending;
+    expect(textOf(result)).toContain("foreground_not_requested");
+    expect(backend.callsFor("browser.browser_prepare")).toHaveLength(0);
+    expect(visibility).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([undefined, false])(
+    "keeps a headless launch with windowed:%s independent of visibility",
+    async (windowed) => {
+      const visibility = vi.fn(async () => ({ userRequestedVisibleUse: false }));
+      const { backend, call } = await setup({
+        authorizeAction: async () => true,
+        resolveForegroundAuthorization: visibility,
+      });
+      const result = await call("computer_browser_prepare", {
+        allow_launch: true,
+        ...(windowed === undefined ? {} : { windowed }),
+        profile: { mode: "isolated_new" },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(backend.callsFor("browser.browser_prepare")).toHaveLength(1);
+      expect(visibility).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a visible launch when its authorization changes in the browser queue", async () => {
+    let userRequestedVisibleUse = true;
+    const visibility = vi.fn(async () => ({ userRequestedVisibleUse }));
+    const firstEntered = Promise.withResolvers<void>();
+    const firstRelease = Promise.withResolvers<void>();
+    const browser = vi.fn(async (call: ComputerBrowserCall) => {
+      if (call.name === "get_browser_state") {
+        firstEntered.resolve();
+        await firstRelease.promise;
+      }
+      return { structuredContent: { status: "ok" } };
+    });
+    const { manager, call } = await setup({
+      backend: new FakeComputerBackend({ browser }),
+      authorizeAction: async () => true,
+      resolveForegroundAuthorization: visibility,
+    });
+    const queued = vi.spyOn(manager, "browserCall");
+    const first = call("computer_browser_state", { target_id: "t", tab_id: "tab" });
+    await firstEntered.promise;
+    const visible = call("computer_browser_prepare", {
+      allow_launch: true,
+      windowed: true,
+      profile: { mode: "isolated_new" },
+    });
+    await vi.waitFor(() => expect(queued).toHaveBeenCalledTimes(2));
+    expect(visibility).toHaveBeenCalledTimes(1);
+    userRequestedVisibleUse = false;
+    firstRelease.resolve();
+
+    await first;
+    const result = await visible;
+    expect(textOf(result)).toContain("foreground_not_requested");
+    expect(visibility).toHaveBeenCalledTimes(2);
+    expect(browser.mock.calls.map(([call]) => call.name)).toEqual(["get_browser_state"]);
+  });
+
+  it("does not dispatch after cancellation during the admitted browser check", async () => {
+    const checkEntered = Promise.withResolvers<void>();
+    const checkRelease = Promise.withResolvers<void>();
+    const browser = vi.fn(async () => ({ structuredContent: { status: "ok" } }));
+    const { manager } = await setup({ backend: new FakeComputerBackend({ browser }) });
+    const controller = new AbortController();
+    const pending = manager.browserCall(
+      THREAD,
+      "turn-browser",
+      "browser_prepare",
+      { windowed: true },
+      controller.signal,
+      async () => {
+        checkEntered.resolve();
+        await checkRelease.promise;
+      },
+    );
+    const rejected = expect(pending).rejects.toThrow("Caller cancelled");
+    await checkEntered.promise;
+    controller.abort(new Error("Caller cancelled"));
+    checkRelease.resolve();
+    await rejected;
+    expect(browser).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "nested refusal code",
+      reply: { structuredContent: { status: "refused", refusal: { code: "browser_ref_stale" } } },
+      expected: { effect: "refused", code: "browser_ref_stale" },
+    },
+    {
+      label: "legacy top-level refusal code",
+      reply: { structuredContent: { status: "refused", code: "browser_requires_setup" } },
+      expected: { effect: "refused", code: "browser_requires_setup" },
+    },
+    {
+      label: "typed refusal carrying isError",
+      reply: {
+        isError: true,
+        structuredContent: { status: "refused", refusal: { code: "browser_consent_required" } },
+      },
+      expected: { effect: "refused", code: "browser_consent_required" },
+    },
+    {
+      label: "successful dispatch without effect proof",
+      reply: { structuredContent: { status: "ok" } },
+      expected: { effect: "dispatched-unknown" },
+    },
+    {
+      label: "DOM readback without application effect proof",
+      reply: {
+        structuredContent: {
+          status: "ok",
+          effect: "unverifiable",
+          route: "dom_event",
+          dispatched: true,
+          readback: "matched",
+        },
+      },
+      expected: { effect: "dispatched-unknown" },
+    },
+  ])("audits $label without upgrading its effect", async ({ reply, expected }) => {
+    const backend = new FakeComputerBackend({ browser: () => reply });
+    const { manager, call } = await setup({ backend, authorizeAction: async () => true });
+    const audit = vi.spyOn(manager, "recordComputerAudit");
+    const result = await call("computer_browser_type", {
+      target_id: "t",
+      tab_id: "tab",
+      ref: "p1:0",
+      text: "private text",
+    });
+    expect(result.structuredContent).toEqual(reply.structuredContent);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({ tool: "computer_browser_type", ...expected }),
+    );
+    expect(JSON.stringify(audit.mock.calls)).not.toContain("private text");
   });
 
   it("asks the gate once per mutating call and dispatches the mapped driver name", async () => {

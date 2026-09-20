@@ -38,6 +38,11 @@ import {
 } from "../computer/ComputerBackend.ts";
 import { CuaActionError } from "../computer/CuaComputerBackend.ts";
 import type { ComputerManager } from "../computer/ComputerManager.ts";
+import {
+  COMPUTER_FOREGROUND_NOT_AUTHORIZED,
+  COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+  type ComputerForegroundAuthorization,
+} from "../computer/computerVisibleUse.ts";
 import { ToolInputError, errorText } from "./toolInput.ts";
 import { mcpToolResultError, type McpToolCallResult } from "./protocol.ts";
 import {
@@ -71,6 +76,10 @@ export interface AgentGatewayComputerBrowserToolsOptions {
     context: ToolContext,
     signal: AbortSignal,
   ) => Promise<boolean>;
+  /** Visible browser launches need the same user-authored request as native raises. */
+  readonly resolveForegroundAuthorization?: (
+    context: ToolContext,
+  ) => Promise<ComputerForegroundAuthorization>;
   /**
    * The caller thread's canonical workspace root, for bounding upload and
    * download paths. Absent or unresolved means the file-transfer tools refuse
@@ -306,6 +315,33 @@ function browserRefusalResult(refusal: {
   };
 }
 
+/** Browser dispatch and DOM read-back alone do not prove the page accepted an action. */
+function browserAuditOutcome(result: ComputerBrowserCallResult): {
+  readonly effect: ComputerAuditEffect;
+  readonly code?: string;
+} {
+  const structured = isRecord(result.structuredContent) ? result.structuredContent : undefined;
+  if (structured?.status === "refused") {
+    const refusal = isRecord(structured.refusal) ? structured.refusal : undefined;
+    return {
+      effect: "refused",
+      code:
+        typeof refusal?.code === "string"
+          ? refusal.code
+          : typeof structured.code === "string"
+            ? structured.code
+            : "browser_refused",
+    };
+  }
+  if (result.isError === true) {
+    return {
+      effect: "error",
+      code: typeof structured?.error === "string" ? structured.error : "browser_error",
+    };
+  }
+  return { effect: "dispatched-unknown" };
+}
+
 /**
  * The observed packaged E2E passed the bind's target id in the `tab_id` slot
  * ("tab bt-85991064… is not known for target bt-85991064…"), then burned calls
@@ -382,6 +418,20 @@ export function makeAgentGatewayComputerBrowserTools(
   options: AgentGatewayComputerBrowserToolsOptions,
 ): ReadonlyArray<ToolEntry> {
   const { manager } = options;
+
+  const assertVisibleBrowserAllowed = async (context: ToolContext): Promise<void> => {
+    const authorization = await Promise.resolve()
+      .then(() => options.resolveForegroundAuthorization?.(context))
+      .catch(() => COMPUTER_FOREGROUND_NOT_AUTHORIZED);
+    if (authorization?.userRequestedVisibleUse !== true) {
+      throw new CuaActionError(
+        "The user's task did not ask for a visible browser. Keep windowed false " +
+          "to work in the background, or ask the user to confirm they want to watch.",
+        "not-dispatched",
+        COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
+      );
+    }
+  };
 
   /**
    * Target → tabs, per caller thread. A bind mints a fresh target id every
@@ -526,6 +576,10 @@ export function makeAgentGatewayComputerBrowserTools(
           if (name === "computer_browser_press") {
             effectiveArgs = { ...effectiveArgs, mode: "keystrokes", text: "\n" };
           }
+          const visibleLaunch =
+            name === "computer_browser_prepare" && effectiveArgs.windowed === true;
+          // Refuse before asking the user to approve a call that cannot run.
+          if (visibleLaunch) await assertVisibleBrowserAllowed(context);
           if (computerBrowserToolRequiresApproval(name, effectiveArgs)) {
             if (!options.authorizeAction) {
               audit({ effect: "refused", code: "approval_unavailable" });
@@ -559,6 +613,9 @@ export function makeAgentGatewayComputerBrowserTools(
             COMPUTER_BROWSER_DRIVER_NAMES[name],
             boundedArgs,
             abortSignal,
+            // Approval and the browser queue can both outlive visible-use
+            // intent. Check the shared resolver at actual queue admission.
+            visibleLaunch ? () => assertVisibleBrowserAllowed(context) : undefined,
           );
           // A deliberate driver refusal is a successful call with a refused
           // payload; both halves land in the audit record's effect + code.
@@ -567,21 +624,7 @@ export function makeAgentGatewayComputerBrowserTools(
               ? (result.structuredContent as Record<string, unknown>)
               : undefined;
           rememberTargetTabs(context.callerThreadId, structured);
-          const status = typeof structured?.status === "string" ? structured.status : undefined;
-          audit(
-            result.isError === true
-              ? {
-                  effect: "error",
-                  code: typeof structured?.error === "string" ? structured.error : "browser_error",
-                }
-              : status === "refused"
-                ? {
-                    effect: "refused",
-                    code:
-                      typeof structured?.code === "string" ? structured.code : "browser_refused",
-                  }
-                : { effect: "dispatched-unknown" },
-          );
+          audit(browserAuditOutcome(result));
           return browserResultToMcp(augmentBrowserResult(name, effectiveArgs, result));
         },
         catch: (error) => error,
@@ -671,7 +714,7 @@ export function makeAgentGatewayComputerBrowserTools(
     entry(
       "computer_browser_prepare",
       "Prepare browser",
-      `Prepare a driver-owned isolated Chromium for CDP control (profile.mode "isolated_new" or "isolated_named" with allow_launch true), or detect an existing debug endpoint on pid (+ window_id). The driver-owned launch is headless by default — no window and no Dock entry — and windowed:true is the explicit opt-in to a visible browser window. For multi-step work prefer "isolated_named": the named profile survives the browser process restarting, while an "isolated_new" profile starts empty every launch. Returns the endpoint's prepared_pid for binding via computer_browser_state. Attaching to an existing user profile (strategy existing_profile) requires a consent grant this embedding does not host and is refused by the driver with browser_consent_required.`,
+      `Prepare a driver-owned isolated Chromium for CDP control (profile.mode "isolated_new" or "isolated_named" with allow_launch true), or detect an existing debug endpoint on pid (+ window_id). The driver-owned launch is headless by default — no window and no Dock entry. windowed:true creates a visible browser window and is refused with foreground_not_requested unless the user's own task asked to watch. For multi-step work prefer "isolated_named": the named profile survives the browser process restarting, while an "isolated_new" profile starts empty every launch. Returns the endpoint's prepared_pid for binding via computer_browser_state. Attaching to an existing user profile (strategy existing_profile) requires a consent grant this embedding does not host and is refused by the driver with browser_consent_required.`,
       {
         type: "object",
         properties: {
@@ -687,7 +730,7 @@ export function makeAgentGatewayComputerBrowserTools(
           windowed: {
             type: "boolean",
             description:
-              "Opt in to a visible windowed isolated launch. Default false: the driver-owned isolated browser runs headless with no window and no Dock entry. Set true only when a visible browser window is explicitly needed.",
+              "Default false: the driver-owned browser runs headless. true creates a visible window and requires the user's own task to ask to watch; full access alone does not authorize it.",
           },
           profile: {
             type: "object",
