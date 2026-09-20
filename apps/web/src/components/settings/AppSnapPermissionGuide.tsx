@@ -1,7 +1,6 @@
 // FILE: AppSnapPermissionGuide.tsx
 // Purpose: Guided macOS permission setup shared by AppSnap and Computer control — deep-links
-//          the exact System Settings pane, walks through adding this build, and offers a restart
-//          for the rare case where a grant does not apply live.
+//          the exact System Settings pane and explains granting access to this installed build.
 // Layer: Settings UI component
 
 import type { DesktopAppSnapSettingsPane } from "@synara/contracts";
@@ -23,10 +22,6 @@ export function AppSnapPermissionGuide(props: {
   onRestart: () => void;
 }) {
   const app = props.appDisplayName;
-  const step2 =
-    props.pane === "screen-recording"
-      ? `No dialog will appear. If ${app} is missing, click +, choose Applications, add it, then turn on.`
-      : `Find ${app} in the list and turn on its toggle. Entries cannot be dragged — use the toggle.`;
   const steps = [
     <Button
       key="open-settings"
@@ -37,8 +32,8 @@ export function AppSnapPermissionGuide(props: {
     >
       {`Open ${GUIDE_PANE_LABELS[props.pane]} settings`}
     </Button>,
-    step2,
-    `If ${app} is missing, click +, choose Applications, and add it.`,
+    `If this copy of ${app} is already listed, turn it on. Otherwise, drag the app from the floating guide into the list, or use + to choose this installed copy, then turn it on.`,
+    "Complete any macOS authentication. If macOS asks you to quit and reopen, do so before checking again.",
   ];
 
   return (
@@ -72,7 +67,8 @@ export function AppSnapPermissionGuide(props: {
         )}
       </div>
       <p className="text-ui-sm text-muted-foreground">
-        Still showing Denied after enabling it? Restarting the app clears stale macOS grant state.
+        Still denied after an update or rebuild? Remove this app from the list and add this copy
+        again. Complete any macOS authentication, and restart if macOS asks you to quit and reopen.
       </p>
       <Button type="button" size="xs" variant="outline" onClick={props.onRestart}>
         {`Restart ${app}`}

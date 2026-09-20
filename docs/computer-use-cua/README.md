@@ -143,13 +143,21 @@ guide. Computer requests three macOS grants:
 | Screen Recording | Capture screenshots and preview frames.                        |
 
 Choose **Set up** in Computer settings. The guide checks the running app and
-opens only its next missing pane, in Accessibility → Screen Recording → Input
-Monitoring order. Use the app chip where the pane accepts drag and drop, or
+opens only its next missing pane, in Accessibility → Input Monitoring → Screen
+Recording order. Use the app chip where the pane accepts drag and drop, or
 enable the exact existing app entry. Fresh helper checks advance the guide
 while System Settings is in front; merely dropping the app or seeing its name
 in the list never counts as granted. The renderer also refreshes when returning
 from Settings. Guide monitoring stops on completion, dismissal or its bounded
 timeout; setup does not make model calls or send screenshots.
+
+Before an explicit setup attempt, the shared service verifies that macOS can
+locate this exact app bundle. It tries the supported LaunchServices registration
+API once when necessary; a successful registration call alone is not enough.
+If macOS still cannot locate the app, setup stops with instructions to move it
+to Applications and reopen. If macOS resolves another copy, quit the other
+copies and reopen the installed copy before trying again. Passive status
+checks do not register apps, change grants or start a setup guide.
 
 AppSnap remains independent. Its shortcut/picker uses Input Monitoring and
 Screen Recording; granting these for Computer does not enable the AppSnap
@@ -163,9 +171,11 @@ disarmed.
 
 If Settings shows a switch on but the fresh check reports denied, verify the
 exact running app and signing identity. Local ad-hoc rebuilds can leave a stale
-grant. Remove and re-add only that app if the guide advises it, and complete
-macOS authentication or Quit & Reopen when requested. Synara does not reset
-grants automatically or treat a rebuild as permission. Signed-build grant
+grant. Remove and re-add that exact updated copy, then complete macOS
+authentication or Quit & Reopen when requested. Restarting alone does not
+repair a stale signing requirement. Synara cannot diagnose that mismatch from
+the granted/denied result; it does not reset grants automatically or treat a
+rebuild as permission. Signed-build grant
 persistence still needs real validation.
 
 | Event                                   | Implemented recovery boundary                                                                                                                                                                                                                                                                                                      |

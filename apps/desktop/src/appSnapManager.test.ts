@@ -51,6 +51,7 @@ describe("desktop AppSnap platform state", () => {
       helperPath: process.execPath,
       captureDirectory: "/tmp/synara-appsnap-test",
       excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      appBundlePath: "/Applications/Synara Test.app",
       spawn,
       onState: vi.fn(),
       onCaptured: vi.fn(),
@@ -88,7 +89,7 @@ describe("desktop AppSnap platform state", () => {
     expect(spawn).toHaveBeenNthCalledWith(
       2,
       process.execPath,
-      ["--request-permissions"],
+      ["--request-permissions", "--app-path", "/Applications/Synara Test.app"],
       expect.any(Object),
     );
     requestChild.stdout.end(
@@ -370,6 +371,7 @@ describe("AppSnap helper protocol", () => {
       helperPath: process.execPath,
       captureDirectory: "/tmp/synara-appsnap-test",
       excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      appBundlePath: "/Applications/Synara Test.app",
       spawn,
       onState: vi.fn(),
       onCaptured: vi.fn(),
@@ -404,7 +406,7 @@ describe("AppSnap helper protocol", () => {
     expect(spawn).toHaveBeenNthCalledWith(
       2,
       process.execPath,
-      ["--request-permissions"],
+      ["--request-permissions", "--app-path", "/Applications/Synara Test.app"],
       expect.any(Object),
     );
 
@@ -1527,6 +1529,9 @@ describe("AppSnap permission guide", () => {
       guideChild.stdout.write(`${JSON.stringify({ type: "permission-guide", state: "shown" })}\n`);
       await flushPromises();
       guideChild.emit("exit", 1, null);
+      guideChild.stdout.end();
+      guideChild.stderr.end();
+      guideChild.emit("close", 1, null);
       await flushPromises();
       expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");
     } finally {
@@ -1785,6 +1790,144 @@ describe("AppSnap permission guide", () => {
   });
 });
 
+describe("AppSnap setup registration failures", () => {
+  const setupFailure = {
+    type: "error",
+    code: "permission_setup_registration_unresolved",
+    message: "Move this app to Applications and reopen it before granting access.",
+  };
+
+  it("stops before opening Settings or a coach and preserves the error through passive refresh", async () => {
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-registration-"));
+    const calls: string[][] = [];
+    let registrationFails = true;
+    const spawn = vi.fn((_file: string, args: readonly string[]) => {
+      calls.push([...args]);
+      const child = createFakeChildProcess();
+      setImmediate(() => {
+        child.stdout.end(
+          `${JSON.stringify(args[0] === "--prepare-permission-setup" && registrationFails ? setupFailure : { type: "permissions", accessibility: "granted", inputMonitoring: "granted", screenRecording: "granted" })}\n`,
+        );
+        child.stderr.end();
+        child.emit("close", 0, null);
+      });
+      return child;
+    });
+    const openSettingsPane = vi.fn();
+    const onError = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      appBundlePath: "/Applications/Synara Test.app",
+      appDisplayName: "Synara Test",
+      spawn,
+      openSettingsPane,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError,
+    });
+    try {
+      const failed = await manager.startPermissionSetup([
+        "accessibility",
+        "screenRecording",
+        "inputMonitoring",
+      ]);
+      expect(failed).toMatchObject({
+        status: "error",
+        message: setupFailure.message,
+        permissionSetupErrorCode: setupFailure.code,
+      });
+      expect(calls[0]).toEqual([
+        "--prepare-permission-setup",
+        "--permission",
+        "accessibility",
+        "--permission",
+        "screenRecording",
+        "--permission",
+        "inputMonitoring",
+        "--app-path",
+        "/Applications/Synara Test.app",
+      ]);
+      expect(openSettingsPane).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({ code: setupFailure.code, message: setupFailure.message }),
+        true,
+      );
+      const refreshed = await manager.refreshState([
+        "accessibility",
+        "screenRecording",
+        "inputMonitoring",
+      ]);
+      expect(refreshed).toMatchObject({
+        status: "error",
+        message: setupFailure.message,
+        permissionSetupErrorCode: setupFailure.code,
+      });
+      expect(calls.map((args) => args[0])).toEqual([
+        "--prepare-permission-setup",
+        "--check-permissions",
+      ]);
+      registrationFails = false;
+      expect(
+        (
+          await manager.startPermissionSetup([
+            "accessibility",
+            "screenRecording",
+            "inputMonitoring",
+          ])
+        ).message,
+      ).toBeNull();
+      expect(manager.getState().permissionSetupErrorCode).toBeUndefined();
+      expect(openSettingsPane).not.toHaveBeenCalled();
+    } finally {
+      manager.dispose();
+      rmSync(captureDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("drains an exiting coach registration failure and cancels its poll", async () => {
+    vi.useFakeTimers();
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-coach-registration-"));
+    const child = createFakeChildProcess();
+    const spawn = vi.fn(() => child);
+    const onPermissionGuideState = vi.fn();
+    const onError = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "darwin",
+      helperPath: process.execPath,
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      appBundlePath: "/Applications/Synara Test.app",
+      appDisplayName: "Synara Test",
+      spawn,
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError,
+      onPermissionGuideState,
+    });
+    try {
+      manager.showPermissionGuide("screen-recording");
+      child.emit("exit", 1, null);
+      child.stdout.end(`${JSON.stringify(setupFailure)}\n`);
+      child.stderr.end();
+      child.emit("close", 1, null);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(manager.getState()).toMatchObject({ status: "error", message: setupFailure.message });
+      expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");
+      expect(child.stdin.read()?.toString()).toBe("close\n");
+      await vi.advanceTimersByTimeAsync(2_500);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledOnce();
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+      rmSync(captureDirectory, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("AppSnap permission setup sessions", () => {
   function createSessionManager(state: {
     accessibility: string;
@@ -1922,6 +2065,9 @@ describe("AppSnap permission setup sessions", () => {
       // session must stop rather than open the next pane over their dismissal.
       // A dismissed session never closes the user's Settings either.
       guideChildren[0]!.emit("exit", 0, null);
+      guideChildren[0]!.stdout.end();
+      guideChildren[0]!.stderr.end();
+      guideChildren[0]!.emit("close", 0, null);
       await flushPromises();
       await new Promise<void>((resolve) => setTimeout(resolve, 900));
       expect(onPermissionGuideState).toHaveBeenLastCalledWith("closed");

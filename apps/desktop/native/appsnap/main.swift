@@ -9,8 +9,12 @@ do {
     switch options.mode {
     case let .checkPermissions(selectedPermissions):
         emitter.emitPermissions(preflightAppSnapPermissions(selectedPermissions))
-    case let .requestPermissions(selectedPermissions):
+    case let .requestPermissions(selectedPermissions, appPath):
+        try MainActor.assumeIsolated { try ensurePermissionSetupAppRegistration(appPath: appPath) }
         emitter.emitPermissions(requestAppSnapPermissions(selectedPermissions))
+    case let .preparePermissionSetup(selectedPermissions, appPath):
+        try MainActor.assumeIsolated { try ensurePermissionSetupAppRegistration(appPath: appPath) }
+        emitter.emitPermissions(preflightAppSnapPermissions(selectedPermissions))
     case .releaseHeldInput:
         emitter.emit(releaseHeldInputEvents())
     case let .watch(outputDirectory, excludedBundleIdentifier, externalTrigger):
@@ -114,6 +118,7 @@ do {
             RunLoop.main.run()
         }
     case let .permissionGuide(pane, appPath, appName):
+        try MainActor.assumeIsolated { try ensurePermissionSetupAppRegistration(appPath: appPath) }
         _ = NSApplication.shared.setActivationPolicy(.accessory)
 
         let (coach, parentProcessMonitor): (GrantCoach, ParentProcessMonitor) = MainActor.assumeIsolated {

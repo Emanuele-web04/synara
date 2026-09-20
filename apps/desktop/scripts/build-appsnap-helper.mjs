@@ -36,6 +36,8 @@ const frameworkArguments = [
   "-framework",
   "AppKit",
   "-framework",
+  "CoreServices",
+  "-framework",
   "CoreGraphics",
   "-framework",
   "CoreImage",

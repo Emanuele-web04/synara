@@ -511,6 +511,11 @@ export interface DesktopAppSnapState {
   inputMonitoringPermission: DesktopAppSnapPermission;
   screenRecordingPermission: DesktopAppSnapPermission;
   message: string | null;
+  /** Explicit setup failure; unrelated AppSnap capture errors do not set this. */
+  permissionSetupErrorCode?:
+    | "permission_setup_bundle_unavailable"
+    | "permission_setup_registration_unresolved"
+    | "permission_setup_identity_mismatch";
   /** Name macOS shows for this build in System Settings permission lists. */
   appDisplayName: string;
 }

@@ -85,7 +85,14 @@ it("reads history only when opened, pages on request, and refreshes from the lat
 
 afterEach(() => vi.unstubAllGlobals());
 
-it.each([
+it.each<{
+  platform: DesktopAppSnapState["platform"];
+  supported: boolean;
+  endpoint: string;
+  showSetup: boolean;
+  setupError?: string;
+  unrelatedAppSnapError?: string;
+}>([
   { platform: "macos" as const, supported: true, endpoint: "ws://127.0.0.1:4111", showSetup: true },
   {
     platform: "linux" as const,
@@ -99,19 +106,37 @@ it.each([
     endpoint: "wss://remote.synara.test",
     showSetup: false,
   },
+  {
+    platform: "macos",
+    supported: true,
+    endpoint: "ws://127.0.0.1:4111",
+    showSetup: true,
+    setupError:
+      "macOS cannot locate this running app. Move this app to Applications and reopen it before granting access.",
+  },
+  {
+    platform: "macos",
+    supported: true,
+    endpoint: "ws://127.0.0.1:4111",
+    showSetup: true,
+    unrelatedAppSnapError: "The selected AppSnap window closed before capture.",
+  },
 ])(
   "uses local supported grant evidence in Computer settings: $platform/$endpoint",
-  async ({ platform, supported, endpoint, showSetup }) => {
+  async ({ platform, supported, endpoint, showSetup, setupError, unrelatedAppSnapError }) => {
     const appSnapState: DesktopAppSnapState = {
       platform,
       supported,
       enabled: false,
-      status: "disabled",
+      status: setupError || unrelatedAppSnapError ? "error" : "disabled",
       shortcut: null,
       accessibilityPermission: "denied",
       inputMonitoringPermission: "denied",
       screenRecordingPermission: "denied",
-      message: null,
+      message: setupError ?? unrelatedAppSnapError ?? null,
+      ...(setupError
+        ? { permissionSetupErrorCode: "permission_setup_registration_unresolved" as const }
+        : {}),
       appDisplayName: "Synara",
     };
     const appSnap = {
@@ -166,13 +191,25 @@ it.each([
       await expect
         .element(screen.getByRole("button", { name: "Set up", exact: true }))
         .toBeVisible();
-      await expect
-        .element(
-          screen.getByText(
-            "Computer control needs Accessibility, Screen Recording and Input Monitoring",
-          ),
-        )
-        .toBeVisible();
+      if (setupError) {
+        await expect
+          .element(screen.getByText("Computer permission setup needs attention"))
+          .toBeVisible();
+        await expect.element(screen.getByText(setupError)).toBeVisible();
+      } else {
+        await expect
+          .element(screen.getByText("Computer permission setup needs attention"))
+          .not.toBeInTheDocument();
+        if (unrelatedAppSnapError)
+          await expect.element(screen.getByText(unrelatedAppSnapError)).not.toBeInTheDocument();
+        await expect
+          .element(
+            screen.getByText(
+              "Computer control needs Accessibility, Screen Recording and Input Monitoring",
+            ),
+          )
+          .toBeVisible();
+      }
       await screen.getByRole("button", { name: "Show", exact: true }).click();
       await expect.element(screen.getByText("Input Monitoring", { exact: true })).toBeVisible();
     } else {

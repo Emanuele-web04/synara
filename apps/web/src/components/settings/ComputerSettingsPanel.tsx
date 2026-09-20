@@ -186,6 +186,10 @@ export function ComputerSettingsPanel({
   const localPermissionBridge = readLocalComputerPermissionBridge();
   const hasNativePermissionSetup =
     localPermissionBridge !== null && computerPermissionSetupSupported(appSnapState);
+  const nativePermissionSetupError =
+    hasNativePermissionSetup && appSnapState?.permissionSetupErrorCode
+      ? appSnapState.message
+      : null;
   // Returning from System Settings must re-pull both the server status and the
   // native grant snapshot — the toggle the user just flipped lives in the
   // second one.
@@ -313,7 +317,10 @@ export function ComputerSettingsPanel({
   const captureBlocked = captureUnavailable && health?.status === "connected";
   // Shared with the chat's setup card, which asks the same question of the same
   // status after pressing the same server-side Set up.
-  const needsSetup = nativeMissingPermissions.length > 0 || computerStatusNeedsSetup(status);
+  const needsSetup =
+    nativePermissionSetupError !== null ||
+    nativeMissingPermissions.length > 0 ||
+    computerStatusNeedsSetup(status);
   // The one counter worth carrying beside the status sentence; a last failure
   // is already the reconnect sentence, so it is not repeated here.
   const healthNotes = [computerReconnectsNote(health)].filter(
@@ -328,23 +335,30 @@ export function ComputerSettingsPanel({
    * fixes or rechecks it.
    */
   const showAttentionRow =
+    nativePermissionSetupError !== null ||
     availabilityView.kind === "blocked" ||
     (availabilityView.kind === "checking" && (needsSetup || health?.status === "reconnecting"));
-  const attentionTitle = captureBlocked
-    ? "Screen capture is not allowed yet"
-    : availabilityView.title;
-  const attentionDescription = captureBlocked
-    ? backend === COMPUTER_MAC_BACKEND
-      ? "The agent can act on the desktop but cannot see it, so screenshots fail. Turn Synara on in System Settings › Privacy & Security › Screen Recording, then press Set up to reconnect."
-      : "The agent can act on the desktop but cannot see it, so screenshots fail. Press Set up to reconnect."
-    : availabilityView.description;
+  const attentionTitle = nativePermissionSetupError
+    ? "Computer permission setup needs attention"
+    : captureBlocked
+      ? "Screen capture is not allowed yet"
+      : availabilityView.title;
+  const attentionDescription =
+    nativePermissionSetupError ??
+    (captureBlocked
+      ? backend === COMPUTER_MAC_BACKEND
+        ? "The agent can act on the desktop but cannot see it, so screenshots fail. Turn Synara on in System Settings › Privacy & Security › Screen Recording, then press Set up to reconnect."
+        : "The agent can act on the desktop but cannot see it, so screenshots fail. Press Set up to reconnect."
+      : availabilityView.description);
   const attentionTone = cn(
     "size-2 shrink-0 rounded-full",
-    availabilityView.kind === "checking"
-      ? "animate-pulse bg-amber-500"
-      : captureBlocked
-        ? "bg-amber-500"
-        : "bg-red-500",
+    nativePermissionSetupError
+      ? "bg-red-500"
+      : availabilityView.kind === "checking"
+        ? "animate-pulse bg-amber-500"
+        : captureBlocked
+          ? "bg-amber-500"
+          : "bg-red-500",
   );
   const attentionAction =
     needsSetup && !statusQuery.isError ? (

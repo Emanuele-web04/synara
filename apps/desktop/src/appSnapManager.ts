@@ -58,6 +58,10 @@ const MAX_MACOS_WINDOW_ID = 0xffff_ffff;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<Writable | null, Readable, Readable>;
+type AppSnapPermissionCommand =
+  | "--check-permissions"
+  | "--request-permissions"
+  | "--prepare-permission-setup";
 
 interface PendingAppSnapCaptureRecord {
   capture: DesktopAppSnapCapture;
@@ -549,6 +553,12 @@ export class DesktopAppSnapManager {
   // request/setup paths always bypass it. Five seconds keeps a TCC answer
   // honest for display while skipping a helper spawn on every poll.
   #permissionCheckCache: { at: number; kindsKey: string } | null = null;
+  // An explicit setup failure survives passive grant/health refreshes until
+  // another explicit attempt or app restart; it must not become endless waiting.
+  #permissionSetupFailure: {
+    code: NonNullable<DesktopAppSnapState["permissionSetupErrorCode"]>;
+    message: string;
+  } | null = null;
   #disposed = false;
   #requestedCapture: { id: string; cancel: () => void } | null = null;
   #intentionalWatchStop = false;
@@ -605,14 +615,17 @@ export class DesktopAppSnapManager {
       platform: this.#platform,
       supported: this.#platform === "macos",
       enabled: this.#enabled,
-      status: this.#status,
+      status: this.#permissionSetupFailure ? "error" : this.#status,
       shortcut: this.#platform === "macos" ? this.#shortcut : null,
       inputMonitoringPermission: this.#inputMonitoringPermission,
       screenRecordingPermission: this.#screenRecordingPermission,
       ...(this.#accessibilityPermission !== undefined
         ? { accessibilityPermission: this.#accessibilityPermission }
         : {}),
-      message: this.#message,
+      message: this.#permissionSetupFailure?.message ?? this.#message,
+      ...(this.#permissionSetupFailure
+        ? { permissionSetupErrorCode: this.#permissionSetupFailure.code }
+        : {}),
       appDisplayName: this.#options.appDisplayName,
     };
   }
@@ -731,6 +744,8 @@ export class DesktopAppSnapManager {
     permissions?: readonly DesktopAppSnapPermissionKind[],
   ): Promise<DesktopAppSnapState> {
     if (this.#platform !== "macos" || this.#disposed) return this.getState();
+    this.#permissionSetupFailure = null;
+    this.#permissionCheckCache = null;
     if (!(await this.#runPermissionCommand("--request-permissions", permissions))) {
       return this.getState();
     }
@@ -748,17 +763,21 @@ export class DesktopAppSnapManager {
    *
    * No macOS permission prompt is raised here on purpose: the prompt adds the
    * app with its switch off and cannot be re-raised once denied, while the
-   * guide's own page (toggle, or drag-and-drop where the list accepts it)
-   * always works. Prompt args from tools never reach a request path either.
+   * guide uses the pane's toggle or supported drag-and-drop. Registration must
+   * first resolve this exact running app. Prompt args from tools never reach a
+   * request path either.
    */
   async startPermissionSetup(
     permissions: readonly DesktopAppSnapPermissionKind[],
   ): Promise<DesktopAppSnapState> {
     if (this.#platform !== "macos" || this.#disposed) return this.getState();
     if (permissions.length === 0) return this.getState();
-    // Check only — no OS prompt is ever raised. Each guide step opens its own
-    // System Settings page, and the coach plus inline steps do the rest.
-    if (!(await this.#runPermissionCommand("--check-permissions", permissions))) {
+    this.hidePermissionGuide();
+    this.#permissionSetupFailure = null;
+    this.#permissionCheckCache = null;
+    // Explicit registration preflight plus a grant check, with no TCC mutation
+    // or permission prompt. Unresolvable copies never start a polling coach.
+    if (!(await this.#runPermissionCommand("--prepare-permission-setup", permissions))) {
       return this.getState();
     }
     this.#guidePaneQueue = [...new Set(permissions)]
@@ -841,6 +860,7 @@ export class DesktopAppSnapManager {
     // No OS prompt is raised: the inline steps plus the coach are the whole
     // flow, and a denied prompt cannot be re-raised.
     this.#finishGuideSession(false);
+    this.#permissionSetupFailure = null;
     this.#spawnPermissionGuide(pane);
   }
 
@@ -904,6 +924,11 @@ export class DesktopAppSnapManager {
         this.#handleGuideMessage(child, message),
       );
       child.once("exit", () => {
+        this.#stopGuideGrantWatch(child);
+      });
+      // An exiting helper can still have a final structured setup error in
+      // stdout. Drain it before disposing the reader or advancing the guide.
+      child.once("close", () => {
         if (this.#guideProcess !== child) return;
         this.#guideProcess = null;
         this.#activeGuidePane = null;
@@ -1092,9 +1117,38 @@ export class DesktopAppSnapManager {
 
   #handleGuideMessage(child: AppSnapHelperProcess, message: AppSnapHelperMessage): void {
     if (this.#guideProcess !== child) return;
+    if (message.type === "error") {
+      this.#recordPermissionSetupFailure(message);
+      return;
+    }
     if (message.type !== "permission-guide") return;
     this.#lastGuideState = message.state;
     this.#options.onPermissionGuideState(message.state);
+  }
+
+  #recordPermissionSetupFailure(message: Extract<AppSnapHelperMessage, { type: "error" }>): void {
+    const code = message.code;
+    if (
+      code !== "permission_setup_bundle_unavailable" &&
+      code !== "permission_setup_registration_unresolved" &&
+      code !== "permission_setup_identity_mismatch"
+    )
+      return;
+    this.#permissionSetupFailure = { code, message: message.message };
+    this.#permissionCheckCache = null;
+    this.#finishGuideSession(false);
+    this.#stopGuideProcess();
+    this.#lastGuideState = "closed";
+    this.#options.onPermissionGuideState("closed");
+    this.#setState("error", message.message);
+    this.#options.onError(
+      {
+        code: message.code,
+        message: message.message,
+        capturedAt: this.#options.now().toISOString(),
+      },
+      true,
+    );
   }
 
   #requireWatchProcess(): AppSnapHelperProcess {
@@ -1726,7 +1780,7 @@ export class DesktopAppSnapManager {
   }
 
   async #runPermissionCommand(
-    command: "--check-permissions" | "--request-permissions",
+    command: AppSnapPermissionCommand,
     permissions?: readonly DesktopAppSnapPermissionKind[],
   ): Promise<boolean> {
     const run = this.#permissionCommandQueue.then(() =>
@@ -1756,7 +1810,7 @@ export class DesktopAppSnapManager {
   }
 
   async #executePermissionCommand(
-    command: "--check-permissions" | "--request-permissions",
+    command: AppSnapPermissionCommand,
     permissions?: readonly DesktopAppSnapPermissionKind[],
   ): Promise<boolean> {
     if (this.#disposed || this.#platform !== "macos") return false;
@@ -1774,9 +1828,19 @@ export class DesktopAppSnapManager {
     return await new Promise<boolean>((resolve) => {
       let child: AppSnapHelperProcess;
       try {
-        child = this.#options.spawn(this.#options.helperPath, [command, ...permissionArguments], {
-          stdio: ["ignore", "pipe", "pipe"],
-        });
+        child = this.#options.spawn(
+          this.#options.helperPath,
+          [
+            command,
+            ...permissionArguments,
+            ...(command === "--check-permissions"
+              ? []
+              : ["--app-path", this.#options.appBundlePath]),
+          ],
+          {
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
       } catch (error) {
         this.#setState(
           "error",
@@ -1800,6 +1864,7 @@ export class DesktopAppSnapManager {
           this.#applyPermissionReport(message);
         } else if (message.type === "error") {
           reportedError = message.message;
+          this.#recordPermissionSetupFailure(message);
         }
       });
       child.once("error", (error) => {
@@ -1822,7 +1887,7 @@ export class DesktopAppSnapManager {
             reportedError ?? "The AppSnap helper did not report its permission state.",
           );
         }
-        resolve(receivedPermissions);
+        resolve(receivedPermissions && reportedError === null && !spawnFailed);
       });
     });
   }

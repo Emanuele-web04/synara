@@ -8,7 +8,8 @@ struct AppSnapFailure: Error {
 
 enum AppSnapMode {
     case checkPermissions(Set<AppSnapPermission>)
-    case requestPermissions(Set<AppSnapPermission>)
+    case requestPermissions(Set<AppSnapPermission>, appPath: String)
+    case preparePermissionSetup(Set<AppSnapPermission>, appPath: String)
     case releaseHeldInput
     case permissionGuide(pane: String, appPath: String, appName: String)
     case watch(
@@ -73,7 +74,7 @@ struct AppSnapOptions {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
-            case "--check-permissions", "--request-permissions", "--release-held-input", "--watch", "--permission-guide", "--computer-frames", "--escape-monitor", "--shield":
+            case "--check-permissions", "--request-permissions", "--prepare-permission-setup", "--release-held-input", "--watch", "--permission-guide", "--computer-frames", "--escape-monitor", "--shield":
                 guard requestedMode == nil else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
@@ -117,8 +118,9 @@ struct AppSnapOptions {
             index += 1
         }
 
+        let usesSetupAppPath = requestedMode == "--request-permissions" || requestedMode == "--prepare-permission-setup"
         if requestedMode != "--permission-guide",
-           guidePane != nil || guideAppPath != nil || guideAppName != nil {
+           guidePane != nil || guideAppName != nil || (guideAppPath != nil && !usesSetupAppPath) {
             throw AppSnapFailure(code: "invalid_arguments", message: "Guide metadata is only used by the permission guide.")
         }
         if requestedMode != "--computer-frames",
@@ -145,8 +147,21 @@ struct AppSnapOptions {
             ))
         case "--request-permissions":
             try rejectWatchArguments("Permission requests do not accept watch arguments.")
+            guard let appPath = guideAppPath, appPath.hasPrefix("/"), appPath.hasSuffix(".app") else {
+                throw AppSnapFailure(code: "permission_setup_bundle_unavailable", message: "Move this app to Applications and reopen it before granting access.")
+            }
             return AppSnapOptions(mode: .requestPermissions(
-                permissions.isEmpty ? [.inputMonitoring, .screenRecording] : permissions
+                permissions.isEmpty ? [.inputMonitoring, .screenRecording] : permissions,
+                appPath: appPath
+            ))
+        case "--prepare-permission-setup":
+            try rejectWatchArguments("Permission setup does not accept watch arguments.")
+            guard let appPath = guideAppPath, appPath.hasPrefix("/"), appPath.hasSuffix(".app") else {
+                throw AppSnapFailure(code: "permission_setup_bundle_unavailable", message: "Move this app to Applications and reopen it before granting access.")
+            }
+            return AppSnapOptions(mode: .preparePermissionSetup(
+                permissions.isEmpty ? [.inputMonitoring, .screenRecording] : permissions,
+                appPath: appPath
             ))
         case "--release-held-input":
             try rejectWatchArguments("Held-input release does not accept watch arguments.")
@@ -244,7 +259,7 @@ struct AppSnapOptions {
         default:
             throw AppSnapFailure(
                 code: "invalid_arguments",
-                message: "Expected --check-permissions, --request-permissions, --release-held-input, --watch, --permission-guide, --computer-frames, --escape-monitor, or --shield."
+                message: "Expected --check-permissions, --request-permissions, --prepare-permission-setup, --release-held-input, --watch, --permission-guide, --computer-frames, --escape-monitor, or --shield."
             )
         }
     }

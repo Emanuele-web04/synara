@@ -42,11 +42,17 @@ describe("AppSnap permission copy", () => {
     }
   });
 
-  it("uses per-pane step 2 copy", () => {
-    const ax = renderGuide("accessibility");
-    expect(ax).toContain("Entries cannot be dragged — use the toggle.");
-
-    const sr = renderGuide("screen-recording");
-    expect(sr).toContain("No dialog will appear.");
+  it("reuses drag or add instructions and makes authentication and stale-build recovery conditional", () => {
+    for (const pane of ["accessibility", "input-monitoring", "screen-recording"] as const) {
+      const markup = renderGuide(pane);
+      expect(markup).toContain("drag the app from the floating guide");
+      expect(markup).toContain("use + to choose this installed copy");
+      expect(markup).toContain("If this copy of Synara is already listed, turn it on.");
+      expect(markup).toContain("If macOS asks you to quit and reopen");
+      expect(markup).toContain("Remove this app from the list and add this copy again.");
+      expect(markup).not.toContain("Entries cannot be dragged");
+      expect(markup).not.toContain("No dialog will appear");
+      expect(markup).not.toContain("Restarting the app clears");
+    }
   });
 });
