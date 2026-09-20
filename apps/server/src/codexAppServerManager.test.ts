@@ -30,6 +30,7 @@ import {
   SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS,
 } from "./codexProcessEnv";
 import {
+  buildCodexCollaborationMode,
   buildCodexInitializeParams,
   buildCodexThreadOpenRequest,
   resolveCodexThreadOpenMinimumVersion,
@@ -55,7 +56,10 @@ import {
   CodexJsonlWriter,
 } from "./codexAppServerTransport";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
-import { SYNARA_HARNESS_POLICY_MARKER } from "./agentGateway/harnessPolicy.ts";
+import {
+  SYNARA_GATEWAY_HARNESS_POLICY,
+  SYNARA_HARNESS_POLICY_MARKER,
+} from "./agentGateway/harnessPolicy.ts";
 import {
   AGENT_GATEWAY_NO_CAPABILITIES,
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
@@ -218,6 +222,34 @@ const autoTurnOverrides = {
 } as const;
 
 describe("Codex Synara harness policy", () => {
+  it("keeps Computer desktop guidance out of base and disabled default/plan instructions", () => {
+    const disabledInstructions = [SYNARA_GATEWAY_HARNESS_POLICY];
+    for (const interactionMode of ["default", "plan"] as const) {
+      const baseline =
+        interactionMode === "default"
+          ? CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS
+          : CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS;
+      const disabled = buildCodexCollaborationMode({
+        interactionMode,
+        enableComputerControl: false,
+      })?.settings.developer_instructions;
+      expect(disabled).toBe(baseline);
+      disabledInstructions.push(baseline, disabled!);
+      const enabled = buildCodexCollaborationMode({
+        interactionMode,
+        enableComputerControl: true,
+      })?.settings.developer_instructions;
+      expect(enabled).toContain("## Synara computer use");
+      expect(enabled).toContain("The computer_* tools are live on this session");
+    }
+    for (const instructions of disabledInstructions) {
+      expect(instructions).not.toContain("Use `Computer Use`");
+      expect(instructions).not.toContain("desktop apps, OS settings");
+      expect(instructions).not.toContain("## Synara computer use");
+      expect(instructions).not.toContain("computer_");
+    }
+  });
+
   it("keeps the same host policy exactly once in default and plan instructions", () => {
     for (const instructions of [
       CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,

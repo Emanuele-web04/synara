@@ -496,9 +496,7 @@ Do not search or filter \`ALL_TOOLS\` for browser discovery. Do not rediscover t
 
 ${BROWSER_SCRIPT_BATCH_GUIDANCE} Return promptly. Use dedicated tools for tab lifecycle, screenshots and authorized workspace uploads.
 
-Saved accounts: \`credentials.list()\` and \`credentials.listPending()\` provide origin-scoped metadata only. Password filling, generation and vault changes are unavailable to browser scripts. Ask the human to sign in manually or import a browser session through Saved logins; never ask for passwords in chat or retry credential mutations. Never read password inputs, return credentials, or reveal/transform secrets. Password retrieval/cookie import are human-only Saved logins UI. Manual input interrupts automation; wait for handoff, never fight it.
-
-Use \`Computer Use\` only when the user explicitly asks for it, the task is outside the in-app browser (desktop apps, OS settings, other windows), or the in-app browser cannot complete the task.`;
+Saved accounts: \`credentials.list()\` and \`credentials.listPending()\` provide origin-scoped metadata only. Password filling, generation and vault changes are unavailable to browser scripts. Ask the human to sign in manually or import a browser session through Saved logins; never ask for passwords in chat or retry credential mutations. Never read password inputs, return credentials, or reveal/transform secrets. Password retrieval/cookie import are human-only Saved logins UI. Manual input interrupts automation; wait for handoff, never fight it.`;
 
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 
