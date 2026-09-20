@@ -202,6 +202,12 @@ export interface BrowserAutomationVisibleRuntime {
    * signal can never mask a later human action.
    */
   readonly expectAgentInput?: (signal: BrowserAutomationExpectedInput) => () => void;
+  /**
+   * True only while this runtime owns the visible browser surface. Native
+   * automation may then leave focus where a real click or key press put it;
+   * background runtimes must restore the user's previous Synara focus.
+   */
+  readonly retainFocusAfterInput?: () => boolean;
 }
 
 export interface BrowserAutomationPrepareTabInput {
@@ -1438,6 +1444,7 @@ export class DesktopBrowserManager {
         tabId: tab.id,
         webContents: runtime.webContents,
         expectAgentInput: (signal) => this.expectAutomationInput(input.threadId, tab.id, signal),
+        retainFocusAfterInput: () => this.isRuntimeVisible(input.threadId, tab.id),
       };
     }
     // A renderer guest can remain alive briefly while its panel is hidden or a
@@ -1458,6 +1465,7 @@ export class DesktopBrowserManager {
       tabId: tab.id,
       webContents: runtime.webContents,
       expectAgentInput: (signal) => this.expectAutomationInput(input.threadId, tab.id, signal),
+      retainFocusAfterInput: () => this.isRuntimeVisible(input.threadId, tab.id),
     };
   }
 
@@ -1476,6 +1484,7 @@ export class DesktopBrowserManager {
       tabId: tab.id,
       webContents: runtime.webContents,
       expectAgentInput: (signal) => this.expectAutomationInput(input.threadId, tab.id, signal),
+      retainFocusAfterInput: () => false,
     };
   }
 
@@ -1525,7 +1534,23 @@ export class DesktopBrowserManager {
       tabId: tab.id,
       webContents: runtime.webContents,
       expectAgentInput: (signal) => this.expectAutomationInput(input.threadId, tab.id, signal),
+      retainFocusAfterInput: () => this.isRuntimeVisible(input.threadId, tab.id),
     };
+  }
+
+  private isRuntimeVisible(threadId: ThreadId, tabId: string): boolean {
+    const key = buildRuntimeKey(threadId, tabId);
+    const state = this.states.get(threadId);
+    const runtime = this.runtimes.get(key);
+    return Boolean(
+      state?.open &&
+      state.activeTabId === tabId &&
+      this.activeThreadId === threadId &&
+      this.attachedRuntimeKey === key &&
+      this.getVisibleBoundsForThread(threadId) !== null &&
+      runtime &&
+      !runtime.webContents.isDestroyed(),
+    );
   }
 
   /** Closes a tab without selecting or constructing a native fallback. */

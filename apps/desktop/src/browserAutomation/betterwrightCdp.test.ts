@@ -12,6 +12,7 @@ function fixture(
   backendSessionId?: string,
   cookieImport = false,
   expectInput?: BrowserAutomationVisibleRuntime["expectAgentInput"],
+  retainFocusAfterInput?: BrowserAutomationVisibleRuntime["retainFocusAfterInput"],
 ) {
   focusState.current = null;
   const debuggerApi = Object.assign(new EventEmitter(), {
@@ -44,6 +45,7 @@ function fixture(
     backendSessionId,
     cookieImport,
     expectInput,
+    retainFocusAfterInput,
   );
   return { contents, target, messages, debuggerApi };
 }
@@ -232,6 +234,72 @@ describe("Betterwright target boundary", () => {
       await f.target.dispose(false);
     },
   );
+
+  it.each([
+    {
+      method: "Input.dispatchMouseEvent",
+      params: { type: "mousePressed", button: "left", x: 20, y: 30 },
+    },
+    { method: "Input.dispatchKeyEvent", params: { type: "keyDown", key: "Tab" } },
+  ])("keeps $method focus on a visible browser surface", async ({ method, params }) => {
+    const retainFocusAfterInput = vi.fn(() => true);
+    const f = fixture([], undefined, false, undefined, retainFocusAfterInput);
+    const host = {
+      isDestroyed: () => false,
+      focus: vi.fn(() => {
+        focusState.current = host as unknown as WebContents;
+      }),
+    };
+    focusState.current = host as unknown as WebContents;
+    await f.target.receive({
+      id: 1,
+      method: "Target.attachToTarget",
+      params: { targetId: f.target.targetId },
+    });
+    const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+
+    await f.target.receive({ id: 2, sessionId, method, params });
+
+    expect(retainFocusAfterInput).toHaveBeenCalledOnce();
+    expect(host.focus).not.toHaveBeenCalled();
+    expect(focusState.current).toBe(f.contents);
+    await f.target.dispose(false);
+  });
+
+  it("restores host focus after a hover or failed visible-browser input", async () => {
+    const f = fixture([], undefined, false, undefined, () => true);
+    const host = {
+      isDestroyed: () => false,
+      focus: vi.fn(() => {
+        focusState.current = host as unknown as WebContents;
+      }),
+    };
+    focusState.current = host as unknown as WebContents;
+    await f.target.receive({
+      id: 1,
+      method: "Target.attachToTarget",
+      params: { targetId: f.target.targetId },
+    });
+    const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+
+    await f.target.receive({
+      id: 2,
+      sessionId,
+      method: "Input.dispatchMouseEvent",
+      params: { type: "mouseMoved", x: 20, y: 30 },
+    });
+    expect(host.focus).toHaveBeenCalledOnce();
+    f.debuggerApi.sendCommand.mockRejectedValueOnce(new Error("click failed"));
+    await f.target.receive({
+      id: 3,
+      sessionId,
+      method: "Input.dispatchMouseEvent",
+      params: { type: "mousePressed", button: "left", x: 20, y: 30 },
+    });
+    expect(host.focus).toHaveBeenCalledTimes(2);
+    expect(focusState.current).toBe(host);
+    await f.target.dispose(false);
+  });
 
   it.each(["user moved focus", "host destroyed", "dispatch failed"])(
     "cleans up keyboard focus safely when %s",

@@ -1104,6 +1104,7 @@ export class DesktopBrowserAutomationHost {
               home: join(app.getPath("userData"), "browser-engine"),
               contents: runtime.webContents,
               expectAgentInput: runtime.expectAgentInput,
+              retainFocusAfterInput: runtime.retainFocusAfterInput,
               code: (input as BrowserRunInput).code,
               timeoutMs: (input.timeoutMs as number | undefined) ?? 15_000,
               signal,
