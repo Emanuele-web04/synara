@@ -81,7 +81,7 @@ const PANE_LABELS: Record<DesktopAppSnapSettingsPane, string> = {
 
 function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPermission }) {
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+    <span className="inline-flex items-center gap-1.5 text-ui-xs font-medium text-muted-foreground">
       <span
         aria-hidden
         className={cn(

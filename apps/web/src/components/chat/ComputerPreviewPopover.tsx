@@ -342,7 +342,7 @@ function ComputerPreviewViewport(props: {
         </div>
       ) : null}
       {statusLabel ? (
-        <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%_-_1rem)] items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-[10px] font-medium text-white shadow-sm backdrop-blur-md">
+        <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%_-_1rem)] items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-ui-xs font-medium text-white shadow-sm backdrop-blur-md">
           <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-muted-foreground" />
           <span className="truncate">{statusLabel}</span>
         </div>
@@ -399,23 +399,23 @@ function ComputerPreviewStreamStatus(props: {
 }) {
   if (props.status.kind === "connecting") {
     return (
-      <span className="text-[10px] text-muted-foreground" role="status">
+      <span className="text-ui-sm text-muted-foreground" role="status">
         Connecting to the desktop…
       </span>
     );
   }
   if (props.status.kind === "unsupported") {
     return (
-      <span className="text-[10px] text-muted-foreground">
+      <span className="text-ui-sm text-muted-foreground">
         This browser cannot decode desktop frames.
       </span>
     );
   }
   if (props.status.kind === "error") {
-    return <span className="text-[10px] text-muted-foreground">{props.status.message}</span>;
+    return <span className="text-ui-sm text-muted-foreground">{props.status.message}</span>;
   }
   return (
-    <span className="text-[10px] text-muted-foreground">
+    <span className="text-ui-sm text-muted-foreground">
       Waiting for the window the agent is using…
     </span>
   );

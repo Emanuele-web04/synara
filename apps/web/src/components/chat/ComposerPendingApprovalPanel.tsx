@@ -228,10 +228,10 @@ function ApprovalDetail({
     return (
       <div className="mt-2">
         {parsed.fallback ? (
-          <p className="text-[11.5px] leading-snug text-muted-foreground/70">{parsed.fallback}</p>
+          <p className="text-ui-sm leading-snug text-muted-foreground/70">{parsed.fallback}</p>
         ) : null}
         {toolParamsDisplay && toolParamsDisplay.length > 0 ? (
-          <dl className="mt-2 space-y-1 rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 text-[11px] leading-snug">
+          <dl className="mt-2 space-y-1 rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 text-ui-xs leading-snug">
             {toolParamsDisplay.map((parameter) => (
               <div className="grid grid-cols-[auto_1fr] gap-x-2" key={parameter.name}>
                 <dt className="font-medium text-muted-foreground/65">

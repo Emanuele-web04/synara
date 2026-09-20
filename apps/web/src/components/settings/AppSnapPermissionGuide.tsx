@@ -51,11 +51,11 @@ export function AppSnapPermissionGuide(props: {
           >
             <span
               aria-hidden
-              className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border border-[color:var(--color-border)] text-xs font-medium text-muted-foreground"
+              className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border border-[color:var(--color-border)] text-ui-xs font-medium text-muted-foreground"
             >
               {index + 1}
             </span>
-            <span className="min-h-6 text-sm leading-6 text-muted-foreground">{step}</span>
+            <span className="min-h-6 text-ui leading-6 text-muted-foreground">{step}</span>
           </li>
         ))}
       </ol>
@@ -63,15 +63,15 @@ export function AppSnapPermissionGuide(props: {
         {props.waiting ? (
           <>
             <Spinner className="size-3.5" />
-            <span className="text-xs text-muted-foreground">
+            <span className="text-ui-sm text-muted-foreground">
               Watching for the change — this page updates automatically.
             </span>
           </>
         ) : (
-          <span className="text-xs font-medium text-emerald-600">Permission granted.</span>
+          <span className="text-ui-sm font-medium text-emerald-600">Permission granted.</span>
         )}
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-ui-sm text-muted-foreground">
         Still showing Denied after enabling it? Restarting the app clears stale macOS grant state.
       </p>
       <Button type="button" size="xs" variant="outline" onClick={props.onRestart}>

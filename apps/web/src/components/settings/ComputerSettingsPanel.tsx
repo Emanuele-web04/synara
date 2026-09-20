@@ -116,9 +116,7 @@ function CursorColorField({
   const draftIsValid = draft.trim() === "" || normalizeCursorHexColor(draft) !== "";
   return (
     <label className="flex items-center gap-2">
-      <span className="w-7 shrink-0 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
-        {label}
-      </span>
+      <span className="w-7 shrink-0 text-ui text-muted-foreground">{label}</span>
       <span
         aria-hidden
         data-swatch={resolved || "stock"}
@@ -374,7 +372,7 @@ export function ComputerSettingsPanel({
           </div>
         }
       >
-        <p className="px-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
+        <p className="px-2 text-ui text-muted-foreground">
           Let the agent use the desktop in any chat.
         </p>
         <SettingsCard>

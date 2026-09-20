@@ -37,11 +37,11 @@ export function ComputerInputPauseNotice({
   return (
     <div
       role="status"
-      className="flex shrink-0 items-center gap-3 border-b border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs"
+      className="flex shrink-0 items-center gap-3 border-b border-amber-500/20 bg-amber-500/10 px-3 py-2 text-ui"
     >
       <div className="min-w-0 flex-1">
         <p className="font-medium">Input paused — return to {target}</p>
-        <p className="text-muted-foreground">
+        <p className="text-ui-sm text-muted-foreground">
           {error ??
             "Bring the window onto this desktop, or exit the full-screen app, then check again. Continue from the current page once input is available."}
         </p>
