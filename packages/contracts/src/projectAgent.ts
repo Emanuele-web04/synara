@@ -72,6 +72,10 @@ export const ProjectAgentConfig = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   disabledAt: Schema.NullOr(IsoDateTime),
+  goal: Schema.optional(Schema.String.check(Schema.isMaxLength(8_000))),
+  icon: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  autoMemoryEnabled: Schema.optional(Schema.Boolean),
+  linkedProjectIds: Schema.optional(Schema.Array(ProjectId)),
 });
 export type ProjectAgentConfig = typeof ProjectAgentConfig.Type;
 
@@ -385,6 +389,10 @@ export const ProjectAgentConfigureInput = Schema.Struct({
   importedInstructions: Schema.optional(
     Schema.String.check(Schema.isMaxLength(PROJECT_AGENT_DOCUMENT_MAX_BYTES)),
   ),
+  goal: Schema.optional(Schema.String.check(Schema.isMaxLength(8_000))),
+  icon: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  autoMemoryEnabled: Schema.optional(Schema.Boolean),
+  userDisplayName: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
 });
 export type ProjectAgentConfigureInput = typeof ProjectAgentConfigureInput.Type;
 
@@ -648,6 +656,7 @@ export const PROJECT_AGENT_RESERVED_PATHS = [
   "archived.md",
   "artifacts/index.md",
   "internal/manifest.json",
+  "memory/MEMORY.md",
 ] as const;
 
 export const PROJECT_AGENT_USER_WRITABLE_PATHS = ["instructions.md", "notes.md"] as const;

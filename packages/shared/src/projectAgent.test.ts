@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   detectProjectTaskDependencyCycle,
   INITIAL_PROJECT_DIGEST_SUMMARY,
+  isMemoryDocumentPath,
   isProjectContextPreviewPath,
+  MEMORY_AUTO_DOCUMENT_PATH,
+  MEMORY_DOCUMENT_PREFIX,
   normalizeProjectDocumentPath,
   PROJECT_CONTEXT_PREVIEW_DOCUMENTS,
   ProjectAgentPathError,
@@ -25,6 +28,15 @@ describe("normalizeProjectDocumentPath", () => {
     expect(() => normalizeProjectDocumentPath("docs/../../escape.md")).toThrow(
       ProjectAgentPathError,
     );
+  });
+});
+
+describe("isMemoryDocumentPath", () => {
+  it("recognizes memory documents after path normalization", () => {
+    expect(isMemoryDocumentPath(MEMORY_AUTO_DOCUMENT_PATH)).toBe(true);
+    expect(isMemoryDocumentPath("./memory/note.md")).toBe(true);
+    expect(isMemoryDocumentPath("instructions.md")).toBe(false);
+    expect(MEMORY_DOCUMENT_PREFIX).toBe("memory/");
   });
 });
 

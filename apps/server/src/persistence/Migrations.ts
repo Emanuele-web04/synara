@@ -121,6 +121,7 @@ import Migration0102 from "./Migrations/102_ProjectionThreadMessagesTurnBoundary
 import ClaudeTokenAccountingMigration from "./Migrations/103_ClaudeTokenAccounting.ts";
 import Migration0104 from "./Migrations/104_ProjectionThreadsClaudeCacheReview.ts";
 import Migration0105 from "./Migrations/105_ProjectAgent.ts";
+import Migration0106 from "./Migrations/106_Groups.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -242,6 +243,7 @@ export const migrationEntries = [
   [103, "ClaudeTokenAccounting", ClaudeTokenAccountingMigration],
   [104, "ProjectionThreadsClaudeCacheReview", Migration0104],
   [105, "ProjectAgent", Migration0105],
+  [106, "Groups", Migration0106],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

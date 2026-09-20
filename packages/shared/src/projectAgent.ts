@@ -55,6 +55,13 @@ export function isGeneratedDocumentPath(logicalPath: string): boolean {
   return logicalPath === "overview.md" || logicalPath === "archived.md";
 }
 
+export const MEMORY_DOCUMENT_PREFIX = "memory/";
+export const MEMORY_AUTO_DOCUMENT_PATH = "memory/MEMORY.md";
+
+export function isMemoryDocumentPath(logicalPath: string): boolean {
+  return normalizeProjectDocumentPath(logicalPath).startsWith(MEMORY_DOCUMENT_PREFIX);
+}
+
 export const PROJECT_CONTEXT_PREVIEW_DOCUMENTS = [
   { logicalPath: "instructions.md", label: "Instructions", editable: true },
   { logicalPath: "notes.md", label: "Notes", editable: true },
