@@ -77,6 +77,7 @@ export const deliverGatewayCompletions = (dependencies: CompletionDeliveryDepend
           resultJson = JSON.stringify({
             childThreadId: row.childThreadId,
             initialMessageId: row.initialMessageId,
+            completedAt: turn?.completedAt ?? failure?.completedAt ?? new Date().toISOString(),
             runId: turn?.turnId ?? null,
             status: goalUnsupported
               ? "error"
@@ -95,6 +96,7 @@ export const deliverGatewayCompletions = (dependencies: CompletionDeliveryDepend
         }
         const result = JSON.parse(resultJson) as {
           status: string;
+          completedAt?: string;
           summary: string | null;
           error: string | null;
         };
@@ -105,7 +107,9 @@ export const deliverGatewayCompletions = (dependencies: CompletionDeliveryDepend
         const parentId = ThreadId.makeUnsafe(row.creatorThreadId);
         const parent = Option.getOrUndefined(yield* snapshotQuery.getThreadShellById(parentId));
         const available = parent !== undefined && parent.archivedAt == null;
-        const createdAt = new Date().toISOString();
+        // Command receipts fingerprint the entire intent, including timestamps.
+        // Replays must use the frozen result's timestamp, never the current clock.
+        const createdAt = result.completedAt ?? row.createdAt;
         if (available) {
           // The decider checks archive state inside the command queue too.
           yield* orchestrationEngine.dispatch({

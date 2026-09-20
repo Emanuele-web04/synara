@@ -8,6 +8,7 @@ export interface GatewayCompletionRow {
   readonly creatorThreadId: string;
   readonly initialMessageId: string;
   readonly resultJson: string | null;
+  readonly createdAt: string;
 }
 
 /** Durable outbox and provider-send assignments, sharing the command ledger's transaction. */
@@ -59,7 +60,7 @@ export const makeCompletionRepository = Effect.gen(function* () {
   const pending = () =>
     sql<GatewayCompletionRow>`
     SELECT child_thread_id AS "childThreadId", creator_thread_id AS "creatorThreadId",
-      initial_message_id AS "initialMessageId", result_json AS "resultJson"
+      initial_message_id AS "initialMessageId", result_json AS "resultJson", created_at AS "createdAt"
     FROM agent_gateway_completions WHERE delivery_state = 'pending'
     ORDER BY created_at, child_thread_id`.pipe(Effect.map((rows) => rows));
   const saveResult = (childThreadId: string, resultJson: string) =>
@@ -76,7 +77,7 @@ export const makeCompletionRepository = Effect.gen(function* () {
       Effect.gen(function* () {
         const rows = yield* sql<GatewayCompletionRow>`
         SELECT child_thread_id AS "childThreadId", creator_thread_id AS "creatorThreadId",
-          initial_message_id AS "initialMessageId", result_json AS "resultJson"
+          initial_message_id AS "initialMessageId", result_json AS "resultJson", created_at AS "createdAt"
         FROM agent_gateway_completions
         WHERE creator_thread_id = ${creatorThreadId} AND result_json IS NOT NULL
           AND (delivery_state = 'delivered' OR (delivery_state = 'pending' AND EXISTS (

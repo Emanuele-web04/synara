@@ -7,6 +7,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { AgentGatewayOperationRepositoryLive } from "./Layers/AgentGatewayOperationRepository.ts";
 import { AgentGatewayOperationRepository } from "./Services/AgentGatewayOperationRepository.ts";
 import { makeCompletionRepository } from "./completionRepository.ts";
+import { fingerprintOrchestrationCommand } from "../orchestration/commandFingerprint.ts";
 import { deliverGatewayCompletions } from "./completionDelivery.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionTurnRepositoryShape } from "../persistence/Services/ProjectionTurns.ts";
@@ -50,6 +51,7 @@ layer("gateway completion outbox", (it) => {
             creatorThreadId: "parent",
             initialMessageId: "opt-in:initial",
             resultJson: null,
+            createdAt: now,
           },
         ]);
         yield* repository.delivered("opt-in", false);
@@ -235,12 +237,17 @@ layer("gateway completion outbox", (it) => {
       const repository = yield* reserve("replay");
       yield* repository.saveResult(
         "replay",
-        JSON.stringify({ status: "completed", summary: "durable original", error: null }),
+        JSON.stringify({
+          status: "completed",
+          summary: "durable original",
+          error: null,
+          completedAt: now,
+        }),
       );
       yield* repository.saveResult("replay", "must not replace first result");
       const rows = yield* repository.pending();
       expect(rows[0]?.resultJson).toContain("durable original");
-      const receipts = new Set<string>();
+      const receipts = new Map<string, string>();
       let attempts = 0;
       const dependencies = {
         repository,
@@ -252,7 +259,13 @@ layer("gateway completion outbox", (it) => {
         orchestrationEngine: {
           dispatch: (command: OrchestrationCommand) =>
             Effect.suspend(() => {
-              receipts.add(command.commandId);
+              const fingerprint = fingerprintOrchestrationCommand(command).value;
+              if (command.type !== "thread.activity.append") throw new Error("unexpected command");
+              expect(command.createdAt).toBe(now);
+              expect(command.activity.createdAt).toBe(now);
+              const previous = receipts.get(command.commandId);
+              if (previous !== undefined) expect(fingerprint).toBe(previous);
+              receipts.set(command.commandId, fingerprint);
               attempts += 1;
               return attempts === 1
                 ? Effect.fail(new Error("lost acknowledgement after commit"))
