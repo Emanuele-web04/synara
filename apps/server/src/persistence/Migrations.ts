@@ -249,7 +249,6 @@ export const migrationEntries = [
   [107, "ProjectionThreadsHumanMessage", Migration0107],
   [108, "ProjectSources", Migration0108],
 ] as const;
-] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
   Migrator.fromRecord(
