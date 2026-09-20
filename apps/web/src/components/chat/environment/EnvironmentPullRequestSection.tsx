@@ -85,7 +85,6 @@ import {
   ENVIRONMENT_ROW_CLASS_NAME,
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
   EnvironmentLabeledSection,
-  EnvironmentRow,
   EnvironmentRowBody,
   EnvironmentRowChevron,
 } from "./EnvironmentRow";
@@ -848,28 +847,6 @@ export function EnvironmentPullRequestSection({
           ) : null}
         </ComposerPickerMenuPopup>
       </Menu>
-
-      {settledState ? (
-        <EnvironmentRow
-          icon={
-            settledState === "merged" ? (
-              <CircleCheckIcon
-                className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, "text-success")}
-                aria-hidden
-              />
-            ) : (
-              <CircleAlertIcon
-                className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, "opacity-60")}
-                aria-hidden
-              />
-            )
-          }
-          label={settledState === "merged" ? "Merged on GitHub" : "Closed on GitHub"}
-          onClick={() => {
-            openPullRequest();
-          }}
-        />
-      ) : null}
 
       <PullRequestConfirmActionDialog
         action={confirmAction}
