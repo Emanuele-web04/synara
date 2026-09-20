@@ -836,6 +836,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     platform,
     target,
     signed,
+    adHocSign: artifactIdentity.identity.usesScriptedUpdates && !signed,
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
 
@@ -1283,6 +1284,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           stageDistDir,
           signed: options.signed,
           verbose: options.verbose,
+          requireUpdateManifest: !artifactIdentity.identity.usesScriptedUpdates,
+          ...(artifactIdentity.identity.usesScriptedUpdates
+            ? { expectedBundleIdentifier: artifactIdentity.identity.bundleId }
+            : {}),
         }),
       catch: (cause) =>
         new BuildScriptError({

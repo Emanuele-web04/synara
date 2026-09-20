@@ -46,6 +46,8 @@ export interface CreateDesktopPlatformBuildConfigInput {
   readonly platform: "linux" | "mac" | "win";
   readonly target: string;
   readonly signed?: boolean;
+  /** Seal isolated local bundles without selecting a release certificate. */
+  readonly adHocSign?: boolean;
   readonly windowsAzureSignOptions?: Record<string, string>;
 }
 
@@ -97,6 +99,12 @@ export function createDesktopPlatformBuildConfig(
       category: "public.app-category.developer-tools",
       hardenedRuntime: input.signed === true,
       notarize: input.signed === true,
+      // Use electron-builder's per-file signing pass, including the inherited
+      // entitlements. Leaving only Electron's linker signature does not bind
+      // the app's actual identity or seal its Info.plist and resources.
+      ...(input.adHocSign === true && input.signed !== true
+        ? { identity: "-", timestamp: "none" }
+        : {}),
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
       binaries: [MAC_APPSNAP_HELPER_BUNDLE_PATH, "Contents/Resources/cua-driver/cua-driver"],

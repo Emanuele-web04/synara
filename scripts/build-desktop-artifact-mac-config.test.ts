@@ -35,6 +35,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(mac.hardenedRuntime, true);
     assert.equal(mac.notarize, true);
+    assert.equal(mac.identity, undefined);
     assert.equal(dmg.sign, true);
     assert.equal(dmg.writeUpdateInfo, false);
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
@@ -108,6 +109,38 @@ describe("createDesktopPlatformBuildConfig", () => {
       sign: false,
       writeUpdateInfo: false,
     });
+    assert.equal(config.mac?.identity, undefined);
+  });
+
+  it("seals isolated local app bundles with the existing nested signing policy", () => {
+    const config = createDesktopPlatformBuildConfig({
+      platform: "mac",
+      target: "zip",
+      signed: false,
+      adHocSign: true,
+    });
+
+    assert.equal(config.mac?.identity, "-");
+    assert.equal(config.mac?.timestamp, "none");
+    assert.equal(config.mac?.hardenedRuntime, false);
+    assert.equal(config.mac?.notarize, false);
+    assert.equal(config.mac?.entitlements, MAC_ENTITLEMENTS_PATH);
+    assert.equal(config.mac?.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
+    assert.equal(config.dmg?.sign, false);
+  });
+
+  it("never replaces release signing with local ad-hoc signing", () => {
+    const config = createDesktopPlatformBuildConfig({
+      platform: "mac",
+      target: "zip",
+      signed: true,
+      adHocSign: true,
+    });
+
+    assert.equal(config.mac?.identity, undefined);
+    assert.equal(config.mac?.timestamp, undefined);
+    assert.equal(config.mac?.hardenedRuntime, true);
+    assert.equal(config.mac?.notarize, true);
   });
 
   it("packages the Linux driver as an external executable and leaves Windows unchanged", () => {

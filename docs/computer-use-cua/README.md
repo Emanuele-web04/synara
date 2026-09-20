@@ -29,8 +29,12 @@ origin `synara-cua://app`, default home `~/.synara-cua`, and Electron profile
 `synara-cua`. Artifacts go to `release-cua/`. The flavor is embedded in the
 staged package before signing and cannot be changed by `SYNARA_DESKTOP_FLAVOR`
 at launch. The production updater is disabled for Cua and Canary packages.
-Use the release signing options when a signed build is required; an unsigned
-local artifact is not evidence of release signing or persistent TCC grants.
+Local macOS Cua and Canary packages use electron-builder's ad-hoc signing pass
+to seal the flavor's bundle identity, Info.plist, resources and nested code with
+the existing entitlements. ZIP finalization verifies that identity before and
+after extraction. Use the release signing options when a Developer ID signed
+build is required; ad-hoc signing is not release signing or notarization and
+does not guarantee that TCC grants persist across rebuilds.
 
 `--flavor canary` follows the same identity rules. Omitting the flag builds
 production, including when the invoking shell has a source flavor set. Isolated
