@@ -64,15 +64,20 @@ describe("buildShortcutSheetSections", () => {
         (entry) => entry.id === "sidebar.activity" && entry.shortcutLabel === "⌥⌘U",
       ),
     ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "editor.file.save" && entry.label === "Save file",
+      ),
+    ).toBe(true);
     expect(sections[1]?.title).toBe("In workspace mode");
     expect(sections[2]?.entries[0]?.shortcutLabel).toBe("⌘R");
   });
 
-  it("switches to workspace shortcuts when the workspace is open", () => {
+  it("separates macOS workspace tabs from thread jumps while the workspace is open", () => {
     const sections = buildShortcutSheetSections({
       keybindings: [],
       projectScripts: [],
-      platform: "Linux",
+      platform: "MacIntel",
       context: {
         terminalFocus: false,
         terminalOpen: true,
@@ -82,13 +87,13 @@ describe("buildShortcutSheetSections", () => {
 
     expect(
       sections[0]?.entries.some(
-        (entry) => entry.id === "terminal.workspace.terminal" && entry.shortcutLabel === "Ctrl+1",
+        (entry) => entry.id === "terminal.workspace.terminal" && entry.shortcutLabel === "⌃1",
       ),
     ).toBe(true);
     expect(sections[1]?.title).toBe("Outside workspace mode");
     expect(
       sections[1]?.entries.some(
-        (entry) => entry.id === "thread.jump.1" && entry.shortcutLabel === "Ctrl+1",
+        (entry) => entry.id === "thread.jump.1" && entry.shortcutLabel === "⌘1",
       ),
     ).toBe(true);
   });
@@ -157,5 +162,18 @@ describe("listEditableShortcutDefinitions", () => {
     expect(listEditableShortcutDefinitions().map((definition) => definition.command)).toEqual(
       STATIC_KEYBINDING_COMMANDS,
     );
+  });
+
+  it("shows a friendly label instead of the raw command id for every built-in command", () => {
+    const definitions = listEditableShortcutDefinitions();
+    const unlabeledCommands = definitions
+      .filter(
+        (definition) =>
+          definition.label === definition.command ||
+          definition.description === "Assign a shortcut to this built-in command.",
+      )
+      .map((definition) => definition.command);
+
+    expect(unlabeledCommands).toEqual([]);
   });
 });

@@ -1,3 +1,4 @@
+import { DEFAULT_GIT_RECENT_COMMIT_LIMIT } from "@synara/contracts";
 import type {
   GitHandoffThreadInput,
   GitReadWorkingTreeDiffInput,
@@ -9,6 +10,8 @@ import type {
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "../nativeApi";
 import { EXPENSIVE_READ_RETRY_OPTIONS, isRpcCapacityExceededError } from "./expensiveReadRetry";
+import { preserveActivePullRequestActionGitFields } from "./pullRequestGitCache";
+import { capturePullRequestActionReadFence } from "./pullRequestMutationCoordinator";
 
 const GIT_STATUS_STALE_TIME_MS = 30_000;
 // Freshness is driven primarily by event-based invalidation (turn lifecycle +
@@ -19,6 +22,7 @@ const GIT_STATUS_REFETCH_INTERVAL_MS = 300_000;
 const GIT_BRANCHES_STALE_TIME_MS = 15_000;
 const GIT_BRANCHES_REFETCH_INTERVAL_MS = 300_000;
 const GIT_WORKING_TREE_DIFF_STALE_TIME_MS = 5_000;
+const GIT_BLAME_LINE_STALE_TIME_MS = 30_000;
 export const GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS = 4_000;
 
 export function isGitExpensiveReadCapacityError(
@@ -36,17 +40,39 @@ export const gitQueryKeys = {
   githubRepository: (cwd: string | null) => ["git", "github-repository", cwd] as const,
   status: (cwd: string | null) => ["git", "status", cwd] as const,
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
+  recentCommits: (cwd: string | null, limit: number) =>
+    ["git", "recent-commits", cwd, limit] as const,
   pullRequest: (cwd: string | null) => ["git", "pull-request", cwd] as const,
+  workingTreeDiffs: (cwd: string | null) => ["git", "working-tree-diff", cwd] as const,
   workingTreeDiff: (
     cwd: string | null,
     scope: GitReadWorkingTreeDiffInput["scope"] = "workingTree",
-  ) => ["git", "working-tree-diff", cwd, scope] as const,
+    compareRef: string | null = null,
+    filePath: string | null = null,
+  ) =>
+    filePath === null
+      ? (["git", "working-tree-diff", cwd, scope, compareRef] as const)
+      : (["git", "working-tree-diff", cwd, scope, compareRef, "file", filePath] as const),
   // Deliberately nested under the patch key so every existing
   // `["git", "working-tree-diff", ...]` invalidation refreshes the counts too.
   workingTreeDiffStats: (
     cwd: string | null,
     scope: GitReadWorkingTreeDiffInput["scope"] = "workingTree",
-  ) => ["git", "working-tree-diff", cwd, scope, "stats"] as const,
+    compareRef: string | null = null,
+  ) => ["git", "working-tree-diff", cwd, scope, compareRef, "stats"] as const,
+  blameLine: (
+    cwd: string | null,
+    filePath: string | null,
+    line: number | null,
+    rev: string | null,
+    base: "branch" | null,
+  ) => ["git", "blame-line", cwd, filePath, line, rev, base] as const,
+  fileAtRev: (
+    cwd: string | null,
+    filePath: string | null,
+    rev: string | null,
+    base: "branch" | "index" | null,
+  ) => ["git", "file-at-rev", cwd, filePath, rev, base] as const,
   diffSummary: (
     cacheScope: string | null,
     model: string | null,
@@ -162,11 +188,19 @@ async function refreshGitAvailability(queryClient: QueryClient, cwd: string): Pr
       exact: true,
       refetchType: "none",
     }),
+    queryClient.invalidateQueries({
+      queryKey: ["git", "recent-commits", cwd] as const,
+      refetchType: "none",
+    }),
   ]);
   await Promise.all([
     refetchFreshGitQueries(queryClient, gitQueryKeys.githubRepository(cwd)),
     refetchFreshGitQueries(queryClient, gitQueryKeys.status(cwd)),
     refetchFreshGitQueries(queryClient, gitQueryKeys.branches(cwd)),
+    ...queryClient
+      .getQueryCache()
+      .findAll({ queryKey: ["git", "recent-commits", cwd] as const, type: "active" })
+      .map((query) => refetchFreshGitQueries(queryClient, query.queryKey)),
   ]);
 }
 
@@ -174,10 +208,14 @@ function activeGitDetailQueries(queryClient: QueryClient, cwd: string) {
   const queryCache = queryClient.getQueryCache();
   const queries = [
     ...queryCache.findAll({
-      queryKey: ["git", "working-tree-diff", cwd] as const,
+      queryKey: gitQueryKeys.workingTreeDiffs(cwd),
       type: "active",
     }),
     ...queryCache.findAll({ queryKey: gitQueryKeys.pullRequest(cwd), type: "active" }),
+    // A mounted diff editor keeps showing a base blob, and an open blame
+    // popover its attribution, until refetched.
+    ...queryCache.findAll({ queryKey: ["git", "file-at-rev", cwd] as const, type: "active" }),
+    ...queryCache.findAll({ queryKey: ["git", "blame-line", cwd] as const, type: "active" }),
   ];
   const uniqueQueries = [...new Map(queries.map((query) => [query.queryHash, query])).values()];
   return uniqueQueries.toSorted((left, right) => {
@@ -194,17 +232,90 @@ function activeGitDetailQueries(queryClient: QueryClient, cwd: string) {
 async function refreshActiveGitDetails(queryClient: QueryClient, cwd: string): Promise<void> {
   await Promise.all([
     queryClient.invalidateQueries({
-      queryKey: ["git", "working-tree-diff", cwd] as const,
+      queryKey: gitQueryKeys.workingTreeDiffs(cwd),
       refetchType: "none",
     }),
     queryClient.invalidateQueries({
       queryKey: gitQueryKeys.pullRequest(cwd),
       refetchType: "none",
     }),
+    // Revision-dependent families: after a save, commit, or branch movement the
+    // cached attribution/blobs would otherwise survive their stale windows.
+    queryClient.invalidateQueries({
+      queryKey: ["git", "blame-line", cwd] as const,
+      refetchType: "none",
+    }),
+    queryClient.invalidateQueries({
+      queryKey: ["git", "file-at-rev", cwd] as const,
+      refetchType: "none",
+    }),
   ]);
   for (const query of activeGitDetailQueries(queryClient, cwd)) {
     await enqueueGitRefresh(queryClient, () => refetchFreshGitQueries(queryClient, query.queryKey));
   }
+}
+
+/**
+ * Revalidates active working-tree diff variants from scratch after a watched
+ * file changes. Reads stay on the shared Git queue so stats and patch variants
+ * cannot consume expensive-read capacity in parallel.
+ */
+export async function refreshGitWorkingTreeDiffsForCwd(
+  queryClient: QueryClient,
+  cwd: string,
+): Promise<void> {
+  await queryClient.invalidateQueries({
+    queryKey: gitQueryKeys.workingTreeDiffs(cwd),
+    refetchType: "none",
+  });
+  const queries = activeGitDetailQueries(queryClient, cwd).filter(
+    (query) => query.queryKey[1] === "working-tree-diff",
+  );
+  for (const query of queries) {
+    await enqueueGitRefresh(queryClient, () => refetchFreshGitQueries(queryClient, query.queryKey));
+  }
+}
+
+const activeFileWriteRefreshes = new WeakMap<
+  QueryClient,
+  Map<string, { generation: number; promise: Promise<void> }>
+>();
+
+/** Refresh only working-copy data after file writes. Autosave must not refetch
+ * PRs, branches or revision blobs for each pause in typing. Watcher echoes join
+ * the pending refresh; events arriving during a read request one fresh pass. */
+export function refreshGitAfterFileWrite(queryClient: QueryClient, cwd: string): Promise<void> {
+  let refreshes = activeFileWriteRefreshes.get(queryClient);
+  if (!refreshes) {
+    refreshes = new Map();
+    activeFileWriteRefreshes.set(queryClient, refreshes);
+  }
+  const existing = refreshes.get(cwd);
+  if (existing) {
+    existing.generation += 1;
+    return existing.promise;
+  }
+  const entry = { generation: 0, promise: Promise.resolve() };
+  refreshes.set(cwd, entry);
+  entry.promise = (async () => {
+    let completed: number;
+    do {
+      completed = entry.generation;
+      // Keep the visible patch first: status may need a separate Git process.
+      await refreshGitWorkingTreeDiffsForCwd(queryClient, cwd);
+      await queryClient.invalidateQueries({
+        queryKey: gitQueryKeys.status(cwd),
+        exact: true,
+        refetchType: "none",
+      });
+      await enqueueGitRefresh(queryClient, () =>
+        refetchFreshGitQueries(queryClient, gitQueryKeys.status(cwd)),
+      );
+    } while (completed !== entry.generation);
+  })().finally(() => {
+    if (refreshes.get(cwd) === entry) refreshes.delete(cwd);
+  });
+  return entry.promise;
 }
 
 /**
@@ -258,6 +369,7 @@ function cachedGitCwds(queryClient: QueryClient): string[] {
     "github-repository",
     "status",
     "branches",
+    "recent-commits",
     "working-tree-diff",
     "pull-request",
   ]);
@@ -313,10 +425,15 @@ export function refreshGitQueriesScoped(
 export function gitStatusQueryOptions(cwd: string | null, enabled = true) {
   return queryOptions({
     queryKey: gitQueryKeys.status(cwd),
-    queryFn: async () => {
+    queryFn: async ({ client }) => {
+      const readFence = capturePullRequestActionReadFence(client);
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git status is unavailable.");
-      return api.git.status({ cwd });
+      return preserveActivePullRequestActionGitFields(
+        client,
+        await api.git.status({ cwd }),
+        readFence,
+      );
     },
     enabled: enabled && cwd !== null,
     staleTime: GIT_STATUS_STALE_TIME_MS,
@@ -342,6 +459,37 @@ export function gitGithubRepositoryQueryOptions(cwd: string | null, enabled = tr
   });
 }
 
+function resolveGitCompareRef(
+  scope: GitReadWorkingTreeDiffInput["scope"],
+  compareRef: string | null | undefined,
+): string | null {
+  if (scope !== "ref") {
+    return null;
+  }
+  const trimmed = compareRef?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function gitRecentCommitsQueryOptions(input: {
+  cwd: string | null;
+  limit?: number;
+  enabled?: boolean;
+}) {
+  const limit = input.limit ?? DEFAULT_GIT_RECENT_COMMIT_LIMIT;
+  return queryOptions({
+    queryKey: gitQueryKeys.recentCommits(input.cwd, limit),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd) throw new Error("Git commits are unavailable.");
+      return api.git.listRecentCommits({ cwd: input.cwd, limit });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null,
+    staleTime: GIT_BRANCHES_STALE_TIME_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+}
+
 export function gitBranchesQueryOptions(cwd: string | null) {
   return queryOptions({
     queryKey: gitQueryKeys.branches(cwd),
@@ -361,6 +509,7 @@ export function gitBranchesQueryOptions(cwd: string | null) {
 export function gitResolvePullRequestQueryOptions(input: {
   cwd: string | null;
   reference: string | null;
+  pollIntervalMs?: number;
 }) {
   return queryOptions({
     queryKey: [...gitQueryKeys.pullRequest(input.cwd), input.reference] as const,
@@ -373,6 +522,11 @@ export function gitResolvePullRequestQueryOptions(input: {
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: 30_000,
+    // A merged pull request is final; polling it forever only burns GitHub rate limit.
+    refetchInterval: (query) =>
+      input.pollIntervalMs === undefined || query.state.data?.pullRequest.state === "merged"
+        ? false
+        : input.pollIntervalMs,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
@@ -391,12 +545,17 @@ export function gitPullRequestSnapshotQueryOptions(input: {
   return queryOptions({
     // Shares the ["git", "pull-request", cwd] prefix so existing invalidations cover it.
     queryKey: [...gitQueryKeys.pullRequest(input.cwd), "snapshot", input.reference] as const,
-    queryFn: async () => {
+    queryFn: async ({ client }) => {
+      const readFence = capturePullRequestActionReadFence(client);
       const api = ensureNativeApi();
       if (!input.cwd || !input.reference) {
         throw new Error("Pull request snapshot is unavailable.");
       }
-      return api.git.pullRequestSnapshot({ cwd: input.cwd, reference: input.reference });
+      return preserveActivePullRequestActionGitFields(
+        client,
+        await api.git.pullRequestSnapshot({ cwd: input.cwd, reference: input.reference }),
+        readFence,
+      );
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && input.reference !== null,
     staleTime: GIT_PR_SNAPSHOT_STALE_TIME_MS,
@@ -425,21 +584,27 @@ export function gitPullRequestSnapshotQueryOptions(input: {
 export function gitWorkingTreeDiffStatsQueryOptions(input: {
   cwd: string | null;
   scope?: GitReadWorkingTreeDiffInput["scope"];
+  compareRef?: string | null;
   enabled?: boolean;
   refetchInterval?: number | false;
 }) {
   const scope = input.scope ?? "workingTree";
+  const compareRef = resolveGitCompareRef(scope, input.compareRef);
   const refetchInterval = input.refetchInterval;
   return queryOptions({
-    queryKey: gitQueryKeys.workingTreeDiffStats(input.cwd, scope),
+    queryKey: gitQueryKeys.workingTreeDiffStats(input.cwd, scope, compareRef),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
         throw new Error("Working tree diff stats are unavailable.");
       }
-      return api.git.workingTreeDiffStats({ cwd: input.cwd, scope });
+      return api.git.workingTreeDiffStats({
+        cwd: input.cwd,
+        scope,
+        ...(compareRef ? { compareRef } : {}),
+      });
     },
-    enabled: (input.enabled ?? true) && input.cwd !== null,
+    enabled: (input.enabled ?? true) && input.cwd !== null && (scope !== "ref" || !!compareRef),
     staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,
     ...(refetchInterval !== undefined ? { refetchInterval } : {}),
     refetchOnWindowFocus: true,
@@ -448,29 +613,99 @@ export function gitWorkingTreeDiffStatsQueryOptions(input: {
   });
 }
 
+export function gitReadFileAtRevQueryOptions(input: {
+  cwd: string | null;
+  filePath: string | null;
+  rev?: string | undefined;
+  base?: "branch" | "index" | undefined;
+  enabled?: boolean;
+}) {
+  const { cwd, filePath, base, rev } = input;
+  return queryOptions({
+    queryKey: gitQueryKeys.fileAtRev(cwd, filePath, rev ?? null, base ?? null),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!cwd || !filePath) {
+        throw new Error("File revision read is unavailable.");
+      }
+      return api.git.readFileAtRev({
+        cwd,
+        filePath,
+        ...(rev !== undefined ? { rev } : {}),
+        ...(base !== undefined ? { base } : {}),
+      });
+    },
+    enabled: (input.enabled ?? true) && cwd !== null && filePath !== null,
+    staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,
+  });
+}
+
 export function gitWorkingTreeDiffQueryOptions(input: {
   cwd: string | null;
   scope?: GitReadWorkingTreeDiffInput["scope"];
+  compareRef?: string | null;
+  filePath?: string | null | undefined;
   enabled?: boolean;
   refetchInterval?: number | false;
 }) {
   const scope = input.scope ?? "workingTree";
+  const compareRef = resolveGitCompareRef(scope, input.compareRef);
   const refetchInterval = input.refetchInterval;
   return queryOptions({
-    queryKey: gitQueryKeys.workingTreeDiff(input.cwd, scope),
+    queryKey: gitQueryKeys.workingTreeDiff(input.cwd, scope, compareRef, input.filePath ?? null),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
         throw new Error("Working tree diff is unavailable.");
       }
-      return api.git.readWorkingTreeDiff({ cwd: input.cwd, scope });
+      return api.git.readWorkingTreeDiff({
+        cwd: input.cwd,
+        scope,
+        ...(compareRef ? { compareRef } : {}),
+        ...(input.filePath ? { filePath: input.filePath } : {}),
+      });
     },
-    enabled: (input.enabled ?? true) && input.cwd !== null,
+    enabled: (input.enabled ?? true) && input.cwd !== null && (scope !== "ref" || !!compareRef),
     staleTime: GIT_WORKING_TREE_DIFF_STALE_TIME_MS,
     ...(refetchInterval !== undefined ? { refetchInterval } : {}),
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     ...GIT_EXPENSIVE_READ_RETRY_OPTIONS,
+  });
+}
+
+export function gitBlameLineQueryOptions(input: {
+  cwd: string | null;
+  filePath: string | null;
+  line: number | null;
+  rev?: string | undefined;
+  base?: "branch" | undefined;
+  enabled?: boolean;
+}) {
+  const rev = input.rev ?? null;
+  const base = input.base ?? null;
+  return queryOptions({
+    queryKey: gitQueryKeys.blameLine(input.cwd, input.filePath, input.line, rev, base),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.filePath || input.line === null) {
+        throw new Error("Git blame is unavailable.");
+      }
+      return api.git.blameLine({
+        cwd: input.cwd,
+        filePath: input.filePath,
+        line: input.line,
+        ...(rev !== null ? { rev } : {}),
+        ...(base !== null ? { base } : {}),
+      });
+    },
+    enabled:
+      (input.enabled ?? true) &&
+      input.cwd !== null &&
+      input.filePath !== null &&
+      input.line !== null,
+    staleTime: GIT_BLAME_LINE_STALE_TIME_MS,
+    retry: false,
   });
 }
 
@@ -638,30 +873,6 @@ export function gitPullMutationOptions(input: { cwd: string | null; queryClient:
     invalidate: "cwd",
     awaitInvalidation: false,
     run: (api, cwd) => api.git.pull({ cwd }),
-  });
-}
-
-export function gitCreateWorktreeMutationOptions(input: { queryClient: QueryClient }) {
-  return mutationOptions({
-    mutationFn: async ({
-      cwd,
-      branch,
-      newBranch,
-      path,
-    }: {
-      cwd: string;
-      branch: string;
-      newBranch: string;
-      path?: string | null;
-    }) => {
-      const api = ensureNativeApi();
-      if (!cwd) throw new Error("Git worktree creation is unavailable.");
-      return api.git.createWorktree({ cwd, branch, newBranch, path: path ?? null });
-    },
-    mutationKey: ["git", "mutation", "create-worktree"] as const,
-    onSettled: async () => {
-      await invalidateGitQueries(input.queryClient);
-    },
   });
 }
 

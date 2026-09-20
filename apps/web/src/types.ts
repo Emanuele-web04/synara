@@ -12,7 +12,7 @@ import type {
   OrchestrationThreadPullRequest,
   OrchestrationProposedPlanId,
   PinnedMessage,
-  ThreadMarker,
+  PendingClaudeCacheReview,
   ThreadGoalAchievement,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
@@ -112,13 +112,16 @@ export interface ChatMessage {
   text: string;
   /** Slices of streamed assistant text between row-making provider events. */
   textSegments?: OrchestrationMessageTextSegment[];
+  asyncUserInput?: import("@synara/contracts").AsyncUserInput;
   attachments?: ChatAttachment[];
   skills?: ProviderSkillReference[];
   mentions?: ProviderMentionReference[];
   dispatchMode?: TurnDispatchMode;
   dispatchOrigin?: MessageDispatchOrigin;
+  startsNewTurn?: boolean;
   turnId?: TurnId | null;
   createdAt: string;
+  updatedAt?: string;
   completedAt?: string | undefined;
   streaming: boolean;
   source?: OrchestrationMessageSource;
@@ -247,7 +250,6 @@ export interface Thread extends ThreadWorkspaceState {
   updatedAt?: string | undefined;
   isPinned?: boolean;
   pinnedMessages?: PinnedMessage[];
-  threadMarkers?: ThreadMarker[];
   notes?: string;
   goal?: string;
   goalStartedAt?: string | null;
@@ -264,9 +266,15 @@ export interface Thread extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatLastActivityAt?: string | null;
+  sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
+  claudeCacheReview?: PendingClaudeCacheReview | null;
+  /** Client projection cursor shared by shell and detail cache-review updates. */
+  claudeCacheReviewSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
@@ -294,7 +302,6 @@ export interface ThreadShell extends ThreadWorkspaceState {
   // These do not arrive on the sidebar shell snapshot, so the snapshot path preserves them
   // from the previous shell rather than clobbering with `undefined`.
   pinnedMessages?: PinnedMessage[];
-  threadMarkers?: ThreadMarker[];
   notes?: string;
   goal?: string;
   goalStartedAt?: string | null;
@@ -308,9 +315,14 @@ export interface ThreadShell extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatLastActivityAt?: string | null;
+  sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
+  claudeCacheReview?: PendingClaudeCacheReview | null;
+  claudeCacheReviewSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
@@ -350,12 +362,15 @@ export interface SidebarThreadSummary {
   subagentNickname?: string | null;
   subagentRole?: string | null;
   latestUserMessageAt: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
   hasLiveTailWork: boolean;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatLastActivityAt?: string | null;
+  sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
 }

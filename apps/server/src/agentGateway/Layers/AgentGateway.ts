@@ -21,6 +21,8 @@ import {
   MessageId,
   THREAD_GOAL_MAX_CHARS,
   ThreadId,
+  type ModelSelection,
+  type ProjectId,
   type ProviderKind,
   type RuntimeMode,
   type ServerProviderStatus,
@@ -30,6 +32,7 @@ import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { Effect, Layer, Option } from "effect";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
+import { GitManager } from "../../git/Services/GitManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -48,6 +51,7 @@ import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
+  resolveAgentGatewayTarget,
   type AgentGatewayProviderAvailability,
 } from "../targetResolver.ts";
 import { mcpToolResultError, mcpToolResultJson } from "../protocol.ts";
@@ -66,6 +70,7 @@ import {
 } from "../toolInput.ts";
 import { WRITE_TOOL_ANNOTATIONS, type ToolEntry } from "../toolRuntime.ts";
 import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
+import { deliverGatewayCompletions } from "../completionDelivery.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
@@ -112,6 +117,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const git = yield* GitCore;
+  const gitManager = yield* GitManager;
   const providerDiscovery = yield* ProviderDiscoveryService;
   const providerHealth = yield* ProviderHealth;
   const serverSettings = yield* ServerSettingsService;
@@ -165,6 +171,20 @@ export const makeAgentGateway = Effect.gen(function* () {
     git,
   });
 
+  yield* Effect.forkScoped(
+    Effect.forever(
+      deliverGatewayCompletions({
+        repository: operationRepository.completions,
+        snapshotQuery,
+        projectionTurns,
+        orchestrationEngine,
+      }).pipe(
+        Effect.catch((error) => Effect.logWarning("gateway completion scan failed", { error })),
+        Effect.andThen(Effect.sleep(1000)),
+      ),
+    ),
+  );
+
   const requireThreadShell = (threadId: string) =>
     snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(threadId)).pipe(
       Effect.mapError((error) => new ToolInputError(errorText(error))),
@@ -175,6 +195,33 @@ export const makeAgentGateway = Effect.gen(function* () {
         }),
       ),
     );
+
+  // Automation targets resolve like thread-creation targets: live provider availability
+  // and model discovery, against the workspace of the project the automation belongs to.
+  const resolveAutomationTarget = (input: {
+    readonly target: ModelSelection;
+    readonly projectId: ProjectId;
+  }): Effect.Effect<ModelSelection, unknown> =>
+    Effect.gen(function* () {
+      const project = yield* snapshotQuery.getProjectShellById(input.projectId).pipe(
+        Effect.mapError((error) => new ToolInputError(errorText(error))),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(new ToolInputError(`Project "${input.projectId}" was not found.`)),
+            onSome: Effect.succeed,
+          }),
+        ),
+      );
+      const providerAvailabilities = yield* loadProviderAvailabilities;
+      const availability = providerAvailabilities.get(input.target.provider);
+      return yield* resolveAgentGatewayTarget({
+        target: input.target,
+        discovery: providerDiscovery,
+        ...(availability !== undefined ? { availability } : {}),
+        cwd: project.workspaceRoot,
+      });
+    });
 
   // Privilege boundary shared by every tool that makes another thread execute
   // work or mutates another thread's state: a caller must not drive a thread
@@ -260,6 +307,11 @@ export const makeAgentGateway = Effect.gen(function* () {
             items: {
               type: "object",
               properties: {
+                notifyCreatorOnComplete: {
+                  type: "boolean",
+                  description:
+                    "Passively return the initial run result to this creating thread. Does not wake the creator; goal runs are unsupported.",
+                },
                 prompt: { type: "string" },
                 title: { type: "string" },
                 target: {
@@ -313,6 +365,11 @@ export const makeAgentGateway = Effect.gen(function* () {
         type: "object",
         properties: {
           requestId: { type: "string", maxLength: 256 },
+          notifyCreatorOnComplete: {
+            type: "boolean",
+            description:
+              "Passively return the initial run result to this creating thread. Does not wake the creator; goal runs are unsupported.",
+          },
           prompt: { type: "string" },
           title: { type: "string" },
           target: {
@@ -371,6 +428,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           "baseBranch",
           "branchName",
           "runtimeMode",
+          "notifyCreatorOnComplete",
         ]) {
           const value = args[key];
           if (value !== undefined) spec[key] = value;
@@ -544,6 +602,70 @@ export const makeAgentGateway = Effect.gen(function* () {
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
+  const setThreadPullRequest: ToolEntry = {
+    requiredCapability: "thread:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_set_thread_pull_request",
+      description:
+        "Associate a pull request with a Synara thread. Use this after successfully creating the pull request that represents that thread's own deliverable. Do not associate pull requests that the thread only reviews, references, or discusses. Defaults to your own thread when threadId is omitted.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          threadId: {
+            type: "string",
+            description: "Thread that owns the pull request. Defaults to your own thread.",
+          },
+          reference: {
+            type: "string",
+            description: "GitHub pull request URL or number resolvable from the thread repository.",
+          },
+        },
+        required: ["reference"],
+        additionalProperties: false,
+      },
+      annotations: { title: "Associate a pull request", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const threadId = readStringArg(args, "threadId") ?? context.callerThreadId;
+        const reference = readStringArg(args, "reference", { required: true })!;
+        const caller = yield* requireThreadShell(context.callerThreadId);
+        const target = yield* requireThreadShell(threadId);
+        yield* assertCallerMayDriveThread(caller, target);
+
+        const project = Option.getOrUndefined(
+          yield* snapshotQuery
+            .getProjectShellById(target.projectId)
+            .pipe(Effect.mapError((error) => new ToolInputError(errorText(error)))),
+        );
+        if (!project) {
+          return yield* Effect.fail(
+            new ToolInputError(`Project for thread "${threadId}" was not found.`),
+          );
+        }
+        const cwd = resolveThreadWorkspaceCwd({ thread: target, projects: [project] });
+        if (!cwd) {
+          return yield* Effect.fail(
+            new ToolInputError(`Git workspace for thread "${threadId}" is unavailable.`),
+          );
+        }
+
+        const { pullRequest } = yield* gitManager
+          .resolvePullRequest({ cwd, reference })
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:pull-request`),
+            threadId: target.id,
+            lastKnownPr: pullRequest,
+          })
+          .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
+        return mcpToolResultJson({ threadId: target.id, pullRequest });
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
   const setThreadArchived: ToolEntry = {
     requiredCapability: "thread:write",
     requiresActiveTurn: true,
@@ -684,6 +806,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     automationService,
     requireThreadShell,
     assertCallerMayDriveThread,
+    resolveAutomationTarget,
     surfaceAutomationProposal: ({ callerThreadId, definition }) => {
       const createdAt = isoNow();
       return orchestrationEngine
@@ -725,6 +848,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     sendMessage,
     interruptThread,
     setThreadTitle,
+    setThreadPullRequest,
     setThreadArchived,
     setThreadGoal,
     ...automationTools,

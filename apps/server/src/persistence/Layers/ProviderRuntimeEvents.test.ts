@@ -40,6 +40,26 @@ const runtimeEvent = (eventId: string, delta: string): ProviderRuntimeEvent => (
   },
 });
 
+const insertLiveProjectionThread = (threadId: string, createdAt: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+      VALUES (${threadId}, 'project-runtime-journal', 'Runtime journal', ${createdAt}, ${createdAt})
+    `;
+  });
+
+const readOpenTurnReplayCount = (threadId: string) =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const rows = yield* repository.readAcceptedOpenTurnEvents({
+      consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+      sequenceExclusive: 0,
+      limit: 50,
+    });
+    return rows.filter((row) => row.event.threadId === threadId).length;
+  });
+
 layer("ProviderRuntimeEventRepository", (it) => {
   it.effect("journals exact events and advances its consumer cursor contiguously", () =>
     Effect.gen(function* () {
@@ -183,6 +203,7 @@ layer("ProviderRuntimeEventRepository", (it) => {
           updatedAt: "2026-07-14T00:01:00.000Z",
         }),
       );
+      yield* insertLiveProjectionThread(event.threadId, event.createdAt);
       yield* sql`
         INSERT INTO projection_turns (
           thread_id, turn_id, state, requested_at, checkpoint_files_json
@@ -217,6 +238,76 @@ layer("ProviderRuntimeEventRepository", (it) => {
         }),
         0,
       );
+    }),
+  );
+
+  it.effect("prunes replay rows whose thread is purged, deleted, or archived", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const orphanThreadId = ThreadId.makeUnsafe("thread-runtime-orphaned");
+      const orphanTurnId = TurnId.makeUnsafe("turn-runtime-orphaned");
+      const event: ProviderRuntimeEvent = {
+        ...runtimeEvent("runtime-event-orphaned-turn", "orphaned replay"),
+        threadId: orphanThreadId,
+        turnId: orphanTurnId,
+      };
+      const persisted = yield* repository.append(event);
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: persisted.sequence,
+          updatedAt: "2026-07-14T00:01:00.000Z",
+        }),
+      );
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // No projection thread row at all (hard-purged): the open turn is dead.
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 0);
+
+      // Re-open the turn under a live thread: the replay row must survive.
+      const reopened = yield* repository.append({
+        ...runtimeEvent("runtime-event-orphaned-turn-2", "live replay"),
+        threadId: orphanThreadId,
+        turnId: orphanTurnId,
+      });
+      assert.isTrue(
+        yield* repository.advanceConsumerCursor({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          eventSequence: reopened.sequence,
+          updatedAt: "2026-07-14T00:01:01.000Z",
+        }),
+      );
+      yield* insertLiveProjectionThread(event.threadId, event.createdAt);
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // Archiving does not interrupt a turn the projection still considers
+      // running, so that replay row must survive the archive.
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, checkpoint_files_json
+        ) VALUES (
+          ${orphanThreadId}, ${orphanTurnId}, 'running', ${event.createdAt}, '[]'
+        )
+      `;
+      yield* sql`
+        UPDATE projection_threads
+        SET archived_at = ${"2026-07-14T00:02:00.000Z"}
+        WHERE thread_id = ${event.threadId}
+      `;
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 1);
+
+      // An archived thread whose turn the projection never tracked (or has
+      // settled) has nothing left to replay.
+      yield* sql`
+        DELETE FROM projection_turns
+        WHERE thread_id = ${orphanThreadId} AND turn_id = ${orphanTurnId}
+      `;
+      yield* repository.pruneSettledOpenTurns;
+      assert.strictEqual(yield* readOpenTurnReplayCount(orphanThreadId), 0);
     }),
   );
 
@@ -492,6 +583,87 @@ retentionLayer("ProviderRuntimeEventRepository retention", (it) => {
       yield* acceptEvent(terminalEvent("b"));
       assert.strictEqual(yield* replayable, 0);
       assert.strictEqual(yield* journalSize, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
+    }),
+  );
+  it.effect("acknowledges a drained page in one transaction with per-row bookkeeping", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderRuntimeEventRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const journalSize = Effect.map(
+        sql<{ readonly count: number }>`SELECT COUNT(*) AS count FROM provider_runtime_events`,
+        (rows) => rows[0]?.count ?? 0,
+      );
+      const replayableTurns = Effect.map(
+        repository.readAcceptedOpenTurnEvents({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          sequenceExclusive: 0,
+          limit: 10_000,
+        }),
+        (rows) => rows.map((row) => String(row.event.turnId)),
+      );
+      const cursorBefore = yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER);
+
+      // One page: a turn that settles inside it, then an open follow-up turn.
+      const settledEvents = 40;
+      const openEvents = 25;
+      let last = cursorBefore;
+      for (let index = 0; index < settledEvents; index += 1) {
+        last = (yield* repository.append(deltaEvent("c", index))).sequence;
+      }
+      last = (yield* repository.append(terminalEvent("c"))).sequence;
+      for (let index = 0; index < openEvents; index += 1) {
+        last = (yield* repository.append(deltaEvent("d", index))).sequence;
+      }
+      const sizeBeforeAck = yield* journalSize;
+
+      // The target must be a stored row the cursor can reach contiguously.
+      assert.isFalse(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: last + 1,
+          updatedAt: "2026-07-14T02:00:00.000Z",
+        }),
+      );
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        cursorBefore,
+      );
+      assert.strictEqual(yield* journalSize, sizeBeforeAck);
+
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: last,
+          updatedAt: "2026-07-14T02:00:00.000Z",
+        }),
+      );
+      assert.strictEqual(
+        yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+        last,
+      );
+      // Same outcome as row-by-row acknowledgement: the settled turn released
+      // its replay backlog (the terminal forced a scan) while every event of
+      // the still-open turn stays replayable.
+      const replayable = yield* replayableTurns;
+      assert.strictEqual(replayable.length, openEvents);
+      assert.isTrue(replayable.every((turn) => turn === "turn-retention-d"));
+      // The scan ran once, at the end of the page: the bounded diagnostic tail
+      // may already include the open turn's rows, so the journal holds between
+      // the tail and tail-plus-open-turn rows, never fewer.
+      const sizeAfterAck = yield* journalSize;
+      assert.isAtLeast(sizeAfterAck, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
+      assert.isAtMost(sizeAfterAck, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + openEvents);
+      assert.isBelow(sizeAfterAck, sizeBeforeAck);
+
+      // Idempotent once the cursor is already there.
+      assert.isTrue(
+        yield* repository.advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: last,
+          updatedAt: "2026-07-14T02:00:01.000Z",
+        }),
+      );
+      assert.strictEqual(yield* journalSize, sizeAfterAck);
     }),
   );
 });

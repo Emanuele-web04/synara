@@ -7,7 +7,6 @@ import {
   type ClaudeApiEffort,
   type ClaudeModelOptions,
   type ClaudeCodeEffort,
-  type CodexModelOptions,
   type CursorModelOptions,
   type GrokModelOptions,
   type GrokReasoningEffort,
@@ -15,26 +14,27 @@ import {
   type ModelSelection,
   type ModelSlug,
   type OpenCodeModelOptions,
+  type ProviderModelDescriptor,
+  type ProviderModelVariantDescriptor,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type PiModelOptions,
   type PiThinkingLevel,
   type ProviderKind,
   type ProviderWithDefaultModel,
-  CodexReasoningEffort,
 } from "@synara/contracts";
 
 const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> = {
   claudeAgent: new Set(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((option) => option.slug)),
   codex: new Set(MODEL_OPTIONS_BY_PROVIDER.codex.map((option) => option.slug)),
   cursor: new Set(MODEL_OPTIONS_BY_PROVIDER.cursor.map((option) => option.slug)),
-  // Antigravity's built-in list is intentionally empty; its CLI supplies the live catalog.
   antigravity: new Set<ModelSlug>(),
   grok: new Set(MODEL_OPTIONS_BY_PROVIDER.grok.map((option) => option.slug)),
   droid: new Set(MODEL_OPTIONS_BY_PROVIDER.droid.map((option) => option.slug)),
-  kilo: new Set(MODEL_OPTIONS_BY_PROVIDER.kilo.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
+  // Devin's built-in list is intentionally empty; its CLI supplies the live catalog.
+  devin: new Set<ModelSlug>(),
 };
 
 export interface SelectableModelOption {
@@ -79,19 +79,118 @@ const MODEL_NAME_BY_SLUG = new Map(
     .map((option) => [option.slug.toLowerCase(), option.name] as const),
 );
 
-// Turns a raw model slug into a readable label when no built-in name exists.
-// GPT slugs keep their canonical "GPT-x" casing; provider-scoped custom ids
-// ("vendor/model") stay verbatim; everything else is title-cased on -/_ .
-export function humanizeModelSlug(slug: string): string {
-  if (slug.toLowerCase().startsWith("gpt-")) {
-    const [, version, ...rest] = slug.split("-");
-    if (rest.length === 0) return `GPT-${version}`;
-    return `GPT-${version} ${rest.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ")}`;
+const MODEL_TOKEN_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  deepseek: "DeepSeek",
+  glm: "GLM",
+  gpt: "GPT",
+  minimax: "MiniMax",
+  openai: "OpenAI",
+  opencode: "OpenCode",
+  swe: "SWE",
+  xai: "xAI",
+  xhigh: "XHigh",
+};
+
+// First tokens that mark a provider-supplied label as a model-family name
+// worth normalizing: the brand tokens plus families whose casing is already
+// title-case. Anything else (custom names like "MyModel", "K2P6") keeps its
+// original casing untouched.
+const MODEL_FAMILY_TOKENS: ReadonlySet<string> = new Set([
+  ...Object.keys(MODEL_TOKEN_DISPLAY_NAMES),
+  "adaptive",
+  "auto",
+  "claude",
+  "codex",
+  "composer",
+  "cursor",
+  "devin",
+  "gemini",
+  "grok",
+  "inkling",
+  "kimi",
+  "nemotron",
+]);
+
+function humanizeModelToken(token: string): string {
+  const key = token.toLowerCase();
+  const displayName = Object.prototype.hasOwnProperty.call(MODEL_TOKEN_DISPLAY_NAMES, key)
+    ? MODEL_TOKEN_DISPLAY_NAMES[key]
+    : undefined;
+  return displayName ?? token.charAt(0).toUpperCase() + token.slice(1);
+}
+
+const MODEL_DATE_OR_BUILD_TOKEN_PATTERN = /^\d{8}$/u;
+
+// Rejoins version fragments split on "-"/"_": a pure-digit token merges onto a
+// preceding token that already ends in a digit, so "swe-1-6" reads as 1.6,
+// "claude-opus-4-8" as 4.8, and "kimi-k2-6" as K2.6. Zero-prefixed tokens and
+// eight-digit provider date/build stamps stay separate, never version minors.
+function joinModelVersionTokens(tokens: string[]): string[] {
+  const merged: string[] = [];
+  for (const token of tokens) {
+    const previous = merged[merged.length - 1];
+    if (
+      /^\d+$/u.test(token) &&
+      (token === "0" || !token.startsWith("0")) &&
+      !MODEL_DATE_OR_BUILD_TOKEN_PATTERN.test(token) &&
+      previous !== undefined &&
+      /\d$/u.test(previous)
+    ) {
+      merged[merged.length - 1] = `${previous}.${token}`;
+    } else {
+      merged.push(token);
+    }
   }
+  return merged;
+}
+
+// Canonical brand shapes that differ from plain space-joined words.
+function restoreModelNameSeparators(name: string): string {
+  return name.replace(/\bGPT (\d)/gu, "GPT-$1");
+}
+
+// Turns a raw model slug into a readable label when no built-in name exists.
+// Provider-scoped custom ids ("vendor/model") stay verbatim; everything else is
+// tokenized on -/_, version fragments rejoined with ".", known model-family
+// brands restored to their canonical casing, and GPT versions rehyphenated.
+export function humanizeModelSlug(slug: string): string {
   if (slug.includes("/")) {
     return slug;
   }
-  return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  const tokens = joinModelVersionTokens(slug.split(/[-_]+/g)).map(humanizeModelToken);
+  return restoreModelNameSeparators(tokens.join(" "));
+}
+
+/**
+ * Normalizes a provider-supplied display name to Synara's canonical casing:
+ * known brand tokens are re-cased ("Swe" → "SWE", "Deepseek" → "DeepSeek"),
+ * slug separators become spaces ("GLM-5.3-Flash" → "GLM 5.3 Flash"), digit
+ * fragments rejoin as versions, and GPT versions keep their hyphen. Gated on a
+ * known family first token so freeform names keep their casing; non-brand
+ * tokens and a parenthesized tail pass through unchanged.
+ */
+export function normalizeModelDisplayName(name: string): string {
+  const trimmed = name.trim();
+  const parenIndex = trimmed.indexOf("(");
+  const head = parenIndex >= 0 ? trimmed.slice(0, parenIndex).trimEnd() : trimmed;
+  const tail = parenIndex >= 0 ? trimmed.slice(parenIndex) : "";
+  const tokens = head.split(/[-_\s]+/u).filter(Boolean);
+  const [firstToken] = tokens;
+  if (firstToken === undefined || !MODEL_FAMILY_TOKENS.has(firstToken.toLowerCase())) {
+    return trimmed;
+  }
+  const normalized = joinModelVersionTokens(tokens)
+    .map((token) => {
+      const displayName = Object.prototype.hasOwnProperty.call(
+        MODEL_TOKEN_DISPLAY_NAMES,
+        token.toLowerCase(),
+      )
+        ? MODEL_TOKEN_DISPLAY_NAMES[token.toLowerCase()]
+        : undefined;
+      return displayName ?? token;
+    })
+    .join(" ");
+  return `${restoreModelNameSeparators(normalized)}${tail ? ` ${tail}` : ""}`;
 }
 
 export function formatModelDisplayName(model: string | null | undefined): string | undefined {
@@ -131,32 +230,130 @@ export function parseCursorCliReasoningEffort(model: string): string | undefined
   return undefined;
 }
 
-/** Check whether a capabilities object includes a given effort value. */
 export function hasEffortLevel(caps: ModelCapabilities, value: string): boolean {
   return caps.reasoningEffortLevels.some((l) => l.value === value);
 }
 
-/** Return the default effort value for a capabilities object, or null if none. */
 export function getDefaultEffort(caps: ModelCapabilities): string | null {
   return caps.reasoningEffortLevels.find((l) => l.isDefault)?.value ?? null;
 }
 
-/** Check whether a capabilities object includes a given context window value. */
 export function hasContextWindowOption(caps: ModelCapabilities, value: string): boolean {
   return caps.contextWindowOptions.some((option) => option.value === value);
 }
 
-/** Return the default context window value for a capabilities object, or null if none. */
 export function getDefaultContextWindow(caps: ModelCapabilities): string | null {
   return caps.contextWindowOptions.find((option) => option.isDefault)?.value ?? null;
 }
 
-/** Check whether a Claude auto-compaction budget is supported. */
+const DEVIN_STATIC_MODEL_VARIANTS: Readonly<
+  Record<string, ReadonlyArray<ProviderModelVariantDescriptor>>
+> = {
+  "swe-1-6": [
+    { model: "swe-1-6", fastMode: false },
+    { model: "swe-1-6-fast", fastMode: true },
+  ],
+  "swe-1-7": [
+    { model: "swe-1-7", fastMode: false },
+    { model: "swe-1-7-lightning", fastMode: true },
+  ],
+};
+
+export function getDevinStaticModelVariants(
+  model: string | null | undefined,
+): ReadonlyArray<ProviderModelVariantDescriptor> | undefined {
+  const normalizedModel = normalizeModelSlug(model, "devin");
+  return normalizedModel ? DEVIN_STATIC_MODEL_VARIANTS[normalizedModel] : undefined;
+}
+
+export function resolveDevinModelVariant(input: {
+  readonly model?: string | null | undefined;
+  readonly runtimeModel?: ProviderModelDescriptor | undefined;
+  readonly modelVariant?: string | null | undefined;
+  readonly reasoningEffort?: string | null | undefined;
+  readonly fastMode?: boolean | undefined;
+  readonly thinking?: boolean | null | undefined;
+  readonly contextWindow?: string | null | undefined;
+}): string | undefined {
+  const variants = input.runtimeModel?.modelVariants ?? getDevinStaticModelVariants(input.model);
+  const explicitVariant = trimOrNull(input.modelVariant) ?? undefined;
+  if (!variants?.length) {
+    return explicitVariant;
+  }
+
+  const reasoningEffort = trimOrNull(input.reasoningEffort);
+  const contextWindow = trimOrNull(input.contextWindow);
+  const mapsReasoningEffort =
+    reasoningEffort !== null && variants.some((variant) => variant.reasoningEffort !== undefined);
+  const mapsFastMode =
+    input.fastMode !== undefined && variants.some((variant) => variant.fastMode !== undefined);
+  const mapsThinking =
+    input.thinking !== null &&
+    input.thinking !== undefined &&
+    variants.some((variant) => variant.thinking !== undefined);
+  const mapsContextWindow =
+    contextWindow !== null && variants.some((variant) => variant.contextWindow !== undefined);
+  if (!mapsReasoningEffort && !mapsFastMode && !mapsThinking && !mapsContextWindow) {
+    return explicitVariant;
+  }
+
+  const effectiveReasoningEffort =
+    reasoningEffort ?? trimOrNull(input.runtimeModel?.defaultReasoningEffort);
+  const effectiveContextWindow =
+    contextWindow ?? trimOrNull(input.runtimeModel?.defaultContextWindow);
+  // Thinking is on by default for Devin families that expose a thinking
+  // toggle. Keep the persisted option sparse, but use the effective
+  // default when resolving a non-default context window to its concrete
+  // process-start variant.
+  const effectiveThinking =
+    input.thinking ?? (input.runtimeModel?.supportsThinkingToggle === true ? true : undefined);
+  const matches = (variant: ProviderModelVariantDescriptor): boolean => {
+    if (effectiveReasoningEffort && variant.reasoningEffort !== effectiveReasoningEffort) {
+      return false;
+    }
+    if (effectiveContextWindow && variant.contextWindow !== effectiveContextWindow) {
+      return false;
+    }
+    if (input.fastMode === true && variant.fastMode !== true) {
+      return false;
+    }
+    if (input.fastMode !== true && variant.fastMode === true) {
+      return false;
+    }
+    if (
+      effectiveThinking !== null &&
+      effectiveThinking !== undefined &&
+      variant.thinking !== undefined
+    ) {
+      return variant.thinking === effectiveThinking;
+    }
+    return true;
+  };
+
+  const preferred = variants.filter(matches);
+  const withDefaultContext =
+    !contextWindow && effectiveContextWindow
+      ? preferred.filter((variant) => variant.contextWindow === effectiveContextWindow)
+      : preferred;
+  return (withDefaultContext[0] ?? preferred[0])?.model;
+}
+
 export function hasAutoCompactWindowOption(caps: ModelCapabilities, value: string): boolean {
   return caps.autoCompactWindowOptions?.some((option) => option.value === value) ?? false;
 }
 
-/** Return the default Claude auto-compaction budget, or null if the model has no override. */
+// Claude model ids may carry a context-window qualifier, e.g. `claude-fable-5-1[1m]`.
+const CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN = /\[([^\]]+)\]$/u;
+
+export function getClaudeContextWindowSuffix(model: string | null | undefined): string | null {
+  if (typeof model !== "string") return null;
+  return CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN.exec(model)?.[1]?.toLowerCase() ?? null;
+}
+
+export function stripClaudeContextWindowSuffix(model: string): string {
+  return model.replace(CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN, "");
+}
+
 export function getDefaultAutoCompactWindow(caps: ModelCapabilities): string | null {
   return caps.autoCompactWindowOptions?.find((option) => option.isDefault)?.value ?? null;
 }
@@ -222,13 +419,6 @@ export function getProviderOptionBooleanSelectionValue(
   return typeof value === "boolean" ? value : undefined;
 }
 
-export function getModelSelectionOptionValue(
-  modelSelection: ModelSelection | null | undefined,
-  id: string,
-): string | boolean | undefined {
-  return providerOptionSelectionValue(modelSelection?.options as ProviderOptionSelectionsInput, id);
-}
-
 export function getModelSelectionStringOptionValue(
   modelSelection: ModelSelection | null | undefined,
   id: string,
@@ -283,7 +473,7 @@ function reasoningDescriptorId(provider: ProviderKind): string {
   if (provider === "claudeAgent") {
     return "effort";
   }
-  if (provider === "kilo" || provider === "opencode") {
+  if (provider === "opencode") {
     return "variant";
   }
   if (provider === "pi") {
@@ -297,15 +487,13 @@ function legacyCapabilityDescriptors(
   caps: ModelCapabilities,
 ): ProviderOptionDescriptor[] {
   const primaryOptions =
-    provider === "kilo" || provider === "opencode"
-      ? (caps.variantOptions ?? [])
-      : caps.reasoningEffortLevels;
+    provider === "opencode" ? (caps.variantOptions ?? []) : caps.reasoningEffortLevels;
   const descriptors: ProviderOptionDescriptor[] = [];
   if (primaryOptions.length > 0) {
     const defaultPrimaryOption = primaryOptions.find((option) => option.isDefault);
     descriptors.push({
       id: reasoningDescriptorId(provider),
-      label: provider === "kilo" || provider === "opencode" ? "Variant" : "Reasoning",
+      label: provider === "opencode" ? "Variant" : "Reasoning",
       type: "select",
       options: primaryOptions.map((option) => ({
         id: option.value,
@@ -384,43 +572,17 @@ export function getProviderOptionCurrentValue(
   return descriptor.currentValue ?? descriptor.options.find((option) => option.isDefault)?.id;
 }
 
-export function getProviderOptionCurrentLabel(
-  descriptor: ProviderOptionDescriptor | null | undefined,
-): string | undefined {
-  const value = getProviderOptionCurrentValue(descriptor);
-  if (!descriptor) {
-    return undefined;
-  }
-  if (descriptor.type === "boolean") {
-    return typeof value === "boolean" ? (value ? "On" : "Off") : undefined;
-  }
-  return typeof value === "string"
-    ? descriptor.options.find((option) => option.id === value)?.label
-    : undefined;
-}
-
-export function buildProviderOptionSelectionsFromDescriptors(
-  descriptors: ReadonlyArray<ProviderOptionDescriptor> | null | undefined,
-): ProviderOptionSelection[] | undefined {
-  if (!descriptors || descriptors.length === 0) {
-    return undefined;
-  }
-  const selections = descriptors.flatMap((descriptor) => {
-    const value = getProviderOptionCurrentValue(descriptor);
-    return typeof value === "string" || typeof value === "boolean"
-      ? [{ id: descriptor.id, value }]
-      : [];
-  });
-  return selections.length > 0 ? selections : undefined;
-}
-
 // ── Data-driven capability resolver ───────────────────────────────────
 
 export function getModelCapabilities(
   provider: ProviderKind,
   model: string | null | undefined,
 ): ModelCapabilities {
-  const slug = normalizeModelSlug(model, provider);
+  const normalizedSlug = normalizeModelSlug(model, provider);
+  const slug =
+    provider === "claudeAgent" && normalizedSlug
+      ? stripClaudeContextWindowSuffix(normalizedSlug)
+      : normalizedSlug;
   if (slug && MODEL_CAPABILITIES_INDEX[provider]?.[slug]) {
     return MODEL_CAPABILITIES_INDEX[provider][slug];
   }
@@ -493,12 +655,22 @@ export function normalizeModelSlug(
   }
 
   const providerScopedModel =
-    provider === "claudeAgent" ? trimmed.replace(/\[[^\]]+\]$/u, "") : trimmed;
+    provider === "claudeAgent"
+      ? stripClaudeContextWindowSuffix(trimmed)
+      : provider === "devin" && trimmed === trimmed.toLowerCase() && trimmed.endsWith("-medium")
+        ? trimmed.slice(0, -"-medium".length)
+        : trimmed;
   const aliases = MODEL_SLUG_ALIASES_BY_PROVIDER[provider] as Record<string, ModelSlug>;
-  const aliased = Object.prototype.hasOwnProperty.call(aliases, providerScopedModel)
-    ? aliases[providerScopedModel]
+  const aliasKey = providerScopedModel.toLowerCase();
+  const aliased = Object.prototype.hasOwnProperty.call(aliases, aliasKey)
+    ? aliases[aliasKey]
     : undefined;
-  return typeof aliased === "string" ? aliased : (providerScopedModel as ModelSlug);
+  const normalized = typeof aliased === "string" ? aliased : providerScopedModel;
+  return (
+    provider === "claudeAgent" && getClaudeContextWindowSuffix(trimmed) === "1m"
+      ? `${normalized}[1m]`
+      : normalized
+  ) as ModelSlug;
 }
 
 export function resolveSelectableModel(
@@ -538,8 +710,12 @@ export function resolveModelSlug(
   model: string | null | undefined,
   provider: ProviderKind = "codex",
 ): ModelSlug | null {
-  const normalized = normalizeModelSlug(model, provider);
-  if (provider === "pi") {
+  const normalizedModel = normalizeModelSlug(model, provider);
+  const normalized =
+    provider === "claudeAgent" && normalizedModel
+      ? (stripClaudeContextWindowSuffix(normalizedModel) as ModelSlug)
+      : normalizedModel;
+  if (provider === "devin" || provider === "pi") {
     return normalized;
   }
   if (!normalized) {
@@ -558,28 +734,17 @@ export function resolveModelSlugForProvider(
   return resolveModelSlug(model, provider);
 }
 
-/** Trim a string, returning null for empty/missing values. */
 export function trimOrNull<T extends string>(value: T | null | undefined): T | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim() as T;
   return trimmed || null;
 }
 
-export function normalizeCodexModelOptions(
-  model: string | null | undefined,
-  modelOptions: CodexModelOptions | null | undefined,
-): CodexModelOptions | undefined {
-  const caps = getModelCapabilities("codex", model);
-  const defaultReasoningEffort = getDefaultEffort(caps) as CodexReasoningEffort;
-  const reasoningEffort = trimOrNull(modelOptions?.reasoningEffort) ?? defaultReasoningEffort;
-  const fastModeEnabled = modelOptions?.fastMode === true;
-  const nextOptions: CodexModelOptions = {
-    ...(reasoningEffort !== defaultReasoningEffort ? { reasoningEffort } : {}),
-    ...(fastModeEnabled ? { fastMode: true } : {}),
-  };
-  return Object.keys(nextOptions).length > 0 ? nextOptions : undefined;
-}
-
+/**
+ * Keeps only explicit Claude option overrides. The model-native auto-compact
+ * window stays unset so Claude Code can apply server tuning, settings.json,
+ * and CLAUDE_CODE_AUTO_COMPACT_WINDOW.
+ */
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
@@ -617,6 +782,14 @@ export function normalizeClaudeModelOptions(
 }
 
 export function resolveApiModelId(modelSelection: ModelSelection): string {
+  if (
+    modelSelection.provider === "claudeAgent" &&
+    normalizeClaudeModelOptions(modelSelection.model, modelSelection.options)?.autoCompactWindow ===
+      "1m" &&
+    getClaudeContextWindowSuffix(modelSelection.model) === null
+  ) {
+    return `${modelSelection.model}[1m]`;
+  }
   return modelSelection.model;
 }
 
@@ -636,31 +809,23 @@ export function getEffectiveClaudeCodeEffort(
 
 interface ClaudeSpawnProfile {
   readonly maxEffort: boolean;
+  readonly autoCompactWindow: string | undefined;
 }
 
-// Mirrors the spawn-time option derivation in the Claude adapter's startSession:
-// only `max` effort is fixed at subprocess spawn (the query `effort` option;
-// the flag-settings `effortLevel` key caps at xhigh). Every other effort level
-// plus fastMode/ultracode are Settings keys applied live via the SDK's
-// flag-settings control, and model/context window switch via `setModel`.
+// Claude's live flag settings do not refresh the runtime auto-compaction window.
+// Keep this profile aligned with the adapter's normalized spawn settings.
 function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
   const caps = getModelCapabilities("claudeAgent", selection.model);
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
   const effort = requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
   return {
     maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
+    autoCompactWindow: normalizeClaudeModelOptions(selection.model, selection.options)
+      ?.autoCompactWindow,
   } satisfies ClaudeSpawnProfile;
 }
 
-/**
- * Whether switching from `previous` to `next` requires restarting the Claude
- * subprocess. Restarting resumes via `--resume`, which replays the whole
- * conversation as uncached input tokens, so it must only happen for options
- * fixed at spawn — currently only `max` effort, which has no live Settings
- * equivalent. Model changes use `setModel`; other effort levels, fast mode,
- * ultracode, the auto-compact budget, and the thinking toggle all use the
- * SDK's live flag-settings control.
- */
+/** Restart only for spawn-fixed settings; resume preserves identity, not guaranteed cache hits. */
 export function claudeSelectionRequiresRestart(
   previous: ModelSelection | undefined,
   next: ModelSelection,
@@ -681,7 +846,9 @@ export function claudeSelectionRequiresRestart(
   // selected model's capabilities change.
   const prev = claudeSpawnProfile(previous);
   const desired = claudeSpawnProfile(next);
-  return prev.maxEffort !== desired.maxEffort;
+  return (
+    prev.maxEffort !== desired.maxEffort || prev.autoCompactWindow !== desired.autoCompactWindow
+  );
 }
 
 export function normalizeCursorModelOptions(

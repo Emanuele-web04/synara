@@ -7,9 +7,9 @@ import { describe, it, assert } from "@effect/vitest";
 import {
   buildClaudeProcessEnv,
   hasUsableClaudeCliCredentials,
-  hasUsableClaudeCliCredentialsContent,
   readClaudeCliCredentialsContentSummary,
   resolveClaudeCredentialsPaths,
+  withClaudeArtifactOptIn,
 } from "./claudeProcessEnv.ts";
 
 describe("claudeProcessEnv", () => {
@@ -102,7 +102,7 @@ describe("claudeProcessEnv", () => {
 
   it("detects usable Claude OAuth credential files", () => {
     assert.equal(
-      hasUsableClaudeCliCredentialsContent(
+      readClaudeCliCredentialsContentSummary(
         JSON.stringify({
           claudeAiOauth: {
             accessToken: "local-access-token",
@@ -110,12 +110,12 @@ describe("claudeProcessEnv", () => {
           },
         }),
         1_000,
-      ),
+      ).usable,
       true,
     );
 
     assert.equal(
-      hasUsableClaudeCliCredentialsContent(
+      readClaudeCliCredentialsContentSummary(
         JSON.stringify({
           claudeAiOauth: {
             accessToken: "expired-access-token",
@@ -124,7 +124,7 @@ describe("claudeProcessEnv", () => {
           },
         }),
         1_000,
-      ),
+      ).usable,
       true,
     );
   });
@@ -148,7 +148,7 @@ describe("claudeProcessEnv", () => {
 
   it("rejects leftover expired or malformed Claude credential files", () => {
     assert.equal(
-      hasUsableClaudeCliCredentialsContent(
+      readClaudeCliCredentialsContentSummary(
         JSON.stringify({
           claudeAiOauth: {
             accessToken: "expired-access-token",
@@ -156,11 +156,11 @@ describe("claudeProcessEnv", () => {
           },
         }),
         1_000,
-      ),
+      ).usable,
       false,
     );
-    assert.equal(hasUsableClaudeCliCredentialsContent("{}", 1_000), false);
-    assert.equal(hasUsableClaudeCliCredentialsContent("not json", 1_000), false);
+    assert.equal(readClaudeCliCredentialsContentSummary("{}", 1_000).usable, false);
+    assert.equal(readClaudeCliCredentialsContentSummary("not json", 1_000).usable, false);
   });
 
   it("reads the first usable credentials path", () => {
@@ -190,5 +190,18 @@ describe("claudeProcessEnv", () => {
       "/tmp/custom-claude/.credentials.json",
       "/home/tester/.claude/.credentials.json",
     ]);
+  });
+
+  it("opts Claude into Artifacts only when the setting is on", () => {
+    const env = { PATH: "/usr/bin" };
+    assert.strictEqual(withClaudeArtifactOptIn(env, false), env);
+    assert.strictEqual(withClaudeArtifactOptIn(env, undefined), env);
+    assert.deepStrictEqual(withClaudeArtifactOptIn(env, true), {
+      PATH: "/usr/bin",
+      CLAUDE_CODE_ARTIFACT: "1",
+    });
+    assert.deepStrictEqual(withClaudeArtifactOptIn({ ...env, CLAUDE_CODE_ARTIFACT: "1" }, false), {
+      PATH: "/usr/bin",
+    });
   });
 });

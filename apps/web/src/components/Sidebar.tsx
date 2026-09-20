@@ -1,3 +1,4 @@
+import { useProjectImportDialogStore } from "~/projectImport/projectImportDialogStore";
 // FILE: Sidebar.tsx
 // Purpose: Renders the project/thread sidebar, including row status, sorting, and thread actions.
 // Exports: Sidebar
@@ -10,6 +11,8 @@ import {
   CircleQuestionIcon,
   ClockIcon,
   CopyIcon,
+  CustomizeIcon,
+  DragHandleIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
   FoldersIcon,
@@ -33,12 +36,9 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { createCentralIconComponent } from "~/lib/central-icons";
-import {
-  PR_STATE_PRESENTATION_ICONS,
-  resolvePrStatePresentation,
-  type PrStatePresentation,
-} from "~/components/pullRequest/pullRequestStatePresentation";
+import { ThreadPrStatusBadge } from "~/components/pullRequest/ThreadPrStatusBadge";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
+import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
@@ -66,13 +66,19 @@ import {
   type CollisionDetection,
   PointerSensor,
   type DragStartEvent,
+  closestCenter,
   closestCorners,
   pointerWithin,
   useSensor,
   useSensors,
   type DragEndEvent,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -81,6 +87,7 @@ import {
   MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
+  type OrchestrationThreadPullRequest,
   PROVIDER_DISPLAY_NAMES,
   ProjectId,
   SpaceId,
@@ -90,6 +97,7 @@ import {
   WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import { getDefaultModel } from "@synara/shared/model";
 import { pluralize } from "@synara/shared/text";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
@@ -100,6 +108,11 @@ import {
   type SidebarThreadSortOrder,
   useAppSettings,
 } from "../appSettings";
+import {
+  normalizeHiddenSidebarNavItems,
+  normalizeSidebarNavOrder,
+  type SidebarNavItemId,
+} from "../sidebarNavOrdering";
 import { isElectron } from "../env";
 import { formatRelativeTime } from "../lib/relativeTime";
 import {
@@ -134,7 +147,7 @@ import {
   isSidebarThreadVisible,
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
-import { useThreadPullRequests, type ThreadPullRequest } from "../hooks/useThreadPullRequests";
+import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
 import {
   providerComposerCapabilitiesQueryOptions,
   supportsThreadImport,
@@ -165,6 +178,7 @@ import {
   isStudioContainerProject,
   prewarmStudioProject,
 } from "../lib/studioProjects";
+import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useLatestProjectStore } from "../latestProjectStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
@@ -180,6 +194,7 @@ import {
 } from "../routes/-automations.shared";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
 import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
+import { isModelPickerShortcutScopeActive } from "./chat/ComposerModelPicker.logic";
 import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { FolderClosed } from "./FolderClosed";
@@ -212,6 +227,7 @@ import {
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
 import { RenameDialog } from "./RenameDialog";
+import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import {
   ThreadFolderRemovalDialog,
@@ -258,6 +274,7 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { Input } from "./ui/input";
 import {
@@ -333,6 +350,7 @@ import {
   resolveSettingsBackTarget,
   type SettingsBackTarget,
   resolveSidebarNewThreadEnvMode,
+  resolveSidebarProjectRowLabel,
   resolveThreadHoverCardMetadata,
   resolveThreadProjectLabel,
   resolveThreadRowClassName,
@@ -367,6 +385,14 @@ import {
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import {
+  beginThreadDrag,
+  endThreadDrag,
+  isThreadDragTransfer,
+  readThreadDragPayload,
+  resolveSidebarFolderDropTarget,
+  THREAD_DRAG_MIME,
+} from "../lib/threadDrag";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { normalizeSettingsSection } from "../settingsNavigation";
 import {
@@ -386,14 +412,9 @@ import {
   ComposerPickerMenuPopup,
   ComposerPickerMenuSubPopup,
 } from "./chat/ComposerPickerMenuPopup";
+import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "./chat/composerPickerStyles";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
-import {
-  hasThreadDragType,
-  parseThreadDragPayload,
-  resolveSidebarFolderDropTarget,
-  THREAD_DRAG_MIME,
-} from "../threadDrag";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useThreadActivationController } from "../hooks/useThreadActivationController";
 import {
@@ -482,10 +503,6 @@ const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
 const GITHUB_CANCEL_RECOVERY_MAX_ATTEMPTS = 40;
 const GITHUB_CANCEL_RECOVERY_DELAY_MS = 250;
-const SIDEBAR_VIEW_LABELS: Record<SidebarView, string> = {
-  threads: "Projects",
-  studio: "Studio",
-};
 /** Snap the optimistic segment selection back if the navigation never lands. */
 const EMPTY_PROJECT_SIDEBAR_DATA: ReadonlyMap<ProjectId, SidebarDerivedProjectData> = new Map();
 const DebugFeatureFlagsMenu = import.meta.env.DEV
@@ -500,6 +517,7 @@ type ProjectContextMenuId =
   | "open-in-finder"
   | "open-in-kanban"
   | "copy-path"
+  | "relocate"
   | "start-dev"
   | "stop-dev"
   | "open-dev-server"
@@ -637,7 +655,7 @@ function threadRowStatusSlotClassName(isSubagentThread: boolean, toneClassName?:
     "flex w-[15px] shrink-0 items-center justify-center leading-none tabular-nums",
     sidebarHoverRevealHideClassName("thread-row"),
     isSubagentThread
-      ? "text-[10px]"
+      ? "text-ui-xs"
       : // Nudge the timestamp a hair above the meta scale while still tracking the user's
         // typography setting (the CSS var is always set; the 11px is just an SSR fallback).
         "text-[length:calc(var(--app-font-size-ui-meta,11px)+0.5px)]",
@@ -662,14 +680,10 @@ type ThreadMetaChip = {
 
 /**
  * Back-to-front order: first = behind, last = in front.
- * Priority lowest -> highest: handoff -> fork -> worktree. Sidechats skip fork/temporary
- * badges because the "Sidechat:" title already identifies them.
+ * Priority lowest -> highest: handoff -> fork -> worktree.
  */
 function resolveThreadRowMetaChips(input: {
-  thread: Pick<
-    Thread,
-    "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
-  >;
+  thread: Pick<Thread, "forkSourceThreadId" | "envMode" | "worktreePath" | "handoff">;
   includeHandoffBadge: boolean;
   /**
    * When the leading provider avatar already renders the source → target handoff
@@ -680,8 +694,6 @@ function resolveThreadRowMetaChips(input: {
   threadAutomations?: readonly AutomationDefinition[] | undefined;
 }): ThreadMetaChip[] {
   const chips: ThreadMetaChip[] = [];
-  const isSidechatThread = Boolean(input.thread.sidechatSourceThreadId);
-
   const threadAutomations = input.threadAutomations;
   if (threadAutomations && threadAutomations.length > 0) {
     const anyEnabled = threadAutomations.some((automation) => automation.enabled);
@@ -714,7 +726,7 @@ function resolveThreadRowMetaChips(input: {
     });
   }
 
-  if (input.thread.forkSourceThreadId && !isSidechatThread) {
+  if (input.thread.forkSourceThreadId) {
     chips.push({
       id: "fork",
       tooltip: "Forked thread",
@@ -739,16 +751,6 @@ function resolveThreadRowMetaChips(input: {
 
   return chips;
 }
-
-interface PrStatusIndicator {
-  label: PrStatePresentation["label"];
-  colorClass: string;
-  icon: LucideIcon;
-  tooltip: string;
-  url: string;
-}
-
-type ThreadPr = ThreadPullRequest;
 
 function terminalStatusFromThreadState(input: {
   runningTerminalIds: string[];
@@ -779,50 +781,6 @@ function terminalStatusFromThreadState(input: {
   return null;
 }
 
-function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
-  if (!pr) return null;
-  const presentation = resolvePrStatePresentation(pr);
-  return {
-    label: presentation.label,
-    colorClass: presentation.colorClass,
-    icon: PR_STATE_PRESENTATION_ICONS[presentation.iconKind],
-    tooltip: `#${pr.number} ${presentation.label}: ${pr.title}`,
-    url: pr.url,
-  };
-}
-
-function ThreadPrStatusBadge({
-  prStatus,
-  onOpen,
-  className,
-}: {
-  prStatus: PrStatusIndicator;
-  onOpen: (event: MouseEvent<HTMLElement>, prUrl: string) => void;
-  className?: string;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            type="button"
-            aria-label={prStatus.tooltip}
-            className={cn(
-              "inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
-              prStatus.colorClass,
-              className,
-            )}
-            onClick={(event) => onOpen(event, prStatus.url)}
-          >
-            <SidebarGlyph icon={prStatus.icon} variant="meta" className="size-3.5" />
-          </button>
-        }
-      />
-      <TooltipPopup side="top">{prStatus.tooltip}</TooltipPopup>
-    </Tooltip>
-  );
-}
-
 type SortableProjectHandleProps = Pick<
   ReturnType<typeof useSortable>,
   "attributes" | "listeners" | "setActivatorNodeRef"
@@ -850,7 +808,7 @@ function ProjectSortMenu({
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
             Sort projects
           </div>
           <MenuRadioGroup
@@ -861,7 +819,11 @@ function ProjectSortMenu({
           >
             {(Object.entries(SIDEBAR_SORT_LABELS) as Array<[SidebarProjectSortOrder, string]>).map(
               ([value, label]) => (
-                <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-xs">
+                <MenuRadioItem
+                  key={value}
+                  value={value}
+                  className="min-h-7 py-1 sm:text-ui leading-snug"
+                >
                   {label}
                 </MenuRadioItem>
               ),
@@ -869,7 +831,7 @@ function ProjectSortMenu({
           </MenuRadioGroup>
         </MenuGroup>
         <MenuGroup>
-          <div className="px-2 pt-2 pb-1 sm:text-xs font-medium text-muted-foreground">
+          <div className="px-2 pt-2 pb-1 sm:text-ui leading-snug font-medium text-muted-foreground">
             Sort threads
           </div>
           <ThreadSortMenuItems
@@ -893,9 +855,12 @@ const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).sl
 function SidebarHelpMenu({
   onOpenShortcuts,
   onOpenFeedback,
+  onCustomizeSidebar,
 }: {
   onOpenShortcuts: () => void;
   onOpenFeedback: () => void;
+  /** Null hides the entry (e.g. on surfaces without the primary nav block). */
+  onCustomizeSidebar: (() => void) | null;
 }) {
   // `openCount` keys the dialog so each open remounts the accordion — its rows
   // capture `defaultOpen` in mount state, so a stale mount would ignore a
@@ -921,7 +886,9 @@ function SidebarHelpMenu({
         />
         <ComposerPickerMenuPopup align="end" side="top" className="w-64 min-w-64">
           <MenuGroup>
-            <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">What’s new</div>
+            <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+              What’s new
+            </div>
             {HELP_MENU_RELEASE_ENTRIES.map((entry) => (
               <MenuItem
                 key={entry.version}
@@ -946,6 +913,15 @@ function SidebarHelpMenu({
           </MenuGroup>
           <MenuSeparator />
           <MenuGroup>
+            {onCustomizeSidebar ? (
+              <MenuItem
+                className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={onCustomizeSidebar}
+              >
+                <SidebarContextMenuIcon icon={CustomizeIcon} />
+                <span>Customize sidebar</span>
+              </MenuItem>
+            ) : null}
             <MenuItem className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME} onClick={onOpenShortcuts}>
               <SidebarContextMenuIcon icon={KeyboardIcon} />
               <span>Keybindings</span>
@@ -992,7 +968,7 @@ function ThreadSortMenuItems({
     >
       {(Object.entries(SIDEBAR_THREAD_SORT_LABELS) as Array<[SidebarThreadSortOrder, string]>).map(
         ([value, label]) => (
-          <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-xs">
+          <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-ui leading-snug">
             {label}
           </MenuRadioItem>
         ),
@@ -1019,7 +995,9 @@ function ChatSortMenu({
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Sort chats</div>
+          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+            Sort chats
+          </div>
           <ThreadSortMenuItems
             threadSortOrder={threadSortOrder}
             onThreadSortOrderChange={onThreadSortOrderChange}
@@ -1090,7 +1068,7 @@ function SidebarPrimaryAction({
         <span className="truncate">{label}</span>
         {badge ? (
           <span
-            className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-muted px-1 text-[10px] font-medium text-muted-foreground"
+            className="ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-md bg-muted px-1 text-ui-xs font-medium text-muted-foreground"
             aria-label={badge.accessibleLabel}
             title={badge.accessibleLabel}
           >
@@ -1107,6 +1085,85 @@ function SidebarPrimaryAction({
         ) : null}
       </SidebarMenuButton>
     </SidebarMenuItem>
+  );
+}
+
+/** Everything a primary nav row needs, keyed by `SidebarNavItemId` so persisted
+ *  order/visibility settings can drive both the live rows and the customize card. */
+type SidebarNavItemDescriptor = {
+  readonly icon: ComponentType<{ className?: string }>;
+  readonly iconClassName?: string;
+  readonly label: string;
+  readonly active: boolean;
+  readonly badge: SidebarActionBadge | null;
+  readonly onClick: () => void;
+  readonly onMouseEnter?: () => void;
+  readonly onFocus?: () => void;
+};
+
+/** One row of the nav customize card: visibility checkbox + label + drag handle. */
+function SidebarNavCustomizeRow({
+  id,
+  icon: Icon,
+  iconClassName,
+  label,
+  visible,
+  onVisibleChange,
+}: {
+  id: SidebarNavItemId;
+  icon: ComponentType<{ className?: string }>;
+  iconClassName?: string;
+  label: string;
+  visible: boolean;
+  onVisibleChange: (visible: boolean) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={cn("relative list-none", isDragging && "z-20 opacity-80")}
+    >
+      <div
+        className={cn(
+          SIDEBAR_HEADER_ROW_CLASS_NAME,
+          SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+          "cursor-default",
+        )}
+      >
+        <Checkbox
+          checked={visible}
+          onCheckedChange={(checked) => onVisibleChange(Boolean(checked))}
+          aria-label={visible ? `Hide ${label} from the sidebar` : `Show ${label} in the sidebar`}
+        />
+        <SidebarLeadingIcon size="sm" tone="text-inherit">
+          <SidebarGlyph
+            icon={Icon}
+            variant="leading"
+            {...(iconClassName ? { className: iconClassName } : {})}
+          />
+        </SidebarLeadingIcon>
+        <span className="truncate">{label}</span>
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          className="ml-auto inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground active:cursor-grabbing"
+          aria-label={`Reorder ${label}`}
+          {...attributes}
+          {...listeners}
+        >
+          <DragHandleIcon className="size-3.5" />
+        </button>
+      </div>
+    </li>
   );
 }
 
@@ -1247,8 +1304,8 @@ function SidebarActivityBellButton({
       >
         {onboardingVisible ? (
           <div className="text-left">
-            <div className="text-xs font-semibold">Activity</div>
-            <div className="mt-0.5 text-[11px] leading-4 text-white/85">
+            <div className="text-ui leading-snug font-semibold">Activity</div>
+            <div className="mt-0.5 text-ui-sm leading-4 text-white/85">
               See running tasks, completed work, and anything that needs your attention.
             </div>
           </div>
@@ -1329,10 +1386,10 @@ export function SidebarSurfacePicker({
                 className="items-center rounded-[10px] data-checked:bg-[var(--color-background-button-secondary-hover)]"
               >
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="text-[13px] font-medium leading-none text-foreground">
+                  <span className="text-ui-lg font-medium leading-none text-foreground">
                     {copy.title}
                   </span>
-                  <span className="text-[11px] leading-snug text-muted-foreground">
+                  <span className="text-ui-sm leading-snug text-muted-foreground">
                     {copy.description}
                   </span>
                 </span>
@@ -1544,7 +1601,6 @@ export default function Sidebar() {
       }
     };
   }, []);
-  const createSplitViewFromDrop = useSplitViewStore((store) => store.createFromDrop);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
   const openRightDockPane = useRightDockStore((store) => store.openPane);
   // Query defaults are applied after destructuring: a default inside the destructuring
@@ -1596,6 +1652,7 @@ export default function Sidebar() {
     useState<ThreadFolderEditorState | null>(null);
   const [threadFolderRemovalState, setThreadFolderRemovalState] =
     useState<ThreadFolderRemovalState | null>(null);
+  const [relocateProjectDialogId, setRelocateProjectDialogId] = useState<ProjectId | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
   // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
@@ -2180,7 +2237,10 @@ export default function Sidebar() {
       const latestThread = sortThreadsForSidebar(
         snapshot.threads
           .filter(
-            (thread) => thread.projectId === projectId && (thread.archivedAt ?? null) === null,
+            (thread) =>
+              thread.projectId === projectId &&
+              (thread.archivedAt ?? null) === null &&
+              !thread.sidechatSourceThreadId,
           )
           .map((thread) => ({
             id: thread.id,
@@ -2198,17 +2258,9 @@ export default function Sidebar() {
         return true;
       }
 
-      void handleNewThread(projectId, {
-        envMode: appSettings.defaultThreadEnvMode,
-      }).catch(() => undefined);
-      return true;
+      return (await handleNewThread(projectId).catch(() => null)) !== null;
     },
-    [
-      appSettings.defaultThreadEnvMode,
-      appSettings.sidebarThreadSortOrder,
-      handleNewThread,
-      navigate,
-    ],
+    [appSettings.sidebarThreadSortOrder, handleNewThread, navigate],
   );
 
   const openExistingProjectFromSnapshot = useCallback(
@@ -2241,18 +2293,9 @@ export default function Sidebar() {
       }
 
       setProjectExpanded(projectId, true);
-      void handleNewThread(projectId, {
-        envMode: appSettings.defaultThreadEnvMode,
-      }).catch(() => undefined);
-      return true;
+      return (await handleNewThread(projectId).catch(() => null)) !== null;
     },
-    [
-      appSettings.defaultThreadEnvMode,
-      appSettings.sidebarThreadSortOrder,
-      handleNewThread,
-      navigate,
-      setProjectExpanded,
-    ],
+    [appSettings.sidebarThreadSortOrder, handleNewThread, navigate, setProjectExpanded],
   );
 
   // Poll the server read model briefly after project.create so we only recover from fresh state.
@@ -2371,19 +2414,9 @@ export default function Sidebar() {
         return;
       }
 
-      void handleNewThread(typedProjectId, {
-        envMode: resolveSidebarNewThreadEnvMode({
-          defaultEnvMode: appSettings.defaultThreadEnvMode,
-        }),
-      });
+      void handleNewThread(typedProjectId);
     },
-    [
-      appSettings.defaultThreadEnvMode,
-      focusMostRecentThreadForProject,
-      handleNewThread,
-      hideAutomationRunThreads,
-      sidebarThreads,
-    ],
+    [focusMostRecentThreadForProject, handleNewThread, hideAutomationRunThreads, sidebarThreads],
   );
 
   // Shared resolver behind resolveBackToStudioTarget/resolveBackToThreadsTarget (and the
@@ -2644,6 +2677,7 @@ export default function Sidebar() {
             ? {}
             : { createIfMissing: options.createIfMissing }),
           ...(options.spaceId === undefined ? {} : { spaceId: options.spaceId }),
+          defaultProvider: appSettings.defaultProvider,
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
@@ -2664,6 +2698,11 @@ export default function Sidebar() {
           if (recovered) {
             return;
           }
+          if (creationResult.created) {
+            // The opener's draft navigation was superseded; retrying here
+            // would override the user's newer route.
+            throw new Error("Project creation was superseded before its chat opened.");
+          }
         }
 
         if (!creationResult.created) {
@@ -2678,15 +2717,16 @@ export default function Sidebar() {
         // snapshot is just slow to catch up, continue with the local new-thread flow
         // instead of surfacing a false-negative sidebar sync error.
         setProjectExpanded(creationResult.projectId, true);
-        void handleNewThread(creationResult.projectId, {
-          envMode: appSettings.defaultThreadEnvMode,
-        }).catch(() => undefined);
+        const threadId = await handleNewThread(creationResult.projectId).catch(() => null);
+        if (!threadId) {
+          throw new Error("Project creation was superseded before its chat opened.");
+        }
       };
 
       await runExclusiveProjectAddition(projectAdditionLockRef, runAddProject);
     },
     [
-      appSettings.defaultThreadEnvMode,
+      appSettings.defaultProvider,
       handleNewThread,
       projects,
       recoverExistingProjectFromServer,
@@ -2752,12 +2792,12 @@ export default function Sidebar() {
         projectCwd: project.cwd,
         draftWorktreePath: draftThread?.worktreePath ?? null,
         serverCwd,
-        // Hover-time warm must resolve the same envMode the click will pass so the
-        // warmed cwd keys match the thread ChatView actually mounts (local mode
-        // clears the draft worktree; worktree mode keeps it).
-        envMode: resolveSidebarNewThreadEnvMode({
-          defaultEnvMode: appSettings.defaultThreadEnvMode,
-        }),
+        // Match new-thread bootstrap: preserve existing drafts and apply project
+        // preferences only when creating a fresh one.
+        envMode:
+          draftThread?.envMode ??
+          useProjectEnvironmentStore.getState().envModeByProjectId[projectId] ??
+          appSettings.defaultThreadEnvMode,
         providerStatuses,
         statusesReconciled: hasReconciledServerProviderStatuses(queryClient),
         providerOrder: appSettings.providerOrder,
@@ -2786,11 +2826,7 @@ export default function Sidebar() {
   const handlePrimaryNewThread = useCallback(() => {
     if (primaryNewThreadTarget) {
       prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId, { includeDroid: true });
-      void handleNewThread(primaryNewThreadTarget.projectId, {
-        envMode: resolveSidebarNewThreadEnvMode({
-          defaultEnvMode: appSettings.defaultThreadEnvMode,
-        }),
-      });
+      void handleNewThread(primaryNewThreadTarget.projectId);
       return;
     }
 
@@ -2801,7 +2837,6 @@ export default function Sidebar() {
     }
     handleStartAddProject();
   }, [
-    appSettings.defaultThreadEnvMode,
     handleNewThread,
     handleStartAddProject,
     prefetchModelsForProjectNewThread,
@@ -2849,11 +2884,9 @@ export default function Sidebar() {
           ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
           : provider === "cursor"
             ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
-            : provider === "kilo"
-              ? `Imported Kilo session${suffix ? ` ${suffix}` : ""}`
-              : provider === "opencode"
-                ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-                : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+            : provider === "opencode"
+              ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
+              : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {
@@ -3007,7 +3040,8 @@ export default function Sidebar() {
   const moveThreadsToFolder = useCallback(
     (threadIds: readonly ThreadId[], folderId: string | null) => {
       const folder = folderId
-        ? useSidebarThreadFolderStore.getState().folders.find((entry) => entry.id === folderId)
+        ? (useSidebarThreadFolderStore.getState().folders.find((entry) => entry.id === folderId) ??
+          null)
         : null;
       const eligibleIds = threadIds.filter((threadId) => {
         const thread = getThreadFromState(useStore.getState(), threadId);
@@ -3031,8 +3065,8 @@ export default function Sidebar() {
 
   const resolveSidebarThreadDropIds = useCallback(
     (event: ReactDragEvent<HTMLElement>, projectId: ProjectId): ThreadId[] => {
-      if (!hasThreadDragType(event.dataTransfer)) return [];
-      const payload = parseThreadDragPayload(event.dataTransfer);
+      if (!isThreadDragTransfer(event.dataTransfer)) return [];
+      const payload = readThreadDragPayload(event.dataTransfer);
       const rememberedIds = sidebarThreadDragIdsRef.current;
       const candidateIds =
         rememberedIds.length > 0 &&
@@ -3055,7 +3089,7 @@ export default function Sidebar() {
       projectId: ProjectId,
       targetFolderId: string | null,
     ) => {
-      if (!hasThreadDragType(event.dataTransfer)) return;
+      if (!isThreadDragTransfer(event.dataTransfer)) return;
       // A folder owns its whole subtree as a drop target. Blocking the project-root
       // parent prevents dropping on the current folder from accidentally extracting it.
       if (targetFolderId !== null) event.stopPropagation();
@@ -3082,7 +3116,7 @@ export default function Sidebar() {
       projectId: ProjectId,
       targetFolderId: string | null,
     ) => {
-      if (!hasThreadDragType(event.dataTransfer)) return;
+      if (!isThreadDragTransfer(event.dataTransfer)) return;
       const relatedTarget = event.relatedTarget as Node | null;
       if (relatedTarget && event.currentTarget.contains(relatedTarget)) return;
       const key = threadFolderDropKey(projectId, targetFolderId);
@@ -3097,7 +3131,7 @@ export default function Sidebar() {
       projectId: ProjectId,
       targetFolderId: string | null,
     ) => {
-      if (!hasThreadDragType(event.dataTransfer)) return;
+      if (!isThreadDragTransfer(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
       const threadIds = resolveSidebarThreadDropIds(event, projectId);
@@ -3320,6 +3354,7 @@ export default function Sidebar() {
       const handoffItems = handoffTargets.map((provider, index) => ({
         id: `handoff:${provider}`,
         label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
+        icon: THREAD_CONTEXT_MENU_ICONS.handoff,
         separatorBefore: index === 0,
       }));
       const threadWorkspacePath = resolveThreadWorkspaceCwd({
@@ -3349,18 +3384,39 @@ export default function Sidebar() {
           ];
       const clicked = await api.contextMenu.show(
         [
-          { id: "rename", label: "Rename thread" },
-          { id: "toggle-pin", label: pinActionLabel("thread", isPinned) },
+          { id: "rename", label: "Rename thread", icon: THREAD_CONTEXT_MENU_ICONS.rename },
+          {
+            id: "toggle-pin",
+            label: pinActionLabel("thread", isPinned),
+            icon: THREAD_CONTEXT_MENU_ICONS.pin,
+          },
           ...(threadStatus?.dismissible
-            ? [{ id: "clear-notification", label: "Clear notification" }]
+            ? [
+                {
+                  id: "clear-notification",
+                  label: "Clear notification",
+                  icon: THREAD_CONTEXT_MENU_ICONS.clearNotification,
+                },
+              ]
             : []),
-          { id: "mark-unread", label: "Mark unread" },
+          { id: "mark-unread", label: "Mark unread", icon: THREAD_CONTEXT_MENU_ICONS.markUnread },
           ...handoffItems,
-          { id: "copy-path", label: "Copy Path", separatorBefore: true },
+          {
+            id: "copy-path",
+            label: "Copy Path",
+            icon: THREAD_CONTEXT_MENU_ICONS.copy,
+            separatorBefore: true,
+          },
           ...(threadWorkspacePath
-            ? [{ id: "open-path-in-terminal", label: "Open Path in Terminal" }]
+            ? [
+                {
+                  id: "open-path-in-terminal",
+                  label: "Open Path in Terminal",
+                  icon: THREAD_CONTEXT_MENU_ICONS.openInTerminal,
+                },
+              ]
             : []),
-          { id: "copy-thread-id", label: "Copy Thread ID" },
+          { id: "copy-thread-id", label: "Copy Thread ID", icon: THREAD_CONTEXT_MENU_ICONS.copy },
           ...threadFolderItems,
           ...(options?.extraItems ?? []),
           // Subagent threads are archived and restored through their parent
@@ -3368,10 +3424,18 @@ export default function Sidebar() {
           // no sidebar or Archived-panel row to restore it from.
           ...(thread.parentThreadId
             ? []
-            : [{ id: "archive", label: "Archive", separatorBefore: true }]),
+            : [
+                {
+                  id: "archive",
+                  label: "Archive",
+                  icon: THREAD_CONTEXT_MENU_ICONS.archive,
+                  separatorBefore: true,
+                },
+              ]),
           {
             id: "delete",
             label: "Delete",
+            icon: THREAD_CONTEXT_MENU_ICONS.delete,
             destructive: true,
             ...(thread.parentThreadId ? { separatorBefore: true } : {}),
           },
@@ -3594,9 +3658,18 @@ export default function Sidebar() {
                 })),
               ]
             : []),
-          { id: "mark-unread", label: `Mark unread (${count})` },
-          { id: "archive", label: `Archive (${count})` },
-          { id: "delete", label: `Delete (${count})`, destructive: true },
+          {
+            id: "mark-unread",
+            label: `Mark unread (${count})`,
+            icon: THREAD_CONTEXT_MENU_ICONS.markUnread,
+          },
+          { id: "archive", label: `Archive (${count})`, icon: THREAD_CONTEXT_MENU_ICONS.archive },
+          {
+            id: "delete",
+            label: `Delete (${count})`,
+            icon: THREAD_CONTEXT_MENU_ICONS.delete,
+            destructive: true,
+          },
         ],
         position,
       );
@@ -3740,6 +3813,33 @@ export default function Sidebar() {
     splitViewsById,
     terminalStateByThreadId,
   });
+  // PR chip on a thread row behaves like a link: a plain click opens the PR in the thread's
+  // right dock, while cmd/ctrl/middle-click (or a non-GitHub URL) opens it on GitHub.
+  const openThreadPullRequest = useCallback(
+    (
+      event: MouseEvent<HTMLElement>,
+      thread: SidebarThreadSummary,
+      pr: OrchestrationThreadPullRequest,
+    ) => {
+      const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(pr.url);
+      if (event.metaKey || event.ctrlKey || event.button === 1 || !repository) {
+        openPrLink(event, pr.url);
+        return;
+      }
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      activateThreadFromSidebarIntent(thread.id);
+      openRightDockPane(thread.id, {
+        kind: "pullRequest",
+        pullRequestProjectId: thread.projectId,
+        pullRequestRepository: repository,
+        pullRequestNumber: pr.number,
+        pullRequestInitialTab: "summary",
+      });
+    },
+    [activateThreadFromSidebarIntent, openPrLink, openRightDockPane],
+  );
 
   const handleCloseProjectContextMenu = useCallback(() => setProjectContextMenuState(null), []);
   const {
@@ -3808,8 +3908,7 @@ export default function Sidebar() {
               if (!project || !snapshot) return false;
 
               handleSelectSpaceForIncomingProject(project.spaceId ?? null);
-              await openExistingProjectFromSnapshot(project.id, snapshot);
-              return true;
+              return openExistingProjectFromSnapshot(project.id, snapshot);
             };
             const requestedProjectId = newProjectId();
             const requestedWorkspaceRoot = joinProjectPath(
@@ -3944,6 +4043,10 @@ export default function Sidebar() {
       }
       if (clicked === "open-dev-server") {
         await handleOpenProjectRunServer(projectId);
+        return;
+      }
+      if (clicked === "relocate") {
+        setRelocateProjectDialogId(projectId);
         return;
       }
       if (clicked === "rename") {
@@ -4109,6 +4212,122 @@ export default function Sidebar() {
     autoAnimate(node, SIDEBAR_LIST_ANIMATION_OPTIONS);
     animatedProjectListsRef.current.add(node);
   }, []);
+
+  // --- Primary nav customization: persisted order + visibility, edited in a card. ---
+  const sidebarNavOrder = useMemo(
+    () => normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
+    [appSettings.sidebarNavOrder],
+  );
+  const hiddenSidebarNavItems = useMemo(
+    () => new Set(normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems)),
+    [appSettings.hiddenSidebarNavItems],
+  );
+  const [isCustomizingNav, setIsCustomizingNav] = useState(false);
+  const [navCustomizeMenuPosition, setNavCustomizeMenuPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const navCustomizeMenuAnchor = useMemo(
+    () => (navCustomizeMenuPosition ? createClientPointMenuAnchor(navCustomizeMenuPosition) : null),
+    [navCustomizeMenuPosition],
+  );
+  const sidebarNavDescriptors = useMemo<Record<SidebarNavItemId, SidebarNavItemDescriptor>>(
+    () => ({
+      newThread: {
+        icon: NewThreadIcon,
+        iconClassName: "size-3.5",
+        label: "New thread",
+        active: false,
+        badge: null,
+        onClick: handlePrimaryNewThread,
+        onMouseEnter: prefetchModelsForPrimaryNewThread,
+        onFocus: prefetchModelsForPrimaryNewThread,
+      },
+      kanban: {
+        icon: KanbanIcon,
+        label: "Kanban",
+        active: isOnKanban,
+        badge: null,
+        onClick: () => {
+          void navigate({ to: "/kanban" });
+        },
+      },
+      pullRequests: {
+        icon: IoIosGitCompare,
+        label: "Pull requests",
+        active: isOnPullRequests,
+        badge: pullRequestsReviewBadge,
+        onClick: () => {
+          void navigate({
+            to: "/pull-requests",
+            search: { involvement: "all", state: "open" },
+          });
+        },
+      },
+      automations: {
+        icon: ClockIcon,
+        label: "Automations",
+        active: isOnAutomations,
+        badge: automationAttentionBadge,
+        onClick: () => {
+          void navigate({ to: "/automations" });
+        },
+      },
+    }),
+    [
+      automationAttentionBadge,
+      handlePrimaryNewThread,
+      isOnAutomations,
+      isOnKanban,
+      isOnPullRequests,
+      navigate,
+      prefetchModelsForPrimaryNewThread,
+      pullRequestsReviewBadge,
+    ],
+  );
+  // A hidden item whose route is currently active stays visible so the current
+  // surface never loses its sidebar row (mirrors the hidden-provider rule).
+  const visibleSidebarNavIds = useMemo(
+    () =>
+      sidebarNavOrder.filter(
+        (id) => !hiddenSidebarNavItems.has(id) || sidebarNavDescriptors[id].active,
+      ),
+    [hiddenSidebarNavItems, sidebarNavDescriptors, sidebarNavOrder],
+  );
+  const handleNavOrderDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const order = normalizeSidebarNavOrder(appSettings.sidebarNavOrder);
+      const fromIndex = order.indexOf(active.id as SidebarNavItemId);
+      const toIndex = order.indexOf(over.id as SidebarNavItemId);
+      if (fromIndex < 0 || toIndex < 0) return;
+      updateSettings({ sidebarNavOrder: arrayMove(order, fromIndex, toIndex) });
+    },
+    [appSettings.sidebarNavOrder, updateSettings],
+  );
+  const handleNavItemVisibleChange = useCallback(
+    (id: SidebarNavItemId, visible: boolean) => {
+      const hidden = normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems).filter(
+        (entry) => entry !== id,
+      );
+      updateSettings({ hiddenSidebarNavItems: visible ? hidden : [...hidden, id] });
+    },
+    [appSettings.hiddenSidebarNavItems, updateSettings],
+  );
+  const handleNavContextMenu = useCallback((event: MouseEvent) => {
+    if (!readNativeApi()) return;
+    event.preventDefault();
+    setNavCustomizeMenuPosition({ x: event.clientX, y: event.clientY });
+  }, []);
+  useEffect(() => {
+    if (!isCustomizingNav) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsCustomizingNav(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isCustomizingNav]);
 
   // Trees need child (subagent) threads too; the flat display list stays
   // root-only for pinned rows and other non-tree consumers.
@@ -4779,6 +4998,8 @@ export default function Sidebar() {
           sourceProjectName={hoverMetadata.sourceProjectName}
           branch={hoverMetadata.branch}
           worktreeName={hoverMetadata.worktreeName}
+          pullRequest={prByThreadId.get(thread.id) ?? null}
+          onOpenPullRequest={openPrLink}
           model={resolveThreadModelSummary(thread.modelSelection)}
           status={hoverStatus}
         />
@@ -4832,11 +5053,8 @@ export default function Sidebar() {
     });
     const threadStatus = resolveThreadStatusForSidebar(thread);
     const isSubagentThread = Boolean(thread.parentThreadId);
-    const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
-    const leadingPrStatus =
-      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
-        ? null
-        : prStatus;
+    const pr = prByThreadId.get(thread.id) ?? null;
+    const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -4860,9 +5078,9 @@ export default function Sidebar() {
             />
           }
         >
-          {leadingPrStatus ? (
+          {leadingPr ? (
             <ThreadPrStatusBadge
-              prStatus={leadingPrStatus}
+              pr={leadingPr}
               onOpen={openPrLink}
               className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
             />
@@ -4878,7 +5096,7 @@ export default function Sidebar() {
               // present — instead of a rigid grid that permanently fenced off a
               // timestamp-era column and squeezed the title/project even when wide.
               "relative gap-1.5 transition-colors",
-              leadingPrStatus && "pl-8",
+              leadingPr && "pl-8",
               resolveThreadRowTrailingReserveClass({
                 metaChipCount: rightMetaChips.length,
                 hasTrailingGlyph: hasTrailingStatusGlyph,
@@ -4930,7 +5148,7 @@ export default function Sidebar() {
                   // touching the worktree chip. It costs no space when the row is idle.
                   <span
                     className={cn(
-                      "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out",
+                      "max-w-[40%] shrink-0 truncate text-right text-ui-meta text-muted-foreground/38 transition-[margin] duration-150 ease-out",
                       hasTrailingStatusGlyph && "mr-2",
                     )}
                   >
@@ -4978,7 +5196,7 @@ export default function Sidebar() {
     const isSelected = selectedThreadIds.has(thread.id);
     const isHighlighted = isActive || isSelected;
     const threadStatus = resolveThreadStatusForSidebar(thread);
-    const prStatus = prStatusIndicator(prByThreadId.get(thread.id) ?? null);
+    const pr = prByThreadId.get(thread.id) ?? null;
     const terminalStatus = terminalStatusFromThreadState({
       runningTerminalIds: threadTerminalState.runningTerminalIds,
       terminalAttentionStatesById: threadTerminalState.terminalAttentionStatesById,
@@ -5000,14 +5218,10 @@ export default function Sidebar() {
       threadAutomations: automationsByThreadId.get(thread.id),
     });
     const isSubagentThread = Boolean(thread.parentThreadId);
-    const leadingPrStatus =
-      isSubagentThread || thread.forkSourceThreadId || thread.sidechatSourceThreadId
-        ? null
-        : prStatus;
+    const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
     const showCompactMeta = !isSubagentThread;
-    const showTemporaryThreadIcon =
-      showCompactMeta && isTemporaryThread && !thread.sidechatSourceThreadId;
+    const showTemporaryThreadIcon = showCompactMeta && isTemporaryThread;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -5023,9 +5237,9 @@ export default function Sidebar() {
         className="group/thread-row w-full"
         data-thread-item
       >
-        {leadingPrStatus ? (
+        {leadingPr ? (
           <ThreadPrStatusBadge
-            prStatus={leadingPrStatus}
+            pr={leadingPr}
             onOpen={openPrLink}
             className="pointer-events-auto absolute left-1.5 top-1/2 z-30 size-5 -translate-y-1/2"
           />
@@ -5044,7 +5258,7 @@ export default function Sidebar() {
                     isActive,
                     isSelected,
                   }),
-                  leadingPrStatus ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
+                  leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
                   isSubagentThread
                     ? "pr-7.5"
                     : resolveThreadRowTrailingReserveClass({
@@ -5054,7 +5268,6 @@ export default function Sidebar() {
                 )}
                 draggable
                 onDragStart={(event) => {
-                  const dragImage = event.currentTarget as HTMLElement | null;
                   const candidateIds = selectedThreadIds.has(thread.id)
                     ? [...selectedThreadIds]
                     : [thread.id];
@@ -5071,21 +5284,12 @@ export default function Sidebar() {
                     draggableFolderThreadIds.length > 0 ? thread.projectId : null,
                   );
                   setThreadFolderDropTargetKey(null);
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData(
-                    THREAD_DRAG_MIME,
-                    JSON.stringify({ threadId: thread.id }),
-                  );
-                  if (dragImage) {
-                    const rect = dragImage.getBoundingClientRect();
-                    event.dataTransfer.setDragImage(
-                      dragImage,
-                      Math.max(0, event.clientX - rect.left),
-                      Math.max(0, event.clientY - rect.top),
-                    );
-                  }
+                  beginThreadDrag(event, thread.id);
                 }}
-                onDragEnd={clearSidebarThreadDrag}
+                onDragEnd={() => {
+                  endThreadDrag();
+                  clearSidebarThreadDrag();
+                }}
                 onClick={(event) => {
                   handleThreadClick(event, thread.id, orderedProjectThreadIds);
                 }}
@@ -5315,6 +5519,8 @@ export default function Sidebar() {
     // name container itself is not focusable — the row's button is.
     const projectToolbarReserveClassName =
       "group-hover/project-header:pr-[6.25rem] group-has-[:focus-visible]/project-header:pr-[6.25rem]";
+    // Configured display name only — folder identity lives in the hover card (#1000).
+    const projectRowLabel = resolveSidebarProjectRowLabel(project);
 
     return (
       <div className="group/collapsible">
@@ -5384,17 +5590,12 @@ export default function Sidebar() {
               >
                 <span
                   className={cn(
-                    "truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal",
+                    "min-w-0 flex-1 truncate font-system-ui text-ui font-normal",
                     SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
                   )}
                 >
-                  {project.name}
+                  {projectRowLabel}
                 </span>
-                {project.localName ? (
-                  <span className="shrink-0 truncate text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/40">
-                    {project.folderName}
-                  </span>
-                ) : null}
               </div>
               {/* Closed folders surface child-chat status on the project row; open
                   folders leave that signal to their visible child thread rows. */}
@@ -5482,12 +5683,7 @@ export default function Sidebar() {
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  void handleNewThread(project.id, {
-                    envMode: resolveSidebarNewThreadEnvMode({
-                      defaultEnvMode: appSettings.defaultThreadEnvMode,
-                    }),
-                    entryPoint: "terminal",
-                  });
+                  void handleNewThread(project.id, { entryPoint: "terminal" });
                 }}
               />
               <SidebarIconButton
@@ -5508,11 +5704,7 @@ export default function Sidebar() {
                   event.preventDefault();
                   event.stopPropagation();
                   prefetchModelsForProjectNewThread(project.id, { includeDroid: true });
-                  void handleNewThread(project.id, {
-                    envMode: resolveSidebarNewThreadEnvMode({
-                      defaultEnvMode: appSettings.defaultThreadEnvMode,
-                    }),
-                  });
+                  void handleNewThread(project.id);
                 }}
               />
             </SidebarSectionToolbar>
@@ -5572,7 +5764,7 @@ export default function Sidebar() {
                         render={<button type="button" />}
                         data-thread-selection-safe
                         size="sm"
-                        className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                        className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                         onMouseDown={preventFocusOnMouseDown}
                         onClick={() => {
                           showMoreThreadsForProject(project.cwd, threadListExtraPages);
@@ -5587,7 +5779,7 @@ export default function Sidebar() {
                         data-thread-selection-safe
                         size="sm"
                         className={cn(
-                          "h-7 translate-x-0 justify-start rounded-lg text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                          "h-7 translate-x-0 justify-start rounded-lg text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
                           // Keep the left indent when "Show less" is the only affordance left.
                           canShowMoreThreads ? "w-auto flex-none px-2" : "flex-1 pr-2 pl-8",
                         )}
@@ -5781,6 +5973,8 @@ export default function Sidebar() {
       }
       const jumpIndex = threadJumpIndexFromCommand(command ?? "");
       if (jumpIndex !== null) {
+        // The open model picker addresses its rows with the same mod+digit chord.
+        if (isModelPickerShortcutScopeActive()) return;
         event.preventDefault();
         event.stopPropagation();
         const threadJumpTargetId = threadJumpThreadIds[jumpIndex];
@@ -5984,7 +6178,7 @@ export default function Sidebar() {
     desktopUpdateButtonPresentation.secondaryLabel !== null;
   const desktopUpdateDownloadPercent = getDesktopUpdateDownloadPercent(desktopUpdateState);
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--info)] px-2.5 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-medium leading-none text-white transition-colors",
+    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--info)] px-2.5 font-system-ui text-ui-xs font-medium leading-none text-white transition-colors",
     desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
     desktopUpdateButtonInteractivityClasses,
   );
@@ -6033,6 +6227,12 @@ export default function Sidebar() {
         keywords: ["folder", "repo", "repository", "open"],
         shortcutLabel: addProjectShortcutLabel,
         run: handleStartAddProject,
+      },
+      {
+        id: "import-projects",
+        label: "Import projects from…",
+        description: "Bring Codex and Claude Code projects and conversations into Synara.",
+        keywords: ["import", "projects", "codex", "claude", "conversations", "folders"],
       },
       {
         id: "import-thread",
@@ -6336,6 +6536,9 @@ export default function Sidebar() {
       {headerControls}
     </div>
   );
+  const relocateProjectDialogProject = relocateProjectDialogId
+    ? (projectById.get(relocateProjectDialogId) ?? null)
+    : null;
   const renameProjectDialogProject = renameProjectDialogId
     ? (projectById.get(renameProjectDialogId) ?? null)
     : null;
@@ -6483,60 +6686,90 @@ export default function Sidebar() {
               className="sidebar-surface-enter"
             >
               {/* Primary sidebar actions stay limited to features we currently ship. */}
-              <SidebarGroup className="px-1.5 pt-1 pb-1.5">
-                <SidebarMenu className="gap-0.5">
-                  {isOnStudio ? (
-                    <>
+              {!isOnStudio && isCustomizingNav ? (
+                <SidebarGroup className="px-1.5 pt-1 pb-1.5">
+                  {/* Customize mode: the nav block lifts into a raised card (same chrome as
+                      the Environment panel/composer) with per-item visibility + reorder. */}
+                  <div className={cn(ENVIRONMENT_PANEL_SURFACE_CLASS_NAME, "p-1.5")}>
+                    <div className="flex items-center justify-between ps-2 pe-1 pt-0.5 pb-1">
+                      <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Customize</span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-ui text-primary hover:text-primary"
+                        onClick={() => setIsCustomizingNav(false)}
+                      >
+                        Done
+                      </Button>
+                    </div>
+                    <DndContext
+                      sensors={projectDnDSensors}
+                      collisionDetection={closestCenter}
+                      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
+                      onDragEnd={handleNavOrderDragEnd}
+                    >
+                      <SortableContext
+                        items={sidebarNavOrder}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        <ul className="flex w-full min-w-0 flex-col gap-0.5">
+                          {sidebarNavOrder.map((id) => {
+                            const item = sidebarNavDescriptors[id];
+                            return (
+                              <SidebarNavCustomizeRow
+                                key={id}
+                                id={id}
+                                icon={item.icon}
+                                {...(item.iconClassName
+                                  ? { iconClassName: item.iconClassName }
+                                  : {})}
+                                label={item.label}
+                                visible={!hiddenSidebarNavItems.has(id)}
+                                onVisibleChange={(visible) =>
+                                  handleNavItemVisibleChange(id, visible)
+                                }
+                              />
+                            );
+                          })}
+                        </ul>
+                      </SortableContext>
+                    </DndContext>
+                  </div>
+                </SidebarGroup>
+              ) : (
+                <SidebarGroup
+                  className="px-1.5 pt-1 pb-1.5"
+                  onContextMenu={isOnStudio ? undefined : handleNavContextMenu}
+                >
+                  <SidebarMenu className="gap-0.5">
+                    {isOnStudio ? (
                       <SidebarPrimaryAction
                         icon={NewThreadIcon}
                         iconClassName="size-3.5"
                         label="New studio chat"
                         onClick={handleCreateStudioChat}
                       />
-                    </>
-                  ) : (
-                    <>
-                      <SidebarPrimaryAction
-                        icon={NewThreadIcon}
-                        iconClassName="size-3.5"
-                        label="New thread"
-                        onClick={handlePrimaryNewThread}
-                        onMouseEnter={prefetchModelsForPrimaryNewThread}
-                        onFocus={prefetchModelsForPrimaryNewThread}
-                      />
-                      <SidebarPrimaryAction
-                        icon={KanbanIcon}
-                        label="Kanban"
-                        active={isOnKanban}
-                        onClick={() => {
-                          void navigate({ to: "/kanban" });
-                        }}
-                      />
-                      <SidebarPrimaryAction
-                        icon={IoIosGitCompare}
-                        label="Pull requests"
-                        active={isOnPullRequests}
-                        badge={pullRequestsReviewBadge}
-                        onClick={() => {
-                          void navigate({
-                            to: "/pull-requests",
-                            search: { involvement: "all", state: "open" },
-                          });
-                        }}
-                      />
-                      <SidebarPrimaryAction
-                        icon={ClockIcon}
-                        label="Automations"
-                        active={isOnAutomations}
-                        badge={automationAttentionBadge}
-                        onClick={() => {
-                          void navigate({ to: "/automations" });
-                        }}
-                      />
-                    </>
-                  )}
-                </SidebarMenu>
-              </SidebarGroup>
+                    ) : (
+                      visibleSidebarNavIds.map((id) => {
+                        const item = sidebarNavDescriptors[id];
+                        return (
+                          <SidebarPrimaryAction
+                            key={id}
+                            icon={item.icon}
+                            {...(item.iconClassName ? { iconClassName: item.iconClassName } : {})}
+                            label={item.label}
+                            active={item.active}
+                            badge={item.badge}
+                            onClick={item.onClick}
+                            {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
+                            {...(item.onFocus ? { onFocus: item.onFocus } : {})}
+                          />
+                        );
+                      })
+                    )}
+                  </SidebarMenu>
+                </SidebarGroup>
+              )}
 
               {isOnStudio ? (
                 // Studio is "just chats": a labeled Studio block holding a flat list of threads
@@ -6567,7 +6800,7 @@ export default function Sidebar() {
                         renderThreadRow(row.thread, studioChatThreadIds, row.depth, true),
                       )
                     ) : (
-                      <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                      <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
                         {threadsHydrated ? "No studio chats yet" : "Loading Studio..."}
                       </div>
                     )}
@@ -6584,6 +6817,7 @@ export default function Sidebar() {
                     threadsHydrated={threadsHydrated}
                     resolveThreadStatus={resolveThreadStatusForSidebar}
                     onOpenThread={activateThreadFromSidebarIntent}
+                    onOpenThreadPullRequest={openThreadPullRequest}
                     onSetThreadSettled={setThreadSettledWithToast}
                     onToggleThreadPinned={toggleThreadPinned}
                     onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
@@ -6712,7 +6946,7 @@ export default function Sidebar() {
                       aria-live="polite"
                       aria-label="Loading projects"
                     >
-                      <div className="text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                      <div className="text-center text-ui text-muted-foreground/58">
                         Loading projects...
                       </div>
                       <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
@@ -6760,7 +6994,7 @@ export default function Sidebar() {
                   }}
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-                    <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
+                    <span className="truncate font-system-ui text-ui font-normal text-muted-foreground/79">
                       Chats
                     </span>
                     <DisclosureChevron
@@ -6807,9 +7041,7 @@ export default function Sidebar() {
                         ),
                       )
                     ) : (
-                      <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
-                        No chats yet
-                      </div>
+                      <div className="px-2 py-2 text-ui text-muted-foreground/48">No chats yet</div>
                     )}
                     {canShowMoreChatThreads || canShowLessChatThreads ? (
                       <SidebarMenuItem className="w-full">
@@ -6817,7 +7049,7 @@ export default function Sidebar() {
                           {canShowMoreChatThreads ? (
                             <SidebarMenuButton
                               size="sm"
-                              className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                              className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
                               onMouseDown={preventFocusOnMouseDown}
                               onClick={() =>
                                 setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
@@ -6830,7 +7062,7 @@ export default function Sidebar() {
                             <SidebarMenuButton
                               size="sm"
                               className={cn(
-                                "h-7 justify-start rounded-lg text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                                "h-7 justify-start rounded-lg text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
                                 // Keep the left indent when "Show less" is the only affordance left.
                                 canShowMoreChatThreads
                                   ? "w-auto flex-none px-2"
@@ -6901,13 +7133,13 @@ export default function Sidebar() {
                               {desktopUpdateButtonPresentation.label}
                             </span>
                             {desktopUpdateButtonPresentation.secondaryLabel ? (
-                              <span className="min-w-0 truncate text-center text-[length:var(--app-font-size-ui-xs,10px)] text-white/80">
+                              <span className="min-w-0 truncate text-center text-ui-xs text-white/80">
                                 {desktopUpdateButtonPresentation.secondaryLabel}
                               </span>
                             ) : null}
                           </span>
                           {desktopUpdateDownloadPercent !== null ? (
-                            <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-white/95">
+                            <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-ui-2xs font-semibold tabular-nums text-white/95">
                               {desktopUpdateDownloadPercent}%
                             </span>
                           ) : null}
@@ -6922,6 +7154,13 @@ export default function Sidebar() {
                       void navigate({ to: "/settings", search: { section: "shortcuts" } })
                     }
                     onOpenFeedback={openFeedbackDialog}
+                    onCustomizeSidebar={
+                      isOnStudio || isOnSettings
+                        ? null
+                        : () => {
+                            setIsCustomizingNav(true);
+                          }
+                    }
                   />
                 )}
               </div>
@@ -7161,6 +7400,15 @@ export default function Sidebar() {
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                 onClick={() =>
+                  void handleProjectContextMenuAction(projectContextMenuState.projectId, "relocate")
+                }
+              >
+                <ProjectContextMenuIcon icon={FolderOpenIcon} />
+                <span>Change project path…</span>
+              </MenuItem>
+              <MenuItem
+                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() =>
                   void handleProjectContextMenuAction(
                     projectContextMenuState.projectId,
                     "toggle-pin",
@@ -7216,6 +7464,38 @@ export default function Sidebar() {
         </Menu>
       ) : null}
 
+      {navCustomizeMenuPosition && navCustomizeMenuAnchor ? (
+        <Menu
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              setNavCustomizeMenuPosition(null);
+            }
+          }}
+        >
+          <ComposerPickerMenuPopup
+            anchor={navCustomizeMenuAnchor}
+            align="start"
+            side="bottom"
+            sideOffset={0}
+            className={SIDEBAR_CONTEXT_MENU_PANEL_CLASS_NAME}
+          >
+            <MenuGroup>
+              <MenuItem
+                className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() => {
+                  setNavCustomizeMenuPosition(null);
+                  setIsCustomizingNav(true);
+                }}
+              >
+                <SidebarContextMenuIcon icon={CustomizeIcon} />
+                <span>Customize</span>
+              </MenuItem>
+            </MenuGroup>
+          </ComposerPickerMenuPopup>
+        </Menu>
+      ) : null}
+
       <Dialog
         open={projectRunDialogProjectId !== null}
         onOpenChange={(open) => {
@@ -7237,7 +7517,7 @@ export default function Sidebar() {
           <DialogPanel className="space-y-2">
             <label
               htmlFor="project-run-command-input"
-              className="block text-[length:var(--app-font-size-ui-xs,10px)] font-medium text-[var(--color-text-foreground-secondary)]"
+              className="block text-ui-xs font-medium text-[var(--color-text-foreground-secondary)]"
             >
               Command
             </label>
@@ -7260,9 +7540,7 @@ export default function Sidebar() {
               }}
             />
             {projectRunDialogCommandIsValid ? null : (
-              <p className="text-[length:var(--app-font-size-ui-sm,11px)] text-destructive">
-                Enter a command to run.
-              </p>
+              <p className="text-ui-sm text-destructive">Enter a command to run.</p>
             )}
           </DialogPanel>
           <DialogFooter>
@@ -7295,6 +7573,16 @@ export default function Sidebar() {
           void commitRename(target.id, newTitle, target.title);
         }}
       />
+
+      {relocateProjectDialogProject ? (
+        <RelocateProjectDialog
+          projectId={relocateProjectDialogProject.id}
+          workspaceRoot={relocateProjectDialogProject.cwd}
+          onOpenChange={(open) => {
+            if (!open) setRelocateProjectDialogId(null);
+          }}
+        />
+      ) : null}
 
       <RenameDialog
         open={renameProjectDialogId !== null && renameProjectDialogProject !== null}
@@ -7411,18 +7699,18 @@ function SidebarSearchPaletteController(props: {
   onOpenThread: (threadId: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
-  // Search is deliberately unfiltered: typing a query is intent-driven retrieval, and
-  // search is the durable escape hatch for automation-run threads hidden elsewhere.
+  // Search keeps automation-run threads as an intent-driven escape hatch, while
+  // structurally nested side chats stay out of standalone thread results.
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const importProviderCapabilityQueries = useQueries({
-    queries: (["codex", "claudeAgent", "cursor", "kilo", "opencode"] as const).map((provider) =>
+    queries: (["codex", "claudeAgent", "cursor", "opencode"] as const).map((provider) =>
       providerComposerCapabilitiesQueryOptions(provider),
     ),
   });
   const threads = useStore(selectAllThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const importProviders: ReadonlyArray<ImportProviderKind> = (
-    ["codex", "claudeAgent", "cursor", "kilo", "opencode"] as const
+    ["codex", "claudeAgent", "cursor", "opencode"] as const
   ).filter((provider, index) => supportsThreadImport(importProviderCapabilityQueries[index]?.data));
   const searchPaletteThreads = useMemo<SidebarSearchThread[]>(() => {
     const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
@@ -7474,6 +7762,7 @@ function SidebarSearchPaletteController(props: {
       onOpenProject={props.onOpenProject}
       importProviders={importProviders}
       onImportThread={props.onImportThread}
+      onImportProjects={(providers) => useProjectImportDialogStore.getState().openDialog(providers)}
       onOpenThread={props.onOpenThread}
     />
   );

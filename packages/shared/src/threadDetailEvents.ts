@@ -2,6 +2,7 @@ import type { OrchestrationEvent, ThreadId } from "@synara/contracts";
 
 export const THREAD_DETAIL_EVENT_TYPES = [
   "thread.message-sent",
+  "thread.async-user-input-answered",
   "thread.proposed-plan-upserted",
   "thread.activity-appended",
   "thread.turn-diff-completed",
@@ -13,12 +14,10 @@ export const THREAD_DETAIL_EVENT_TYPES = [
   "thread.pinned-message-removed",
   "thread.pinned-message-done-set",
   "thread.pinned-message-label-set",
-  "thread.marker-added",
-  "thread.marker-removed",
-  "thread.marker-done-set",
-  "thread.marker-label-set",
   "thread.archived",
   "thread.unarchived",
+  "thread.sidechat-activity-recorded",
+  "thread.sidechat-expired",
 ] as const satisfies ReadonlyArray<OrchestrationEvent["type"]>;
 
 const THREAD_DETAIL_EVENT_TYPE_SET = new Set<OrchestrationEvent["type"]>(THREAD_DETAIL_EVENT_TYPES);

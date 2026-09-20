@@ -13,6 +13,7 @@
     "SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS",
     "SYNARA_GROK_ACP_DEBUG",
     "SYNARA_WEB_SOURCEMAP",
+    "SYNARA_DEV_REACT_COMPILER",
     "SYNARA_SERVER_SOURCEMAP",
     "SYNARA_DESKTOP_SOURCEMAP",
     "SYNARA_MODE",
@@ -36,6 +37,16 @@
     },
     "typecheck": {
       "dependsOn": ["^typecheck"],
+      "outputs": [],
+      "cache": false
+    },
+    "typecheck:native": {
+      "dependsOn": ["^typecheck:native"],
+      "outputs": [],
+      "cache": false
+    },
+    "typecheck:legacy": {
+      "dependsOn": ["^typecheck:legacy"],
       "outputs": [],
       "cache": false
     },

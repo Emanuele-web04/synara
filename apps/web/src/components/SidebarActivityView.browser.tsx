@@ -7,7 +7,7 @@ import "../index.css";
 import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { page, userEvent } from "vitest/browser";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
@@ -58,6 +58,7 @@ function makeThread(
     } as SidebarThreadSummary["latestTurn"],
     lastVisitedAt: "2026-08-02T12:00:00.000Z",
     latestUserMessageAt: null,
+    latestHumanMessageAt: completedAt,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
@@ -96,6 +97,7 @@ function renderActivity(input: {
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
       onOpenThread={input.onOpenThread ?? (() => {})}
+      onOpenThreadPullRequest={() => {}}
       onSetThreadSettled={input.onSetThreadSettled ?? (() => {})}
       onToggleThreadPinned={() => {}}
       onArchiveThread={() => {}}
@@ -112,8 +114,75 @@ function renderActivity(input: {
 }
 
 describe("SidebarActivityView", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-02T12:00:00.000Z"));
+  });
   afterEach(() => {
+    vi.restoreAllMocks();
     document.body.innerHTML = "";
+  });
+
+  it("keeps mounted rows and navigation order stable until a human sends a new message", async () => {
+    const older = makeThread(500, {
+      latestHumanMessageAt: "2026-08-02T09:30:00.000Z",
+      projectId: PROJECT_B,
+    });
+    const newer = makeThread(501, {
+      latestHumanMessageAt: "2026-08-02T09:45:00.000Z",
+      hasLiveTailWork: true,
+    });
+    const onVisibleThreadIdsChange = vi.fn();
+    const input = {
+      projects: [makeProject(PROJECT_A, "Project A"), makeProject(PROJECT_B, "Project B")],
+      onVisibleThreadIdsChange,
+    };
+    const mounted = await render(renderActivity({ ...input, threads: [older, newer] }));
+    const mountedIds = () =>
+      [...document.querySelectorAll('[data-testid^="activity-thread-"]')].map((row) =>
+        row.getAttribute("data-testid"),
+      );
+    const expected = [newer.id, older.id];
+    const expectOrder = async (ids: ThreadId[]) => {
+      await vi.waitFor(() => {
+        expect(mountedIds()).toEqual(ids.map((id) => `activity-thread-${id}`));
+        expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith(ids);
+      });
+    };
+    await expectOrder(expected);
+    for (const update of [
+      {
+        latestTurn: { ...older.latestTurn!, completedAt: "2026-08-02T11:00:00.000Z" },
+        lastVisitedAt: "2026-08-02T09:00:00.000Z",
+      },
+      { lastVisitedAt: "2026-08-02T11:01:00.000Z" },
+      {
+        hasPendingUserInput: true,
+        session: {
+          provider: "codex" as const,
+          status: "running" as const,
+          orchestrationStatus: "running" as const,
+          createdAt: older.createdAt,
+          updatedAt: "2026-08-02T11:02:00.000Z",
+        },
+      },
+      { latestUserMessageAt: "2026-08-02T11:03:00.000Z", updatedAt: "2026-08-02T11:03:00.000Z" },
+    ]) {
+      await mounted.rerender(
+        renderActivity({ ...input, threads: [{ ...older, ...update }, newer] }),
+      );
+      await expectOrder(expected);
+    }
+    await page.getByRole("button", { name: "Activity options" }).click();
+    await page.getByRole("menuitemradio", { name: "Project", exact: true }).click();
+    await expectOrder(expected);
+    await mounted.rerender(
+      renderActivity({
+        ...input,
+        threads: [{ ...older, latestHumanMessageAt: "2026-08-02T11:04:00.000Z" }, newer],
+      }),
+    );
+    await expectOrder([older.id, newer.id]);
+    await mounted.unmount();
   });
 
   it("pages project groups, reports only mounted rows, and prefers live PR state", async () => {
@@ -289,14 +358,18 @@ describe("SidebarActivityView", () => {
     expect(onSetThreadSettled).toHaveBeenCalledWith(pinned.id, false);
 
     const resumedRow = page.getByTestId(`activity-thread-${resumedSettled.id}`).element();
-    expect(resumedRow.parentElement?.querySelector('button[aria-label="Undo"]')).not.toBeNull();
+    expect(resumedRow.parentElement?.querySelector('button[aria-label="Done"]')).not.toBeNull();
 
     page.getByTestId(`activity-thread-${unseen.id}`).element().focus();
     await vi.waitFor(() => {
       expect(getComputedStyle(completedStatusSlot!).opacity).toBe("0");
     });
     expect(completedStatusSlot?.getBoundingClientRect().left).toBe(completedStatusLeft);
-    await page.getByRole("button", { name: "Done" }).click();
+    page
+      .getByTestId(`activity-thread-${unseen.id}`)
+      .element()
+      .parentElement?.querySelector<HTMLButtonElement>('button[aria-label="Done"]')
+      ?.click();
     expect(onMarkThreadRead).toHaveBeenCalledWith(
       unseen.id,
       unseen.latestTurn?.completedAt ?? undefined,

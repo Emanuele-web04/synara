@@ -14,7 +14,10 @@ import type {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@synara/shared/errorMessages";
+import {
+  APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER,
+  THREAD_NOT_ARCHIVED_INVARIANT_MARKER,
+} from "@synara/shared/errorMessages";
 import {
   isLegacyHomeChatContainerRow as isSharedLegacyHomeChatContainerRow,
   isOrdinaryProjectRow as isSharedOrdinaryProjectRow,
@@ -402,7 +405,7 @@ export function requireApprovalNotResponded(input: {
   return Effect.fail(
     invariantError(
       input.command.type,
-      `Approval request '${input.requestId}' on thread '${input.threadId}' was already answered.`,
+      `Approval request '${input.requestId}' on thread '${input.threadId}' ${APPROVAL_ALREADY_ANSWERED_INVARIANT_MARKER}`,
     ),
   );
 }
@@ -457,22 +460,6 @@ export function requireThreadNotArchived(input: {
               `Thread '${input.threadId}' is already archived and cannot handle command '${input.command.type}'.`,
             ),
           ),
-    ),
-  );
-}
-
-export function requireNonNegativeInteger(input: {
-  readonly commandType: OrchestrationCommand["type"];
-  readonly field: string;
-  readonly value: number;
-}): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (Number.isInteger(input.value) && input.value >= 0) {
-    return Effect.void;
-  }
-  return Effect.fail(
-    invariantError(
-      input.commandType,
-      `${input.field} must be an integer greater than or equal to 0.`,
     ),
   );
 }

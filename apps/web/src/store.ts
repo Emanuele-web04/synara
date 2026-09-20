@@ -31,12 +31,7 @@ import {
   syncServerThreadDetailHotPath,
 } from "./storeProjection";
 import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
-import {
-  persistState,
-  readPersistedState,
-  rememberProjectLocalNames,
-  rememberProjectUiState,
-} from "./storePersistence";
+import { persistState, readPersistedState, rememberProjectState } from "./storePersistence";
 import { initialState, type AppState } from "./storeState";
 import type { Project, ThreadWorkspacePatch } from "./types";
 
@@ -264,7 +259,7 @@ export function setThreadWorkspace(
 interface AppStore extends AppState {
   syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
   syncServerThreadDetail: (thread: ReadModelThread) => void;
-  syncServerThreadDetailHotPath: (thread: ReadModelThread) => void;
+  syncServerThreadDetailHotPath: (thread: ReadModelThread, snapshotSequence?: number) => void;
   syncServerReadModel: (readModel: OrchestrationReadModel) => void;
   applyShellEvent: (event: OrchestrationShellStreamEvent) => void;
   applyOrchestrationEvents: (events: ReadonlyArray<OrchestrationEvent>) => void;
@@ -292,8 +287,8 @@ export const useStore = create<AppStore>((set) => ({
   ...readPersistedState(initialState),
   syncServerShellSnapshot: (snapshot) => set((state) => syncServerShellSnapshot(state, snapshot)),
   syncServerThreadDetail: (thread) => set((state) => syncServerThreadDetail(state, thread)),
-  syncServerThreadDetailHotPath: (thread) =>
-    set((state) => syncServerThreadDetailHotPath(state, thread)),
+  syncServerThreadDetailHotPath: (thread, snapshotSequence) =>
+    set((state) => syncServerThreadDetailHotPath(state, thread, snapshotSequence)),
   syncServerReadModel: (readModel) => set((state) => syncServerReadModel(state, readModel)),
   applyShellEvent: (event) => set((state) => applyShellEvent(state, event)),
   applyOrchestrationEvents: (events) => set((state) => applyOrchestrationEvents(state, events)),
@@ -353,8 +348,7 @@ let lastRememberedProjects: readonly Project[] | undefined;
 useStore.subscribe((state) => {
   if (state.projects !== lastRememberedProjects) {
     lastRememberedProjects = state.projects;
-    rememberProjectUiState(state.projects);
-    rememberProjectLocalNames(state.projects);
+    rememberProjectState(state.projects);
   }
   debouncedPersistState.maybeExecute(state);
 });

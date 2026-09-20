@@ -3,7 +3,7 @@
 // Layer: Web settings UI
 // Exports: ThemePackEditor
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Button } from "./ui/button";
 import {
@@ -35,6 +35,7 @@ import { ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME } from "../surfaceStyles"
 import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
+  buildThemeCssVariables,
   getAvailableCodeThemes,
   getCodeThemeSeed,
   resolveThemePack,
@@ -51,7 +52,7 @@ const COLOR_PICKER_COMMIT_DELAY_MS = 220;
 
 /** Borderless text action in the editor's header chrome (Copy, Import). */
 const EDITOR_TEXT_ACTION_CLASS_NAME = cn(
-  "rounded-md px-2 py-1 text-xs text-[var(--color-text-foreground-secondary)]",
+  "rounded-md px-2 py-1 text-ui leading-snug text-[var(--color-text-foreground-secondary)]",
   ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
 );
 
@@ -60,8 +61,6 @@ export function ThemePackEditor({
   isActive: isActiveProp,
   mode: modeProp,
 }: ThemePackEditorProps) {
-  const isActive = isActiveProp ?? false;
-  const mode = modeProp ?? "system";
   const {
     darkTheme,
     lightTheme,
@@ -70,12 +69,22 @@ export function ThemePackEditor({
     isDefaultThemePack,
     resetThemeVariant,
     setCodeThemeId,
+    setTheme,
+    resolvedTheme,
+    theme: themeMode,
+    systemUiFont,
     updateThemePack,
     updateThemeFonts,
   } = useTheme();
+  const isActive = isActiveProp ?? resolvedTheme === variant;
+  const mode = modeProp ?? themeMode;
 
   const pack = variant === "dark" ? darkTheme : lightTheme;
   const theme = pack.theme;
+  const previewVariables = useMemo(
+    () => buildThemeCssVariables(pack, variant, { systemUiFont }).variables,
+    [pack, variant, systemUiFont],
+  );
   const defaultTheme = resolveThemePack(DEFAULT_THEME_STATE, variant).theme;
   const codeThemes = useMemo(() => {
     const options = getAvailableCodeThemes(variant);
@@ -124,13 +133,13 @@ export function ThemePackEditor({
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:py-3.5">
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-medium text-foreground">{titleLabel}</h3>
+          <h3 className="text-ui-lg font-medium text-foreground">{titleLabel}</h3>
           {!isPristine ? (
             <button
               type="button"
               onClick={() => resetThemeVariant(variant)}
               className={cn(
-                "rounded-md px-1.5 py-0.5 text-[11px] text-[var(--color-text-foreground-secondary)]",
+                "rounded-md px-1.5 py-0.5 text-ui-sm text-[var(--color-text-foreground-secondary)]",
                 ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
               )}
             >
@@ -178,8 +187,40 @@ export function ThemePackEditor({
           </Select>
         </div>
       </div>
-      <div className="border-b border-[color:var(--color-border)] px-4 pb-3 text-[11px] text-[var(--color-text-foreground-secondary)]">
-        {contextLabel}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-3 text-ui-sm text-[var(--color-text-foreground-secondary)]">
+        <span>{contextLabel}</span>
+        {!isActive ? (
+          <Button variant="outline" size="xs" onClick={() => setTheme(variant)}>
+            Use {variant} theme
+          </Button>
+        ) : null}
+      </div>
+      <div className="border-b border-[color:var(--color-border)] px-4 pb-3">
+        <div
+          role="img"
+          aria-label={`${titleLabel} preview: ${codeThemeLabel}`}
+          className="flex items-center justify-between gap-3 rounded-lg border p-3"
+          style={
+            {
+              ...previewVariables,
+              backgroundColor: "var(--color-background-surface)",
+              color: "var(--color-text-foreground)",
+              borderColor: "var(--color-border)",
+              colorScheme: variant,
+            } as CSSProperties
+          }
+        >
+          <span className="text-ui-lg leading-snug font-medium">{codeThemeLabel}</span>
+          <span
+            className="rounded-md px-3 py-1 text-ui leading-snug"
+            style={{
+              backgroundColor: "var(--color-background-accent)",
+              color: "var(--color-text-accent)",
+            }}
+          >
+            Accent preview
+          </span>
+        </div>
       </div>
 
       <div className={SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME}>
@@ -239,6 +280,11 @@ export function ThemePackEditor({
               ariaLabel={`${titleLabel} UI font`}
               onChange={(next) => updateThemeFonts(variant, { ui: next.length > 0 ? next : null })}
             />
+            {systemUiFont ? (
+              <span className="text-ui-sm text-muted-foreground">
+                Use system UI font is on; theme fonts are not applied.
+              </span>
+            ) : null}
           </div>
         </ThemeRow>
 
@@ -286,7 +332,7 @@ function ThemeRow({ label, children }: { label: string; children: React.ReactNod
         "flex min-h-12 items-center justify-between gap-3",
       )}
     >
-      <span className="text-sm text-foreground/90">{label}</span>
+      <span className="text-ui leading-snug text-foreground/90">{label}</span>
       <div className="flex shrink-0 items-center gap-2">{children}</div>
     </div>
   );
@@ -417,7 +463,7 @@ function ColorPill({
             className="block size-5 shrink-0 rounded-full border"
             style={{ borderColor: ringColor }}
           />
-          <span className="font-system-ui flex-1 text-[12px] uppercase">{previewColor}</span>
+          <span className="font-system-ui flex-1 text-ui uppercase">{previewColor}</span>
         </PopoverTrigger>
         <PopoverPopup
           align="end"
@@ -445,7 +491,7 @@ function ColorPill({
               maxLength={7}
               className={cn(
                 SETTINGS_CONTROL_RADIUS_CLASS_NAME,
-                "h-8 border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-2 text-center font-chat-code text-xs uppercase outline-none focus:border-[color:var(--color-border-focus)]",
+                "h-8 border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] px-2 text-center font-chat-code text-ui leading-snug uppercase outline-none focus:border-[color:var(--color-border-focus)]",
               )}
               aria-label={`${ariaLabel} hex value`}
             />
@@ -460,7 +506,7 @@ function CodeThemeBadge({ theme }: { theme: ChromeTheme }) {
   return (
     <span
       aria-hidden
-      className="flex size-5 shrink-0 items-center justify-center rounded-md border text-[10px] font-semibold leading-none"
+      className="flex size-5 shrink-0 items-center justify-center rounded-md border text-ui-xs font-semibold leading-none"
       style={{
         backgroundColor: theme.surface,
         borderColor: mixColor(theme.surface, theme.ink, 0.16),
@@ -477,7 +523,7 @@ function CodeThemeSelectOption({ label, theme }: { label: string; theme: ChromeT
     <div className="flex min-w-0 items-center gap-2.5">
       <CodeThemeBadge theme={theme} />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] text-[var(--color-text-foreground)]">{label}</div>
+        <div className="truncate text-ui-lg text-[var(--color-text-foreground)]">{label}</div>
       </div>
     </div>
   );
@@ -546,7 +592,7 @@ function ContrastSlider({
           background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${fillPct}%, var(--input) ${fillPct}%, var(--input) 100%)`,
         }}
       />
-      <span className="w-7 text-right font-chat-code text-xs text-muted-foreground tabular-nums">
+      <span className="w-7 text-right font-chat-code text-ui leading-snug text-muted-foreground tabular-nums">
         {value}
       </span>
     </div>
@@ -594,7 +640,7 @@ function ImportThemeDialog({
       <DialogPopup className="max-w-md">
         <DialogHeader>
           <DialogTitle>Import {variant} theme</DialogTitle>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-ui leading-snug text-muted-foreground">
             Paste a{" "}
             <code className="rounded bg-muted px-1 py-0.5 font-chat-code">codex-theme-v1:</code>{" "}
             share string. The embedded variant must match {variant}, and the selected code theme
@@ -611,10 +657,10 @@ function ImportThemeDialog({
             placeholder='codex-theme-v1:{"codeThemeId":"linear",...}'
             spellCheck={false}
             rows={5}
-            className="font-chat-code text-[11px]"
+            className="font-chat-code text-chat-code"
             aria-label="Theme share string"
           />
-          {error ? <p className="mt-2 text-xs text-destructive">{error}</p> : null}
+          {error ? <p className="mt-2 text-ui leading-snug text-destructive">{error}</p> : null}
         </DialogPanel>
         <DialogFooter>
           <DialogClose

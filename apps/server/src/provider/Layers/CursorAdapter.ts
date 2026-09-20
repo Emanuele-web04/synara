@@ -1,3 +1,4 @@
+import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
 /**
  * CursorAdapterLive — Cursor CLI (`cursor-agent acp`) via ACP.
  *
@@ -22,7 +23,6 @@ import {
   type ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import {
   DateTime,
   Deferred,
@@ -37,7 +37,8 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
@@ -1551,7 +1552,7 @@ export function makeCursorAdapter(
     const readThread: CursorAdapterShape["readThread"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        return { threadId, turns: ctx.turns };
+        return { threadId, turns: snapshotProviderTurns(ctx.turns) };
       });
 
     const rollbackThread: CursorAdapterShape["rollbackThread"] = (threadId, numTurns) =>
@@ -1566,7 +1567,7 @@ export function makeCursorAdapter(
         }
         const nextLength = Math.max(0, ctx.turns.length - numTurns);
         ctx.turns.splice(nextLength);
-        return { threadId, turns: ctx.turns };
+        return { threadId, turns: snapshotProviderTurns(ctx.turns) };
       });
 
     const stopSession: CursorAdapterShape["stopSession"] = (threadId) =>
@@ -1636,13 +1637,8 @@ export function makeCursorAdapter(
           ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
         });
         const env = buildCursorAgentHeadlessEnv();
-        const prepared = prepareWindowsSafeProcess(command.command, command.args, {
-          env,
-        });
         const child = yield* childProcessSpawner.spawn(
-          ChildProcess.make(prepared.command, prepared.args, {
-            shell: prepared.shell,
-            ...(prepared.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+          makeEffectProcessCommand(command.command, command.args, {
             env,
           }),
         );

@@ -1,6 +1,6 @@
 {
   "name": "@synara/desktop",
-  "version": "0.7.3",
+  "version": "0.8.4",
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
@@ -9,19 +9,26 @@
     "dev:electron": "bun run scripts/dev-electron.mjs",
     "build": "tsdown",
     "start": "bun run scripts/start-electron.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
+    "typecheck:native": "bun run typecheck",
+    "typecheck:legacy": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "smoke-test": "node scripts/smoke-test.mjs"
+    "smoke-test": "node scripts/smoke-test.mjs",
+    "smoke:browser-lifecycle": "bun build scripts/browser-lifecycle-smoke.ts --target=node --external=electron --external=betterwright --external=betterwright/* --external=ws --external=effect --outfile=.smoke/browser-lifecycle.mjs && electron .smoke/browser-lifecycle.mjs && electron ../../.github/scripts/energy-cloud-probe.cjs 3 10000",
+    "smoke:browser-viewport": "bun build scripts/browser-viewport-smoke.ts --target=node --external=electron --external=betterwright --outfile=.smoke/browser-viewport.mjs && electron .smoke/browser-viewport.mjs"
   },
   "dependencies": {
+    "betterwright": "2.7.3",
     "effect": "catalog:",
     "electron": "43.4.1",
-    "electron-updater": "^6.6.2"
+    "electron-updater": "^6.6.2",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@synara/contracts": "workspace:*",
     "@synara/shared": "workspace:*",
     "@types/node": "catalog:",
+    "@types/ws": "^8.5.13",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",

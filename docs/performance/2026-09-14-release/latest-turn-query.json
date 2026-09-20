@@ -1,0 +1,19 @@
+{
+  "fixture": {
+    "chats": 600,
+    "historicalTurns": 300000
+  },
+  "scope": "Exact production latest-turn SQL, Node SQLite, in-memory synthetic fixture",
+  "results": [
+    {
+      "label": "before",
+      "returnedRows": 300000,
+      "medianMs": 253.79
+    },
+    {
+      "label": "after",
+      "returnedRows": 600,
+      "medianMs": 21.03
+    }
+  ]
+}

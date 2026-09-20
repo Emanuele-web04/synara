@@ -11,11 +11,11 @@ import {
   ModelSelection,
   NonNegativeInt,
   OrchestrationThreadPullRequest,
+  PendingClaudeCacheReview,
   ThreadNotes,
   ThreadGoal,
   ThreadGoalAchievements,
   ThreadPinnedMessages,
-  ThreadMarkers,
   ThreadHandoff,
   ProjectId,
   ProviderInteractionMode,
@@ -67,11 +67,19 @@ export const ProjectionThread = Schema.Struct({
   subagentRole: Schema.optional(Schema.NullOr(Schema.String)),
   forkSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   sidechatSourceThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+  sidechatLastActivityAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  sidechatExpiredAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
   lastKnownPr: Schema.NullOr(OrchestrationThreadPullRequest),
   latestTurnId: Schema.NullOr(TurnId),
   handoff: Schema.NullOr(ThreadHandoff),
+  // Omission preserves an existing review during legacy whole-row upserts;
+  // null explicitly clears it.
+  claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
   pinnedMessages: Schema.NullOr(ThreadPinnedMessages),
-  threadMarkers: Schema.NullOr(ThreadMarkers),
   notes: Schema.NullOr(ThreadNotes),
   goal: Schema.NullOr(ThreadGoal),
   goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
@@ -84,6 +92,7 @@ export const ProjectionThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
+  latestHumanMessageAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,

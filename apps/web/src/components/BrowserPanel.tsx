@@ -31,12 +31,10 @@ import {
 } from "~/lib/icons";
 
 import { localServerPrimaryLabel } from "@synara/shared/localServers";
-import { resolveDesktopDipRectFromCssRect } from "@synara/shared/desktopChrome";
 import {
   BROWSER_BLANK_URL,
   isBlankBrowserTabUrl,
   resolveCopyableBrowserTabUrl,
-  resolveFloatingBrowserGuestLayout,
 } from "@synara/shared/browserSession";
 import {
   BROWSER_COPY_LINK_TOAST_TITLE,
@@ -46,10 +44,14 @@ import {
 import { isElectron } from "~/env";
 import { CentralIcon } from "~/lib/central-icons";
 import { readNativeApi } from "~/nativeApi";
+import { BrowserVaultButton } from "./BrowserVault";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
 import { BROWSER_PANEL_BOUNDS_SYNC_EVENT } from "~/lib/browserPanelBoundsSync";
-import { NATIVE_SURFACE_OCCLUSION_SYNC_EVENT } from "~/lib/nativeSurfaceOcclusion";
+import {
+  NATIVE_SURFACE_MENU_OVERLAY_SELECTOR,
+  NATIVE_SURFACE_OCCLUSION_SYNC_EVENT,
+} from "~/lib/nativeSurfaceOcclusion";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 
@@ -77,6 +79,7 @@ import {
   shouldOccludeBrowserWebview,
   applyBrowserWebviewPresentation,
   isBrowserPanelBoundsHiddenKey,
+  resolveBrowserRuntimePresentation,
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { BrowserTabStrip } from "./BrowserTabStrip";
@@ -116,6 +119,7 @@ const BROWSER_ACTION_MENU_ICON_CLASS_NAME =
   "inline-flex size-3.5 shrink-0 items-center justify-center text-[var(--color-text-foreground-secondary)] [&>svg]:size-3.5 [&>[data-slot=central-icon]]:size-3.5";
 const EMPTY_BROWSER_ANNOTATIONS: readonly BrowserAnnotationDraft[] = [];
 const NATIVE_BROWSER_OBSCURING_OVERLAY_SELECTOR = [
+  NATIVE_SURFACE_MENU_OVERLAY_SELECTOR,
   "[data-slot='dialog-backdrop']",
   "[data-slot='dialog-popup']",
   "[data-slot='dialog-viewport']",
@@ -406,8 +410,8 @@ function BrowserRuntimePreview(props: { title: string; detail: string }) {
           </div>
         </div>
         <div className="mt-4 min-w-0 text-center">
-          <p className="text-xs font-medium text-foreground">Restoring browser</p>
-          <p className="mt-1 truncate text-[11px] text-muted-foreground" title={props.detail}>
+          <p className="text-ui leading-snug font-medium text-foreground">Restoring browser</p>
+          <p className="mt-1 truncate text-ui-sm text-muted-foreground" title={props.detail}>
             {props.title}
           </p>
         </div>
@@ -424,8 +428,8 @@ function BrowserRuntimeError(props: { message: string; onReload: () => void }) {
     >
       <div className="flex max-w-xs flex-col items-center">
         <CircleAlertIcon className="size-7 text-white/35" aria-hidden="true" />
-        <p className="mt-3 text-sm font-medium text-white/80">This page could not be loaded</p>
-        <p className="mt-1 text-xs text-white/45">{props.message}</p>
+        <p className="mt-3 text-ui-lg font-medium text-white/80">This page could not be loaded</p>
+        <p className="mt-1 text-ui leading-snug text-white/45">{props.message}</p>
         <Button
           type="button"
           variant="secondary"
@@ -522,13 +526,13 @@ function BrowserLocalServersHome({
               <>
                 <RefreshCwIcon className="mb-4 size-12 animate-spin text-white/20" />
                 <p className="text-base font-semibold text-white">Scanning local servers</p>
-                <p className="mt-2 text-sm text-white/35">Checking localhost ports</p>
+                <p className="mt-2 text-ui leading-snug text-white/35">Checking localhost ports</p>
               </>
             ) : (
               <>
                 <GlobeIcon className="mb-4 size-16 stroke-[1.5] text-white/30" />
                 <p className="text-base font-semibold text-white">No local servers</p>
-                <p className="mt-2 text-sm text-white/35">Try another browser URL</p>
+                <p className="mt-2 text-ui leading-snug text-white/35">Try another browser URL</p>
               </>
             )}
           </div>
@@ -642,13 +646,19 @@ export function BrowserPanel({
   const [localError, setLocalError] = useState<string | null>(null);
   const [browserRendererGeneration, setBrowserRendererGeneration] = useState(0);
   const [browserActionsMenuOpen, setBrowserActionsMenuOpen] = useState(false);
+  const [previewFrame, setPreviewFrame] = useState<{ tabId: string; src: string } | null>(null);
   const runtimeReady = isLiveRuntime ? workspaceReady : true;
   const activeTab =
     threadBrowserState?.tabs.find((tab) => tab.id === threadBrowserState.activeTabId) ??
     threadBrowserState?.tabs[0] ??
     null;
   const activeTabId = activeTab?.id ?? null;
-  const usesNativeRuntime = !isFloatingMode && activeTab?.runtimeSurface === "native";
+  const usesNativeRuntime = activeTab?.runtimeSurface === "native";
+  const rendererHasPopup =
+    threadBrowserState?.tabs.some(
+      (tab) =>
+        Boolean(tab.openerTabId) && tab.openerTabId === browserWebviewRef.current?.dataset.tabId,
+    ) ?? false;
   const activeTabInitialUrl = activeTab?.lastCommittedUrl ?? activeTab?.url ?? BROWSER_BLANK_URL;
   activeTabInitialUrlRef.current = activeTabInitialUrl;
   const loading = activeTab?.isLoading ?? false;
@@ -852,6 +862,11 @@ export function BrowserPanel({
     }
 
     if (showLocalServersHome || usesNativeRuntime) {
+      if (rendererHasPopup && browserWebviewStageRef.current) {
+        // Keep the renderer-owned opener alive while its native popup is shown.
+        browserWebviewStageRef.current.style.visibility = "hidden";
+        return;
+      }
       detachRendererBrowserWebview();
       return;
     }
@@ -870,6 +885,9 @@ export function BrowserPanel({
     if (stage.parentElement !== host) {
       host.append(stage);
     }
+    stage.style.visibility = "visible";
+    stage.style.pointerEvents = isFloatingMode ? "none" : "";
+    stage.inert = isFloatingMode;
 
     let webview = browserWebviewRef.current;
     if (!webview) {
@@ -1064,6 +1082,7 @@ export function BrowserPanel({
     threadId,
     upsertThreadState,
     usesNativeRuntime,
+    rendererHasPopup,
     workspaceReady,
   ]);
 
@@ -1116,7 +1135,7 @@ export function BrowserPanel({
       // trusting the obscuring-overlay heuristic. The native/inline webview otherwise paints
       // about:blank white over our dark DOM home — the "always white" empty state.
       const obscuredByOverlay =
-        !isFloatingMode &&
+        (!isFloatingMode || usesNativeRuntime) &&
         (browserPageError !== null ||
           shouldOccludeBrowserWebview({
             showLocalServersHome,
@@ -1141,46 +1160,18 @@ export function BrowserPanel({
         });
       }
       const rect = element.getBoundingClientRect();
-      const bounds = obscuredByOverlay
-        ? null
-        : (() => {
-            if (rect.width <= 0 || rect.height <= 0) {
-              return null;
-            }
-            // The native view is positioned in window DIPs, which only equal the CSS
-            // pixels measured above while the shell sits at 100% zoom. Convert, or a
-            // zoomed shell leaves the browser surface sized 1/zoom off its DOM slot.
-            const zoom = readDesktopZoomFactor();
-            if (isFloatingMode) {
-              // Keep the guest viewport frozen at 1280×800. Slot resize is CSS scale
-              // only, so main/CDP do not see a new page size on every drag frame.
-              const layout = resolveFloatingBrowserGuestLayout({
-                width: rect.width,
-                height: rect.height,
-              });
-              return resolveDesktopDipRectFromCssRect(
-                {
-                  x: rect.left + layout.x,
-                  y: rect.top + layout.y,
-                  width: layout.width,
-                  height: layout.height,
-                },
-                zoom,
-              );
-            }
-            return resolveDesktopDipRectFromCssRect(
-              { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-              zoom,
-            );
-          })();
-      const surface = isFloatingMode || !usesNativeRuntime ? "renderer" : "native";
-      // Native WebContentsViews and adopted renderer <webview>s share the same main-process
-      // WebContents. Floating presentation is a CSS scale of the frozen 1280x800 guest, so
-      // keep page zoom at 1 and avoid reflowing the live page as the card moves.
-      const pageZoomFactor = 1;
+      const presentation = resolveBrowserRuntimePresentation({
+        native: usesNativeRuntime,
+        floating: isFloatingMode,
+        rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+        desktopZoom: readDesktopZoomFactor(),
+      });
+      const bounds =
+        obscuredByOverlay || rect.width <= 0 || rect.height <= 0 ? null : presentation.bounds;
+      const { surface, pageZoomFactor } = presentation;
       const nextKey = bounds
-        ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}:zoom-${pageZoomFactor}`
-        : `${surface}:hidden:zoom-${pageZoomFactor}`;
+        ? `${surface}:${Math.round(bounds.x)}:${Math.round(bounds.y)}:${Math.round(bounds.width)}:${Math.round(bounds.height)}:zoom-${pageZoomFactor}:preview-${isFloatingMode}`
+        : `${surface}:hidden:zoom-${pageZoomFactor}:preview-${isFloatingMode}`;
       lastMeasuredBoundsKeyRef.current = nextKey;
       if (lastSentBoundsRef.current === nextKey) {
         perfCountersRef.current.syncSkips += 1;
@@ -1189,7 +1180,14 @@ export function BrowserPanel({
       lastSentBoundsRef.current = nextKey;
       perfCountersRef.current.syncSends += 1;
       void api.browser
-        .setPanelBounds({ threadId, bounds, surface, pageZoomFactor })
+        .setPanelBounds({
+          threadId,
+          bounds,
+          surface,
+          pageZoomFactor,
+          occluded: obscuredByOverlay,
+          preview: isFloatingMode,
+        })
         .catch(ignoreBrowserBoundsSyncError);
     };
 
@@ -1314,6 +1312,46 @@ export function BrowserPanel({
     showLocalServersHome,
     threadId,
     usesNativeRuntime,
+  ]);
+
+  useEffect(() => {
+    if (
+      !api ||
+      !isLiveRuntime ||
+      !workspaceReady ||
+      !isFloatingMode ||
+      !usesNativeRuntime ||
+      !activeTabId
+    )
+      return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const capture = async () => {
+      try {
+        if (!document.hidden) {
+          const src = await api.browser.capturePreview({ threadId, tabId: activeTabId });
+          if (!cancelled && src) setPreviewFrame({ tabId: activeTabId, src });
+        }
+      } catch {
+        // A navigation or closing tab can invalidate a frame; retry without
+        // disturbing the live page or surfacing a transient capture error.
+      } finally {
+        if (!cancelled) timer = setTimeout(capture, 500);
+      }
+    };
+    void capture();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [
+    api,
+    isLiveRuntime,
+    workspaceReady,
+    isFloatingMode,
+    usesNativeRuntime,
+    activeTabId,
+    threadId,
   ]);
 
   const onSubmitAddress = useCallback(() => {
@@ -1791,7 +1829,7 @@ export function BrowserPanel({
                 <button
                   key={suggestion.id}
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui leading-snug text-foreground transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                   onMouseDown={(event) => {
                     event.preventDefault();
                     onChooseSuggestion(suggestion);
@@ -1808,7 +1846,7 @@ export function BrowserPanel({
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate">{suggestion.title}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">
+                    <span className="block truncate text-ui-sm text-muted-foreground">
                       {suggestion.detail}
                     </span>
                   </span>
@@ -1819,6 +1857,17 @@ export function BrowserPanel({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+        <BrowserVaultButton
+          destination={
+            activeTab
+              ? {
+                  threadId,
+                  tabId: activeTab.id,
+                  origin: /^https?:\/\//.test(activeTab.url) ? new URL(activeTab.url).origin : null,
+                }
+              : undefined
+          }
+        />
         <BrowserAnnotationButton
           controller={annotationController}
           disabled={
@@ -1961,6 +2010,14 @@ export function BrowserPanel({
             ) : null}
             {isLiveRuntime && browserPageError ? (
               <BrowserRuntimeError message={browserPageError} onReload={onReloadActiveTab} />
+            ) : null}
+            {isFloatingMode && usesNativeRuntime && previewFrame?.tabId === activeTabId ? (
+              <img
+                src={previewFrame.src}
+                alt="Browser preview"
+                draggable={false}
+                className="pointer-events-none absolute inset-0 h-full w-full select-none object-contain"
+              />
             ) : null}
             {showLocalServersHome ? (
               <BrowserLocalServersHome

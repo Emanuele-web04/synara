@@ -18,11 +18,16 @@ import { Effect, Layer, Option, Schema, SchemaIssue } from "effect";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderValidationError } from "../Errors.ts";
+import type { ProviderDiscoveryError } from "../Services/ProviderDiscoveryService.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import {
   ProviderDiscoveryService,
   type ProviderDiscoveryServiceShape,
 } from "../Services/ProviderDiscoveryService.ts";
+import {
+  makeProviderModelDiscoveryCache,
+  providerModelDiscoveryCacheKey,
+} from "../providerModelDiscoveryCache.ts";
 import {
   discoverSkillsCatalog,
   filterDisabledSkills,
@@ -89,6 +94,10 @@ const make = Effect.gen(function* () {
   const registry = yield* ProviderAdapterRegistry;
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
+  // One catalog cache for every provider: adapters that spawn a CLI/ACP process
+  // per listModels call share stale-while-revalidate, single-flight, and
+  // failure-replay behaviour with adapters that reuse a running process.
+  const modelDiscoveryCache = makeProviderModelDiscoveryCache<ProviderDiscoveryError>();
   const providerIsEnabled = Effect.fn("providerIsEnabled")(function* (
     provider: ProviderGetComposerCapabilitiesInput["provider"],
   ) {
@@ -202,7 +211,18 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      return yield* adapter.listCommands(parsed);
+      if (parsed.provider !== "claudeAgent") {
+        return yield* adapter.listCommands(parsed);
+      }
+      // Server-owned like the session start options, so discovery lists the
+      // same commands a new Claude session will actually have.
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.orElseSucceed(() => DEFAULT_SERVER_SETTINGS),
+      );
+      return yield* adapter.listCommands({
+        ...parsed,
+        enableArtifacts: settings.providers.claudeAgent.enableArtifacts,
+      });
     });
 
   const listPlugins: ProviderDiscoveryServiceShape["listPlugins"] = (input) =>
@@ -281,11 +301,16 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      const result = yield* adapter.listModels(parsed);
-      return yield* isolateMalformedModelDescriptors({
-        provider: parsed.provider,
-        result,
-      });
+      const listModelsFromAdapter = adapter.listModels;
+      return yield* modelDiscoveryCache.lookup(
+        providerModelDiscoveryCacheKey(parsed),
+        // Suspend so the adapter is only touched when the cache actually misses.
+        Effect.suspend(() => listModelsFromAdapter(parsed)).pipe(
+          Effect.flatMap((result) =>
+            isolateMalformedModelDescriptors({ provider: parsed.provider, result }),
+          ),
+        ),
+      );
     });
 
   const listAgents: ProviderDiscoveryServiceShape["listAgents"] = (input) =>

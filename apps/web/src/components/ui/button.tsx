@@ -38,7 +38,7 @@ const headerButtonDarkBorderClassName =
 // class and skip their radius/sizing override for capsules).
 const buttonVariants = cva(
   extendButtonIconChildSelectors(
-    "[&_svg]:-mx-0.5 relative inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg border font-medium text-[length:var(--app-font-size-ui,12px)] outline-none pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 sm:text-[length:var(--app-font-size-ui,12px)] [&_svg:not([class*='opacity-'])]:opacity-80 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+    "[&_svg]:-mx-0.5 relative inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg border font-medium text-ui outline-none pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 sm:text-ui [&_svg:not([class*='opacity-'])]:opacity-80 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
   ),
   {
     defaultVariants: {
@@ -53,7 +53,7 @@ const buttonVariants = cva(
       },
       size: {
         chip: extendButtonIconChildSelectors(
-          "h-auto gap-1 px-2 py-0.5 text-[length:var(--app-font-size-ui-sm,11px)] sm:h-auto sm:text-[length:var(--app-font-size-ui-sm,11px)] [&_svg:not([class*='size-'])]:size-3 sm:[&_svg:not([class*='size-'])]:size-3",
+          "h-auto gap-1 px-2 py-0.5 text-ui-sm sm:h-auto sm:text-ui-sm [&_svg:not([class*='size-'])]:size-3 sm:[&_svg:not([class*='size-'])]:size-3",
         ),
         default: "h-9 px-[calc(--spacing(3)-1px)] sm:h-8",
         icon: "size-9 sm:size-8",
@@ -71,10 +71,10 @@ const buttonVariants = cva(
         lg: "h-10 px-[calc(--spacing(3.5)-1px)] sm:h-9",
         sm: "h-8 gap-1.5 px-[calc(--spacing(2.5)-1px)] sm:h-7",
         xl: extendButtonIconChildSelectors(
-          "h-11 px-[calc(--spacing(4)-1px)] text-[length:var(--app-font-size-ui-lg,13px)] sm:h-10 sm:text-[length:var(--app-font-size-ui-lg,13px)] [&_svg:not([class*='size-'])]:size-5 sm:[&_svg:not([class*='size-'])]:size-4.5",
+          "h-11 px-[calc(--spacing(4)-1px)] text-ui-lg sm:h-10 sm:text-ui-lg [&_svg:not([class*='size-'])]:size-5 sm:[&_svg:not([class*='size-'])]:size-4.5",
         ),
         xs: extendButtonIconChildSelectors(
-          "h-7 gap-1 rounded-sm px-[calc(--spacing(2)-1px)] text-[length:var(--app-font-size-ui-sm,11px)] sm:h-6 sm:text-[length:var(--app-font-size-ui-xs,10px)] [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
+          "h-7 gap-1 rounded-sm px-[calc(--spacing(2)-1px)] text-ui-sm sm:h-6 sm:text-ui-xs [&_svg:not([class*='size-'])]:size-4 sm:[&_svg:not([class*='size-'])]:size-3.5",
         ),
       },
       variant: {
@@ -109,7 +109,7 @@ const buttonVariants = cva(
     compoundVariants: [
       {
         class:
-          "!box-border !h-auto !min-h-7 gap-1.5 rounded-lg px-[calc(--spacing(2.5)-1px)] !py-0.5 text-[length:var(--app-font-size-ui,12px)] sm:!h-auto sm:px-[calc(--spacing(2.5)-1px)] sm:text-[length:var(--app-font-size-ui-sm,11px)]",
+          "!box-border !h-auto !min-h-7 gap-1.5 rounded-lg px-[calc(--spacing(2.5)-1px)] !py-0.5 text-ui sm:!h-auto sm:px-[calc(--spacing(2.5)-1px)] sm:text-ui-sm",
         size: "xs",
         variant: "chrome-outline",
       },

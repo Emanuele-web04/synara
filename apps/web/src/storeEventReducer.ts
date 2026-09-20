@@ -9,18 +9,17 @@ import {
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import {
+  clearRemovedAsyncUserInputResponses,
+  mergeAsyncUserInput,
+} from "@synara/shared/asyncUserInput";
+import {
   addPinnedMessage,
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
+import { deriveThreadSummaryMetadata, resolveHumanMessageAt } from "@synara/shared/threadSummary";
 import { isPendingInteractionResponseClaimable } from "@synara/shared/pendingInteractions";
-import {
-  addThreadMarker,
-  removeThreadMarker,
-  setThreadMarkerDone,
-  setThreadMarkerLabel,
-} from "@synara/shared/threadMarkers";
 
 import { isSessionRunningTurn } from "./session-logic";
 import {
@@ -631,6 +630,10 @@ function mergeStreamingMessage(
     nextText = incomingMessage.text;
   }
   const nextAttachments = incomingMessage.attachments ?? existingMessage.attachments;
+  const nextAsyncUserInput = mergeAsyncUserInput(
+    existingMessage.asyncUserInput,
+    incomingMessage.asyncUserInput,
+  );
   const nextSkills =
     incomingMessage.skills && incomingMessage.skills.length > 0
       ? incomingMessage.skills
@@ -642,6 +645,8 @@ function mergeStreamingMessage(
   const nextCompletedAt = incomingMessage.streaming
     ? existingMessage.completedAt
     : (incomingMessage.completedAt ?? existingMessage.completedAt);
+  const nextUpdatedAt =
+    incomingMessage.updatedAt ?? existingMessage.updatedAt ?? incomingMessage.createdAt;
   const nextTurnId =
     incomingMessage.turnId !== undefined ? incomingMessage.turnId : existingMessage.turnId;
   const nextDispatchMode =
@@ -652,18 +657,25 @@ function mergeStreamingMessage(
     incomingMessage.dispatchOrigin !== undefined
       ? incomingMessage.dispatchOrigin
       : existingMessage.dispatchOrigin;
+  const nextStartsNewTurn =
+    incomingMessage.startsNewTurn !== undefined
+      ? incomingMessage.startsNewTurn
+      : existingMessage.startsNewTurn;
   const nextSource = incomingMessage.source ?? existingMessage.source;
 
   if (
     existingMessage.text === nextText &&
+    existingMessage.asyncUserInput === nextAsyncUserInput &&
     existingMessage.streaming === incomingMessage.streaming &&
     existingMessage.attachments === nextAttachments &&
     providerReferenceArraysEqual(existingMessage.skills, nextSkills) &&
     providerReferenceArraysEqual(existingMessage.mentions, nextMentions) &&
     existingMessage.completedAt === nextCompletedAt &&
+    existingMessage.updatedAt === nextUpdatedAt &&
     existingMessage.turnId === nextTurnId &&
     existingMessage.dispatchMode === nextDispatchMode &&
     existingMessage.dispatchOrigin === nextDispatchOrigin &&
+    existingMessage.startsNewTurn === nextStartsNewTurn &&
     existingMessage.source === nextSource
   ) {
     return null;
@@ -672,6 +684,8 @@ function mergeStreamingMessage(
   return {
     ...existingMessage,
     text: nextText,
+    updatedAt: nextUpdatedAt,
+    ...(nextAsyncUserInput ? { asyncUserInput: nextAsyncUserInput } : {}),
     streaming: incomingMessage.streaming,
     ...(nextAttachments ? { attachments: nextAttachments } : {}),
     ...(nextSkills && nextSkills.length > 0 ? { skills: [...nextSkills] } : {}),
@@ -679,6 +693,7 @@ function mergeStreamingMessage(
     ...(nextTurnId !== undefined ? { turnId: nextTurnId } : {}),
     ...(nextDispatchMode !== undefined ? { dispatchMode: nextDispatchMode } : {}),
     ...(nextDispatchOrigin !== undefined ? { dispatchOrigin: nextDispatchOrigin } : {}),
+    ...(nextStartsNewTurn !== undefined ? { startsNewTurn: nextStartsNewTurn } : {}),
     ...(nextSource !== undefined ? { source: nextSource } : {}),
     ...(nextCompletedAt !== undefined ? { completedAt: nextCompletedAt } : {}),
   };
@@ -702,8 +717,10 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       id: payload.messageId,
       role: payload.role,
       text: payload.text,
+      ...(payload.asyncUserInput ? { asyncUserInput: payload.asyncUserInput } : {}),
       dispatchMode: payload.dispatchMode,
       dispatchOrigin: payload.dispatchOrigin,
+      startsNewTurn: payload.startsNewTurn,
       turnId: payload.turnId,
       attachments: payload.attachments ?? [],
       ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
@@ -761,12 +778,18 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
     });
   }
 
+  const humanMessageAt = resolveHumanMessageAt(incomingMessage);
+  const latestHumanMessageAt =
+    humanMessageAt !== null && humanMessageAt > (thread.latestHumanMessageAt ?? "")
+      ? humanMessageAt
+      : thread.latestHumanMessageAt;
   const updatedAt =
     thread.updatedAt && thread.updatedAt > payload.updatedAt ? thread.updatedAt : payload.updatedAt;
   if (
     messages === thread.messages &&
     turnDiffSummaries === thread.turnDiffSummaries &&
     latestTurn === thread.latestTurn &&
+    latestHumanMessageAt === thread.latestHumanMessageAt &&
     updatedAt === thread.updatedAt
   ) {
     return thread;
@@ -777,6 +800,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
     messages,
     turnDiffSummaries,
     latestTurn,
+    ...(latestHumanMessageAt !== undefined ? { latestHumanMessageAt } : {}),
     updatedAt,
   };
 }
@@ -959,8 +983,6 @@ function applyOrchestrationEvent(
               (event.payload.handoff ?? null) === (thread.handoff ?? null)) &&
             (event.payload.pinnedMessages === undefined ||
               deepEqualJson(event.payload.pinnedMessages, thread.pinnedMessages ?? null)) &&
-            (event.payload.threadMarkers === undefined ||
-              deepEqualJson(event.payload.threadMarkers, thread.threadMarkers ?? null)) &&
             (event.payload.notes === undefined || event.payload.notes === (thread.notes ?? "")) &&
             (event.payload.goal === undefined || event.payload.goal === (thread.goal ?? "")) &&
             (event.payload.goalStartedAt === undefined ||
@@ -1013,13 +1035,7 @@ function applyOrchestrationEvent(
                   >,
                 }
               : {}),
-            ...(event.payload.threadMarkers !== undefined
-              ? {
-                  threadMarkers: event.payload.threadMarkers as NonNullable<
-                    Thread["threadMarkers"]
-                  >,
-                }
-              : {}),
+
             ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
             ...(event.payload.goal !== undefined ? { goal: event.payload.goal } : {}),
             ...(event.payload.goalStartedAt !== undefined
@@ -1132,89 +1148,25 @@ function applyOrchestrationEvent(
         { ...options, updateSidebarSummary: false },
       );
 
-    case "thread.marker-added":
+    case "thread.async-user-input-answered":
       return applyThreadUpdate(
         state,
         event.payload.threadId,
-        (thread) => {
-          const threadMarkers = addThreadMarker(thread.threadMarkers, event.payload.marker);
-          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
-          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
-            return thread;
-          }
-          return {
-            ...thread,
-            threadMarkers,
-            updatedAt,
-          };
-        },
-        { ...options, updateSidebarSummary: false },
-      );
-
-    case "thread.marker-removed":
-      return applyThreadUpdate(
-        state,
-        event.payload.threadId,
-        (thread) => {
-          const threadMarkers = removeThreadMarker(thread.threadMarkers, event.payload.markerId);
-          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
-          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
-            return thread;
-          }
-          return {
-            ...thread,
-            threadMarkers,
-            updatedAt,
-          };
-        },
-        { ...options, updateSidebarSummary: false },
-      );
-
-    case "thread.marker-done-set":
-      return applyThreadUpdate(
-        state,
-        event.payload.threadId,
-        (thread) => {
-          const threadMarkers = setThreadMarkerDone(
-            thread.threadMarkers,
-            event.payload.markerId,
-            event.payload.done,
-            event.payload.updatedAt,
-          );
-          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
-          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
-            return thread;
-          }
-          return {
-            ...thread,
-            threadMarkers,
-            updatedAt,
-          };
-        },
-        { ...options, updateSidebarSummary: false },
-      );
-
-    case "thread.marker-label-set":
-      return applyThreadUpdate(
-        state,
-        event.payload.threadId,
-        (thread) => {
-          const threadMarkers = setThreadMarkerLabel(
-            thread.threadMarkers,
-            event.payload.markerId,
-            event.payload.label,
-            event.payload.updatedAt,
-          );
-          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
-          if (thread.threadMarkers === threadMarkers && thread.updatedAt === updatedAt) {
-            return thread;
-          }
-          return {
-            ...thread,
-            threadMarkers,
-            updatedAt,
-          };
-        },
+        (thread) => ({
+          ...thread,
+          messages: thread.messages.map((message) =>
+            message.id === event.payload.messageId && message.asyncUserInput
+              ? {
+                  ...message,
+                  asyncUserInput: mergeAsyncUserInput(message.asyncUserInput, {
+                    ...message.asyncUserInput,
+                    response: event.payload.response,
+                    responseSequence: event.sequence,
+                  }),
+                }
+              : message,
+          ),
+        }),
         { ...options, updateSidebarSummary: false },
       );
 
@@ -1231,6 +1183,30 @@ function applyOrchestrationEvent(
         },
       );
 
+    case "thread.claude-cache-set":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          if (
+            event.sequence <=
+            Math.max(thread.claudeCacheReviewSequence ?? 0, state.shellSnapshotSequence ?? 0)
+          ) {
+            return thread;
+          }
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.updatedAt);
+          return {
+            ...thread,
+            claudeCacheReview: deepEqualJson(thread.claudeCacheReview ?? null, event.payload.review)
+              ? (thread.claudeCacheReview ?? null)
+              : event.payload.review,
+            claudeCacheReviewSequence: event.sequence,
+            updatedAt,
+          };
+        },
+        options,
+      );
+
     case "thread.session-set":
       return applyThreadUpdate(
         state,
@@ -1242,7 +1218,10 @@ function applyOrchestrationEvent(
           if (
             session === thread.session &&
             error === thread.error &&
-            latestTurn === thread.latestTurn
+            latestTurn === thread.latestTurn &&
+            (!thread.sidechatSourceThreadId ||
+              thread.sidechatExpiredAt ||
+              thread.sidechatLastActivityAt === event.payload.session.updatedAt)
           ) {
             return thread;
           }
@@ -1251,6 +1230,9 @@ function applyOrchestrationEvent(
             session,
             error,
             latestTurn,
+            ...(thread.sidechatSourceThreadId && !thread.sidechatExpiredAt
+              ? { sidechatLastActivityAt: event.payload.session.updatedAt }
+              : {}),
             updatedAt:
               (thread.updatedAt ?? thread.createdAt) > event.occurredAt
                 ? thread.updatedAt
@@ -1261,6 +1243,48 @@ function applyOrchestrationEvent(
           ...options,
           updateSidebarSummary: true,
         },
+      );
+
+    case "thread.sidechat-activity-recorded":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.lastActivityAt);
+          if (
+            thread.sidechatLastActivityAt === event.payload.lastActivityAt &&
+            thread.updatedAt === updatedAt
+          ) {
+            return thread;
+          }
+          return {
+            ...thread,
+            sidechatLastActivityAt: event.payload.lastActivityAt,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
+      );
+
+    case "thread.sidechat-expired":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => {
+          const updatedAt = resolveEventUpdatedAt(thread, event.payload.expiredAt);
+          if (
+            thread.sidechatExpiredAt === event.payload.expiredAt &&
+            thread.updatedAt === updatedAt
+          ) {
+            return thread;
+          }
+          return {
+            ...thread,
+            sidechatExpiredAt: event.payload.expiredAt,
+            updatedAt,
+          };
+        },
+        { ...options, updateSidebarSummary: true },
       );
 
     case "thread.turn-interrupt-requested": {
@@ -1335,6 +1359,8 @@ function applyOrchestrationEvent(
             thread.runtimeMode === runtimeMode &&
             thread.interactionMode === interactionMode &&
             thread.pendingSourceProposedPlan === event.payload.sourceProposedPlan &&
+            (!thread.sidechatSourceThreadId ||
+              thread.sidechatLastActivityAt === event.payload.createdAt) &&
             (thread.updatedAt ?? thread.createdAt) >= event.payload.createdAt
           ) {
             return thread;
@@ -1345,6 +1371,9 @@ function applyOrchestrationEvent(
             runtimeMode,
             interactionMode,
             pendingSourceProposedPlan: event.payload.sourceProposedPlan,
+            ...(thread.sidechatSourceThreadId
+              ? { sidechatLastActivityAt: event.payload.createdAt }
+              : {}),
             updatedAt:
               (thread.updatedAt ?? thread.createdAt) > event.payload.createdAt
                 ? thread.updatedAt
@@ -1522,10 +1551,15 @@ function applyOrchestrationEvent(
                 (right.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER),
             );
           const retainedTurnIds = new Set(turnDiffSummaries.map((entry) => entry.turnId));
-          const messages = retainThreadMessagesAfterRevert(
+          const retainedMessages = retainThreadMessagesAfterRevert(
             thread.messages,
             retainedTurnIds,
             event.payload.turnCount,
+          );
+          const messages = clearRemovedAsyncUserInputResponses(
+            retainedMessages,
+            new Set(retainedMessages.map((message) => message.id)),
+            event.sequence,
           ).slice(-MAX_THREAD_MESSAGES);
           const proposedPlans = retainThreadProposedPlansAfterRevert(
             thread.proposedPlans,
@@ -1541,6 +1575,8 @@ function applyOrchestrationEvent(
             proposedPlans,
             activities,
             pendingSourceProposedPlan: undefined,
+            latestHumanMessageAt: deriveThreadSummaryMetadata({ ...thread, messages })
+              .latestHumanMessageAt,
             latestTurn:
               latestCheckpoint === null
                 ? null
@@ -1602,10 +1638,18 @@ function applyOrchestrationEvent(
           return {
             ...thread,
             turnDiffSummaries,
-            messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
+            messages: clearRemovedAsyncUserInputResponses(
+              rollback.messages,
+              new Set(rollback.messages.map((message) => message.id)),
+              event.sequence,
+            ).slice(-MAX_THREAD_MESSAGES),
             proposedPlans,
             activities,
             pendingSourceProposedPlan: undefined,
+            latestHumanMessageAt: deriveThreadSummaryMetadata({
+              ...thread,
+              messages: rollback.messages,
+            }).latestHumanMessageAt,
             latestTurn:
               latestCheckpoint === null
                 ? null

@@ -54,10 +54,7 @@ import { GatewayToolError, gatewayToolErrorResult } from "./toolRuntime.ts";
 const CREATION_REPLAY_WAIT_MS = 60_000;
 
 function interactionModeForGatewayTarget(target: ModelSelection): ProviderInteractionMode {
-  if (
-    (target.provider === "opencode" || target.provider === "kilo") &&
-    target.options?.agent === "plan"
-  ) {
+  if (target.provider === "opencode" && target.options?.agent === "plan") {
     return "plan";
   }
   return "default";
@@ -318,6 +315,17 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           new GatewayToolError(
             "creation_limit_exceeded",
             "External MCP integrations may create exactly one task per request.",
+          ),
+        );
+      }
+      if (
+        context.kind !== "provider-session" &&
+        input.threads.some((spec) => spec.notifyCreatorOnComplete)
+      ) {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "capability_denied",
+            "Completion delivery requires an authenticated creating thread.",
           ),
         );
       }
@@ -886,6 +894,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               planJson: canonicalJson(
                 prepared.map((entry) => ({
                   index: entry.index,
+                  notifyCreatorOnComplete: entry.spec.notifyCreatorOnComplete === true,
                   projectId: entry.projectId,
                   workspaceRoot: entry.workspaceRoot,
                   environment: entry.environment,

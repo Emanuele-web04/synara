@@ -23,6 +23,7 @@ import {
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
+import { CodexSessionStartError } from "../../codexErrorClassification.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -175,8 +176,43 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect(
+    "preserves startup cleanup evidence without reclassifying unknown process failures",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        for (const cause of [
+          new CodexSessionStartError("Codex stdout closed during initialization."),
+          new Error("Failed to prove Codex app-server process-tree exit."),
+        ]) {
+          validationManager.startSessionImpl.mockRejectedValueOnce(cause);
+          const result = yield* adapter
+            .startSession({
+              provider: "codex",
+              threadId: asThreadId("thread-start-failed"),
+              runtimeMode: "full-access",
+            })
+            .pipe(Effect.result);
+
+          assert.equal(result._tag, "Failure");
+          if (result._tag !== "Failure") throw new Error("Expected startup failure");
+          assert.equal(result.failure._tag, "ProviderAdapterProcessError");
+          if (result.failure._tag !== "ProviderAdapterProcessError") {
+            throw new Error("Expected process failure");
+          }
+          assert.equal(
+            result.failure.reason,
+            cause instanceof CodexSessionStartError ? "startup-failed" : undefined,
+          );
+          assert.equal(result.failure.cause, cause);
+          assert.equal(result.failure.detail, cause.message);
+        }
+      }),
+  );
+
   it.effect("returns validation error for non-codex provider on startSession", () =>
     Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
       const adapter = yield* CodexAdapter;
       const result = yield* adapter
         .startSession({
@@ -248,6 +284,26 @@ validationLayer("CodexAdapterLive validation", (it) => {
         forkSourceResumeCursor,
         runtimeMode: "full-access",
       });
+    }),
+  );
+  it.effect("explicitly selects Standard when opening a session with Fast disabled", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-standard"),
+        resumeCursor: { threadId: "previously-fast-thread" },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.4",
+          options: { fastMode: false },
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(validationManager.startSessionImpl.mock.calls[0]?.[0].serviceTier, "default");
     }),
   );
 });
@@ -333,6 +389,32 @@ const turnPreparationLayer = it.layer(
 );
 
 turnPreparationLayer("CodexAdapterLive turn input preparation", (it) => {
+  it.effect("clears Fast mode on the next turn while preserving an unspecified tier", () =>
+    Effect.gen(function* () {
+      turnPreparationManager.sendTurnImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      for (const fastMode of [true, false, undefined]) {
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-tier-toggle"),
+          input: "Continue",
+          attachments: [],
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+            ...(fastMode !== undefined ? { options: { fastMode } } : {}),
+          },
+        });
+      }
+
+      const requests = turnPreparationManager.sendTurnImpl.mock.calls.map(([input]) => input);
+      assert.deepStrictEqual(
+        requests.map((input) => input.serviceTier),
+        ["fast", "default", undefined],
+      );
+      assert.equal(Object.hasOwn(requests[2]!, "serviceTier"), false);
+    }),
+  );
   it.effect("prepares equivalent rich send and steer manager payloads", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -732,6 +814,132 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.itemId, "msg_1");
       assert.equal(firstEvent.value.turnId, "turn-1");
       assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+    }),
+  );
+
+  it.effect("preserves async questions without emitting a blocking request", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      const event: ProviderEvent = {
+        id: asEventId("evt-msg-complete"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("msg_1"),
+        payload: {
+          item: {
+            type: "agentMessage",
+            id: "msg_1",
+            delivery: "async",
+            questions: [
+              { title: "Which action?", options: ["Click", "Scroll"] },
+              { title: "Anything else?", options: null },
+            ],
+          },
+        },
+      };
+
+      lifecycleManager.emit("event", event);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.itemId, "msg_1");
+      assert.equal(firstEvent.value.turnId, "turn-1");
+      assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+      assert.deepStrictEqual(firstEvent.value.payload.asyncQuestions, [
+        { title: "Which action?", options: ["Click", "Scroll"] },
+        { title: "Anything else?" },
+      ]);
+    }),
+  );
+
+  it.effect("falls back to assistant text for malformed async questions", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      const event: ProviderEvent = {
+        id: asEventId("evt-msg-complete"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("msg_1"),
+        payload: {
+          item: {
+            type: "agentMessage",
+            id: "msg_1",
+            delivery: "async",
+            text: "Which action?",
+            questions: [{ title: "", options: ["Click"] }],
+          },
+        },
+      };
+
+      lifecycleManager.emit("event", event);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      assert.equal(firstEvent.value.itemId, "msg_1");
+      assert.equal(firstEvent.value.turnId, "turn-1");
+      assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+      assert.equal(firstEvent.value.payload.asyncQuestions, undefined);
+      assert.equal(firstEvent.value.payload.detail, "Which action?");
+    }),
+  );
+
+  it.effect("keeps inspected images out of generated output artifacts", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      const payload = {
+        item: {
+          type: "imageView",
+          id: "view_1",
+          path: "/attachments/objects/upload.png",
+        },
+      };
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-image-view"),
+        kind: "notification",
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("view_1"),
+        payload,
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") return;
+      assert.equal(firstEvent.value.type, "item.completed");
+      if (firstEvent.value.type !== "item.completed") return;
+      assert.equal(firstEvent.value.payload.itemType, "image_view");
+      assert.equal(firstEvent.value.payload.title, "Image view");
+      assert.deepStrictEqual(firstEvent.value.payload.data, payload);
     }),
   );
 
@@ -1514,6 +1722,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
             total: {
               inputTokens: 11_833,
               cachedInputTokens: 3456,
+              cacheWriteInputTokens: 500,
               outputTokens: 6,
               reasoningOutputTokens: 0,
               totalTokens: 11_839,
@@ -1542,6 +1751,12 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
 
       assert.deepEqual(firstEvent.value.payload.usage, {
         usedTokens: 126,
+        cumulativeUsage: {
+          inputTokens: 11_833,
+          outputTokens: 6,
+          cachedInputTokens: 3456,
+          cacheCreationInputTokens: 500,
+        },
         totalProcessedTokens: 11_839,
         maxTokens: 258_400,
         inputTokens: 120,
@@ -1589,6 +1804,101 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.payload.itemType, "context_compaction");
       assert.equal(firstEvent.value.payload.detail, "Compacting context");
       assert.equal(firstEvent.value.payload.status, "inProgress");
+    }),
+  );
+
+  it.effect("maps Codex hook notifications to bounded canonical lifecycle events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 2).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const commonRun = {
+        id: "hook-run-1",
+        eventName: "preToolUse",
+        executionMode: "sync",
+        handlerType: "command",
+        scope: "turn",
+        source: "user",
+        sourcePath: "/Users/example/.codex/hooks.json",
+        displayOrder: 0,
+        startedAt: 100,
+      };
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-hook-started"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+        method: "hook/started",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          run: {
+            ...commonRun,
+            status: "running",
+            statusMessage: null,
+            completedAt: null,
+            durationMs: null,
+            entries: [],
+          },
+        },
+      } satisfies ProviderEvent);
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-hook-completed"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+        method: "hook/completed",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          run: {
+            ...commonRun,
+            status: "blocked",
+            statusMessage: "api_key=private-hook-secret blocked this action",
+            completedAt: 112,
+            durationMs: 12,
+            entries: [{ kind: "error", text: "Authorization: Bearer private-hook-token" }],
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(events.length, 2);
+      const [started, completed] = events;
+      assert.equal(started?.type, "hook.started");
+      if (started?.type !== "hook.started") return;
+      assert.deepEqual(started.payload, {
+        hookId: "hook-run-1",
+        hookName: "/Users/example/.codex/hooks.json",
+        hookEvent: "preToolUse",
+        data: {
+          ...commonRun,
+          status: "running",
+          statusMessage: null,
+          completedAt: null,
+          durationMs: null,
+          entries: [],
+        },
+      });
+      assert.deepEqual(started.raw?.payload, { synaraSanitized: true });
+
+      assert.equal(completed?.type, "hook.completed");
+      if (completed?.type !== "hook.completed") return;
+      assert.equal(completed.payload.outcome, "cancelled");
+      assert.equal(completed.payload.status, "blocked");
+      assert.equal(completed.payload.durationMs, 12);
+      const serialized = JSON.stringify(completed);
+      assert.equal(serialized.includes("private-hook-secret"), false);
+      assert.equal(serialized.includes("private-hook-token"), false);
+      assert.equal(serialized.includes("[REDACTED]"), true);
+      assert.deepEqual(completed.raw?.payload, { synaraSanitized: true });
     }),
   );
 
@@ -1646,6 +1956,45 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         assert.equal(firstEvent.value.itemId, "agent_message_9");
         assert.equal(firstEvent.value.providerRefs?.providerItemId, "agent_message_9");
       }),
+  );
+
+  it.effect("keeps routine Codex startup notifications out of the activity stream", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.take(adapter.streamEvents, 3).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const emit = (method: string, kind: ProviderEvent["kind"] = "notification") =>
+        lifecycleManager.emit("event", {
+          id: asEventId(`startup-${method}-${kind}`),
+          kind,
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method,
+          threadId: asThreadId("startup-thread"),
+          ...(kind === "error" ? { message: "Failed to open thread" } : {}),
+          payload: { status: "disabled" },
+        } satisfies ProviderEvent);
+
+      emit("remoteControl/status/changed");
+      emit("skills/changed");
+      emit("session/threadOpenRequested", "session");
+      // Real errors and useful unknown events must survive the filter.
+      emit("session/threadOpenRequested", "error");
+      emit("item/future/completed");
+      emit("session/started", "session");
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["runtime.error", "event.unmapped", "session.started"],
+      );
+      assert.equal(
+        events[1]?.type === "event.unmapped" ? events[1].payload.nativeType : undefined,
+        "item/future/completed",
+      );
+    }),
   );
 
   it.effect("coalesces repeated unmapped burst events", () =>

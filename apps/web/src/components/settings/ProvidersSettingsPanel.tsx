@@ -31,8 +31,10 @@ import { type MouseEvent, type ReactNode, useCallback, useMemo, useRef, useState
 
 import type { AppSettings, AppSettingsBinding } from "~/appSettings";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { CentralIcon } from "~/lib/central-icons";
 import { DownloadIcon, ExternalLinkIcon, Loader2Icon } from "~/lib/icons";
+import { providerSetupStatusLabel } from "~/lib/providerSetupStatus";
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
@@ -76,20 +78,17 @@ type ProviderInstallTextKey =
   | "codexHomePath"
   | "cursorBinaryPath"
   | "cursorApiEndpoint"
+  | "devinBinaryPath"
   | "antigravityBinaryPath"
   | "grokBinaryPath"
   | "droidBinaryPath"
-  | "kiloBinaryPath"
-  | "kiloServerUrl"
   | "openCodeBinaryPath"
   | "openCodeServerUrl"
   | "piBinaryPath"
   | "piAgentDir";
-type ProviderInstallPasswordKey = "kiloServerPassword" | "openCodeServerPassword";
-type ProviderInstallPasswordConfiguredKey =
-  | "kiloServerPasswordConfigured"
-  | "openCodeServerPasswordConfigured";
-type ProviderInstallBooleanKey = "openCodeExperimentalWebSockets";
+type ProviderInstallPasswordKey = "openCodeServerPassword";
+type ProviderInstallPasswordConfiguredKey = "openCodeServerPasswordConfigured";
+type ProviderInstallBooleanKey = "claudeEnableArtifacts" | "openCodeExperimentalWebSockets";
 
 type ProviderInstallTextField = {
   readonly kind: "text";
@@ -122,11 +121,11 @@ type ProviderInstallSettings = {
   readonly fields: readonly ProviderInstallField[];
 };
 
-const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title: string }> =
-  PROVIDER_DESCRIPTORS.map((descriptor) => ({
-    provider: descriptor.kind,
-    title: descriptor.displayName,
-  }));
+const PROVIDER_VISIBILITY_OPTIONS = PROVIDER_DESCRIPTORS.map((descriptor) => ({
+  provider: descriptor.kind,
+  title: descriptor.displayName,
+  setupDocsHref: descriptor.setupDocsHref,
+}));
 
 const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   {
@@ -173,6 +172,18 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         description: (
           <>
             Leave blank to use <code>claude</code> from your PATH.
+          </>
+        ),
+      },
+      {
+        kind: "boolean",
+        settingsKey: "claudeEnableArtifacts",
+        label: "Artifacts, /design and /slides",
+        description: (
+          <>
+            Claude Code keeps Artifacts off in embedded sessions. Turn this on so{" "}
+            <code>/design</code> and <code>/slides</code> publish to claude.ai. Needs a claude.ai
+            login on a Pro, Max, Team or Enterprise plan, and applies to new sessions.
           </>
         ),
       },
@@ -272,38 +283,24 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
     ],
   },
   {
-    provider: "kilo",
+    provider: "devin",
     docs: [
-      { label: "Install", href: "https://kilo.ai/docs/cli" },
-      { label: "Update", href: "https://kilo.ai/docs/cli" },
-      { label: "Config", href: "https://kilo.ai/docs/cli#configuration" },
+      { label: "Install", href: "https://docs.devin.ai/cli" },
+      { label: "Commands", href: "https://docs.devin.ai/cli/reference/commands" },
+      { label: "Config", href: "https://docs.devin.ai/cli/reference/configuration/config-file" },
     ],
     fields: [
       {
         kind: "text",
-        settingsKey: "kiloBinaryPath",
-        label: "Kilo binary path",
-        placeholder: "Kilo binary path",
+        settingsKey: "devinBinaryPath",
+        label: "Devin binary path",
+        placeholder: "devin",
         description: (
           <>
-            Leave blank to use <code>kilo</code> from your PATH.
+            Leave blank to use <code>devin</code> from your PATH. Authenticate with{" "}
+            <code>devin auth login</code> or set WINDSURF_API_KEY.
           </>
         ),
-      },
-      {
-        kind: "text",
-        settingsKey: "kiloServerUrl",
-        label: "Kilo server URL",
-        placeholder: "http://127.0.0.1:4096",
-        description: "Optional existing Kilo server URL. Leave blank to spawn a local server.",
-      },
-      {
-        kind: "password",
-        settingsKey: "kiloServerPassword",
-        configuredKey: "kiloServerPasswordConfigured",
-        label: "Kilo server password",
-        placeholder: "Kilo server password",
-        description: "Optional password for an externally managed Kilo server.",
       },
     ],
   },
@@ -456,6 +453,7 @@ function SortableProviderVisibilityRow(props: {
   option: { provider: ProviderKind; title: string };
   providerStatus: ServerProviderStatus | undefined;
   statusReconciled: boolean;
+  isDisabled: boolean;
   isHidden: boolean;
   onHiddenChange: (hidden: boolean) => void;
 }) {
@@ -499,9 +497,15 @@ function SortableProviderVisibilityRow(props: {
         </button>
         <ProviderIcon provider={props.option.provider} className="size-4 shrink-0" />
         <span className="min-w-0">
-          <span className="block truncate text-sm text-foreground">{props.option.title}</span>
-          <span className="block text-[11px] text-muted-foreground">
-            {isChecking ? "Checking" : isAvailable ? "Installed" : "CLI not installed"}
+          <span className="block truncate text-ui-lg leading-snug text-foreground">
+            {props.option.title}
+          </span>
+          <span className="block text-ui-sm text-muted-foreground">
+            {providerSetupStatusLabel({
+              status: props.providerStatus,
+              reconciled: props.statusReconciled,
+              disabled: props.isDisabled,
+            })}
           </span>
         </span>
       </div>
@@ -514,7 +518,7 @@ function SortableProviderVisibilityRow(props: {
             ? `Checking ${props.option.title} CLI availability`
             : isAvailable
               ? `Show ${props.option.title} in the provider picker`
-              : `${props.option.title} CLI is not installed`
+              : `${props.option.title} is unavailable in the provider picker`
         }
       />
     </div>
@@ -525,7 +529,7 @@ function ProviderDocsLinks({ docs }: { docs: ProviderInstallSettings["docs"] }) 
   return (
     <div className={cn(SETTINGS_OUTLINED_SURFACE_CLASS_NAME, "px-3 py-2.5")}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <span className="text-xs font-medium text-foreground">CLI docs</span>
+        <span className="text-ui leading-snug font-medium text-foreground">CLI docs</span>
         <div className="flex flex-wrap gap-2">
           {docs.map((doc) => (
             <Button
@@ -615,8 +619,10 @@ function ProviderInstallFieldControl(props: {
         className="flex items-start justify-between gap-3 rounded-md border border-border/70 bg-background/60 px-3 py-2"
       >
         <span className="min-w-0">
-          <span className="block text-xs font-medium text-foreground">{props.field.label}</span>
-          <span className="mt-1 block text-xs text-muted-foreground">
+          <span className="block text-ui leading-snug font-medium text-foreground">
+            {props.field.label}
+          </span>
+          <span className="mt-1 block text-ui leading-snug text-muted-foreground">
             {props.field.description}
           </span>
         </span>
@@ -636,7 +642,9 @@ function ProviderInstallFieldControl(props: {
   const isPassword = props.field.kind === "password";
   return (
     <label htmlFor={id} className="block">
-      <span className="block text-xs font-medium text-foreground">{props.field.label}</span>
+      <span className="block text-ui leading-snug font-medium text-foreground">
+        {props.field.label}
+      </span>
       <DebouncedSettingTextInput
         id={id}
         size="sm"
@@ -655,7 +663,9 @@ function ProviderInstallFieldControl(props: {
         autoComplete={isPassword ? "new-password" : undefined}
         spellCheck={false}
       />
-      <span className="mt-1 block text-xs text-muted-foreground">{props.field.description}</span>
+      <span className="mt-1 block text-ui leading-snug text-muted-foreground">
+        {props.field.description}
+      </span>
     </label>
   );
 }
@@ -718,14 +728,14 @@ function ProviderToolRow(props: {
             type="button"
             className="flex min-w-0 flex-1 items-center gap-2 text-left"
           >
-            <span className="min-w-0 flex-1 text-sm font-medium text-foreground">{title}</span>
+            <span className="min-w-0 flex-1 text-ui-lg font-medium text-foreground">{title}</span>
             {isDirty ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground">Custom</span>
+              <span className="shrink-0 text-ui-sm text-muted-foreground">Custom</span>
             ) : null}
             {providerUpdateLabel ? (
               <span
                 className={cn(
-                  "shrink-0 text-[11px]",
+                  "shrink-0 text-ui-sm",
                   updateAdvisory?.status === "behind_latest"
                     ? "text-foreground"
                     : "text-muted-foreground",
@@ -754,7 +764,7 @@ function ProviderToolRow(props: {
             <div className="space-y-3">
               <ProviderDocsLinks docs={props.config.docs} />
               {showProviderUpdateStatus && updateAdvisory?.status === "behind_latest" ? (
-                <div className="text-xs text-muted-foreground">
+                <div className="text-ui leading-snug text-muted-foreground">
                   {updateAdvisory.canUpdate && updateAdvisory.updateCommand ? (
                     <>
                       <span>Command: </span>
@@ -767,7 +777,7 @@ function ProviderToolRow(props: {
               ) : null}
               {showSelfManagedUpdate && props.providerStatus ? (
                 <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 text-xs text-muted-foreground">
+                  <div className="min-w-0 text-ui leading-snug text-muted-foreground">
                     {title} manages its own releases, so Synara cannot tell whether a newer version
                     exists. Run the update to be sure.
                   </div>
@@ -812,6 +822,9 @@ export function ProvidersSettingsPanel({
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const localProviderStatuses = useProviderStatusesForLocalConfig();
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
+  const [refreshingProviders, setRefreshingProviders] = useState(false);
+  const refreshProvidersInFlightRef = useRef(false);
   const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>(
@@ -970,12 +983,35 @@ export function ProvidersSettingsPanel({
 
   if (!active) return null;
 
+  const refreshProviders = async () => {
+    if (refreshProvidersInFlightRef.current) return;
+    refreshProvidersInFlightRef.current = true;
+    setRefreshingProviders(true);
+    try {
+      await refreshProviderStatuses();
+    } finally {
+      refreshProvidersInFlightRef.current = false;
+      setRefreshingProviders(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <SettingsSection title="Provider activity">
         <SettingsRow
           title="Enabled providers"
-          description="Disabling a provider stops its background health checks, model and command discovery, updates, and new turns. Existing threads stay visible and continue after you re-enable it; a turn already running is not interrupted."
+          description="Allow background checks and new turns. Enabling a provider does not install it or sign it in. Disabling keeps existing threads and does not interrupt a running turn."
+          control={
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={refreshingProviders}
+              onClick={() => void refreshProviders()}
+            >
+              {refreshingProviders ? <Loader2Icon className="size-3.5 animate-spin" /> : null}
+              {refreshingProviders ? "Checking setup" : "Refresh status"}
+            </Button>
+          }
           status={
             providerEnablementMutationPending
               ? "Saving provider activity"
@@ -999,6 +1035,7 @@ export function ProvidersSettingsPanel({
           >
             {orderedProviderVisibilityOptions.map((option) => {
               const enabled = !disabledProviderSet.has(option.provider);
+              const providerStatus = providerStatusByProvider.get(option.provider);
               return (
                 <SettingsListRow
                   key={option.provider}
@@ -1008,22 +1045,50 @@ export function ProvidersSettingsPanel({
                       <span>{option.title}</span>
                     </span>
                   }
-                  description={enabled ? "Background activity allowed" : "Disabled on the server"}
+                  description={
+                    <>
+                      <span className="block">
+                        {providerSetupStatusLabel({
+                          status: providerStatus,
+                          reconciled: providerStatusesReconciled,
+                          disabled: !enabled,
+                        })}
+                      </span>
+                      {enabled &&
+                      providerStatusesReconciled &&
+                      providerStatus?.message &&
+                      (providerStatus.status !== "ready" ||
+                        providerStatus.authStatus !== "authenticated") ? (
+                        <span className="mt-1 block">{providerStatus.message}</span>
+                      ) : null}
+                    </>
+                  }
                   actions={
-                    <Switch
-                      checked={enabled}
-                      disabled={!serverSettingsQuery.data || providerEnablementMutationPending}
-                      onCheckedChange={(checked) =>
-                        void updateProviderEnablement(
-                          setProviderListMembership(
-                            settings.disabledProviders,
-                            option.provider,
-                            !Boolean(checked),
-                          ),
-                        )
-                      }
-                      aria-label={`${enabled ? "Disable" : "Enable"} ${option.title}`}
-                    />
+                    <>
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        render={<a href={option.setupDocsHref} target="_blank" rel="noreferrer" />}
+                        aria-label={`${option.title} setup guide`}
+                      >
+                        Setup guide
+                        <ExternalLinkIcon className="size-3" />
+                      </Button>
+                      <Switch
+                        checked={enabled}
+                        disabled={!serverSettingsQuery.data || providerEnablementMutationPending}
+                        onCheckedChange={(checked) =>
+                          void updateProviderEnablement(
+                            setProviderListMembership(
+                              settings.disabledProviders,
+                              option.provider,
+                              !Boolean(checked),
+                            ),
+                          )
+                        }
+                        aria-label={`${enabled ? "Disable" : "Enable"} ${option.title}`}
+                      />
+                    </>
                   }
                 />
               );
@@ -1078,6 +1143,7 @@ export function ProvidersSettingsPanel({
                     option={option}
                     providerStatus={providerStatusByProvider.get(option.provider)}
                     statusReconciled={providerStatusesReconciled}
+                    isDisabled={disabledProviderSet.has(option.provider)}
                     isHidden={hiddenProviderSet.has(option.provider)}
                     onHiddenChange={(hidden) =>
                       updateSettings({
@@ -1162,7 +1228,7 @@ export function ProvidersSettingsPanel({
                             onUpdate={(provider) => void runProviderUpdate(provider)}
                           />
                         ) : (
-                          <span className="text-[11px] text-muted-foreground">Manual update</span>
+                          <span className="text-ui-sm text-muted-foreground">Manual update</span>
                         )
                       }
                     />

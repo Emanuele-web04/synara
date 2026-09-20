@@ -27,7 +27,9 @@ export type ThreadPullRequestSource = Pick<
 >;
 
 const THREAD_PR_STALE_TIME_MS = 30_000;
-const THREAD_PR_REFETCH_INTERVAL_MS = 60_000;
+// Every visible row costs one GitHub API call per tick, so badges poll at the relaxed git-status
+// cadence. Local pushes, merges, and turn activity still refresh them through git invalidation.
+const THREAD_PR_REFETCH_INTERVAL_MS = 300_000;
 
 // Also accepts persisted `lastKnownPr` entries, whose draft/mergeability/diff fields are
 // optional because older rows predate them.
@@ -71,13 +73,14 @@ export function toThreadPullRequest(
  */
 export function resolveThreadPullRequestFallback(input: {
   readonly branch: string | null;
+  readonly hasDedicatedWorktree: boolean;
   readonly lastKnownPr: OrchestrationThreadPullRequest | null | undefined;
 }): ThreadPullRequest {
   return resolveSidebarThreadPullRequest({
     threadBranch: input.branch,
     liveBranch: null,
     hasLiveStatus: false,
-    hasDedicatedWorktree: false,
+    hasDedicatedWorktree: input.hasDedicatedWorktree,
     livePullRequest: null,
     persistedPullRequest: input.lastKnownPr ? toThreadPullRequest(input.lastKnownPr) : null,
   });
@@ -85,8 +88,9 @@ export function resolveThreadPullRequestFallback(input: {
 
 /**
  * Resolves the PR badge for each given thread. Callers pass only the rows they render:
- * every distinct checkout behind them gets a polled git-status query and every stored PR
- * reference a polled lookup, so hidden history must stay out of the input.
+ * every distinct thread-owned worktree gets a polled git-status query and every stored PR
+ * reference a polled lookup. Shared local checkouts intentionally use only the durable thread PR:
+ * their live branch may belong to another concurrent thread.
  */
 export function useThreadPullRequests(input: {
   readonly threads: readonly ThreadPullRequestSource[];
@@ -112,7 +116,7 @@ export function useThreadPullRequests(input: {
     () => [
       ...new Set(
         threadGitTargets
-          .filter((target) => target.branch !== null || target.hasDedicatedWorktree)
+          .filter((target) => target.hasDedicatedWorktree)
           .map((target) => target.cwd)
           .filter((cwd): cwd is string => cwd !== null),
       ),
@@ -142,9 +146,9 @@ export function useThreadPullRequests(input: {
       ...gitResolvePullRequestQueryOptions({
         cwd: target.cwd,
         reference: target.lastKnownPr.url,
+        pollIntervalMs: THREAD_PR_REFETCH_INTERVAL_MS,
       }),
       staleTime: THREAD_PR_STALE_TIME_MS,
-      refetchInterval: THREAD_PR_REFETCH_INTERVAL_MS,
     })),
   });
   return useMemo(() => {

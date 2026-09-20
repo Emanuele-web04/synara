@@ -26,6 +26,7 @@ import {
   Undo2Icon,
   WorktreeIcon,
 } from "~/lib/icons";
+import { beginThreadDrag, endThreadDrag } from "~/lib/threadDrag";
 import { cn } from "~/lib/utils";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
@@ -58,7 +59,6 @@ import {
   isThreadSettledForActivity,
   resolveActivityScope,
   splitActivityThreadsByDateBucket,
-  splitPriorityActivityThreads,
   splitRecentActivityThreads,
   type ActivityGroupMode,
   type ActivityProjectGroup,
@@ -108,6 +108,7 @@ function ActivityThreadRow({
   pr,
   status,
   onOpen,
+  onOpenPullRequest,
   onSetSettled,
   onTogglePinned,
   onArchive,
@@ -124,6 +125,7 @@ function ActivityThreadRow({
   pr: OrchestrationThreadPullRequest | null;
   status: ThreadStatusPill | null;
   onOpen: () => void;
+  onOpenPullRequest: (event: MouseEvent<HTMLElement>, pr: OrchestrationThreadPullRequest) => void;
   onSetSettled: (settled: boolean) => void;
   onTogglePinned: () => void;
   onArchive: () => void;
@@ -175,6 +177,11 @@ function ActivityThreadRow({
         <button
           type="button"
           onClick={onOpen}
+          // Same native drag as the classic thread rows: drop on a chat pane to
+          // split, or on a composer to @mention the chat.
+          draggable
+          onDragStart={(event) => beginThreadDrag(event, thread.id)}
+          onDragEnd={endThreadDrag}
           data-testid={`activity-thread-${thread.id}`}
           className={cn(
             "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 py-2 text-left select-none",
@@ -199,7 +206,7 @@ function ActivityThreadRow({
             />
             <span
               className={cn(
-                "min-w-0 shrink truncate text-[length:var(--app-font-size-ui,12px)] leading-5 font-normal",
+                "min-w-0 shrink truncate text-ui leading-5 font-normal",
                 isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
               )}
             >
@@ -211,13 +218,19 @@ function ActivityThreadRow({
               className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
               aria-hidden
             />
-            <span className="min-w-0 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/80">
+            <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
             <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-              {pr ? <PrStateChip pr={pr} className="[&_svg]:size-2.5" /> : null}
+              {pr ? (
+                <PrStateChip
+                  pr={pr}
+                  className="[&_svg]:size-2.5"
+                  onOpen={(event) => onOpenPullRequest(event, pr)}
+                />
+              ) : null}
               {branch ? (
-                <span className="flex min-w-0 items-center gap-1 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/70">
+                <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/70">
                   <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
                   <span className="max-w-36 truncate">{branch}</span>
                 </span>
@@ -393,7 +406,7 @@ function ActivityScopeMenu({
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
+          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
             Activity scope
           </div>
           <MenuRadioGroup
@@ -404,14 +417,14 @@ function ActivityScopeMenu({
               );
             }}
           >
-            <MenuRadioItem value="all" className="min-h-7 py-1 sm:text-xs">
+            <MenuRadioItem value="all" className="min-h-7 py-1 sm:text-ui leading-snug">
               All activity
             </MenuRadioItem>
             {options.map((option) => (
               <MenuRadioItem
                 key={option.kind === "project" ? option.projectId : "chats"}
                 value={option.kind === "project" ? option.projectId : "chats"}
-                className="min-h-7 py-1 sm:text-xs"
+                className="min-h-7 py-1 sm:text-ui leading-snug"
               >
                 <span className="min-w-0 flex-1 truncate">
                   {option.kind === "project"
@@ -456,22 +469,24 @@ function ActivityFilterMenu({
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">Group by</div>
+          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+            Group by
+          </div>
           <MenuRadioGroup
             value={groupMode}
             onValueChange={(value) => onChangeGroupMode(value as ActivityGroupMode)}
           >
-            <MenuRadioItem value="time" className="min-h-7 py-1 sm:text-xs">
+            <MenuRadioItem value="time" className="min-h-7 py-1 sm:text-ui leading-snug">
               Time
             </MenuRadioItem>
-            <MenuRadioItem value="project" className="min-h-7 py-1 sm:text-xs">
+            <MenuRadioItem value="project" className="min-h-7 py-1 sm:text-ui leading-snug">
               Project
             </MenuRadioItem>
           </MenuRadioGroup>
         </MenuGroup>
         <MenuSeparator />
         <MenuItem
-          className="min-h-7 py-1 sm:text-xs"
+          className="min-h-7 py-1 sm:text-ui leading-snug"
           disabled={markAllReadDisabled}
           onClick={onMarkAllRead}
         >
@@ -495,7 +510,7 @@ function ActivityShowMoreRow({
 }) {
   if (!canShowMore && !canShowLess) return null;
   const buttonClassName =
-    "h-7 cursor-pointer rounded-lg px-2.5 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:text-foreground";
+    "h-7 cursor-pointer rounded-lg px-2.5 text-left text-ui text-muted-foreground/79 hover:text-foreground";
   return (
     <div className="flex w-full items-center gap-1">
       {canShowMore ? (
@@ -525,6 +540,7 @@ export function SidebarActivityView({
   threadsHydrated,
   resolveThreadStatus,
   onOpenThread,
+  onOpenThreadPullRequest,
   onSetThreadSettled,
   onToggleThreadPinned,
   onArchiveThread,
@@ -549,6 +565,12 @@ export function SidebarActivityView({
   onVisibleThreadIdsChange: (threadIds: readonly ThreadId[]) => void;
   resolveThreadStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
   onOpenThread: (threadId: ThreadId) => void;
+  /** PR chip click: plain click opens it in the thread, cmd/ctrl/middle-click on GitHub. */
+  onOpenThreadPullRequest: (
+    event: MouseEvent<HTMLElement>,
+    thread: SidebarThreadSummary,
+    pr: OrchestrationThreadPullRequest,
+  ) => void;
   onSetThreadSettled: (threadId: ThreadId, settled: boolean) => void;
   onToggleThreadPinned: (threadId: ThreadId) => void;
   onArchiveThread: (threadId: ThreadId) => void;
@@ -602,17 +624,14 @@ export function SidebarActivityView({
   });
   const scopedPinnedThreads = model.pinned;
   const nowMs = Date.now();
-  const { priority: priorityThreads, seen: seenThreads } = splitPriorityActivityThreads(
-    model.active,
-  );
   const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
-    seenThreads,
+    model.active,
     { nowMs },
   );
   const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs);
   const projectGroups =
     groupMode === "project"
-      ? groupActivityThreadsByProject(model.active, isRealProject, { nowMs })
+      ? groupActivityThreadsByProject(model.active, isRealProject)
       : EMPTY_PROJECT_GROUPS;
 
   const earlierPaging = resolveSidebarThreadListPaging({
@@ -647,7 +666,6 @@ export function SidebarActivityView({
         groupMode,
         pinnedOpen,
         pinned: scopedPinnedThreads,
-        priority: priorityThreads,
         recent: recentThreads,
         today: dateBuckets.today,
         yesterday: dateBuckets.yesterday,
@@ -667,7 +685,6 @@ export function SidebarActivityView({
       model.settled,
       pagedProjectGroups,
       pinnedOpen,
-      priorityThreads,
       recentThreads,
       scopedPinnedThreads,
       settledOpen,
@@ -710,11 +727,13 @@ export function SidebarActivityView({
           ? (prByThreadId.get(thread.id) ?? null)
           : resolveThreadPullRequestFallback({
               branch: thread.branch,
+              hasDedicatedWorktree: thread.worktreePath !== null,
               lastKnownPr: thread.lastKnownPr ?? null,
             })
       }
       status={resolveThreadStatus(thread)}
       onOpen={() => onOpenThread(thread.id)}
+      onOpenPullRequest={(event, pr) => onOpenThreadPullRequest(event, thread, pr)}
       onSetSettled={(settled) => {
         if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
         onSetThreadSettled(thread.id, settled);
@@ -790,7 +809,7 @@ export function SidebarActivityView({
       </div>
 
       {isEmpty ? (
-        <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+        <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
           {threadsHydrated ? emptyLabel : "Loading activity..."}
         </div>
       ) : groupMode === "project" ? (
@@ -836,13 +855,10 @@ export function SidebarActivityView({
         ))
       ) : (
         <>
-          {priorityThreads.length > 0 || recentThreads.length > 0 ? (
+          {recentThreads.length > 0 ? (
             <div>
               <ActivitySectionLabel label="Recent" />
-              <div className="flex flex-col gap-0.5">
-                {priorityThreads.map(renderActiveRow)}
-                {recentThreads.map(renderActiveRow)}
-              </div>
+              <div className="flex flex-col gap-0.5">{recentThreads.map(renderActiveRow)}</div>
             </div>
           ) : null}
           {dateBuckets.today.length > 0 ? (

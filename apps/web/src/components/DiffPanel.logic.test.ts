@@ -4,11 +4,17 @@ import { describe, expect, it } from "vitest";
 import type { DraftThreadState } from "../composerDraftStore";
 import type { Thread } from "../types";
 import {
+  buildDiffPanelCompareRefValue,
   filterRenderableFilesForSearch,
-  isDiffPanelPickerOptionSelected,
+  resolveAdjacentDiffFilePath,
+  resolveDiffChangeMarkers,
+  resolveDiffChangeMarkerKind,
+  DIFF_CHANGE_MARKER_HEIGHT_PX,
+  isDiffPanelRepoScopeOption,
   isStaleDiffTurnSelection,
   resolveConversationCacheScope,
   resolveDiffPanelGitStatusQueriesEnabled,
+  resolveDiffPanelPickerLabel,
   resolveDiffPanelQueriesEnabled,
   resolveDiffPanelRepoLiveRefresh,
   resolveDiffPanelRepoLiveRefetchIntervalMs,
@@ -17,8 +23,10 @@ import {
   resolveDiffPanelScopePickerValue,
   resolveDiffPanelThread,
   resolveDiffPanelViewSource,
+  resolveWatchedDiffFilePath,
   resolveDiffSelectAllArmed,
   resolveDiffSelectAllWithinViewport,
+  parseDiffPanelCompareRefValue,
   resolveInitialDiffViewKind,
   resolveSelectedTurnSummary,
   DIFF_PANEL_PICKER_SCOPE_OPTIONS,
@@ -118,7 +126,7 @@ describe("resolveDiffPanelThread", () => {
         threadId: THREAD_ID,
         serverThread: undefined,
         draftThread: null,
-        fallbackModelSelection: null,
+        fallbackModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
       }),
     ).toBeUndefined();
   });
@@ -303,33 +311,57 @@ describe("diff panel view source helpers", () => {
     expect(DIFF_PANEL_PICKER_SCOPE_OPTIONS).toContain("workingTree");
   });
 
-  it("marks picker options selected only when they match the active scope", () => {
+  it("keeps the ref scope out of the plain scope option list", () => {
+    expect(DIFF_PANEL_PICKER_SCOPE_OPTIONS).not.toContain("ref");
+    expect(isDiffPanelRepoScopeOption("ref")).toBe(false);
+    expect(isDiffPanelRepoScopeOption("branch")).toBe(true);
+  });
+
+  it("round-trips compare ref picker values", () => {
+    expect(buildDiffPanelCompareRefValue("feature/x")).toBe("ref:feature/x");
+    expect(parseDiffPanelCompareRefValue("ref:feature/x")).toBe("feature/x");
+    expect(parseDiffPanelCompareRefValue("ref:  ")).toBeNull();
+    expect(parseDiffPanelCompareRefValue("branch")).toBeNull();
+  });
+
+  it("resolves the compare-ref picker value and label from the active ref", () => {
     const latestTurnId = TurnId.makeUnsafe("turn-latest");
 
     expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: null },
-        { id: "allTurns" },
+      resolveDiffPanelScopePickerValue({
+        viewSource: { kind: "repo", scope: "ref" },
         latestTurnId,
-        "all",
-      ),
-    ).toBe(true);
+        compareRef: "release/1.2",
+      }),
+    ).toBe("ref:release/1.2");
     expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: latestTurnId },
-        { id: "lastTurn" },
+      resolveDiffPanelScopePickerValue({
+        viewSource: { kind: "repo", scope: "ref" },
         latestTurnId,
-        "last",
-      ),
-    ).toBe(true);
+        compareRef: null,
+      }),
+    ).toBeNull();
     expect(
-      isDiffPanelPickerOptionSelected(
-        { kind: "turn", turnId: TurnId.makeUnsafe("turn-older") },
-        { id: "lastTurn" },
-        latestTurnId,
-        "last",
+      resolveDiffPanelPickerLabel({ kind: "repo", scope: "ref" }, undefined, "release/1.2"),
+    ).toBe("vs release/1.2");
+    expect(
+      resolveDiffPanelPickerLabel(
+        { kind: "repo", scope: "ref" },
+        undefined,
+        "0123456789abcdef0123456789abcdef01234567",
       ),
-    ).toBe(false);
+    ).toBe("vs 0123456");
+  });
+
+  it("surfaces a ref scope file count in the picker badges", () => {
+    expect(
+      resolveDiffPanelScopeFileCounts({
+        viewSource: { kind: "repo", scope: "ref" },
+        activeScopeFileCount: 4,
+        scopePickerOpen: false,
+        pickerScopeCounts: {},
+      }),
+    ).toEqual({ ref: 4 });
   });
 
   it("detects stale turn selections and resolves summaries without fallback", () => {
@@ -364,6 +396,17 @@ describe("diff panel view source helpers", () => {
 
     expect(filterRenderableFilesForSearch(files, "diffpanel")).toHaveLength(1);
     expect(filterRenderableFilesForSearch(files, "")).toHaveLength(2);
+  });
+
+  it("falls back to the first visible diff when the selected file is stale", () => {
+    const files = [
+      { name: "src/visible.ts", hunks: [] },
+      { name: "src/other.ts", hunks: [] },
+    ] as unknown as Parameters<typeof resolveWatchedDiffFilePath>[1];
+
+    expect(resolveWatchedDiffFilePath("src/other.ts", files)).toBe("src/other.ts");
+    expect(resolveWatchedDiffFilePath("src/stale.ts", files)).toBe("src/visible.ts");
+    expect(resolveWatchedDiffFilePath(null, [])).toBeNull();
   });
 });
 
@@ -425,5 +468,97 @@ describe("resolveDiffSelectAllWithinViewport", () => {
 
   it("keeps direct events inside the diff authoritative", () => {
     expect(resolveDiffSelectAllWithinViewport(true, false, true)).toBe(true);
+  });
+});
+
+describe("resolveAdjacentDiffFilePath", () => {
+  const FILE_PATHS = ["a.ts", "b.ts", "c.ts"];
+
+  it("returns null when there are no files", () => {
+    expect(resolveAdjacentDiffFilePath([], null, "next")).toBeNull();
+    expect(resolveAdjacentDiffFilePath([], "a.ts", "previous")).toBeNull();
+  });
+
+  it("moves to the neighbouring file in both directions", () => {
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "a.ts", "next")).toBe("b.ts");
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "b.ts", "next")).toBe("c.ts");
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "c.ts", "previous")).toBe("b.ts");
+  });
+
+  it("clamps at both ends instead of wrapping around", () => {
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "c.ts", "next")).toBeNull();
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "a.ts", "previous")).toBeNull();
+  });
+
+  it("starts at the first file when the active file is unknown", () => {
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, null, "next")).toBe("a.ts");
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, "gone.ts", "next")).toBe("a.ts");
+    expect(resolveAdjacentDiffFilePath(FILE_PATHS, null, "previous")).toBeNull();
+  });
+});
+
+describe("resolveDiffChangeMarkerKind", () => {
+  it("maps git change types onto marker colors", () => {
+    expect(resolveDiffChangeMarkerKind("new")).toBe("added");
+    expect(resolveDiffChangeMarkerKind("deleted")).toBe("removed");
+    expect(resolveDiffChangeMarkerKind("change")).toBe("modified");
+    expect(resolveDiffChangeMarkerKind("rename-pure")).toBe("modified");
+    expect(resolveDiffChangeMarkerKind("rename-changed")).toBe("modified");
+  });
+});
+
+describe("resolveDiffChangeMarkers", () => {
+  it("returns nothing for an empty file list", () => {
+    expect(resolveDiffChangeMarkers({ files: [], scrollHeight: 1000, stripHeight: 200 })).toEqual(
+      [],
+    );
+  });
+
+  it("returns nothing when the scroll surface has no measurable height", () => {
+    expect(
+      resolveDiffChangeMarkers({
+        files: [{ path: "a.ts", offsetTop: 0, changeType: "change" }],
+        scrollHeight: 0,
+        stripHeight: 200,
+      }),
+    ).toEqual([]);
+  });
+
+  it("positions markers proportionally within the strip", () => {
+    const markers = resolveDiffChangeMarkers({
+      files: [
+        { path: "a.ts", offsetTop: 0, changeType: "new" },
+        { path: "b.ts", offsetTop: 500, changeType: "change" },
+      ],
+      scrollHeight: 1000,
+      stripHeight: 200,
+    });
+
+    expect(markers).toEqual([
+      { path: "a.ts", kind: "added", top: 0 },
+      { path: "b.ts", kind: "modified", top: 100 },
+    ]);
+  });
+
+  it("clamps the last marker inside the strip", () => {
+    const markers = resolveDiffChangeMarkers({
+      files: [{ path: "z.ts", offsetTop: 4000, changeType: "deleted" }],
+      scrollHeight: 1000,
+      stripHeight: 200,
+    });
+
+    expect(markers).toEqual([
+      { path: "z.ts", kind: "removed", top: 200 - DIFF_CHANGE_MARKER_HEIGHT_PX },
+    ]);
+  });
+
+  it("keeps markers at the strip origin when the strip has no height", () => {
+    const markers = resolveDiffChangeMarkers({
+      files: [{ path: "a.ts", offsetTop: 250, changeType: "change" }],
+      scrollHeight: 1000,
+      stripHeight: 0,
+    });
+
+    expect(markers).toEqual([{ path: "a.ts", kind: "modified", top: 0 }]);
   });
 });

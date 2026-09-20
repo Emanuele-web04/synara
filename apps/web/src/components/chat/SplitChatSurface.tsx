@@ -30,7 +30,6 @@ import {
   useFloatingBrowserRequestStore,
 } from "./floatingBrowserRequestStore";
 import { useBrowserPanelDesktopBridge } from "../../hooks/useBrowserPanelDesktopBridge";
-import { useDeviceEventBridge } from "../../hooks/useDeviceEventBridge";
 import { useHandleNewChat } from "../../hooks/useHandleNewChat";
 import type { ChatRightPanel } from "../../diffRouteSearch";
 import { stripDiffSearchParams } from "../../diffRouteSearch";
@@ -259,7 +258,7 @@ function SplitPaneEmptyState(props: {
       onMouseDown={props.onFocus}
     >
       <div className="w-full max-w-sm space-y-4">
-        <p className="text-center text-sm font-medium text-foreground/70">Select a chat</p>
+        <p className="text-center text-ui-lg font-medium text-foreground/70">Select a chat</p>
         <div className="max-h-[60vh] space-y-1 overflow-y-auto">
           {props.threads.map((thread) => {
             const isUsed = props.excludedThreadIds.has(thread.id);
@@ -285,10 +284,12 @@ function SplitPaneEmptyState(props: {
                   className="size-4 shrink-0"
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-foreground">
+                  <div className="truncate text-ui-lg leading-snug font-medium text-foreground">
                     {resolveThreadPickerTitle(thread.title)}
                   </div>
-                  <div className="truncate text-xs text-muted-foreground">{projectName}</div>
+                  <div className="truncate text-ui leading-snug text-muted-foreground">
+                    {projectName}
+                  </div>
                 </div>
               </button>
             );
@@ -587,13 +588,9 @@ function SplitPaneSurface(props: {
       {props.isFocused ? (
         <div
           aria-hidden="true"
+          // The accent border alone marks the focused pane; unfocused panes stay
+          // undimmed so they never read as disabled.
           className="pointer-events-none absolute inset-[0.9px] z-20 border border-[color-mix(in_srgb,var(--info)_45%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--info)_12%,transparent)] transition-opacity duration-150"
-        />
-      ) : null}
-      {!props.isFocused ? (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-10 bg-foreground/[0.060] transition-opacity duration-150"
         />
       ) : null}
     </div>
@@ -770,12 +767,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
       : null,
   });
 
-  // Split view has no device panel yet: ChatRightPanel is browser|diff, so
-  // there is nowhere to open one. The bridge still runs with a null open
-  // handler because its other half keeps device state fresh, which the pane on
-  // a single-surface tab and the composer screenshot both read.
-  useDeviceEventBridge({ onOpenPaneRequested: null });
-
   const closeFloatingBrowser = (threadId: ThreadId) => {
     dismissFloatingBrowserForThread(threadId);
   };
@@ -937,11 +928,13 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
 
   const selectableThreads = useMemo(
     () =>
-      threads.toSorted(
-        (left, right) =>
-          Date.parse(right.updatedAt ?? right.createdAt) -
-          Date.parse(left.updatedAt ?? left.createdAt),
-      ),
+      threads
+        .filter((thread) => !thread.sidechatSourceThreadId)
+        .toSorted(
+          (left, right) =>
+            Date.parse(right.updatedAt ?? right.createdAt) -
+            Date.parse(left.updatedAt ?? left.createdAt),
+        ),
     [threads],
   );
   const splitThreadIds = new Set(activeSplitView ? resolveSplitViewThreadIds(activeSplitView) : []);
@@ -1087,10 +1080,12 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
                       className="size-4 shrink-0"
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">
+                      <div className="truncate text-ui-lg leading-snug font-medium text-foreground">
                         {resolveThreadPickerTitle(thread.title)}
                       </div>
-                      <div className="truncate text-xs text-muted-foreground">{projectName}</div>
+                      <div className="truncate text-ui leading-snug text-muted-foreground">
+                        {projectName}
+                      </div>
                     </div>
                   </button>
                 );

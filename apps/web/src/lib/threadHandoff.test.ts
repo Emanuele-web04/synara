@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS_VIEW,
   EventId,
   MessageId,
@@ -161,10 +162,10 @@ describe("threadHandoff", () => {
           readyStatus("cursor", { available: false, status: "error" }),
           readyStatus("antigravity"),
           readyStatus("grok", { authStatus: "unauthenticated" }),
-          readyStatus("kilo", { authStatus: "unknown" }),
+          readyStatus("opencode", { authStatus: "unknown" }),
         ],
       }),
-    ).toEqual(["claudeAgent", "kilo"]);
+    ).toEqual(["claudeAgent", "opencode"]);
   });
 
   it("does not expose targets before enabled-provider settings are available", () => {
@@ -233,7 +234,7 @@ describe("threadHandoff", () => {
       }),
     ).toEqual({
       provider: "codex",
-      model: "gpt-5.5",
+      model: DEFAULT_MODEL_BY_PROVIDER.codex,
     });
   });
 });

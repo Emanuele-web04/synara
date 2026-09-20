@@ -1,5 +1,8 @@
 export const BRAND_ASSET_PATHS = {
   productionMacIconPng: "assets/prod/black-macos-1024.png",
+  // Icon Composer source for the macOS 26 bundle icon. Only a layered ".icon"
+  // asset gets the Liquid Glass material; a flat ICNS/PNG never does.
+  productionMacIconComposer: "assets/prod/Synara.icon",
   productionMacLegacyIconPng: "assets/prod/black-macos-legacy-1024.png",
   productionLinuxIconPng: "assets/prod/black-universal-1024.png",
   productionWindowsIconIco: "assets/prod/synara-black-windows.ico",

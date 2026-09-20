@@ -112,6 +112,18 @@ import Migration0093 from "./Migrations/093_BackfillMaxIterationsDisabledReason.
 import Migration0094 from "./Migrations/094_ProjectionThreadsGoal.ts";
 import Migration0095 from "./Migrations/095_ProjectionThreadsGoalTiming.ts";
 import Migration0096 from "./Migrations/096_ProjectionThreadsGoalAchievements.ts";
+import Migration0097 from "./Migrations/097_ProjectionThreadsSidechatLifecycle.ts";
+import Migration0098 from "./Migrations/098_MigrateKiloToOpenCode.ts";
+import Migration0099 from "./Migrations/099_InvalidateProjectionThreadsCursor.ts";
+import Migration0100 from "./Migrations/100_MessageTextChunks.ts";
+import Migration0101 from "./Migrations/101_RemoveTranscriptMarkers.ts";
+import Migration0102 from "./Migrations/102_ProjectionThreadMessagesTurnBoundary.ts";
+import AsyncUserInputMigration from "./Migrations/105_AsyncUserInput.ts";
+import ClaudeTokenAccountingMigration from "./Migrations/103_ClaudeTokenAccounting.ts";
+import Migration0104 from "./Migrations/104_ProjectionThreadsClaudeCacheReview.ts";
+import ProjectImportOriginsMigration from "./Migrations/106_ProjectImportOrigins.ts";
+import Migration0108 from "./Migrations/108_GatewayCompletions.ts";
+import Migration0107 from "./Migrations/107_ProjectionThreadsHumanMessage.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -223,6 +235,19 @@ export const migrationEntries = [
   [94, "ProjectionThreadsGoal", Migration0094],
   [95, "ProjectionThreadsGoalTiming", Migration0095],
   [96, "ProjectionThreadsGoalAchievements", Migration0096],
+  [97, "ProjectionThreadsSidechatLifecycle", Migration0097],
+  [98, "MigrateKiloToOpenCode", Migration0098],
+  [99, "InvalidateProjectionThreadsCursor", Migration0099],
+  [100, "MessageTextChunks", Migration0100],
+  [101, "RemoveTranscriptMarkers", Migration0101],
+  [102, "ProjectionThreadMessagesTurnBoundary", Migration0102],
+  // Keep this ID literal: scripts/check-migration-lineage.ts parses this list.
+  [103, "ClaudeTokenAccounting", ClaudeTokenAccountingMigration],
+  [104, "ProjectionThreadsClaudeCacheReview", Migration0104],
+  [105, "AsyncUserInput", AsyncUserInputMigration],
+  [106, "ProjectImportOrigins", ProjectImportOriginsMigration],
+  [107, "ProjectionThreadsHumanMessage", Migration0107],
+  [108, "GatewayCompletions", Migration0108],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

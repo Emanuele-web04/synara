@@ -26,6 +26,7 @@ const CONTROL_METHODS = new Set<string>([
 ]);
 
 const EXPENSIVE_READ_METHODS = new Set<string>([
+  ORCHESTRATION_WS_METHODS.listProjectImports,
   ORCHESTRATION_WS_METHODS.getSnapshot,
   ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot,
   ORCHESTRATION_WS_METHODS.repairState,
@@ -42,6 +43,9 @@ const EXPENSIVE_READ_METHODS = new Set<string>([
   WS_METHODS.filesystemBrowse,
   WS_METHODS.gitStatus,
   WS_METHODS.gitReadWorkingTreeDiff,
+  WS_METHODS.gitBlameLine,
+  WS_METHODS.gitReadFileAtRev,
+  WS_METHODS.gitListRecentCommits,
   WS_METHODS.gitWorkingTreeDiffStats,
   WS_METHODS.gitSummarizeDiff,
   WS_METHODS.gitPullRequestSnapshot,

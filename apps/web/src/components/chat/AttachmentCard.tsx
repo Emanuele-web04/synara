@@ -31,16 +31,16 @@ const ATTACHMENT_CARD_SIZE_STYLES: Record<AttachmentCardSize, AttachmentCardSize
     shellWithRemove: "pr-5",
     shellWithoutRemove: "pr-2",
     tile: "size-6 rounded-md",
-    title: "text-xs",
+    title: "text-ui leading-snug",
     remove: "sm",
   },
   // Roomier composer card with a prominent type glyph (file attachments).
   md: {
-    shell: "h-14 w-60 max-w-full gap-2.5 rounded-xl py-2 pl-2 shadow-sm",
+    shell: "h-14 w-60 max-w-full gap-2.5 rounded-xl py-2 pl-2",
     shellWithRemove: "pr-8",
     shellWithoutRemove: "pr-3",
     tile: "size-10 rounded-lg",
-    title: "text-[13px]",
+    title: "text-ui-lg",
     remove: "md",
   },
 };
@@ -92,7 +92,7 @@ export const AttachmentCard = forwardRef<HTMLSpanElement, AttachmentCardProps>(
         <span className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 leading-tight">
           <span className={cn("truncate font-medium text-foreground", styles.title)}>{title}</span>
           {subtitle ? (
-            <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+            <span className="flex min-w-0 items-center gap-1.5 text-ui-sm font-medium text-muted-foreground">
               {subtitle}
             </span>
           ) : null}

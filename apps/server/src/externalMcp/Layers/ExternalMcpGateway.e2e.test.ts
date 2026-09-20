@@ -61,7 +61,6 @@ function emptyThreadDetail(shell: OrchestrationThreadShell): OrchestrationThread
     ...shell,
     deletedAt: null,
     pinnedMessages: [],
-    threadMarkers: [],
     messages: [],
     proposedPlans: [],
     activities: [],
@@ -289,7 +288,6 @@ describe("external MCP gateway stdio flow", () => {
       "antigravity",
       "grok",
       "droid",
-      "kilo",
       "opencode",
       "pi",
     ].map((provider) => ({

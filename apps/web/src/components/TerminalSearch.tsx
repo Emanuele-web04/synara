@@ -141,10 +141,12 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
         placeholder="Find"
-        className="h-6 w-28 min-w-0 flex-shrink bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+        className="h-6 w-28 min-w-0 flex-shrink bg-transparent text-ui leading-snug text-foreground placeholder:text-muted-foreground focus:outline-none"
       />
       {hasResults === false && query && (
-        <span className="whitespace-nowrap px-1 text-xs text-muted-foreground">No results</span>
+        <span className="whitespace-nowrap px-1 text-ui leading-snug text-muted-foreground">
+          No results
+        </span>
       )}
       <div className="flex shrink-0 items-center">
         <IconButton
@@ -157,7 +159,7 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
               : "text-muted-foreground hover:bg-muted-foreground/20 hover:text-foreground",
           )}
         >
-          <span className="text-[10px] font-bold leading-none">Aa</span>
+          <span className="text-ui-xs font-bold leading-none">Aa</span>
         </IconButton>
         <IconButton
           onClick={() => handleSearch("previous")}

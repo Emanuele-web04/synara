@@ -14,9 +14,9 @@ const ProviderDiscoveryKind = Schema.Literals([
   "antigravity",
   "grok",
   "droid",
-  "kilo",
   "opencode",
   "pi",
+  "devin",
 ]);
 
 export const ProviderSkillInterface = Schema.Struct({
@@ -108,13 +108,21 @@ export const ProviderListCommandsInput = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
   experimentalWebSockets: Schema.optional(Schema.Boolean),
+  enableArtifacts: Schema.optional(Schema.Boolean),
   agentDir: Schema.optional(TrimmedNonEmptyString),
   forceReload: Schema.optional(Schema.Boolean),
 });
 export type ProviderListCommandsInput = typeof ProviderListCommandsInput.Type;
 
+// Whether the provider can publish hosted artifacts in this session: `disabled`
+// means the host setting is off, `unavailable` means the provider refused it
+// (plan, login, version or organization policy).
+export const ProviderArtifactsState = Schema.Literals(["available", "disabled", "unavailable"]);
+export type ProviderArtifactsState = typeof ProviderArtifactsState.Type;
+
 export const ProviderListCommandsResult = Schema.Struct({
   commands: Schema.Array(ProviderNativeCommandDescriptor),
+  artifacts: Schema.optional(ProviderArtifactsState),
   source: Schema.optional(TrimmedNonEmptyString),
   cached: Schema.optional(Schema.Boolean),
 });
@@ -264,6 +272,18 @@ export const ProviderContextWindowDescriptor = Schema.Struct({
 });
 export type ProviderContextWindowDescriptor = typeof ProviderContextWindowDescriptor.Type;
 
+// Some provider CLIs expose a family-level model with a matrix of concrete
+// process-start variants. The web app uses this mapping to keep the friendly
+// effort/context/fast controls separate from the provider's opaque model UID.
+export const ProviderModelVariantDescriptor = Schema.Struct({
+  model: TrimmedNonEmptyString,
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  contextWindow: Schema.optional(TrimmedNonEmptyString),
+  fastMode: Schema.optional(Schema.Boolean),
+  thinking: Schema.optional(Schema.Boolean),
+});
+export type ProviderModelVariantDescriptor = typeof ProviderModelVariantDescriptor.Type;
+
 export const ProviderModelDescriptor = Schema.Struct({
   slug: TrimmedNonEmptyString,
   resolvedModel: Schema.optional(TrimmedNonEmptyString),
@@ -281,6 +301,7 @@ export const ProviderModelDescriptor = Schema.Struct({
   supportsAutoMode: Schema.optional(Schema.Boolean),
   contextWindowOptions: Schema.optional(Schema.Array(ProviderContextWindowDescriptor)),
   defaultContextWindow: Schema.optional(TrimmedNonEmptyString),
+  modelVariants: Schema.optional(Schema.Array(ProviderModelVariantDescriptor)),
 });
 export type ProviderModelDescriptor = typeof ProviderModelDescriptor.Type;
 
@@ -288,6 +309,9 @@ export const ProviderListModelsResult = Schema.Struct({
   models: Schema.Array(ProviderModelDescriptor),
   source: Schema.optional(TrimmedNonEmptyString),
   cached: Schema.optional(Schema.Boolean),
+  // A concise, redacted explanation when live discovery failed and the result
+  // was populated from a static fallback.
+  error: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsResult = typeof ProviderListModelsResult.Type;
 

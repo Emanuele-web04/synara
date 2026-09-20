@@ -56,7 +56,7 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
   return option.available;
 }
 
-function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
+export function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
   disabled: boolean;
   label: string | null;
 } {
@@ -107,6 +107,30 @@ function filterProviderOptionsByVisibility<T extends { value: ProviderKind }>(
   );
 }
 
+// Providers the picker may offer: installed ones in the user's order, minus hidden
+// providers, always keeping the active/locked provider reachable.
+export function resolveVisibleProviderOptions(input: {
+  provider: ProviderKind;
+  lockedProvider: ProviderKind | null;
+  providers: ReadonlyArray<ServerProviderStatus> | undefined;
+  hiddenProviders: ReadonlyArray<ProviderKind> | undefined;
+  providerOrder: ReadonlyArray<ProviderKind> | undefined;
+}) {
+  const protectedProviderSet = new Set<ProviderKind>([input.provider]);
+  if (input.lockedProvider !== null) {
+    protectedProviderSet.add(input.lockedProvider);
+  }
+  return filterProviderOptionsByVisibility(
+    AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
+      compareProvidersByOrder(input.providerOrder ?? [], left.value, right.value),
+    ).filter((option) =>
+      input.providers?.some((provider) => provider.provider === option.value && provider.available),
+    ),
+    new Set<ProviderKind>(input.hiddenProviders ?? []),
+    protectedProviderSet,
+  );
+}
+
 function providerIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string,
@@ -137,9 +161,12 @@ function resolveSelectedModelLabel(input: {
   model: string;
   options: ReadonlyArray<ProviderModelOption>;
 }): string {
-  const exact = input.options.find((option) => option.slug === input.model);
-  if (exact) {
-    return exact.name;
+  const resolvedSlug = resolveSelectableModel(input.provider, input.model, input.options);
+  if (resolvedSlug) {
+    const resolvedOption = input.options.find((option) => option.slug === resolvedSlug);
+    if (resolvedOption) {
+      return resolvedOption.name;
+    }
   }
   if (input.provider === "cursor") {
     const baseModel = stripParameterizedModelSuffix(input.model);
@@ -176,6 +203,7 @@ type ProviderModelMenuItemsProps = {
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
   disabled?: boolean;
@@ -193,11 +221,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 ) {
   const { onAfterSelection } = props;
   const [modelSearchQuery, setModelSearchQuery] = useState("");
-  const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
-    FAVORITE_MODEL_STORAGE_KEYS.kilo,
-    EMPTY_FAVORITE_MODEL_SLUGS,
-    FavoriteModelSlugs,
-  );
   const [cursorFavoriteModelSlugs, setCursorFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.cursor,
     EMPTY_FAVORITE_MODEL_SLUGS,
@@ -215,29 +238,18 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
-  const hiddenProviders = props.hiddenProviders;
-  const providerOrder = props.providerOrder;
-  const hiddenProviderSet = new Set<ProviderKind>(hiddenProviders ?? []);
-  const protectedProviderSet = new Set<ProviderKind>([props.provider]);
-  if (props.lockedProvider !== null) {
-    protectedProviderSet.add(props.lockedProvider);
-  }
-  const visibleAvailableProviderOptions = filterProviderOptionsByVisibility(
-    AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
-      compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
-    ).filter((option) =>
-      props.providers?.some((provider) => provider.provider === option.value && provider.available),
-    ),
-    hiddenProviderSet,
-    protectedProviderSet,
-  );
-  const kiloFavoriteModelSlugSet = new Set(kiloFavoriteModelSlugs);
+  const visibleAvailableProviderOptions = resolveVisibleProviderOptions({
+    provider: props.provider,
+    lockedProvider: props.lockedProvider,
+    providers: props.providers,
+    hiddenProviders: props.hiddenProviders,
+    providerOrder: props.providerOrder,
+  });
   const openCodeFavoriteModelSlugSet = new Set(openCodeFavoriteModelSlugs);
   const cursorFavoriteModelSlugSet = new Set(cursorFavoriteModelSlugs);
   const piFavoriteModelSlugSet = new Set(piFavoriteModelSlugs);
   const favoriteModelSlugSets = {
     cursor: cursorFavoriteModelSlugSet,
-    kilo: kiloFavoriteModelSlugSet,
     opencode: openCodeFavoriteModelSlugSet,
     pi: piFavoriteModelSlugSet,
   };
@@ -257,11 +269,9 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     const setFavoriteModelSlugs =
       provider === "cursor"
         ? setCursorFavoriteModelSlugs
-        : provider === "kilo"
-          ? setKiloFavoriteModelSlugs
-          : provider === "pi"
-            ? setPiFavoriteModelSlugs
-            : setOpenCodeFavoriteModelSlugs;
+        : provider === "pi"
+          ? setPiFavoriteModelSlugs
+          : setOpenCodeFavoriteModelSlugs;
     setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
   };
 
@@ -281,9 +291,9 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 
     const providerOptions = props.modelOptionsByProvider[provider];
     const shouldShowSearch =
-      (provider === "kilo" ||
-        provider === "opencode" ||
+      (provider === "opencode" ||
         provider === "cursor" ||
+        provider === "devin" ||
         provider === "pi") &&
       providerOptions.length >= SEARCHABLE_MODEL_PICKER_THRESHOLD;
     const normalizedModelSearchQuery = deferredModelSearchQuery.trim().toLowerCase();
@@ -304,6 +314,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           })
         : groupProviderModelOptions(filteredOptions);
 
+    const discoveryError = props.discoveryErrorsByProvider?.[provider];
+    const discoveryErrorElement = discoveryError ? (
+      <div className="px-2 py-1.5 text-ui leading-snug text-destructive">{discoveryError}</div>
+    ) : null;
+
     const content =
       groupedOptions.length > 0 ? (
         <MenuRadioGroup
@@ -322,7 +337,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           />
         </MenuRadioGroup>
       ) : (
-        <div className="px-2 py-2 text-muted-foreground text-sm">
+        <div className="px-2 py-2 text-muted-foreground text-ui leading-snug">
           {provider === "pi" && normalizedModelSearchQuery.length === 0
             ? "No Pi models found"
             : "No matches"}
@@ -335,18 +350,26 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         shouldUseCollapsibleModelGroups(groupedOptions.length, false);
       if (needsScrollContainer) {
         return (
-          <div
-            className={cn(
-              "overflow-y-auto overscroll-contain py-0.5",
-              COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
-              COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
-            )}
-          >
-            {content}
-          </div>
+          <>
+            {discoveryErrorElement}
+            <div
+              className={cn(
+                "overflow-y-auto overscroll-contain py-0.5",
+                COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
+                COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
+              )}
+            >
+              {content}
+            </div>
+          </>
         );
       }
-      return content;
+      return (
+        <>
+          {discoveryErrorElement}
+          {content}
+        </>
+      );
     }
 
     return (
@@ -360,6 +383,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         bleedParentPadding
         listMaxHeightClassName={COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME}
       >
+        {discoveryErrorElement}
         {content}
       </PickerPanelShell>
     );
@@ -386,7 +410,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 )}
               />
               <span>{option.label}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80">
+              <span className="ms-auto text-ui-sm text-muted-foreground/80">
                 {availability.label}
               </span>
             </MenuItem>
@@ -422,7 +446,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   );
 };
 
-// Resolves the human-readable label for the currently selected model.
 export function resolveProviderModelLabel(input: {
   provider: ProviderKind;
   lockedProvider: ProviderKind | null;
@@ -451,6 +474,7 @@ type ProviderModelPickerProps = {
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
   activeProviderIconClassName?: string;
@@ -552,7 +576,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
                 <span>Change model</span>
                 <ShortcutKbd
                   shortcutLabel={props.shortcutLabel}
-                  className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
+                  className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
                 />
               </span>
             </TooltipPopup>
@@ -572,6 +596,9 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
           modelOptionsByProvider={props.modelOptionsByProvider}
           {...(props.loadingModelProviders
             ? { loadingModelProviders: props.loadingModelProviders }
+            : {})}
+          {...(props.discoveryErrorsByProvider
+            ? { discoveryErrorsByProvider: props.discoveryErrorsByProvider }
             : {})}
           {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
           {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}

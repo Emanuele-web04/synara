@@ -25,10 +25,12 @@ import {
   nativeTheme,
   protocol,
   screen,
+  safeStorage,
   session,
   shell,
   systemPreferences,
 } from "electron";
+import { configureElectronNetwork } from "betterwright/electron";
 import type {
   BrowserWindowConstructorOptions,
   FileFilter,
@@ -49,7 +51,7 @@ import {
   type UpdateDownloadedEvent,
 } from "electron-updater";
 
-import type { ContextMenuItem } from "@synara/contracts";
+import type { DesktopContextMenuItem } from "@synara/contracts";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
@@ -93,6 +95,7 @@ import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
   shouldUpdateDesktopAppIcon,
+  usesMacBundleAppIcon,
 } from "./desktopAppIcon";
 import {
   applyWindowsTaskbarIcon,
@@ -144,9 +147,11 @@ import {
   serializeLaunchVersionRecord,
   shouldRefreshIconCache,
 } from "./macIconCacheRefresh";
+import { persistMacAppIcon } from "./macAppIcon";
 import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { isTrustedMediaPermissionRequest } from "./mediaPermissions";
+import { isClipboardWritePermission } from "./clipboardPermissions";
 import {
   installResumableUpdateDownloader,
   type ResumableDownloaderTarget,
@@ -187,6 +192,7 @@ import {
   applyDesktopPhysicalZoomAction,
   resolveDesktopMenuAccelerator,
   resolveDesktopPhysicalZoomAction,
+  resolveDesktopZoomShortcutAction,
   resolveKeyboardShortcutsMenuAccelerator,
   shouldUseNativeZoomMenuRoles,
 } from "./menuShortcuts";
@@ -228,6 +234,14 @@ import {
 import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { BROWSER_SESSION_PARTITION, DesktopBrowserManager } from "./browserManager";
+import { BrowserSessionRestore } from "./browserAutomation/browserSessionRestore";
+import { createCookieSessionBackend } from "./browserAutomation/electronCookieSession";
+import { BrowserVault } from "./browserAutomation/browserVault";
+import { BrowserVaultCapture } from "./browserAutomation/browserVaultCapture";
+import { registerBrowserVaultIpc } from "./browserVaultIpc";
+import { registerSafariAccessIpc } from "./safariAccessIpc";
+import { BrowserCookieImport } from "./browserAutomation/browserCookieImport";
+import { shutdownBrowserServices } from "./browserAutomation/browserShutdown";
 import {
   registerBrowserIpcHandlers,
   sendBrowserAnnotationEvent,
@@ -414,7 +428,23 @@ let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
+const browserOsKeyStore = {
+  available: async () => {
+    await app.whenReady();
+    return (
+      safeStorage.isEncryptionAvailable() &&
+      (process.platform !== "linux" || safeStorage.getSelectedStorageBackend() !== "basic_text")
+    );
+  },
+  encrypt: (value: string) => safeStorage.encryptString(value),
+  decrypt: (value: Buffer) => safeStorage.decryptString(value),
+};
+const browserVault = new BrowserVault(Path.join(BASE_DIR, "browser-vault"), browserOsKeyStore);
+let browserSessionRestore: BrowserSessionRestore | undefined;
+const browserVaultCapture = new BrowserVaultCapture(browserVault);
 const browserManager = new DesktopBrowserManager({
+  onRuntimeReady: (runtime) => browserVaultCapture.register(runtime),
+  onHumanControl: (threadId) => browserVaultCapture.noteHumanActivity(threadId),
   annotationPreloadPath: annotationGuestPreload,
   beforeInputEvent: (event, input) => {
     if (
@@ -441,7 +471,11 @@ const browserManager = new DesktopBrowserManager({
     }
 
     const target = resolveMenuTargetWindow()?.webContents;
-    return target ? handleDesktopPhysicalZoomShortcut(event, input, target) : false;
+    if (!target) return false;
+    return (
+      handleDesktopPhysicalZoomShortcut(event, input, target) ||
+      handleDesktopZoomShortcut(event, input, target)
+    );
   },
 });
 let browserHostPipeServer: BrowserHostPipeServer | null = null;
@@ -493,6 +527,8 @@ async function ensureBrowserHostPipeServer(): Promise<void> {
     return;
   }
   const server = new BrowserHostPipeServer(browserManager, {
+    vault: browserVault,
+    vaultCapture: browserVaultCapture,
     capability: DESKTOP_BROWSER_HOST_CAPABILITY,
     requestOpenPanel: (threadId) => {
       if (!threadId) return;
@@ -815,6 +851,30 @@ function getDestructiveMenuIcon(): Electron.NativeImage | undefined {
     destructiveMenuIconCache = null;
     return undefined;
   }
+}
+// Renderer-rasterized Central icons: 32px PNGs shown in a 16pt macOS menu slot.
+const CONTEXT_MENU_ICON_DATA_URL_PREFIX = "data:image/png;base64,";
+const CONTEXT_MENU_ICON_MAX_DATA_URL_LENGTH = 64_000;
+// NSMenu sizes to its widest title and Electron has no minimum width; trailing em
+// spaces add a little breathing room on the right of macOS context menus.
+const MAC_CONTEXT_MENU_LABEL_TRAILING_PADDING = "\u2003\u2003";
+
+function createContextMenuIcon(dataUrl: unknown): Electron.NativeImage | undefined {
+  if (
+    process.platform !== "darwin" ||
+    typeof dataUrl !== "string" ||
+    dataUrl.length > CONTEXT_MENU_ICON_MAX_DATA_URL_LENGTH ||
+    !dataUrl.startsWith(CONTEXT_MENU_ICON_DATA_URL_PREFIX)
+  ) {
+    return undefined;
+  }
+  const icon = nativeImage.createFromBuffer(
+    Buffer.from(dataUrl.slice(CONTEXT_MENU_ICON_DATA_URL_PREFIX.length), "base64"),
+    { scaleFactor: 2 },
+  );
+  if (icon.isEmpty()) return undefined;
+  icon.setTemplateImage(true);
+  return icon;
 }
 let updatePollTimer: ReturnType<typeof setInterval> | null = null;
 let updateStartupTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1560,8 +1620,33 @@ function handleDesktopPhysicalZoomShortcut(
 
 function attachDesktopPhysicalZoomShortcuts(window: BrowserWindow): void {
   window.webContents.on("before-input-event", (event, input) => {
-    handleDesktopPhysicalZoomShortcut(event, input, window.webContents);
+    if (handleDesktopPhysicalZoomShortcut(event, input, window.webContents)) return;
+    handleDesktopZoomShortcut(event, input, window.webContents);
   });
+}
+
+function handleDesktopZoomShortcut(
+  event: Electron.Event,
+  input: Electron.Input,
+  target: Electron.WebContents,
+): boolean {
+  const action = resolveDesktopZoomShortcutAction(process.platform, input);
+  if (!action || target.isDestroyed()) {
+    return false;
+  }
+
+  event.preventDefault();
+  if (action === "resetZoom") {
+    target.setZoomFactor(1);
+  } else {
+    // Same 1.1 step as the View-menu click handlers so keyboard and menu
+    // zoom can never drift apart.
+    adjustWebContentsZoom(
+      target,
+      action === "zoomIn" ? DESKTOP_MENU_ZOOM_FACTOR_STEP : 1 / DESKTOP_MENU_ZOOM_FACTOR_STEP,
+    );
+  }
+  return true;
 }
 
 function resetWindowZoomFromMenu(): void {
@@ -2018,9 +2103,8 @@ function configureAppIdentity(): void {
   }
 }
 
-// The packaged bundle icon is a solid, pre-rounded ICNS so Tahoe does not reinterpret
-// the mark as Icon Composer glass. Older macOS gets the same literal rounded artwork as
-// a runtime dock override because it does not apply the modern system mask itself.
+// Older macOS needs pre-rounded artwork as a runtime Dock override. macOS 26+
+// renders the appearance-aware Icon Composer asset when Default is selected.
 function usesLegacyMacDockIcon(): boolean {
   if (process.platform !== "darwin") return false;
   const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
@@ -2175,6 +2259,23 @@ function toWindowsTaskbarIcoBytes(sourcePath: string): Buffer {
 let windowsShellStampTimer: ReturnType<typeof setImmediate> | null = null;
 let windowsShellStampResolve: (() => void) | null = null;
 let desktopAppIconApplyTail: Promise<void> = Promise.resolve();
+let lastPersistedMacAppIcon: DesktopAppIcon | null = null;
+
+async function syncMacAppBundleIcon(
+  icon: DesktopAppIcon,
+  image: Electron.NativeImage | null,
+): Promise<void> {
+  // Do not customize the shared Electron executable used by development runs.
+  if (!app.isPackaged || lastPersistedMacAppIcon === icon) return;
+  const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
+  if (!bundlePath) return;
+  await persistMacAppIcon({
+    bundlePath,
+    cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
+    png: icon === "default" ? null : (image?.toPNG() ?? null),
+  });
+  lastPersistedMacAppIcon = icon;
+}
 
 function cancelDeferredWindowsShellStamp(): void {
   if (windowsShellStampTimer === null) return;
@@ -2261,6 +2362,20 @@ async function applyDesktopAppIconUnlocked(
   ) {
     return;
   }
+  if (
+    usesMacBundleAppIcon({
+      icon,
+      platform: process.platform,
+      usesLegacyDockIcon: usesLegacyMacDockIcon(),
+    })
+  ) {
+    // Remove the persistent override before asking AppKit to reload the bundle
+    // icon, otherwise it can read the previous custom artwork again.
+    await syncMacAppBundleIcon(icon, null);
+    app.dock?.setIcon(null as unknown as Electron.NativeImage);
+    return;
+  }
+
   const resourceName = desktopAppIconResourceName({
     icon,
     platform: process.platform,
@@ -2274,6 +2389,7 @@ async function applyDesktopAppIconUnlocked(
 
   if (process.platform === "darwin") {
     app.dock?.setIcon(image);
+    await syncMacAppBundleIcon(icon, image);
     return;
   }
   if (process.platform === "win32") {
@@ -2347,22 +2463,22 @@ function applyInitialMacDockIcon(): void {
   if (process.platform !== "darwin" || !app.dock) {
     return;
   }
-  const icon = readDesktopAppIcon();
-  if (icon === "default" && !usesLegacyMacDockIcon() && !nativeTheme.shouldUseDarkColors) {
-    return;
-  }
-  applyDesktopAppIcon(icon);
+  void applyPersistedDesktopAppIcon().catch((error) => {
+    console.warn("[desktop] Failed to persist the macOS app icon", error);
+  });
 }
 
 function registerMacAppearanceIconSync(): void {
   if (process.platform !== "darwin") {
     return;
   }
-  // The bundled ICNS is the light artwork; macOS does not swap third-party dock
-  // icons when the system appearance changes, so re-apply the persisted
-  // preference so the default icon follows light/dark mode at runtime.
+  // macOS does not swap a runtime dock image when the system appearance
+  // changes, so re-apply the persisted preference. On macOS 26 the default
+  // preference short-circuits to the bundle icon, which adapts on its own.
   nativeTheme.on("updated", () => {
-    applyDesktopAppIcon(readDesktopAppIcon());
+    void applyPersistedDesktopAppIcon().catch((error) => {
+      console.warn("[desktop] Failed to persist the macOS app icon", error);
+    });
   });
 }
 
@@ -4005,11 +4121,13 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       ...backendEnv(),
       ELECTRON_RUN_AS_NODE: "1",
       SYNARA_SERVER_ENTRY: backendEntry,
+      SYNARA_DESKTOP_PARENT_STDIN: "1",
     },
     // Keep output piped in every environment so startup blockers and readiness
     // are observable even when packaged log setup is unavailable. The fourth
     // pipe carries the browser-host capability and must never be inherited.
-    stdio: ["ignore", "pipe", "pipe", "pipe"],
+    // Leave stdin open: EOF lets the backend clean up if this main process dies.
+    stdio: ["pipe", "pipe", "pipe", "pipe"],
   });
   const capabilityPipe = child.stdio[DESKTOP_BROWSER_HOST_CAPABILITY_FD];
   if (capabilityPipe && "end" in capabilityPipe) {
@@ -4205,8 +4323,13 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       cancelBackendReadinessWait();
       appSnapManager?.dispose();
       appSnapManager = null;
-      await disposeBrowserHostPipeServerForShutdown(reason);
-      browserManager.dispose();
+      await shutdownBrowserServices({
+        revokeHost: () => disposeBrowserHostPipeServerForShutdown(reason),
+        closePages: () => browserManager.dispose(),
+        stopCapture: () => browserVaultCapture.dispose(),
+        clearKeys: () => browserVault.dispose(),
+      });
+      await browserSessionRestore?.shutdown();
       restoreStdIoCapture?.();
       desktopShutdownComplete = true;
       writeDesktopLogHeader(`${reason} shutdown complete`);
@@ -4386,10 +4509,9 @@ function registerIpcHandlers(): void {
   const enqueueDesktopAppIconApply = createExclusiveApplyQueue(async (icon: DesktopAppIcon) => {
     const shouldPersist = shouldUpdateDesktopAppIcon(readDesktopAppIcon(), icon);
     if (shouldPersist) persistDesktopAppIcon(icon);
-    // Renderer hydration mirrors this native preference. Avoid reapplying the
-    // icon selected during boot on macOS. Windows still reapplies so a click
-    // on the already-selected icon can retry a failed Explorer refresh.
-    if (!shouldPersist && process.platform !== "win32") return;
+    // Renderer hydration mirrors this native preference. Explicit clicks on
+    // macOS/Windows can retry a failed shell update even if the choice is saved.
+    if (!shouldPersist && process.platform !== "win32" && process.platform !== "darwin") return;
     await applyDesktopAppIcon(icon, mainWindow, { flushShellIconCache: true });
   });
   ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
@@ -4400,7 +4522,7 @@ function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC.contextMenu);
   ipcMain.handle(
     IPC.contextMenu,
-    async (_event, items: ContextMenuItem[], position?: { x: number; y: number }) => {
+    async (_event, items: DesktopContextMenuItem[], position?: { x: number; y: number }) => {
       const normalizedItems = items
         .filter((item) => typeof item.id === "string" && typeof item.label === "string")
         .map((item) => ({
@@ -4408,6 +4530,7 @@ function registerIpcHandlers(): void {
           label: item.label,
           separatorBefore: item.separatorBefore === true,
           destructive: item.destructive === true,
+          icon: createContextMenuIcon(item.iconDataUrl),
         }));
       if (normalizedItems.length === 0) {
         return null;
@@ -4442,14 +4565,15 @@ function registerIpcHandlers(): void {
             hasInsertedDestructiveSeparator = true;
           }
           const itemOption: MenuItemConstructorOptions = {
-            label: item.label,
+            label:
+              process.platform === "darwin"
+                ? `${item.label}${MAC_CONTEXT_MENU_LABEL_TRAILING_PADDING}`
+                : item.label,
             click: () => resolve(item.id),
           };
-          if (item.destructive) {
-            const destructiveIcon = getDestructiveMenuIcon();
-            if (destructiveIcon) {
-              itemOption.icon = destructiveIcon;
-            }
+          const icon = item.icon ?? (item.destructive ? getDestructiveMenuIcon() : undefined);
+          if (icon) {
+            itemOption.icon = icon;
           }
           template.push(itemOption);
         }
@@ -4463,6 +4587,16 @@ function registerIpcHandlers(): void {
       });
     },
   );
+
+  registerSafariAccessIpc(ipcMain, {
+    platform: process.platform,
+    systemVersion: process.getSystemVersion(),
+    execPath: process.execPath,
+    appName: app.getName(),
+    isTrustedRenderer: (id) => browserManager.isTrustedRenderer(id),
+    openExternal: (url) => shell.openExternal(url),
+    showItemInFolder: (path) => shell.showItemInFolder(path),
+  });
 
   ipcMain.removeHandler(IPC.openExternal);
   ipcMain.handle(IPC.openExternal, async (_event, rawUrl: unknown) => {
@@ -4652,6 +4786,41 @@ function registerIpcHandlers(): void {
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
   registerBrowserIpcHandlers(ipcMain, browserManager);
+  registerBrowserVaultIpc(
+    ipcMain,
+    browserManager,
+    browserVault,
+    () => {
+      mainWindow?.webContents.send(IPC.browser.vault.changed);
+    },
+    new BrowserCookieImport(
+      Path.join(BASE_DIR, "browser-engine"),
+      browserManager,
+      async () => {
+        await browserHostPipeServer?.waitForIdle();
+      },
+      async (domains) => {
+        if (!browserSessionRestore) throw new Error("Browser session restoration is unavailable.");
+        try {
+          await browserSessionRestore.rememberImport(domains);
+        } catch (error) {
+          const allowed = [
+            "Secure browser session storage is unavailable.",
+            "Browser session metadata could not be read.",
+            "Browser session metadata is unsupported.",
+            "Secure browser session persistence failed.",
+          ];
+          console.warn(
+            "[Synara browser]",
+            error instanceof Error && allowed.includes(error.message)
+              ? error.message
+              : "Browser session checkpoint failed.",
+          );
+          throw new Error("Browser session checkpoint failed.");
+        }
+      },
+    ),
+  );
 }
 
 function getIconOption(): { icon: string } | Record<string, never> {
@@ -5063,6 +5232,7 @@ function configureMediaPermissions(): void {
     if (!targetSession) continue;
 
     targetSession.setPermissionCheckHandler((webContents, permission, origin, details) => {
+      if (isClipboardWritePermission(webContents, permission, details, origin)) return true;
       if (
         permission !== "media" ||
         !isTrustedMediaPermissionRequest(webContents, trustedRequester(), details, origin)
@@ -5076,6 +5246,10 @@ function configureMediaPermissions(): void {
     });
 
     targetSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+      if (isClipboardWritePermission(webContents, permission, details)) {
+        callback(true);
+        return;
+      }
       if (
         permission !== "media" ||
         !isTrustedMediaPermissionRequest(webContents, trustedRequester(), details)
@@ -5110,6 +5284,14 @@ if (hasSingleInstanceLock) {
 }
 
 configureAppIdentity();
+configureElectronNetwork();
+
+const browserEngineFeatures = new Set([
+  ...app.commandLine.getSwitchValue("enable-features").split(",").filter(Boolean),
+  "WebMCPTesting",
+  "DevToolsWebMCPSupport",
+]);
+app.commandLine.appendSwitch("enable-features", [...browserEngineFeatures].join(","));
 
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -5138,6 +5320,19 @@ async function bootstrap(): Promise<void> {
 
   backendAuthToken = Crypto.randomBytes(24).toString("hex");
   await reserveBackendEndpoint("bootstrap");
+
+  browserSessionRestore = new BrowserSessionRestore(
+    Path.join(BASE_DIR, "browser-session-restore"),
+    createCookieSessionBackend(BROWSER_SESSION_PARTITION),
+    browserOsKeyStore,
+  );
+  try {
+    await browserSessionRestore.initialize();
+  } catch {
+    console.warn(
+      "[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored.",
+    );
+  }
 
   registerIpcHandlers();
   writeDesktopLogHeader("bootstrap ipc handlers registered");

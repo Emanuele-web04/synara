@@ -7,14 +7,16 @@ import { useEffect, useRef, type DragEvent as ReactDragEvent, type ReactNode } f
 import { type ThreadId } from "@synara/contracts";
 
 import { type SplitDirection, type SplitDropSide } from "../../splitViewStore";
-import { cn } from "../../lib/utils";
 import {
-  hasThreadDragType,
-  parseThreadDragPayload,
+  getActiveThreadDragId,
+  isThreadDragTransfer,
+  isWithinThreadMentionDropzone,
+  readThreadDragPayload,
   type ThreadDragPayload,
-} from "../../threadDrag";
+} from "../../lib/threadDrag";
+import { cn } from "../../lib/utils";
 
-export { THREAD_DRAG_MIME } from "../../threadDrag";
+export { THREAD_DRAG_MIME, type ThreadDragPayload } from "../../lib/threadDrag";
 
 export type DropZone = "top" | "bottom" | "left" | "right";
 
@@ -112,6 +114,14 @@ export function dropZoneToDirectionSide(zone: DropZone): {
   return { direction: "horizontal", side: "second" };
 }
 
+function isThreadDrag(event: ReactDragEvent): boolean {
+  return isThreadDragTransfer(event.dataTransfer);
+}
+
+function parseThreadDragPayload(event: ReactDragEvent): ThreadDragPayload | null {
+  return readThreadDragPayload(event.dataTransfer);
+}
+
 // Applies the same thread constraints for hover feedback and the final drop.
 export function isThreadDragPayloadAllowed(
   payload: ThreadDragPayload,
@@ -179,7 +189,10 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   const getAllowedZoneForEvent = (event: ReactDragEvent<HTMLDivElement>) => {
     const zone = getZoneForEvent(event);
     if (!zone) return null;
-    const payload = parseThreadDragPayload(event.dataTransfer);
+    // Drag data is unreadable until `drop`; fall back to the in-app drag source.
+    const activeThreadId = getActiveThreadDragId();
+    const payload =
+      parseThreadDragPayload(event) ?? (activeThreadId ? { threadId: activeThreadId } : null);
     if (
       payload &&
       !isThreadDragPayloadAllowed(payload, {
@@ -191,8 +204,17 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
     return zone;
   };
 
+  // The composer turns a thread drop into an @mention; it owns the event there,
+  // so only drop the split preview left over from the surrounding pane.
+  const deferToMentionDropzone = (event: ReactDragEvent<HTMLDivElement>): boolean => {
+    if (!isWithinThreadMentionDropzone(event.target)) return false;
+    setPreviewZone(null);
+    return true;
+  };
+
   const handleDragEnter = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!hasThreadDragType(event.dataTransfer)) return;
+    if (!isThreadDrag(event)) return;
+    if (deferToMentionDropzone(event)) return;
     event.preventDefault();
     event.stopPropagation();
     rectRef.current = wrapperRef.current?.getBoundingClientRect() ?? null;
@@ -203,7 +225,8 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   };
 
   const handleDragOver = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!hasThreadDragType(event.dataTransfer)) return;
+    if (!isThreadDrag(event)) return;
+    if (deferToMentionDropzone(event)) return;
     event.preventDefault();
     event.stopPropagation();
     const zone = getAllowedZoneForEvent(event);
@@ -212,7 +235,7 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   };
 
   const handleDragLeave = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!hasThreadDragType(event.dataTransfer)) return;
+    if (!isThreadDrag(event)) return;
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
     const related = event.relatedTarget as Node | null;
@@ -221,11 +244,15 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
   };
 
   const handleDrop = (event: ReactDragEvent<HTMLDivElement>) => {
-    if (!hasThreadDragType(event.dataTransfer)) return;
+    if (!isThreadDrag(event)) return;
+    if (deferToMentionDropzone(event)) {
+      resetOverlayState();
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     const zone = getZoneForEvent(event);
-    const payload = parseThreadDragPayload(event.dataTransfer);
+    const payload = parseThreadDragPayload(event);
 
     resetOverlayState();
 

@@ -3,17 +3,12 @@
 // Exports: resolveDiffPanelThread, diff view source helpers
 // Depends on: ChatView.logic draft-thread normalization.
 
-import {
-  DEFAULT_MODEL_BY_PROVIDER,
-  type ModelSelection,
-  type ThreadId,
-  type TurnId,
-} from "@synara/contracts";
+import { type ModelSelection, type ThreadId, type TurnId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
 import type { DraftThreadState } from "../composerDraftStore";
 import type { RepoDiffScope } from "../repoDiffScopeStore";
-import { REPO_DIFF_SCOPE_LABELS } from "../repoDiffScopeStore";
+import { REPO_DIFF_SCOPE_LABELS, resolveRepoDiffScopeLabel } from "../repoDiffScopeStore";
 import { hasLiveTurnTailWork, isLatestTurnSettled } from "../session-logic";
 import { buildLocalDraftThread } from "./ChatView.logic";
 import { buildFileDiffRenderKey, resolveFileDiffPath } from "../lib/diffRendering";
@@ -28,26 +23,47 @@ export type DiffPanelViewSource =
   | { kind: "repo"; scope: RepoDiffScope }
   | { kind: "turn"; turnId: TurnId | null };
 
-export type DiffPanelScopePickerValue = RepoDiffScope | "allTurns" | "lastTurn";
+export type DiffPanelRepoScopeOption = Exclude<RepoDiffScope, "ref">;
 
-export type DiffPanelPickerOption =
-  | { id: "scope"; scope: RepoDiffScope }
-  | { id: "allTurns" }
-  | { id: "lastTurn" };
+export type DiffPanelScopePickerValue =
+  | DiffPanelRepoScopeOption
+  | `ref:${string}`
+  | "allTurns"
+  | "lastTurn";
 
-export const DIFF_PANEL_PICKER_SCOPE_OPTIONS: ReadonlyArray<RepoDiffScope> = [
+export const DIFF_PANEL_PICKER_SCOPE_OPTIONS: ReadonlyArray<DiffPanelRepoScopeOption> = [
   "workingTree",
   "unstaged",
   "staged",
   "branch",
 ];
 
+export const DIFF_PANEL_COMPARE_REF_VALUE_PREFIX = "ref:";
+
+export function buildDiffPanelCompareRefValue(ref: string): `ref:${string}` {
+  return `${DIFF_PANEL_COMPARE_REF_VALUE_PREFIX}${ref}`;
+}
+
+export function parseDiffPanelCompareRefValue(value: string): string | null {
+  if (!value.startsWith(DIFF_PANEL_COMPARE_REF_VALUE_PREFIX)) {
+    return null;
+  }
+  const ref = value.slice(DIFF_PANEL_COMPARE_REF_VALUE_PREFIX.length).trim();
+  return ref.length > 0 ? ref : null;
+}
+
+export function isDiffPanelRepoScopeOption(value: string): value is DiffPanelRepoScopeOption {
+  return (
+    value === "workingTree" || value === "unstaged" || value === "staged" || value === "branch"
+  );
+}
+
 // Reuse the chat-view draft fallback so diff surfaces keep working before the first server turn exists.
 export function resolveDiffPanelThread(input: {
   threadId: ThreadId | null | undefined;
   serverThread: Thread | undefined;
   draftThread: DraftThreadState | null | undefined;
-  fallbackModelSelection: ModelSelection | null | undefined;
+  fallbackModelSelection: ModelSelection;
 }): Thread | undefined {
   if (input.serverThread) {
     return input.serverThread;
@@ -59,10 +75,7 @@ export function resolveDiffPanelThread(input: {
   return buildLocalDraftThread(
     input.threadId,
     input.draftThread,
-    input.fallbackModelSelection ?? {
-      provider: "codex",
-      model: DEFAULT_MODEL_BY_PROVIDER.codex,
-    },
+    input.fallbackModelSelection,
     null,
   );
 }
@@ -167,12 +180,16 @@ export function resolveDiffPanelViewSource(input: {
 export function resolveDiffPanelPickerLabel(
   source: DiffPanelViewSource,
   turnScopeIntent?: DiffPanelTurnScopeIntent,
+  compareRef?: string | null,
 ): string {
   if (source.kind === "turn") {
     if (source.turnId !== null) {
       return "Turn diff";
     }
     return turnScopeIntent === "last" ? "Last turn" : "All turns";
+  }
+  if (source.scope === "ref") {
+    return resolveRepoDiffScopeLabel("ref", compareRef ?? null);
   }
   return REPO_DIFF_SCOPE_LABELS[source.scope];
 }
@@ -202,8 +219,13 @@ export function resolveDiffPanelScopePickerValue(input: {
   viewSource: DiffPanelViewSource;
   latestTurnId: TurnId | null;
   turnScopeIntent?: DiffPanelTurnScopeIntent;
+  compareRef?: string | null;
 }): DiffPanelScopePickerValue | null {
   if (input.viewSource.kind === "repo") {
+    if (input.viewSource.scope === "ref") {
+      const ref = input.compareRef?.trim() ?? "";
+      return ref.length > 0 ? buildDiffPanelCompareRefValue(ref) : null;
+    }
     return input.viewSource.scope;
   }
   if (input.viewSource.turnId === null) {
@@ -224,31 +246,6 @@ export function resolveConversationCacheScope(
   return `conversation:to-${conversationCheckpointTurnCount}`;
 }
 
-export function isDiffPanelPickerOptionSelected(
-  source: DiffPanelViewSource,
-  option: DiffPanelPickerOption,
-  latestTurnId: TurnId | null,
-  turnScopeIntent?: DiffPanelTurnScopeIntent,
-): boolean {
-  const activeValue = resolveDiffPanelScopePickerValue({
-    viewSource: source,
-    latestTurnId,
-    // Omit the key entirely when undefined: under exactOptionalPropertyTypes an
-    // explicit `undefined` is not assignable to the optional `turnScopeIntent`.
-    ...(turnScopeIntent !== undefined ? { turnScopeIntent } : {}),
-  });
-  if (activeValue === null) {
-    return false;
-  }
-  if (option.id === "allTurns") {
-    return activeValue === "allTurns";
-  }
-  if (option.id === "lastTurn") {
-    return activeValue === "lastTurn";
-  }
-  return activeValue === option.scope;
-}
-
 export function filterRenderableFilesForSearch(
   files: ReadonlyArray<FileDiffMetadata>,
   query: string,
@@ -261,6 +258,87 @@ export function filterRenderableFilesForSearch(
     const filePath = resolveFileDiffPath(fileDiff).toLowerCase();
     return filePath.includes(normalizedQuery);
   });
+}
+
+export type DiffChangeNavigationDirection = "previous" | "next";
+
+export type DiffChangeMarkerKind = "added" | "removed" | "modified";
+
+export interface DiffChangeMarkerSource {
+  path: string;
+  offsetTop: number;
+  changeType: FileDiffMetadata["type"];
+}
+
+export interface DiffChangeMarker {
+  path: string;
+  kind: DiffChangeMarkerKind;
+  top: number;
+}
+
+export const DIFF_CHANGE_MARKER_HEIGHT_PX = 3;
+
+export function resolveAdjacentDiffFilePath(
+  filePaths: ReadonlyArray<string>,
+  activeFilePath: string | null,
+  direction: DiffChangeNavigationDirection,
+): string | null {
+  if (filePaths.length === 0) {
+    return null;
+  }
+  const activeIndex = activeFilePath === null ? -1 : filePaths.indexOf(activeFilePath);
+  if (activeIndex === -1) {
+    return direction === "next" ? (filePaths[0] ?? null) : null;
+  }
+  const targetIndex = direction === "next" ? activeIndex + 1 : activeIndex - 1;
+  if (targetIndex < 0 || targetIndex >= filePaths.length) {
+    return null;
+  }
+  return filePaths[targetIndex] ?? null;
+}
+
+export function resolveDiffChangeMarkerKind(
+  changeType: FileDiffMetadata["type"],
+): DiffChangeMarkerKind {
+  if (changeType === "new") {
+    return "added";
+  }
+  if (changeType === "deleted") {
+    return "removed";
+  }
+  return "modified";
+}
+
+export function resolveDiffChangeMarkers(input: {
+  files: ReadonlyArray<DiffChangeMarkerSource>;
+  scrollHeight: number;
+  stripHeight: number;
+}): DiffChangeMarker[] {
+  if (input.files.length === 0 || input.scrollHeight <= 0) {
+    return [];
+  }
+  const maxTop = Math.max(0, input.stripHeight - DIFF_CHANGE_MARKER_HEIGHT_PX);
+  return input.files.map((file) => {
+    const topRatio = Math.min(1, Math.max(0, file.offsetTop / input.scrollHeight));
+    return {
+      path: file.path,
+      kind: resolveDiffChangeMarkerKind(file.changeType),
+      top: Math.min(maxTop, topRatio * input.stripHeight),
+    };
+  });
+}
+
+export function resolveWatchedDiffFilePath(
+  selectedFilePath: string | null,
+  files: ReadonlyArray<FileDiffMetadata>,
+): string | null {
+  if (
+    selectedFilePath &&
+    files.some((fileDiff) => resolveFileDiffPath(fileDiff) === selectedFilePath)
+  ) {
+    return selectedFilePath;
+  }
+  return files[0] ? resolveFileDiffPath(files[0]) : null;
 }
 
 export function areAllRenderableFilesCollapsed(

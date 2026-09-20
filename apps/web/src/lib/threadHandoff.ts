@@ -176,7 +176,9 @@ export function buildThreadHandoffImportedActivities(
 
 export function hasNativeThreadHandoffMessages(thread: Pick<Thread, "messages">): boolean {
   return thread.messages.some(
-    (message) => isImportableThreadMessage(message) && message.source === "native",
+    (message) =>
+      isImportableThreadMessage(message) &&
+      (message.source === "native" || message.source === "async-user-input"),
   );
 }
 
@@ -212,10 +214,7 @@ export function resolveThreadHandoffModelSelection(input: {
   const isCompatibleSelection = (
     selection: ModelSelection | null | undefined,
   ): selection is ModelSelection => {
-    if (!selection || selection.provider !== input.targetProvider) {
-      return false;
-    }
-    return input.targetProvider !== "kilo" || selection.model.startsWith("kilo/");
+    return Boolean(selection && selection.provider === input.targetProvider);
   };
 
   const stickySelection = input.stickyModelSelectionByProvider[input.targetProvider];

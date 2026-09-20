@@ -3,6 +3,11 @@
 // Layer: Release/build helper
 // Depends on: Desktop packaging policy and electron-builder config shape.
 
+import {
+  createDesktopBundleFilePatterns,
+  preserveDependencyDiagnostics,
+} from "./desktop-bundle-files.ts";
+
 export const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
 export const MAC_ENTITLEMENTS_PATH = "apps/desktop/resources/entitlements.mac.plist";
@@ -15,6 +20,13 @@ export const MAC_APPSNAP_HELPER_BUNDLE_PATH = "Contents/Helpers/synara-appsnap-h
 export const MAC_DEVICE_HELPER_STAGE_PATH = "apps/server/dist/device-helper";
 export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
 export const WINDOWS_INSTALLER_GUID = "368107a8-afe6-5db5-ab3b-d4f331684868";
+// Asset catalog name of the compiled Icon Composer icon. macOS 26 reads
+// CFBundleIconName out of Assets.car and renders that layered icon with the
+// Liquid Glass material; older releases ignore it and keep using the ICNS.
+export const MAC_ICON_ASSET_NAME = "Synara";
+export const MAC_ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
+export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car";
+export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
 const MAC_DMG_ICON_PATH = "icon.icns";
 export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
@@ -67,7 +79,15 @@ export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInpu
 export function createDesktopPlatformBuildConfig(
   input: CreateDesktopPlatformBuildConfigInput,
 ): DesktopPlatformBuildConfig {
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS] };
+  const report =
+    process.platform === "linux"
+      ? (process.report.getReport() as { header?: { glibcVersionRuntime?: string } })
+      : undefined;
+  const files = createDesktopBundleFilePatterns(input.platform, {
+    diagnostics: preserveDependencyDiagnostics(process.env),
+    linuxGlibc: typeof report?.header?.glibcVersionRuntime === "string",
+  });
+  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS], files };
 
   if (input.platform === "mac") {
     const mac = {
@@ -84,19 +104,28 @@ export function createDesktopPlatformBuildConfig(
       x64ArchFiles: MAC_APPSNAP_HELPER_BUNDLE_PATH,
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
+        CFBundleIconName: MAC_ICON_ASSET_NAME,
       },
     } satisfies Record<string, unknown>;
 
     return {
       ...nativePackaging,
       dmg: {
+        background: "apps/desktop/resources/dmgly/assets/dmg-background.png",
+        window: { width: 642, height: 406 },
+        iconSize: 128,
+        contents: [
+          // Omit path so electron-builder uses the packaged app and its actual filename.
+          { x: 172, y: 135, type: "file" },
+          { x: 514, y: 241, type: "link", path: "/Applications" },
+        ],
         sign: input.signed === true,
         // The signed release flow notarizes and staples the DMG after electron-builder exits.
         // Do not emit a blockmap/update entry whose hashes would describe the pre-stapled image;
         // macOS auto-updates use the separately finalized ZIP artifact.
         writeUpdateInfo: false,
       },
-      files: ["**/*", MAC_APPSNAP_HELPER_ASAR_EXCLUSION],
+      files: [...files, MAC_APPSNAP_HELPER_ASAR_EXCLUSION],
       extraFiles: [
         {
           from: MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -105,6 +134,12 @@ export function createDesktopPlatformBuildConfig(
         {
           from: MAC_DEVICE_HELPER_STAGE_PATH,
           to: MAC_DEVICE_HELPER_RESOURCE_PATH,
+        },
+        // electron-builder only knows how to place an ICNS; the compiled asset
+        // catalog has to be copied into Contents/Resources by hand.
+        {
+          from: MAC_ICON_ASSETS_CAR_STAGE_PATH,
+          to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
         },
       ],
       mac,

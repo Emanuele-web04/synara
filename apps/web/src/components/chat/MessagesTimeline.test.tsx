@@ -209,7 +209,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "context-restart-entry",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Native session history was unavailable, so the model continued from a recap.",
+              label: "The session's history was lost, so the model continues from a summary.",
               tone: "error",
               activityKind: "provider.context.changed",
               providerContextLifecycle: {
@@ -219,7 +219,7 @@ describe("MessagesTimeline", () => {
                 sessionRestarted: true,
                 recapInjected: true,
                 recapCharacters: 4_200,
-                recapPreview: "Bounded recap preview",
+                recapPreview: "Bounded summary preview",
                 recapPreviewTruncated: true,
               },
             },
@@ -228,10 +228,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Native session history was unavailable");
+    expect(markup).toContain("history was lost, so the model continues from a summary.");
     expect(markup).toContain('data-tool-detail-trigger="true"');
     expect(markup).not.toContain('data-provider-context-lifecycle-details="true"');
-    expect(markup).not.toContain("Bounded recap preview");
+    expect(markup).not.toContain("Bounded summary preview");
   });
 
   it("keeps small transcripts on the simple non-virtualized path", async () => {
@@ -363,7 +363,9 @@ describe("MessagesTimeline", () => {
       "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
     );
     expect(markup).toContain("rounded-[var(--radius-user-message)]");
-    expect(markup).toContain("py-1.5");
+    expect(markup).toContain("chat-user-message-bubble");
+    const bubbleClassName = markup.match(/class="([^"]*chat-user-message-bubble[^"]*)"/)?.[1];
+    expect(bubbleClassName?.split(" ")).toContain("py-2.5");
     expect(markup).toContain("group-hover:opacity-100");
   });
 
@@ -1214,6 +1216,7 @@ describe("MessagesTimeline", () => {
               createdAt: "2026-03-17T19:12:28.000Z",
               label: "Context compacted manually",
               tone: "info",
+              activityKind: "context-compaction",
             },
           },
         ]}
@@ -1234,11 +1237,29 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Context compacted manually");
+    expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).not.toContain("Work log");
   });
 
   it("keeps the generic working copy alongside the active compaction entry", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
+    const [compactionEntry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "work-compacting",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          kind: "context-compaction",
+          summary: "Compacting context",
+          tone: "info",
+          payload: {
+            itemType: "context_compaction",
+            status: "inProgress",
+            data: { item: { type: "contextCompaction", id: "compaction-1" } },
+          },
+        }),
+      ],
+      undefined,
+    );
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
@@ -1250,12 +1271,7 @@ describe("MessagesTimeline", () => {
             id: "entry-compacting",
             kind: "work",
             createdAt: "2026-03-17T19:12:28.000Z",
-            entry: {
-              id: "work-compacting",
-              createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Compacting conversation...",
-              tone: "info",
-            },
+            entry: compactionEntry!,
           },
         ]}
         turnDiffSummaryByAssistantMessageId={new Map()}
@@ -1274,7 +1290,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Compacting conversation...");
+    expect(markup).toContain("Compacting context");
+    expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).toContain("Working for");
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
@@ -1821,7 +1838,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("+2 more tool calls");
   });
 
-  it("renders reasoning activity as iconless tool text while Thinking remains live", async () => {
+  it("folds a live run to its latest status description while Thinking remains live", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const activeTurnId = TurnId.makeUnsafe("turn-reasoning-live");
     const markup = renderToStaticMarkup(
@@ -1906,9 +1923,56 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(3);
-    expect(markup.match(/data-work-entry-icon="true"/g) ?? []).toHaveLength(1);
+    expect(markup.match(/data-tool-group-live="true"/g) ?? []).toHaveLength(1);
+    expect(markup).toContain("Running the focused tests");
+    expect(markup).not.toContain("MCP tool call");
+    expect(markup).not.toContain('data-codex-status-row="true"');
     expect(markup).toContain(">Thinking<");
+  });
+
+  it("renders a lone reasoning update as iconless tool text", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-reasoning-lone");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[
+          {
+            id: "entry-reasoning-trace",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.100Z",
+            entry: {
+              id: "reasoning-trace",
+              createdAt: "2026-03-17T19:12:28.100Z",
+              turnId: activeTurnId,
+              label: "Reasoning trace",
+              toolTitle: "Reasoning trace",
+              detail: "**Inspecting apps/web/src/store.ts**\n\n<!-- -->",
+              tone: "tool",
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(1);
+    expect(markup).not.toContain('data-work-entry-icon="true"');
     expect(markup).toContain("Inspecting apps/web/src/store.ts");
     expect(markup).not.toContain("Reasoning trace Inspecting");
   });
@@ -2137,7 +2201,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
-  it("expands live inline tool calls past the cap when the group is toggled open", async () => {
+  it("folds live inline tool calls to one line wearing the newest call", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -2147,7 +2211,7 @@ describe("MessagesTimeline", () => {
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
         timelineEntries={[
           // The message comes first so the tools are the turn's live inline
-          // tail: the run stays expanded and keeps the +N cap behavior.
+          // tail: the run renders as one line for its newest call, uncapped.
           {
             id: "entry-assistant-inline-tools-expanded",
             kind: "message",
@@ -2232,8 +2296,11 @@ describe("MessagesTimeline", () => {
       />,
     );
 
+    expect(markup.match(/data-tool-group-live="true"/g) ?? []).toHaveLength(1);
     expect(markup).toContain("Tool 5");
-    expect(markup).toContain("Show less");
+    expect(markup).not.toContain("Tool 4");
+    expect(markup).not.toContain("Show less");
+    expect(markup).not.toContain("more tool calls");
   });
 
   it("renders inline file-change tool calls as edited rows with diff stats", async () => {
@@ -2431,8 +2498,8 @@ describe("MessagesTimeline", () => {
 
   it("uses the GitHub logo for git and GitHub CLI command rows", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    // Rendered as a live turn: once settled, consecutive command rows fold into
-    // a closed "Ran N commands" summary and individual rows are not in markup.
+    // A thinking boundary keeps the two commands in separate singleton runs:
+    // consecutive command rows fold into one line and leave the markup.
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
@@ -2452,6 +2519,17 @@ describe("MessagesTimeline", () => {
               itemType: "command_execution",
               toolTitle: "Checked",
               command: "git status --short",
+            },
+          },
+          {
+            id: "entry-git-boundary",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.500Z",
+            entry: {
+              id: "work-git-boundary",
+              createdAt: "2026-03-17T19:12:28.500Z",
+              label: "Thinking",
+              tone: "thinking",
             },
           },
           {

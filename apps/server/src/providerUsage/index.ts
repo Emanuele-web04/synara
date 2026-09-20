@@ -6,6 +6,8 @@
 
 import type {
   ProviderKind,
+  ServerConsumeCodexResetCreditInput,
+  ServerConsumeCodexResetCreditResult,
   ServerListProviderUsageInput,
   ServerListProviderUsageResult,
   ServerProviderUsageSnapshot,
@@ -15,6 +17,7 @@ import { Effect } from "effect";
 import { PROVIDER_USAGE_PROVIDERS } from "@synara/shared/providerUsage";
 
 import { ServerConfig } from "../config";
+import { consumeCodexResetCredit } from "./codexResetCredits";
 import { buildProviderChildEnvironment, type ProviderChildKind } from "../providerChildEnvironment";
 import { ServerSettingsService } from "../serverSettings";
 import { loadLocalProviderUsageLines } from "../providerUsageSnapshot";
@@ -265,6 +268,7 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
           ...buildContext(),
           homeDir: serverConfig.homeDir,
           claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+          codexBinaryPath: settings.providers.codex.binaryPath,
         },
         {
           forceRefresh: input.forceRefresh === true,
@@ -274,4 +278,31 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
       ),
     catch: () => [] as unknown as ServerListProviderUsageResult,
   });
+});
+
+/** Spend one banked Codex reset, then drop the cached Codex snapshot so the
+ * next read reflects the spend. A spent reset shows up as a fresh quota read. */
+export const consumeCodexResetCreditEffect = Effect.fn(function* (
+  input: ServerConsumeCodexResetCreditInput,
+) {
+  const serverConfig = yield* ServerConfig;
+  const serverSettings = yield* ServerSettingsService;
+  const settings = yield* serverSettings.getSettings;
+  const outcome = yield* Effect.tryPromise({
+    try: async () => {
+      try {
+        return await consumeCodexResetCredit({
+          binaryPath: settings.providers.codex.binaryPath,
+          env: buildProviderChildEnvironment({ provider: "codex", baseEnv: process.env }),
+          cwd: serverConfig.homeDir,
+          ...input,
+        });
+      } finally {
+        // A lost reply may still have spent the reset. Never retain pre-attempt quota data.
+        invalidateProviderUsageSnapshots(["codex"]);
+      }
+    },
+    catch: (cause) => cause,
+  });
+  return { outcome } as ServerConsumeCodexResetCreditResult;
 });

@@ -25,11 +25,11 @@ import {
   ProjectCreateCommand,
   THREAD_NOTES_MAX_CHARS,
   THREAD_GOAL_MAX_CHARS,
-  THREAD_MARKER_LABEL_MAX_CHARS,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
+  ThreadHandoff,
   ThreadTurnStartRequestedPayload,
   RuntimeMode,
 } from "./orchestration";
@@ -235,11 +235,6 @@ it.effect("preserves Pi model selections through the JSON codec", () =>
 it.effect("drops legacy provider passwords from decoded provider options", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeProviderStartOptions({
-      kilo: {
-        binaryPath: "/custom/bin/kilo",
-        serverUrl: "http://127.0.0.1:4095",
-        serverPassword: "legacy-kilo-secret",
-      },
       opencode: {
         binaryPath: "/custom/bin/opencode",
         serverUrl: "http://127.0.0.1:4096",
@@ -248,10 +243,6 @@ it.effect("drops legacy provider passwords from decoded provider options", () =>
     });
 
     assert.deepStrictEqual(parsed, {
-      kilo: {
-        binaryPath: "/custom/bin/kilo",
-        serverUrl: "http://127.0.0.1:4095",
-      },
       opencode: {
         binaryPath: "/custom/bin/opencode",
         serverUrl: "http://127.0.0.1:4096",
@@ -716,78 +707,6 @@ it.effect("decodes pinned-message commands and events", () =>
   }),
 );
 
-it.effect("decodes thread marker commands and events", () =>
-  Effect.gen(function* () {
-    const command = yield* decodeClientOrchestrationCommand({
-      type: "thread.marker.add",
-      commandId: "cmd-marker-add",
-      threadId: "thread-1",
-      markerId: "marker-1",
-      messageId: "message-1",
-      startOffset: 7,
-      endOffset: 21,
-      selectedText: "important text",
-      style: "highlight",
-      color: "yellow",
-    });
-    assert.strictEqual(command.type, "thread.marker.add");
-    assert.strictEqual(command.selectedText, "important text");
-    assert.strictEqual(command.style, "highlight");
-    assert.strictEqual(command.color, "yellow");
-
-    const event = yield* decodeOrchestrationEvent({
-      sequence: 1,
-      eventId: "event-marker-added",
-      aggregateKind: "thread",
-      aggregateId: "thread-1",
-      type: "thread.marker-added",
-      occurredAt: "2026-01-01T00:00:00.000Z",
-      commandId: "cmd-marker-add",
-      causationEventId: null,
-      correlationId: "cmd-marker-add",
-      metadata: {},
-      payload: {
-        threadId: "thread-1",
-        marker: {
-          id: "marker-1",
-          messageId: "message-1",
-          startOffset: 7,
-          endOffset: 21,
-          selectedText: "important text",
-          style: "highlight",
-          color: "yellow",
-          label: null,
-          done: false,
-          createdAt: "2026-01-01T00:00:00.000Z",
-          updatedAt: "2026-01-01T00:00:00.000Z",
-        },
-        updatedAt: "2026-01-01T00:00:00.000Z",
-      },
-    });
-    assert.strictEqual(event.type, "thread.marker-added");
-    assert.strictEqual(event.payload.marker.id, "marker-1");
-
-    const doneCommand = yield* decodeClientOrchestrationCommand({
-      type: "thread.marker.done.set",
-      commandId: "cmd-marker-done",
-      threadId: "thread-1",
-      markerId: "marker-1",
-      done: true,
-    });
-    assert.strictEqual(doneCommand.type, "thread.marker.done.set");
-    assert.strictEqual(doneCommand.done, true);
-
-    const labelCommand = yield* decodeClientOrchestrationCommand({
-      type: "thread.marker.label.set",
-      commandId: "cmd-marker-label",
-      threadId: "thread-1",
-      markerId: "marker-1",
-      label: "x".repeat(THREAD_MARKER_LABEL_MAX_CHARS),
-    });
-    assert.strictEqual(labelCommand.type, "thread.marker.label.set");
-  }),
-);
-
 it.effect("rejects oversized thread notes payloads", () =>
   Effect.gen(function* () {
     const failed = yield* decodeThreadMetaUpdatedPayload({
@@ -1059,5 +978,35 @@ it.effect("preserves user-input answer values through the RPC JSON codec", () =>
         skipped: null,
       },
     );
+  }),
+);
+
+const decodeThreadHandoff = Schema.decodeUnknownEffect(ThreadHandoff);
+
+it.effect("ThreadHandoff decodes legacy provider names instead of failing the row", () =>
+  Effect.gen(function* () {
+    const handoff = yield* decodeThreadHandoff({
+      sourceThreadId: "thread-src",
+      sourceProvider: "kilo",
+      importedAt: "2026-01-01T00:00:00Z",
+      bootstrapStatus: "completed",
+    });
+    assert.equal(handoff.sourceProvider, "opencode");
+
+    const renamed = yield* decodeThreadHandoff({
+      sourceThreadId: "thread-src",
+      sourceProvider: "gemini",
+      importedAt: "2026-01-01T00:00:00Z",
+      bootstrapStatus: "completed",
+    });
+    assert.equal(renamed.sourceProvider, "antigravity");
+
+    const current = yield* decodeThreadHandoff({
+      sourceThreadId: "thread-src",
+      sourceProvider: "codex",
+      importedAt: "2026-01-01T00:00:00Z",
+      bootstrapStatus: "completed",
+    });
+    assert.equal(current.sourceProvider, "codex");
   }),
 );

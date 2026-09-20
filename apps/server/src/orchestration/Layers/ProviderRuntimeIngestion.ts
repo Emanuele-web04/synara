@@ -2,6 +2,7 @@ import {
   type AssistantDeliveryMode,
   CommandId,
   EventId,
+  isToolLifecycleItemType,
   MessageId,
   type OrchestrationCheckpointFile,
   type OrchestrationEvent,
@@ -18,7 +19,18 @@ import {
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@synara/contracts";
-import { Cache, Cause, Deferred, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
+import {
+  Cache,
+  Cause,
+  Deferred,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Queue,
+  Ref,
+  Stream,
+} from "effect";
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -62,6 +74,7 @@ import {
   OrchestrationCommandPreviouslyRejectedError,
 } from "../Errors.ts";
 import { makeRuntimeJournalPoisonGate } from "../runtimeJournalPoisonGate.ts";
+import { isExpiredSidechat } from "../sidechatLifecycle.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
@@ -322,7 +335,7 @@ function isRowMakingProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
     case "item.updated":
     case "item.completed": {
       const itemType = event.payload.itemType;
-      return itemType !== undefined && itemType !== "assistant_message" && itemType !== "reasoning";
+      return isToolLifecycleItemType(itemType) || itemType === "context_compaction";
     }
     case "runtime.warning":
     case "user-input.requested":
@@ -1426,6 +1439,7 @@ const make = Effect.gen(function* () {
     commandTag: string;
     finalDeltaCommandTag: string;
     fallbackText?: string;
+    asyncQuestions?: import("@synara/contracts").AsyncUserInputQuestions;
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* getBufferedAssistantText(input.messageId);
@@ -1457,6 +1471,7 @@ const make = Effect.gen(function* () {
         commandId: providerCommandId(input.event, input.commandTag, input.messageId),
         threadId: input.threadId,
         messageId: input.messageId,
+        ...(input.asyncQuestions ? { asyncQuestions: input.asyncQuestions } : {}),
         ...(input.turnId ? { turnId: input.turnId } : {}),
         createdAt: input.createdAt,
       });
@@ -1846,11 +1861,10 @@ const make = Effect.gen(function* () {
     now: string,
   ) =>
     Effect.gen(function* () {
-      const rows = yield* pendingInteractions.listByThreadId({ threadId });
+      const rows = yield* pendingInteractions.listUnsettled({ threadId });
       for (const row of rows) {
-        // `uncertain` rows were already reported as unanswerable; re-reporting
-        // on every session start would duplicate the failure activity.
-        if (row.status === "confirmed" || row.status === "uncertain") continue;
+        // An uncertain delivery is not proof that its callback was invalidated.
+        if (row.status === "uncertain" && row.interactionKind === "approval") continue;
         const isApproval = row.interactionKind === "approval";
         const requestKind = isApproval ? ("approval" as const) : ("user-input" as const);
         const commandId = providerCommandId(event, `stale-pending-${requestKind}`, row.requestId);
@@ -2283,7 +2297,14 @@ const make = Effect.gen(function* () {
             createdAt: now,
           });
 
-          if (isTerminalTurnEvent) {
+          // Recovery still settles the old turn and drains queued work, but
+          // its technical cancellation must not pause an autonomous goal.
+          const isDevinWedgeRecoveryCancellation =
+            event.provider === "devin" &&
+            event.type === "turn.completed" &&
+            event.payload.state === "cancelled" &&
+            event.payload.stopReason === "synara.devin.wedge-recovery";
+          if (isTerminalTurnEvent && !isDevinWedgeRecoveryCancellation) {
             // The command read model advances synchronously with goal tools.
             // Reading it here prevents a fast terminal provider event from
             // overtaking the projection of achieved/blocked/pause metadata.
@@ -2294,6 +2315,7 @@ const make = Effect.gen(function* () {
               settledThread &&
               settledThread.deletedAt == null &&
               settledThread.archivedAt == null &&
+              !isExpiredSidechat(settledThread) &&
               settledThread.parentThreadId == null &&
               Boolean(activeThreadGoal(settledThread)?.trim()) &&
               settledThread.goalPausedAt == null
@@ -2472,6 +2494,8 @@ const make = Effect.gen(function* () {
         event.type === "item.completed" && event.payload.itemType === "assistant_message"
           ? {
               fallbackText: event.payload.detail,
+              asyncQuestions:
+                thread.parentThreadId == null ? event.payload.asyncQuestions : undefined,
             }
           : undefined;
       const proposedPlanCompletion =
@@ -2485,11 +2509,14 @@ const make = Effect.gen(function* () {
 
       if (assistantCompletion) {
         const turnId = toTurnId(event.turnId);
-        const assistantMessageId = yield* resolveAssistantCompletionMessageId({
-          event,
-          thread,
-          ...(turnId ? { turnId } : {}),
-        });
+        const assistantMessageId =
+          assistantCompletion.asyncQuestions && event.itemId
+            ? MessageId.makeUnsafe(`assistant:${event.itemId}`)
+            : yield* resolveAssistantCompletionMessageId({
+                event,
+                thread,
+                ...(turnId ? { turnId } : {}),
+              });
         const existingAssistantMessage = thread.messages.find(
           (entry) => entry.id === assistantMessageId,
         );
@@ -2507,6 +2534,9 @@ const make = Effect.gen(function* () {
           createdAt: now,
           commandTag: "assistant-complete",
           finalDeltaCommandTag: "assistant-delta-finalize",
+          ...(assistantCompletion.asyncQuestions
+            ? { asyncQuestions: assistantCompletion.asyncQuestions }
+            : {}),
           ...(assistantCompletion.fallbackText !== undefined && shouldApplyFallbackCompletionText
             ? { fallbackText: assistantCompletion.fallbackText }
             : {}),
@@ -2682,6 +2712,30 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+          // The old turn was technically cancelled, so only the failed
+          // recovery can now pause its goal. Never pause a different turn.
+          if (
+            event.provider === "devin" &&
+            asObject(event.payload.detail)?.reason === "synara.devin.wedge-recovery" &&
+            eventTurnId !== undefined &&
+            thread.latestTurn?.turnId === eventTurnId
+          ) {
+            const failedThread = (yield* orchestrationEngine.getReadModel()).threads.find(
+              (candidate) => candidate.id === thread.id,
+            );
+            if (
+              failedThread &&
+              activeThreadGoal(failedThread)?.trim() &&
+              failedThread.goalPausedAt == null
+            ) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.meta.update",
+                commandId: providerCommandId(event, "goal-recovery-failed-pause", thread.id),
+                threadId: thread.id,
+                goalPaused: true,
+              });
+            }
+          }
         }
       }
 
@@ -2873,24 +2927,51 @@ const make = Effect.gen(function* () {
       });
     });
 
+  // Processed journal rows are acknowledged once per drained page rather than
+  // once per event: the durable cursor moves in one transaction through every
+  // row the worker completed, which removes a commit (and its consumer,
+  // open-turn and index page writes) from every streamed token. The cursor is
+  // flushed before anything reads or moves it out of band (quarantine,
+  // dead-lettering, the page-progress check) and when ingestion stops. A crash
+  // between processing and the flush leaves at most one page unacknowledged.
+  // In-process retries must flush the completed prefix before reading another
+  // page: command receipts deduplicate durable writes, not buffered text or
+  // other process-local aggregation state.
+  let pendingAckedSequence: number | null = null;
+
+  const flushRuntimeCursor = Effect.suspend(() => {
+    const throughSequence = pendingAckedSequence;
+    if (throughSequence === null) return Effect.void;
+    return runtimeEvents
+      .advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence,
+        updatedAt: new Date().toISOString(),
+      })
+      .pipe(
+        Effect.flatMap((advanced) =>
+          advanced
+            ? Effect.sync(() => {
+                // Keep a newer completed prefix if work advanced during the
+                // SQL call. A failed/uncertain commit retains this retry fence.
+                if (pendingAckedSequence === throughSequence) pendingAckedSequence = null;
+              })
+            : Effect.die(
+                new Error(
+                  `Provider runtime cursor could not advance through event ${throughSequence}`,
+                ),
+              ),
+        ),
+      );
+  });
+
   const processInput = (input: RuntimeIngestionInput) =>
     input.source === "runtime"
       ? processRuntimeEvent(input.event, input.sequence).pipe(
           Effect.andThen(
-            runtimeEvents.advanceConsumerCursor({
-              consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
-              eventSequence: input.sequence,
-              updatedAt: new Date().toISOString(),
+            Effect.sync(() => {
+              pendingAckedSequence = Math.max(pendingAckedSequence ?? 0, input.sequence);
             }),
-          ),
-          Effect.flatMap((advanced) =>
-            advanced
-              ? Effect.void
-              : Effect.die(
-                  new Error(
-                    `Provider runtime cursor could not advance through event ${input.sequence}`,
-                  ),
-                ),
           ),
         )
       : processDomainEvent(input.event);
@@ -2916,6 +2997,10 @@ const make = Effect.gen(function* () {
     // assistant output — for at least a minute. Quarantine this deterministically
     // unreplayable row immediately, exactly as the poison gate eventually would,
     // and keep the accepted event available in the retained diagnostic tail.
+    // A failure while flushing the preceding rows must block this page too;
+    // otherwise a later successful row could acknowledge past the poison row.
+    runtimeJournalPageBlocked = true;
+    yield* flushRuntimeCursor;
     const advanced = yield* runtimeEvents
       .advanceConsumerCursor({
         consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
@@ -2952,6 +3037,7 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    runtimeJournalPageBlocked = false;
     yield* Effect.logError(
       "provider runtime unreplayable command quarantined without blocking the journal",
       {
@@ -2997,6 +3083,17 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processInputSafely, {
     capacity: PROVIDER_RUNTIME_INGESTION_CAPACITY,
   });
+  // Registered after the worker so it runs before the worker's own finalizer
+  // (LIFO): rows the worker already completed are acknowledged on shutdown.
+  yield* Effect.addFinalizer(() =>
+    flushRuntimeCursor.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider runtime cursor flush failed during shutdown", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    ),
+  );
   const runtimeJournalDrainLock = yield* Semaphore.make(1);
 
   // A deterministically failing row would otherwise pin the single global
@@ -3008,6 +3105,7 @@ const make = Effect.gen(function* () {
   const poisonGate = makeRuntimeJournalPoisonGate();
 
   const deadLetterPoisonHeadRow = Effect.gen(function* () {
+    yield* flushRuntimeCursor;
     const cursor = yield* runtimeEvents.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER);
     if (!poisonGate.noteBlockedDrain(cursor, Date.now())) return false;
     const highWater = yield* runtimeEvents.getHighWaterSequence;
@@ -3037,9 +3135,13 @@ const make = Effect.gen(function* () {
   const drainRuntimeJournalThrough = (throughSequenceInclusive?: number) =>
     runtimeJournalDrainLock.withPermits(1)(
       Effect.gen(function* () {
+        // An interrupted drain may have left accepted work in the worker.
+        // Finish it before retrying its acknowledgement or reading the cursor.
+        yield* worker.drain;
         const replayFence = throughSequenceInclusive ?? (yield* runtimeEvents.getHighWaterSequence);
         let hadBacklog = false;
         while (true) {
+          yield* flushRuntimeCursor;
           const cursor = yield* runtimeEvents.getConsumerCursor(
             PROVIDER_RUNTIME_INGESTION_CONSUMER,
           );
@@ -3066,6 +3168,7 @@ const make = Effect.gen(function* () {
             }),
           );
           yield* worker.drain;
+          yield* flushRuntimeCursor;
           if (runtimeJournalPageBlocked) {
             // Either the poison threshold was reached and the head row was
             // skipped (loop again from the fresh cursor), or the drain yields
@@ -3154,15 +3257,11 @@ const make = Effect.gen(function* () {
   const rebuildAcceptedOpenTurnStateForEvent = (event: ProviderRuntimeEvent, sequence: number) =>
     prepareAcceptedRuntimeEventReplay(event).pipe(
       Effect.andThen(processRuntimeEvent(event, sequence)),
+      Effect.as({ replayed: true } as const),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
-          : Effect.logWarning("provider runtime ingestion failed to rebuild open-turn state", {
-              eventId: event.eventId,
-              eventType: event.type,
-              threadId: event.threadId,
-              cause: Cause.pretty(cause),
-            }),
+          : Effect.succeed({ replayed: false, cause } as const),
       ),
     );
 
@@ -3171,18 +3270,47 @@ const make = Effect.gen(function* () {
   // deduplicate durable effects while the caches are rebuilt in event order.
   const rebuildAcceptedOpenTurnState = Effect.gen(function* () {
     let sequence = 0;
+    // Log only the first failure for each turn, but keep replaying later rows.
+    // A command rejection or identity collision is scoped to that event's
+    // command ids, while a transient persistence failure may succeed on the
+    // next event. Skipping the rest of the turn would also skip buffered text
+    // that exists only in these process-local caches until completion.
+    const failedTurns = new Set<string>();
+    let failedEvents = 0;
     while (true) {
       const page = yield* runtimeEvents.readAcceptedOpenTurnEvents({
         consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
         sequenceExclusive: sequence,
         limit: PROVIDER_RUNTIME_REPLAY_PAGE_SIZE,
       });
-      if (page.length === 0) return;
+      if (page.length === 0) break;
       for (const entry of page) {
-        yield* rebuildAcceptedOpenTurnStateForEvent(entry.event, entry.sequence);
         sequence = entry.sequence;
+        // Open-turn rows are keyed by (thread, turn), so a replayed event
+        // always carries a turn id.
+        const turnId = toTurnId(entry.event.turnId);
+        const turnKey = turnId ? providerTurnKey(entry.event.threadId, turnId) : null;
+        const replay = yield* rebuildAcceptedOpenTurnStateForEvent(entry.event, entry.sequence);
+        if (replay.replayed) continue;
+
+        failedEvents += 1;
+        const failureKey = turnKey ?? `event:${entry.event.eventId}`;
+        if (failedTurns.has(failureKey)) continue;
+        failedTurns.add(failureKey);
+        yield* Effect.logWarning("provider runtime ingestion failed to rebuild open-turn state", {
+          eventId: entry.event.eventId,
+          eventType: entry.event.type,
+          threadId: entry.event.threadId,
+          cause: Cause.pretty(replay.cause),
+        });
       }
-      if (page.length < PROVIDER_RUNTIME_REPLAY_PAGE_SIZE) return;
+      if (page.length < PROVIDER_RUNTIME_REPLAY_PAGE_SIZE) break;
+    }
+    if (failedTurns.size > 0) {
+      yield* Effect.logWarning("provider runtime ingestion encountered open-turn replay failures", {
+        failedTurns: failedTurns.size,
+        failedEvents,
+      });
     }
   });
   const startupRuntimeReplayComplete = yield* Deferred.make<void>();
@@ -3196,10 +3324,50 @@ const make = Effect.gen(function* () {
         ...(streamPersistedEvents === undefined ? {} : { streamPersistedEvents }),
         append: (event) => runtimeEvents.append(event),
       });
+      // Live notifications only raise the drain fence and wake one long-lived
+      // drain fiber; they never run a drain themselves. The fiber keeps going
+      // while newer notifications moved the fence, so events that arrive while
+      // a drain is in flight are processed as pages (and acknowledged once per
+      // page) instead of one drain and one acknowledgement per notification.
+      // With no backlog this still drains one event at a time; the batching
+      // engages exactly when ingestion falls behind the providers.
+      let requestedLiveFence = 0;
+      const liveDrainWakeups = yield* Queue.sliding<void>(1);
+      yield* Effect.forkScoped(
+        Effect.forever(
+          Effect.gen(function* () {
+            yield* Queue.take(liveDrainWakeups);
+            while (true) {
+              const fence = requestedLiveFence;
+              yield* drainRuntimeJournalThrough(fence).pipe(
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause)
+                    ? Effect.failCause(cause)
+                    : Effect.logWarning("provider runtime event journal ingestion failed", {
+                        throughSequence: fence,
+                        cause: Cause.pretty(cause),
+                      }),
+                ),
+              );
+              if (requestedLiveFence <= fence) return;
+              // A blocked page yields to the safety poller instead of spinning.
+              const cursor = yield* runtimeEvents.getConsumerCursor(
+                PROVIDER_RUNTIME_INGESTION_CONSUMER,
+              );
+              if (cursor < fence) return;
+            }
+          }),
+        ),
+      );
       yield* Effect.forkScoped(
         Stream.runForEach(persistedRuntimeEvents, (persisted) =>
           Deferred.await(startupRuntimeReplayComplete).pipe(
-            Effect.andThen(drainRuntimeJournalThrough(persisted.sequence)),
+            Effect.andThen(
+              Effect.sync(() => {
+                requestedLiveFence = Math.max(requestedLiveFence, persisted.sequence);
+              }),
+            ),
+            Effect.andThen(Queue.offer(liveDrainWakeups, undefined)),
             Effect.catchCause((cause) =>
               Cause.hasInterruptsOnly(cause)
                 ? Effect.failCause(cause)

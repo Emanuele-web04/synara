@@ -56,14 +56,14 @@ const POPUP_CLASS = "max-w-lg border-transparent before:shadow-none dark:before:
 // paddings to fight — the h-11 row IS the header. `font-system-ui` counters
 // the global `input { font-family: mono }` rule.
 const INPUT_CLASS =
-  "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-[13px] text-zinc-800 outline-none placeholder:text-zinc-400 dark:text-zinc-200 dark:placeholder:text-zinc-500";
+  "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-ui-lg text-zinc-800 outline-none placeholder:text-zinc-400 dark:text-zinc-200 dark:placeholder:text-zinc-500";
 
 // The list keeps AutocompleteList's built-in 4px frame; combined with the 10px
 // paddings below, every piece of text lands on the same 14px column.
 const LIST_CLASS = "max-h-[min(30rem,60vh)]";
 
 const GROUP_LABEL_CLASS =
-  "px-2.5 pt-1.5 pb-1 font-normal text-[11px] text-zinc-400 dark:text-zinc-500";
+  "px-2.5 pt-1.5 pb-1 font-normal text-ui-sm text-zinc-400 dark:text-zinc-500";
 
 // Row text sizes live on the inner spans (the item base carries a sm:text-sm
 // that would win over an item-level override).
@@ -172,7 +172,7 @@ function SnippetLineText(props: { text: string; query: string }) {
 function DirectoryText(props: { dir: string; className?: string }) {
   return (
     <span
-      className={cn("truncate text-start text-[12px]", MUTED_TEXT_CLASS, props.className)}
+      className={cn("truncate text-start text-ui", MUTED_TEXT_CLASS, props.className)}
       dir="rtl"
       title={props.dir}
     >
@@ -213,7 +213,7 @@ const FileResultRow = memo(function FileResultRow(props: {
         colorMode="inherit"
         className={ICON_CLASS}
       />
-      <span className="min-w-0 flex-1 truncate text-[13px]">
+      <span className="min-w-0 flex-1 truncate text-ui-lg">
         <FileNameText text={base} query={props.highlightQuery} />
       </span>
       {dir ? <DirectoryText className="max-w-[45%] shrink-0" dir={dir} /> : null}
@@ -243,7 +243,7 @@ const SnippetResultRow = memo(function SnippetResultRow(props: {
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate text-[13px]">
+          <span className="min-w-0 flex-1 truncate text-ui-lg">
             <FileNameText text={base} query={props.highlightQuery} />
           </span>
           <DirectoryText
@@ -251,7 +251,7 @@ const SnippetResultRow = memo(function SnippetResultRow(props: {
             dir={dir ? `${dir}:${props.match.lineNumber}` : `:${props.match.lineNumber}`}
           />
         </div>
-        <div className={`truncate font-mono text-[11px] leading-4 ${MUTED_TEXT_CLASS}`}>
+        <div className={`truncate font-mono text-ui-sm leading-4 ${MUTED_TEXT_CLASS}`}>
           <SnippetLineText text={props.match.lineText} query={props.highlightQuery} />
         </div>
       </div>
@@ -406,7 +406,7 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
         {statusMessage ? (
           <div className="text-start">
             <div className={GROUP_LABEL_CLASS}>{copy.groupLabel}</div>
-            <div className="px-2.5 pt-0.5 pb-2 text-[13px] text-zinc-700 dark:text-zinc-300">
+            <div className="px-2.5 pt-0.5 pb-2 text-ui-lg text-zinc-700 dark:text-zinc-300">
               {statusMessage}
             </div>
           </div>

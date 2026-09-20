@@ -8,6 +8,7 @@ import { memo } from "react";
 import { cn } from "~/lib/utils";
 import type { RenderablePatch } from "~/lib/diffRendering";
 import { DiffPanelFileList, type DiffFileChatActions } from "./DiffPanelFileList";
+import type { DiffLineBlameTarget } from "./DiffLineBlamePopover";
 import { DiffPanelLoadingState } from "./DiffPanelShell";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 
@@ -24,6 +25,7 @@ export const DiffPanelPatchViewport = memo(
     collapsedFiles: ReadonlySet<string>;
     onToggleFileCollapsed: (fileKey: string) => void;
     chatActions?: DiffFileChatActions | undefined;
+    onBlameLine?: ((target: DiffLineBlameTarget) => void) | undefined;
     isLoading: boolean;
     hasNoChanges: boolean;
     error: string | null;
@@ -42,7 +44,7 @@ export const DiffPanelPatchViewport = memo(
             fill="flex"
             className="items-start justify-start px-3 pt-3"
           >
-            <p className="text-left text-[11px] text-red-500/80">{props.error}</p>
+            <p className="text-left text-ui-sm text-red-500/80">{props.error}</p>
           </PanelStateMessage>
         </div>
       );
@@ -83,6 +85,7 @@ export const DiffPanelPatchViewport = memo(
             collapsedFiles={props.collapsedFiles}
             onToggleFileCollapsed={props.onToggleFileCollapsed}
             chatActions={props.chatActions}
+            onBlameLine={props.onBlameLine}
           />
         </div>
       );
@@ -91,10 +94,10 @@ export const DiffPanelPatchViewport = memo(
     return (
       <div className={cn(viewportClassName, "overflow-auto p-2")}>
         <div className="space-y-2">
-          <p className="text-[11px] text-muted-foreground/75">{props.renderablePatch.reason}</p>
+          <p className="text-ui-sm text-muted-foreground/75">{props.renderablePatch.reason}</p>
           <pre
             className={cn(
-              "max-h-[72vh] rounded-md border border-border/70 bg-background/70 p-3 font-mono text-[11px] leading-relaxed text-muted-foreground/90",
+              "max-h-[72vh] rounded-md border border-border/70 bg-background/70 p-3 font-mono text-ui-sm leading-relaxed text-muted-foreground/90",
               props.diffWordWrap
                 ? "overflow-auto whitespace-pre-wrap wrap-break-word"
                 : "overflow-auto",
@@ -117,6 +120,7 @@ export const DiffPanelPatchViewport = memo(
       previous.collapsedFiles === next.collapsedFiles &&
       previous.onToggleFileCollapsed === next.onToggleFileCollapsed &&
       previous.chatActions === next.chatActions &&
+      previous.onBlameLine === next.onBlameLine &&
       previous.isLoading === next.isLoading &&
       previous.hasNoChanges === next.hasNoChanges &&
       previous.error === next.error &&

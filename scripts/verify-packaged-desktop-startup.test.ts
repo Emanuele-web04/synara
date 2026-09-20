@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createPackagedDesktopSmokeEnvironment,
   parsePackagedDesktopStartupArgs,
+  readPackagedStartupLogTails,
   resolveNativePackagedDesktopPlatform,
+  verifyPackagedRuntimeDependencies,
 } from "./verify-packaged-desktop-startup.ts";
 
 const temporaryRoots: string[] = [];
@@ -19,6 +21,18 @@ afterEach(() => {
 });
 
 describe("packaged desktop startup verification", () => {
+  it("retains bounded failure diagnostics even when a startup log is missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-startup-diagnostics-test-"));
+    temporaryRoots.push(root);
+    writeFileSync(join(root, "desktop-main.log"), "old entry" + "x".repeat(20_000) + "app ready");
+
+    const diagnostics = readPackagedStartupLogTails(root);
+    expect(diagnostics).toContain("app ready");
+    expect(diagnostics).not.toContain("old entry");
+    expect(diagnostics).toContain("server-child.log: unavailable");
+    expect(diagnostics.length).toBeLessThan(16_500);
+  });
+
   it("parses a bounded native payload request", () => {
     expect(
       parsePackagedDesktopStartupArgs([
@@ -90,5 +104,58 @@ describe("packaged desktop startup verification", () => {
     expect(resolveNativePackagedDesktopPlatform("darwin")).toBe("mac");
     expect(resolveNativePackagedDesktopPlatform("win32")).toBe("win");
     expect(resolveNativePackagedDesktopPlatform("linux")).toBe("linux");
+  });
+
+  it("rejects a missing packaged peer even when the development tree provides it", () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-runtime-deps-test-"));
+    temporaryRoots.push(root);
+    const app = join(root, "app.asar");
+    const dist = join(app, "apps/server/dist");
+    const sdk = join(app, "node_modules/@agentclientprotocol/sdk");
+    const developmentModules = join(root, "development/node_modules");
+    const writeZod = (modules: string) => {
+      const directory = join(modules, "zod");
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "package.json"), '{"type":"module","exports":"./index.js"}');
+      writeFileSync(join(directory, "index.js"), 'export const version = "test";');
+    };
+    mkdirSync(dist, { recursive: true });
+    mkdirSync(sdk, { recursive: true });
+    writeFileSync(
+      join(dist, "runtimeDependencySmoke.mjs"),
+      'await import("@agentclientprotocol/sdk");',
+    );
+    writeFileSync(join(sdk, "package.json"), '{"type":"module","exports":"./index.js"}');
+    writeFileSync(join(sdk, "index.js"), 'export { version } from "zod";');
+    writeZod(developmentModules);
+
+    const runtime = { executable: process.execPath, resourcesDirectory: root };
+    const env = {
+      ...process.env,
+      NODE_PATH: developmentModules,
+      NODE_OPTIONS: "--invalid-development-node-option",
+    };
+    expect(() => verifyPackagedRuntimeDependencies(runtime, env, 5_000)).toThrow(
+      /Cannot find package 'zod'/,
+    );
+
+    writeZod(join(app, "node_modules"));
+    expect(() => verifyPackagedRuntimeDependencies(runtime, env, 5_000)).not.toThrow();
+  });
+
+  it("bounds a runtime import that never finishes", () => {
+    const root = mkdtempSync(join(tmpdir(), "synara-runtime-timeout-test-"));
+    temporaryRoots.push(root);
+    const dist = join(root, "app.asar/apps/server/dist");
+    mkdirSync(dist, { recursive: true });
+    writeFileSync(join(dist, "runtimeDependencySmoke.mjs"), "setInterval(() => {}, 1000);");
+
+    expect(() =>
+      verifyPackagedRuntimeDependencies(
+        { executable: process.execPath, resourcesDirectory: root },
+        process.env,
+        200,
+      ),
+    ).toThrow(/ETIMEDOUT/);
   });
 });
