@@ -16,6 +16,7 @@ const paths: ServerWorkspacePaths = {
   homeDir: null,
   chatWorkspaceRoot: null,
   studioWorkspaceRoot: null,
+  groupsWorkspaceRoot: null,
 };
 
 const workSpaceId = SpaceId.makeUnsafe("space-work");

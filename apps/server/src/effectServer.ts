@@ -245,6 +245,7 @@ export const createEffectServer = Effect.fn(function* (
       homeDir: config.homeDir,
       chatWorkspaceRoot: config.chatWorkspaceRoot,
       studioWorkspaceRoot: config.studioWorkspaceRoot,
+      groupsWorkspaceRoot: config.groupsWorkspaceRoot,
       projectName: config.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? config.cwd,
     },
   });

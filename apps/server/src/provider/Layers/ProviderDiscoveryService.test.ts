@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   deriveServerPaths,
   resolveDefaultChatWorkspaceRoot,
+  resolveDefaultGroupsWorkspaceRoot,
   resolveDefaultStudioWorkspaceRoot,
   ServerConfig,
   type ServerConfigShape,
@@ -63,6 +64,7 @@ const makeConfigLayer = () =>
         homeDir,
         chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir }),
         studioWorkspaceRoot: resolveDefaultStudioWorkspaceRoot({ homeDir }),
+        groupsWorkspaceRoot: resolveDefaultGroupsWorkspaceRoot({ homeDir }),
         baseDir,
         ...derived,
         staticDir: undefined,

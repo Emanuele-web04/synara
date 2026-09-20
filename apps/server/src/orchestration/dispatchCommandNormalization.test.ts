@@ -159,6 +159,7 @@ describe("makeDispatchCommandNormalizer", () => {
       attachmentsDir: "/tmp/attachments",
       chatWorkspaceRoot: "/Users/tester/Documents/Synara",
       studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      groupsWorkspaceRoot: "/Users/tester/Documents/Synara/Groups",
       fileSystem: {} as FileSystem.FileSystem,
       path: {} as Path.Path,
       canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
@@ -188,6 +189,7 @@ describe("makeDispatchCommandNormalizer", () => {
     const normalizer = makeDispatchCommandNormalizer<Error>({
       attachmentsDir: "/tmp/attachments",
       studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      groupsWorkspaceRoot: "/Users/tester/Documents/Synara/Groups",
       fileSystem: {} as FileSystem.FileSystem,
       path: {} as Path.Path,
       canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
@@ -217,6 +219,43 @@ describe("makeDispatchCommandNormalizer", () => {
     await runPrepareWorkspaceRoot(second);
 
     expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/Studio/Outbox"]);
+  });
+
+  it("roots a group create under Groups/<slug> and prepares that folder", async () => {
+    const preparedRoots: string[] = [];
+    const canonicalized: string[] = [];
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      groupsWorkspaceRoot: "/Users/tester/Documents/Synara/Groups",
+      fileSystem: {} as FileSystem.FileSystem,
+      path: { join: (...parts: string[]) => parts.join("/") } as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => {
+        canonicalized.push(workspaceRoot);
+        return Effect.succeed(workspaceRoot);
+      },
+      prepareGroupWorkspaceRoot: (workspaceRoot) =>
+        Effect.sync(() => {
+          preparedRoots.push(workspaceRoot);
+        }),
+    });
+
+    const result = await Effect.runPromise(
+      normalizer({
+        command: projectCreateCommand({
+          kind: "group",
+          title: "Alpha Bot",
+          workspaceRoot: "/tmp/ignored",
+        }),
+      }),
+    );
+    await runPrepareWorkspaceRoot(result);
+
+    expect(canonicalized).toEqual(["/Users/tester/Documents/Synara/Groups/alpha-bot"]);
+    expect(result.command.type).toBe("project.create");
+    if (result.command.type === "project.create") {
+      expect(result.command.workspaceRoot).toBe("/Users/tester/Documents/Synara/Groups/alpha-bot");
+    }
+    expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/Groups/alpha-bot"]);
   });
 
   it("defers binary attachment authority to the transactional managed ledger", async () => {

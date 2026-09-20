@@ -63,6 +63,7 @@ import {
   ensureStudioWorkspaceInstructionsFiles,
   STUDIO_WORKSPACE_SUBDIRECTORIES,
 } from "./studioWorkspaceScaffold";
+import { ensureGroupWorkspaceInstructionsFiles } from "./groupWorkspaceScaffold";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
 import { DeviceService } from "./device/Services/DeviceService";
 import { makeWsDeviceHandlers } from "./device/wsDeviceHandlers";
@@ -617,16 +618,40 @@ const makeWsRpcHandlersLayer = () =>
             ),
           ),
         );
+      const prepareGroupWorkspaceRoot = (workspaceRoot: string) =>
+        fileSystem.makeDirectory(workspaceRoot, { recursive: true }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new WsRpcError({
+                message: `Failed to create group workspace: ${workspaceRoot}`,
+                cause,
+              }),
+          ),
+          Effect.andThen(
+            ensureGroupWorkspaceInstructionsFiles(workspaceRoot).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("failed to write group workspace instructions", {
+                  workspaceRoot,
+                  cause,
+                }),
+              ),
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            ),
+          ),
+        );
 
       const normalizeDispatchCommand = makeDispatchCommandNormalizer<WsRpcError>({
         attachmentsDir: config.attachmentsDir,
         chatWorkspaceRoot: config.chatWorkspaceRoot,
         studioWorkspaceRoot: config.studioWorkspaceRoot,
+        groupsWorkspaceRoot: config.groupsWorkspaceRoot,
         fileSystem,
         path,
         canonicalizeProjectWorkspaceRoot,
         prepareChatWorkspaceRoot,
         prepareStudioWorkspaceRoot,
+        prepareGroupWorkspaceRoot,
       });
 
       const importThread = makeImportThreadHandler({
@@ -714,6 +739,7 @@ const makeWsRpcHandlersLayer = () =>
           homeDir: config.homeDir,
           chatWorkspaceRoot: config.chatWorkspaceRoot,
           studioWorkspaceRoot: config.studioWorkspaceRoot,
+          groupsWorkspaceRoot: config.groupsWorkspaceRoot,
           worktreesDir: config.worktreesDir,
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,

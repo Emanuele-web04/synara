@@ -587,6 +587,7 @@ describe("EventRouter scoped orchestration sync", () => {
       homeDir: null,
       chatWorkspaceRoot: null,
       studioWorkspaceRoot: null,
+      groupsWorkspaceRoot: null,
     });
     subscribeShellRequestCount = 0;
     subscribeThreadRequestCountById.clear();

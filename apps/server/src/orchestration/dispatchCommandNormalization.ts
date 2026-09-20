@@ -4,6 +4,20 @@ import type { FileSystem, Path } from "effect";
 import { Effect, Schedule } from "effect";
 
 import { createAttachmentId } from "../attachmentStore";
+import { slugifyGroupTitle } from "../groupWorkspaceScaffold";
+
+function resolveGroupWorkspaceRoot<E>(
+  kind: string | undefined,
+  title: string | undefined,
+  workspaceRoot: string,
+  options: DispatchCommandNormalizerOptions<E>,
+): string {
+  if (kind !== "group" || !options.groupsWorkspaceRoot) {
+    return workspaceRoot;
+  }
+  const slug = slugifyGroupTitle(title?.trim() || workspaceRoot);
+  return options.path.join(options.groupsWorkspaceRoot, slug);
+}
 
 export interface DispatchCommandNormalizerResult<E> {
   readonly command: OrchestrationCommand;
@@ -21,6 +35,7 @@ export interface DispatchCommandNormalizerOptions<E> {
   readonly attachmentsDir: string;
   readonly chatWorkspaceRoot?: string;
   readonly studioWorkspaceRoot?: string;
+  readonly groupsWorkspaceRoot?: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
   readonly canonicalizeProjectWorkspaceRoot: (
@@ -29,6 +44,7 @@ export interface DispatchCommandNormalizerOptions<E> {
   ) => Effect.Effect<string, E>;
   readonly prepareChatWorkspaceRoot?: (workspaceRoot: string) => Effect.Effect<void, E>;
   readonly prepareStudioWorkspaceRoot?: (workspaceRoot: string) => Effect.Effect<void, E>;
+  readonly prepareGroupWorkspaceRoot?: (workspaceRoot: string) => Effect.Effect<void, E>;
 }
 
 // Deferred workspace-root scaffolding (mkdir of managed subdirectories like Inbox/Outbox/
@@ -53,8 +69,10 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
   //     to avoid ever scaffolding "work"/"outputs" straight into the shared parent directory.
   //   - studio: the Studio container project's workspace root IS exactly studioWorkspaceRoot
   //     (see ensureStudioProject in studioProjects.ts), so exact equality must trigger prepare.
+  //   - group: each group lives in its own subfolder under groupsWorkspaceRoot, never at the
+  //     Groups parent itself, so exact equality must be excluded like chat.
   const maybePrepareWorkspaceRoot = (input: {
-    readonly kind: "chat" | "studio";
+    readonly kind: "chat" | "studio" | "group";
     readonly command: Extract<
       ClientOrchestrationCommand,
       { type: "project.create" | "project.meta.update" }
@@ -118,6 +136,21 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       prepare: options.prepareStudioWorkspaceRoot,
       prepareWhenEqualToRoot: true,
     });
+  const maybePrepareGroupWorkspaceRoot = (
+    command: Extract<
+      ClientOrchestrationCommand,
+      { type: "project.create" | "project.meta.update" }
+    >,
+    workspaceRoot: string,
+  ) =>
+    maybePrepareWorkspaceRoot({
+      kind: "group",
+      command,
+      workspaceRoot,
+      configuredWorkspaceRoot: options.groupsWorkspaceRoot,
+      prepare: options.prepareGroupWorkspaceRoot,
+      prepareWhenEqualToRoot: false,
+    });
 
   // Combines the chat + studio scaffolding decisions into a single deferred effect. The
   // decision logic (kinds, prepareWhenEqualToRoot, isWorkspaceRootWithin/workspaceRootsEqual)
@@ -134,6 +167,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       [
         maybePrepareChatWorkspaceRoot(command, workspaceRoot),
         maybePrepareStudioWorkspaceRoot(command, workspaceRoot),
+        maybePrepareGroupWorkspaceRoot(command, workspaceRoot),
       ],
       { discard: true },
     );
@@ -145,8 +179,14 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       // exist, and comparing lexical paths instead would mis-handle symlinked roots. A rejected
       // command can therefore leave an empty directory behind, but never scaffolding: the
       // subdirectory prepare is deferred until the dispatch is accepted (see wsRpc).
-      const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
+      const requestedWorkspaceRoot = resolveGroupWorkspaceRoot(
+        input.command.kind,
+        input.command.title,
         input.command.workspaceRoot,
+        options,
+      );
+      const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
+        requestedWorkspaceRoot,
         {
           createIfMissing: input.command.createWorkspaceRootIfMissing === true,
         },
@@ -163,8 +203,14 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
     }
 
     if (input.command.type === "project.meta.update" && input.command.workspaceRoot !== undefined) {
-      const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
+      const requestedWorkspaceRoot = resolveGroupWorkspaceRoot(
+        input.command.kind,
+        input.command.title,
         input.command.workspaceRoot,
+        options,
+      );
+      const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
+        requestedWorkspaceRoot,
         {
           createIfMissing: input.command.createWorkspaceRootIfMissing === true,
         },
