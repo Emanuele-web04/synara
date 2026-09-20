@@ -41,7 +41,7 @@ describe("composerDraftStore persisted-state hydration", () => {
     },
   );
 
-  it.each(["off", "chat"] as const)(
+  it.each(["off", "request", "chat"] as const)(
     "round-trips explicit %s intent without changing other draft content",
     (mode) => {
       resetComposerDraftStore();
@@ -75,13 +75,13 @@ describe("composerDraftStore persisted-state hydration", () => {
     },
   );
 
-  it("normalizes a legacy request to the chat switch", () => {
+  it("preserves a request without promoting it to the chat default", () => {
     resetComposerDraftStore();
     const threadId = ThreadId.makeUnsafe("computer-request-legacy");
     const store = useComposerDraftStore.getState();
-    store.setComputerControlMode(threadId, "request" as never, { generation: 7 });
+    store.setComputerControlMode(threadId, "request", { generation: 7 });
     const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
-    expect(draft?.computerControlMode).toBe("chat");
+    expect(draft?.computerControlMode).toBe("request");
     expect(draft?.enableComputerControl).toBe(true);
     expect(draft?.computerControlGeneration).toBe(7);
   });

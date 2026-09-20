@@ -2,7 +2,7 @@
 // Purpose: The single guided macOS permission checklist — per-pane Grant buttons that deep-link
 //          System Settings, run the floating GrantCoach, and poll until the grant lands. Shared
 //          by AppSnap (Input Monitoring + Screen Recording) and Computer control
-//          (Accessibility + Screen Recording).
+//          (Accessibility + Screen Recording + Input Monitoring).
 // Layer: Settings UI component
 
 import {
@@ -45,10 +45,9 @@ export const APP_SNAP_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor
 ];
 
 /**
- * The Computer control rows: the two grants desktop control can ask for. Input
- * Monitoring is deliberately absent — the release chord it would power is a
- * compositor-plugin feature that only exists on the Linux backends. The
- * matching kind list lives in `@synara/shared/computerGrants`.
+ * Computer also needs Input Monitoring for Escape and human takeover. This
+ * grant does not enable AppSnap's shortcut. The matching kind list lives in
+ * `@synara/shared/computerGrants`.
  */
 export const COMPUTER_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor[] = [
   {
@@ -62,6 +61,12 @@ export const COMPUTER_PERMISSION_PANES: readonly AppSnapPermissionPaneDescriptor
     title: "Screen Recording",
     description:
       "Lets Synara capture windows and the desktop so the agent can see what it is driving.",
+  },
+  {
+    pane: "input-monitoring",
+    title: "Input Monitoring",
+    description:
+      "Lets Synara detect Escape and pause when you take over during a Computer task. This does not enable the AppSnap shortcut.",
   },
 ];
 

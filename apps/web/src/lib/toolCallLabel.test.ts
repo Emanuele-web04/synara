@@ -310,6 +310,10 @@ describe("deriveReadableToolTitle", () => {
     ["mcp__synara__computer_kill_app", "Force-quit an app"],
     ["computer_set_window_minimized", "Minimize or restore a window"],
     ["synara_computer_set_app_visibility", "Hide or unhide an app"],
+    ["computer_inspect", "Inspect the computer"],
+    ["computer_browser_state", "Read the browser page"],
+    ["mcp__synara__computer_browser_click", "Click in the browser"],
+    ["synara_computer_browser_navigate", "Open a browser page"],
   ])("uses the curated Computer label for %s", (toolName, expected) => {
     expect(
       deriveReadableToolTitle({

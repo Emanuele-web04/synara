@@ -88,7 +88,8 @@ describe("ComputerSettingsPanel", () => {
     // Exactly one occurrence: the section title owns the words, and no row
     // repeats them.
     expect(markup.match(/Computer control/g) ?? []).toHaveLength(1);
-    expect(markup).toContain("Let the agent use the desktop in any chat.");
+    expect(markup).toContain("Enable Computer by default in any chat.");
+    expect(markup).toContain("use /computer-use for one request");
     expect(markup).toContain('aria-label="Let the agent use the desktop in any chat"');
     // The section is the search/deep-link target for the toggle it carries.
     expect(markup).toContain('id="setting-computer-control"');
@@ -206,6 +207,25 @@ describe("ComputerSettingsPanel", () => {
     });
     expect(markup).toContain("Preview");
     expect(markup).toContain("Compact");
+  });
+
+  it("describes observation-only Cua without promising Mac input or treating idle readiness as input authorization", () => {
+    const markup = render({
+      status: status({
+        availability: { kind: "available", backend: "cua" },
+        capabilities: capabilities({
+          input: false,
+          focus: false,
+          raise: false,
+          ghostCursor: false,
+        }),
+      }),
+    });
+    expect(markup).toContain("Cua 0.28.2");
+    expect(markup).toContain("native desktop input is unavailable");
+    expect(markup).toContain("verified browser runtime");
+    expect(markup).not.toContain("shares your Mac");
+    expect(markup).not.toContain("macOS desktop");
   });
 
   it("keeps the details collapsed until asked for", () => {

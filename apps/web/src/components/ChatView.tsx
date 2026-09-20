@@ -1,5 +1,9 @@
 import { type LegendListRef } from "@legendapp/list/react";
 import {
+  parseComputerInvocation,
+  resolveComputerInvocationMode,
+} from "@synara/shared/computerInvocation";
+import {
   MessageId,
   OrchestrationThreadActivity,
   PROVIDER_DISPLAY_NAMES,
@@ -1303,9 +1307,13 @@ export default function ChatView({
     composerSkills,
     composerMentions,
   });
-  // Computer control follows the Settings switch. Ordinary messages never
-  // attach Computer schemas/instructions unless the switch is on.
-  const enableComputerControl = settings.computerControlEnabled === true;
+  // A command enables only this draft's turn. Settings remains a separate
+  // explicit default; clearing the draft removes request activation.
+  const computerControlMode = resolveComputerInvocationMode({
+    messageText: prompt,
+    enableComputerControl: settings.computerControlEnabled,
+  });
+  const enableComputerControl = computerControlMode !== "off";
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -2515,10 +2523,6 @@ export default function ChatView({
       setMode: setComposerDraftComputerControlMode,
       focusComposer: scheduleComposerFocus,
     });
-  // The denial card switches control on; the composer keeps the plain message.
-  const handleEnableComputerControlFromDenial = useCallback(() => {
-    handleComputerControlModeChange("chat");
-  }, [handleComputerControlModeChange]);
   // External panels (diff headers, file explorer, preview) bump this nonce after
   // inserting a reference so the composer visibly receives the text.
   const composerFocusRequestNonce = useComposerFocusRequestStore(
@@ -3262,6 +3266,7 @@ export default function ChatView({
       modelSelection: selectedModelSelection,
       providerOptions: providerOptionsForDispatch,
       enableComputerControl,
+      computerControlMode,
       computerControlGeneration,
       assistantDeliveryMode,
       runtimeMode,
@@ -3271,6 +3276,7 @@ export default function ChatView({
     [
       assistantDeliveryMode,
       computerControlGeneration,
+      computerControlMode,
       enableComputerControl,
       envMode,
       interactionMode,
@@ -4351,6 +4357,15 @@ export default function ChatView({
     scheduleComposerFocus,
   });
 
+  // A denied task offers the same visible, one-request invocation as the slash menu.
+  const handleEnableComputerControlFromDenial = useCallback(() => {
+    const currentPrompt = composerEditorRef.current?.readSnapshot()?.value ?? promptRef.current;
+    if (!parseComputerInvocation(currentPrompt)) {
+      setComposerPromptValue(`/computer-use ${currentPrompt}`);
+    }
+    handleComputerControlModeChange("request");
+  }, [composerEditorRef, promptRef, setComposerPromptValue, handleComputerControlModeChange]);
+
   const slashEditorActions = useMemo(
     () => ({
       resolveActiveComposerTrigger,
@@ -5087,7 +5102,7 @@ export default function ChatView({
     environmentOverlayVariant === "docked" &&
     settings.autoOpenComputerPane &&
     previewSession?.phase === "live" &&
-    previewLayout?.hasFrame === true &&
+    (previewLayout?.hasFrame === true || previewLayout?.hasVisibleStatus === true) &&
     previewLayout?.floating !== true;
   const previewInsetPx = previewReservesInset
     ? Math.min(previewLayout?.width ?? previewBudgetPx, previewBudgetPx) + 24

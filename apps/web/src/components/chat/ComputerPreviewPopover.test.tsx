@@ -21,6 +21,7 @@ import type {
   ComputerPreviewCardSize,
   ComputerPreviewSession,
 } from "./ComputerPreviewPopover.logic";
+import type { ComputerImageStreamStatus } from "../computer/useComputerImageStream";
 
 vi.mock("~/components/ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 
@@ -31,6 +32,7 @@ const current: {
   tapActive: boolean;
   tapFrameSize: { width: number; height: number } | null;
   stillsStreaming: boolean;
+  streamStatus: ComputerImageStreamStatus | undefined;
   floating: { x: number; y: number } | undefined;
 } = vi.hoisted(() => ({
   session: undefined,
@@ -39,6 +41,7 @@ const current: {
   tapActive: true,
   tapFrameSize: { width: 960, height: 600 },
   stillsStreaming: false,
+  streamStatus: undefined,
   floating: undefined,
 }));
 
@@ -82,7 +85,8 @@ vi.mock("../computer/useComputerPreviewTap", () => ({
 
 vi.mock("../computer/useComputerImageStream", () => ({
   useComputerImageStream: () => ({
-    status: current.stillsStreaming ? { kind: "streaming" } : { kind: "idle" },
+    status:
+      current.streamStatus ?? (current.stillsStreaming ? { kind: "streaming" } : { kind: "idle" }),
     dimensions: null,
   }),
 }));
@@ -139,6 +143,7 @@ function render(input?: {
   /** Tap decoded a frame then went silent: size kept, no longer active. */
   tapQuiet?: boolean;
   stills?: boolean;
+  streamStatus?: ComputerImageStreamStatus;
   size?: ComputerPreviewCardSize;
   maxWidthPx?: number;
   floating?: { x: number; y: number };
@@ -151,6 +156,7 @@ function render(input?: {
   current.tapActive = withFrame && !tapQuiet;
   current.tapFrameSize = withFrame ? { width: 960, height: 600 } : null;
   current.stillsStreaming = input?.stills ?? false;
+  current.streamStatus = input?.streamStatus;
   current.floating = input?.floating;
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderToStaticMarkup(
@@ -171,6 +177,7 @@ afterEach(() => {
   current.tapActive = true;
   current.tapFrameSize = { width: 960, height: 600 };
   current.stillsStreaming = false;
+  current.streamStatus = undefined;
   current.floating = undefined;
 });
 
@@ -226,6 +233,38 @@ describe("ComputerPreviewPopover", () => {
       stills: true,
     });
     expect(markup).toContain("opacity-100");
+  });
+
+  it.each([
+    [
+      { kind: "error", message: "The preview connection failed." },
+      "The preview connection failed.",
+    ],
+    [{ kind: "unsupported" }, "This browser cannot decode desktop frames."],
+  ] as const)(
+    "shows a first-frame %s without waiting for a decoded image",
+    (streamStatus, message) => {
+      const markup = render({
+        session: session("live"),
+        state: threadState(),
+        frame: false,
+        streamStatus,
+      });
+      expect(markup).toContain("scale-100 opacity-100");
+      expect(markup).toContain(message);
+      expect(markup).toContain('role="status"');
+      expect(markup).toContain("<canvas");
+    },
+  );
+
+  it("does not reopen a dismissed preview because its first frame failed", () => {
+    const markup = render({
+      session: session("hidden-for-task"),
+      state: threadState(),
+      frame: false,
+      streamStatus: { kind: "error", message: "The preview connection failed." },
+    });
+    expect(markup).not.toContain("scale-100 opacity-100");
   });
 
   it("shows the waiting state, never a picture, when no window frame exists yet", () => {

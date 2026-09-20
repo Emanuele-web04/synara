@@ -10,6 +10,7 @@ import {
 } from "./workLog";
 import type { ChatMessage } from "./types";
 import { makeActivity } from "./storeTestFixtures";
+import { isComputerToolName } from "./lib/computerToolPresentation";
 
 describe("deriveWorkLogEntries", () => {
   it("keeps started tool entries so pending Cursor calls appear immediately", () => {
@@ -1729,6 +1730,59 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.find((entry) => entry.id === "computer-item-input")?.toolTitle).not.toContain(
       "private value",
     );
+  });
+
+  it("recognizes normalized ACP Computer calls without exposing typed or clipboard values", () => {
+    const activities = [
+      makeActivity({
+        id: "acp-computer-typing",
+        kind: "tool.started",
+        summary: "Tool",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Tool",
+          data: {
+            toolCallId: "acp-typing-call",
+            toolName: "computer_type_text",
+            rawInput: {
+              _toolName: "mcp__synara__computer_type_text",
+              app_name: "Notes",
+              label: "Message",
+              text: "private typed value",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "acp-computer-inspection",
+        kind: "tool.completed",
+        summary: "Tool",
+        payload: {
+          itemType: "dynamic_tool_call",
+          title: "Tool",
+          data: {
+            toolCallId: "acp-inspection-call",
+            toolName: "computer_inspect",
+            rawInput: {
+              toolName: "synara_computer_inspect",
+              tool: "computer_read_clipboard",
+              arguments: {},
+            },
+            rawOutput: { text: "private clipboard value" },
+          },
+        },
+      }),
+    ];
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toMatchObject([
+      { toolName: "computer_type_text", toolTitle: "Type in “Message” in Notes" },
+      { toolName: "computer_inspect", toolTitle: "Read the clipboard" },
+    ]);
+    for (const entry of entries) {
+      expect(isComputerToolName(entry.toolName)).toBe(true);
+      expect(entry.toolTitle).not.toContain("private typed value");
+      expect(entry.toolTitle).not.toContain("private clipboard value");
+    }
   });
 
   it("preserves meaningful provider and progress titles for Computer calls", () => {

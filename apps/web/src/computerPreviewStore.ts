@@ -28,8 +28,8 @@ interface ComputerPreviewStore {
   agentActiveByThreadId: Record<string, boolean | undefined>;
   /**
    * Live layout footprint per thread, published by the mounted card: whether
-   * a real frame has landed (so the rail reserves space only for a visible
-   * card) and the fitted card width (so the content inset matches it).
+   * a real frame or a first-frame error is visible, plus the fitted card width
+   * (so the content inset matches the card).
    */
   previewLayoutByThreadId: Record<string, ComputerPreviewLayout | undefined>;
   /**
@@ -66,6 +66,8 @@ interface ComputerPreviewStore {
 
 export interface ComputerPreviewLayout {
   readonly hasFrame: boolean;
+  /** A first-frame error is visible content too, without claiming a decoded frame. */
+  readonly hasVisibleStatus?: boolean | undefined;
   readonly width: number;
   /** True while the card floats detached; the rail reserves no inset for it. */
   readonly floating?: boolean | undefined;
@@ -155,6 +157,7 @@ export const useComputerPreviewStore = create<ComputerPreviewStore>()((set) => (
       const previous = current.previewLayoutByThreadId[threadId];
       if (
         previous?.hasFrame === layout.hasFrame &&
+        previous?.hasVisibleStatus === layout.hasVisibleStatus &&
         previous?.width === layout.width &&
         previous?.floating === layout.floating
       ) {

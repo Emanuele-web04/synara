@@ -14,7 +14,15 @@ import {
   type ComputerCapabilities,
   type ComputerPermission,
 } from "@synara/contracts";
-import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
+import {
+  COMPUTER_PERMISSION_KINDS,
+  computerPermissionSetupMessage,
+  missingComputerAppSnapPermissions,
+} from "@synara/shared/computerGrants";
+import {
+  computerPermissionSetupSupported,
+  readLocalComputerPermissionBridge,
+} from "~/lib/computerProvisioning";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
@@ -52,6 +60,8 @@ import { settingRowAnchorId } from "~/settingsNavigation";
 import { useAgentCursorDesktopSync } from "./agentCursorDesktopSync";
 import { SettingResetButton, SettingsSegmentedControl } from "./SettingControls";
 import { SettingsCard, SettingsRow, SettingsSectionShell } from "./SettingsPanelPrimitives";
+import { ComputerGettingStarted } from "./ComputerGettingStarted";
+import { ComputerAuditHistorySection } from "./ComputerAuditHistorySection";
 
 /** Stable identity, so the provision hook's toast copy is not rebuilt every render. */
 const EMPTY_PERMISSIONS: readonly ComputerPermission[] = [];
@@ -61,7 +71,7 @@ const BACKEND_DISPLAY_NAMES: Record<string, string> = {
   [COMPUTER_HYPRLAND_BACKEND]: "Hyprland plugin",
   [COMPUTER_NESTED_KWIN_BACKEND]: "Isolated agent desktop (nested KWin)",
   [COMPUTER_MAC_BACKEND]: "macOS desktop",
-  cua: "macOS desktop · Cua 0.28.2",
+  cua: "Cua 0.28.2",
   fake: "Test backend",
 };
 
@@ -173,12 +183,14 @@ export function ComputerSettingsPanel({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // The native permission surface is the AppSnap helper: the same coach that
   // AppSnap's own settings drive, asked about the computer-use grant set.
-  const hasNativePermissionSetup = typeof window !== "undefined" && !!window.desktopBridge?.appSnap;
+  const localPermissionBridge = readLocalComputerPermissionBridge();
+  const hasNativePermissionSetup =
+    localPermissionBridge !== null && computerPermissionSetupSupported(appSnapState);
   // Returning from System Settings must re-pull both the server status and the
   // native grant snapshot — the toggle the user just flipped lives in the
   // second one.
   const refreshPermissionState = useCallback(() => {
-    const bridge = window.desktopBridge?.appSnap;
+    const bridge = readLocalComputerPermissionBridge();
     if (!bridge) return;
     void bridge
       .getState(COMPUTER_PERMISSION_KINDS)
@@ -205,7 +217,7 @@ export function ComputerSettingsPanel({
   });
 
   useEffect(() => {
-    const bridge = window.desktopBridge?.appSnap;
+    const bridge = readLocalComputerPermissionBridge();
     if (!bridge || !active) return;
     let disposed = false;
     const unsubscribe = bridge.onState((state) => {
@@ -227,10 +239,27 @@ export function ComputerSettingsPanel({
    * explains what to do; the attention row below names them, and the native
    * checklist in Advanced is the per-grant walkthrough.
    */
-  const missingPermissions =
-    status?.availability.kind === "permission-required"
-      ? status.availability.missing
+  const nativeMissingPermissions =
+    hasNativePermissionSetup && appSnapState
+      ? missingComputerAppSnapPermissions(appSnapState)
       : EMPTY_PERMISSIONS;
+  const missingPermissions =
+    nativeMissingPermissions.length > 0
+      ? nativeMissingPermissions
+      : status?.availability.kind === "permission-required"
+        ? status.availability.missing
+        : EMPTY_PERMISSIONS;
+  // Idle status is intentionally side-effect-free. Fresh local grant evidence
+  // can reveal setup needs without starting Computer or its input listener.
+  const availability =
+    nativeMissingPermissions.length > 0 && status?.availability.kind === "available"
+      ? {
+          kind: "permission-required" as const,
+          missing: nativeMissingPermissions,
+          buildSignature: "unknown" as const,
+          message: computerPermissionSetupMessage(nativeMissingPermissions, "unknown"),
+        }
+      : status?.availability;
   // The same provision the chat's setup card runs, through the same hook: one
   // call in flight at a time whichever surface started it, and one account of
   // what happened. This surface keeps that account inline rather than as a
@@ -248,7 +277,7 @@ export function ComputerSettingsPanel({
             ? statusQuery.error.message
             : "The server could not be reached.",
       }
-    : resolveComputerAvailabilityView(status?.availability, status?.health);
+    : resolveComputerAvailabilityView(availability, status?.health);
   const backend =
     status?.availability.kind === "available" ? (status.availability.backend ?? null) : null;
   const health = status?.health;
@@ -259,13 +288,15 @@ export function ComputerSettingsPanel({
   // it, and a nested offscreen session never hears the human's keys, so only a
   // visible plugin-backed desktop may promise it.
   const capabilitiesDescription =
-    backend === COMPUTER_MAC_BACKEND || backend === "cua"
-      ? "The agent shares your Mac desktop. An authorized Computer task can switch apps and bring its target window forward. Background input may also affect focus. Stop ends desktop control; the drawn cursor is a visual indicator, not a separate keyboard focus. Pressing the physical Escape key while the agent drives stops its current action, and input resumes on its own."
-      : backend !== null &&
-          COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
-          status?.capabilities.visibleDesktop === true
-        ? `The agent shares the computer described by this backend. Press ${COMPUTER_RELEASE_CONTROL_HOTKEY} at any time to stop it from acting on the desktop, and press it again to let it resume.`
-        : "The agent drives its own seat, so your cursor and focus stay untouched.";
+    backend === "cua" && status?.capabilities.input === false
+      ? "This backend can observe desktop windows, but native desktop input is unavailable. Isolated headless browser actions require a verified browser runtime and an available task-scoped Escape shortcut. Use Stop in the chat to interrupt the task."
+      : backend === COMPUTER_MAC_BACKEND || backend === "cua"
+        ? "The agent shares your Mac desktop and works in the background by default. It can bring a window forward when your task asks to watch. Background input may still affect focus. Use Stop in the chat to interrupt the task. Physical Escape interrupts the current action when Input Monitoring is granted; it does not disable future tasks."
+        : backend !== null &&
+            COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
+            status?.capabilities.visibleDesktop === true
+          ? `The agent shares the computer described by this backend. Press ${COMPUTER_RELEASE_CONTROL_HOTKEY} at any time to stop it from acting on the desktop, and press it again to let it resume.`
+          : "The agent drives its own seat, so your cursor and focus stay untouched.";
   /**
    * Screen capture is granted separately from input on every backend that has a
    * permission model at all, so a desktop can be fully driveable and still
@@ -282,7 +313,7 @@ export function ComputerSettingsPanel({
   const captureBlocked = captureUnavailable && health?.status === "connected";
   // Shared with the chat's setup card, which asks the same question of the same
   // status after pressing the same server-side Set up.
-  const needsSetup = computerStatusNeedsSetup(status);
+  const needsSetup = nativeMissingPermissions.length > 0 || computerStatusNeedsSetup(status);
   // The one counter worth carrying beside the status sentence; a last failure
   // is already the reconnect sentence, so it is not repeated here.
   const healthNotes = [computerReconnectsNote(health)].filter(
@@ -373,7 +404,8 @@ export function ComputerSettingsPanel({
         }
       >
         <p className="px-2 text-ui text-muted-foreground">
-          Let the agent use the desktop in any chat.
+          Enable Computer by default in any chat. Leave this off and use /computer-use for one
+          request without adding Computer tools to ordinary turns.
         </p>
         <SettingsCard>
           {showAttentionRow ? (
@@ -482,6 +514,9 @@ export function ComputerSettingsPanel({
           />
         </SettingsCard>
       </SettingsSectionShell>
+
+      <ComputerGettingStarted appSnapAvailable={hasNativePermissionSetup} />
+      <ComputerAuditHistorySection />
 
       {/* Details stay out of the way until asked for: the per-grant checklist
           the macOS helper drives and what this backend can actually do. */}

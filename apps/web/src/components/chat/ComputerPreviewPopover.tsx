@@ -4,8 +4,8 @@
 // Depends on: computerPreviewStore session machine, computerStateStore thread
 //             state, useComputerImageStream, ComputerPanel.logic helpers.
 //
-// View-only: the card is a pure scaled replica of the driven content — no
-// header, no status text, no badges. Presence is the live indicator. Close
+// View-only: the card follows the driven content, with a compact activity
+// label and a visible error if its first frame cannot arrive. Close
 // lives in a hover/focus-reveal cluster (the composer's stop stays the
 // always-visible safety net). It mounts wherever the owning thread's transcript is on
 // screen and self-hides when that thread has no live preview session. Size is
@@ -158,11 +158,14 @@ function ComputerPreviewPopoverCard(props: {
   if (frameSignal && !hasFrame) {
     setHasFrame(true);
   }
-  // Closed until content exists: invisible and inert, but present for decode.
-  const visuallyOpen = open && hasFrame;
+  // A failed first frame must not hide its own recovery message. Connecting
+  // stays quiet, while an explicit error or unsupported decoder opens the card.
+  const hasVisibleStatus =
+    !hasFrame && (streamStatus.kind === "error" || streamStatus.kind === "unsupported");
+  const visuallyOpen = open && (hasFrame || hasVisibleStatus);
 
   // Publish the live footprint for the rail: the chat reserves gutter space
-  // only for a card that actually has content, at its fitted width.
+  // for a frame or a visible first-frame error, at the card's fitted width.
 
   // Aspect follows the live content: the last decoded frame's own size,
   // latched so a source going quiet (tap silence, stills reconnect, a
@@ -209,15 +212,18 @@ function ComputerPreviewPopoverCard(props: {
   useEffect(() => {
     notePreviewLayout(threadId, {
       hasFrame,
+      hasVisibleStatus,
       width: fitWidth,
       floating: floating !== undefined,
     });
-  }, [notePreviewLayout, threadId, hasFrame, fitWidth, floating]);
+  }, [notePreviewLayout, threadId, hasFrame, hasVisibleStatus, fitWidth, floating]);
   const card = (
     <div
       ref={cardRef}
       role="region"
       aria-label="Computer preview"
+      aria-hidden={visuallyOpen ? undefined : true}
+      inert={!visuallyOpen}
       data-computer-preview-popover={threadId}
       className={cn(
         "group pointer-events-auto flex flex-col overflow-hidden rounded-2xl border border-white/10 bg-popover/95 text-foreground shadow-[0_16px_56px_-16px_rgb(0_0_0/0.5),0_2px_12px_-2px_rgb(0_0_0/0.3)] backdrop-blur-xl",
@@ -337,7 +343,10 @@ function ComputerPreviewViewport(props: {
           into. Once a frame landed, losing the source just holds that frame —
           no blank flash, and no label pasted over a live picture. */}
       {!hasFrame ? (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center">
+        <div
+          className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center"
+          role="status"
+        >
           <ComputerPreviewStreamStatus status={streamStatus} />
         </div>
       ) : null}

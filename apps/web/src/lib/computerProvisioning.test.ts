@@ -3,8 +3,13 @@
 //          settings panel now share.
 // Layer: Web UI logic tests
 
-import type { ComputerProvisionResult, ComputerStatusResult } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import type {
+  ComputerProvisionResult,
+  ComputerStatusResult,
+  DesktopAppSnapState,
+} from "@synara/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 
 import {
   computerProvisionErrorToast,
@@ -12,7 +17,146 @@ import {
   computerProvisionOutcome,
   computerProvisionResultToast,
   computerProvisionStartToast,
+  prepareComputerPermissionGuide,
+  readLocalComputerPermissionBridge,
+  computerPermissionSetupSupported,
 } from "./computerProvisioning";
+
+function grantState(overrides: Partial<DesktopAppSnapState> = {}): DesktopAppSnapState {
+  return {
+    platform: "macos",
+    supported: true,
+    enabled: false,
+    status: "disabled",
+    shortcut: null,
+    accessibilityPermission: "granted",
+    inputMonitoringPermission: "granted",
+    screenRecordingPermission: "granted",
+    message: null,
+    appDisplayName: "Synara",
+    ...overrides,
+  };
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("prepareComputerPermissionGuide", () => {
+  it("does not probe without a native setup bridge", async () => {
+    const getPermissionState = vi.fn();
+    await expect(
+      prepareComputerPermissionGuide({ getPermissionState, isCurrent: () => true }),
+    ).resolves.toBe(true);
+    expect(getPermissionState).not.toHaveBeenCalled();
+  });
+  it("checks real grants before the first task instead of trusting idle server availability", async () => {
+    const getStatus = vi.fn(async () => ({ availability: { kind: "available", backend: "cua" } }));
+    const getPermissionState = vi.fn(async () =>
+      grantState({ inputMonitoringPermission: "denied" }),
+    );
+    const startPermissionSetup = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      prepareComputerPermissionGuide({
+        getPermissionState,
+        startPermissionSetup,
+        isCurrent: () => true,
+      }),
+    ).resolves.toBe(false);
+    expect(getPermissionState).toHaveBeenCalledExactlyOnceWith(COMPUTER_PERMISSION_KINDS);
+    expect(startPermissionSetup).toHaveBeenCalledExactlyOnceWith(COMPUTER_PERMISSION_KINDS);
+    expect(getStatus).not.toHaveBeenCalled();
+  });
+  it("does not open setup after cancellation overtakes the grant check", async () => {
+    let current = true;
+    const startPermissionSetup = vi.fn();
+    const getPermissionState = vi.fn(async () => {
+      current = false;
+      return grantState({ screenRecordingPermission: "denied" });
+    });
+    await expect(
+      prepareComputerPermissionGuide({
+        getPermissionState,
+        startPermissionSetup,
+        isCurrent: () => current,
+      }),
+    ).resolves.toBe(false);
+    expect(getPermissionState).toHaveBeenCalledOnce();
+    expect(startPermissionSetup).not.toHaveBeenCalled();
+  });
+  it("continues without setup when all requested grants exist", async () => {
+    const startPermissionSetup = vi.fn();
+    await expect(
+      prepareComputerPermissionGuide({
+        getPermissionState: async () => grantState(),
+        startPermissionSetup,
+        isCurrent: () => true,
+      }),
+    ).resolves.toBe(true);
+    expect(startPermissionSetup).not.toHaveBeenCalled();
+  });
+  it.each([
+    { platform: "linux" as const, supported: false },
+    { platform: "linux" as const, supported: true },
+    { platform: "macos" as const, supported: false },
+  ])("never offers Mac grants for unsupported state %j", async (overrides) => {
+    const state = grantState({
+      ...overrides,
+      accessibilityPermission: "unknown",
+      inputMonitoringPermission: "unknown",
+      screenRecordingPermission: "unknown",
+    });
+    const startPermissionSetup = vi.fn();
+    expect(computerPermissionSetupSupported(state)).toBe(false);
+    await expect(
+      prepareComputerPermissionGuide({
+        getPermissionState: async () => state,
+        startPermissionSetup,
+        isCurrent: () => true,
+      }),
+    ).resolves.toBe(true);
+    expect(startPermissionSetup).not.toHaveBeenCalled();
+  });
+  it("keeps the draft unsent when the native check fails", async () => {
+    const startPermissionSetup = vi.fn();
+    await expect(
+      prepareComputerPermissionGuide({
+        getPermissionState: async () => {
+          throw new Error("helper unavailable");
+        },
+        startPermissionSetup,
+        isCurrent: () => true,
+      }),
+    ).rejects.toThrow("helper unavailable");
+    expect(startPermissionSetup).not.toHaveBeenCalled();
+  });
+});
+
+describe("local Computer permission ownership", () => {
+  it("does not infer locality for an injected API from an unrelated desktop endpoint", () => {
+    vi.stubGlobal("window", {
+      nativeApi: {},
+      desktopBridge: { getWsUrl: () => "ws://127.0.0.1:4111", appSnap: {} },
+    });
+    expect(readLocalComputerPermissionBridge()).toBeNull();
+  });
+  it.each(["ws://127.0.0.1:4312", "ws://[::1]:4312", "wss://localhost:4312"])(
+    "uses the desktop-owned loopback endpoint %s",
+    (endpoint) => {
+      const appSnap = {};
+      vi.stubGlobal("window", { desktopBridge: { getWsUrl: () => endpoint, appSnap } });
+      expect(readLocalComputerPermissionBridge()).toBe(appSnap);
+    },
+  );
+  it.each([
+    "wss://remote.synara.test",
+    "ws://192.168.1.42:4312",
+    "http://localhost:4312",
+    "invalid",
+    null,
+  ])("does not require local client grants for remote or unknown endpoint %s", (endpoint) => {
+    vi.stubGlobal("window", { desktopBridge: { getWsUrl: () => endpoint, appSnap: {} } });
+    expect(readLocalComputerPermissionBridge()).toBeNull();
+  });
+});
 
 const READY_STATUS: ComputerStatusResult = {
   computerId: "computer-1",

@@ -3277,7 +3277,7 @@ describe("turn dispatch settings", () => {
     });
   });
 
-  it.each(["off", "chat"] as const)(
+  it.each(["off", "request", "chat"] as const)(
     "preserves explicit %s intent across every dispatch projection",
     (computerControlMode) => {
       const settings = {
@@ -3302,7 +3302,7 @@ describe("turn dispatch settings", () => {
     },
   );
 
-  it("normalizes a legacy request to chat on replay", () => {
+  it("preserves queued request intent after the live composer returns to off", () => {
     const legacyQueued = {
       ...QUEUED_CHAT_TURN,
       computerControlMode: "request" as const,
@@ -3310,11 +3310,32 @@ describe("turn dispatch settings", () => {
       computerControlGeneration: 5,
     };
     const replay = resolveQueuedTurnDispatchSettings(
-      { ...LIVE_SETTINGS, enableComputerControl: true },
+      {
+        ...LIVE_SETTINGS,
+        enableComputerControl: false,
+        computerControlMode: "off",
+        computerControlGeneration: 5,
+      },
       legacyQueued,
     );
-    expect(replay.computerControlMode).toBe("chat");
+    expect(replay.computerControlMode).toBe("request");
     expect(replay.enableComputerControl).toBe(true);
+    expect(replay.computerControlGeneration).toBe(5);
+  });
+
+  it("does not re-arm a queued invocation after Stop advanced the generation", () => {
+    const replay = resolveQueuedTurnDispatchSettings(
+      { ...LIVE_SETTINGS, enableComputerControl: false, computerControlGeneration: 6 },
+      {
+        ...QUEUED_CHAT_TURN,
+        prompt: "/computer-use open Calculator",
+        computerControlMode: "request",
+        enableComputerControl: true,
+        computerControlGeneration: 5,
+      },
+    );
+    expect(replay.computerControlMode).toBe("off");
+    expect(replay.enableComputerControl).toBe(false);
     expect(replay.computerControlGeneration).toBe(5);
   });
 

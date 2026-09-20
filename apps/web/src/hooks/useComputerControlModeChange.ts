@@ -3,9 +3,12 @@ import type { ThreadId } from "@synara/contracts";
 import type { ComposerComputerControlMode } from "~/computerControlMode";
 import { readNativeApi } from "~/nativeApi";
 import { toastManager } from "~/components/ui/toast";
-import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
+import {
+  prepareComputerPermissionGuide,
+  readLocalComputerPermissionBridge,
+} from "~/lib/computerProvisioning";
 
-/** Explicit chat activation also enters the same native permission guide as AppSnap. */
+/** Explicit activation also enters the same native permission guide as AppSnap. */
 export function useComputerControlModeChange({
   threadId,
   setMode,
@@ -45,20 +48,19 @@ export function useComputerControlModeChange({
         if (mode !== "off" && !result.enabled && current()) {
           toastManager.add({
             title: "Computer control was reset",
-            description: "Control was reset — turn the Settings switch on again.",
+            description: "Control was reset — invoke /computer-use again for a new task.",
             type: "error",
           });
         }
-        const appSnap = window.desktopBridge?.appSnap;
+        const appSnap = readLocalComputerPermissionBridge();
         if (result.enabled && appSnap) {
           settingUp = true;
-          // Check live state, not a possibly stale composer availability snapshot.
-          const status = await api.computer.getStatus({});
-          if (!current()) return;
-          if (status.availability.kind === "permission-required") {
-            await appSnap.startPermissionSetup(COMPUTER_PERMISSION_KINDS);
-            return; // Keep Settings/its floating guide in front.
-          }
+          const ready = await prepareComputerPermissionGuide({
+            getPermissionState: (kinds) => appSnap.getState(kinds),
+            startPermissionSetup: (kinds) => appSnap.startPermissionSetup(kinds),
+            isCurrent: current,
+          });
+          if (!ready) return; // Keep Settings/its floating guide in front.
         }
         if (current()) focusComposer();
       })().catch((error) => {

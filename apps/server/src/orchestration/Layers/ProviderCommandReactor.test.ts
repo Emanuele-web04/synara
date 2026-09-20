@@ -8261,9 +8261,9 @@ describe("ProviderCommandReactor", () => {
     { switchOn: false as const, after: "none", expected: false },
     { switchOn: true as const, after: "none", expected: true },
     { switchOn: true as const, after: "disable-reenable", expected: false },
-    { switchOn: true as const, after: "ordinary-turn", expected: true },
+    { switchOn: true as const, after: "ordinary-turn", expected: false },
   ])(
-    "ordinary follow-ups inherit live switch intent while switch-off turns do not persist (Computer switch=$switchOn with $after gives goal continuation exposure=$expected)",
+    "only current Settings opt-in survives into goal continuation (Computer switch=$switchOn with $after gives goal continuation exposure=$expected)",
     async ({ switchOn, after, expected }) => {
       const manager = new ComputerManager({ backend: new FakeComputerBackend() });
       const harness = await createHarness({
@@ -8385,6 +8385,79 @@ describe("ProviderCommandReactor", () => {
     expect(sent?.input).toContain('"source":"Preview - report"');
     expect(sent?.input).toContain('"capturedAt":"2026-09-08T12:00:00.000Z"');
     expect(sent?.input?.match(/AppSnap image metadata/g)).toHaveLength(1);
+  });
+
+  it("restarts the provider off → one Computer request → off without persisting consent", async () => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend() });
+    const harness = await createHarness({
+      computerService: {
+        supported: true,
+        availability: { kind: "available", backend: "fake" },
+        manager,
+      },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const createdAt = new Date().toISOString();
+    try {
+      for (const [index, text] of [
+        "Explain the project",
+        "/computer-use open Calculator",
+        "Explain the result",
+      ].entries()) {
+        if (index > 0) {
+          harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
+          await Effect.runPromise(
+            harness.engine.dispatch({
+              type: "thread.session.set",
+              commandId: CommandId.makeUnsafe(`computer-invocation-ready-${index}`),
+              threadId,
+              session: {
+                threadId,
+                status: "ready",
+                providerName: "codex",
+                runtimeMode: "approval-required",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: createdAt,
+              },
+              createdAt,
+            }),
+          );
+        }
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`computer-invocation-${index}`),
+            threadId,
+            message: {
+              messageId: asMessageId(`computer-invocation-message-${index}`),
+              role: "user",
+              text,
+              attachments: [],
+            },
+            enableComputerControl: false,
+            computerControlGeneration: 0,
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt,
+          }),
+        );
+        await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
+        expect(manager.canContinueChatControl(threadId)).toBe(false);
+      }
+      expect(
+        harness.startSession.mock.calls.map(([, input]) => input.enableComputerControl),
+      ).toEqual([false, true, false]);
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("open Calculator");
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).not.toContain("/computer-use");
+      expect(
+        (await readHarnessThread(harness))?.messages.find(
+          (message) => message.id === asMessageId("computer-invocation-message-1"),
+        )?.text,
+      ).toBe("/computer-use open Calculator");
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("a frozen switch-off turn records no durable intent for the next ordinary turn", async () => {

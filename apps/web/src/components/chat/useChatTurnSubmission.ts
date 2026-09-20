@@ -1,4 +1,9 @@
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
+import { resolveComputerInvocationMode } from "@synara/shared/computerInvocation";
+import {
+  prepareComputerPermissionGuide,
+  readLocalComputerPermissionBridge,
+} from "~/lib/computerProvisioning";
 import { useCallback } from "react";
 import {
   filterPromptProviderMentionReferences,
@@ -319,7 +324,7 @@ export function useChatTurnSubmission({
         return lateSendHandlers.advanceActivePendingUserInput(answerOverrides);
       }
       const queuedChatTurn = queuedTurn ?? null;
-      const dispatchSettings = resolveQueuedTurnDispatchSettings(
+      let dispatchSettings = resolveQueuedTurnDispatchSettings(
         turnDispatchSettings,
         queuedChatTurn,
       );
@@ -328,6 +333,19 @@ export function useChatTurnSubmission({
         queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
       let promptForSend =
         queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
+      if (queuedChatTurn === null) {
+        // Read the live editor snapshot, not an earlier React render. A queued
+        // command already froze its mode and generation and must not be inferred again.
+        const mode = resolveComputerInvocationMode({
+          messageText: promptForSend,
+          enableComputerControl: settings.computerControlEnabled,
+        });
+        dispatchSettings = {
+          ...dispatchSettings,
+          computerControlMode: mode,
+          enableComputerControl: mode !== "off",
+        };
+      }
       let composerImagesForSend =
         queuedChatTurn?.images ??
         useComposerDraftStore.getState().draftsByThreadId[activeThread.id]?.images ??
@@ -537,6 +555,36 @@ export function useChatTurnSubmission({
         if (handled) return true;
       }
       if (hasPendingCacheReview()) return false;
+      if (dispatchSettings.computerControlMode === "request") {
+        const appSnap = readLocalComputerPermissionBridge();
+        const activeThreadBeforeCheck = activeThreadIdRef.current;
+        const draftBeforeCheck = promptRef.current;
+        sendPreflightInFlightRef.current = true;
+        const ready = await prepareComputerPermissionGuide({
+          ...(appSnap
+            ? {
+                getPermissionState: appSnap.getState,
+                startPermissionSetup: appSnap.startPermissionSetup,
+              }
+            : {}),
+          isCurrent: () =>
+            activeThreadIdRef.current === activeThreadBeforeCheck &&
+            computerControlChangeSequence.current === computerControlSequenceForSend &&
+            (queuedChatTurn !== null || promptRef.current === draftBeforeCheck),
+        })
+          .catch((error) => {
+            toastManager.add({
+              type: "error",
+              title: "Computer permission setup could not start",
+              description: String(error),
+            });
+            return false;
+          })
+          .finally(() => {
+            sendPreflightInFlightRef.current = false;
+          });
+        if (!ready) return false;
+      }
       sendPreflightInFlightRef.current = true;
       const sendProviderAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: selectedModelSelectionForSend.provider,
@@ -846,7 +894,7 @@ export function useChatTurnSubmission({
         nextAssociatedWorktreePath,
         nextAssociatedWorktreeBranch,
         nextAssociatedWorktreeRef,
-        turnDispatchSettings,
+        turnDispatchSettings: dispatchSettings,
         computerControlSequenceForSend,
         api,
         targetProjectCwdForSend,

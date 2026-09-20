@@ -14,7 +14,7 @@
 
 import type { ComputerWindow } from "@synara/contracts";
 
-/** The gateway's desktop tools, and the verb each one performs. */
+/** The gateway's Computer tools, and the verb each one performs. */
 export const COMPUTER_TOOL_TITLES = {
   computer_screenshot: "Take a screenshot",
   computer_get_state: "Read the screen",
@@ -47,6 +47,17 @@ export const COMPUTER_TOOL_TITLES = {
   computer_write_clipboard: "Write to the clipboard",
   computer_paste: "Paste text",
   computer_run: "Run a sequence",
+  computer_inspect: "Inspect the computer",
+  computer_browser_state: "Read the browser page",
+  computer_browser_prepare: "Prepare a browser",
+  computer_browser_navigate: "Open a browser page",
+  computer_browser_click: "Click in the browser",
+  computer_browser_type: "Type in a browser field",
+  computer_browser_dialog: "Handle a browser dialog",
+  computer_browser_upload: "Attach files in the browser",
+  computer_browser_download: "Download a file",
+  computer_browser_pointer: "Use the pointer in the browser",
+  computer_browser_press: "Press Enter in the browser",
 } as const;
 
 export type ComputerToolName = keyof typeof COMPUTER_TOOL_TITLES;
@@ -97,24 +108,53 @@ export function describeComputerToolCall(input: {
   const tool = computerToolName(input.toolName);
   if (tool === null) return null;
   const args = input.args ?? {};
+  if (tool === "computer_inspect") {
+    const selectedTool = readString(args.tool);
+    if (
+      selectedTool === "computer_read_clipboard" ||
+      selectedTool === "computer_zoom" ||
+      selectedTool === "computer_get_accessibility_tree" ||
+      selectedTool === "computer_get_cursor_position"
+    ) {
+      const description = describeComputerToolCall({
+        toolName: selectedTool,
+        args: readRecord(args.arguments) ?? undefined,
+        windows: input.windows,
+      })!;
+      return {
+        ...description,
+        tool,
+        params: selectedTool === "computer_read_clipboard" ? [] : description.params,
+      };
+    }
+  }
+  if (tool.startsWith("computer_browser_")) {
+    return {
+      tool,
+      summary: describeBrowserAction(tool, args),
+      params: describeParams(tool, args, input.windows),
+    };
+  }
   // The visibility pair's flag is the verb's direction: an approval that reads
   // "Minimize or restore" makes the user guess which half is being asked for.
   const verb =
-    tool === "computer_launch_app"
-      ? "Open"
-      : tool === "computer_activate_window"
-        ? `Switch to ${
-            readString(args.app_name) ??
-            readString(args.application) ??
-            readString(args.app) ??
-            resolveWindow(args.window_id, input.windows) ??
-            ""
-          }`.trimEnd()
-        : ((tool === "computer_set_window_minimized"
-            ? directionVerb(args.minimized, "Minimize a window", "Restore a window")
-            : tool === "computer_set_app_visibility"
-              ? directionVerb(args.hidden, "Hide an app", "Unhide an app")
-              : undefined) ?? COMPUTER_TOOL_TITLES[tool]);
+    tool === "computer_press_key" && readString(args.key)
+      ? "Press"
+      : tool === "computer_launch_app"
+        ? "Open"
+        : tool === "computer_activate_window"
+          ? `Switch to ${
+              readString(args.app_name) ??
+              readString(args.application) ??
+              readString(args.app) ??
+              resolveWindow(args.window_id, input.windows) ??
+              ""
+            }`.trimEnd()
+          : ((tool === "computer_set_window_minimized"
+              ? directionVerb(args.minimized, "Minimize a window", "Restore a window")
+              : tool === "computer_set_app_visibility"
+                ? directionVerb(args.hidden, "Hide an app", "Unhide an app")
+                : undefined) ?? COMPUTER_TOOL_TITLES[tool]);
   const where =
     tool === "computer_launch_app" || tool === "computer_activate_window"
       ? ""
@@ -216,7 +256,7 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
   }
   if (tool === "computer_press_key") {
     const key = readString(args.key);
-    return key === null ? "" : `${key}`;
+    return key === null ? "" : keyboardShortcut(key);
   }
   if (tool === "computer_scroll") {
     const dx = readNumber(args.delta_x) ?? 0;
@@ -226,7 +266,7 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
     return "";
   }
   if (tool === "computer_launch_app") {
-    const app = readString(args.app) ?? readString(args.name) ?? readString(args.bundle_id);
+    const app = appName(args.app) ?? appName(args.name) ?? appName(args.bundle_id);
     return app ?? "";
   }
   if (tool === "computer_invoke_menu") {
@@ -241,6 +281,69 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
       : `for ${durationMs} ms`;
   }
   return "";
+}
+
+function describeBrowserAction(
+  tool: ComputerToolName,
+  args: Readonly<Record<string, unknown>>,
+): string {
+  if (tool === "computer_browser_prepare" && args.allow_launch === true) {
+    return args.windowed === true
+      ? "Open an isolated browser window"
+      : "Open an isolated browser in the background";
+  }
+  if (tool === "computer_browser_navigate") {
+    const site = browserSite(args.url);
+    if (site) return `Open ${site} in the browser`;
+  }
+  if (tool === "computer_browser_type" && args.replace === true) {
+    return args.text === "" ? "Clear a browser field" : "Replace text in a browser field";
+  }
+  if (tool === "computer_browser_dialog") {
+    const verbs: Record<string, string> = { inspect: "Read", accept: "Accept", dismiss: "Dismiss" };
+    const verb =
+      typeof args.action === "string" && Object.hasOwn(verbs, args.action)
+        ? verbs[args.action]
+        : undefined;
+    if (verb) return `${verb} a browser dialog`;
+  }
+  if (tool === "computer_browser_upload") {
+    const count = readStringArray(args.files).length;
+    if (count > 0) return `Attach ${count === 1 ? "a file" : `${count} files`} in the browser`;
+  }
+  if (tool === "computer_browser_pointer") {
+    const actions: Record<string, string> = {
+      hover: "Hover over a browser control",
+      right_click: "Right-click in the browser",
+      double_click: "Double-click in the browser",
+      drag: "Drag in the browser",
+    };
+    if (args.action === "scroll") {
+      return ["Scroll", describePayload("computer_scroll", args), "in the browser"]
+        .filter(Boolean)
+        .join(" ");
+    }
+    const action =
+      typeof args.action === "string" && Object.hasOwn(actions, args.action)
+        ? actions[args.action]
+        : undefined;
+    if (action) return action;
+  }
+  return COMPUTER_TOOL_TITLES[tool];
+}
+
+/** A page's domain is useful context; credentials, paths and query values are not a tool title. */
+function browserSite(value: unknown): string | null {
+  const url = readString(value);
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? truncate(parsed.hostname, 80)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function appName(value: unknown): string | null {
@@ -282,6 +385,13 @@ const KEY_NAMES: Readonly<Record<string, string>> = {
 
 function keyName(key: string): string {
   return KEY_NAMES[key.toLowerCase()] ?? (key.length === 1 ? key.toUpperCase() : key);
+}
+
+function keyboardShortcut(value: string): string {
+  return value
+    .split(/\+(?=.)/)
+    .map((key) => keyName(key.trim()))
+    .join(" + ");
 }
 
 /**
@@ -331,7 +441,7 @@ function describeParams(
     });
   }
   const key = readString(args.key);
-  if (key) rows.push({ name: "Key", value: keyName(key) });
+  if (key) rows.push({ name: "Key", value: keyboardShortcut(key) });
   const keys = readStringArray(args.keys);
   if (keys.length > 0) rows.push({ name: "Shortcut", value: keys.map(keyName).join(" + ") });
   const dx = readNumber(args.delta_x);
@@ -349,11 +459,23 @@ function describeParams(
     }
   }
   const action = readString(args.action);
-  if (action) rows.push({ name: "Action", value: action });
+  if (action && !tool.startsWith("computer_browser_")) rows.push({ name: "Action", value: action });
   const topic = readString(args.topic);
   if (topic) rows.push({ name: "Topic", value: topic });
   const app = readString(args.app) ?? readString(args.name) ?? readString(args.bundle_id);
   if (app) rows.push({ name: "App", value: app });
+  if (tool.startsWith("computer_browser_")) {
+    const site = browserSite(args.url);
+    if (site) rows.push({ name: "Website", value: site });
+    const files = readStringArray(args.files);
+    if (files.length > 0) rows.push({ name: "Files", value: `${files.length}` });
+    if (tool === "computer_browser_prepare" && args.allow_launch === true) {
+      rows.push({
+        name: "Browser",
+        value: args.windowed === true ? "Visible window" : "Background",
+      });
+    }
+  }
   // The off-screen flag changes what the launch does to the user's screen, so
   // the card shows it rather than letting "Open an app" read as ordinary.
   if (tool === "computer_launch_app" && args.hidden === true) {
@@ -373,7 +495,17 @@ function describeParams(
       .filter((kind): kind is string => kind !== null);
     rows.push({
       name: "Steps",
-      value: truncate(kinds.length > 0 ? kinds.join(" → ") : `${args.steps.length}`, 200),
+      value: truncate(
+        kinds.length > 0
+          ? kinds
+              .map((kind) => {
+                const name = computerToolName(`computer_${kind}`);
+                return name ? COMPUTER_TOOL_TITLES[name] : "Action";
+              })
+              .join(" → ")
+          : `${args.steps.length}`,
+        200,
+      ),
     });
   }
   return rows;

@@ -23,7 +23,7 @@ const SAFARI: ComputerWindow = {
 } as unknown as ComputerWindow;
 
 describe("computerToolName", () => {
-  it("covers every native desktop tool advertised by the gateway", () => {
+  it("covers native desktop and browser tools advertised by the gateway", () => {
     expect(Object.keys(COMPUTER_TOOL_TITLES)).toEqual([
       "computer_screenshot",
       "computer_get_state",
@@ -56,6 +56,17 @@ describe("computerToolName", () => {
       "computer_write_clipboard",
       "computer_paste",
       "computer_run",
+      "computer_inspect",
+      "computer_browser_state",
+      "computer_browser_prepare",
+      "computer_browser_navigate",
+      "computer_browser_click",
+      "computer_browser_type",
+      "computer_browser_dialog",
+      "computer_browser_upload",
+      "computer_browser_download",
+      "computer_browser_pointer",
+      "computer_browser_press",
     ]);
   });
 
@@ -141,7 +152,7 @@ describe("describeComputerToolCall", () => {
       },
     });
     expect(run?.summary).toBe("Run a sequence");
-    expect(run?.params).toEqual([{ name: "Steps", value: "click → type_text → press_key" }]);
+    expect(run?.params).toEqual([{ name: "Steps", value: "Click → Type → Press a key" }]);
   });
 
   it("gives a scroll a direction and a key press its chord", () => {
@@ -151,7 +162,7 @@ describe("describeComputerToolCall", () => {
     // Hotkeys folded into press_key: a chord arrives as the `key` string.
     expect(
       describeComputerToolCall({ toolName: "computer_press_key", args: { key: "cmd+s" } })?.summary,
-    ).toBe("Press a key cmd+s");
+    ).toBe("Press Command + S");
   });
 
   it("renders a coordinate pair as one row, because it is one fact", () => {
@@ -299,5 +310,88 @@ describe("describeComputerToolCall", () => {
 
   it("returns null for anything that is not a desktop tool", () => {
     expect(describeComputerToolCall({ toolName: "Bash", args: { command: "ls" } })).toBeNull();
+  });
+
+  it("names launched apps and keyboard shortcuts without wire identifiers", () => {
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_launch_app",
+        args: { bundle_id: "com.apple.calculator" },
+      })?.summary,
+    ).toBe("Open Calculator");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_press_key",
+        args: { key: "ctrl+shift+enter" },
+      })?.summary,
+    ).toBe("Press Control + Shift + Enter");
+    expect(
+      describeComputerToolCall({ toolName: "computer_press_key", args: { key: "cmd++" } })?.summary,
+    ).toBe("Press Command + +");
+  });
+
+  it.each([
+    ["state", {}, "Read the browser page"],
+    ["prepare", { allow_launch: true }, "Open an isolated browser in the background"],
+    ["prepare", { allow_launch: true, windowed: true }, "Open an isolated browser window"],
+    [
+      "navigate",
+      { url: "https://user:secret@example.com/private?token=secret" },
+      "Open example.com in the browser",
+    ],
+    ["click", { ref: "e123", target_id: "bt-1" }, "Click in the browser"],
+    ["type", { text: "secret", replace: true }, "Replace text in a browser field"],
+    ["type", { text: "", replace: true }, "Clear a browser field"],
+    ["dialog", { action: "accept", prompt_text: "secret" }, "Accept a browser dialog"],
+    ["dialog", { action: "dismiss" }, "Dismiss a browser dialog"],
+    ["upload", { files: ["/private/a", "/private/b"] }, "Attach 2 files in the browser"],
+    ["download", { destination_root: "/private/downloads" }, "Download a file"],
+    ["pointer", { action: "right_click" }, "Right-click in the browser"],
+    ["pointer", { action: "scroll", delta_y: -100 }, "Scroll up in the browser"],
+    ["press", { ref: "e123" }, "Press Enter in the browser"],
+  ])("describes browser %s without exposing private payloads", (name, args, expected) => {
+    const result = describeComputerToolCall({
+      toolName: `mcp__synara__computer_browser_${name}`,
+      args,
+    });
+    expect(result?.summary).toBe(expected);
+    expect(result?.summary).not.toMatch(/secret|e123|bt-1|private/);
+  });
+
+  it("uses safe generic browser labels for unknown actions and invalid URLs", () => {
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_browser_pointer",
+        args: { action: "__proto__" },
+      })?.summary,
+    ).toBe("Use the pointer in the browser");
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_browser_navigate",
+        args: { url: "not a URL with secret" },
+      })?.summary,
+    ).toBe("Open a browser page");
+  });
+
+  it("describes inspect through its selected read without exposing clipboard values", () => {
+    const zoom = describeComputerToolCall({
+      toolName: "computer_inspect",
+      args: { tool: "computer_zoom", arguments: { window_id: "win-7", x: 10, y: 20 } },
+      windows: [SAFARI],
+    });
+    expect(zoom?.tool).toBe("computer_inspect");
+    expect(zoom?.summary).toBe("Zoom into a window at (10, 20) in Safari — Google");
+    const clipboard = describeComputerToolCall({
+      toolName: "computer_inspect",
+      args: { tool: "computer_read_clipboard", arguments: { text: "synthetic-secret" } },
+    });
+    expect(clipboard?.summary).toBe("Read the clipboard");
+    expect(clipboard?.params).toEqual([]);
+    expect(
+      describeComputerToolCall({
+        toolName: "computer_inspect",
+        args: { tool: "computer_inspect", arguments: {} },
+      })?.summary,
+    ).toBe("Inspect the computer");
   });
 });

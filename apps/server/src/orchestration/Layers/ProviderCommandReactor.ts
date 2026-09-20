@@ -1,5 +1,6 @@
 import { appendAppSnapPromptContext } from "../../provider/appSnapPromptContext.ts";
 import { computerActivationMetadata } from "../../computer/computerActivation.ts";
+import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
 import { ComputerService } from "../../computer/Services/ComputerService";
 import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
@@ -2226,16 +2227,25 @@ const make = Effect.gen(function* () {
     const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
+    const computerInvocation =
+      input.dispatchOrigin === undefined || input.dispatchOrigin === "user"
+        ? parseComputerInvocation(input.messageText)
+        : null;
+    // Synara owns this command. Keep it in durable user text for provenance,
+    // but do not ask the provider to interpret a native slash command.
+    const authoredMessageText = computerInvocation
+      ? computerInvocation.prompt || "Use Synara Computer for this task."
+      : input.messageText;
     const threadMentionProjection = yield* resolveThreadMentionPromptProjection({
       mentions: input.mentions,
       snapshotQuery: projectionSnapshotQuery,
       maxTotalContextChars: availableThreadMentionContextChars(
-        input.messageText,
+        authoredMessageText,
         providerPromptOverheadChars,
       ),
     });
     const messageText = appendThreadMentionContextBlocks({
-      text: input.messageText,
+      text: authoredMessageText,
       contextBlocks: threadMentionProjection.contextBlocks,
     });
     const mentionContextSuffix = threadMentionContextSuffix(threadMentionProjection.contextBlocks);
@@ -2328,37 +2338,28 @@ const make = Effect.gen(function* () {
       return;
     }
     const activation = computerActivationMetadata(input);
-    // The Settings switch is the only consent. A dispatch-path switch-off is
-    // the composer's resolved default on every ordinary turn (the composer
-    // sends the switch on each turn and carries no other intent signal), so it
-    // is indistinguishable from an explicit switch-off on the wire and must
-    // never clear durable intent: admitControl("off") would wipe chatGeneration
-    // via recordChatIntent(false). Ordinary switch-off turns inherit the live
-    // chat intent instead; only explicit offs clear, through Stop
-    // (interruptProviderTurn) and the revoke/disable paths, never here. A
-    // switch-on turn admits durable chat intent when the generation gate
-    // allows it; a stale generation stays off for that turn.
-    const switchOn = input.enableComputerControl === true;
+    // Every new user turn owns its exposure: explicit Settings opt-in is chat
+    // mode, /computer-use is request mode, and an ordinary turn is off. Native
+    // steering keeps the current turn's catalog; installing Computer mid-turn
+    // uses the existing interrupt-and-queue boundary below.
+    const requestedMode = activation.computerControlMode;
     const generation = activation.computerControlGeneration;
     const enableComputerControl = Option.isNone(computerService)
       ? activation.enableComputerControl
       : input.turnKind === "goal-continuation"
         ? computerService.value.manager.canContinueChatControl(input.threadId)
-        : input.dispatchMode === "steer" && !switchOn
-          ? false // A switch-off steer does not change the live turn's intent.
-          : switchOn
-            ? yield* Effect.promise(() =>
-                computerService.value.manager.admitControl(
-                  input.threadId,
-                  "chat",
-                  generation,
-                  false,
-                ),
-              )
-            : computerService.value.manager.canContinueChatControl(input.threadId);
+        : input.dispatchMode === "steer" && requestedMode === "off"
+          ? false // Ordinary steering does not change the active turn's intent.
+          : yield* Effect.promise(() =>
+              computerService.value.manager.admitControl(
+                input.threadId,
+                requestedMode,
+                generation,
+                requestedMode === "request" && computerInvocation !== null,
+              ),
+            );
     yield* Effect.logDebug("provider command reactor computer inputs", {
       threadId: input.threadId,
-      switchOn,
       mode: activation.computerControlMode,
       generation,
       enableComputerControl,
@@ -2497,8 +2498,8 @@ const make = Effect.gen(function* () {
     // text below still counts the suffix, keeping the total under the provider
     // input limit regardless of where the suffix sits.
     const boundaryMessageText = thread.sidechatSourceThreadId
-      ? `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${input.messageText}\n</latest_user_message>`
-      : input.messageText;
+      ? `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${authoredMessageText}\n</latest_user_message>`
+      : authoredMessageText;
     const bootstrapBudgetMessageText = `${boundaryMessageText}${mentionContextSuffix}`;
     const shouldBootstrapHandoff =
       thread.handoff?.bootstrapStatus === "pending" &&

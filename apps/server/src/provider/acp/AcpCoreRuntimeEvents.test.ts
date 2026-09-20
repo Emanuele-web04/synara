@@ -10,8 +10,72 @@ import {
   makeAcpToolCallEvent,
   stampAcpRuntimeEventLifecycleGeneration,
 } from "./AcpCoreRuntimeEvents.ts";
+import { mergeToolCallState, parseSessionUpdateEvent } from "./AcpRuntimeModel.ts";
 
 describe("AcpCoreRuntimeEvents", () => {
+  it.each(["cursor", "droid", "grok", "devin"] as const)(
+    "preserves Computer identity through %s start, update and sparse completion events",
+    (provider) => {
+      const rawInput = {
+        _toolName: "mcp__synara__computer_inspect",
+        tool: "computer_read_clipboard",
+        arguments: {},
+      };
+      const started = parseSessionUpdateEvent({
+        sessionId: "computer-session",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "computer-call",
+          title: "Tool",
+          kind: "other",
+          status: "pending",
+          rawInput,
+        },
+      }).events[0];
+      expect(started?._tag).toBe("ToolCallUpdated");
+      if (started?._tag !== "ToolCallUpdated") throw new Error("Expected Computer tool start");
+      let state = started.toolCall;
+      for (const status of ["pending", "in_progress", "completed"] as const) {
+        if (status !== "pending") {
+          const updated = parseSessionUpdateEvent({
+            sessionId: "computer-session",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "computer-call",
+              status,
+              ...(status === "completed" ? { rawOutput: { text: "private clipboard value" } } : {}),
+            },
+          }).events[0];
+          expect(updated?._tag).toBe("ToolCallUpdated");
+          if (updated?._tag !== "ToolCallUpdated") throw new Error("Expected Computer tool update");
+          state = mergeToolCallState(state, updated.toolCall);
+        }
+        const event = makeAcpToolCallEvent({
+          stamp: { eventId: `event-${status}` as never, createdAt: "2026-09-20T00:00:00.000Z" },
+          provider,
+          threadId: "thread-computer" as never,
+          turnId: TurnId.makeUnsafe("turn-computer"),
+          toolCall: state,
+          rawPayload: {},
+        });
+        expect(event).toMatchObject({
+          provider,
+          type:
+            status === "pending"
+              ? "item.started"
+              : status === "completed"
+                ? "item.completed"
+                : "item.updated",
+          payload: {
+            itemType: "dynamic_tool_call",
+            data: { toolName: "computer_inspect", rawInput },
+          },
+        });
+        expect(state.title).not.toContain("private clipboard value");
+      }
+    },
+  );
+
   it("stamps one captured lifecycle generation without mutating legacy events", () => {
     const event = makeAcpContentDeltaEvent({
       stamp: { eventId: "event-generation" as never, createdAt: "2026-07-14T00:00:00.000Z" },

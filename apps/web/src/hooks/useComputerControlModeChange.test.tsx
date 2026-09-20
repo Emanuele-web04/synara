@@ -1,4 +1,4 @@
-import { ThreadId, type ComputerStatusResult } from "@synara/contracts";
+import { ThreadId, type DesktopAppSnapState } from "@synara/contracts";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,9 +13,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function grantState(overrides: Partial<DesktopAppSnapState> = {}): DesktopAppSnapState {
+  return {
+    platform: "macos",
+    supported: true,
+    enabled: false,
+    status: "disabled",
+    shortcut: null,
+    accessibilityPermission: "granted",
+    inputMonitoringPermission: "granted",
+    screenRecordingPermission: "granted",
+    message: null,
+    appDisplayName: "Synara",
+    ...overrides,
+  };
+}
+
 function fixture() {
-  const permissions = { startPermissionSetup: vi.fn(async () => {}) };
-  vi.stubGlobal("window", { desktopBridge: { appSnap: permissions } });
+  const permissions = {
+    getState: vi.fn(async () => grantState({ accessibilityPermission: "denied" })),
+    startPermissionSetup: vi.fn(async () => {}),
+  };
+  vi.stubGlobal("window", {
+    desktopBridge: { getWsUrl: () => "ws://127.0.0.1:4111", appSnap: permissions },
+  });
   const setMode = vi.fn();
   const focusComposer = vi.fn();
   let change!: ReturnType<typeof useComputerControlModeChange>["change"];
@@ -51,12 +72,13 @@ describe("Computer activation permission guide", () => {
       );
       expect(f.setMode).toHaveBeenCalledWith("test", mode, { revokeQueued: false, generation: 4 });
       expect(f.focusComposer).not.toHaveBeenCalled();
+      expect(api.computer.getStatus).not.toHaveBeenCalled();
     },
   );
 
   it("skips the guide and prompts when grants already exist", async () => {
     const f = fixture();
-    api.computer.getStatus.mockResolvedValue({ availability: { kind: "available" } });
+    f.permissions.getState.mockResolvedValue(grantState());
     f.change("request");
     await vi.waitFor(() => expect(f.focusComposer).toHaveBeenCalledOnce());
     expect(f.permissions.startPermissionSetup).not.toHaveBeenCalled();
@@ -64,15 +86,15 @@ describe("Computer activation permission guide", () => {
 
   it("does not reopen setup after Off overtakes a permission check", async () => {
     const f = fixture();
-    let resolve!: (status: Partial<ComputerStatusResult>) => void;
-    api.computer.getStatus.mockImplementationOnce(
+    let resolve!: (state: DesktopAppSnapState) => void;
+    f.permissions.getState.mockImplementationOnce(
       () =>
         new Promise((done) => {
           resolve = done;
         }),
     );
     f.change("request");
-    await vi.waitFor(() => expect(api.computer.getStatus).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(f.permissions.getState).toHaveBeenCalledOnce());
     f.change("off");
     await vi.waitFor(() =>
       expect(f.setMode).toHaveBeenLastCalledWith("test", "off", {
@@ -80,14 +102,7 @@ describe("Computer activation permission guide", () => {
         generation: 4,
       }),
     );
-    resolve({
-      availability: {
-        kind: "permission-required",
-        missing: ["accessibility"],
-        message: "Needs access",
-        buildSignature: "adhoc",
-      },
-    });
+    resolve(grantState({ accessibilityPermission: "denied" }));
     await Promise.resolve();
     await Promise.resolve();
     expect(f.permissions.startPermissionSetup).not.toHaveBeenCalled();

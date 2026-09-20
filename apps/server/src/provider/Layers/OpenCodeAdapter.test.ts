@@ -838,7 +838,7 @@ describe("OpenCode host policy delivery", () => {
             ...firstCursor,
             harnessPolicyDelivery: {
               ...firstCursor.harnessPolicyDelivery,
-              policyVersion: "stale-policy-version",
+              policyVersion: "2026-09-03.1",
             },
           },
         });

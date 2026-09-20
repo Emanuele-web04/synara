@@ -154,7 +154,7 @@ function editAndResendCommand(enableComputerControl?: boolean) {
 
 describe("decider computer-control pass-through", () => {
   it.each([false, true])(
-    "ignores slash text and follows the switch instead (queued=%s)",
+    "freezes a deliberate Computer invocation for this turn (queued=%s)",
     async (queued) => {
       const command = turnStartCommand();
       const events = await decide(
@@ -168,8 +168,8 @@ describe("decider computer-control pass-through", () => {
       expect(
         payloadOf(events, queued ? "thread.turn-queued" : "thread.turn-start-requested"),
       ).toMatchObject({
-        computerControlMode: "off",
-        enableComputerControl: false,
+        computerControlMode: "request",
+        enableComputerControl: true,
         computerControlGeneration: 7,
       });
     },
@@ -189,12 +189,44 @@ describe("decider computer-control pass-through", () => {
         makeReadModel(),
       );
       expect(payloadOf(events, "thread.turn-start-requested")).toMatchObject({
-        computerControlMode: enableComputerControl ? "chat" : "off",
-        enableComputerControl,
+        computerControlMode: enableComputerControl ? "chat" : "request",
+        enableComputerControl: true,
         computerControlGeneration: 7,
       });
     },
   );
+
+  it.each(["request", "off"] as const)(
+    "does not reinterpret frozen %s queue metadata",
+    async (computerControlMode) => {
+      const events = await decide(
+        { ...dispatchQueuedCommand(true), computerControlMode, computerControlGeneration: 9 },
+        makeReadModel({
+          messages: [{ ...tailUserMessage(), text: "/computer-use open Calculator" }],
+        }),
+      );
+      expect(payloadOf(events, "thread.turn-start-requested")).toMatchObject({
+        computerControlMode,
+        enableComputerControl: computerControlMode !== "off",
+        computerControlGeneration: 9,
+      });
+    },
+  );
+
+  it("resolves a fresh edit without inheriting a prior invocation", async () => {
+    for (const [text, expectedMode] of [
+      ["/computer-use open Calculator", "request"],
+      ["Explain the result", "off"],
+    ] as const) {
+      const events = await decide(
+        { ...editAndResendCommand(true), computerControlMode: "request", text },
+        makeReadModel({ messages: [tailUserMessage()] }),
+      );
+      expect(payloadOf(events, "thread.message-edit-resend-requested").computerControlMode).toBe(
+        expectedMode,
+      );
+    }
+  });
 
   it.each(["agent", "automation"] as const)(
     "does not infer consent from a %s message",

@@ -248,16 +248,13 @@ export function useChatQueuedTurns({
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
       // Restore the frozen switch plus its revocation generation.
-      const restoredComputerEnabled =
-        resolveComputerControlMode(
-          queuedTurn.computerControlMode,
-          queuedTurn.enableComputerControl,
-        ) !== "off";
-      setComposerDraftComputerControlMode(
-        activeThread.id,
-        restoredComputerEnabled ? "chat" : "off",
-        { generation: queuedTurn.computerControlGeneration ?? 0 },
+      const restoredComputerMode = resolveComputerControlMode(
+        queuedTurn.computerControlMode,
+        queuedTurn.enableComputerControl,
       );
+      setComposerDraftComputerControlMode(activeThread.id, restoredComputerMode, {
+        generation: queuedTurn.computerControlGeneration ?? 0,
+      });
       setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
       scheduleComposerFocus();

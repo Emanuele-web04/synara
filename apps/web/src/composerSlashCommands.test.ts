@@ -35,7 +35,7 @@ describe("composerSlashCommands", () => {
     "pi",
     "antigravity",
   ] as const)(
-    "does not offer a Computer slash invocation for %s, even with a native name collision",
+    "offers one Synara Computer invocation for %s despite a native name collision",
     (provider) => {
       const commands = getAvailableComposerSlashCommands({
         provider,
@@ -47,12 +47,13 @@ describe("composerSlashCommands", () => {
         canOfferExportCommand: false,
         providerNativeCommandNames: ["computer-use"],
       });
-      expect(commands.filter((command) => (command as string) === "computer-use")).toHaveLength(0);
-      expect(isBuiltInComposerSlashCommand("computer-use")).toBe(false);
+      expect(commands.filter((command) => command === "computer-use")).toHaveLength(1);
+      expect(shouldHideProviderNativeCommandFromComposerMenu(provider, "computer-use")).toBe(true);
+      expect(isBuiltInComposerSlashCommand("computer-use")).toBe(true);
     },
   );
   it("recognizes built-in slash commands", () => {
-    expect(isBuiltInComposerSlashCommand("computer-use")).toBe(false);
+    expect(isBuiltInComposerSlashCommand("computer-use")).toBe(true);
     expect(isBuiltInComposerSlashCommand("review")).toBe(true);
     expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
     expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
@@ -83,7 +84,10 @@ describe("composerSlashCommands", () => {
   });
 
   it("parses slash invocations with optional arguments", () => {
-    expect(parseComposerSlashInvocation("/computer-use open Notes")).toBeNull();
+    expect(parseComposerSlashInvocation("/computer-use open Notes")).toEqual({
+      command: "computer-use",
+      args: "open Notes",
+    });
     expect(parseComposerSlashInvocation("/review current diff")).toEqual({
       command: "review",
       args: "current diff",
@@ -496,6 +500,7 @@ describe("composerSlashCommands", () => {
       "goal",
       "rename",
       "debug",
+      "computer-use",
       "default",
       "feedback",
       "automation",
@@ -624,6 +629,7 @@ describe("composerSlashCommands", () => {
       "side",
       "status",
       "subagents",
+      "computer-use",
       "export",
       "goal",
       "rename",

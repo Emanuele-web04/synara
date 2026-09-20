@@ -1881,7 +1881,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? { providerOptions: command.providerOptions }
           : {}),
         ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
-        ...computerActivationMetadata(command),
+        ...computerActivationMetadata({ ...command, userMessageText: command.message.text }),
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
         dispatchOrigin: command.dispatchOrigin ?? "user",
@@ -2446,7 +2446,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.providerOptions !== undefined
             ? { providerOptions: command.providerOptions }
             : {}),
-          ...computerActivationMetadata(command),
+          ...computerActivationMetadata({ ...command, userMessageText: command.text }),
           ...(command.assistantDeliveryMode !== undefined
             ? { assistantDeliveryMode: command.assistantDeliveryMode }
             : {}),

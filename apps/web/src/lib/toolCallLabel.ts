@@ -230,6 +230,41 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
   ),
   synara_computer_paste: presentComputerTool("pasting text", "pasted text"),
   synara_computer_run: presentComputerTool("running a desktop sequence", "ran a desktop sequence"),
+  synara_computer_inspect: presentComputerTool("inspecting the computer", "inspected the computer"),
+  synara_computer_browser_state: presentComputerTool(
+    "reading the browser page",
+    "read the browser page",
+  ),
+  synara_computer_browser_prepare: presentComputerTool("preparing a browser", "prepared a browser"),
+  synara_computer_browser_navigate: presentComputerTool(
+    "opening a browser page",
+    "opened a browser page",
+  ),
+  synara_computer_browser_click: presentComputerTool(
+    "clicking in the browser",
+    "clicked in the browser",
+  ),
+  synara_computer_browser_type: presentComputerTool(
+    "typing in a browser field",
+    "typed in a browser field",
+  ),
+  synara_computer_browser_dialog: presentComputerTool(
+    "handling a browser dialog",
+    "handled a browser dialog",
+  ),
+  synara_computer_browser_upload: presentComputerTool(
+    "attaching files in the browser",
+    "attached files in the browser",
+  ),
+  synara_computer_browser_download: presentComputerTool("downloading a file", "downloaded a file"),
+  synara_computer_browser_pointer: presentComputerTool(
+    "using the pointer in the browser",
+    "used the pointer in the browser",
+  ),
+  synara_computer_browser_press: presentComputerTool(
+    "pressing Enter in the browser",
+    "pressed Enter in the browser",
+  ),
 } as const satisfies Record<`synara_${ComputerToolName}`, SynaraMcpToolPresentation>;
 
 function presentComputerTool(present: string, past: string): SynaraMcpToolPresentation {

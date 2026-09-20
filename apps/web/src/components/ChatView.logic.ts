@@ -1729,8 +1729,9 @@ export interface TurnDispatchSettings {
 /**
  * A queued turn froze its dispatch settings when it was queued, so dispatching
  * it later must replay those, not whatever the composer shows now. Every field
- * falls back to the live settings except Computer access: the frozen switch
- * replays, but a live switch-off forces off so disabling revokes queued intent.
+ * falls back to the live settings except Computer access: request mode remains
+ * a frozen one-turn choice, while chat mode still needs the Settings default.
+ * Stop/disable revoke queued generations rather than depending on draft text.
  *
  * `interactionMode` is deliberately included here but overridden by the
  * plan-follow-up path, which decides the mode from the follow-up itself.
@@ -1742,17 +1743,27 @@ export function resolveQueuedTurnDispatchSettings(
   if (!queuedTurn) {
     return settings;
   }
-  const queuedSwitchOn =
-    resolveComputerControlMode(queuedTurn.computerControlMode, queuedTurn.enableComputerControl) !==
-    "off";
-  const enableComputerControl = settings.enableComputerControl === true ? queuedSwitchOn : false;
+  const queuedMode = resolveComputerControlMode(
+    queuedTurn.computerControlMode,
+    queuedTurn.enableComputerControl,
+  );
+  const liveMode = resolveComputerControlMode(
+    settings.computerControlMode,
+    settings.enableComputerControl,
+  );
+  const sameGeneration =
+    settings.computerControlGeneration === undefined ||
+    settings.computerControlGeneration === (queuedTurn.computerControlGeneration ?? 0);
+  const computerControlMode =
+    sameGeneration && (queuedMode === "request" || liveMode === "chat") ? queuedMode : "off";
+  const enableComputerControl = computerControlMode !== "off";
   return {
     ...settings,
     modelSelection: queuedTurn.modelSelection ?? settings.modelSelection,
     providerOptions: queuedTurn.providerOptionsForDispatch ?? settings.providerOptions,
     enableComputerControl,
     computerControlGeneration: queuedTurn.computerControlGeneration ?? 0,
-    computerControlMode: enableComputerControl ? "chat" : "off",
+    computerControlMode,
     runtimeMode: queuedTurn.runtimeMode ?? settings.runtimeMode,
     interactionMode: queuedTurn.interactionMode ?? settings.interactionMode,
     // Plan follow-ups carry no environment of their own; they run wherever the

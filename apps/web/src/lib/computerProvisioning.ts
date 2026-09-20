@@ -12,10 +12,63 @@
 // provision concurrently. The state machine lives in `useProvisionComputer`; the
 // words live here.
 
-import type { ComputerPermission, ComputerProvisionResult } from "@synara/contracts";
-import { listComputerPermissions } from "@synara/shared/computerGrants";
+import type {
+  ComputerPermission,
+  ComputerProvisionResult,
+  DesktopAppSnapPermissionKind,
+  DesktopAppSnapState,
+  DesktopBridge,
+} from "@synara/contracts";
+import {
+  COMPUTER_PERMISSION_KINDS,
+  listComputerPermissions,
+  missingComputerAppSnapPermissions,
+} from "@synara/shared/computerGrants";
 
 import { computerStatusNeedsSetup } from "~/components/ComputerPanel.logic";
+import { isLoopbackHostname } from "~/components/Sidebar.logic";
+
+/** The desktop bridge identifies its live server; remote servers own their own grants. */
+export function readLocalComputerPermissionBridge(): DesktopBridge["appSnap"] | null {
+  // An injected NativeApi can target a different host than the desktop bridge.
+  if (globalThis.window?.nativeApi) return null;
+  const bridge = globalThis.window?.desktopBridge;
+  if (!bridge?.appSnap) return null;
+  try {
+    const endpoint = bridge.getWsUrl?.();
+    if (!endpoint) return null;
+    const url = new URL(endpoint);
+    return (url.protocol === "ws:" || url.protocol === "wss:") && isLoopbackHostname(url.hostname)
+      ? bridge.appSnap
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function computerPermissionSetupSupported(state: DesktopAppSnapState | null): boolean {
+  return state?.supported === true && state.platform === "macos";
+}
+
+/** One fresh, explicit activation check; ordinary sends do not call this. */
+export async function prepareComputerPermissionGuide(input: {
+  readonly getPermissionState?: (
+    permissions: readonly DesktopAppSnapPermissionKind[],
+  ) => Promise<DesktopAppSnapState>;
+  readonly startPermissionSetup?: (
+    permissions: readonly DesktopAppSnapPermissionKind[],
+  ) => Promise<unknown>;
+  readonly isCurrent: () => boolean;
+}): Promise<boolean> {
+  if (!input.getPermissionState || !input.startPermissionSetup) return input.isCurrent();
+  if (!input.isCurrent()) return false;
+  const state = await input.getPermissionState(COMPUTER_PERMISSION_KINDS);
+  if (!input.isCurrent()) return false;
+  if (!computerPermissionSetupSupported(state)) return true;
+  if (missingComputerAppSnapPermissions(state).length === 0) return true;
+  await input.startPermissionSetup(COMPUTER_PERMISSION_KINDS);
+  return false; // Preserve the draft; granting access never auto-sends the task.
+}
 
 /** What the server's answer means for the user, once. */
 export type ComputerProvisionOutcome = "ready" | "incomplete";

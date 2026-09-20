@@ -158,6 +158,22 @@ describe("computerPreviewStore session details", () => {
 });
 
 describe("notePreviewLayout", () => {
+  it("reserves space for a first-frame error without claiming a frame", () => {
+    const store = useComputerPreviewStore.getState();
+    store.notePreviewLayout(THREAD_A, { hasFrame: false, hasVisibleStatus: false, width: 288 });
+    store.notePreviewLayout(THREAD_A, { hasFrame: false, hasVisibleStatus: true, width: 288 });
+    const errorLayout = useComputerPreviewStore.getState().previewLayoutByThreadId[THREAD_A];
+    expect(errorLayout).toEqual({ hasFrame: false, hasVisibleStatus: true, width: 288 });
+    store.notePreviewLayout(THREAD_A, { hasFrame: false, hasVisibleStatus: true, width: 288 });
+    expect(useComputerPreviewStore.getState().previewLayoutByThreadId[THREAD_A]).toBe(errorLayout);
+    store.notePreviewLayout(THREAD_A, { hasFrame: true, hasVisibleStatus: false, width: 288 });
+    expect(useComputerPreviewStore.getState().previewLayoutByThreadId[THREAD_A]).toEqual({
+      hasFrame: true,
+      hasVisibleStatus: false,
+      width: 288,
+    });
+  });
+
   it("publishes the card footprint and preserves identity when unchanged", () => {
     const store = useComputerPreviewStore.getState();
     store.notePreviewLayout(THREAD_A, { hasFrame: false, width: 448 });

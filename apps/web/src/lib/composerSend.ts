@@ -19,6 +19,7 @@ import {
   ATTACHMENT_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@synara/shared/model";
+import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 
 import {
   cloneComposerImageAttachment,
@@ -203,6 +204,14 @@ export function formatOutgoingComposerPrompt(params: {
 }): string {
   const caps = getModelCapabilities(params.provider, params.model);
   if (params.effort && caps.promptInjectedEffortLevels.includes(params.effort)) {
+    const computerInvocation = parseComputerInvocation(params.text);
+    if (computerInvocation) {
+      const prompt = applyClaudePromptEffortPrefix(
+        computerInvocation.prompt,
+        params.effort as ClaudeCodeEffort | null,
+      );
+      return `/computer-use ${prompt}`;
+    }
     return applyClaudePromptEffortPrefix(params.text, params.effort as ClaudeCodeEffort | null);
   }
   return params.text;
