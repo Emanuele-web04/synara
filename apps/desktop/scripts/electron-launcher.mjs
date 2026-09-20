@@ -9,6 +9,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
@@ -70,6 +71,14 @@ function refreshLaunchServicesRegistration(appBundlePath) {
     return;
   }
   spawnSync(LSREGISTER_PATH, ["-u", appBundlePath], { encoding: "utf8" });
+  // Unregistering is not enough on its own: IconServices keeps serving the
+  // cached artwork until the bundle's own modification date moves forward.
+  try {
+    const now = new Date();
+    utimesSync(appBundlePath, now, now);
+  } catch {
+    // A failed timestamp bump only costs a stale icon, so carry on.
+  }
   const result = spawnSync(LSREGISTER_PATH, ["-f", "-R", appBundlePath], { encoding: "utf8" });
   if (result.status !== 0) {
     const details = [result.error?.message, result.stderr].filter(Boolean).join("\n").trim();
