@@ -38,6 +38,7 @@ import {
 } from "../computer/ComputerBackend.ts";
 import { CuaActionError } from "../computer/CuaComputerBackend.ts";
 import type { ComputerManager } from "../computer/ComputerManager.ts";
+import { withModelDesktopObservation } from "../computer/modelDesktopObservation.ts";
 import {
   COMPUTER_FOREGROUND_NOT_AUTHORIZED,
   COMPUTER_FOREGROUND_NOT_REQUESTED_CODE,
@@ -58,9 +59,11 @@ import {
   cuaActionErrorPayload,
 } from "./computerTools.ts";
 import {
+  computerAuditGatewayRequestId,
   summarizeComputerAuditArgs,
   type ComputerAuditEffect,
 } from "../computer/computerAuditLog.ts";
+import { computerBrowserEffect, computerBrowserFieldReadback } from "./computerBrowserEffect.ts";
 
 export interface AgentGatewayComputerBrowserToolsOptions {
   readonly manager: ComputerManager;
@@ -315,32 +318,8 @@ function browserRefusalResult(refusal: {
   };
 }
 
-/** Browser dispatch and DOM read-back alone do not prove the page accepted an action. */
-function browserAuditOutcome(result: ComputerBrowserCallResult): {
-  readonly effect: ComputerAuditEffect;
-  readonly code?: string;
-} {
-  const structured = isRecord(result.structuredContent) ? result.structuredContent : undefined;
-  if (structured?.status === "refused") {
-    const refusal = isRecord(structured.refusal) ? structured.refusal : undefined;
-    return {
-      effect: "refused",
-      code:
-        typeof refusal?.code === "string"
-          ? refusal.code
-          : typeof structured.code === "string"
-            ? structured.code
-            : "browser_refused",
-    };
-  }
-  if (result.isError === true) {
-    return {
-      effect: "error",
-      code: typeof structured?.error === "string" ? structured.error : "browser_error",
-    };
-  }
-  return { effect: "dispatched-unknown" };
-}
+const EXISTING_PROFILE_UNAVAILABLE =
+  'This Computer route cannot attach to your existing browser profile. If a separate browser without your cookies satisfies the task, call computer_browser_prepare({allow_launch:true,profile:{mode:"isolated_new"}}). Use isolated_named with a task-specific name if the profile must survive browser restarts. Do not substitute it when the task requires your existing profile.';
 
 /**
  * The observed packaged E2E passed the bind's target id in the `tab_id` slot
@@ -355,10 +334,32 @@ function augmentBrowserResult(
 ): ComputerBrowserCallResult {
   const structured = isRecord(result.structuredContent) ? result.structuredContent : undefined;
   if (structured === undefined) return result;
+  if (computerBrowserFieldReadback(name, args, result)) {
+    return {
+      ...result,
+      content: [
+        {
+          type: "text",
+          text: "Field value matched; application effect unverified. Observe once; do not repeat the input automatically.",
+        },
+        ...(result.content ?? []).filter((part) => part.type !== "text"),
+      ],
+    };
+  }
   const structuredRecord = structured as Record<string, unknown>;
   if (structuredRecord.status === "refused" && isRecord(structuredRecord.refusal)) {
     const refusal = structuredRecord.refusal;
     const code = typeof refusal.code === "string" ? refusal.code : "browser_refused";
+    if (name === "computer_browser_prepare" && code === "browser_consent_required") {
+      return {
+        ...result,
+        content: [{ type: "text", text: `refused (${code}): ${EXISTING_PROFILE_UNAVAILABLE}` }],
+        structuredContent: {
+          ...structuredRecord,
+          refusal: { ...refusal, message: EXISTING_PROFILE_UNAVAILABLE },
+        },
+      };
+    }
     const tabId = typeof args.tab_id === "string" ? args.tab_id : undefined;
     const targetId = typeof args.target_id === "string" ? args.target_id : undefined;
     const swapped =
@@ -548,6 +549,7 @@ export function makeAgentGatewayComputerBrowserTools(
               : undefined;
         manager.recordComputerAudit({
           tool: name,
+          ...computerAuditGatewayRequestId(context.jsonRpcRequestId),
           threadId: context.callerThreadId,
           ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
           args: summarizeComputerAuditArgs(effectiveArgs),
@@ -607,16 +609,20 @@ export function makeAgentGatewayComputerBrowserTools(
             abortSignal,
             options.resolveWorkspaceRoot,
           );
-          const result = await manager.browserCall(
-            context.callerThreadId,
-            context.callerTurnId ?? undefined,
-            COMPUTER_BROWSER_DRIVER_NAMES[name],
-            boundedArgs,
-            abortSignal,
-            // Approval and the browser queue can both outlive visible-use
-            // intent. Check the shared resolver at actual queue admission.
-            visibleLaunch ? () => assertVisibleBrowserAllowed(context) : undefined,
-          );
+          const dispatch = () =>
+            manager.browserCall(
+              context.callerThreadId,
+              context.callerTurnId ?? undefined,
+              COMPUTER_BROWSER_DRIVER_NAMES[name],
+              boundedArgs,
+              abortSignal,
+              // Approval and the browser queue can both outlive visible-use
+              // intent. Check the shared resolver at actual queue admission.
+              visibleLaunch ? () => assertVisibleBrowserAllowed(context) : undefined,
+            );
+          const result = await (name === "computer_browser_state"
+            ? withModelDesktopObservation(dispatch)
+            : dispatch());
           // A deliberate driver refusal is a successful call with a refused
           // payload; both halves land in the audit record's effect + code.
           const structured =
@@ -624,7 +630,7 @@ export function makeAgentGatewayComputerBrowserTools(
               ? (result.structuredContent as Record<string, unknown>)
               : undefined;
           rememberTargetTabs(context.callerThreadId, structured);
-          audit(browserAuditOutcome(result));
+          audit(computerBrowserEffect(name, boundedArgs, result));
           return browserResultToMcp(augmentBrowserResult(name, effectiveArgs, result));
         },
         catch: (error) => error,
@@ -714,7 +720,7 @@ export function makeAgentGatewayComputerBrowserTools(
     entry(
       "computer_browser_prepare",
       "Prepare browser",
-      `Prepare a driver-owned isolated Chromium for CDP control (profile.mode "isolated_new" or "isolated_named" with allow_launch true), or detect an existing debug endpoint on pid (+ window_id). The driver-owned launch is headless by default — no window and no Dock entry. windowed:true creates a visible browser window and is refused with foreground_not_requested unless the user's own task asked to watch. For multi-step work prefer "isolated_named": the named profile survives the browser process restarting, while an "isolated_new" profile starts empty every launch. Returns the endpoint's prepared_pid for binding via computer_browser_state. Attaching to an existing user profile (strategy existing_profile) requires a consent grant this embedding does not host and is refused by the driver with browser_consent_required.`,
+      `Prepare driver-owned isolated Chromium (profile.mode "isolated_new" or "isolated_named", allow_launch:true), headless by default. Or detect an existing endpoint with pid (+ window_id), allow_launch:false and no strategy. Linux control requires the verified driver and packaged host's confirmed direct-X11 Escape listener; only owned isolated headless targets support mutation. Wayland/XWayland and standalone hosts permit reads/passive prepare only. Linux refuses visible launch and personal-profile control. On macOS, windowed:true needs the user's request to watch; otherwise foreground_not_requested. Prefer "isolated_named" to preserve a profile across restarts; "isolated_new" starts empty. Use prepared_pid with computer_browser_state. Existing-profile attachment needs a consent grant this embedding cannot host (browser_consent_required).`,
       {
         type: "object",
         properties: {
@@ -730,7 +736,7 @@ export function makeAgentGatewayComputerBrowserTools(
           windowed: {
             type: "boolean",
             description:
-              "Default false: the driver-owned browser runs headless. true creates a visible window and requires the user's own task to ask to watch; full access alone does not authorize it.",
+              "Default false: isolated headless. Linux requires a verified driver and confirmed direct-X11 Escape listener, and refuses true. On macOS, true opens a window only when the user asks to watch; full access is insufficient.",
           },
           profile: {
             type: "object",

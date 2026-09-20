@@ -19,11 +19,13 @@ function fixture(options?: {
   readonly semanticTextLaneHoldMs?: number;
   readonly semanticTextLaneGapMs?: number;
   readonly stillIntervalMs?: number;
+  readonly hostPlatform?: string;
 }) {
   const calls: Array<{
     name?: string;
     args?: Record<string, unknown>;
     modelObservation?: boolean;
+    deliveryMode?: string;
   }> = [];
   let bounds = { x: -300, y: 20, width: 200, height: 100 };
   let live = true;
@@ -34,6 +36,7 @@ function fixture(options?: {
   let desktopEpoch = 0;
   let missingPermissions = false;
   let screenRecordingMissing = false;
+  let monitorPermissions: Record<string, unknown> = {};
   let permissionWait: Promise<void> | undefined;
   let overviewFailure = false;
   let captureWindowId = 20;
@@ -68,7 +71,11 @@ function fixture(options?: {
     calls.push(request);
     const responseEpoch = desktopEpoch;
     if (request.method === "probe" || request.method === "stop")
-      return { ok: true, desktopEpoch: responseEpoch };
+      return {
+        ok: true,
+        desktopEpoch: responseEpoch,
+        hostPlatform: options?.hostPlatform ?? "darwin",
+      };
     if (desktopPaused && (request.name === "click" || isTyping(request.name)))
       return {
         ok: true,
@@ -110,6 +117,7 @@ function fixture(options?: {
       data = {
         accessibility: !missingPermissions,
         screen_recording: !missingPermissions && !screenRecordingMissing,
+        ...monitorPermissions,
         source: { host_bundle_id: "com.synara.test" },
       };
       await permissionWait;
@@ -191,11 +199,13 @@ function fixture(options?: {
         ok: true,
         result: toolHandler(request.args ?? {}),
         desktopEpoch: responseEpoch,
+        hostPlatform: options?.hostPlatform ?? "darwin",
       };
     return {
       ok: true,
       result: { structuredContent: data },
       desktopEpoch: responseEpoch,
+      hostPlatform: options?.hostPlatform ?? "darwin",
     };
   }) as unknown as typeof cuaRequest;
   const backend = new CuaComputerBackend({
@@ -291,6 +301,9 @@ function fixture(options?: {
     },
     denyScreenRecording: () => {
       screenRecordingMissing = true;
+    },
+    setInputMonitor: (granted: boolean, ready: boolean) => {
+      monitorPermissions = { input_monitoring: granted, input_monitor_ready: ready };
     },
     waitForPermission: (wait: Promise<void>) => {
       permissionWait = wait;
@@ -1459,6 +1472,99 @@ describe("Cua native boundary", () => {
     expect(await f.backend.availability()).toMatchObject({ kind: "available" });
   });
 
+  it("names Input Monitoring when the physical interruption listener lacks its grant", async () => {
+    const f = fixture({ hostPlatform: "darwin" });
+    f.setInputMonitor(false, false);
+    const availability = await f.backend.availability();
+    expect(availability).toMatchObject({
+      kind: "permission-required",
+      missing: ["inputMonitoring"],
+      message: expect.stringContaining("Input Monitoring"),
+    });
+    expect(Schema.decodeUnknownSync(ComputerAvailability)(availability)).toEqual(availability);
+    expect(await f.backend.provision()).toContain("Allow Input Monitoring");
+  });
+
+  it("reports a failed listener separately from permissions and recovers after it starts", async () => {
+    const f = fixture({ hostPlatform: "darwin" });
+    f.setInputMonitor(true, false);
+    expect(await f.backend.availability()).toMatchObject({
+      kind: "backend-unavailable",
+      message: expect.stringContaining("Escape and human-input listener"),
+    });
+    expect(f.backend.health()).toMatchObject({ status: "unavailable", captureAvailable: true });
+    expect(await f.backend.provision()).not.toContain("permissions are ready");
+    f.setInputMonitor(true, true);
+    expect(await f.backend.provision()).toContain("permissions are ready");
+    expect(await f.backend.availability()).toMatchObject({ kind: "available" });
+    expect(f.backend.health().status).toBe("connected");
+  });
+
+  it("does not impose macOS Input Monitoring on a remote Linux host", async () => {
+    const f = fixture({ hostPlatform: "linux" });
+    f.setInputMonitor(false, false);
+    expect(await f.backend.availability()).toMatchObject({ kind: "available" });
+  });
+
+  it("recognizes native Linux display and AT-SPI prerequisites without inventing TCC grants", async () => {
+    const f = fixture({ hostPlatform: "linux" });
+    f.onTool("check_permissions", () => ({
+      structuredContent: { atspi: true, x11: true, wayland: false, wayland_enabled: false },
+    }));
+    expect(await f.backend.availability()).toMatchObject({ kind: "available" });
+    expect(await f.backend.missingPermissions()).toEqual([]);
+    expect(f.backend.health().captureAvailable).toBe(true);
+    expect(f.backend.capabilities()).toMatchObject({
+      input: false,
+      focus: false,
+      raise: false,
+      capture: true,
+      windows: true,
+    });
+  });
+
+  it("reports unavailable Wayland geometry without failing status or concealing it behind a live socket", async () => {
+    const f = fixture({ hostPlatform: "linux" });
+    f.onTool("check_permissions", () => ({
+      structuredContent: { atspi: true, x11: false, wayland: true, wayland_enabled: true },
+    }));
+    f.onTool("get_screen_size", () => {
+      throw new Error("$DISPLAY variable not set and no value was provided explicitly");
+    });
+    const unavailable = await f.backend.availability();
+    expect(unavailable).toMatchObject({
+      kind: "backend-unavailable",
+      message: expect.stringContaining("$DISPLAY"),
+    });
+    expect(f.backend.health()).toMatchObject({ status: "unavailable", captureAvailable: false });
+    const beforeProbe = f.calls.length;
+    expect(await f.backend.probeAvailability()).toEqual(unavailable);
+    expect(f.calls.slice(beforeProbe).some((call) => call.name === "get_screen_size")).toBe(false);
+    await expect(f.backend.getScreenSize()).rejects.toThrow("$DISPLAY");
+    f.onTool("get_screen_size", () => ({ structuredContent: { width: 1280, height: 800 } }));
+    expect(await f.backend.availability()).toMatchObject({ kind: "available" });
+    expect(await f.backend.getScreenSize()).toMatchObject({ width: 1280, height: 800 });
+  });
+
+  it("recovers Linux capture only after real pixels, not a compositor permission probe", async () => {
+    const f = fixture({ hostPlatform: "linux" });
+    f.onTool("check_permissions", () => ({
+      structuredContent: { atspi: true, x11: true, wayland: false, wayland_enabled: false },
+    }));
+    await f.backend.availability();
+    f.failOverview();
+    await expect(f.backend.getState({ includeScreenshot: true })).rejects.toThrow("Capture denied");
+    expect(f.backend.health().captureAvailable).toBe(false);
+    await f.backend.provision();
+    expect(f.backend.health().captureAvailable).toBe(false);
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    expect(f.backend.health()).toMatchObject({
+      status: "connected",
+      captureAvailable: true,
+      consecutiveFailures: 0,
+    });
+  });
+
   it("re-probes a transient missing report before publishing availability", async () => {
     const f = fixture();
     f.denyPermissions();
@@ -1611,6 +1717,22 @@ describe("Cua native boundary", () => {
     await expect(f.backend.checkInputReady("cua:10:20")).rejects.toMatchObject({
       code: "invalid_readiness",
     });
+  });
+  it("refreshes Linux readiness from exact visible window identity without a missing native tool", async () => {
+    const f = fixture({ hostPlatform: "linux" });
+    await expect(f.backend.checkInputReady("cua:10:20")).resolves.toBeUndefined();
+    expect(f.calls.map((call) => call.name)).toEqual(["list_windows"]);
+    f.setVisible(false);
+    await expect(f.backend.checkInputReady("cua:10:20")).rejects.toMatchObject({
+      code: "target_not_on_active_space",
+      effect: "not-dispatched",
+    });
+    f.close();
+    await expect(f.backend.checkInputReady("cua:10:20")).rejects.toMatchObject({
+      code: "stale_target",
+      effect: "not-dispatched",
+    });
+    expect(f.calls.every((call) => call.name === "list_windows")).toBe(true);
   });
   it("asks the driver to observe settle for the exact window without touching input", async () => {
     const f = fixture();
@@ -1904,6 +2026,57 @@ describe("Cua native boundary", () => {
       effect: "not-dispatched",
       code: "unsupported_operation",
     });
+  });
+  it("uses the Linux launch schema after discovering a remote host's platform", async () => {
+    const request = vi.fn(async (_endpoint: string, _request: unknown) => ({
+      ok: true,
+      hostPlatform: "linux",
+      driverNativeRevision: 0,
+      result: { structuredContent: {} },
+    }));
+    const backend = new CuaComputerBackend({
+      endpoint: "/fixture-only",
+      request: request as unknown as typeof cuaRequest,
+    });
+    await backend.launchApp("/usr/bin/gnome-calculator", ["--mode=basic"], { hidden: false });
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ method: "probe" });
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
+      name: "launch_app",
+      args: { launch_path: "/usr/bin/gnome-calculator", additional_arguments: ["--mode=basic"] },
+    });
+    await backend.launchApp("org.gnome.Calculator.desktop", [], { hidden: false });
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
+      name: "launch_app",
+      args: { name: "org.gnome.Calculator.desktop" },
+    });
+    expect(
+      (request.mock.calls.at(-1)?.[1] as { args: Record<string, unknown> }).args,
+    ).not.toHaveProperty("hidden");
+    expect(
+      request.mock.calls.filter(([, call]) => (call as { method: string }).method === "probe"),
+    ).toHaveLength(1);
+  });
+  it("refuses unsupported Linux hidden launches and ambiguous executable paths before dispatch", async () => {
+    const request = vi.fn(async (_endpoint: string, _request: unknown) => ({
+      ok: true,
+      hostPlatform: "linux",
+      driverNativeRevision: 0,
+    }));
+    const backend = new CuaComputerBackend({
+      endpoint: "/fixture-only",
+      request: request as unknown as typeof cuaRequest,
+    });
+    for (const options of [undefined, { hidden: true }]) {
+      await expect(backend.launchApp("org.gnome.Calculator", [], options)).rejects.toMatchObject({
+        effect: "not-dispatched",
+        code: "unsupported_operation",
+      });
+    }
+    await expect(
+      backend.launchApp("/opt/My App/bin/calculator", [], { hidden: false }),
+    ).rejects.toMatchObject({ effect: "not-dispatched", code: "unsupported_operation" });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ method: "probe" });
   });
   it("lists apps with pid, name, bundle id, running and active state", async () => {
     const f = fixture();
@@ -2543,6 +2716,42 @@ describe("Cua native boundary", () => {
     expect(byId.get("cua:11:22")).toMatchObject({
       minimized: false,
       visible: false,
+    });
+  });
+  it("preserves observed Space membership without inventing missing or unsafe identifiers", async () => {
+    const f = fixture();
+    const base = {
+      pid: 10,
+      bounds: { x: 10, y: 10, width: 200, height: 100 },
+      is_on_screen: false,
+    };
+    f.setWindows([
+      { ...base, window_id: 21, space_ids: [3, 8], current_space_id: 8, on_current_space: true },
+      { ...base, window_id: 22, space_ids: [3], current_space_id: 8, on_current_space: false },
+      { ...base, window_id: 23, space_ids: null, current_space_id: null, on_current_space: null },
+      { ...base, window_id: 24, space_ids: [3, Number.MAX_SAFE_INTEGER + 1], current_space_id: 0 },
+      { ...base, window_id: 25, space_ids: [], current_space_id: 8, on_current_space: false },
+    ]);
+    const byId = new Map((await f.backend.listWindows()).map((window) => [window.id, window]));
+    expect(byId.get("cua:10:21")).toMatchObject({
+      spaceIds: [3, 8],
+      currentSpaceId: 8,
+      onCurrentSpace: true,
+    });
+    expect(byId.get("cua:10:22")).toMatchObject({
+      spaceIds: [3],
+      currentSpaceId: 8,
+      onCurrentSpace: false,
+    });
+    for (const window of [byId.get("cua:10:23"), byId.get("cua:10:24")]) {
+      expect(window).not.toHaveProperty("spaceIds");
+      expect(window).not.toHaveProperty("currentSpaceId");
+      expect(window).not.toHaveProperty("onCurrentSpace");
+    }
+    expect(byId.get("cua:10:25")).toMatchObject({
+      spaceIds: [],
+      currentSpaceId: 8,
+      onCurrentSpace: false,
     });
   });
   it("distinguishes a native admission refusal from an uncertain delivery", async () => {
@@ -3548,8 +3757,8 @@ describe("host-reported platform and native revision", () => {
       request: hostReply({ hostPlatform: "win32", driverNativeRevision: 0 }),
     });
     expect(backend.agentDialect).toBe(process.platform === "darwin" ? "macos" : "linux");
-    expect(backend.focusNeutralSemanticText).toBe(true);
-    expect(backend.capabilities().ghostCursor).toBe(true);
+    expect(backend.focusNeutralSemanticText).toBe(process.platform === "darwin");
+    expect(backend.capabilities().ghostCursor).toBe(process.platform === "darwin");
 
     await backend.probeAvailability();
     // The first reply teaches the backend what actually runs on the other
@@ -3569,5 +3778,154 @@ describe("host-reported platform and native revision", () => {
     expect(backend.agentDialect).toBe("macos");
     expect(backend.focusNeutralSemanticText).toBe(true);
     expect(backend.capabilities().ghostCursor).toBe(true);
+  });
+
+  it("does not advertise macOS input guarantees for a patched Linux browser driver", async () => {
+    const backend = new CuaComputerBackend({
+      endpoint: "/fixture-only",
+      request: hostReply({ hostPlatform: "linux", driverNativeRevision: 32 }),
+    });
+    await backend.probeAvailability();
+    expect(backend.focusNeutralSemanticText).toBe(false);
+    expect(backend.capabilities()).toMatchObject({
+      input: false,
+      focus: false,
+      raise: false,
+      ghostCursor: false,
+    });
+  });
+});
+
+describe("Linux native input dialect", () => {
+  it("uses the strict upstream pixel and keyboard schemas only in authorized foreground mode", async () => {
+    const f = fixture({ hostPlatform: "linux" });
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await withDesktopDeliveryMode("foreground", async () => {
+      await f.backend.click({ x: -275, y: 30 }, "cua:10:20");
+      await f.backend.typeText("visible input", "cua:10:20");
+      await f.backend.drag({ x: -275, y: 30 }, { x: -225, y: 50 }, 500, "cua:10:20");
+    });
+    expect(f.calls.find((call) => call.name === "click")).toMatchObject({
+      deliveryMode: "foreground",
+      args: { pid: 10, window_id: 20, delivery_mode: "foreground", count: 1, x: 25, y: 10 },
+    });
+    expect(f.calls.find((call) => call.name === "type_text")?.args).toEqual({
+      pid: 10,
+      window_id: 20,
+      delivery_mode: "foreground",
+      text: "visible input",
+    });
+    expect(f.calls.find((call) => call.name === "drag")?.args).toEqual({
+      pid: 10,
+      window_id: 20,
+      delivery_mode: "foreground",
+      from_x: 25,
+      from_y: 10,
+      to_x: 75,
+      to_y: 30,
+      duration_ms: 500,
+    });
+    for (const call of f.calls.filter((call) =>
+      ["click", "type_text", "drag"].includes(call.name ?? ""),
+    )) {
+      expect(call.args).not.toHaveProperty("force_synthetic");
+      expect(call.args).not.toHaveProperty("coordinate_space");
+      expect(call.args).not.toHaveProperty("expected_window_bounds");
+    }
+  });
+
+  it("refuses default background input without dispatching a relaxed Linux request", async () => {
+    const f = fixture({ hostPlatform: "linux" });
+    await expect(f.backend.typeText("must not type", "cua:10:20")).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "linux_background_unavailable",
+    });
+    expect(f.calls.some((call) => call.name === "type_text")).toBe(false);
+    expect(f.calls.every((call) => call.deliveryMode === "background")).toBe(true);
+  });
+
+  it("translates an unmodified single-axis scroll without dropping unsupported gesture semantics", async () => {
+    const f = fixture({ hostPlatform: "linux" });
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await withDesktopDeliveryMode("foreground", () =>
+      f.backend.scroll({ x: -275, y: 30 }, 0, 240, "cua:10:20"),
+    );
+    expect(f.calls.find((call) => call.name === "scroll")?.args).toEqual({
+      pid: 10,
+      window_id: 20,
+      delivery_mode: "foreground",
+      direction: "down",
+      amount: 2,
+      by: "line",
+      x: 25,
+      y: 10,
+    });
+    await expect(
+      withDesktopDeliveryMode("foreground", () =>
+        f.backend.scroll({ x: -275, y: 30 }, 120, 240, "cua:10:20"),
+      ),
+    ).rejects.toMatchObject({ effect: "not-dispatched", code: "unsupported_linux_operation" });
+    await expect(
+      withDesktopDeliveryMode("foreground", () =>
+        f.backend.scroll({ x: -275, y: 30 }, 0, 240, "cua:10:20", ["ctrl"]),
+      ),
+    ).rejects.toMatchObject({ effect: "not-dispatched", code: "unsupported_linux_operation" });
+    expect(f.calls.filter((call) => call.name === "scroll")).toHaveLength(1);
+  });
+
+  it("does not downgrade an exact semantic text target to focused Linux typing", async () => {
+    const f = fixture({ hostPlatform: "linux" });
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Fixture input",
+        element_token: "snapshot-token",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+      },
+    ]);
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const node = state.root!.children[0]!;
+    const target = { target: { label: "Fixture input" }, node, point: node.activationPoint! };
+    await expect(
+      withDesktopDeliveryMode("foreground", () =>
+        f.backend.typeText("must preserve identity", "cua:10:20", target),
+      ),
+    ).rejects.toMatchObject({ effect: "not-dispatched", code: "linux_semantic_target_unproven" });
+    expect(f.calls.some((call) => call.name === "type_text" || call.name === "set_value")).toBe(
+      false,
+    );
+  });
+
+  it("keeps native arguments separate from the server's delivery authorization envelope", async () => {
+    const f = fixture({ hostPlatform: "linux" });
+    await f.backend.browser!.call({
+      name: "browser_click",
+      args: { target_id: "fixture", delivery_mode: "foreground", deliveryMode: "foreground" },
+      task: { threadId: "linux-envelope-test" },
+      mutation: true,
+      signal: new AbortController().signal,
+    });
+    expect(f.calls.at(-1)).toMatchObject({
+      deliveryMode: "background",
+      args: { delivery_mode: "foreground", deliveryMode: "foreground" },
+    });
+  });
+
+  it("marks only active model browser observations as eligible for interruption recovery", async () => {
+    const f = fixture();
+    const observe = () =>
+      f.backend.browser!.call({
+        name: "get_browser_state",
+        args: { target_id: "fixture", tab_id: "tab" },
+        task: { threadId: "observation-test" },
+        mutation: false,
+        signal: new AbortController().signal,
+      });
+    await observe();
+    expect(f.calls.at(-1)?.modelObservation).toBe(false);
+    await withModelDesktopObservation(observe);
+    expect(f.calls.at(-1)?.modelObservation).toBe(true);
+    await observe();
+    expect(f.calls.at(-1)?.modelObservation).toBe(false);
   });
 });

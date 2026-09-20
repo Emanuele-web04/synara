@@ -34,6 +34,7 @@ export const serverQueryKeys = {
   studioThreadOutputs: (threadId: ThreadId | null) =>
     ["server", "studioThreadOutputs", threadId] as const,
   computerStatus: () => ["server", "computerStatus"] as const,
+  computerAuditHistory: () => ["server", "computerAuditHistory"] as const,
 };
 
 export const serverMutationKeys = {

@@ -200,10 +200,12 @@ import type {
   ComputerThreadInput,
   ThreadComputerState,
 } from "./computer";
+import type { ComputerGetAuditHistoryInput, ComputerGetAuditHistoryResult } from "./computerAudit";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
+  ServerReadThreadDiagnosticsInput,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -984,6 +986,7 @@ export interface NativeApi {
       input: ServerConsumeCodexResetCreditInput,
     ) => Promise<ServerConsumeCodexResetCreditResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
+    readThreadDiagnostics: (input: ServerReadThreadDiagnosticsInput) => Promise<unknown>;
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;
@@ -1103,6 +1106,9 @@ export interface NativeApi {
   computer: {
     /** Thread-independent backend status for surfaces outside any conversation. */
     getStatus: (input: ComputerGetStatusInput) => Promise<ComputerStatusResult>;
+    getAuditHistory: (
+      input: ComputerGetAuditHistoryInput,
+    ) => Promise<ComputerGetAuditHistoryResult>;
     provision: (input: ComputerProvisionInput) => Promise<ComputerProvisionResult>;
     setControlEnabled: (
       input: ComputerSetControlEnabledInput,

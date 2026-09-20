@@ -19,6 +19,27 @@ function setup() {
 }
 
 describe("computer WebSocket handlers", () => {
+  it("reads history independently of backend availability without dispatching desktop input", async () => {
+    const { manager, backend } = setup();
+    const handlers = makeWsComputerHandlers({
+      supported: false,
+      availability: { kind: "backend-unavailable", message: "No native backend" },
+      manager,
+    });
+    try {
+      await expect(
+        Effect.runPromise(handlers[COMPUTER_WS_METHODS.getAuditHistory]({ limit: 30 })),
+      ).resolves.toEqual({
+        entries: [],
+        nextCursor: null,
+        truncated: false,
+        status: "disabled",
+      });
+      expect(backend.callsFor("click")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
   it("refuses pane targeting inherited from a completed operation before reentering the queue", async () => {
     const { backend, manager } = setup();
     const release = Promise.withResolvers<void>();

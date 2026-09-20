@@ -145,10 +145,13 @@ import {
   makeWsStreamAdmission,
 } from "./wsStreamAdmission";
 import { ThreadDiagnosticsQuery } from "./diagnostics/Services/ThreadDiagnosticsQuery";
+import { makeOwnerThreadDiagnosticReader } from "./diagnostics/ownerThreadDiagnostics";
+import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEventStore";
+import { ProviderRuntimeEventRepository } from "./persistence/Services/ProviderRuntimeEvents";
+import { requireWsOwnerSession } from "./wsOwnerAuthorization";
 import { makeWsRequestAdmission } from "./wsRequestAdmission";
 import { voiceUploadAdmissionGate } from "./voiceUploadAdmission";
 import {
-  CurrentWsSessionRole,
   provideWsConnectionSession,
   WS_CONNECTION_SESSION_HEADER,
   WsConnectionSessions,
@@ -397,6 +400,21 @@ const makeWsRpcHandlersLayer = () =>
       const workspaceEntries = yield* WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
       const threadDiagnostics = yield* ThreadDiagnosticsQuery;
+      const eventStore = yield* OrchestrationEventStore;
+      const providerRuntimeEvents = yield* ProviderRuntimeEventRepository;
+      const readOwnerThreadDiagnostics = makeOwnerThreadDiagnosticReader({
+        eventStore,
+        providerRuntimeEvents,
+        requireThreadShell: (threadId) =>
+          projectionReadModelQuery.getThreadShellById(ThreadId.makeUnsafe(threadId)).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.fail(new Error("Thread was not found.")),
+                onSome: Effect.succeed,
+              }),
+            ),
+          ),
+      });
       // Optional so route-level tests and non-macOS builds can mount the RPC
       // group without a device engine; the handlers below then refuse cleanly
       // with the same unsupported-platform answer the backend would give.
@@ -894,11 +912,7 @@ const makeWsRpcHandlersLayer = () =>
           );
 
       const requireOwner = Effect.gen(function* () {
-        if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
-          return yield* Effect.fail(
-            new WsRpcError({ message: "Owner authorization is required for this operation." }),
-          );
-        }
+        yield* requireWsOwnerSession;
         if (!isLoopbackHost(config.host) || config.publicUrl !== undefined) {
           return yield* Effect.fail(
             new WsRpcError({
@@ -1824,6 +1838,12 @@ const makeWsRpcHandlersLayer = () =>
             }),
             "Failed to load server diagnostics",
           ),
+        [WS_METHODS.serverReadThreadDiagnostics]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(
+              rpcEffect(readOwnerThreadDiagnostics(input), "Failed to read thread diagnostics"),
+            ),
+          ),
         [WS_METHODS.serverPrewarmVoice]: (input) =>
           rpcEffect(
             getEnabledProviderAdapter(input.provider, serverSettings, providerAdapterRegistry).pipe(
@@ -2134,6 +2154,10 @@ const makeWsRpcHandlersLayer = () =>
           ),
 
         ...computerHandlers,
+        [COMPUTER_WS_METHODS.getAuditHistory]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(computerHandlers[COMPUTER_WS_METHODS.getAuditHistory](input)),
+          ),
         [COMPUTER_WS_METHODS.getThreadState]: (input, { headers }) =>
           Effect.suspend(() => {
             computerInterests.watch(

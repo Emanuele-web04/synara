@@ -1,5 +1,12 @@
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import type {
+  ComputerAuditEffect,
+  ComputerGetAuditHistoryInput,
+  ComputerGetAuditHistoryResult,
+} from "@synara/contracts";
+import { readComputerAuditHistory } from "./computerAuditHistory.ts";
+import { computerAuditTailLines, readComputerAuditFileTail } from "./computerAuditFile.ts";
 
 /**
  * Append-only local evidence for mutating `computer_*` calls.
@@ -14,9 +21,10 @@ import { dirname } from "node:path";
  *
  * Bounded two ways at once: at most {@link COMPUTER_AUDIT_MAX_ENTRIES} lines
  * and at most {@link COMPUTER_AUDIT_MAX_BYTES} bytes. Crossing either cap
- * compacts to the newest half, written through the same temp-file + rename
+ * compacts toward the newest half of both caps, written through temp-file + rename
  * `ComputerControlState` persists with, so a crash mid-compaction leaves the
- * old file intact rather than a truncated one.
+ * old file intact rather than a truncated one. Legacy files are read from a
+ * bounded tail, and a single oversized or unserializable record is omitted.
  *
  * Writes are serialized on a private promise chain — the desktop operation
  * queue cannot serialize refusals that happen before an operation slot is
@@ -30,6 +38,7 @@ export const COMPUTER_AUDIT_MAX_ENTRIES = 10_000;
 export const COMPUTER_AUDIT_MAX_BYTES = 2 * 1024 * 1024;
 /** Compaction keeps the newest half so the log stays bounded without churning. */
 const COMPUTER_AUDIT_COMPACT_TO = Math.floor(COMPUTER_AUDIT_MAX_ENTRIES / 2);
+const COMPUTER_AUDIT_COMPACT_BYTES = Math.floor(COMPUTER_AUDIT_MAX_BYTES / 2);
 
 /**
  * The effect side of one audit record. The first three are the delivery
@@ -38,12 +47,7 @@ const COMPUTER_AUDIT_COMPACT_TO = Math.floor(COMPUTER_AUDIT_MAX_ENTRIES / 2);
  * `error` is anything else that stopped the call — always with `code` naming
  * what refused or failed.
  */
-export type ComputerAuditEffect =
-  | "verified"
-  | "dispatched-unknown"
-  | "not-dispatched"
-  | "refused"
-  | "error";
+export type { ComputerAuditEffect } from "@synara/contracts";
 
 export interface ComputerAuditEntry {
   /** ISO timestamp; written by the log, not the caller. */
@@ -52,6 +56,8 @@ export interface ComputerAuditEntry {
   readonly tool: string;
   readonly threadId?: string;
   readonly turnId?: string;
+  /** Gateway JSON-RPC request identity; it is not a provider tool-item ID. */
+  readonly gatewayRequestId?: string;
   /** The resolved target when one is known — window id, pid, app, bundle id. */
   readonly target?: {
     readonly windowId?: string;
@@ -87,6 +93,17 @@ const COMPUTER_AUDIT_SENSITIVE_ARGS: ReadonlySet<string> = new Set([
 
 /** Longest logged string field; a label or path longer than this is cut. */
 const COMPUTER_AUDIT_MAX_STRING = 256;
+
+/** Keep a bounded transport identity without inventing a provider call ID. */
+export function computerAuditGatewayRequestId(value: unknown): { gatewayRequestId?: string } {
+  const id =
+    typeof value === "string"
+      ? value
+      : typeof value === "number" && Number.isFinite(value)
+        ? String(value)
+        : undefined;
+  return id !== undefined && /^[A-Za-z0-9_.:-]{1,128}$/.test(id) ? { gatewayRequestId: id } : {};
+}
 
 /**
  * Project one tool-call argument object onto what the log may keep: scalars
@@ -166,6 +183,7 @@ export class ComputerAuditLog {
   private entries = 0;
   private bytes = 0;
   private loaded = false;
+  private needsSeparator = false;
   private chain: Promise<void> = Promise.resolve();
 
   constructor(
@@ -176,8 +194,13 @@ export class ComputerAuditLog {
   /** Queue one record. Never throws and never waits: the log is fire-and-forget. */
   record(entry: Omit<ComputerAuditEntry, "ts">): void {
     if (this.filePath === undefined) return;
-    const line = `${JSON.stringify({ ts: this.now().toISOString(), ...entry })}\n`;
-    this.chain = this.chain.then(() => this.append(line));
+    try {
+      const line = `${JSON.stringify({ ts: this.now().toISOString(), ...entry })}\n`;
+      if (Buffer.byteLength(line, "utf8") > COMPUTER_AUDIT_MAX_BYTES) return;
+      this.chain = this.chain.then(() => this.append(line));
+    } catch {
+      // A malformed evidence object must not make a delivered action fail.
+    }
   }
 
   /** Settles once every queued append — and any compaction — has finished. */
@@ -185,20 +208,34 @@ export class ComputerAuditLog {
     await this.chain;
   }
 
+  async readHistory(input: ComputerGetAuditHistoryInput): Promise<ComputerGetAuditHistoryResult> {
+    await this.flush();
+    return readComputerAuditHistory(this.filePath, input);
+  }
+
   private async append(line: string): Promise<void> {
     const filePath = this.filePath;
     if (filePath === undefined) return;
     try {
       if (!this.loaded) {
+        const existing = await readComputerAuditFileTail(filePath, COMPUTER_AUDIT_MAX_BYTES);
+        if (existing !== null) {
+          this.bytes = existing.totalBytes;
+          this.needsSeparator = existing.contents.length > 0 && existing.contents.at(-1) !== 10;
+          this.entries = this.needsSeparator ? 1 : 0;
+          const lines = computerAuditTailLines(existing);
+          while (this.entries <= COMPUTER_AUDIT_MAX_ENTRIES && !lines.next().done) {
+            this.entries += 1;
+          }
+        }
         this.loaded = true;
-        const existing = await readFile(filePath, "utf8").catch(() => "");
-        this.entries = existing.length === 0 ? 0 : existing.split("\n").length - 1;
-        this.bytes = Buffer.byteLength(existing, "utf8");
       }
       await mkdir(dirname(filePath), { recursive: true, mode: 0o700 });
-      await appendFile(filePath, line, { mode: 0o600 });
+      const content = this.needsSeparator ? `\n${line}` : line;
+      await appendFile(filePath, content, { mode: 0o600 });
+      this.needsSeparator = false;
       this.entries += 1;
-      this.bytes += Buffer.byteLength(line, "utf8");
+      this.bytes += Buffer.byteLength(content, "utf8");
       if (this.entries > COMPUTER_AUDIT_MAX_ENTRIES || this.bytes > COMPUTER_AUDIT_MAX_BYTES) {
         await this.compact(filePath);
       }
@@ -208,14 +245,29 @@ export class ComputerAuditLog {
   }
 
   private async compact(filePath: string): Promise<void> {
-    const existing = await readFile(filePath, "utf8").catch(() => "");
-    const lines = existing.split("\n").filter((line) => line.length > 0);
-    const kept = lines.slice(-COMPUTER_AUDIT_COMPACT_TO);
-    const content = kept.length === 0 ? "" : `${kept.join("\n")}\n`;
+    const existing = await readComputerAuditFileTail(filePath, COMPUTER_AUDIT_MAX_BYTES);
+    if (existing === null) return;
+    const kept: Buffer[] = [];
+    let keptBytes = 0;
+    let scannedRows = 0;
+    for (const { line } of computerAuditTailLines(existing)) {
+      if (scannedRows >= COMPUTER_AUDIT_MAX_ENTRIES) break;
+      scannedRows += 1;
+      if (line.length <= 1) continue;
+      if (
+        kept.length >= COMPUTER_AUDIT_COMPACT_TO ||
+        (kept.length > 0 && keptBytes + line.length > COMPUTER_AUDIT_COMPACT_BYTES)
+      ) {
+        break;
+      }
+      kept.push(line);
+      keptBytes += line.length;
+    }
+    const content = Buffer.concat(kept.reverse(), keptBytes);
     const temporaryPath = `${filePath}.tmp`;
     await writeFile(temporaryPath, content, { mode: 0o600 });
     await rename(temporaryPath, filePath);
     this.entries = kept.length;
-    this.bytes = Buffer.byteLength(content, "utf8");
+    this.bytes = content.length;
   }
 }

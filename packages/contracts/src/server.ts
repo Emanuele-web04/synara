@@ -17,6 +17,23 @@ import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "
 export const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS = 14_000_000;
 
+/** Owner-only diagnostic pages reuse the provider diagnostic readers and sanitizer. */
+export const ServerReadThreadDiagnosticsInput = Schema.Struct({
+  source: Schema.Literals(["events", "runtime"]),
+  threadId: ThreadId.check(Schema.isMaxLength(256)),
+  cursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+  eventTypes: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(128))).check(
+      Schema.isMaxLength(64),
+    ),
+  ),
+  turnId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  payloadMode: Schema.optional(Schema.Literals(["none", "summary", "full"])),
+  includeDetails: Schema.optional(Schema.Boolean),
+});
+export type ServerReadThreadDiagnosticsInput = typeof ServerReadThreadDiagnosticsInput.Type;
+
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
   message: TrimmedNonEmptyString,

@@ -21,6 +21,8 @@ import {
   type ComputerCapabilities,
   type ComputerCursorPosition,
   type ComputerEvent,
+  type ComputerGetAuditHistoryInput,
+  type ComputerGetAuditHistoryResult,
   type ComputerHealth,
   type ComputerInputModifier,
   type ComputerRect,
@@ -44,6 +46,7 @@ import { FrameTransport, type FrameSink } from "@synara/shared/frameTransport";
 
 import {
   DesktopOperationQueue,
+  withDesktopDeliveryMode,
   assertDesktopOperationActive,
   assertDesktopOperationAdmission,
   withDesktopOperationSignal,
@@ -571,6 +574,10 @@ export class ComputerManager {
     this.auditLog.record(entry);
   }
 
+  getAuditHistory(input: ComputerGetAuditHistoryInput): Promise<ComputerGetAuditHistoryResult> {
+    return this.auditLog.readHistory(input);
+  }
+
   /**
    * The denylist check for the admission/consent keys, which are the raw
    * strings a tool call declared — an app name, a bundle id, an executable
@@ -757,17 +764,10 @@ export class ComputerManager {
       await this.setControlEnabled(threadId, true);
     }
     const enabled = mode !== "off" && this.canActivateControl(threadId, generation);
-    // An admitted one-shot request promotes to durable chat: the turn it opens
-    // spans tool calls and approval waits, and a goal continuation must still
-    // find it afterwards. It persists until an explicit off (or a disable,
-    // which bumps the generation out from under it) — a background request
-    // admitted without an explicit user invocation records nothing.
+    // Request admission lasts through this turn's tool loop and approval waits.
+    // Only an explicit chat default survives into later turns or goals.
     try {
-      await this.controlState.recordChatIntent(
-        threadId,
-        enabled && (mode === "chat" || (mode === "request" && explicitInvocation)),
-        generation,
-      );
+      await this.controlState.recordChatIntent(threadId, enabled && mode === "chat", generation);
     } catch (error) {
       // Fail closed and LOUD: a persist failure means durable intent is
       // unrecorded, so the thread is disabled; without this warning the next
@@ -3538,13 +3538,19 @@ export class ComputerManager {
         // that arrives while this asynchronous check is still running.
         if (beforeDispatch) await beforeDispatch();
         operationSignal.throwIfAborted();
-        return browser.call({
-          name,
-          args,
-          task: { threadId, ...(turnId ? { turnId } : {}) },
-          mutation: name !== "get_browser_state",
-          signal: operationSignal,
-        });
+        const invoke = () =>
+          browser.call({
+            name,
+            args,
+            task: { threadId, ...(turnId ? { turnId } : {}) },
+            mutation: name !== "get_browser_state",
+            signal: operationSignal,
+          });
+        // Only the gateway's successful visible-use recheck can stamp a
+        // visible launch as authorized. Model arguments alone cannot do so.
+        return beforeDispatch && name === "browser_prepare" && args.windowed === true
+          ? withDesktopDeliveryMode("foreground", invoke)
+          : invoke();
       },
       signal,
       turnId,

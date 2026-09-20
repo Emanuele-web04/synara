@@ -154,6 +154,32 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("forwards bounded Computer history and owner diagnostic requests through their RPCs", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    requestMock.mockResolvedValue({
+      entries: [],
+      nextCursor: null,
+      truncated: false,
+      status: "missing",
+    });
+    await api.computer.getAuditHistory({ limit: 30, before: "cursor" });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith("computer.getAuditHistory", {
+      limit: 30,
+      before: "cursor",
+    });
+    requestMock.mockClear();
+    await api.server.readThreadDiagnostics({
+      source: "runtime",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      includeDetails: true,
+    });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith("server.readThreadDiagnostics", {
+      source: "runtime",
+      threadId: "thread-1",
+      includeDetails: true,
+    });
+  });
   it("checks paused readiness without dropping immediate control revocation", async () => {
     const { createWsNativeApi } = await import("./wsNativeApi");
     const api = createWsNativeApi();

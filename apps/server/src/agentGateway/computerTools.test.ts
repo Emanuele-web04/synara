@@ -32,6 +32,7 @@ import {
 } from "./computerTools.ts";
 import type { McpToolCallResult } from "./protocol.ts";
 import { GatewayToolError, type ToolContext } from "./toolRuntime.ts";
+import { PROVIDER_KINDS } from "./toolInput.ts";
 
 const THREAD = "thread-computer";
 
@@ -166,22 +167,28 @@ describe("agent gateway computer tools", () => {
       .map((tool) => tool.definition);
     const descriptorBytes = Buffer.byteLength(JSON.stringify(definitions), "utf8");
     // The macOS desktop catalog was 29,792 bytes before advertising run; it is
-    // now 28,617 after trimming repeated prose. Keep the new batch route below
-    // that baseline without serializing every step schema on every turn.
+    // now 29,326 with the compact run and inspector routes. Keep both below
+    // that baseline without serializing every step or specialist schema.
     // Browser tools, provider framing and images are separate costs.
-    expect(descriptorBytes).toBeLessThanOrEqual(29_000);
+    expect(descriptorBytes).toBeLessThanOrEqual(29_400);
     expect(
       Buffer.byteLength(
         JSON.stringify(definitions.find((tool) => tool.name === "computer_run")),
         "utf8",
       ),
     ).toBeLessThanOrEqual(2_000);
+    expect(
+      Buffer.byteLength(
+        JSON.stringify(definitions.find((tool) => tool.name === "computer_inspect")),
+        "utf8",
+      ),
+    ).toBeLessThanOrEqual(750);
     const notes = computerToolInstructions();
     // The injected block was 8,404 chars before the surface cut shrank it to
     // the every-turn core (~3.5k); the ceiling keeps the block from growing
     // back silently.
     expect(notes.length).toBeLessThanOrEqual(3_800);
-    expect(descriptorBytes + Buffer.byteLength(notes, "utf8")).toBeLessThanOrEqual(32_800);
+    expect(descriptorBytes + Buffer.byteLength(notes, "utf8")).toBeLessThanOrEqual(33_200);
     expect(notes).toContain("never list the whole catalog");
     expect(notes).toContain("look them up by exact name");
     expect(notes).toContain("computer_launch_app");
@@ -386,7 +393,7 @@ describe("agent gateway computer tools", () => {
 
   it("exposes the native batch fast path behind computer:control, with 14 specialist tools hidden", async () => {
     const { byName, tools } = await setup();
-    // 31 registered desktop tools: 17 advertised, including the batch fast
+    // 32 registered desktop tools: 18 advertised, including the batch fast
     // path, plus 14 specialists. The 7 recording/replay tools, the three click
     // variants and computer_hotkey are gone entirely — their behavior folded
     // into computer_click's count/button and computer_press_key's chord.
@@ -403,6 +410,7 @@ describe("agent gateway computer tools", () => {
       "computer_zoom",
       "computer_get_accessibility_tree",
       "computer_get_cursor_position",
+      "computer_inspect",
       "computer_help",
       "computer_set_window_frame",
       "computer_invoke_menu",
@@ -434,6 +442,7 @@ describe("agent gateway computer tools", () => {
       "computer_launch_app",
       "computer_list_apps",
       "computer_verify_state",
+      "computer_inspect",
       "computer_help",
       "computer_click",
       "computer_scroll",
@@ -3525,6 +3534,158 @@ describe("computer_activate_window foreground restore", () => {
   });
 });
 
+describe("computer_inspect", () => {
+  it.each(PROVIDER_KINDS)(
+    "preserves specialist reads and image results for %s",
+    async (provider) => {
+      const authorize = vi.fn<NonNullable<AgentGatewayComputerToolsOptions["authorizeAction"]>>(
+        async () => true,
+      );
+      const { backend, manager, byName, call } = await setup(new FakeComputerBackend(), authorize);
+      try {
+        const inspector = byName.get("computer_inspect")!;
+        expect(inspector.discoveryOnly).not.toBe(true);
+        expect(inspector.requiredCapability).toBe("computer:control");
+        expect(inspector.requiresActiveTurn).toBe(true);
+        expect(inspector.definition.annotations?.readOnlyHint).toBe(false);
+        for (const [tool, args] of [
+          ["computer_read_clipboard", {}],
+          ["computer_get_accessibility_tree", { window_id: "fake-calculator" }],
+          ["computer_get_cursor_position", { window_id: "fake-calculator" }],
+          ["computer_zoom", { window_id: "fake-calculator", x: 0, y: 0, width: 40, height: 40 }],
+        ] as const) {
+          const help = resultJson(await call("computer_help", { tool }, provider)) as {
+            inspection: { name: string; tool: string };
+          };
+          const result = await call(
+            help.inspection.name,
+            { tool: help.inspection.tool, arguments: args },
+            provider,
+          );
+          expect(result.isError, tool).not.toBe(true);
+          if (tool === "computer_zoom") {
+            expect(
+              result.content.some(
+                (item) => item.type === "image" && item.mimeType === "image/jpeg",
+              ),
+            ).toBe(true);
+            const payload = resultJson(result) as { zoom: unknown };
+            expect(payload.zoom).toMatchObject({ windowId: "fake-calculator" });
+            expect(JSON.stringify(payload)).not.toContain("bytesBase64");
+            expect(JSON.stringify(payload)).not.toContain("screenshotId");
+          }
+        }
+        expect(authorize).toHaveBeenCalledTimes(1);
+        expect(authorize.mock.calls[0]?.[0]).toBe("computer_read_clipboard");
+        for (const method of [
+          "readClipboard",
+          "getAccessibilityTree",
+          "getCursorPosition",
+          "zoomWindow",
+        ]) {
+          expect(backend.callsFor(method), method).toHaveLength(1);
+        }
+        expect(backend.callsFor("captureScreenshot")).toHaveLength(0);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("refuses unknown routes, invalid schemas and extra fields before any backend call", async () => {
+    const authorize = vi.fn(async () => true);
+    const { backend, manager, call } = await setup(new FakeComputerBackend(), authorize);
+    try {
+      for (const args of [
+        { tool: "computer_click", arguments: { x: 2, y: 3 } },
+        { tool: "computer_inspect", arguments: { tool: "computer_read_clipboard" } },
+        { tool: "computer_future" },
+        { tool: "mcp__synara__computer_read_clipboard" },
+        { tool: "computer_read_clipboard", arguments: { text: "private" } },
+        { tool: "computer_read_clipboard", arguments: [] },
+        { tool: "computer_read_clipboard", arguments: null },
+        { tool: "computer_get_cursor_position", arguments: { window_id: 42 } },
+        { tool: "computer_zoom", arguments: { window_id: "fake-calculator" } },
+        {
+          tool: "computer_zoom",
+          arguments: { window_id: "fake-calculator", x: "1", y: 0, width: 4, height: 4 },
+        },
+        {
+          tool: "computer_zoom",
+          arguments: { window_id: "fake-calculator", x: 1, y: 0, width: Infinity, height: 4 },
+        },
+        { tool: "computer_get_accessibility_tree", delivery_mode: "foreground" },
+      ]) {
+        expect((await call("computer_inspect", args)).isError).toBe(true);
+      }
+      expect(backend.calls).toHaveLength(0);
+      expect(authorize).not.toHaveBeenCalled();
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("retains clipboard refusal and dead-turn checks before dispatch", async () => {
+    const authorize = vi.fn(async () => false);
+    const { backend, manager, byName, call } = await setup(new FakeComputerBackend(), authorize);
+    try {
+      expect((await call("computer_inspect", { tool: "computer_read_clipboard" })).isError).toBe(
+        true,
+      );
+      expect(authorize).toHaveBeenCalledTimes(1);
+      const inactive = {
+        ...makeContext(),
+        assertCallerTurnActive: () =>
+          Effect.fail(new GatewayToolError("caller_turn_inactive", "The requesting turn ended.")),
+      };
+      const result = await Effect.runPromise(
+        byName.get("computer_inspect")!.handler({ tool: "computer_get_cursor_position" }, inactive),
+      );
+      expect(result.isError).toBe(true);
+      expect(backend.callsFor("readClipboard")).toHaveLength(0);
+      expect(backend.callsFor("getCursorPosition")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("passes cancellation to a pending canonical clipboard approval", async () => {
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let approvalSignal: AbortSignal | undefined;
+    const authorize: NonNullable<AgentGatewayComputerToolsOptions["authorizeAction"]> = async (
+      _name,
+      _args,
+      _context,
+      signal,
+    ) => {
+      approvalSignal = signal;
+      entered();
+      return new Promise<boolean>((resolve) =>
+        signal.addEventListener("abort", () => resolve(false), { once: true }),
+      );
+    };
+    const { backend, manager, byName } = await setup(new FakeComputerBackend(), authorize);
+    const controller = new AbortController();
+    try {
+      const pending = Effect.runPromise(
+        byName.get("computer_inspect")!.handler({ tool: "computer_read_clipboard" }, makeContext()),
+        { signal: controller.signal },
+      );
+      const outcome = pending.catch(() => "cancelled");
+      await started;
+      controller.abort();
+      expect(await outcome).toBe("cancelled");
+      expect(approvalSignal?.aborted).toBe(true);
+      expect(backend.callsFor("readClipboard")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
 describe("computer_run", () => {
   it("reports the active step instead of one generic batch label", async () => {
     const { manager, call } = await setup();
@@ -5150,14 +5311,13 @@ describe("computer_help", () => {
     }
   });
 
-  it("does not invent a batch route for hidden read-only specialists", async () => {
+  it("exposes an image-preserving inspection route for hidden specialists", async () => {
     const { call, manager } = await setup();
     try {
       const help = resultJson(await call("computer_help", { tool: "computer_zoom" }));
       expect(help).toMatchObject({
         advertised: false,
-        availability:
-          "No computer_run step; requires a direct gateway client or provider forwarder.",
+        inspection: { name: "computer_inspect", tool: "computer_zoom" },
       });
       expect(help).not.toHaveProperty("batchStep");
       for (const args of [
@@ -5165,6 +5325,43 @@ describe("computer_help", () => {
         { tool: "computer_select_text", topic: "tools" },
       ]) {
         expect((await call("computer_help", args)).isError).toBe(true);
+      }
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("gives every hidden desktop tool a currently advertised canonical route", async () => {
+    const { call, tools, manager } = await setup();
+    try {
+      const advertised = new Set(
+        tools.filter((tool) => tool.discoveryOnly !== true).map((tool) => tool.definition.name),
+      );
+      const inspectionNames = schemaEnum(
+        new Map(tools.map((tool) => [tool.definition.name, tool])),
+        "computer_inspect",
+        "tool",
+      );
+      for (const tool of tools.filter((entry) => entry.discoveryOnly === true)) {
+        const name = tool.definition.name;
+        const help = resultJson(await call("computer_help", { tool: name })) as {
+          advertised: boolean;
+          batchStep?: { type: string };
+          inspection?: { name: string; tool: string };
+        };
+        expect(help.advertised, name).toBe(false);
+        if (help.batchStep) {
+          expect(advertised.has("computer_run"), name).toBe(true);
+          expect(name).toBe(`computer_${help.batchStep.type}`);
+        } else {
+          expect(help.inspection, name).toEqual({
+            name: "computer_inspect",
+            tool: name,
+            instruction: "Pass this schema's arguments in the arguments object.",
+          });
+          expect(advertised.has(help.inspection!.name), name).toBe(true);
+          expect(inspectionNames, name).toContain(name);
+        }
       }
     } finally {
       await manager.dispose();
@@ -5182,7 +5379,7 @@ describe("computer_help", () => {
       expect(json.chapters).toContain("set_window_minimized");
       // The generated index is part of the "all" read: a discovery-only name
       // that no chapter's prose names proves the catalog joined the chapters.
-      expect(json.chapters).toContain("computer_select_text");
+      expect(json.chapters).toContain("computer_write_clipboard");
       expect(json.chapters).toContain("Available as computer_run steps");
       expect(json.chapters).not.toContain("computer_recording");
       expect(json.chapters).not.toContain("computer_replay");
@@ -5194,7 +5391,7 @@ describe("computer_help", () => {
   it("refuses an unknown topic and names the valid ones", async () => {
     const { call, manager } = await setup();
     try {
-      const result = await call("computer_help", { topic: "spaces" });
+      const result = await call("computer_help", { topic: "unknown_chapter" });
       expect(result.isError).toBe(true);
       const text = result.content.find((entry) => entry.type === "text");
       expect(text?.type === "text" ? text.text : "").toContain("browser");

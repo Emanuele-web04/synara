@@ -9,6 +9,8 @@ import { COMPUTER_BROWSER_DRIVER_NAMES, COMPUTER_BROWSER_TOOL_NAMES } from "@syn
 
 import type { ComputerBrowserCall } from "../computer/ComputerBackend.ts";
 import { ComputerManager } from "../computer/ComputerManager.ts";
+import { desktopDeliveryMode } from "../computer/DesktopOperationQueue.ts";
+import { isModelDesktopObservationActive } from "../computer/modelDesktopObservation.ts";
 import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
 import type { McpToolCallResult } from "./protocol.ts";
 import type { ToolContext } from "./toolRuntime.ts";
@@ -110,6 +112,19 @@ function bindingResult(tabs: ReadonlyArray<Record<string, unknown>>) {
 }
 
 describe("computer_browser_* gateway tools", () => {
+  it("authorizes fresh browser observations only while the model state call runs", async () => {
+    const { backend, call } = await setup({ authorizeAction: async () => true });
+    const scopes: boolean[] = [];
+    const originalCall = backend.browser!.call;
+    vi.spyOn(backend.browser!, "call").mockImplementation((request) => {
+      scopes.push(isModelDesktopObservationActive());
+      return originalCall(request);
+    });
+    await call("computer_browser_state", { pid: 123 });
+    await call("computer_browser_prepare", { allow_launch: true });
+    expect(scopes).toEqual([true, false]);
+    expect(isModelDesktopObservationActive()).toBe(false);
+  });
   it("registers the whole family on the computer:control capability with active-turn dispatch", () => {
     const tools = makeAgentGatewayComputerBrowserTools({
       manager: new ComputerManager({ backend: new FakeComputerBackend({ browser: true }) }),
@@ -136,12 +151,28 @@ describe("computer_browser_* gateway tools", () => {
     expect(prepare?.definition.description).toContain("headless by default");
     expect(prepare?.definition.description).toContain("windowed:true");
     expect(prepare?.definition.description).toContain("isolated_named");
-    // The existing-profile attach wording stays the consent-gated contract.
+    // No platform may treat visible or personal-profile input as a Linux fallback.
+    expect(prepare?.definition.description).toContain("confirmed direct-X11 Escape listener");
+    expect(prepare?.definition.description).toContain(
+      "only owned isolated headless targets support mutation",
+    );
+    expect(prepare?.definition.description).toContain(
+      "Wayland/XWayland and standalone hosts permit reads/passive prepare only",
+    );
+    expect(prepare?.definition.description).toContain(
+      "Linux refuses visible launch and personal-profile control",
+    );
+    expect(prepare?.definition.description).not.toContain("Linux cannot launch headlessly");
     expect(prepare?.definition.description).toContain("browser_consent_required");
     const prepareSchema = prepare?.definition.inputSchema as {
       properties?: Record<string, unknown>;
     };
     expect(prepareSchema.properties?.windowed).toBeDefined();
+    expect(prepareSchema.properties?.windowed).toMatchObject({
+      description: expect.stringContaining(
+        "confirmed direct-X11 Escape listener, and refuses true",
+      ),
+    });
     const state = byName.get("computer_browser_state");
     expect(state?.definition.description).toContain("driver_owned_headless");
     const stateSchema = state?.definition.inputSchema as {
@@ -255,6 +286,12 @@ describe("computer_browser_* gateway tools", () => {
       authorizeAction: async () => true,
       resolveForegroundAuthorization: visibility,
     });
+    const modes: string[] = [];
+    const originalCall = backend.browser!.call;
+    vi.spyOn(backend.browser!, "call").mockImplementation((request) => {
+      modes.push(desktopDeliveryMode());
+      return originalCall(request);
+    });
     const args = { allow_launch: true, windowed: true, profile: { mode: "isolated_new" } };
     const allowed = await call("computer_browser_prepare", args);
     expect(allowed.isError).not.toBe(true);
@@ -268,6 +305,9 @@ describe("computer_browser_* gateway tools", () => {
     expect(textOf(revoked)).toContain("foreground_not_requested");
     expect(backend.callsFor("browser.browser_prepare")).toHaveLength(1);
     expect(visibility).toHaveBeenCalledTimes(3);
+    expect(modes).toEqual(["foreground"]);
+    await call("computer_browser_prepare", { ...args, windowed: false });
+    expect(modes).toEqual(["foreground", "background"]);
   });
 
   it("refuses when visible-use authorization changes while ordinary approval is pending", async () => {
@@ -403,6 +443,11 @@ describe("computer_browser_* gateway tools", () => {
       expected: { effect: "dispatched-unknown" },
     },
     {
+      label: "closed native action refusal",
+      reply: { structuredContent: { effect: "refused", route: "dom" } },
+      expected: { effect: "refused", code: "browser_refused" },
+    },
+    {
       label: "DOM readback without application effect proof",
       reply: {
         structuredContent: {
@@ -430,6 +475,86 @@ describe("computer_browser_* gateway tools", () => {
       expect.objectContaining({ tool: "computer_browser_type", ...expected }),
     );
     expect(JSON.stringify(audit.mock.calls)).not.toContain("private text");
+  });
+
+  it("records a proven navigation without issuing another browser call", async () => {
+    const args = { target_id: "bt-1", tab_id: "tab-1", url: "https://example.test/" };
+    const backend = new FakeComputerBackend({
+      browser: () => ({
+        structuredContent: {
+          status: "ok",
+          ...args,
+          verification: { scope: "navigation", method: "page_frame_tree", status: "confirmed" },
+        },
+      }),
+    });
+    const { manager, call } = await setup({ backend, authorizeAction: async () => true });
+    const audit = vi.spyOn(manager, "recordComputerAudit");
+    await call("computer_browser_navigate", args);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: "computer_browser_navigate",
+        effect: "verified",
+      }),
+    );
+    expect(backend.calls.filter((entry) => entry.method.startsWith("browser."))).toHaveLength(1);
+  });
+
+  it("reports field readback without claiming submission succeeded", async () => {
+    const structuredContent = {
+      effect: "unverifiable",
+      route: "dom",
+      evidence: [{ kind: "value_readback" }],
+    };
+    const backend = new FakeComputerBackend({
+      browser: () => ({
+        structuredContent,
+        content: [{ type: "text", text: "legacy dispatch summary" }],
+      }),
+    });
+    const { manager, call } = await setup({ backend, authorizeAction: async () => true });
+    const audit = vi.spyOn(manager, "recordComputerAudit");
+    const result = await call("computer_browser_type", {
+      target_id: "bt-1",
+      tab_id: "tab-1",
+      ref: "p1:2",
+      text: "private value",
+      input_route: "dom_event",
+      replace: true,
+    });
+    expect(result.structuredContent).toEqual(structuredContent);
+    expect(textOf(result)).toContain("Field value matched; application effect unverified");
+    expect(textOf(result)).not.toContain("private value");
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ effect: "dispatched-unknown" }));
+  });
+
+  it("offers one honest next step after unsupported profile attachment without launching it", async () => {
+    const backend = new FakeComputerBackend({
+      browser: () => ({
+        structuredContent: {
+          status: "refused",
+          refusal: {
+            code: "browser_consent_required",
+            message: "consent provider absent",
+          },
+        },
+      }),
+    });
+    const { call } = await setup({ backend, authorizeAction: async () => true });
+    const result = await call("computer_browser_prepare", { pid: 42 });
+    expect(result.structuredContent).toMatchObject({
+      status: "refused",
+      refusal: { code: "browser_consent_required" },
+    });
+    expect(textOf(result)).toContain("cannot attach to your existing browser profile");
+    expect(textOf(result)).toContain(
+      'computer_browser_prepare({allow_launch:true,profile:{mode:"isolated_new"',
+    );
+    expect(textOf(result)).toContain("without your cookies");
+    expect(textOf(result)).toContain(
+      "Do not substitute it when the task requires your existing profile",
+    );
+    expect(backend.callsFor("browser.browser_prepare")).toHaveLength(1);
   });
 
   it("asks the gate once per mutating call and dispatches the mapped driver name", async () => {

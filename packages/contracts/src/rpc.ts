@@ -99,6 +99,7 @@ import {
   ComputerControlEnabledResult,
   ThreadComputerState,
 } from "./computer";
+import { ComputerGetAuditHistoryInput, ComputerGetAuditHistoryResult } from "./computerAudit";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import {
   GitHubProjectProvisionInput,
@@ -233,6 +234,7 @@ import {
   ServerConfig,
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
+  ServerReadThreadDiagnosticsInput,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -751,6 +753,12 @@ export const WsComputerGetStatusRpc = Rpc.make(COMPUTER_WS_METHODS.getStatus, {
   error: WsRpcError,
 });
 
+export const WsComputerGetAuditHistoryRpc = Rpc.make(COMPUTER_WS_METHODS.getAuditHistory, {
+  payload: ComputerGetAuditHistoryInput,
+  success: ComputerGetAuditHistoryResult,
+  error: WsRpcError,
+});
+
 export const WsComputerProvisionRpc = Rpc.make(COMPUTER_WS_METHODS.provision, {
   payload: ComputerProvisionInput,
   success: ComputerProvisionResult,
@@ -893,6 +901,7 @@ export const WsSubscribeComputerEventsRpc = Rpc.make(COMPUTER_WS_METHODS.subscri
 /** Platform-neutral computer control and perception surface. */
 export const WsComputerRpcGroup = RpcGroup.make(
   WsComputerGetStatusRpc,
+  WsComputerGetAuditHistoryRpc,
   WsComputerProvisionRpc,
   WsComputerListWindowsRpc,
   WsComputerGetStateRpc,
@@ -1320,6 +1329,12 @@ export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostic
   error: WsRpcError,
 });
 
+export const WsServerReadThreadDiagnosticsRpc = Rpc.make(WS_METHODS.serverReadThreadDiagnostics, {
+  payload: ServerReadThreadDiagnosticsInput,
+  success: Schema.Unknown,
+  error: WsRpcError,
+});
+
 export const WsServerPrewarmVoiceRpc = Rpc.make(WS_METHODS.serverPrewarmVoice, {
   payload: ServerVoicePrewarmInput,
   success: ServerVoicePrewarmResult,
@@ -1612,6 +1627,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
   WsServerGetDiagnosticsRpc,
+  WsServerReadThreadDiagnosticsRpc,
   WsServerPrewarmVoiceRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,

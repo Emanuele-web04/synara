@@ -127,7 +127,7 @@ it("persists only explicit matching-generation chat intent and clears it on back
   }
 });
 
-it("an admitted one-shot request persists as durable chat until explicit off", async () => {
+it("one-shot requests never persist chat consent, including after a previous chat opt-in", async () => {
   const dir = await mkdtemp(join(tmpdir(), "synara-one-shot-"));
   const file = join(dir, "control.json");
   const manager = new ComputerManager({
@@ -135,20 +135,15 @@ it("an admitted one-shot request persists as durable chat until explicit off", a
     controlStatePath: file,
   });
   try {
-    // A background request admitted without an explicit invocation records
-    // nothing: only the user's own one-shot promotes.
-    expect(await manager.admitControl("thread", "request", 0)).toBe(true);
-    expect(manager.canContinueChatControl("thread")).toBe(false);
-    expect(new ComputerControlState(file).get("thread").chatGeneration).toBeUndefined();
-    // The explicit one-shot persists across admissions until an explicit off.
-    expect(await manager.admitControl("thread", "request", 0, true)).toBe(true);
+    expect(await manager.admitControl("thread", "chat", 0)).toBe(true);
     expect(manager.canContinueChatControl("thread")).toBe(true);
-    expect(new ComputerControlState(file).get("thread").chatGeneration).toBe(0);
-    expect(await manager.admitControl("thread", "request", 0, true)).toBe(true);
-    expect(manager.canContinueChatControl("thread")).toBe(true);
+    for (const explicitInvocation of [false, true, true]) {
+      expect(await manager.admitControl("thread", "request", 0, explicitInvocation)).toBe(true);
+      expect(manager.canContinueChatControl("thread")).toBe(false);
+      expect(new ComputerControlState(file).get("thread").chatGeneration).toBeUndefined();
+    }
     await manager.admitControl("thread", "off", 0);
     expect(manager.canContinueChatControl("thread")).toBe(false);
-    expect(new ComputerControlState(file).get("thread").chatGeneration).toBeUndefined();
   } finally {
     await manager.dispose();
     await rm(dir, { recursive: true, force: true });

@@ -60,6 +60,7 @@ import {
   type ComputerActionObservation,
 } from "../computer/ComputerManager.ts";
 import {
+  computerAuditGatewayRequestId,
   summarizeComputerAuditArgs,
   type ComputerAuditEffect,
   type ComputerAuditEntry,
@@ -380,6 +381,62 @@ const DELIVERY_HINT =
 /** Longest step list one computer_run accepts. */
 const COMPUTER_RUN_MAX_STEPS = 25;
 
+/** Bounded perception routes whose results do not fit a run's JSON steps. */
+const COMPUTER_INSPECTION_TOOL_NAMES = [
+  "computer_read_clipboard",
+  "computer_zoom",
+  "computer_get_accessibility_tree",
+  "computer_get_cursor_position",
+] as const;
+
+function isInspectionToolName(name: string): boolean {
+  return (COMPUTER_INSPECTION_TOOL_NAMES as readonly string[]).includes(name);
+}
+
+/**
+ * These four canonical schemas are flat string/number objects. Validate the
+ * selected definition itself, rather than copy its fields into a second
+ * schema. Reject unfamiliar schema constraints instead of ignoring them.
+ */
+function validateInspectionArguments(
+  value: unknown,
+  definition: ToolEntry["definition"],
+): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ToolInputError('"arguments" must be an object.');
+  }
+  const args = value as Record<string, unknown>;
+  const schema = definition.inputSchema;
+  const properties = schema.properties as Record<string, Record<string, unknown>> | undefined;
+  if (schema.type !== "object" || schema.additionalProperties !== false || !properties) {
+    throw new ToolInputError("The inspection schema cannot be validated.");
+  }
+  const required = schema.required as readonly string[] | undefined;
+  for (const key of required ?? []) {
+    if (!Object.hasOwn(args, key)) throw new ToolInputError(`Missing required argument "${key}".`);
+  }
+  for (const [key, property] of Object.entries(properties)) {
+    if (
+      (property.type !== "string" && property.type !== "number") ||
+      Object.keys(property).some((field) => field !== "type" && field !== "description")
+    ) {
+      throw new ToolInputError("The inspection schema cannot be validated.");
+    }
+    if (!Object.hasOwn(args, key)) continue;
+    const value = args[key];
+    if (
+      (property.type === "string" && typeof value !== "string") ||
+      (property.type === "number" && (typeof value !== "number" || !Number.isFinite(value)))
+    ) {
+      throw new ToolInputError(`Argument "${key}" must be a ${property.type}.`);
+    }
+  }
+  for (const key of Object.keys(args)) {
+    if (!Object.hasOwn(properties, key)) throw new ToolInputError(`Unknown argument "${key}".`);
+  }
+  return args;
+}
+
 /**
  * Per-app notes that change how the standard tools behave, attached once to
  * the first state read scoped to that app's window. Verified behavior only —
@@ -387,8 +444,7 @@ const COMPUTER_RUN_MAX_STEPS = 25;
  * Keyed by the lowercase appName computer_list_windows reports.
  */
 const APP_GUIDANCE: Record<string, string> = {
-  slack:
-    "Slack: prefer set_value on the message composer — type_text submits the message on Return, while set_value inserts text and newlines without sending. When the composer holds 3+ characters, a hint button below it names the key combination that adds a new line; the combination not listed sends.",
+  slack: COMPUTER_HELP_SECTIONS.slack,
 };
 
 function keyboardTargetProperty(): Record<string, unknown> {
@@ -1613,6 +1669,7 @@ export function makeAgentGatewayComputerTools(
         const target = computerAuditTarget(args, drivenApps, resultWindowId);
         manager.recordComputerAudit({
           tool: name,
+          ...computerAuditGatewayRequestId(context.jsonRpcRequestId),
           threadId: context.callerThreadId,
           ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
           args: summarizeComputerAuditArgs(args),
@@ -2830,8 +2887,15 @@ export function makeAgentGatewayComputerTools(
       "Available as computer_run steps (read computer_help with tool for fields):",
       ...hidden.filter((entry) => batchStepTypeFor(entry.definition.name) !== undefined).map(line),
       "",
-      "Direct calls only (gateway client or provider forwarder); no computer_run step:",
-      ...hidden.filter((entry) => batchStepTypeFor(entry.definition.name) === undefined).map(line),
+      "Available through computer_inspect (read computer_help with tool for fields):",
+      ...hidden.filter((entry) => isInspectionToolName(entry.definition.name)).map(line),
+      ...hidden
+        .filter(
+          (entry) =>
+            batchStepTypeFor(entry.definition.name) === undefined &&
+            !isInspectionToolName(entry.definition.name),
+        )
+        .map((entry) => `${line(entry)} (requires direct gateway access or a provider forwarder)`),
     ].join("\n");
   };
 
@@ -3484,9 +3548,59 @@ export function makeAgentGatewayComputerTools(
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
       requiresActiveTurn: true,
       definition: {
+        name: "computer_inspect",
+        description:
+          "Inspect clipboard, a magnified window region, desktop inventory or cursor position. Read computer_help with the selected tool for its argument schema. Clipboard reads require task approval.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            tool: { type: "string", enum: [...COMPUTER_INSPECTION_TOOL_NAMES] },
+            arguments: {
+              type: "object",
+              description: "Arguments from that tool's schema; default {}.",
+            },
+          },
+          required: ["tool"],
+          additionalProperties: false,
+        },
+        annotations: {
+          title: "Inspect the computer",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      handler: (args, context) =>
+        Effect.suspend(() => {
+          try {
+            if (Object.keys(args).some((key) => key !== "tool" && key !== "arguments")) {
+              throw new ToolInputError('computer_inspect accepts only "tool" and "arguments".');
+            }
+            const name = args.tool;
+            if (typeof name !== "string" || !isInspectionToolName(name)) {
+              throw new ToolInputError("Unknown Computer inspection tool.");
+            }
+            const entry = entries.find((candidate) => candidate.definition.name === name)!;
+            const toolArgs = validateInspectionArguments(
+              Object.hasOwn(args, "arguments") ? args.arguments : {},
+              entry.definition,
+            );
+            // Delegate once: the canonical handler owns approval, cancellation,
+            // queue admission and image delivery. No second lease or capture.
+            return entry.handler(toolArgs, context);
+          } catch (error) {
+            return Effect.succeed(mcpToolResultError(errorText(error)));
+          }
+        }),
+    },
+    {
+      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
+      requiresActiveTurn: true,
+      definition: {
         name: "computer_help",
         description:
-          "Read Computer guidance: no arguments lists chapters; topic reads one chapter. Pass tool instead for one exact desktop-tool schema and its supported computer_run step fields. Looking up a hidden tool does not register it with your provider; use its batch step when available.",
+          "Read Computer guidance: no arguments lists chapters; topic reads one. Pass tool instead for its exact schema and computer_run or computer_inspect route. Lookup does not register a hidden tool with your provider.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3527,12 +3641,20 @@ export function makeAgentGatewayComputerTools(
             definition: entry.definition,
             advertised: entry.discoveryOnly !== true,
             ...(stepType === undefined
-              ? entry.discoveryOnly === true
+              ? isInspectionToolName(toolName)
                 ? {
-                    availability:
-                      "No computer_run step; requires a direct gateway client or provider forwarder.",
+                    inspection: {
+                      name: "computer_inspect",
+                      tool: toolName,
+                      instruction: "Pass this schema's arguments in the arguments object.",
+                    },
                   }
-                : {}
+                : entry.discoveryOnly === true
+                  ? {
+                      availability:
+                        "Requires direct gateway access or a provider forwarder; help does not register the tool.",
+                    }
+                  : {}
               : {
                   batchStep: {
                     type: stepType,

@@ -1,13 +1,15 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ComputerManager } from "./ComputerManager.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import {
   COMPUTER_AUDIT_MAX_ENTRIES,
+  COMPUTER_AUDIT_MAX_BYTES,
   ComputerAuditLog,
   summarizeComputerAuditArgs,
 } from "./computerAuditLog.ts";
@@ -21,6 +23,7 @@ async function tempDir(): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -159,6 +162,102 @@ describe("ComputerAuditLog", () => {
     const log = new ComputerAuditLog(join(blocker, "computer-audit.jsonl"));
     expect(() => log.record({ tool: "computer_click", effect: "verified" })).not.toThrow();
     await log.flush();
+  });
+
+  it("retains a bounded UTF-8 tail of a huge legacy file without reading its prefix", async () => {
+    const dir = await tempDir();
+    const filePath = join(dir, "computer-audit.jsonl");
+    const legacy = await fs.open(filePath, "w", 0o600);
+    // Sparse history makes a full-file read materially larger than the allowed
+    // evidence tail without allocating that prefix in the fixture itself.
+    const prefixBytes = 16 * COMPUTER_AUDIT_MAX_BYTES;
+    await legacy.truncate(prefixBytes);
+    const tail =
+      Array.from({ length: 2_000 }, (_, index) =>
+        JSON.stringify({
+          ts: "old",
+          tool: "computer_click",
+          args: { index, label: "界🙂".repeat(100) },
+        }),
+      ).join("\n") + "\n";
+    await legacy.write(tail, prefixBytes, "utf8");
+    const handlePrototype: Pick<typeof legacy, "read"> = Object.getPrototypeOf(legacy);
+    await legacy.close();
+    const reads = vi.spyOn(handlePrototype, "read");
+    const wholeFileReads = vi.spyOn(fs, "readFile");
+    const log = new ComputerAuditLog(filePath);
+    log.record({ tool: "computer_click", args: { index: -1 }, effect: "verified" });
+    log.record({ tool: "computer_click", args: { index: -2 }, effect: "verified" });
+    await log.flush();
+    expect(wholeFileReads).not.toHaveBeenCalled();
+    const positionalReads = reads.mock.calls as unknown as readonly (readonly [
+      buffer: Uint8Array,
+      offset: number,
+      length: number,
+      position: number,
+    ])[];
+    expect(positionalReads.length).toBeGreaterThan(0);
+    expect(
+      positionalReads.every(
+        ([, , length, position]) =>
+          length <= COMPUTER_AUDIT_MAX_BYTES && position >= prefixBytes - COMPUTER_AUDIT_MAX_BYTES,
+      ),
+    ).toBe(true);
+    expect(positionalReads.reduce((bytes, [, , length]) => bytes + length, 0)).toBeLessThanOrEqual(
+      2 * COMPUTER_AUDIT_MAX_BYTES,
+    );
+    vi.restoreAllMocks();
+
+    const retained = await readFile(filePath, "utf8");
+    const entries = retained
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(COMPUTER_AUDIT_MAX_BYTES);
+    expect(entries.length).toBeLessThanOrEqual(COMPUTER_AUDIT_MAX_ENTRIES);
+    expect(entries.slice(-2).map((entry) => entry.args.index)).toEqual([-1, -2]);
+    const historical = entries.slice(0, -2);
+    expect(historical.length).toBeGreaterThan(0);
+    expect(historical.at(-1).args.index).toBe(1_999);
+    expect(historical.every((entry) => entry.args.label === "界🙂".repeat(100))).toBe(true);
+    expect(
+      historical.every(
+        (entry, index) => index === 0 || entry.args.index === historical[index - 1].args.index + 1,
+      ),
+    ).toBe(true);
+  });
+
+  it("omits oversized or unserializable evidence without poisoning subsequent appends", async () => {
+    const dir = await tempDir();
+    const filePath = join(dir, "computer-audit.jsonl");
+    const log = new ComputerAuditLog(filePath);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(() =>
+      log.record({ tool: "computer_click", args: circular, effect: "verified" }),
+    ).not.toThrow();
+    log.record({
+      tool: "computer_click",
+      args: { label: "界".repeat(COMPUTER_AUDIT_MAX_BYTES) },
+      effect: "verified",
+    });
+    log.record({ tool: "computer_click", gatewayRequestId: "next", effect: "verified" });
+    await log.flush();
+    const lines = (await readFile(filePath, "utf8")).trim().split("\n");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0]!).gatewayRequestId).toBe("next");
+  });
+
+  it("separates an interrupted legacy tail from the next complete action", async () => {
+    const dir = await tempDir();
+    const filePath = join(dir, "computer-audit.jsonl");
+    await writeFile(filePath, '{"tool":"computer_click"');
+    const log = new ComputerAuditLog(filePath);
+    log.record({ tool: "computer_click", gatewayRequestId: "next", effect: "verified" });
+    await expect(log.readHistory({})).resolves.toMatchObject({
+      entries: [{ gatewayRequestId: "next" }],
+      truncated: true,
+    });
   });
 });
 

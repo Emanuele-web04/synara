@@ -10,6 +10,7 @@ export const SYNARA_COMPUTER_TOOL_NAMES = [
   "computer_get_screen_size",
   "computer_get_state",
   "computer_help",
+  "computer_inspect",
   "computer_invoke_menu",
   "computer_kill_app",
   "computer_launch_app",

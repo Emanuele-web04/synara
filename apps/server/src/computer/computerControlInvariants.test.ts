@@ -146,9 +146,8 @@ describe("Provider authority invariants", () => {
       expect((await manager.getThreadState("audit")).controlGeneration).toBe(stopped.generation);
       expect(await manager.admitControl("audit", "request", 0, true)).toBe(false);
       expect(await manager.admitControl("audit", "request", stopped.generation, true)).toBe(true);
-      // An admitted one-shot request promotes to durable chat: it persists
-      // until an explicit off, so a goal continuation still finds it.
-      expect(manager.canContinueChatControl("audit")).toBe(true);
+      // Re-arming this explicit request never authorizes later turns or goals.
+      expect(manager.canContinueChatControl("audit")).toBe(false);
     } finally {
       await manager.dispose();
     }

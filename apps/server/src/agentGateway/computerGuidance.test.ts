@@ -6,6 +6,7 @@ import {
   COMPUTER_HELP_TOPICS,
   computerToolInstructions,
 } from "./computerGuidance.ts";
+import { renderSynaraHarnessPolicy } from "./harnessPolicy.ts";
 
 describe("computer guidance", () => {
   it("keeps core guidance concise and explains the callable batch route", () => {
@@ -24,6 +25,7 @@ describe("computer guidance", () => {
     expect(notes).toContain("repeated_unverified_action");
     expect(notes).toContain("Use computer_run to batch known desktop steps in one call");
     expect(notes).toContain('computer_help({tool:"computer_invoke_menu"})');
+    expect(notes).toContain("computer_inspect route");
     expect(notes).toContain("does not add it to your provider catalog");
     expect(notes.length).toBeLessThanOrEqual(3_800);
     for (const retired of [
@@ -66,6 +68,46 @@ describe("computer guidance", () => {
     expect(browser).toContain("own search box");
     expect(browser).toContain("do not leave the browser");
     expect(browser).toContain("Refs die on navigation");
+    expect(browser).toContain('scope:"navigation",status:"confirmed"');
+    expect(browser).toContain("proves field content, not submission");
+    expect(browser).toContain("never automatically repeat input");
+  });
+
+  it("limits Linux mutations to owned headless browsers with a confirmed direct-X11 Escape listener", () => {
+    const notes = computerToolInstructions();
+    const linux = COMPUTER_HELP_SECTIONS.linux;
+    for (const text of [
+      "display/AT-SPI access",
+      "native desktop input is unavailable",
+      "only driver-owned isolated headless profiles",
+      "verified Linux driver",
+      "confirmed direct-X11 Escape listener",
+      "does not detect general human takeover",
+      "Wayland/XWayland portal registration and standalone hosts cannot prove Escape",
+      "input_monitor_unavailable",
+      "passive browser_prepare (allow_launch:false, no strategy)",
+      "linux_browser_cleanup_unavailable",
+      "Visible launches and personal-profile control are unavailable",
+      "do not retry through shell or foreground input",
+    ]) {
+      expect(linux, text).toContain(text);
+    }
+    expect(linux.length).toBeLessThanOrEqual(900);
+    expect(notes).toContain("Linux native desktop input is unavailable");
+    expect(notes).toContain("packaged host's direct-X11 Escape listener");
+    expect(notes).toContain("Wayland/XWayland and standalone hosts permit browser reads only");
+    expect(notes).not.toContain(linux);
+    for (const guidance of [notes, linux, COMPUTER_HELP_SECTIONS.browser]) {
+      expect(guidance).not.toContain("Linux cannot launch headlessly");
+      expect(guidance).not.toContain("native input and headless launch are unavailable");
+      expect(guidance).not.toContain("explicitly requested visible launch");
+    }
+    const disabled = renderSynaraHarnessPolicy({
+      gatewayControlAvailable: true,
+      enableComputerControl: false,
+    });
+    expect(disabled).not.toContain("computer_");
+    expect(disabled).not.toContain("direct-X11");
   });
 
   it("keeps the visibility chapter about explicit user-requested controls", () => {
@@ -83,13 +125,13 @@ describe("computer guidance", () => {
     expect(COMPUTER_HELP_TOPICS).not.toContain("recording");
 
     expect(COMPUTER_HELP_SECTIONS.menus.length).toBeLessThanOrEqual(700);
-    for (const topic of ["browser", "hidden", "foreground", "forms"] as const) {
+    for (const topic of ["browser", "hidden", "foreground", "forms", "spaces"] as const) {
       expect(COMPUTER_HELP_SECTIONS[topic].length, topic).toBeLessThanOrEqual(900);
     }
     expect(COMPUTER_HELP_SECTIONS.tools.length).toBeGreaterThanOrEqual(100);
     expect(COMPUTER_HELP_SECTIONS.tools.length).toBeLessThanOrEqual(300);
     expect(COMPUTER_HELP_SECTIONS.tools).toContain("computer_run");
-    expect(COMPUTER_HELP_SECTIONS.tools).toContain("provider forwarder or direct gateway client");
+    expect(COMPUTER_HELP_SECTIONS.tools).toContain("computer_inspect");
 
     for (const topic of COMPUTER_HELP_TOPICS) {
       expect(COMPUTER_HELP_SECTIONS[topic].length, topic).toBeGreaterThan(0);
@@ -109,5 +151,31 @@ describe("computer guidance", () => {
         line,
       ).toBe(true);
     }
+  });
+
+  it("keeps application playbooks on demand without expanding the active prompt", () => {
+    const notes = computerToolInstructions();
+    for (const app of [
+      "finder",
+      "editors",
+      "terminals",
+      "electron",
+      "calculator",
+      "slack",
+    ] as const) {
+      expect(COMPUTER_HELP_SECTIONS[app].length).toBeLessThanOrEqual(700);
+      expect(COMPUTER_HELP_INDEX).toContain(`${app} —`);
+      expect(notes).not.toContain(COMPUTER_HELP_SECTIONS[app]);
+    }
+    expect(COMPUTER_HELP_SECTIONS.electron).toContain("same_pid_keyboard_ambiguity");
+    expect(COMPUTER_HELP_SECTIONS.editors).toContain("not that it was saved or synced");
+  });
+
+  it("limits Space metadata to observed membership without promising workspace control", () => {
+    const spaces = COMPUTER_HELP_SECTIONS.spaces;
+    expect(spaces).toContain("spaceIds, currentSpaceId and onCurrentSpace");
+    expect(spaces).toContain("do not enumerate every Space or empty Spaces");
+    expect(spaces).toContain("cannot create, switch, move windows between or own Spaces");
+    expect(computerToolInstructions()).not.toContain(spaces);
   });
 });

@@ -89,6 +89,32 @@ const text = (value: unknown, max = 1024): string =>
   typeof value === "string" ? value.slice(0, max) : "";
 const number = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) ? value : NaN;
+function captureAccessAvailable(permission: Record<string, unknown>, platform: string): boolean {
+  if (platform !== "linux" || typeof permission.screen_recording === "boolean")
+    return permission.screen_recording === true;
+  // These are display prerequisites, not proof that every compositor exposes
+  // capture. A failed real capture still marks capture health unavailable.
+  return (
+    permission.x11 === true || (permission.wayland === true && permission.wayland_enabled === true)
+  );
+}
+function missingComputerPermissions(
+  permission: Record<string, unknown>,
+  platform: string,
+): ComputerPermission[] {
+  const missing: ComputerPermission[] = [];
+  const accessibility =
+    platform === "linux"
+      ? (permission.atspi ?? permission.accessibility)
+      : permission.accessibility;
+  if (accessibility !== true) missing.push("accessibility");
+  if (!captureAccessAvailable(permission, platform)) missing.push("screenRecording");
+  // Only the macOS host with a physical input listener reports this grant.
+  // Legacy/standalone drivers must not acquire an invented macOS requirement.
+  if (platform === "darwin" && permission.input_monitoring === false)
+    missing.push("inputMonitoring");
+  return missing;
+}
 function optionalRect(value: unknown): ComputerRect | undefined {
   const r = record(value);
   const out = {
@@ -239,14 +265,14 @@ function cuaKey(value: string): string {
   return aliases[key] ?? key;
 }
 
-/** The single macOS backend. Cua owns native actions; Synara owns admission,
+/** The Cua backend. Cua owns native actions; Synara owns admission,
  * session authority, explicit delivery policy and the provider result. */
 export class CuaComputerBackend implements ComputerBackend {
   // Focus-neutral semantic writes are a Synara-patch guarantee. Unknown
   // (pre-handshake) reads as the patched default; `0` is the unpatched
   // upstream driver, where the property is unverified and unclaimed.
   get focusNeutralSemanticText(): boolean {
-    return this.driverNativeRevision !== 0;
+    return (this.hostPlatform ?? process.platform) === "darwin" && this.driverNativeRevision !== 0;
   }
   readonly computerId = DEFAULT_COMPUTER_ID;
   // The AXPress/meta-key dialect is macOS semantics; Windows and Linux
@@ -417,7 +443,7 @@ export class CuaComputerBackend implements ComputerBackend {
   ): Promise<CuaReply> {
     if (this.disposed || !this.endpoint)
       throw new CuaActionError(
-        "Open this session in the Synara macOS desktop app to use Computer.",
+        "Open this session in a supported Synara desktop app to use Computer.",
         "not-dispatched",
         "gui_host_required",
       );
@@ -440,6 +466,10 @@ export class CuaComputerBackend implements ComputerBackend {
           endpoint,
           {
             ...request,
+            // Host admission uses the server-authorized mode, never a model's
+            // native arguments. Linux does not implement the macOS background
+            // input contract and must refuse those routes before dispatch.
+            ...(request.method === "call" ? { deliveryMode: desktopDeliveryMode() } : {}),
             ...(task ? { task } : {}),
             ...(request.method === "call" &&
             (request.name === "get_window_state" || request.name === "get_desktop_state")
@@ -584,11 +614,14 @@ export class CuaComputerBackend implements ComputerBackend {
       return {
         kind: "backend-unavailable",
         message:
-          "Computer requires the Synara macOS desktop app, which owns the native permissions.",
+          "Computer requires a connected Synara desktop host, which owns native access on that computer.",
       };
     try {
       await this.host({ method: "probe" });
-      return this.currentAvailability.kind === "backend-unavailable"
+      return this.currentAvailability.kind === "backend-unavailable" &&
+        this.snapshotAt === 0 &&
+        this.currentHealth.consecutiveFailures === 0 &&
+        this.currentHealth.lastFailure === undefined
         ? { kind: "available", backend: "cua" }
         : this.currentAvailability;
     } catch (error) {
@@ -599,27 +632,34 @@ export class CuaComputerBackend implements ComputerBackend {
     }
   }
   async availability(): Promise<ComputerAvailability> {
-    await this.refresh();
+    try {
+      await this.refresh();
+    } catch {
+      // refresh records the failed native prerequisite in both availability
+      // and health. Status must carry that diagnosis instead of failing RPC.
+    }
     return this.currentAvailability;
   }
   health(): ComputerHealth {
     return this.currentHealth;
   }
   capabilities(): ComputerCapabilities {
+    const nativeInputAvailable = (this.hostPlatform ?? process.platform) !== "linux";
     return {
       ...NO_COMPUTER_CAPABILITIES,
       windows: true,
       windowBounds: true,
       stacking: true,
       capture: true,
-      input: true,
+      input: nativeInputAvailable,
       clipboard: true,
-      focus: true,
-      raise: true,
+      focus: nativeInputAvailable,
+      raise: nativeInputAvailable,
       // The compact agent cursor is a Synara-patch rendering path. Unknown
       // (no handshake yet) reads as the patched default; `0` is the
       // unpatched upstream driver's honest answer.
-      ghostCursor: this.driverNativeRevision !== 0,
+      ghostCursor:
+        (this.hostPlatform ?? process.platform) === "darwin" && this.driverNativeRevision !== 0,
       visibleDesktop: true,
     };
   }
@@ -645,6 +685,8 @@ export class CuaComputerBackend implements ComputerBackend {
     // screen_recording grant clears it, in refresh() below, so a setup that
     // did not actually restore capture cannot launder the health away.
     await this.refresh(true);
+    if (this.currentAvailability.kind === "backend-unavailable")
+      return this.currentAvailability.message;
     if (!this.permissions.length)
       return "Computer permissions are ready. Send a message to continue; no action is retried automatically.";
     const missing = listComputerPermissions(this.permissions);
@@ -661,6 +703,7 @@ export class CuaComputerBackend implements ComputerBackend {
     this.snapshot = (async () => {
       let permission =
         (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
+      const hostPlatform = this.hostPlatform ?? process.platform;
       // tccd can report a transient negative for a freshly spawned session
       // while it maps the running app to its grants — observed to outlive a
       // single 400ms re-probe at turn start. A missing report that follows a
@@ -668,36 +711,47 @@ export class CuaComputerBackend implements ComputerBackend {
       // is published; a steady missing state converges on the last call and a
       // granted answer short-circuits the remaining probes.
       if (
-        (permission.accessibility !== true || permission.screen_recording !== true) &&
+        missingComputerPermissions(permission, hostPlatform).length > 0 &&
         !this.hadMissingPermissions
       ) {
         for (let attempt = 0; attempt < 4; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 600));
           permission =
             (await this.call("check_permissions", { prompt: false })).structuredContent ?? {};
-          if (permission.accessibility === true && permission.screen_recording === true) break;
+          if (missingComputerPermissions(permission, hostPlatform).length === 0) break;
         }
       }
-      this.permissions = [];
-      if (permission.accessibility !== true) this.permissions.push("accessibility");
-      if (permission.screen_recording !== true) this.permissions.push("screenRecording");
+      this.permissions = missingComputerPermissions(permission, hostPlatform);
       this.hadMissingPermissions = this.permissions.length > 0;
       // A capture failure clears only on an observed Screen Recording grant:
       // neither a previous-missing transition nor an explicit setup proves
       // pixels flow again, only a fresh probe saying so does.
-      if (permission.screen_recording === true) this.captureFailed = false;
+      // Only macOS's fresh grant proves its capture prerequisite recovered.
+      // A Linux compositor connection alone must not erase a capture failure.
+      if (hostPlatform !== "linux" && permission.screen_recording === true)
+        this.captureFailed = false;
       const bundleId = text(record(permission.source).host_bundle_id, 256);
       const signature = this.buildSignature();
+      const monitorUnavailable =
+        hostPlatform === "darwin" &&
+        permission.input_monitoring === true &&
+        permission.input_monitor_ready === false;
+      const monitorMessage =
+        "Computer control is paused because the Escape and human-input listener could not start. " +
+        "Reopen Synara, then check Computer settings again.";
       this.setHealth({
         ...this.currentHealth,
-        status: this.captureFailed ? "unavailable" : "connected",
-        captureAvailable: permission.screen_recording === true && !this.captureFailed,
+        status: this.captureFailed || monitorUnavailable ? "unavailable" : "connected",
+        captureAvailable: captureAccessAvailable(permission, hostPlatform) && !this.captureFailed,
         consecutiveFailures: this.captureFailed ? this.currentHealth.consecutiveFailures : 0,
+        ...(monitorUnavailable
+          ? { lastFailure: { at: new Date().toISOString(), message: monitorMessage } }
+          : {}),
       });
       // TCC's setup surface is macOS-only: on other platforms the driver's
       // own probe reports what it found, and the message names the access
       // mechanism that platform actually has.
-      const hostIsDarwin = (this.hostPlatform ?? process.platform) === "darwin";
+      const hostIsDarwin = hostPlatform === "darwin";
       this.currentAvailability = this.permissions.length
         ? {
             kind: "permission-required",
@@ -710,8 +764,10 @@ export class CuaComputerBackend implements ComputerBackend {
                   this.permissions,
                 )} access. Grant it at the OS level the platform uses — display-server access on Linux, integrity/UIAccess on Windows — then try again.`,
           }
-        : { kind: "available", backend: "cua" };
-      if (!this.permissions.length) {
+        : monitorUnavailable
+          ? { kind: "backend-unavailable", message: monitorMessage }
+          : { kind: "available", backend: "cua" };
+      if (this.currentAvailability.kind === "available") {
         await this.readWindows();
         const geometry = (await this.call("get_screen_size")).structuredContent ?? {};
         const width = number(geometry.width),
@@ -723,6 +779,10 @@ export class CuaComputerBackend implements ComputerBackend {
       this.snapshotAt = Date.now();
     })()
       .catch((error) => {
+        this.currentAvailability = {
+          kind: "backend-unavailable",
+          message: String(error).slice(0, 2048),
+        };
         this.setHealth({
           ...this.currentHealth,
           status: "unavailable",
@@ -751,6 +811,15 @@ export class CuaComputerBackend implements ComputerBackend {
         const pid = number(w.pid),
           windowId = number(w.window_id),
           bounds = optionalRect(w.bounds);
+        const currentSpaceId = number(w.current_space_id);
+        const spaceIds =
+          Array.isArray(w.space_ids) &&
+          w.space_ids.length <= COMPUTER_WINDOW_LIST_MAX_LENGTH &&
+          w.space_ids.every(
+            (id: unknown) => typeof id === "number" && Number.isSafeInteger(id) && id > 0,
+          )
+            ? w.space_ids
+            : undefined;
         // WindowServer can return zero-area placeholders. They are not input
         // targets and must not make every other application unavailable.
         if (
@@ -778,6 +847,13 @@ export class CuaComputerBackend implements ComputerBackend {
               Array.isArray(w.space_ids) &&
               w.space_ids.length > 0,
             visible: w.is_on_screen === true && w.on_current_space !== false,
+            ...(spaceIds !== undefined ? { spaceIds } : {}),
+            ...(Number.isSafeInteger(currentSpaceId) && currentSpaceId > 0
+              ? { currentSpaceId }
+              : {}),
+            ...(typeof w.on_current_space === "boolean"
+              ? { onCurrentSpace: w.on_current_space }
+              : {}),
             ...(Number.isInteger(w.z_index) ? { stackingIndex: i } : {}),
           },
         ];
@@ -836,7 +912,19 @@ export class CuaComputerBackend implements ComputerBackend {
     this.stillTarget = { kind: "window", windowId };
   }
   async checkInputReady(windowId: string): Promise<void> {
-    const { pid, window_id } = await this.target(windowId);
+    const { pid, window_id, window } = await this.target(windowId);
+    if (this.hostPlatform === "linux") {
+      // The Linux artifact has no native readiness gate. A fresh exact-window
+      // observation can clear a stale target pause, but does not certify input
+      // delivery: host admission still refuses unsupported background routes.
+      if (!window.visible)
+        throw new CuaActionError(
+          "The Linux target is not visible in the current desktop session.",
+          "not-dispatched",
+          "target_not_on_active_space",
+        );
+      return;
+    }
     const result = await this.call("check_input_ready", { pid, window_id });
     const data = result.structuredContent ?? {};
     if (data.ready !== true || number(data.pid) !== pid || number(data.window_id) !== window_id) {
@@ -931,6 +1019,17 @@ export class CuaComputerBackend implements ComputerBackend {
     const scale = dimensions.width / region.width;
     if (Math.abs(dimensions.height / region.height - scale) > 0.01)
       throw new Error("Cua screenshot dimensions disagree with its geometry.");
+    // Linux has no TCC grant that proves capture recovered. A validated frame
+    // does; a mere connection to the compositor must not clear a prior failure.
+    if ((this.hostPlatform ?? process.platform) === "linux" && this.captureFailed) {
+      this.captureFailed = false;
+      this.setHealth({
+        ...this.currentHealth,
+        status: "connected",
+        captureAvailable: true,
+        consecutiveFailures: 0,
+      });
+    }
     return {
       mimeType: "image/png",
       ...dimensions,
@@ -1342,6 +1441,68 @@ export class CuaComputerBackend implements ComputerBackend {
     admitMutation?: () => void,
   ): Promise<ComputerBackendActionResult> {
     const { pid, window_id, window, baseline } = resolved;
+    const linux = (this.hostPlatform ?? process.platform) === "linux";
+    const deliveryMode = desktopDeliveryMode();
+    let nativeArgs = args;
+    if (linux) {
+      // The unpatched Linux token actuators are not the macOS semantic
+      // contract: several rewalk the PID tree by ordinal and can GrabFocus.
+      // Do not turn a requested exact write into generic focused typing.
+      if (
+        name === "set_value" ||
+        name === "select_text" ||
+        args.semantic_only === true ||
+        args.element_token !== undefined ||
+        args.element_index !== undefined
+      )
+        throw new CuaActionError(
+          "This Linux route cannot preserve the observed semantic element's exact identity. " +
+            "Native input is unavailable until cancellation cleanup is supported; use observation or an existing debuggable browser when appropriate.",
+          "not-dispatched",
+          "linux_semantic_target_unproven",
+        );
+      if (deliveryMode !== "foreground")
+        throw new CuaActionError(
+          "This Linux native route cannot guarantee background input without moving desktop focus or the human pointer. " +
+            "Foreground input is also unavailable until cancellation cleanup is supported; use observation or an existing debuggable browser when appropriate.",
+          "not-dispatched",
+          "linux_background_unavailable",
+        );
+      if (args.action !== undefined)
+        throw new CuaActionError(
+          "This Linux driver does not implement the requested accessibility action.",
+          "not-dispatched",
+          "unsupported_linux_operation",
+        );
+      nativeArgs = { ...args };
+      // These keys select/validate Synara's patched macOS routes and are
+      // rejected by Linux's strict native schemas. The visible-use gate above
+      // runs first so removing them cannot relax a background-only promise.
+      delete nativeArgs.force_synthetic;
+      delete nativeArgs.coordinate_space;
+      delete nativeArgs.expected_window_bounds;
+      if (name === "scroll") {
+        const dx = typeof nativeArgs.delta_x === "number" ? nativeArgs.delta_x : 0;
+        const dy = typeof nativeArgs.delta_y === "number" ? nativeArgs.delta_y : 0;
+        if (
+          (dx !== 0 && dy !== 0) ||
+          (Array.isArray(nativeArgs.modifiers) && nativeArgs.modifiers.length > 0)
+        )
+          throw new CuaActionError(
+            "This Linux driver supports one unmodified scroll axis per gesture. " +
+              "Diagonal and modified scroll gestures are unavailable.",
+            "not-dispatched",
+            "unsupported_linux_operation",
+          );
+        if (dx !== 0 || dy !== 0) {
+          nativeArgs.amount = Math.abs(dx || dy);
+          nativeArgs.by = "line";
+        }
+        delete nativeArgs.delta_x;
+        delete nativeArgs.delta_y;
+        delete nativeArgs.modifiers;
+      }
+    }
     if (!window.visible && !exactSemanticText) {
       const message =
         "The target window is not on the current Space or not on screen. Only an exact retained semantic text element may be mutated without activation; pointer, synthetic keyboard, and generic window actions require computer_activate_window followed by fresh state.";
@@ -1390,7 +1551,7 @@ export class CuaComputerBackend implements ComputerBackend {
         y >= bounds.height
       )
         throw new CuaActionError("Point is outside the target window.", "not-dispatched");
-      pixel = { x, y, coordinate_space: "window_points" };
+      pixel = { x, y, ...(!linux ? { coordinate_space: "window_points" } : {}) };
     }
     assertDesktopOperationActive();
     admitMutation?.();
@@ -1404,11 +1565,13 @@ export class CuaComputerBackend implements ComputerBackend {
           // Always-background semantic AX writes take no delivery_mode —
           // there is no foreground/background split for an attribute write.
           ...(name !== "set_value" && name !== "select_text"
-            ? { delivery_mode: desktopDeliveryMode() }
+            ? { delivery_mode: deliveryMode }
             : {}),
-          ...args,
+          ...nativeArgs,
           ...pixel,
-          ...(point || preparedBounds ? { expected_window_bounds: preparedBounds ?? bounds } : {}),
+          ...(!linux && (point || preparedBounds)
+            ? { expected_window_bounds: preparedBounds ?? bounds }
+            : {}),
         },
         true,
       );
@@ -1875,21 +2038,46 @@ export class CuaComputerBackend implements ComputerBackend {
     await this.call("clipboard_write", { text: value }, true);
   }
   async launchApp(app: string, args?: readonly string[], options?: { readonly hidden?: boolean }) {
-    if (app.startsWith("/"))
+    // A standalone endpoint can run on a different OS than the server.
+    // Learn that OS before choosing a launch schema or dispatching input.
+    if (this.hostPlatform === undefined) await this.host({ method: "probe" });
+    const linux = (this.hostPlatform ?? process.platform) === "linux";
+    if (linux && options?.hidden !== false)
+      throw new CuaActionError(
+        "This Linux driver cannot guarantee a hidden app launch. Use an already open app, " +
+          "or request a visible launch only when the user's task asks to see the app.",
+        "not-dispatched",
+        "unsupported_operation",
+      );
+    if (!linux && app.startsWith("/"))
       throw new CuaActionError(
         "Use an installed app's name or bundle identifier with Cua.",
+        "not-dispatched",
+        "unsupported_operation",
+      );
+    // Upstream splits launch_path on whitespace. Passing a path containing
+    // spaces could execute a different prefix, so use an installed app ID.
+    if (linux && app.startsWith("/") && /\s/.test(app))
+      throw new CuaActionError(
+        "This Linux driver cannot launch an executable path containing whitespace. " +
+          "Use the installed application's desktop ID and pass arguments separately.",
         "not-dispatched",
         "unsupported_operation",
       );
     await this.call(
       "launch_app",
       {
-        ...(/^[a-zA-Z][\w-]*(\.[\w-]+)+$/.test(app) ? { bundle_id: app } : { name: app }),
+        ...(linux
+          ? app.startsWith("/")
+            ? { launch_path: app }
+            : { name: app }
+          : /^[a-zA-Z][\w-]*(\.[\w-]+)+$/.test(app)
+            ? { bundle_id: app }
+            : { name: app }),
         ...(args?.length ? { additional_arguments: args } : {}),
-        // The open -j posture: windows are created but never rendered, and
-        // nothing activates. Only sent when asked — an absent flag is the
-        // ordinary background launch every existing caller expects.
-        ...(options?.hidden === true ? { hidden: true } : {}),
+        // hidden is a Synara macOS extension, absent from upstream Linux's
+        // strict schema. Linux visible consent is checked by the tool layer.
+        ...(!linux && options?.hidden === true ? { hidden: true } : {}),
       },
       true,
     );
@@ -2613,9 +2801,9 @@ export class CuaComputerBackend implements ComputerBackend {
    *
    * Deliberately NOT routed through `call()`: the desktop path converts
    * `isError`/`status:"refused"` replies into thrown `CuaActionError`s, but
-   * a browser refusal IS the result the model must branch on. Desktop-epoch
-   * staleness and model-observation bookkeeping are skipped for the same
-   * reason — a browser reply describes a CDP surface, not the desktop.
+   * a browser refusal IS the result the model must branch on. The host checks
+   * fresh browser observations against the exact CDP target after interruption;
+   * they do not update desktop window geometry.
    */
   readonly browser: ComputerBrowserBackend = {
     call: (call) => this.browserCall(call),
@@ -2624,7 +2812,7 @@ export class CuaComputerBackend implements ComputerBackend {
   private async browserCall(call: ComputerBrowserCall): Promise<ComputerBrowserCallResult> {
     if (this.disposed || !this.endpoint)
       throw new CuaActionError(
-        "Open this session in the Synara macOS desktop app to use Computer.",
+        "Open this session in a supported Synara desktop app to use Computer.",
         "not-dispatched",
         "gui_host_required",
       );
@@ -2646,6 +2834,10 @@ export class CuaComputerBackend implements ComputerBackend {
             method: "call",
             name: call.name,
             args: call.args,
+            deliveryMode: desktopDeliveryMode(),
+            ...(call.name === "get_browser_state"
+              ? { modelObservation: isModelDesktopObservationActive() }
+              : {}),
             task,
             capability: this.capability,
           },

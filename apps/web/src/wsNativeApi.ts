@@ -726,6 +726,8 @@ export function createWsNativeApi(): NativeApi {
       consumeCodexResetCredit: (input) =>
         transport.request(WS_METHODS.serverConsumeCodexResetCredit, input),
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
+      readThreadDiagnostics: (input) =>
+        transport.request(WS_METHODS.serverReadThreadDiagnostics, input),
       generateThreadRecap: (input) =>
         transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
           timeoutMs: null,
@@ -870,6 +872,7 @@ export function createWsNativeApi(): NativeApi {
     },
     computer: {
       getStatus: (input) => transport.request(COMPUTER_WS_METHODS.getStatus, input),
+      getAuditHistory: (input) => transport.request(COMPUTER_WS_METHODS.getAuditHistory, input),
       getState: (input) => transport.request(COMPUTER_WS_METHODS.getState, input),
       provision: (input) =>
         transport.request(COMPUTER_WS_METHODS.provision, input, { timeoutMs: null }),

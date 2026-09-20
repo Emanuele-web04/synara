@@ -149,9 +149,7 @@ describe("Synara harness policy", () => {
   });
 
   it("keeps the gateway policy below its prompt budget", () => {
-    // Budget raised for the one-line Computer discoverability affordance
-    // above (242 chars); it still guards against accidental bloat.
-    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_300);
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_030);
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {
@@ -162,27 +160,24 @@ describe("Synara harness policy", () => {
     assert.notInclude(policy, "device_describe_ui");
   });
 
-  it("keeps the Computer discoverability affordance unconditional on the Computer flag", () => {
-    // A session without Computer tools is exactly where the affordance pays:
-    // the model must route desktop-app work to the Settings switch instead
-    // of substituting shell/AppleScript/browser/device tools.
-    const affordance =
-      "To operate real macOS/Windows apps (open, click, type, scroll), call the computer_* tools the Synara tool list exposes — by exact name. If none are listed, tell the user to turn Computer control on in Settings. Do not substitute shell/AppleScript/browser/device tools.";
+  it("includes Computer tool guidance only when the session can use Computer", () => {
     for (const gatewayControlAvailable of [true, false] as const) {
       for (const enableComputerControl of [true, false, undefined] as const) {
         const policy = renderSynaraHarnessPolicy({
           gatewayControlAvailable,
           ...(enableComputerControl === undefined ? {} : { enableComputerControl }),
         });
-        assert.include(policy, affordance, `${gatewayControlAvailable}/${enableComputerControl}`);
+        const scope = `${gatewayControlAvailable}/${enableComputerControl}`;
+        if (gatewayControlAvailable && enableComputerControl === true) {
+          assert.include(policy, "## Synara computer use", scope);
+          assert.include(policy, "The computer_* tools are live on this session", scope);
+        } else {
+          assert.notInclude(policy, "## Synara computer use", scope);
+          assert.notInclude(policy, "computer_", scope);
+          assert.notInclude(policy, "turn Computer control on in Settings", scope);
+        }
       }
     }
-    // One line, not the gated guidance: sessions without control must not pay
-    // for the full Computer instructions.
-    assert.notInclude(
-      renderSynaraHarnessPolicy({ gatewayControlAvailable: true }),
-      "## Synara computer use",
-    );
   });
 });
 
@@ -209,6 +204,7 @@ it("adds Computer guidance only for an explicitly enabled scoped session across 
     );
     assert.strictEqual(off, explicitOff);
     assert.notInclude(off ?? "", "## Synara computer use");
+    assert.notInclude(off ?? "", "computer_", provider);
     const state = { enableComputerControl: true };
     const on =
       takeSynaraHarnessPolicyForProviderSession(state, {

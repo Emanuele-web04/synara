@@ -10,6 +10,8 @@ import {
   type ComputerGetScreenSizeInput,
   type ComputerGetScreenSizeResult,
   type ComputerGetStateInput,
+  type ComputerGetAuditHistoryInput,
+  type ComputerGetAuditHistoryResult,
   type ComputerGetStatusInput,
   type ComputerHotkeyInput,
   type ComputerInputClickInput,
@@ -76,6 +78,9 @@ export interface WsComputerHandlers {
   readonly [COMPUTER_WS_METHODS.getStatus]: (
     input: ComputerGetStatusInput,
   ) => Effect.Effect<ComputerStatusResult, WsRpcError>;
+  readonly [COMPUTER_WS_METHODS.getAuditHistory]: (
+    input: ComputerGetAuditHistoryInput,
+  ) => Effect.Effect<ComputerGetAuditHistoryResult, WsRpcError>;
   readonly [COMPUTER_WS_METHODS.provision]: (
     input: ComputerProvisionInput,
   ) => Effect.Effect<ComputerProvisionResult, WsRpcError>;
@@ -182,6 +187,13 @@ export function makeWsComputerHandlers(
       [COMPUTER_WS_METHODS.setControlEnabled]: () =>
         Effect.fail(new WsRpcError({ message: UNSUPPORTED_MESSAGE })),
       [COMPUTER_WS_METHODS.getStatus]: () => Effect.succeed(unsupportedStatus),
+      [COMPUTER_WS_METHODS.getAuditHistory]: (input) =>
+        computerService
+          ? attempt(
+              () => computerService.manager.getAuditHistory(input),
+              "Failed to read Computer activity history",
+            )
+          : Effect.succeed({ entries: [], nextCursor: null, truncated: false, status: "disabled" }),
       [COMPUTER_WS_METHODS.provision]: () => unsupported(),
       [COMPUTER_WS_METHODS.listWindows]: () => unsupported(),
       [COMPUTER_WS_METHODS.getState]: () => unsupported(),
@@ -220,6 +232,8 @@ export function makeWsComputerHandlers(
       }, "Failed to change computer authority"),
     [COMPUTER_WS_METHODS.getStatus]: () =>
       attempt(() => manager.getStatus(), "Failed to read computer status"),
+    [COMPUTER_WS_METHODS.getAuditHistory]: (input) =>
+      attempt(() => manager.getAuditHistory(input), "Failed to read Computer activity history"),
     [COMPUTER_WS_METHODS.provision]: () =>
       attempt(() => manager.provision(), "Failed to set up computer control"),
     [COMPUTER_WS_METHODS.listWindows]: () =>
