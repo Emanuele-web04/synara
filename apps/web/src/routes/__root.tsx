@@ -40,6 +40,7 @@ import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoordinator";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
+import { BetaDiagnosticsWelcomeDialog } from "../components/BetaDiagnosticsWelcomeDialog";
 import { useOnboarding } from "../onboarding/useOnboarding";
 import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
@@ -333,6 +334,7 @@ function RootRouteView() {
           <QueuedComposerDrainCoordinator />
           <SafariAccessOnboarding>
             <AppSnapWelcomeDialog />
+            <BetaDiagnosticsWelcomeDialog />
           </SafariAccessOnboarding>
           <GlobalOnboardingDialog />
           <ProjectImportAnnouncementDialog />

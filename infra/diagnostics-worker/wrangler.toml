@@ -1,0 +1,19 @@
+name = "synara-beta-diagnostics"
+main = "worker.ts"
+compatibility_date = "2026-09-01"
+
+# Events land in Analytics Engine (free at beta volume) — query via the
+# Cloudflare dashboard or the GraphQL analytics API.
+[[analytics_engine_datasets]]
+binding = "BETA_EVENTS"
+dataset = "synara_beta_events"
+
+# Minidumps go to R2. Lifecycle rule recommended: expire objects after 30 days.
+[[r2_buckets]]
+binding = "CRASH_DUMPS"
+bucket_name = "synara-beta-crash-dumps"
+
+# Optional shared secret; set with `wrangler secret put INGEST_TOKEN` and bake
+# the same value into beta builds only if you want the endpoint closed.
+# [vars]
+# MAX_DUMP_BYTES = "5242880"

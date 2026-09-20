@@ -25,6 +25,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  crashReporter,
   dialog,
   globalShortcut,
   ipcMain,
@@ -102,6 +103,12 @@ import {
   type BundleSignature,
 } from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
+import { DesktopBetaChannel, resolveBetaHomeDir } from "./betaChannel";
+import {
+  BetaDiagnostics,
+  resolveBetaDiagnosticsEndpoint,
+  type BetaDiagnosticsEventName,
+} from "./betaDiagnostics";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
@@ -387,6 +394,38 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 // for the same lock even when they use the same Electron executable.
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
+
+// Beta-only diagnostics: constructed solely when the baked build flavor is
+// "beta", so production binaries never run a collection path. The payload
+// schema is an allowlist — no prompts, file contents, or paths are collected.
+const betaDiagnostics =
+  desktopFlavor === "beta"
+    ? new BetaDiagnostics({
+        homeDir: BASE_DIR,
+        appVersion: app.getVersion(),
+        platform: process.platform,
+        arch: process.arch,
+      })
+    : null;
+
+if (betaDiagnostics) {
+  crashReporter.start({
+    productName: APP_DISPLAY_NAME,
+    companyName: "Synara",
+    submitURL: `${resolveBetaDiagnosticsEndpoint(process.env)}/v1/crash`,
+    uploadToServer: true,
+    compress: true,
+    globalExtra: { installId: betaDiagnostics.installId, flavor: "beta" },
+  });
+}
+
+const trackBetaDiagnostics = (
+  event: BetaDiagnosticsEventName,
+  payload: Parameters<BetaDiagnostics["track"]>[1],
+): void => {
+  betaDiagnostics?.track(event, payload);
+};
+
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -2793,8 +2832,33 @@ function emitUpdateState(): void {
 }
 
 function setUpdateState(patch: Partial<DesktopUpdateState>): void {
+  const previousStatus = updateState.status;
   updateState = { ...updateState, ...patch };
   emitUpdateState();
+  if (betaDiagnostics && updateState.status !== previousStatus) {
+    const status = updateState.status;
+    if (status === "checking") {
+      trackBetaDiagnostics("update.check", { kind: "update", outcome: "ok" });
+    } else if (status === "available") {
+      trackBetaDiagnostics("update.available", {
+        kind: "update",
+        outcome: "ok",
+        ...(updateState.availableVersion ? { targetVersion: updateState.availableVersion } : {}),
+      });
+    } else if (status === "downloaded") {
+      trackBetaDiagnostics("update.downloaded", {
+        kind: "update",
+        outcome: "ok",
+        ...(updateState.downloadedVersion ? { targetVersion: updateState.downloadedVersion } : {}),
+      });
+    } else if (status === "error") {
+      trackBetaDiagnostics("update.error", {
+        kind: "update",
+        outcome: "error",
+        ...(updateState.errorContext ? { errorContext: updateState.errorContext } : {}),
+      });
+    }
+  }
 }
 
 function shouldEnableAutoUpdates(): boolean {
@@ -4595,6 +4659,10 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       });
       await browserSessionRestore?.shutdown();
       restoreStdIoCapture?.();
+      if (betaDiagnostics) {
+        trackBetaDiagnostics("app.exit", { kind: "lifecycle" });
+        await betaDiagnostics.dispose().catch(() => undefined);
+      }
       desktopShutdownComplete = true;
       writeDesktopLogHeader(`${reason} shutdown complete`);
     },
@@ -4994,6 +5062,23 @@ function registerIpcHandlers(): void {
       });
     }
   });
+
+  const betaChannel = new DesktopBetaChannel({
+    platform: process.platform,
+    homeDir: OS.homedir(),
+    betaHomeDir: resolveBetaHomeDir(),
+    flavor:
+      desktopFlavor === "beta" ? "beta" : desktopFlavor === "canary" ? "canary" : "production",
+  });
+
+  ipcMain.removeHandler(IPC.beta.getState);
+  ipcMain.handle(IPC.beta.getState, async () => betaChannel.getState());
+
+  ipcMain.removeHandler(IPC.beta.launch);
+  ipcMain.handle(IPC.beta.launch, async () => betaChannel.launch());
+
+  ipcMain.removeHandler(IPC.beta.importAndLaunch);
+  ipcMain.handle(IPC.beta.importAndLaunch, async () => betaChannel.importAndLaunch(BASE_DIR));
 
   ipcMain.removeHandler(IPC.updateGetState);
   ipcMain.handle(IPC.updateGetState, async () => updateState);
@@ -5395,6 +5480,11 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
     // the pending ask and count it as quitting for the crash policy.
     const quitAskPending = runningChatsQuitGuard.hasPendingAsk();
     runningChatsQuitGuard.allowPending();
+    trackBetaDiagnostics("app.renderer-crash", {
+      kind: "crash",
+      processType: "renderer",
+      reason: details.reason,
+    });
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
@@ -5744,6 +5834,19 @@ if (hasSingleInstanceLock) {
     .whenReady()
     .then(() => {
       writeDesktopLogHeader("app ready");
+      if (betaDiagnostics) {
+        betaDiagnostics.start();
+        const previousLaunchVersion = parseLastLaunchVersion(readLaunchVersionRecordContents());
+        trackBetaDiagnostics("app.start", { kind: "lifecycle" });
+        if (previousLaunchVersion !== null && previousLaunchVersion !== app.getVersion()) {
+          // A version change across launches means an update install landed.
+          trackBetaDiagnostics("update.installed", {
+            kind: "update",
+            outcome: "ok",
+            targetVersion: app.getVersion(),
+          });
+        }
+      }
       configureAppIdentity();
       if (process.platform === "win32") {
         try {
@@ -5777,6 +5880,17 @@ if (hasSingleInstanceLock) {
       app.on("browser-window-blur", () => {
         markDesktopAppBackgrounded();
       });
+
+      if (betaDiagnostics) {
+        app.on("child-process-gone", (_event, details) => {
+          // GPU/utility process crashes; details.reason is a fixed Electron enum.
+          trackBetaDiagnostics("app.child-process-crash", {
+            kind: "crash",
+            processType: details.type,
+            reason: details.reason,
+          });
+        });
+      }
 
       app.on("browser-window-focus", () => {
         handleDesktopAppForegrounded();

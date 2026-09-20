@@ -76,9 +76,43 @@ bun run dist:desktop:artifact -- --platform mac --target dmg --arch arm64 --flav
 resolved flavor (`synaraFlavor`), so a packaged build cannot silently lose its
 identity at runtime; on packaged builds the embedded value wins over the env var.
 
+## Joining beta from stable
+
+The stable app offers a one-click handoff under **Settings → General → Synara Beta**:
+
+- **Get Synara Beta** opens the public download page when no beta install is
+  detected.
+- **Copy my data and open** writes a marker at
+  `~/.synara-beta/import-requested.json` and launches the beta app. On its next
+  startup the beta server consumes the marker, snapshots stable's database with
+  `VACUUM INTO` (a consistent point-in-time copy that works while stable is
+  running), copies settings and provider secrets, then deletes the marker. The
+  outcome is written to `~/.synara-beta/import-result.json` so the stable
+  settings card can report success or the failure reason.
+- **Open Beta** launches the installed beta app without touching data.
+- The import button is disabled while a beta server is running so an in-flight
+  beta never reads a half-written snapshot; quit beta first, then import.
+- Launch/import are refused unless the running app is a production-flavor build.
+
+The marker format lives in `packages/shared/src/betaChannel.ts`
+(`BetaImportRequest`, `BetaImportResult`); the desktop side is
+`apps/desktop/src/betaChannel.ts` and the consuming import is
+`apps/server/src/betaImport.ts`.
+
+The import copies settings, provider secrets, and a database snapshot. It never
+copies logs, diagnostics queues, runtime files, or other import markers, and it
+never writes into the stable home except the one marker file.
+
+## Diagnostics
+
+Beta builds ship always-on diagnostics; stable builds contain no sender code at
+all. See [diagnostics.md](diagnostics.md) for exactly what is collected, what is
+never collected, and how the Cloudflare ingest works.
+
 ## Data
 
-Beta starts with an empty `~/.synara-beta` home. It does not copy, share, or migrate
-stable (`~/.synara`) or Canary (`~/.synara-canary`) data. Both apps can run at the
-same time: the server binds an ephemeral port, single-instance locks are scoped per
-Electron `userData`, and provider secrets are file-scoped inside each home.
+Without an explicit import, beta starts with an empty `~/.synara-beta` home. It
+does not copy, share, or migrate stable (`~/.synara`) or Canary
+(`~/.synara-canary`) data on its own. Both apps can run at the same time: the
+server binds an ephemeral port, single-instance locks are scoped per Electron
+`userData`, and provider secrets are file-scoped inside each home.

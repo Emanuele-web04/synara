@@ -112,6 +112,10 @@
       "types": "./src/desktopIdentity.ts",
       "import": "./src/desktopIdentity.ts"
     },
+    "./betaChannel": {
+      "types": "./src/betaChannel.ts",
+      "import": "./src/betaChannel.ts"
+    },
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"

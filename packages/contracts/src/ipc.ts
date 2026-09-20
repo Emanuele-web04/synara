@@ -367,6 +367,36 @@ export interface DesktopUpdateActionResult {
   state: DesktopUpdateState;
 }
 
+/** Result of a stable-side probe for a parallel Synara Beta install. */
+export interface DesktopBetaChannelState {
+  /** False on web builds and unsupported probing environments. */
+  readonly supported: boolean;
+  /** Flavor of the running desktop app; the card only acts on "production". */
+  readonly flavor: "production" | "beta" | "canary";
+  readonly installed: boolean;
+  readonly version: string | null;
+  /** Beta's server pid is alive (its launch marker/runtime file says so). */
+  readonly running: boolean;
+  /** Timestamp of the last completed data import reported by the beta app. */
+  readonly lastImportAt: string | null;
+  readonly lastImportError: string | null;
+  /** Public download page handed to the user when beta is not installed. */
+  readonly downloadUrl: string;
+}
+
+export type DesktopBetaActionError =
+  | "not-supported"
+  | "not-installed"
+  | "beta-running"
+  | "launch-failed"
+  | "internal";
+
+export interface DesktopBetaActionResult {
+  readonly ok: boolean;
+  readonly error?: DesktopBetaActionError;
+  readonly message?: string;
+}
+
 export interface BrowserTabState {
   /** Live popup relationship; not restored as an OAuth session after restart. */
   openerTabId?: string;
@@ -756,6 +786,13 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  /** Stable→Beta opt-in surface. Absent on builds that do not ship it. */
+  beta?: {
+    getState: () => Promise<DesktopBetaChannelState>;
+    /** Writes the import marker and launches Synara Beta to consume it. */
+    importAndLaunch: () => Promise<DesktopBetaActionResult>;
+    launch: () => Promise<DesktopBetaActionResult>;
+  };
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;

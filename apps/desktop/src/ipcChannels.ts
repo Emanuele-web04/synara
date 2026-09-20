@@ -29,6 +29,11 @@ export const DESKTOP_IPC_CHANNELS = {
   menuAction: "desktop:menu-action",
   quitConfirmationRequest: "desktop:quit-confirmation-request",
   quitConfirmationResponse: "desktop:quit-confirmation-response",
+  beta: {
+    getState: "desktop:beta-get-state",
+    launch: "desktop:beta-launch",
+    importAndLaunch: "desktop:beta-import-and-launch",
+  },
   updateState: "desktop:update-state",
   updateGetState: "desktop:update-get-state",
   updateCheck: "desktop:update-check",
@@ -119,5 +124,6 @@ export const DESKTOP_IPC_CHANNELS = {
 export const BROWSER_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.browser;
 export const BROWSER_ANNOTATION_GUEST_COMMAND_CHANNEL = "desktop:browser-annotations-guest-command";
 export const APPSNAP_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.appSnap;
+export const BETA_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.beta;
 export const DESKTOP_WS_URL_CHANNEL = DESKTOP_IPC_CHANNELS.wsUrl;
 export const SERVER_TRANSCRIBE_VOICE_CHANNEL = DESKTOP_IPC_CHANNELS.transcribeVoice;

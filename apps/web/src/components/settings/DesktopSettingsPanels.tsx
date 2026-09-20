@@ -1,11 +1,12 @@
 // FILE: DesktopSettingsPanels.tsx
 // Purpose: Own settings panels whose behavior depends on browser or desktop-native lifecycles.
 // Layer: Settings UI components
-// Exports: NotificationsSettingsPanel, AppSnapSettingsPanel
+// Exports: NotificationsSettingsPanel, AppSnapSettingsPanel, BetaChannelSettingsPanel
 
 import {
   type DesktopAppSnapSettingsPane,
   type DesktopAppSnapState,
+  type DesktopBetaChannelState,
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
 import { appSnapShortcutLabels } from "@synara/shared/appSnapShortcut";
@@ -422,5 +423,173 @@ export function AppSnapSettingsPanel({
         />
       ) : null}
     </div>
+  );
+}
+
+function BetaChannelMark() {
+  return (
+    <img
+      src="/app-icons/beta.png"
+      alt="Synara Beta"
+      className="mt-0.5 size-9 shrink-0 rounded-xl"
+    />
+  );
+}
+
+/**
+ * Stable → Synara Beta handoff. Rendered inside General settings; visible only
+ * on desktop builds, with the full action card on production and a status card
+ * (plus diagnostics disclosure) on beta.
+ */
+export function BetaChannelSettingsPanel({ active }: { readonly active: boolean }) {
+  const betaBridge = isElectron ? window.desktopBridge?.beta : undefined;
+  const betaStateQuery = useQuery({
+    queryKey: ["desktop-beta-channel-state"],
+    queryFn: () => betaBridge!.getState(),
+    enabled: active && betaBridge !== undefined,
+    refetchInterval: 30_000,
+  });
+  const [actionPending, setActionPending] = useState<"copy" | "open" | null>(null);
+  const state: DesktopBetaChannelState | null = betaStateQuery.data ?? null;
+
+  if (!active || !betaBridge || !state?.supported) return null;
+
+  const refresh = () => void betaStateQuery.refetch();
+
+  async function copyDataAndLaunch() {
+    setActionPending("copy");
+    try {
+      const result = await betaBridge!.importAndLaunch();
+      if (!result.ok) {
+        toastManager.add({
+          type: "warning",
+          title: "Could not start the beta handoff",
+          description: result.message ?? "Try again from Settings → General.",
+        });
+        return;
+      }
+      toastManager.add({
+        type: "success",
+        title: "Opening Synara Beta",
+        description:
+          "Beta is copying your projects, settings, and provider sign-ins from stable on first launch.",
+      });
+      refresh();
+    } finally {
+      setActionPending(null);
+    }
+  }
+
+  async function launchBeta() {
+    setActionPending("open");
+    try {
+      const result = await betaBridge!.launch();
+      if (!result.ok) {
+        toastManager.add({
+          type: "warning",
+          title: "Could not open Synara Beta",
+          description: result.message ?? "The beta install was not found.",
+        });
+      }
+      refresh();
+    } finally {
+      setActionPending(null);
+    }
+  }
+
+  async function openDownloadPage() {
+    if (state?.downloadUrl && window.desktopBridge?.openExternal) {
+      await window.desktopBridge.openExternal(state.downloadUrl);
+    }
+  }
+
+  if (state.flavor === "beta") {
+    return (
+      <SettingsCard divided={false} className="flex items-start gap-3 px-4 py-3.5">
+        <BetaChannelMark />
+        <div className="min-w-0 space-y-1">
+          <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
+          <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
+            Beta builds ship early so we can test changes on real workflows. Because you're on beta,
+            Synara sends lightweight diagnostics — crashes, launch and update timings, and feature
+            counters — to help us fix things faster. Your chats, prompts, file contents, and paths
+            are never collected. See docs/diagnostics.md in the repository for the exact schema.
+          </p>
+        </div>
+      </SettingsCard>
+    );
+  }
+
+  if (state.flavor !== "production") return null;
+
+  return (
+    <SettingsCard divided={false} className="px-4 py-3.5">
+      <div className="flex items-start gap-3">
+        <BetaChannelMark />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex items-center gap-2">
+            <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>Synara Beta</p>
+            <span className="inline-flex items-center rounded-full bg-[var(--beta-pill)] px-1.5 py-0.5 text-ui-xs font-semibold uppercase leading-none tracking-wide text-[var(--beta-pill-ink)]">
+              Beta
+            </span>
+            {state.installed && state.version ? (
+              <span className="text-ui-xs text-muted-foreground">v{state.version} installed</span>
+            ) : state.installed ? (
+              <span className="text-ui-xs text-muted-foreground">Installed</span>
+            ) : null}
+          </div>
+          <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
+            {state.installed
+              ? "Beta installs side-by-side and keeps its own data — nothing here changes your stable setup. Copy your data to move over projects, settings, and provider sign-ins in one shot."
+              : "Try new features before they reach stable. Synara Beta is a separate app with its own data — your stable install stays exactly as it is."}
+          </p>
+          {state.lastImportAt ? (
+            <p className="text-ui-xs text-muted-foreground">
+              Last copied your data {new Date(state.lastImportAt).toLocaleString()}.
+            </p>
+          ) : null}
+          {state.lastImportError ? (
+            <p className="text-ui-xs text-destructive">
+              Last import failed: {state.lastImportError}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2 pt-1.5">
+            {!state.installed ? (
+              <Button size="xs" onClick={() => void openDownloadPage()}>
+                Get Synara Beta
+              </Button>
+            ) : (
+              <>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={actionPending !== null || state.running}
+                  title={
+                    state.running
+                      ? "Quit Synara Beta first so it can pick up the import on its next launch."
+                      : undefined
+                  }
+                  onClick={() => void copyDataAndLaunch()}
+                >
+                  {actionPending === "copy"
+                    ? "Copying…"
+                    : state.lastImportAt
+                      ? "Re-copy my data and open"
+                      : "Copy my data and open"}
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={actionPending !== null}
+                  onClick={() => void launchBeta()}
+                >
+                  {actionPending === "open" ? "Opening…" : "Open Beta"}
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </SettingsCard>
   );
 }

@@ -43,6 +43,7 @@ import {
   type RuntimeMode,
   type ServerConfigShape,
 } from "./config";
+import { runBetaImportIfRequested } from "./betaImport";
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import { ServerAuth } from "./auth/Services/ServerAuth";
@@ -270,6 +271,15 @@ const ServerConfigLive = (input: CliInput) =>
       const baseDir = yield* resolveBaseDir(configuredHome);
       const userHomeDir = OS.homedir();
       const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
+      // A "Copy my data to Beta" request from a stable install lands as a
+      // marker in this home; it must be consumed before the private state
+      // directory (and its database) is created or repaired.
+      yield* Effect.tryPromise({
+        try: () =>
+          runBetaImportIfRequested({ betaHomeDir: baseDir, stateDir: derivedPaths.stateDir }),
+        catch: (cause) =>
+          new StartupError({ message: "Failed to complete the stable→beta data import", cause }),
+      });
       yield* Effect.try({
         try: () => preparePrivateServerPaths(derivedPaths),
         catch: (cause) =>
