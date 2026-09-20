@@ -396,7 +396,7 @@ export function normalizeProject(
   // list mean "all collapsed" instead of "no preference, default expanded".
   const sources = previous?.sources && deepEqualJson(previous.sources, incoming.sources)
     ? previous.sources
-    : [...incoming.sources];
+    : [...(incoming.sources ?? [])];
   const expanded =
     (previous && projectCwdKey(previous.cwd) === workspaceRootKey
       ? previous.expanded
@@ -443,7 +443,7 @@ export function normalizeProject(
     updatedAt: incoming.updatedAt,
     scripts,
     sources,
-    primarySourceId: incoming.primarySourceId,
+    primarySourceId: incoming.primarySourceId ?? null,
   } satisfies Project;
 }
 

@@ -965,6 +965,8 @@ describe("pin helpers", () => {
       createdAt: "2026-03-09T10:00:00.000Z",
       updatedAt: "2026-03-09T10:00:00.000Z",
       scripts: [],
+      sources: [],
+      primarySourceId: null,
     }) satisfies Project;
 
   const makeThread = (id: string): Thread =>
@@ -1676,6 +1678,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     updatedAt: "2026-03-09T10:00:00.000Z",
     scripts: [],
     ...rest,
+    sources: overrides.sources ?? [],
+    primarySourceId: overrides.primarySourceId ?? null,
   };
 }
 

@@ -2951,8 +2951,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ...source,
             sortOrder,
             createdAt:
-              existingProject.sources.find((existing) => existing.id === source.id)?.createdAt ??
-              command.updatedAt,
+              (existingProject.sources ?? []).find((existing) => existing.id === source.id)
+                ?.createdAt ?? command.updatedAt,
             updatedAt: command.updatedAt,
           })),
           primarySourceId: command.primarySourceId,

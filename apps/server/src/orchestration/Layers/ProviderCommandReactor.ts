@@ -1400,9 +1400,9 @@ const make = Effect.gen(function* () {
     if (!project) return null;
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     return deriveThreadRoots({
-      sources: project.sources,
-      primarySourceId: project.primarySourceId,
-      primaryWorktreePath: effectiveCwd,
+      sources: project.sources ?? [],
+      primarySourceId: project.primarySourceId ?? null,
+      primaryWorktreePath: effectiveCwd ?? null,
     });
   });
 
@@ -2608,6 +2608,7 @@ const make = Effect.gen(function* () {
     // never send this text, so they stay exempt.
     if (
       input.reviewTarget === undefined &&
+      normalizedInput !== undefined &&
       normalizedInput.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS
     ) {
       return yield* new ProviderAdapterValidationError({
