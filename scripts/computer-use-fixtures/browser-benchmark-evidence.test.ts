@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   assessGitHubCompletion,
   assessNeweggCompletion,
+  assessBrowserBenchmarkRuns,
   BROWSER_BENCHMARK_BUDGET_MS,
   browserBenchmarkPrompt,
+  parseBrowserBenchmarkRunCount,
   parseBrowserWitness,
   parsePullRequestTitles,
   parseNeweggPageEvidence,
@@ -25,6 +27,57 @@ const witnesses: BrowserWitness[] = pages.map((prs, index) => ({
 }));
 const answer = JSON.stringify({ pages: pages.map((prs, index) => ({ page: index + 1, prs })) });
 const proof = () => ({ before: pages, after: pages, witnesses, finalText: answer });
+
+describe("browser benchmark run coverage", () => {
+  it("defaults to two runs and accepts only an explicit one- or two-run request", () => {
+    expect(parseBrowserBenchmarkRunCount(undefined)).toBe(2);
+    expect(parseBrowserBenchmarkRunCount("1")).toBe(1);
+    expect(parseBrowserBenchmarkRunCount("2")).toBe(2);
+    for (const value of ["", "0", "3", "1.0", "01", "1.5", "-1", "NaN"])
+      expect(() => parseBrowserBenchmarkRunCount(value)).toThrow("Invalid --runs");
+  });
+
+  it("does not promote a passing smoke to two-run qualification", () => {
+    expect(
+      assessBrowserBenchmarkRuns({
+        requestedRuns: 1,
+        completedRuns: 1,
+        accepted: true,
+        cleanupProven: true,
+      }),
+    ).toEqual({
+      passed: true,
+      requestedRuns: 1,
+      completedRuns: 1,
+      runMode: "single-run-smoke",
+      twoRunQualificationPassed: false,
+    });
+  });
+
+  it("fails missing requested runs, failed evidence, and unproven cleanup", () => {
+    const complete = {
+      requestedRuns: 2 as const,
+      completedRuns: 2,
+      accepted: true,
+      cleanupProven: true,
+    };
+    expect(assessBrowserBenchmarkRuns(complete)).toMatchObject({
+      passed: true,
+      runMode: "two-run-qualification",
+      twoRunQualificationPassed: true,
+    });
+    for (const input of [
+      { ...complete, completedRuns: 1 },
+      { ...complete, requestedRuns: 1 as const, completedRuns: 0 },
+      { ...complete, accepted: false },
+      { ...complete, cleanupProven: false },
+    ])
+      expect(assessBrowserBenchmarkRuns(input)).toMatchObject({
+        passed: false,
+        twoRunQualificationPassed: false,
+      });
+  });
+});
 
 describe("independent browser benchmark evidence", () => {
   it("requires matching page observations, stable independent reference and final answer", () => {

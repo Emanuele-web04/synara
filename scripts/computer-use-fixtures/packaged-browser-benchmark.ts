@@ -1,4 +1,4 @@
-/** Two bounded, explicitly comparable browser tasks in an already running
+/** Bounded, explicitly comparable browser tasks in an already running
  * isolated package. Observation never navigates or performs the model's task. */
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
@@ -37,8 +37,10 @@ import {
 import {
   assessGitHubCompletion,
   assessNeweggCompletion,
+  assessBrowserBenchmarkRuns,
   BROWSER_BENCHMARK_BUDGET_MS,
   browserBenchmarkPrompt,
+  parseBrowserBenchmarkRunCount,
   type BrowserBenchmarkTask,
 } from "./browser-benchmark-evidence.ts";
 import { createBrowserObserver, readGitHubReference } from "./browser-benchmark-observer.ts";
@@ -47,6 +49,7 @@ const { values } = parseArgs({
   strict: true,
   options: {
     task: { type: "string" },
+    runs: { type: "string" },
     repo: { type: "string" },
     bundle: { type: "string" },
     home: { type: "string" },
@@ -59,6 +62,7 @@ const { values } = parseArgs({
     "profile-root": { type: "string" },
   },
 });
+const requestedRuns = parseBrowserBenchmarkRunCount(values.runs);
 let interrupted = false;
 process.once("SIGINT", () => {
   interrupted = true;
@@ -119,6 +123,7 @@ async function main() {
     console.info(
       JSON.stringify({
         task,
+        requestedRuns,
         status: "unsupported",
         reason: "current-user-Dia-profile-attachment-unsupported",
         substituteRun: false,
@@ -223,7 +228,7 @@ async function main() {
           threadId: ThreadId.makeUnsafe(String(args.threadId)),
         }),
       );
-    for (const index of [1, 2]) {
+    for (let index = 1; index <= requestedRuns; index++) {
       if (interrupted) break;
       phase = `browser-task-${index}`;
       const threadId = ThreadId.makeUnsafe(randomUUID());
@@ -502,6 +507,7 @@ async function main() {
       accepted &&= passed;
       const report = {
         index,
+        requestedRuns,
         task,
         threadId,
         turnId: terminal?.turnId ?? null,
@@ -556,9 +562,15 @@ async function main() {
         cleanupProven = false;
       });
   }
-  const passed = accepted && reports.length === 2 && cleanupProven;
+  const runSummary = assessBrowserBenchmarkRuns({
+    requestedRuns,
+    completedRuns: reports.length,
+    accepted,
+    cleanupProven,
+  });
+  const { passed } = runSummary;
   await save(join(runDirectory, "summary.json"), {
-    passed,
+    ...runSummary,
     task,
     failure,
     artifact,
@@ -569,10 +581,15 @@ async function main() {
     cleanupScope: "Computer-control-revoked-and-provider-turn-terminal",
     browserProcessCleanup: "unverified; driver-owned isolated browser may remain open",
     reports,
-    scope: "two-isolated-Chrome-tasks-with-owner-metrics-and-continuous-focus",
+    scope:
+      requestedRuns === 1
+        ? "single-isolated-Chrome-smoke-with-owner-metrics-and-continuous-focus"
+        : "two-isolated-Chrome-tasks-with-owner-metrics-and-continuous-focus",
     observerReadOnly: true,
   });
-  console.info(`${passed ? "Benchmark verified" : "Benchmark incomplete"}: ${runDirectory}`);
+  console.info(
+    `${requestedRuns === 1 ? "Smoke" : "Benchmark"} ${passed ? "verified" : "incomplete"}: ${runDirectory}`,
+  );
   if (!passed) process.exitCode = 2;
 }
 void main().catch(() => {

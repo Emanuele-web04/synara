@@ -5,6 +5,29 @@ export const BROWSER_BENCHMARK_BUDGET_MS = {
   newegg: 900_000,
 } as const;
 
+export function parseBrowserBenchmarkRunCount(value: string | undefined): 1 | 2 {
+  if (value === undefined || value === "2") return 2;
+  if (value === "1") return 1;
+  throw new Error("Invalid --runs: expected 1 or 2");
+}
+
+export function assessBrowserBenchmarkRuns(input: {
+  requestedRuns: 1 | 2;
+  completedRuns: number;
+  accepted: boolean;
+  cleanupProven: boolean;
+}) {
+  const passed =
+    input.accepted && input.completedRuns === input.requestedRuns && input.cleanupProven;
+  return {
+    passed,
+    requestedRuns: input.requestedRuns,
+    completedRuns: input.completedRuns,
+    runMode: input.requestedRuns === 1 ? "single-run-smoke" : "two-run-qualification",
+    twoRunQualificationPassed: input.requestedRuns === 2 && passed,
+  };
+}
+
 export interface PullRequestTitle {
   number: number;
   title: string;
