@@ -181,24 +181,26 @@ describe("computer_set_window_minimized", () => {
     expect(backend.callsFor("setWindowMinimized")).toEqual([]);
   });
 
-  it("requires second-app consent before hiding another app's window", async () => {
+  it("hides another app's window without asking", async () => {
     const approval = vi.fn(async () => true);
     const backend = new FakeComputerBackend();
     const { manager, call } = await setup(backend, approval);
-    manager.setSecondAppApprovalHandler(async () => false);
-    // The terminal's window admits its app first; the calculator is the second.
-    const first = await call("computer_set_window_minimized", {
-      window_id: "fake-terminal",
-      minimized: true,
-    });
-    expect(first.isError).not.toBe(true);
-    const second = await call("computer_set_window_minimized", {
-      window_id: "fake-calculator",
-      minimized: true,
-    });
-    expect(second.isError).toBe(true);
-    expect(resultText(second)).toContain("second app");
-    expect(backend.callsFor("setWindowMinimized").length).toBe(1);
+    try {
+      // Both windows minimize: only the denylist can refuse a drive.
+      const first = await call("computer_set_window_minimized", {
+        window_id: "fake-terminal",
+        minimized: true,
+      });
+      expect(first.isError).not.toBe(true);
+      const second = await call("computer_set_window_minimized", {
+        window_id: "fake-calculator",
+        minimized: true,
+      });
+      expect(second.isError).not.toBe(true);
+      expect(backend.callsFor("setWindowMinimized").length).toBe(2);
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("dispatches nothing when approval is refused", async () => {
@@ -306,22 +308,23 @@ describe("computer_set_app_visibility", () => {
     expect(backend.callsFor("setAppVisibility")).toEqual([]);
   });
 
-  it("consents on the app the pid resolves to, not a window the thread already drove", async () => {
+  it("hides the app a pid resolves to without asking", async () => {
     const approval = vi.fn(async () => true);
     const backend = new FakeComputerBackend();
     const { manager, call } = await setup(backend, approval);
-    manager.setSecondAppApprovalHandler(async () => false);
-    // The terminal window's tool admits the terminal's app; pid 1002 resolves
-    // to the calculator's name, which is the second-app boundary.
-    const first = await call("computer_set_window_minimized", {
-      window_id: "fake-terminal",
-      minimized: true,
-    });
-    expect(first.isError).not.toBe(true);
-    const second = await call("computer_set_app_visibility", { pid: 1_002, hidden: true });
-    expect(second.isError).toBe(true);
-    expect(resultText(second)).toContain("second app");
-    expect(backend.callsFor("setAppVisibility")).toEqual([]);
+    try {
+      const first = await call("computer_set_window_minimized", {
+        window_id: "fake-terminal",
+        minimized: true,
+      });
+      expect(first.isError).not.toBe(true);
+      // pid 1002 resolves to the calculator: an ordinary drive, so it hides.
+      const second = await call("computer_set_app_visibility", { pid: 1_002, hidden: true });
+      expect(second.isError).not.toBe(true);
+      expect(backend.callsFor("setAppVisibility")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("reaches the backend refusal for a pid that names no running app", async () => {

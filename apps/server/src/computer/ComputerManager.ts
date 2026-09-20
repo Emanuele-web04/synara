@@ -590,41 +590,6 @@ export class ComputerManager {
   }
   private readonly activeAuthorities = new Map<string, Set<AbortController>>();
   private readonly authorityTurns = new Map<string, string>();
-  /**
-   * Apps this thread may drive, lowercased. The first records free — task
-   * consent covers it — and each new app is a fresh consent boundary cleared
-   * once, before the desktop queue, never inside it.
-   */
-  private readonly drivenAppsPerThread = new Map<string, Set<string>>();
-  /**
-   * The prompt surface for a new app, wired by the gateway to a real approval
-   * card. Unwired means no one can answer, so the tool-boundary approval that
-   * already admitted the call stands in — the alternative, parking on a
-   * prompt nobody can see, is the failure this split exists to remove.
-   */
-  private secondAppApproval:
-    | ((input: {
-        threadId: string;
-        turnId?: string | undefined;
-        app: string;
-        toolName?: string | undefined;
-        signal: AbortSignal;
-      }) => Promise<boolean>)
-    | undefined;
-
-  setSecondAppApprovalHandler(
-    handler:
-      | ((input: {
-          threadId: string;
-          turnId?: string | undefined;
-          app: string;
-          toolName?: string | undefined;
-          signal: AbortSignal;
-        }) => Promise<boolean>)
-      | undefined,
-  ): void {
-    this.secondAppApproval = handler;
-  }
 
   private controlDisabled(threadId: string): boolean {
     return this.disabledThreads.has(threadId) || this.controlState.get(threadId).disabled;
@@ -635,111 +600,6 @@ export class ComputerManager {
       !this.controlDisabled(threadId) &&
       !this.suspendedThreads.has(threadId) &&
       this.controlState.allows(threadId, generation)
-    );
-  }
-
-  /**
-   * Second-app consent, asked before the desktop queue. The first app a
-   * thread drives records free — task consent covers it — and each new one
-   * asks the wired approval handler once. A denial refuses before any
-   * operation slot is taken, so the new app is never touched.
-   *
-   * This is the only place a consent wait may happen: inside the serialized
-   * operation queue an unanswered prompt would hold the slot and stall every
-   * thread's computer calls behind it.
-   */
-  async admitDrivenApp(
-    threadId: string | undefined,
-    app: string,
-    options: {
-      readonly signal: AbortSignal;
-      readonly turnId?: string | undefined;
-      readonly toolName?: string | undefined;
-      /**
-       * The action classes the triggering call exercises — needed so a
-       * durable grant can satisfy this boundary. Absent means no grant can
-       * admit the app here and the second-app prompt decides.
-       */
-      readonly grantClasses?: readonly ComputerGrantActionClass[] | undefined;
-    },
-  ): Promise<void> {
-    const owner = agentThreadId(threadId);
-    if (owner === undefined) return;
-    const normalized = app.trim().toLowerCase();
-    if (!normalized) return;
-    // Before any consent bookkeeping: a denylisted app must never reach the
-    // consented set, or a later call would read it as already approved.
-    this.assertDrivenAppAllowed(app);
-    let consented = this.drivenAppsPerThread.get(owner);
-    if (consented === undefined) {
-      consented = new Set();
-      this.drivenAppsPerThread.set(owner, consented);
-    }
-    if (consented.has(normalized)) return;
-    if (consented.size > 0) {
-      // A durable grant covering this app and the call's action classes
-      // satisfies the second-app boundary too — the user already chose
-      // "always allow" for exactly this. Denylist ran above; nothing here
-      // can mint or widen one.
-      const classes = options.grantClasses ?? [];
-      const identity = await this.grantIdentityForAppKey(app).catch(() => undefined);
-      const coveredByGrant =
-        identity !== undefined && classes.length > 0
-          ? this.grantStore.covers({
-              apps: [identity],
-              includesUnattributedTarget: false,
-              classes,
-            })
-          : undefined;
-      if (coveredByGrant !== undefined) {
-        this.grantStore.noteUse(
-          coveredByGrant.map((grant) => grant.id),
-          {
-            toolName: options.toolName ?? "computer_run",
-            threadId: owner,
-            ...(options.turnId !== undefined ? { turnId: options.turnId } : {}),
-          },
-        );
-      }
-      const approved =
-        coveredByGrant !== undefined ||
-        this.secondAppApproval === undefined ||
-        (await this.secondAppApproval({
-          threadId: owner,
-          turnId: options.turnId,
-          app,
-          toolName: options.toolName,
-          signal: options.signal,
-        }));
-      if (!approved) {
-        throw new ComputerBackendError(
-          `Computer action targets a second app (${app}); it was refused pending approval for the new app.`,
-        );
-      }
-    }
-    consented.add(normalized);
-  }
-
-  /**
-   * The in-queue backstop for {@link admitDrivenApp}: consent waits never run
-   * here, so an app that skipped admission is refused rather than parked. A
-   * caller with no admission step still records its first app free, matching
-   * the admission path.
-   */
-  private assertDrivenAppAdmitted(threadId: string | undefined, app: string): void {
-    const owner = agentThreadId(threadId);
-    if (owner === undefined) return;
-    const normalized = app.trim().toLowerCase();
-    if (!normalized) return;
-    this.assertDrivenAppAllowed(app);
-    const consented = this.drivenAppsPerThread.get(owner);
-    if (consented === undefined) {
-      this.drivenAppsPerThread.set(owner, new Set([normalized]));
-      return;
-    }
-    if (consented.has(normalized)) return;
-    throw new ComputerBackendError(
-      `Driving ${app} needs its own approval first; a consent prompt cannot open inside an active desktop operation. Run the action as a standalone call so the user can be asked.`,
     );
   }
 
@@ -2387,7 +2247,7 @@ export class ComputerManager {
     return this.withDesktopControl(threadId, async () => {
       markComputerCall("computer_launch_app");
       assertDesktopOperationActive();
-      this.assertDrivenAppAdmitted(threadId, app);
+      this.assertDrivenAppAllowed(app);
       const hidden = options?.hidden ?? true;
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.launchApp(app, args, hidden ? { hidden: true } : options),
@@ -2437,7 +2297,7 @@ export class ComputerManager {
     threadId: string | undefined,
     target: ComputerWindow,
   ): Promise<void> {
-    this.assertDrivenAppAdmitted(threadId, target.appName ?? target.id);
+    this.assertDrivenAppAllowed(target.appName ?? target.id);
     await this.assertWindowInputAllowedWindow(threadId, target);
     await this.noteTargetResolution("window", target);
   }
@@ -2504,14 +2364,11 @@ export class ComputerManager {
           target.windowId,
         );
       }
-      // Application-level: consent and denylist key on the app this target
-      // provably names, the same split set_app_visibility makes. An app
-      // spelling is its own consent key because that is the key the
-      // pre-queue admission used; the inventory's capitalization must not
-      // turn an admitted app into a second-app refusal.
+      // Application-level: the denylist keys on the app this target
+      // provably names, the same split set_app_visibility makes.
       const resolved = await timedComputerLeg("resolve", () => this.resolveMenuAppTarget(target));
       const consentKey = "app" in target ? target.app : (resolved.name ?? `pid ${target.pid}`);
-      this.assertDrivenAppAdmitted(threadId, consentKey);
+      this.assertDrivenAppAllowed(consentKey);
       this.noteResolution({
         via: "process",
         pid: resolved.pid,
@@ -2616,7 +2473,7 @@ export class ComputerManager {
         const apps = await listApps().catch(() => undefined);
         return apps?.find((app) => app.pid === pid && app.running)?.name;
       });
-      this.assertDrivenAppAdmitted(threadId, named ?? `pid ${pid}`);
+      this.assertDrivenAppAllowed(named ?? `pid ${pid}`);
       this.noteResolution({
         via: "process",
         pid,
@@ -2961,7 +2818,7 @@ export class ComputerManager {
       }
       const previousId =
         windows.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
-      this.assertDrivenAppAdmitted(threadId, target.appName ?? windowId);
+      this.assertDrivenAppAllowed(target.appName ?? windowId);
       await this.assertWindowInputAllowedWindow(threadId, target);
       // The masked-activation shield arms after admission and before the
       // raise: an opt-in that cannot shield refuses here rather than
@@ -4575,7 +4432,6 @@ export class ComputerManager {
     this.authorityTurns.delete(threadId);
     this.authorityRevocations.delete(threadId);
     this.activeAuthorities.delete(threadId);
-    this.drivenAppsPerThread.delete(threadId);
     // Deleted after the thread state, so the resulting publish cannot recreate
     // it: a removed thread must not reappear as a lease holder. A rejected
     // or wedged release must not stall removal either — the idle backstop

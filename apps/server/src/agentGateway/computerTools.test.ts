@@ -31,7 +31,6 @@ import {
   type AgentGatewayComputerToolsOptions,
 } from "./computerTools.ts";
 import type { McpToolCallResult } from "./protocol.ts";
-import { secondAppApprovalDecision } from "./secondAppApproval.ts";
 import { GatewayToolError, type ToolContext } from "./toolRuntime.ts";
 
 const THREAD = "thread-computer";
@@ -3908,85 +3907,13 @@ describe("computer_get_state app hint", () => {
   });
 });
 
-describe("second-app consent", () => {
-  it("asks before a launch names an app the thread has not driven", async () => {
+describe("multi-app driving", () => {
+  it("drives a second ordinary app without a further prompt", async () => {
+    // The second-app boundary is gone: only the denylist can refuse a drive.
     const { call, manager } = await setup();
-    const asked: string[] = [];
-    manager.setSecondAppApprovalHandler(async ({ app, toolName }) => {
-      asked.push(`${toolName}:${app}`);
-      return true;
-    });
     try {
-      // The first app is covered by task consent: no second prompt.
       expect((await call("computer_launch_app", { app: "kcalc" })).isError).not.toBe(true);
-      expect(asked).toEqual([]);
       expect((await call("computer_launch_app", { app: "firefox" })).isError).not.toBe(true);
-      expect(asked).toEqual(["computer_launch_app:firefox"]);
-      // Consent sticks for the thread.
-      expect((await call("computer_launch_app", { app: "firefox" })).isError).not.toBe(true);
-      expect(asked).toEqual(["computer_launch_app:firefox"]);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("refuses without dispatching when second-app consent is denied", async () => {
-    const backend = new FakeComputerBackend();
-    const { call, manager } = await setup(backend);
-    manager.setSecondAppApprovalHandler(async () => false);
-    try {
-      await call("computer_launch_app", { app: "kcalc" });
-      const denied = await call("computer_launch_app", { app: "firefox" });
-      expect(denied.isError).toBe(true);
-      expect(JSON.stringify(denied)).toMatch(/refused pending approval/);
-      expect(backend.callsFor("launchApp")).toHaveLength(1);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("consents every app a batch will drive before the first step runs", async () => {
-    const backend = new FakeComputerBackend();
-    const { call, manager } = await setup(backend);
-    const asked: string[] = [];
-    manager.setSecondAppApprovalHandler(async ({ app, toolName }) => {
-      asked.push(`${toolName}:${app}`);
-      return true;
-    });
-    try {
-      const result = await call("computer_run", {
-        steps: [
-          { type: "launch_app", app: "kcalc" },
-          { type: "launch_app", app: "firefox" },
-        ],
-      });
-      expect(result.isError).not.toBe(true);
-      // kcalc records free as the first app; only firefox prompts, once.
-      expect(asked).toEqual(["computer_run:firefox"]);
-      expect(backend.callsFor("launchApp")).toHaveLength(2);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("resolves an activate target's app at admission, before the queue", async () => {
-    const backend = new FakeComputerBackend();
-    const { call, manager } = await setup(
-      backend,
-      vi.fn(async () => true),
-    );
-    const asked: string[] = [];
-    manager.setSecondAppApprovalHandler(async ({ app }) => {
-      asked.push(app);
-      return true;
-    });
-    try {
-      // Driving kcalc first: the launch argument records it free.
-      await call("computer_launch_app", { app: "kcalc" });
-      expect(asked).toEqual([]);
-      // Activating the calculator window is a second app: the prompt names it.
-      await call("computer_activate_window", { window_id: "fake-calculator" });
-      expect(asked).toEqual(["org.kde.kcalc"]);
     } finally {
       await manager.dispose();
     }
@@ -4131,17 +4058,12 @@ describe("second-app consent", () => {
       }
     });
 
-    it("consents the app a window-targeted mutation names before it runs", async () => {
+    it("drives the app a window-targeted mutation names without asking", async () => {
       const backend = new FakeComputerBackend();
       const { call, manager } = await setup(
         backend,
         vi.fn(async () => true),
       );
-      const asked: string[] = [];
-      manager.setSecondAppApprovalHandler(async ({ app, toolName }) => {
-        asked.push(`${toolName}:${app}`);
-        return true;
-      });
       try {
         await call("computer_launch_app", { app: "TextEdit" });
         const moved = await call("computer_set_window_frame", {
@@ -4152,7 +4074,6 @@ describe("second-app consent", () => {
           height: 400,
         });
         expect(moved.isError).not.toBe(true);
-        expect(asked).toEqual(["computer_set_window_frame:org.kde.kcalc"]);
       } finally {
         await manager.dispose();
       }
@@ -5078,113 +4999,5 @@ describe("computer_help", () => {
     expect(notes).not.toContain("set_window_minimized");
     expect(notes).toContain("Never replay an uncertain action");
     expect(notes).toContain("delivery.verified");
-  });
-});
-
-describe("secondAppApprovalDecision", () => {
-  // The packaged E2E's thread was full-access and still surfaced "Allow the
-  // agent to drive Google Chrome?" for the isolated Chromium it had launched
-  // itself. Full access is the broader consent; the second-app card only
-  // remains for threads that have not given it.
-  it("covers a full-access thread without touching the card path", async () => {
-    let asked = 0;
-    const approved = await secondAppApprovalDecision({
-      readRuntimeMode: async () => "full-access",
-      requestApproval: async () => {
-        asked += 1;
-        return false;
-      },
-    });
-    expect(approved).toBe(true);
-    expect(asked).toBe(0);
-  });
-
-  it("asks the card on approval-required threads and honors its answer", async () => {
-    let asked = 0;
-    const requestApproval = async () => {
-      asked += 1;
-      return false;
-    };
-    await expect(
-      secondAppApprovalDecision({
-        readRuntimeMode: async () => "approval-required",
-        requestApproval,
-      }),
-    ).resolves.toBe(false);
-    await expect(
-      secondAppApprovalDecision({
-        readRuntimeMode: async () => "approval-required",
-        requestApproval: async () => true,
-      }),
-    ).resolves.toBe(true);
-    expect(asked).toBe(1);
-  });
-
-  it("fails toward the card when the runtime mode cannot be read", async () => {
-    // Failing open to silence would be the one wrong answer: a mode that
-    // cannot be read must never become consent the user did not give.
-    let asked = 0;
-    const approved = await secondAppApprovalDecision({
-      readRuntimeMode: async () => {
-        throw new Error("snapshot unavailable");
-      },
-      requestApproval: async () => {
-        asked += 1;
-        return true;
-      },
-    });
-    expect(approved).toBe(true);
-    expect(asked).toBe(1);
-  });
-
-  it("keeps the manager's second-app refusal honest when the decision denies", async () => {
-    // Integration shape: the helper is the handler AgentGateway installs, so
-    // a denial still stops the call before the queue and names the app.
-    const backend = new FakeComputerBackend();
-    const { call, manager } = await setup(backend);
-    const asked: string[] = [];
-    manager.setSecondAppApprovalHandler(async ({ app }) =>
-      secondAppApprovalDecision({
-        readRuntimeMode: async () => "approval-required",
-        requestApproval: async () => {
-          asked.push(app);
-          return false;
-        },
-      }),
-    );
-    try {
-      await call("computer_launch_app", { app: "kcalc" });
-      const denied = await call("computer_launch_app", { app: "Google Chrome" });
-      expect(denied.isError).toBe(true);
-      expect(JSON.stringify(denied)).toMatch(/refused pending approval/);
-      expect(asked).toEqual(["Google Chrome"]);
-      expect(backend.callsFor("launchApp")).toHaveLength(1);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("lets a full-access thread drive a second app without a card or a refusal", async () => {
-    const backend = new FakeComputerBackend();
-    const { call, manager } = await setup(backend);
-    const asked: string[] = [];
-    manager.setSecondAppApprovalHandler(async ({ app }) =>
-      secondAppApprovalDecision({
-        readRuntimeMode: async () => "full-access",
-        requestApproval: async () => {
-          asked.push(app);
-          return false;
-        },
-      }),
-    );
-    try {
-      await call("computer_launch_app", { app: "kcalc" });
-      const second = await call("computer_launch_app", { app: "Google Chrome" });
-      expect(second.isError).not.toBe(true);
-      expect(asked).toEqual([]);
-      expect(backend.callsFor("launchApp")).toHaveLength(2);
-    } finally {
-      await manager.dispose();
-    }
   });
 });

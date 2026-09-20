@@ -1262,79 +1262,17 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
-  it("re-asks approval when a thread drives a second app", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend });
-    const asked: string[] = [];
-    const decisions: boolean[] = [];
-    manager.setSecondAppApprovalHandler(async ({ app }) => {
-      asked.push(app);
-      return decisions.shift() ?? true;
-    });
-    const admit = (app: string) =>
-      manager.admitDrivenApp("thread-1", app, {
-        signal: new AbortController().signal,
-      });
-    try {
-      // The first app records free; the prompt surface is not consulted.
-      await admit("kcalc");
-      await manager.launchApp("thread-1", "kcalc");
-      expect(backend.callsFor("launchApp")).toHaveLength(1);
-      expect(asked).toEqual([]);
-
-      // A denied consent refuses before the backend runs.
-      decisions.push(false);
-      await expect(admit("firefox")).rejects.toThrow(/second app/i);
-      expect(asked).toEqual(["firefox"]);
-      // The in-queue backstop refuses it again — without ever parking.
-      await expect(manager.launchApp("thread-1", "firefox")).rejects.toThrow(
-        /needs its own approval/i,
-      );
-      expect(backend.callsFor("launchApp")).toHaveLength(1);
-
-      // An approved consent records: the app drives from then on unasked.
-      decisions.push(true);
-      await admit("firefox");
-      await manager.launchApp("thread-1", "firefox");
-      expect(backend.callsFor("launchApp")).toHaveLength(2);
-      await admit("firefox");
-      await manager.launchApp("thread-1", "firefox");
-      expect(asked).toEqual(["firefox", "firefox"]);
-      expect(backend.callsFor("launchApp")).toHaveLength(3);
-
-      // Switching back to a consented app is not a new boundary.
-      await admit("kcalc");
-      await manager.launchApp("thread-1", "kcalc");
-      expect(asked).toEqual(["firefox", "firefox"]);
-      expect(backend.callsFor("launchApp")).toHaveLength(4);
-
-      // The activation path asserts the same admission inside the queue —
-      // after the never-raise gate, which this call clears with the task-text
-      // authorization.
-      await expect(
-        manager.activateWindow("thread-1", "fake-terminal", VISIBLE_USE_AUTHORIZED),
-      ).rejects.toThrow(/needs its own approval/i);
-      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
-    } finally {
-      computerApprovalGate.cancelThread("thread-1");
-      await manager.dispose();
-    }
-  });
-
-  it("refuses an unadmitted second app inside the queue instead of waiting", async () => {
-    // A consent wait inside the serialized desktop queue once parked every
-    // computer call behind it for the gate's five-minute timeout. The
-    // in-queue path asserts admission now; it never asks.
+  it("drives a second ordinary app without asking", async () => {
+    // The second-app boundary is gone: only the denylist can refuse a drive.
+    // Two ordinary apps dispatch back to back with no prompt surface involved.
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });
     const request = vi.spyOn(computerApprovalGate, "request");
     try {
       await manager.launchApp("thread-1", "kcalc");
-      await expect(manager.launchApp("thread-1", "firefox")).rejects.toThrow(
-        /needs its own approval/i,
-      );
+      await manager.launchApp("thread-1", "firefox");
+      expect(backend.callsFor("launchApp")).toHaveLength(2);
       expect(request).not.toHaveBeenCalled();
-      expect(backend.callsFor("launchApp")).toHaveLength(1);
     } finally {
       request.mockRestore();
       computerApprovalGate.cancelThread("thread-1");
@@ -1342,55 +1280,17 @@ describe("ComputerManager and FakeComputerBackend", () => {
     }
   });
 
-  it("records a second app without prompting when no approval handler is wired", async () => {
-    // The tool-boundary approval already admitted the call, so with no prompt
-    // surface wired the boundary stands in rather than parking unanswerably.
+  it("applies visibility writes to any non-denied app", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });
     try {
-      await manager.admitDrivenApp("thread-1", "kcalc", {
-        signal: new AbortController().signal,
-      });
-      await manager.admitDrivenApp("thread-1", "firefox", {
-        signal: new AbortController().signal,
-      });
-      await manager.launchApp("thread-1", "firefox");
-      expect(backend.callsFor("launchApp")).toHaveLength(1);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("consents visibility writes on the app the pid resolves to, or a stable pid key", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend });
-    const asked: string[] = [];
-    manager.setSecondAppApprovalHandler(async ({ app }) => {
-      asked.push(app);
-      return true;
-    });
-    const admit = (app: string) =>
-      manager.admitDrivenApp("thread-1", app, {
-        signal: new AbortController().signal,
-      });
-    try {
-      // First drive admits the terminal's app through its window, unasked.
+      // Minimizing the terminal's window and hiding pid 1002 (the calculator)
+      // are both ordinary drives, so both dispatch.
       await manager.setWindowMinimized("thread-1", "fake-terminal", true);
-      // pid 1002 resolves to the calculator's name — the boundary asks by it.
-      await expect(manager.setAppVisibility("thread-1", 1_002, true)).rejects.toThrow(
-        /needs its own approval/i,
-      );
-      await admit("Calculator");
-      expect(asked).toEqual(["Calculator"]);
       await manager.setAppVisibility("thread-1", 1_002, true);
       expect(backend.callsFor("setAppVisibility")).toHaveLength(1);
-      // A pid nothing resolves to keys on "pid N" — still one stable boundary,
-      // and the backend's own refusal is what surfaces past it.
-      await expect(manager.setAppVisibility("thread-1", 9_999, true)).rejects.toThrow(
-        /needs its own approval/i,
-      );
-      await admit("pid 9999");
-      expect(asked).toEqual(["Calculator", "pid 9999"]);
+      // A pid nothing resolves to reaches the backend, whose own refusal is
+      // what surfaces.
       await expect(manager.setAppVisibility("thread-1", 9_999, true)).rejects.toThrow(
         /No running application has pid 9999/,
       );
@@ -1426,11 +1326,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
       ).rejects.toMatchObject({ code: "computer_target_not_found", notFound: true });
       expect(backend.callsFor("invokeMenu")).toHaveLength(1);
       // The pid form rides through to the backend, which refuses a pid that
-      // is not running — the same split set_app_visibility makes. Consent
-      // for the pid key is the pre-queue admission's job, exactly as there.
-      await manager.admitDrivenApp("thread-1", "pid 9999", {
-        signal: new AbortController().signal,
-      });
+      // is not running.
       await expect(manager.invokeMenu("thread-1", { pid: 9_999 }, ["File"])).rejects.toThrow(
         /No running application has pid 9999/,
       );

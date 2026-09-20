@@ -73,7 +73,7 @@ export interface ComputerReplayOptions {
    * steps exactly as it stops a `computer_run`.
    */
   readonly signal?: AbortSignal;
-  /** The turn the replay runs under, for consent bookkeeping on second apps. */
+  /** The turn the replay runs under. */
   readonly turnId?: string;
   /**
    * The never-raise authorization the live call would carry. A replay is not
@@ -176,15 +176,6 @@ export interface ComputerReplayManager {
   getState(options: { readonly includeTree: boolean }): Promise<{
     readonly root?: ComputerUiNode | undefined;
   }>;
-  admitDrivenApp(
-    threadId: string | undefined,
-    app: string,
-    options: {
-      readonly signal: AbortSignal;
-      readonly turnId?: string | undefined;
-      readonly toolName?: string | undefined;
-    },
-  ): Promise<void>;
   click(
     threadId: string | undefined,
     target: ComputerTarget,
@@ -1101,9 +1092,7 @@ function errorCode(error: unknown): string | undefined {
  * the seq range is classified against it. Under `execute`, each `ready` step
  * is dispatched through the manager's own methods in order, so the second
  * resolution, the denylist, the window guards, and the delivery verdicts are
- * the same code a live call runs — and app consent is re-admitted per step
- * through `admitDrivenApp` *before* dispatch, because a consent wait may
- * never run inside the manager's serialized operation slot.
+ * the same code a live call runs.
  */
 export async function classifyComputerReplay(
   manager: ComputerReplayManager,
@@ -1164,33 +1153,6 @@ export async function classifyComputerReplay(
     }
     summary.ready += 1;
     options.signal?.throwIfAborted();
-
-    // Fresh consent for the app this step is about to drive — before the
-    // dispatch, because a consent wait may never run inside the manager's
-    // serialized operation slot.
-    const app = report.target?.app;
-    if (plan.mutating && app !== undefined) {
-      try {
-        await manager.admitDrivenApp(options.threadId, app, {
-          // `new AbortSignal()` is illegal — an AbortController's signal is
-          // the never-aborting stand-in when the caller carried none.
-          signal: options.signal ?? new AbortController().signal,
-          ...(options.turnId !== undefined ? { turnId: options.turnId } : {}),
-          toolName: "computer_replay",
-        });
-      } catch (error) {
-        summary.failed += 1;
-        reports.push({
-          ...report,
-          dispatch: {
-            ok: false,
-            code: errorCode(error) ?? "consent_refused",
-            error: errorMessage(error),
-          },
-        });
-        continue;
-      }
-    }
 
     let toTarget: ComputerTarget | undefined;
     if (plan.target === "drag") {

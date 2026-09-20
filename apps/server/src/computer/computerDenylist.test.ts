@@ -105,24 +105,14 @@ describe("computerDenylistMatch", () => {
 });
 
 describe("computer denylist", () => {
-  it("refuses second-app admission for a password manager before any consent prompt", async () => {
+  it("refuses to drive a password manager — the denylist has no consent override", async () => {
     const manager = new ComputerManager({ backend: deniedFixture(), actionSettleMs: 0 });
-    let asked = 0;
-    manager.setSecondAppApprovalHandler(async () => {
-      asked += 1;
-      return true;
+    await expect(manager.launchApp("thread-1", "1Password")).rejects.toMatchObject({
+      code: "computer_denylist_refused",
     });
-    await expect(
-      manager.admitDrivenApp("thread-1", "1Password", {
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toMatchObject({ code: "computer_denylist_refused" });
-    await expect(
-      manager.admitDrivenApp("thread-1", "com.bitwarden.desktop", {
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toMatchObject({ code: "computer_denylist_refused" });
-    expect(asked).toBe(0);
+    await expect(manager.launchApp("thread-1", "com.bitwarden.desktop")).rejects.toMatchObject({
+      code: "computer_denylist_refused",
+    });
     await manager.dispose();
   });
 

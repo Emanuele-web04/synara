@@ -414,14 +414,9 @@ describe("classifyComputerReplay", () => {
     await manager.dispose();
   });
 
-  it("asks fresh consent for a second driven app — and fails the step honestly when refused", async () => {
+  it("re-issues a second app's step without asking", async () => {
     const backend = new FakeComputerBackend({ windows: windows() });
     const { manager, run } = await replayWith(backend);
-    const asked: string[] = [];
-    manager.setSecondAppApprovalHandler(async ({ app }) => {
-      asked.push(app);
-      return false;
-    });
     const doc = document([
       step({
         tool: "computer_activate_window",
@@ -436,12 +431,10 @@ describe("classifyComputerReplay", () => {
       }),
     ]);
     const report = await run(doc, { execute: true });
-    // The first app is the thread's free consent; the second is asked — and
-    // its refusal is reported beside the step, not hidden.
-    expect(asked).toEqual(["org.test.calc"]);
+    // No consent boundary remains: both steps dispatch.
     expect(report.steps[0]?.dispatch?.ok).toBe(true);
-    expect(report.steps[1]?.dispatch).toMatchObject({ ok: false, code: "consent_refused" });
-    expect(backend.callsFor("raiseWindow")).toHaveLength(1);
+    expect(report.steps[1]?.dispatch?.ok).toBe(true);
+    expect(backend.callsFor("raiseWindow")).toHaveLength(2);
     await manager.dispose();
   });
 

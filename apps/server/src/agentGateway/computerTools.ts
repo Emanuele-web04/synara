@@ -232,8 +232,7 @@ const COMPUTER_AUDITED_TOOLS = COMPUTER_APPROVAL_REQUIRED_TOOLS;
 /**
  * The audit entry's target: the ids the call declared first, then the window
  * the result resolved when one rode it. `drivenApps` carries the apps the
- * call was admitted to drive, so a window-grain tool still names the app its
- * consent covered.
+ * call targeted, so a window-grain tool still names its app.
  */
 function computerAuditTarget(
   args: Record<string, unknown>,
@@ -1579,138 +1578,6 @@ export function makeAgentGatewayComputerTools(
   ): ComputerTarget =>
     resolveTarget(readNestedScreenshotTarget(args, name), context.callerThreadId);
 
-  /**
-   * Window-id → driven-app resolution for pre-queue consent. Mirrors the
-   * in-queue assert's keying: a window with no app name consents under its id
-   * rather than silently skipping the boundary. Best-effort — a read failure
-   * resolves nothing and the in-queue assert stays the backstop.
-   */
-  const drivenAppsForWindows = async (windowIds: ReadonlySet<string>): Promise<Set<string>> => {
-    const apps = new Set<string>();
-    if (windowIds.size === 0) return apps;
-    const windows = await manager
-      .listWindows()
-      .then((listed) => listed.windows)
-      .catch(() => undefined);
-    if (windows === undefined) return apps;
-    for (const window of windows) {
-      if (windowIds.has(window.id)) apps.add(window.appName ?? window.id);
-    }
-    return apps;
-  };
-
-  /**
-   * Pid → driven-app resolution for the app-level visibility tool: the pid is
-   * the target, but consent is keyed on apps, so it resolves through the same
-   * process list the in-queue assert consults. A pid that resolves to nothing
-   * admits under the pid key the manager falls back to — the boundary is
-   * never skipped for want of a name.
-   */
-  const drivenAppsForPids = async (pids: ReadonlySet<number>): Promise<Set<string>> => {
-    const apps = new Set<string>();
-    if (pids.size === 0) return apps;
-    const listed = await manager
-      .listApps()
-      .then((result) => result.apps)
-      .catch(() => undefined);
-    for (const pid of pids) {
-      const named = listed?.find((app) => app.pid === pid && app.running)?.name;
-      apps.add(named ?? `pid ${pid}`);
-    }
-    return apps;
-  };
-
-  /**
-   * The apps a call is about to drive, resolved before the desktop queue so a
-   * consent prompt never holds the serialized operation slot. Steps inside a
-   * computer_run are scanned raw — full validation still happens in the
-   * dispatcher — and an unresolvable activate target skips admission for the
-   * in-queue assert to answer.
-   */
-  const drivenAppsForCall = async (
-    name: string,
-    args: Record<string, unknown>,
-  ): Promise<ReadonlySet<string>> => {
-    if (name === "computer_launch_app") {
-      return typeof args.app === "string" && args.app.trim().length > 0
-        ? new Set([args.app])
-        : new Set();
-    }
-    if (
-      name === "computer_activate_window" ||
-      name === "computer_set_window_frame" ||
-      name === "computer_kill_app" ||
-      name === "computer_set_window_minimized"
-    ) {
-      return typeof args.window_id === "string" && args.window_id.length > 0
-        ? drivenAppsForWindows(new Set([args.window_id]))
-        : new Set();
-    }
-    if (name === "computer_invoke_menu") {
-      // Three target forms, three consent keys — the window id names its
-      // owning app, the app spelling is its own key, and the pid resolves
-      // through the process list like set_app_visibility.
-      const windowId = args.window_id;
-      if (typeof windowId === "string" && windowId.length > 0) {
-        return drivenAppsForWindows(new Set([windowId]));
-      }
-      const app = args.app;
-      if (typeof app === "string" && app.trim().length > 0) return new Set([app]);
-      const pid = args.pid;
-      return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0
-        ? drivenAppsForPids(new Set([pid]))
-        : new Set();
-    }
-    if (name === "computer_set_app_visibility") {
-      const pid = args.pid;
-      return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0
-        ? drivenAppsForPids(new Set([pid]))
-        : new Set();
-    }
-    if (name === "computer_run") {
-      const apps = new Set<string>();
-      const windowIds = new Set<string>();
-      const pids = new Set<number>();
-      for (const step of Array.isArray(args.steps) ? args.steps : []) {
-        if (step === null || typeof step !== "object" || Array.isArray(step)) continue;
-        const type = Reflect.get(step, "type");
-        if (type === "launch_app") {
-          const app = Reflect.get(step, "app");
-          if (typeof app === "string" && app.trim().length > 0) apps.add(app);
-        } else if (type === "invoke_menu") {
-          // The windowless forms consent under the app or pid they name; the
-          // window form resolves through the window's owner like the others.
-          const windowId = Reflect.get(step, "window_id");
-          if (typeof windowId === "string" && windowId.length > 0) {
-            windowIds.add(windowId);
-          } else {
-            const app = Reflect.get(step, "app");
-            if (typeof app === "string" && app.trim().length > 0) {
-              apps.add(app);
-            } else {
-              const pid = Reflect.get(step, "pid");
-              if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0) pids.add(pid);
-            }
-          }
-        } else if (
-          type === "activate_window" ||
-          type === "set_window_frame" ||
-          type === "kill_app" ||
-          type === "set_window_minimized"
-        ) {
-          const windowId = Reflect.get(step, "window_id");
-          if (typeof windowId === "string" && windowId.length > 0) windowIds.add(windowId);
-        } else if (type === "set_app_visibility") {
-          const pid = Reflect.get(step, "pid");
-          if (typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0) pids.add(pid);
-        }
-      }
-      for (const app of await drivenAppsForWindows(windowIds)) apps.add(app);
-      for (const app of await drivenAppsForPids(pids)) apps.add(app);
-      return apps;
-    }
-    return new Set();
-  };
 
   /**
    * What a durable "always allow" grant would have to cover for this call:
@@ -1718,7 +1585,7 @@ export function makeAgentGatewayComputerTools(
    * exercises. Resolved before the approval prompt so a live grant can waive
    * it — and so the prompt can offer exactly this scope.
    *
-   * Best-effort like {@link drivenAppsForCall}, but stricter about honesty:
+   * Best-effort, but stricter about honesty:
    * the consent keys it computes are display names, while a grant is keyed
    * on bundle id + signing team where the backend reports them. A target
    * that cannot be resolved to a stable identity — a bare label search that
@@ -2103,7 +1970,7 @@ export function makeAgentGatewayComputerTools(
         ? COMPUTER_TOOL_REFRESH_GUIDANCE
         : undefined;
       // The audit record's resolved fields, filled as the call learns them:
-      // the admitted apps before dispatch, the delivered window id after.
+      // the targeted apps before dispatch, the delivered window id after.
       let drivenApps: ReadonlySet<string> = new Set();
       let resultWindowId: string | undefined;
       const audit = (outcome: {
@@ -2216,22 +2083,6 @@ export function makeAgentGatewayComputerTools(
             // Required by the taxonomy but the gate never engaged — the
             // trusted-baseline case the record must name honestly.
             recordingApproval = { required: true, decision: "skipped" };
-          }
-          // Second-app consent runs here, on the caller's signal, before the
-          // desktop queue is taken: a prompt nobody can reach must never park
-          // the serialized operation slot.
-          drivenApps = await drivenAppsForCall(name, args);
-          // The classes ride along so a live grant covering this app for
-          // exactly what the call does can satisfy the second-app boundary
-          // too — the prompt stays the fallback for anything ungranted.
-          const grantClasses = computerGrantClassesForTool(name, args);
-          for (const app of drivenApps) {
-            await manager.admitDrivenApp(context.callerThreadId, app, {
-              signal: abortSignal,
-              turnId: context.callerTurnId ?? undefined,
-              toolName: name,
-              grantClasses,
-            });
           }
           // Any non-scroll call breaks an unchanged-scroll streak: the model
           // looked or did something else instead of scrolling blindly on.

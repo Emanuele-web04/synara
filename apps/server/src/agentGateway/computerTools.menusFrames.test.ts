@@ -339,24 +339,26 @@ describe("computer_invoke_menu", () => {
     expect(replay.isError).toBe(true);
   });
 
-  it("requires second-app consent before driving another app's menus", async () => {
+  it("drives another app's menus without asking", async () => {
     const approval = vi.fn(async () => true);
     const backend = new FakeComputerBackend();
     const { manager, call } = await setup(backend, approval);
-    manager.setSecondAppApprovalHandler(async () => false);
-    // First call admits the terminal's app; the calculator is the second app.
-    const first = await call("computer_invoke_menu", {
-      window_id: "fake-terminal",
-      path: ["File"],
-    });
-    expect(first.isError).not.toBe(true);
-    const second = await call("computer_invoke_menu", {
-      window_id: "fake-calculator",
-      path: ["File"],
-    });
-    expect(second.isError).toBe(true);
-    expect(resultText(second)).toContain("second app");
-    expect(backend.callsFor("invokeMenu").length).toBe(1);
+    try {
+      // Both menus dispatch: only the denylist can refuse a drive.
+      const first = await call("computer_invoke_menu", {
+        window_id: "fake-terminal",
+        path: ["File"],
+      });
+      expect(first.isError).not.toBe(true);
+      const second = await call("computer_invoke_menu", {
+        window_id: "fake-calculator",
+        path: ["File"],
+      });
+      expect(second.isError).not.toBe(true);
+      expect(backend.callsFor("invokeMenu").length).toBe(2);
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("dispatches nothing when approval is refused", async () => {
