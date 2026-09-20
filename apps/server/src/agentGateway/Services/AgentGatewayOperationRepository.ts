@@ -1,3 +1,4 @@
+import type { CompletionRepository } from "../completionRepository.ts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -43,6 +44,7 @@ export interface ReserveAgentGatewayOperationInput {
 }
 
 export interface AgentGatewayOperationRepositoryShape {
+  readonly completions: CompletionRepository;
   readonly reserve: (
     input: ReserveAgentGatewayOperationInput,
   ) => Effect.Effect<ReserveAgentGatewayOperationResult, Error>;

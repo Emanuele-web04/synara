@@ -285,3 +285,33 @@ subagent question routing are outside this implementation.
 
 Sources: [OpenAI app-server documentation](https://developers.openai.com/codex/app-server),
 [upstream asynchronous tool handler](https://github.com/openai/codex/blob/b0d95427c2443e90998f48065902309187564085/codex-rs/core/src/tools/handlers/request_user_input_async.rs).
+
+## Passive results from delegated tasks
+
+An authenticated agent can pass `notifyCreatorOnComplete: true` to
+`synara_create_thread`, or on individual entries in `synara_create_threads`.
+The default is off. The destination is always the authenticated creating task;
+there is no destination-ID parameter, and the new task remains standalone.
+
+Synara persists one result for the initial message/run when it completes, fails,
+or is interrupted. The creator sees an attributed activity with the child and
+run IDs, up to 2,000 characters of final response (with truncation indicated),
+and a `synara_read_thread` reference for the full result. Delivery does not start,
+queue, steer, or interrupt a creator turn, and does not update human-message
+recency. The result is supplied as untrusted reference context on a subsequent
+human-started turn; rejected sends retain it, retries keep their assignment, and
+uncertain sends remain held by the existing delivery-reconciliation mechanism.
+Context is bounded to 16,000 characters per send, so larger fan-outs drain over
+subsequent human turns. Native control commands, reviews, and steering do not
+consume completion context.
+
+This option covers only the initial delegated run. Approval/question waits and
+provider idle alone are not completion. Goals are unsupported: if a goal was
+set during the initial run, Synara reports that limitation rather than claiming
+the goal finished at an intermediate turn. Later conversational turns do not
+produce further notifications. External MCP integrations cannot opt in because
+they have no authenticated creating task.
+
+Delivery survives restart and duplicate events. An archived or deleted creator
+is not reopened; the result remains in the child and delivery is recorded as
+unavailable. Delivery is checked approximately once per second.

@@ -318,6 +318,17 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           ),
         );
       }
+      if (
+        context.kind !== "provider-session" &&
+        input.threads.some((spec) => spec.notifyCreatorOnComplete)
+      ) {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "capability_denied",
+            "Completion delivery requires an authenticated creating thread.",
+          ),
+        );
+      }
       const callerTurnId = context.kind === "provider-session" ? context.callerTurnId! : null;
       const caller =
         context.kind === "provider-session"
@@ -883,6 +894,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               planJson: canonicalJson(
                 prepared.map((entry) => ({
                   index: entry.index,
+                  notifyCreatorOnComplete: entry.spec.notifyCreatorOnComplete === true,
                   projectId: entry.projectId,
                   workspaceRoot: entry.workspaceRoot,
                   environment: entry.environment,

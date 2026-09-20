@@ -747,6 +747,7 @@ const make = Effect.gen(function* () {
   const studioOutputReactor = yield* StudioOutputReactor;
   const git = yield* GitCore;
   const gatewayOperations = yield* AgentGatewayOperationRepository;
+  const acceptedCompletionContexts = new Set<number>();
   const textGeneration = yield* TextGeneration;
   const serverSettings = yield* ServerSettingsService;
 
@@ -2101,6 +2102,7 @@ const make = Effect.gen(function* () {
   const dispatchTurnForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly sourceEventSequence: number;
+    readonly completionEventSequence?: number;
     readonly messageId: string;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
@@ -2139,7 +2141,7 @@ const make = Effect.gen(function* () {
       text: input.messageText,
       contextBlocks: threadMentionProjection.contextBlocks,
     });
-    const mentionContextSuffix = threadMentionContextSuffix(threadMentionProjection.contextBlocks);
+    let mentionContextSuffix = threadMentionContextSuffix(threadMentionProjection.contextBlocks);
     const providerMentions = threadMentionProjection.providerMentions;
     // Subagent threads have no provider session of their own: their messages
     // steer the running child task through the parent session (mirrors the
@@ -2340,6 +2342,29 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadSessionModelSelections.set(input.threadId, input.modelSelection);
     }
+    const completionContext =
+      input.cacheReviewSource &&
+      (input.cacheReviewSource.payload.dispatchOrigin ?? "user") === "user" &&
+      input.dispatchMode !== "steer" &&
+      input.reviewTarget === undefined &&
+      !input.messageText.trimStart().startsWith("/")
+        ? yield* gatewayOperations.completions.claimContext(
+            input.threadId,
+            input.completionEventSequence ?? input.sourceEventSequence,
+            Math.max(
+              0,
+              Math.min(
+                16_000,
+                PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+                  input.messageText.length -
+                  mentionContextSuffix.length -
+                  providerPromptOverheadChars -
+                  PROVIDER_INPUT_SAFETY_MARGIN_CHARS,
+              ),
+            ),
+          )
+        : "";
+    mentionContextSuffix += completionContext;
     // Bootstrap prompts wrap the user message in `<latest_user_message>` tags;
     // mentioned-thread context is appended after the assembled provider input
     // instead so it never reads as part of the user's own words. The budget
@@ -2847,6 +2872,8 @@ const make = Effect.gen(function* () {
         ),
       );
       startedTurn = sentTurn;
+      if (completionContext)
+        acceptedCompletionContexts.add(input.completionEventSequence ?? input.sourceEventSequence);
       if (!pendingContextBootstrapAttempt) {
         completeInterruptEscalation(input.threadId, interruptEscalation);
       }
@@ -3184,6 +3211,7 @@ const make = Effect.gen(function* () {
   const processTurnStartRequestedWithoutLease = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
     acceptedCacheReview?: PendingClaudeCacheReview,
+    deliveryEventSequence?: number,
   ) {
     const sessionThreadId =
       (yield* resolveProviderSessionThread(event.payload.threadId))?.id ?? event.payload.threadId;
@@ -3399,6 +3427,7 @@ const make = Effect.gen(function* () {
       const startedTurn = yield* dispatchTurnForThread({
         cacheReviewSource: event,
         sourceEventSequence: event.sequence,
+        completionEventSequence: deliveryEventSequence ?? event.sequence,
         ...(acceptedCacheReview ? { acceptedCacheReview } : {}),
         threadId: event.payload.threadId,
         messageId: message.id,
@@ -3933,7 +3962,7 @@ const make = Effect.gen(function* () {
           );
           return;
         }
-        yield* processTurnStartRequestedWithoutLease(source, review).pipe(
+        yield* processTurnStartRequestedWithoutLease(source, review, event.sequence).pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
               const outcome = classifyProviderAttemptOutcome(Exit.failCause(cause));
@@ -5710,6 +5739,7 @@ const make = Effect.gen(function* () {
       readonly state: "dead" | "uncertain";
       readonly detail: string;
     }) {
+      acceptedCompletionContexts.delete(input.event.sequence);
       yield* Effect.logError("provider command delivery entered terminal failure", {
         eventType: input.event.type,
         eventSequence: input.event.sequence,
@@ -6004,17 +6034,22 @@ const make = Effect.gen(function* () {
                 detail: outcome.detail,
               });
             }
-            const completed = yield* deliveryRepository.complete({
-              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
-              eventSequence: event.sequence,
-              claimOwner,
-              completedAt: new Date().toISOString(),
-            });
+            const completed = yield* gatewayOperations.completions.settleContext(
+              event.sequence,
+              acceptedCompletionContexts.has(event.sequence),
+              deliveryRepository.complete({
+                consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+                eventSequence: event.sequence,
+                claimOwner,
+                completedAt: new Date().toISOString(),
+              }),
+            );
             if (!completed) {
               return yield* Effect.die(
                 new Error(`Provider command delivery ${event.sequence} lost settlement ownership`),
               );
             }
+            acceptedCompletionContexts.delete(event.sequence);
             yield* refreshCursor;
             return;
           }

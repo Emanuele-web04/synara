@@ -776,6 +776,19 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      seedCompletion: () =>
+        runtime!.runPromise(sql`
+        INSERT INTO agent_gateway_completions
+          (child_thread_id, creator_thread_id, initial_message_id, result_json, delivery_state, created_at)
+        VALUES ('delegated-child', 'thread-1', 'delegated-initial', '{"summary":"delegated result","childThreadId":"delegated-child"}', 'delivered', ${new Date().toISOString()})
+      `),
+      completionState: () =>
+        runtime!.runPromise(sql<{
+          context_consumed: number;
+          context_event_sequence: number | null;
+        }>`
+        SELECT context_consumed, context_event_sequence FROM agent_gateway_completions WHERE child_thread_id = 'delegated-child'
+      `),
       reactor,
       serverSettings,
       startSession,
@@ -960,6 +973,131 @@ describe("ProviderCommandReactor", () => {
       interceptEngineDispatch,
     };
   }
+
+  it("includes passive completion context only on a human send and preserves the visible user message", async () => {
+    const harness = await createHarness();
+    await harness.seedCompletion();
+    const beforeCompletion = await readHarnessThread(harness);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe("passive-result"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        requireUnarchived: true,
+        activity: {
+          id: EventId.makeUnsafe("passive-result"),
+          kind: "synara.task.completed",
+          tone: "info",
+          summary: "Delegated task completed",
+          payload: { detail: "delegated result" },
+          turnId: null,
+          createdAt: new Date().toISOString(),
+        },
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await harness.drain();
+    const afterCompletion = await readHarnessThread(harness);
+    expect(afterCompletion?.latestHumanMessageAt).toBe(beforeCompletion?.latestHumanMessageAt);
+    expect(afterCompletion?.session).toEqual(beforeCompletion?.session);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const createdAt = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        commandId: CommandId.makeUnsafe("completion-human-send"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: MessageId.makeUnsafe("completion-human-message"),
+          role: "user",
+          text: "What happened?",
+          attachments: [],
+        },
+        createdAt,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain("delegated result");
+    expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain("untrusted child output");
+    expect(
+      (await readHarnessThread(harness))?.messages.find(
+        (message) => message.id === "completion-human-message",
+      )?.text,
+    ).toBe("What happened?");
+    expect((await harness.completionState())[0]?.context_consumed).toBe(1);
+  });
+
+  it.each(["agent", "automation"] as const)(
+    "does not give passive completion context to a %s-originated send",
+    async (dispatchOrigin) => {
+      const harness = await createHarness();
+      await harness.seedCompletion();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          commandId: CommandId.makeUnsafe("completion-agent-send"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          dispatchOrigin,
+          message: {
+            messageId: MessageId.makeUnsafe("completion-agent-message"),
+            role: "user",
+            text: "Agent work",
+            attachments: [],
+          },
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).not.toContain("delegated result");
+      expect((await harness.completionState())[0]).toMatchObject({
+        context_consumed: 0,
+        context_event_sequence: null,
+      });
+    },
+  );
+
+  it("releases completion context after a rejected provider send", async () => {
+    const harness = await createHarness();
+    await harness.seedCompletion();
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterValidationError({
+          provider: "codex",
+          operation: "sendTurn",
+          issue: "Rejected fixture send",
+        }),
+      ),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        commandId: CommandId.makeUnsafe("completion-rejected-send"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: MessageId.makeUnsafe("completion-rejected-message"),
+          role: "user",
+          text: "Try sending",
+          attachments: [],
+        },
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain("delegated result");
+    expect((await harness.completionState())[0]).toMatchObject({
+      context_consumed: 0,
+      context_event_sequence: null,
+    });
+  });
 
   async function seedRollbackTarget(
     harness: Awaited<ReturnType<typeof createHarness>>,
@@ -1211,6 +1349,21 @@ describe("ProviderCommandReactor", () => {
       );
       await harness.drain();
     }
+
+    it("retains completion context while parked and consumes it only after Continue sends", async () => {
+      const { harness } = await createCompactionHarness();
+      await harness.seedCompletion();
+      const review = await sendHeldMessage(harness);
+      expect((await harness.completionState())[0]).toMatchObject({
+        context_consumed: 0,
+        context_event_sequence: null,
+      });
+      await respondToReview(harness, review, "continue");
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await harness.drain();
+      expect(harness.sendTurn.mock.calls[0]?.[0].input).toContain("delegated result");
+      expect((await harness.completionState())[0]?.context_consumed).toBe(1);
+    });
 
     it("discovery error leaves the held message retryable", async () => {
       const { harness, startClaudeCompaction } = await createCompactionHarness();

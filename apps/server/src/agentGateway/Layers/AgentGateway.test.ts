@@ -271,6 +271,7 @@ interface GatewayHarness {
     readonly assistantMessageId?: string | null;
   }) => void;
   readonly setProviderStatuses: (statuses: ReadonlyArray<ServerProviderStatus>) => void;
+  readonly getOperationPlan: () => string;
   readonly getOperationStatus: (callerTurnId: string) => string | null;
   readonly getOperationErrorCode: (callerTurnId: string) => string | null;
   readonly getWaitReadCounts: () => {
@@ -960,6 +961,17 @@ function makeHarnessLayer(
     );
   }
   const operationLayer = Layer.succeed(AgentGatewayOperationRepository, {
+    completions: {
+      pending: () => Effect.succeed([]),
+      isOutputSettled: () => Effect.succeed(true),
+      hasCompletedRun: () => Effect.succeed(true),
+      initialFailure: () => Effect.succeed(null),
+      hasGoalHistory: () => Effect.succeed(false),
+      saveResult: () => Effect.void,
+      delivered: () => Effect.void,
+      claimContext: () => Effect.succeed(""),
+      settleContext: (_sequence, _accepted, settle) => settle,
+    },
     reserve: (input: {
       operationId: string;
       callerThreadId: string;
@@ -1298,6 +1310,7 @@ function makeHarnessLayer(
       setProviderStatuses: (statuses) => {
         providerStatuses = statuses;
       },
+      getOperationPlan: () => [...operationsByScope.values()][0]!.planJson,
       getOperationStatus: (callerTurnId) =>
         [...operationsByScope.values()].find((operation) => operation.callerTurnId === callerTurnId)
           ?.status ?? null,
@@ -2481,6 +2494,45 @@ describe("AgentGateway", () => {
       }
     }).pipe(Effect.provide(gatewayLayer));
   });
+
+  for (const batch of [false, true]) {
+    it.effect(
+      `persists creator-only completion opt-in for ${batch ? "batch" : "single"} creation`,
+      () => {
+        const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+        return Effect.gen(function* () {
+          const harness = yield* makeHarness;
+          const spec = {
+            prompt: "delegated task",
+            target: { provider: "codex", model: "gpt-5.5" },
+            notifyCreatorOnComplete: true,
+          };
+          const response = yield* harness.callTool({
+            token: "token-parent",
+            name: batch ? "synara_create_threads" : "synara_create_thread",
+            args: batch
+              ? {
+                  requestId: "completion",
+                  threads: [spec, { ...spec, notifyCreatorOnComplete: false }],
+                }
+              : { requestId: "completion", ...spec },
+          });
+          assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+          const plan = JSON.parse(harness.getOperationPlan()) as Array<{
+            notifyCreatorOnComplete: boolean;
+          }>;
+          assert.equal(plan[0]?.notifyCreatorOnComplete, true);
+          if (batch) assert.equal(plan[1]?.notifyCreatorOnComplete, false);
+          for (const command of harness.dispatched) {
+            if (command.type === "thread.create") {
+              assert.equal(command.sourceThreadId, "thread-parent");
+              assert.isFalse("parentThreadId" in command);
+            }
+          }
+        }).pipe(Effect.provide(gatewayLayer));
+      },
+    );
+  }
 
   it.effect("starts explicit OpenCode plan-agent targets in plan mode", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
