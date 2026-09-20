@@ -26,11 +26,12 @@ describe("mergeComputerImageStreamStatus", () => {
   });
 });
 
-// Hook coverage for the disable-path ownership guard: the stills stream shares
-// its canvas with the preview tap, so disabling it must not wipe pixels it
-// never drew. Uses the same slot-tracked React harness as
-// useComputerPreviewTap.test.ts, with the frame source stubbed to capture its
-// handlers so frames can be fed without a WebSocket.
+// Hook coverage for the disable path: the stills stream shares its canvas with
+// the preview tap, and the canvas never gets wiped — a held frame outlives
+// whichever source drew it until another frame paints over it. Uses the same
+// slot-tracked React harness as useComputerPreviewTap.test.ts, with the frame
+// source stubbed to capture its handlers so frames can be fed without a
+// WebSocket.
 
 const reactHarness = vi.hoisted(() => {
   interface EffectSlot {
@@ -205,7 +206,7 @@ describe("useComputerImageStream disable path", () => {
     expect(context.clearRect).not.toHaveBeenCalled();
   });
 
-  it("clears the canvas it drew once disabled", async () => {
+  it("keeps the canvas it drew once disabled", async () => {
     const { canvas, context, canvasRef } = createCanvas();
 
     renderStream({ enabled: true, canvasRef });
@@ -223,6 +224,11 @@ describe("useComputerImageStream disable path", () => {
 
     renderStream({ enabled: false, canvasRef });
     expect(frameSourceHarness.close).toHaveBeenCalledOnce();
-    expect(context.clearRect).toHaveBeenCalledOnce();
+    // The frame stays on the canvas: the tap or a re-subscribed stream paints
+    // over it, so clearing would only blank the preview in between.
+    expect(context.clearRect).not.toHaveBeenCalled();
+    // The stream's own dims reset with the subscription — the card latches the
+    // last decoded size itself so the held frame's aspect survives.
+    expect(renderStream({ enabled: false, canvasRef }).dimensions).toBeNull();
   });
 });

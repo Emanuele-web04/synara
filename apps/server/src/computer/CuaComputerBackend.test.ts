@@ -3254,12 +3254,12 @@ describe("Cua workstream-C speed flags", () => {
     await f.backend.dispose();
   });
 
-  it("arms the still publisher at the compiled 2000 ms cadence by default", async () => {
+  it("arms the still publisher at the compiled 1000 ms cadence by default", async () => {
     setEnv("SYNARA_CUA_PREVIEW_STILL_MS", undefined);
     const f = fixture();
     const intervals = vi.spyOn(globalThis, "setInterval");
     await f.backend.attachStream(() => undefined);
-    expect(intervals.mock.calls.some((call) => call[1] === 2_000)).toBe(true);
+    expect(intervals.mock.calls.some((call) => call[1] === 1_000)).toBe(true);
     await f.backend.dispose();
   });
 
@@ -3269,7 +3269,7 @@ describe("Cua workstream-C speed flags", () => {
     const intervals = vi.spyOn(globalThis, "setInterval");
     await f.backend.attachStream(() => undefined);
     expect(intervals.mock.calls.some((call) => call[1] === 4_000)).toBe(true);
-    expect(intervals.mock.calls.some((call) => call[1] === 2_000)).toBe(false);
+    expect(intervals.mock.calls.some((call) => call[1] === 1_000)).toBe(false);
     await f.backend.dispose();
   });
 
@@ -3278,7 +3278,7 @@ describe("Cua workstream-C speed flags", () => {
     const f = fixture();
     const intervals = vi.spyOn(globalThis, "setInterval");
     await f.backend.attachStream(() => undefined);
-    expect(intervals.mock.calls.some((call) => call[1] === 2_000)).toBe(true);
+    expect(intervals.mock.calls.some((call) => call[1] === 1_000)).toBe(true);
     await f.backend.dispose();
   });
 

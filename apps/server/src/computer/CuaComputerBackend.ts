@@ -161,11 +161,11 @@ const RECENT_TREE_TTL_MS = 5_000;
 /**
  * Pane preview still cadence when nothing overrides it. Slower than the
  * Tier-1 default: each tick re-observes the exact window or browser tab the
- * task is using, and the pane reads as live at half a hertz.
+ * task is using, and the pane reads as live at one hertz.
  * `SYNARA_CUA_PREVIEW_STILL_MS` replaces it; the constructor option replaces
  * it in tests.
  */
-const CUA_STILL_FRAME_INTERVAL_MS = 2_000;
+const CUA_STILL_FRAME_INTERVAL_MS = 1_000;
 /**
  * The semantic element actions this integration admits, what the pinned
  * driver's `click` element path performs for each (`action` argument, mapped
@@ -370,7 +370,7 @@ export class CuaComputerBackend implements ComputerBackend {
       semanticTextLaneGapMs?: number;
       /**
        * Still-capture cadence for the pane preview; defaults to
-       * `SYNARA_CUA_PREVIEW_STILL_MS`, then 2000 ms. Injectable so tests can
+       * `SYNARA_CUA_PREVIEW_STILL_MS`, then 1000 ms. Injectable so tests can
        * observe the interval without env manipulation.
        */
       stillIntervalMs?: number;
@@ -389,7 +389,7 @@ export class CuaComputerBackend implements ComputerBackend {
       isCaptureAvailable: () => !this.disposed && !this.permissions.includes("screenRecording"),
       emit: () => undefined,
       now: Date.now,
-      // Still cadence is 2 s unless SYNARA_CUA_PREVIEW_STILL_MS overrides it;
+      // Still cadence is 1 s unless SYNARA_CUA_PREVIEW_STILL_MS overrides it;
       // the publisher floor keeps an aggressive value from queueing captures
       // faster than one encode can finish.
       intervalMs: resolveStillIntervalMs(
@@ -2407,7 +2407,10 @@ export class CuaComputerBackend implements ComputerBackend {
     const targetId = text(structured.target_id) || text(args.target_id);
     if (!targetId) return;
     const resolved = text(args.tab_id) || resolvableStillTab(structured.tabs);
-    const prior = this.stillTarget?.kind === "browser" && this.stillTarget.targetId === targetId ? this.stillTarget.tabId : undefined;
+    const prior =
+      this.stillTarget?.kind === "browser" && this.stillTarget.targetId === targetId
+        ? this.stillTarget.tabId
+        : undefined;
     this.stillTarget = { kind: "browser", targetId, tabId: resolved || prior || undefined, task };
   }
   async attachStream(listener: ComputerFrameListener) {

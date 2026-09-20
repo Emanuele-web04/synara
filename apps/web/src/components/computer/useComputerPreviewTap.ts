@@ -77,24 +77,16 @@ export function useComputerPreviewTap(input: {
 
     const generation = ++generationRef.current;
     const isCurrent = () => generationRef.current === generation;
-    // Captured for the cleanup: the ref's .current read there would race the
-    // next effect's canvas, and lint flags the direct access for that reason.
-    const subscribedCanvas = canvasRef.current;
     let disposed = false;
     let decoding = false;
     let lastSeq: number | null = null;
-    // True from the latest decoded frame until the tap goes quiet: only then
-    // does the canvas content belong to this hook and need clearing.
-    let ownsCanvas = false;
     let quietTimer: ReturnType<typeof setTimeout> | null = null;
 
     const noteDecoded = () => {
-      ownsCanvas = true;
       setActive(true);
       if (quietTimer !== null) clearTimeout(quietTimer);
       quietTimer = setTimeout(() => {
         if (!isCurrent() || disposed) return;
-        ownsCanvas = false;
         setActive(false);
       }, COMPUTER_PREVIEW_TAP_QUIET_MS);
     };
@@ -153,12 +145,12 @@ export function useComputerPreviewTap(input: {
       generationRef.current += 1;
       if (quietTimer !== null) clearTimeout(quietTimer);
       unsubscribe();
-      if (ownsCanvas) {
-        subscribedCanvas
-          ?.getContext("2d")
-          ?.clearRect(0, 0, subscribedCanvas.width, subscribedCanvas.height);
-        setFrameSize(null);
-      }
+      // The canvas keeps its last decoded frame: a stills frame or the next
+      // tap frame paints over it, so wiping here would flash a blank viewport
+      // in between. The size still resets — the frame-source pick reads
+      // `frameSize !== null` as "the tap has a frame worth holding", and on
+      // teardown it does not.
+      setFrameSize(null);
     };
     // The tap stream is host-wide rather than per thread; threadId keys the
     // subscription so a card remounted for another thread restarts sequence

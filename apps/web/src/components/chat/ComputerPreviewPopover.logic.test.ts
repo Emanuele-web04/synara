@@ -196,7 +196,7 @@ describe("computerPreviewStatusLabel", () => {
         currentActivity: "Clicking",
         lastActionLabel: "Click",
       }),
-    ).toBe("Stopped — Escape");
+    ).toBe("Stopped via Escape");
     expect(
       computerPreviewStatusLabel({
         agentActive: false,
@@ -204,7 +204,7 @@ describe("computerPreviewStatusLabel", () => {
         currentActivity: null,
         lastActionLabel: null,
       }),
-    ).toBe("Stopped — Escape");
+    ).toBe("Stopped via Escape");
     expect(
       computerPreviewStatusLabel({
         agentActive: true,

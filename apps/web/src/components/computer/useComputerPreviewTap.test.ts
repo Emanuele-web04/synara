@@ -301,7 +301,7 @@ describe("useComputerPreviewTap", () => {
     expect(render({ enabled: true, canvasRef, threadId: THREAD_ID }).active).toBe(true);
   });
 
-  it("unsubscribes and clears the canvas it drew on disable", async () => {
+  it("unsubscribes but keeps the canvas it drew on disable", async () => {
     const bridge = createBridge();
     vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
@@ -312,7 +312,9 @@ describe("useComputerPreviewTap", () => {
 
     render({ enabled: false, canvasRef, threadId: THREAD_ID });
     expect(bridge.unsubscribe).toHaveBeenCalledOnce();
-    expect(context.clearRect).toHaveBeenCalledOnce();
+    // The last decoded frame stays on the canvas: the stills stream or a
+    // re-subscribed tap paints over it, so clearing would only blank the card.
+    expect(context.clearRect).not.toHaveBeenCalled();
     expect(render({ enabled: false, canvasRef, threadId: THREAD_ID }).active).toBe(false);
   });
 
@@ -404,7 +406,7 @@ describe("useComputerPreviewTap", () => {
     expect(context.clearRect).not.toHaveBeenCalled();
   });
 
-  it("clears the frame size where it clears the owned canvas on disable", async () => {
+  it("resets the frame size on disable while keeping the canvas painted", async () => {
     const bridge = createBridge();
     vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
     const { context, canvasRef } = createCanvas();
@@ -419,9 +421,11 @@ describe("useComputerPreviewTap", () => {
 
     const disabled = render({ enabled: false, canvasRef, threadId: THREAD_ID });
     expect(bridge.unsubscribe).toHaveBeenCalledOnce();
-    expect(context.clearRect).toHaveBeenCalledOnce();
+    // The pixels stay — a teardown never blanks the canvas — but the tap no
+    // longer claims a frame worth holding, so the stills fallback may resume.
+    expect(context.clearRect).not.toHaveBeenCalled();
     // Effects run after the render that triggered them, so read the settled
-    // state one render later, like the canvas-clear test above.
+    // state one render later, like the disable test above.
     const settled = render({ enabled: false, canvasRef, threadId: THREAD_ID });
     expect(settled.active).toBe(false);
     expect(settled.frameSize).toBeNull();

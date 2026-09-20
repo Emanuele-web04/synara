@@ -136,6 +136,8 @@ function render(input?: {
   state?: ThreadComputerState;
   autoOpenComputerPane?: boolean;
   frame?: boolean;
+  /** Tap decoded a frame then went silent: size kept, no longer active. */
+  tapQuiet?: boolean;
   stills?: boolean;
   size?: ComputerPreviewCardSize;
   maxWidthPx?: number;
@@ -144,8 +146,9 @@ function render(input?: {
   current.session = input?.session;
   current.state = input?.state;
   current.autoOpenComputerPane = input?.autoOpenComputerPane ?? true;
-  const withFrame = input?.frame ?? true;
-  current.tapActive = withFrame;
+  const tapQuiet = input?.tapQuiet ?? false;
+  const withFrame = (input?.frame ?? true) || tapQuiet;
+  current.tapActive = withFrame && !tapQuiet;
   current.tapFrameSize = withFrame ? { width: 960, height: 600 } : null;
   current.stillsStreaming = input?.stills ?? false;
   current.floating = input?.floating;
@@ -232,6 +235,28 @@ describe("ComputerPreviewPopover", () => {
     const markup = render({ session: session("live"), state: threadState(), frame: false });
     expect(markup).toContain("Waiting for the window the agent is using…");
     expect(markup).not.toContain("Waiting for the desktop");
+  });
+
+  it("holds the quiet tap's last frame without the waiting label", () => {
+    // Once a frame decoded, a source going quiet keeps showing it: the card
+    // stays open on the held frame's own aspect with no empty-state label
+    // pasted over a live picture.
+    const markup = render({ session: session("live"), state: threadState(), tapQuiet: true });
+    expect(markup).toContain("scale-100 opacity-100");
+    expect(markup).toContain("960 / 600");
+    expect(markup).not.toContain("Waiting for the window");
+  });
+
+  it("marks the status pill with a static dot, never an animated orb", () => {
+    // The live indicator is a plain 6px dot — no ping ring, no colored orb
+    // pulsing while the agent works.
+    const markup = render({
+      session: session("live"),
+      state: threadState({ agentActive: true }),
+    });
+    expect(markup).toContain("Live");
+    expect(markup).not.toContain("animate-ping");
+    expect(markup).not.toContain("violet");
   });
 
   it("offers only close: the pane is disabled and stopping lives in the composer", () => {

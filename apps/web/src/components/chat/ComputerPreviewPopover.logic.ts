@@ -216,7 +216,7 @@ export function computerPreviewStatusLabel(input: {
 }): string | null {
   // The Escape kill outranks "live": frames may still arrive, but nothing the
   // chip could say about activity is true while input admission is closed.
-  if (input.inputStopped === true) return "Stopped — Escape";
+  if (input.inputStopped === true) return "Stopped via Escape";
   if (input.agentActive) return input.currentActivity ?? input.lastActionLabel ?? "Live";
   return input.lastActionLabel;
 }

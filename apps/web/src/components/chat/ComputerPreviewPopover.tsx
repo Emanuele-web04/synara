@@ -42,7 +42,6 @@ import {
   computerPreviewFrameSource,
   computerPreviewStatusLabel,
   type ComputerPreviewCardSize,
-  type ComputerPreviewFrameSource,
   type ComputerPreviewSession,
 } from "./ComputerPreviewPopover.logic";
 
@@ -165,10 +164,24 @@ function ComputerPreviewPopoverCard(props: {
   // Publish the live footprint for the rail: the chat reserves gutter space
   // only for a card that actually has content, at its fitted width.
 
-  // Aspect follows the live content. Both sources are window/tab captures
-  // now, so the card takes the target's shape; the display size is only the
-  // last-resort placeholder before any frame exists.
-  const frameDims = tap.frameSize ?? dimensions ?? threadState?.screenSize ?? undefined;
+  // Aspect follows the live content: the last decoded frame's own size,
+  // latched so a source going quiet (tap silence, stills reconnect, a
+  // stills-to-tap handoff) never snaps the card back to the display-size
+  // placeholder while the held frame is still on the canvas. The display
+  // size is only the last-resort placeholder before any frame exists.
+  // Compared by value: the sources preserve object identity when unchanged,
+  // but a fresh equal pair must not re-render the card either.
+  const decodedDims = tap.frameSize ?? dimensions ?? null;
+  const [heldFrameDims, setHeldFrameDims] = useState(decodedDims);
+  if (
+    decodedDims !== null &&
+    (heldFrameDims === null ||
+      decodedDims.width !== heldFrameDims.width ||
+      decodedDims.height !== heldFrameDims.height)
+  ) {
+    setHeldFrameDims({ width: decodedDims.width, height: decodedDims.height });
+  }
+  const frameDims = heldFrameDims ?? threadState?.screenSize ?? undefined;
   const frameAspect =
     frameDims && frameDims.height > 0 ? frameDims.width / frameDims.height : 16 / 10;
   const fitWidth = computerPreviewCardFitWidth({
@@ -221,10 +234,9 @@ function ComputerPreviewPopoverCard(props: {
         threadId={threadId}
         floating={floating !== undefined}
         frameDims={frameDims}
-        frameSource={frameSource}
+        hasFrame={hasFrame}
         streamStatus={streamStatus}
         statusLabel={statusLabel}
-        agentActive={desktopControl.agentActive}
         float={float}
       >
         <canvas
@@ -234,7 +246,7 @@ function ComputerPreviewPopoverCard(props: {
             visibleDesktop: desktopControl.visibleDesktop,
           })}
           tabIndex={-1}
-          className="absolute inset-0 h-full w-full"
+          className="absolute inset-0 h-full w-full object-contain"
         />
       </ComputerPreviewViewport>
     </div>
@@ -284,27 +296,20 @@ function ComputerPreviewViewport(props: {
   readonly threadId: ThreadId;
   readonly floating: boolean;
   readonly frameDims: { readonly width: number; readonly height: number } | undefined;
-  readonly frameSource: ComputerPreviewFrameSource;
+  readonly hasFrame: boolean;
   readonly streamStatus: ReturnType<typeof useComputerImageStream>["status"];
   readonly statusLabel: string | null;
-  readonly agentActive: boolean;
   readonly float: ComputerPreviewFloat;
 }) {
-  const {
-    children,
-    threadId,
-    floating,
-    frameDims,
-    frameSource,
-    streamStatus,
-    statusLabel,
-    agentActive,
-    float,
-  } = props;
+  const { children, threadId, floating, frameDims, hasFrame, streamStatus, statusLabel, float } =
+    props;
   return (
     <div
       className={cn(
-        "relative w-full overflow-hidden bg-muted/60",
+        // A captured window reads as a screen, so the surface under it is the
+        // same flat black the device frame uses — dark in every theme, never
+        // a white flash before the first frame lands or while one is held.
+        "relative w-full overflow-hidden bg-black",
         floating && "cursor-grab touch-none select-none active:cursor-grabbing",
       )}
       onPointerDown={float.onFloatPointerDown}
@@ -328,22 +333,17 @@ function ComputerPreviewViewport(props: {
         aria-hidden="true"
         className="pointer-events-none absolute inset-x-0 top-0 h-[45%] bg-gradient-to-b from-white/[0.09] via-white/[0.02] to-transparent"
       />
-      {frameSource !== "tap" && streamStatus.kind !== "streaming" ? (
+      {/* The empty-state label belongs to a canvas nothing has ever decoded
+          into. Once a frame landed, losing the source just holds that frame —
+          no blank flash, and no label pasted over a live picture. */}
+      {!hasFrame ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center">
           <ComputerPreviewStreamStatus status={streamStatus} />
         </div>
       ) : null}
       {statusLabel ? (
         <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%_-_1rem)] items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-[10px] font-medium text-white shadow-sm backdrop-blur-md">
-          <span aria-hidden="true" className="relative flex size-1.5 shrink-0">
-            {agentActive ? (
-              // Sonar ring: the "agent is working" heartbeat. Expands and
-              // fades around the steady core; reduced-motion drops the ring
-              // and keeps the plain dot.
-              <span className="absolute inline-flex size-full animate-ping rounded-full bg-violet-300 opacity-75 motion-reduce:hidden" />
-            ) : null}
-            <span className="relative inline-flex size-1.5 rounded-full bg-violet-300" />
-          </span>
+          <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-muted-foreground" />
           <span className="truncate">{statusLabel}</span>
         </div>
       ) : null}
