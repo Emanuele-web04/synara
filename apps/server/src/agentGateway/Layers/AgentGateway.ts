@@ -77,6 +77,7 @@ import {
 } from "../toolInput.ts";
 import { WRITE_TOOL_ANNOTATIONS, type ToolContext, type ToolEntry } from "../toolRuntime.ts";
 import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
+import { deliverGatewayCompletions } from "../completionDelivery.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
@@ -190,6 +191,20 @@ export const makeAgentGateway = Effect.gen(function* () {
     orchestrationEngine,
     git,
   });
+
+  yield* Effect.forkScoped(
+    Effect.forever(
+      deliverGatewayCompletions({
+        repository: operationRepository.completions,
+        snapshotQuery,
+        projectionTurns,
+        orchestrationEngine,
+      }).pipe(
+        Effect.catch((error) => Effect.logWarning("gateway completion scan failed", { error })),
+        Effect.andThen(Effect.sleep(1000)),
+      ),
+    ),
+  );
 
   const requireThreadShell = (threadId: string) =>
     snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(threadId)).pipe(
@@ -313,6 +328,11 @@ export const makeAgentGateway = Effect.gen(function* () {
             items: {
               type: "object",
               properties: {
+                notifyCreatorOnComplete: {
+                  type: "boolean",
+                  description:
+                    "Passively return the initial run result to this creating thread. Does not wake the creator; goal runs are unsupported.",
+                },
                 prompt: { type: "string" },
                 title: { type: "string" },
                 target: {
@@ -366,6 +386,11 @@ export const makeAgentGateway = Effect.gen(function* () {
         type: "object",
         properties: {
           requestId: { type: "string", maxLength: 256 },
+          notifyCreatorOnComplete: {
+            type: "boolean",
+            description:
+              "Passively return the initial run result to this creating thread. Does not wake the creator; goal runs are unsupported.",
+          },
           prompt: { type: "string" },
           title: { type: "string" },
           target: {
@@ -424,6 +449,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           "baseBranch",
           "branchName",
           "runtimeMode",
+          "notifyCreatorOnComplete",
         ]) {
           const value = args[key];
           if (value !== undefined) spec[key] = value;
