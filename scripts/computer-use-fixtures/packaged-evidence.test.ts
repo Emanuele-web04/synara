@@ -11,6 +11,10 @@ import {
 } from "../../apps/desktop/src/cuaFixtures/focusProbe.ts";
 import { assertLoopbackUrl, waitForSelectedProvider } from "./packaged-client.ts";
 import {
+  assertPackagedAppInstallation,
+  PackagedAppInstallationError,
+} from "./packaged-artifact.ts";
+import {
   assessContinuousFocus,
   assessFixtureReportCoverage,
   assertPassiveComputerReady,
@@ -55,6 +59,34 @@ function run(): FocusProbeRunResult {
 }
 
 describe("packaged fixture evidence", () => {
+  it.each(["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"])(
+    "refuses an app under temporary root %s even if registration resolves to it",
+    (root) => {
+      const bundle = `${root}/isolated/Synara Cua.app`;
+      expect(() => assertPackagedAppInstallation(bundle, bundle)).toThrow(
+        "selected Cua app is in temporary storage",
+      );
+    },
+  );
+
+  it("requires LaunchServices to resolve the exact installed copy and gives actionable setup guidance", () => {
+    const bundle = "/Users/operator/Applications/Synara Cua.app";
+    for (const registered of [null, "/Applications/Synara Cua.app"]) {
+      expect(() => assertPackagedAppInstallation(bundle, registered)).toThrow(
+        PackagedAppInstallationError,
+      );
+      expect(() => assertPackagedAppInstallation(bundle, registered)).toThrow(
+        '--bundle "$HOME/Applications/Synara Cua.app" and a new isolated --home',
+      );
+    }
+    expect(() => assertPackagedAppInstallation(bundle, bundle)).not.toThrow();
+  });
+
+  it("does not mistake a stable directory sharing a temporary root prefix for temporary storage", () => {
+    const bundle = "/tmp-fixtures/Synara Cua.app";
+    expect(() => assertPackagedAppInstallation(bundle, bundle)).not.toThrow();
+  });
+
   it("requires every expected completed trial, including recovery, instead of passing empty or partial coverage", () => {
     const passed = { kind: "click" as const, taskPassed: true, measurement: { valid: true } };
     expect(assessFixtureReportCoverage([], 3)).toMatchObject({

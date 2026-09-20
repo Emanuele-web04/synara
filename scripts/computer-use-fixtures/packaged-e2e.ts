@@ -23,7 +23,7 @@ import {
   startFocusProbe,
   type FocusProbeExpect,
 } from "../../apps/desktop/src/cuaFixtures/focusProbe.ts";
-import { artifactIdentity } from "./packaged-artifact.ts";
+import { artifactIdentity, PackagedAppInstallationError } from "./packaged-artifact.ts";
 import {
   collectComputerRun,
   prepareComputerRunDiagnostics,
@@ -814,9 +814,11 @@ async function main() {
   if (!accepted) process.exitCode = 2;
 }
 
-void main().catch(() => {
+void main().catch((error: unknown) => {
   console.error(
-    "Packaged fixture setup failed. Check explicit paths, bundle revision, unused port and a new isolated home.",
+    error instanceof PackagedAppInstallationError
+      ? error.message
+      : "Packaged fixture setup failed. Check explicit paths, bundle revision, unused port and a new isolated home.",
   );
   process.exitCode = 1;
 });

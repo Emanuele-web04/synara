@@ -22,6 +22,35 @@ Required artifacts:
   model explicitly; the runner neither chooses a different provider/model nor
   changes credentials. Node/Bun and workspace dependencies must be installed.
 
+Install the exact Cua bundle at `~/Applications/Synara Cua.app` before permission
+setup. A bundle under `/tmp` or macOS temporary folders can run while
+LaunchServices cannot resolve its bundle ID, preventing macOS from applying its
+permissions. Both runners now refuse temporary paths and require the read-only
+`NSWorkspace` lookup to resolve to the **same canonical app path** selected by
+`--bundle`. A successful registration command alone is insufficient. This check
+does not grant permissions or prove that existing grants apply.
+
+Set `BUILT_CUA_BUNDLE` to the packaged artifact to install. This recipe refuses
+an existing destination; do not overwrite another app or alter its signature to
+make setup pass. Quit any temporary Cua instance before preparing the installed
+copy. Copying preserves the existing package; an ad-hoc signature still does not
+promise permission persistence after rebuilding or replacing it.
+
+```sh
+(
+  set -eu
+  : "${BUILT_CUA_BUNDLE:?Set BUILT_CUA_BUNDLE to the exact packaged Cua app}"
+  cua_install_path="$HOME/Applications/Synara Cua.app"
+  if [ -e "$cua_install_path" ]; then
+    printf '%s\n' 'Destination exists; verify that copy before continuing.' >&2
+    exit 1
+  fi
+  mkdir -p "$HOME/Applications"
+  /usr/bin/ditto "$BUILT_CUA_BUNDLE" "$cua_install_path"
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$cua_install_path"
+)
+```
+
 Acceptance setup requires the passive Computer availability probe to report `available`.
 An idle host's disconnected/unavailable health is not a setup failure: its
 physical-input listener starts only when the owned task uses Computer. Fresh
@@ -52,7 +81,7 @@ does not prove native permission grants.
 ```sh
 nice -n 10 bun scripts/computer-use-fixtures/packaged-e2e.ts \
   --prepare-only \
-  --bundle "$ISOLATED_CUA_BUNDLE" \
+  --bundle "$HOME/Applications/Synara Cua.app" \
   --home /private/tmp/synara-computer-fixture-run-001 \
   --cdp-port 49231
 ```
@@ -65,7 +94,7 @@ acceptance artifacts and explicit provider/model:
 ```sh
 nice -n 10 bun scripts/computer-use-fixtures/packaged-e2e.ts \
   --attach \
-  --bundle "$ISOLATED_CUA_BUNDLE" \
+  --bundle "$HOME/Applications/Synara Cua.app" \
   --home /private/tmp/synara-computer-fixture-run-001 \
   --cdp-port 49231 \
   --native-fixture "$NATIVE_FIXTURE_EXECUTABLE" \
@@ -79,6 +108,8 @@ Optional `--model-options` is a JSON object decoded through that provider's real
 model-selection schema. `--turn-timeout-seconds` defaults to 180 (10–600).
 `--attach` can reuse only a matching fixture-created home/bundle/CDP port; each
 acceptance invocation still creates a new project directory and new threads.
+After moving from a temporary app to the installed copy, prepare a new isolated
+home and unused port; the old marker belongs to the old app path.
 Omit `--attach` to launch a new isolated instance directly when its package already
 has the required permissions. `--skip-stop` is a diagnostic convenience and leaves
 the stop/recovery gate unverified.

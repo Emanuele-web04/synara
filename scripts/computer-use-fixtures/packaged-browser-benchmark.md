@@ -2,12 +2,17 @@
 
 This runner attaches to one explicitly selected isolated **Synara Cua** package. It does not launch the application, install Chrome, change permissions, borrow account cookies, or select a provider/model for the operator. Run the existing [packaged fixture](packaged-e2e.md) first to establish its isolated instance marker, configured provider, pinned native artifact and focus-observation permissions.
 
+Use the installed `~/Applications/Synara Cua.app` copy prepared by that recipe.
+Before attaching or starting a provider turn, the runner refuses temporary app
+paths and requires LaunchServices to resolve the bundle ID to the exact selected
+copy. Registration is a setup requirement, not proof of native permission grants.
+
 The existing-user-profile task is unsupported. `--task github-running` reports that result without creating a provider thread. `github-isolated` is a separately labeled Chrome comparison; it never represents the existing Dia profile test.
 
 ```sh
 bun scripts/computer-use-fixtures/packaged-browser-benchmark.ts \
   --task github-isolated --repo OWNER/REPO \
-  --bundle '/explicit/path/Synara Cua.app' \
+  --bundle "$HOME/Applications/Synara Cua.app" \
   --home /explicit/isolated/synara-home --cdp-port 9332 \
   --focus-probe /explicit/path/focus-probe \
   --provider PROVIDER --model MODEL \

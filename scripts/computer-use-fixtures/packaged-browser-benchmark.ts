@@ -21,7 +21,7 @@ import {
   startFocusProbe,
   type FocusProbeExpect,
 } from "../../apps/desktop/src/cuaFixtures/focusProbe.ts";
-import { artifactIdentity } from "./packaged-artifact.ts";
+import { artifactIdentity, PackagedAppInstallationError } from "./packaged-artifact.ts";
 import {
   connectPackagedOwner,
   waitForSelectedProvider,
@@ -592,9 +592,11 @@ async function main() {
   );
   if (!passed) process.exitCode = 2;
 }
-void main().catch(() => {
+void main().catch((error: unknown) => {
   console.error(
-    "Browser benchmark setup failed. Verify explicit isolated paths, package identity, provider/model and task options.",
+    error instanceof PackagedAppInstallationError
+      ? error.message
+      : "Browser benchmark setup failed. Verify explicit isolated paths, package identity, provider/model and task options.",
   );
   process.exitCode = 1;
 });
