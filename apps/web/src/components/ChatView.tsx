@@ -293,6 +293,8 @@ import {
   EnvironmentPanel,
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
+import { CoordinatorSuggestions } from "./chat/project/CoordinatorSuggestions";
+import { shouldShowCoordinatorSuggestions } from "./chat/project/coordinatorSuggestions.logic";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { useProjectInstructionsSource } from "./chat/project/useProjectInstructionsSource";
@@ -1629,6 +1631,11 @@ export default function ChatView({
   const isCoordinatorConversation = Boolean(
     activeThread && coordinatorThreadIds.has(activeThread.id),
   );
+  const [coordinatorSettingsOpen, setCoordinatorSettingsOpen] = useState(false);
+  const showCoordinatorSuggestions = shouldShowCoordinatorSuggestions({
+    isCoordinatorThread: isCoordinatorConversation,
+    messages: activeThread?.messages ?? EMPTY_MESSAGES,
+  });
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
@@ -5858,6 +5865,11 @@ export default function ChatView({
                     contentInsetBottomPx={composerTranscriptInsetPx}
                     contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
                   />
+                  {showCoordinatorSuggestions ? (
+                    <CoordinatorSuggestions
+                      onOpenSettings={() => setCoordinatorSettingsOpen(true)}
+                    />
+                  ) : null}
                 </div>
 
                 {/* Trailing block below the transcript: the composer floats on top of it
@@ -5970,6 +5982,8 @@ export default function ChatView({
               onOpenCoordinator={(threadId) => onNavigateToThread(threadId)}
               onOpenThread={(threadId) => onNavigateToThread(threadId)}
               onClose={() => setProjectFromAuxiliary(false)}
+              settingsDialogOpen={coordinatorSettingsOpen}
+              onSettingsDialogOpenChange={setCoordinatorSettingsOpen}
             />
           ) : null}
         </div>

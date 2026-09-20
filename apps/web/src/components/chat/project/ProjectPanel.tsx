@@ -24,6 +24,9 @@ import {
 } from "../environment/EnvironmentRow";
 import { ProjectAgentDialog } from "./ProjectAgentDialog";
 import { defaultProjectAgentName } from "./projectAgentDialog.logic";
+import { toDisplayName } from "~/components/profile/profileFormatting";
+import { useProfileName } from "~/components/profile/useProfileName";
+import { useWorkspacePathsStore } from "~/workspacePathsStore";
 import {
   mergeProjectFocusRows,
   partitionProjectFocusRows,
@@ -45,6 +48,8 @@ export interface ProjectPanelProps {
   onOpenCoordinator: (threadId: ThreadId) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onClose: () => void;
+  settingsDialogOpen?: boolean;
+  onSettingsDialogOpenChange?: (open: boolean) => void;
 }
 
 const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
@@ -60,8 +65,24 @@ export function ProjectPanel({
   importedInstructions,
   onOpenCoordinator,
   onOpenThread,
+  settingsDialogOpen,
+  onSettingsDialogOpenChange,
 }: ProjectPanelProps) {
-  const [agentDialogOpen, setAgentDialogOpen] = useState(false);
+  const [internalDialogOpen, setInternalDialogOpen] = useState(false);
+  const agentDialogOpen = settingsDialogOpen ?? internalDialogOpen;
+  const setAgentDialogOpen = (open: boolean) => {
+    setInternalDialogOpen(open);
+    onSettingsDialogOpenChange?.(open);
+  };
+  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
+  const { name: userDisplayName } = useProfileName(
+    toDisplayName(
+      (homeDir ?? "")
+        .replace(/[\\/]+$/, "")
+        .split(/[\\/]/)
+        .pop() ?? "there",
+    ),
+  );
   const agent = useProjectAgent({
     projectId,
     enabled: open && projectId !== null,
@@ -262,6 +283,7 @@ export function ProjectPanel({
           const saved = await agent.configure({
             modelSelection,
             coordinatorName: nextName,
+            userDisplayName,
             ...(agent.overview?.config?.workerRouting
               ? { workerRouting: agent.overview.config.workerRouting }
               : {}),

@@ -53,6 +53,9 @@ const ConfigRow = Schema.Struct({
   createdAt: ProjectAgentConfig.fields.createdAt,
   updatedAt: ProjectAgentConfig.fields.updatedAt,
   disabledAt: ProjectAgentConfig.fields.disabledAt,
+  goal: Schema.NullOr(Schema.String),
+  icon: Schema.NullOr(Schema.String),
+  autoMemoryEnabled: Schema.Number,
 });
 
 const GoalRow = Schema.Struct({
@@ -121,6 +124,9 @@ function toConfig(row: typeof ConfigRow.Type): ProjectAgentConfig {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     disabledAt: row.disabledAt,
+    ...(row.goal && row.goal.length > 0 ? { goal: row.goal } : {}),
+    ...(row.icon && row.icon.trim().length > 0 ? { icon: row.icon.trim() } : {}),
+    autoMemoryEnabled: row.autoMemoryEnabled === 1,
   };
 }
 
@@ -149,7 +155,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         revision,
         created_at AS "createdAt",
         updated_at AS "updatedAt",
-        disabled_at AS "disabledAt"
+        disabled_at AS "disabledAt",
+        goal,
+        icon,
+        auto_memory_enabled AS "autoMemoryEnabled"
       FROM project_agent_configs
       WHERE project_id = ${projectId}
     `,
@@ -173,7 +182,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         revision,
         created_at AS "createdAt",
         updated_at AS "updatedAt",
-        disabled_at AS "disabledAt"
+        disabled_at AS "disabledAt",
+        goal,
+        icon,
+        auto_memory_enabled AS "autoMemoryEnabled"
       FROM project_agent_configs
       WHERE coordinator_thread_id = ${threadId}
     `,
@@ -186,12 +198,13 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         project_id, coordinator_thread_id, coordinator_name,
         coordinator_model_selection_json, coordinator_provider_options_json,
         worker_routing_json, limits_json, capture_enabled, enabled, automation_id,
-        revision, created_at, updated_at, disabled_at
+        revision, created_at, updated_at, disabled_at, goal, icon, auto_memory_enabled
       ) VALUES (
         ${row.projectId}, ${row.coordinatorThreadId}, ${row.coordinatorName},
         ${row.coordinatorModelSelection}, ${row.coordinatorProviderOptions},
         ${row.workerRouting}, ${row.limits}, ${row.captureEnabled}, ${row.enabled},
-        ${row.automationId}, ${row.revision}, ${row.createdAt}, ${row.updatedAt}, ${row.disabledAt}
+        ${row.automationId}, ${row.revision}, ${row.createdAt}, ${row.updatedAt}, ${row.disabledAt},
+        ${row.goal}, ${row.icon}, ${row.autoMemoryEnabled}
       )
     `,
   });
@@ -212,7 +225,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         automation_id = ${row.automationId},
         revision = ${row.revision},
         updated_at = ${row.updatedAt},
-        disabled_at = ${row.disabledAt}
+        disabled_at = ${row.disabledAt},
+        goal = ${row.goal},
+        icon = ${row.icon},
+        auto_memory_enabled = ${row.autoMemoryEnabled}
       WHERE project_id = ${row.projectId} AND revision = ${expectedRevision}
       RETURNING changes() AS changed
     `,
@@ -399,6 +415,27 @@ const makeProjectAgentRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlOrDecodeError("ProjectAgentRepository.taskDeps", "taskDeps")),
     );
 
+  const listLinkedIds = SqlSchema.findAll({
+    Request: Schema.Struct({ projectId: ProjectId }),
+    Result: Schema.Struct({ linkedProjectId: ProjectId }),
+    execute: ({ projectId }) => sql`
+      SELECT linked_project_id AS "linkedProjectId"
+      FROM project_agent_linked_projects
+      WHERE project_id = ${projectId}
+    `,
+  });
+
+  const withLinkedIds = (config: ProjectAgentConfig) =>
+    listLinkedIds({ projectId: config.projectId }).pipe(
+      Effect.map((rows) => ({
+        ...config,
+        linkedProjectIds: rows.map((row) => row.linkedProjectId),
+      })),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError("ProjectAgentRepository.linkedProjects", "linked"),
+      ),
+    );
+
   const toConfigRow = (config: ProjectAgentConfig): typeof ConfigRow.Type => ({
     projectId: config.projectId,
     coordinatorThreadId: config.coordinatorThreadId,
@@ -414,6 +451,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
     createdAt: config.createdAt,
     updatedAt: config.updatedAt,
     disabledAt: config.disabledAt,
+    goal: config.goal ?? null,
+    icon: config.icon ?? null,
+    autoMemoryEnabled: config.autoMemoryEnabled ? 1 : 0,
   });
 
   const revisionMismatch = (operation: string) =>
@@ -424,9 +464,14 @@ const makeProjectAgentRepository = Effect.gen(function* () {
   const impl: ProjectAgentRepositoryShape = {
     getConfig: (projectId) =>
       getConfigRow({ projectId }).pipe(
-        Effect.map(Option.map(toConfig)),
         Effect.mapError(
           toPersistenceSqlOrDecodeError("ProjectAgentRepository.getConfig", "config"),
+        ),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeed(Option.none()),
+            onSome: (row) => withLinkedIds(toConfig(row)).pipe(Effect.map(Option.some)),
+          }),
         ),
       ),
     listConfigs: () =>
@@ -448,14 +493,17 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             revision,
             created_at AS "createdAt",
             updated_at AS "updatedAt",
-            disabled_at AS "disabledAt"
+            disabled_at AS "disabledAt",
+            goal,
+            icon,
+            auto_memory_enabled AS "autoMemoryEnabled"
           FROM project_agent_configs
         `,
       })({}).pipe(
-        Effect.map((rows) => rows.map(toConfig)),
         Effect.mapError(
           toPersistenceSqlOrDecodeError("ProjectAgentRepository.listConfigs", "config"),
         ),
+        Effect.flatMap((rows) => Effect.forEach(rows, (row) => withLinkedIds(toConfig(row)))),
       ),
     listSummaries: () =>
       SqlSchema.findAll({
@@ -490,12 +538,17 @@ const makeProjectAgentRepository = Effect.gen(function* () {
       ),
     getConfigByCoordinatorThread: (threadId) =>
       getConfigByCoordinatorRow({ threadId }).pipe(
-        Effect.map(Option.map(toConfig)),
         Effect.mapError(
           toPersistenceSqlOrDecodeError(
             "ProjectAgentRepository.getConfigByCoordinatorThread",
             "config",
           ),
+        ),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.succeed(Option.none()),
+            onSome: (row) => withLinkedIds(toConfig(row)).pipe(Effect.map(Option.some)),
+          }),
         ),
       ),
     saveConfig: (config, expectedRevision) => {

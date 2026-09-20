@@ -144,6 +144,10 @@ export function useProjectAgent(input: {
         | undefined;
       importedInstructions?: string | undefined;
       expectedRevision?: number | undefined;
+      goal?: string | undefined;
+      icon?: string | undefined;
+      autoMemoryEnabled?: boolean | undefined;
+      userDisplayName?: string | undefined;
     }) =>
       runMutation(async (projectAgent, projectId) => {
         const overview = await projectAgent.configure({
@@ -158,6 +162,14 @@ export function useProjectAgent(input: {
             : {}),
           ...(input.expectedRevision !== undefined
             ? { expectedRevision: input.expectedRevision }
+            : {}),
+          ...(input.goal !== undefined ? { goal: input.goal } : {}),
+          ...(input.icon !== undefined ? { icon: input.icon } : {}),
+          ...(input.autoMemoryEnabled !== undefined
+            ? { autoMemoryEnabled: input.autoMemoryEnabled }
+            : {}),
+          ...(input.userDisplayName?.trim()
+            ? { userDisplayName: input.userDisplayName.trim() }
             : {}),
         });
         useProjectAgentSummariesStore.getState().applyOverview(overview);

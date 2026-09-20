@@ -6,6 +6,7 @@ import {
   AutomationId,
   CommandId,
   DEFAULT_PROJECT_AGENT_LIMITS,
+  MessageId,
   PROJECT_AGENT_DIGEST_DEBOUNCE_MS,
   PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT,
   ProjectActivityId,
@@ -30,6 +31,11 @@ import {
 } from "@synara/contracts";
 import { isOrdinaryProjectRow } from "@synara/shared/projectContainers";
 import {
+  coordinatorWelcomeDisplayName,
+  coordinatorWelcomeText,
+  isGroupCoordinatorHostProject,
+} from "../groupCoordinatorHost.ts";
+import {
   decodeProjectAgentListCursor,
   detectProjectTaskDependencyCycle,
   encodeProjectAgentListCursor,
@@ -37,7 +43,9 @@ import {
   isCoordinatorCuratedDocumentPath,
   isGeneratedDocumentPath,
   isInboxDocumentPath,
+  isMemoryDocumentPath,
   isUserOwnedDocumentPath,
+  MEMORY_AUTO_DOCUMENT_PATH,
   normalizeProjectDocumentPath,
   sanitizeProjectDigestSummary,
   truncateToContextBudget,
@@ -109,6 +117,7 @@ const branded = {
   activity: (id = randomUUID()) => ProjectActivityId.makeUnsafe(id),
   inbox: (id = randomUUID()) => ProjectInboxEventId.makeUnsafe(id),
   automation: (id = randomUUID()) => AutomationId.makeUnsafe(id),
+  message: (id = randomUUID()) => MessageId.makeUnsafe(id),
 };
 
 const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
@@ -123,6 +132,11 @@ const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
   { path: "artifacts/index.md", content: "# Artifacts\n\n" },
   { path: PROJECT_BOT_PLAYBOOK_PATH, content: PROJECT_BOT_PLAYBOOK },
   { path: "internal/manifest.json", content: "{}\n" },
+  {
+    path: MEMORY_AUTO_DOCUMENT_PATH,
+    content:
+      "# Memory\n\nDurable notes for this group. Threads append here when auto memory is on.\n",
+  },
 ];
 
 export const makeProjectAgentService = Effect.gen(function* () {
@@ -153,7 +167,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
       cause,
     });
 
-  const requireOrdinaryProject = (projectId: ProjectId) =>
+  // Unused until increment 3 (linked ordinary repos).
+  const requireOrdinaryRepoProject = (projectId: ProjectId) =>
     snapshotQuery.getProjectShellById(projectId).pipe(
       Effect.mapError(toServiceError("Failed to load project.")),
       Effect.flatMap(
@@ -174,6 +189,28 @@ export const makeProjectAgentService = Effect.gen(function* () {
               : Effect.fail(
                   fail("Project Coordinator is only available on ordinary projects.", "forbidden"),
                 );
+          },
+        }),
+      ),
+    );
+  void requireOrdinaryRepoProject;
+
+  const requireGroupContainerProject = (projectId: ProjectId) =>
+    snapshotQuery.getProjectShellById(projectId).pipe(
+      Effect.mapError(toServiceError("Failed to load project.")),
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.fail(fail(`Project "${projectId}" was not found.`, "not-found")),
+          onSome: (project) => {
+            const allowed = isGroupCoordinatorHostProject({
+              kind: project.kind,
+              workspaceRoot: project.workspaceRoot,
+              groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+              studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
+            });
+            return allowed
+              ? Effect.succeed(project)
+              : Effect.fail(fail("The coordinator is only available on groups.", "forbidden"));
           },
         }),
       ),
@@ -672,26 +709,45 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const impl: ProjectAgentServiceShape = {
     getOverview: (input, principal) =>
       assertSameProject(principal, input.projectId).pipe(
-        Effect.andThen(requireOrdinaryProject(input.projectId)),
+        Effect.andThen(requireGroupContainerProject(input.projectId)),
         Effect.andThen(buildOverview(input.projectId)),
       ),
 
     listSummaries: (_input, principal) =>
       repository.listSummaries().pipe(
         Effect.mapError(toServiceError("Failed to list project agents.")),
-        Effect.map((rows) => {
-          const summaries: ReadonlyArray<ProjectAgentSummary> = rows.map((row) => ({
-            projectId: row.projectId,
-            configured: true,
-            coordinatorName: row.coordinatorName,
-            coordinatorThreadId: row.coordinatorThreadId,
-            coordinatorStatus: coordinatorStatusFromGoal(true, row.goalStatus),
-            revision: row.revision,
-          }));
-          return {
-            summaries: [...projectAgentSummariesForPrincipal(summaries, principal)],
-          };
-        }),
+        Effect.flatMap((rows) =>
+          Effect.gen(function* () {
+            const visible: ProjectAgentSummary[] = [];
+            for (const row of rows) {
+              const shell = yield* snapshotQuery
+                .getProjectShellById(row.projectId)
+                .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+              if (Option.isNone(shell)) continue;
+              if (
+                !isGroupCoordinatorHostProject({
+                  kind: shell.value.kind,
+                  workspaceRoot: shell.value.workspaceRoot,
+                  groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+                  studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
+                })
+              ) {
+                continue;
+              }
+              visible.push({
+                projectId: row.projectId,
+                configured: true,
+                coordinatorName: row.coordinatorName,
+                coordinatorThreadId: row.coordinatorThreadId,
+                coordinatorStatus: coordinatorStatusFromGoal(true, row.goalStatus),
+                revision: row.revision,
+              });
+            }
+            return {
+              summaries: [...projectAgentSummariesForPrincipal(visible, principal)],
+            };
+          }),
+        ),
       ),
 
     configure: (input, principal) =>
@@ -706,7 +762,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           (json) => JSON.parse(json) as ProjectAgentOverview,
         );
         if (existingReceipt) return existingReceipt;
-        const project = yield* requireOrdinaryProject(input.projectId);
+        const project = yield* requireGroupContainerProject(input.projectId);
         const existing = yield* repository
           .getConfig(input.projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")));
@@ -733,7 +789,30 @@ export const makeProjectAgentService = Effect.gen(function* () {
             title: coordinatorName,
             modelSelection: input.coordinatorModelSelection,
           });
+          // Idempotency is already covered by replayReceipt(input.requestId) above.
+          const welcomeName = coordinatorWelcomeDisplayName({
+            userDisplayName: input.userDisplayName,
+            homeDir: serverConfig.homeDir,
+          });
+          yield* orchestrationEngine
+            .dispatch({
+              type: "thread.messages.import",
+              commandId: branded.command(),
+              threadId: coordinatorThreadId,
+              messages: [
+                {
+                  messageId: branded.message(),
+                  role: "assistant",
+                  text: coordinatorWelcomeText(welcomeName),
+                  createdAt: now,
+                  updatedAt: now,
+                },
+              ],
+              createdAt: now,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to persist the coordinator greeting.")));
         }
+        const existingConfig = Option.isSome(existing) ? existing.value : null;
         const config: ProjectAgentConfig = {
           projectId: input.projectId,
           coordinatorThreadId,
@@ -748,9 +827,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
           enabled: true,
           automationId,
           revision,
-          createdAt: Option.isSome(existing) ? existing.value.createdAt : now,
+          createdAt: existingConfig?.createdAt ?? now,
           updatedAt: now,
           disabledAt: null,
+          ...(input.goal !== undefined
+            ? { goal: input.goal }
+            : existingConfig?.goal
+              ? { goal: existingConfig.goal }
+              : {}),
+          ...(input.icon !== undefined
+            ? { icon: input.icon }
+            : existingConfig?.icon
+              ? { icon: existingConfig.icon }
+              : {}),
+          autoMemoryEnabled: input.autoMemoryEnabled ?? existingConfig?.autoMemoryEnabled ?? false,
+          linkedProjectIds: existingConfig?.linkedProjectIds ?? [],
         };
         const saved = yield* repository
           .saveConfig(config, Option.isSome(existing) ? existing.value.revision : null)
@@ -852,7 +943,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           (json) => JSON.parse(json) as ProjectGoal,
         );
         if (existingReceipt) return existingReceipt;
-        yield* requireOrdinaryProject(input.projectId);
+        yield* requireGroupContainerProject(input.projectId);
         const config = yield* requireConfig(input.projectId);
         const open = yield* repository
           .getActiveGoal(input.projectId)
@@ -1303,7 +1394,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
         );
         if (existingReceipt) return existingReceipt;
         const logicalPath = normalizeProjectDocumentPath(input.logicalPath);
-        if (isGeneratedDocumentPath(logicalPath) && principal.kind !== "user") {
+        if (isMemoryDocumentPath(logicalPath)) {
+          if (
+            principal.kind !== "user" &&
+            principal.kind !== "coordinator" &&
+            principal.kind !== "worker"
+          ) {
+            return yield* Effect.fail(
+              fail("Only group members can write memory documents.", "forbidden"),
+            );
+          }
+        } else if (isGeneratedDocumentPath(logicalPath) && principal.kind !== "user") {
           return yield* Effect.fail(
             fail("Generated views cannot be overwritten directly.", "forbidden"),
           );
@@ -1609,11 +1710,32 @@ export const makeProjectAgentService = Effect.gen(function* () {
             workerReports.push(report.value.content.trim());
           }
         }
+        const groupGoal = Option.isSome(config) ? config.value.goal?.trim() : "";
+        const memoryEnabled = Option.isSome(config)
+          ? Boolean(config.value.autoMemoryEnabled)
+          : false;
+        const memoryDocument = memoryEnabled
+          ? yield* repository
+              .readDocumentRevision({
+                projectId: principal.projectId,
+                logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+              })
+              .pipe(Effect.catch(() => Effect.succeed(Option.none())))
+          : Option.none();
         const budget = truncateToContextBudget([
           {
             label: "Playbook",
             text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
           },
+          ...(groupGoal ? [{ label: "Goal", text: groupGoal }] : []),
+          ...(memoryEnabled
+            ? [
+                {
+                  label: "Memory",
+                  text: Option.isSome(memoryDocument) ? memoryDocument.value.content : "",
+                },
+              ]
+            : []),
           { label: "Watch", text: PROJECT_BOT_WATCH_RULES },
           {
             label: "Workers",
@@ -1642,6 +1764,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         ]);
         return [
           "Project context packet (authoritative durable state; additional documents via synara_project_read_document):",
+          "This thread opened with a welcome message from you; the user may be replying to it.",
           budget.packet,
           packet.historicalCoverage === "partial"
             ? "Historical coverage is partial; remaining threads are not yet summarized."

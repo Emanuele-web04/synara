@@ -413,6 +413,8 @@ import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { hasThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { toDisplayName } from "./profile/profileFormatting";
+import { useProfileName } from "./profile/useProfileName";
 import type {
   SidebarSearchAction,
   SidebarSearchProject,
@@ -1416,6 +1418,14 @@ export default function Sidebar() {
     (store) => store.prunePinnedProjectAgents,
   );
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
+  const { name: userDisplayName } = useProfileName(
+    toDisplayName(
+      (homeDir ?? "")
+        .replace(/[\\/]+$/, "")
+        .split(/[\\/]/)
+        .pop() ?? "there",
+    ),
+  );
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
   const navigate = useNavigate();
@@ -7142,6 +7152,7 @@ export default function Sidebar() {
             coordinatorName,
             modelSelection,
             expectedRevision,
+            userDisplayName,
             configure: api?.projectAgent ? (payload) => api.projectAgent!.configure(payload) : null,
           });
           if (result.ok) {

@@ -59,6 +59,46 @@ layer("ProjectAgentRepository", (it) => {
     }),
   );
 
+  it.effect("round-trips group goal, icon, and auto memory", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectAgentRepository;
+      const config = {
+        projectId,
+        coordinatorThreadId,
+        coordinatorName: "Demo Coordinator",
+        coordinatorModelSelection: { provider: "codex" as const, model: "gpt-5-codex" },
+        limits,
+        captureEnabled: true,
+        enabled: true,
+        automationId: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+        disabledAt: null,
+        goal: "Ship groups",
+        icon: "folder",
+        autoMemoryEnabled: true,
+        linkedProjectIds: [],
+      };
+      yield* repository.saveConfig(
+        {
+          ...config,
+          projectId: ProjectId.makeUnsafe("project-coord-fields"),
+          coordinatorThreadId: ThreadId.makeUnsafe("thread-coordinator-fields"),
+        },
+        null,
+      );
+      const loaded = yield* repository.getConfig(ProjectId.makeUnsafe("project-coord-fields"));
+      assert.equal(Option.isSome(loaded), true);
+      if (Option.isSome(loaded)) {
+        assert.equal(loaded.value.goal, "Ship groups");
+        assert.equal(loaded.value.icon, "folder");
+        assert.equal(loaded.value.autoMemoryEnabled, true);
+        assert.deepEqual(loaded.value.linkedProjectIds, []);
+      }
+    }),
+  );
+
   it.effect("document writes require the expected revision", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectAgentRepository;

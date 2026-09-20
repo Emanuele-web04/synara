@@ -53,6 +53,10 @@ export function buildProjectAgentConfigureInput(input: {
   readonly modelSelection: ModelSelection;
   readonly expectedRevision?: number | undefined;
   readonly importedInstructions?: string | undefined;
+  readonly goal?: string | undefined;
+  readonly icon?: string | undefined;
+  readonly autoMemoryEnabled?: boolean | undefined;
+  readonly userDisplayName?: string | undefined;
 }): ProjectAgentConfigureInput {
   return {
     requestId: crypto.randomUUID(),
@@ -63,6 +67,12 @@ export function buildProjectAgentConfigureInput(input: {
     ...(input.importedInstructions?.trim()
       ? { importedInstructions: input.importedInstructions }
       : {}),
+    ...(input.goal !== undefined ? { goal: input.goal } : {}),
+    ...(input.icon !== undefined ? { icon: input.icon } : {}),
+    ...(input.autoMemoryEnabled !== undefined
+      ? { autoMemoryEnabled: input.autoMemoryEnabled }
+      : {}),
+    ...(input.userDisplayName?.trim() ? { userDisplayName: input.userDisplayName.trim() } : {}),
   };
 }
 
@@ -75,6 +85,10 @@ export async function saveProjectAgentDialog(input: {
   readonly coordinatorName: string;
   readonly modelSelection: ModelSelection;
   readonly expectedRevision?: number | undefined;
+  readonly goal?: string | undefined;
+  readonly icon?: string | undefined;
+  readonly autoMemoryEnabled?: boolean | undefined;
+  readonly userDisplayName?: string | undefined;
   readonly configure:
     | ((payload: ProjectAgentConfigureInput) => Promise<ProjectAgentOverview>)
     | null
@@ -93,6 +107,10 @@ export async function saveProjectAgentDialog(input: {
         coordinatorName: input.coordinatorName,
         modelSelection: input.modelSelection,
         expectedRevision: input.expectedRevision,
+        goal: input.goal,
+        icon: input.icon,
+        autoMemoryEnabled: input.autoMemoryEnabled,
+        userDisplayName: input.userDisplayName,
       }),
     );
     return { ok: true, overview };
