@@ -29,17 +29,22 @@ import {
 function EnvironmentProviderUsageRow({
   provider,
   snapshot,
+  snapshotPending,
   onVisibilityChange,
 }: {
   provider: ProviderKind;
   snapshot: ServerProviderUsageSnapshot | undefined;
+  snapshotPending: boolean;
   onVisibilityChange: (provider: ProviderKind, visible: boolean) => void;
 }) {
   const settingsQuery = useQuery(serverSettingsQueryOptions());
   // The batch snapshot is an enrichment, not a gate: when the provider's live fetch fails or is
   // missing from the batch, the menu model still blends local archives and thread rate limits, so
   // the row must render regardless. Only an explicitly disabled provider hides the row.
-  const model = useProviderUsageMenuModel(provider, { providerSnapshot: snapshot });
+  const model = useProviderUsageMenuModel(provider, {
+    providerSnapshot: snapshot,
+    providerSnapshotPending: snapshotPending,
+  });
 
   const enabled = settingsQuery.data?.providers[provider].enabled !== false;
   // Nothing displayable yet (first fetch still running, sign-in required, or the provider
@@ -159,6 +164,7 @@ export function EnvironmentUsageSection() {
       key={provider}
       provider={provider}
       snapshot={snapshotsByProvider.get(provider)}
+      snapshotPending={usageQuery.isPending}
       onVisibilityChange={handleVisibilityChange}
     />
   ));

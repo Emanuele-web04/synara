@@ -88,6 +88,7 @@ export function useProviderUsageMenuModel(
   provider: ProviderKind,
   input: {
     providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+    providerSnapshotPending?: boolean | undefined;
   } = {},
 ): ProviderUsageMenuModel {
   const { settings } = useAppSettings();
@@ -97,6 +98,7 @@ export function useProviderUsageMenuModel(
     threads,
     codexHomePath: settings.codexHomePath || null,
     providerSnapshot: input.providerSnapshot,
+    providerSnapshotPending: input.providerSnapshotPending,
     fetchOpenUsageData: false,
   });
 

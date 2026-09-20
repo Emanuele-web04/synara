@@ -3,10 +3,15 @@
 
 import "../../../index.css";
 
-import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS_VIEW,
+  type NativeApi,
+  type ProviderKind,
+  type ServerProviderUsageSnapshot,
+} from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 const appSettingsMocks = vi.hoisted(() => ({
@@ -20,6 +25,61 @@ vi.mock("~/appSettings", () => ({
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 
 import { EnvironmentUsageSection } from "./EnvironmentUsageSection";
+
+const enabledProviderSettings = {
+  ...DEFAULT_SERVER_SETTINGS_VIEW,
+  providers: Object.fromEntries(
+    Object.entries(DEFAULT_SERVER_SETTINGS_VIEW.providers).map(([provider, settings]) => [
+      provider,
+      { ...settings, enabled: provider === "codex" || provider === "claudeAgent" },
+    ]),
+  ) as typeof DEFAULT_SERVER_SETTINGS_VIEW.providers,
+};
+let restoreNativeApi: (() => void) | undefined;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function installUsageNativeApi(
+  listProviderUsage: ReturnType<typeof vi.fn>,
+  getProviderUsageSnapshot: ReturnType<typeof vi.fn>,
+) {
+  const previousDescriptor = Object.getOwnPropertyDescriptor(window, "nativeApi");
+  Object.defineProperty(window, "nativeApi", {
+    configurable: true,
+    value: {
+      server: {
+        getSettings: vi.fn().mockResolvedValue(enabledProviderSettings),
+        listProviderUsage,
+        getProviderUsageSnapshot,
+      },
+    } as unknown as NativeApi,
+  });
+  restoreNativeApi = () => {
+    if (previousDescriptor) Object.defineProperty(window, "nativeApi", previousDescriptor);
+    else Reflect.deleteProperty(window, "nativeApi");
+  };
+}
+
+async function renderLiveSection() {
+  await render(
+    <QueryClientProvider client={createQueryClient(true)}>
+      <EnvironmentUsageSection />
+    </QueryClientProvider>,
+  );
+}
+
+afterEach(() => {
+  restoreNativeApi?.();
+  restoreNativeApi = undefined;
+});
 
 function snapshot(
   provider: ServerProviderUsageSnapshot["provider"],
@@ -36,11 +96,78 @@ function snapshot(
   };
 }
 
-function createQueryClient(): QueryClient {
-  return new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+function createQueryClient(enabled = false): QueryClient {
+  return new QueryClient({ defaultOptions: { queries: { retry: false, enabled } } });
 }
 
 describe("EnvironmentUsageSection", () => {
+  it("waits for the shared batch instead of starting provider-scoped requests", async () => {
+    const batch = deferred<ServerProviderUsageSnapshot[]>();
+    const listProviderUsage = vi.fn(() => batch.promise);
+    const getProviderUsageSnapshot = vi.fn();
+    installUsageNativeApi(listProviderUsage, getProviderUsageSnapshot);
+
+    await renderLiveSection();
+    await vi.waitFor(() => expect(listProviderUsage).toHaveBeenCalledTimes(1));
+    expect(getProviderUsageSnapshot).not.toHaveBeenCalled();
+
+    batch.resolve([
+      snapshot("codex", [{ window: "5h", usedPercent: 5, windowDurationMins: 300 }]),
+      snapshot("claudeAgent", [{ window: "Weekly", usedPercent: 54 }]),
+    ]);
+    await expect
+      .element(page.getByRole("button", { name: "Codex usage: 5h 95% remaining" }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Claude usage: Weekly 46% remaining" }))
+      .toBeVisible();
+    expect(getProviderUsageSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("falls back locally when the settled batch omits a provider", async () => {
+    const batch = deferred<ServerProviderUsageSnapshot[]>();
+    const getProviderUsageSnapshot = vi.fn(({ provider }: { provider: ProviderKind }) =>
+      Promise.resolve(snapshot(provider, [{ window: "Weekly", usedPercent: 27 }])),
+    );
+    installUsageNativeApi(
+      vi.fn(() => batch.promise),
+      getProviderUsageSnapshot,
+    );
+
+    await renderLiveSection();
+    batch.resolve([snapshot("codex", [{ window: "5h", usedPercent: 5 }])]);
+
+    await expect
+      .element(page.getByRole("button", { name: "Claude usage: Weekly 73% remaining" }))
+      .toBeVisible();
+    expect(getProviderUsageSnapshot).toHaveBeenCalledTimes(1);
+    expect(getProviderUsageSnapshot).toHaveBeenCalledWith({ provider: "claudeAgent" });
+  });
+
+  it("falls back locally after the shared batch fails", async () => {
+    const batch = deferred<ServerProviderUsageSnapshot[]>();
+    const getProviderUsageSnapshot = vi.fn(({ provider }: { provider: ProviderKind }) =>
+      Promise.resolve(
+        snapshot(provider, [{ window: provider === "codex" ? "5h" : "Weekly", usedPercent: 40 }]),
+      ),
+    );
+    installUsageNativeApi(
+      vi.fn(() => batch.promise),
+      getProviderUsageSnapshot,
+    );
+
+    await renderLiveSection();
+    batch.reject(new Error("batch unavailable"));
+
+    await expect
+      .element(page.getByRole("button", { name: "Codex usage: 5h 60% remaining" }))
+      .toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Claude usage: Weekly 60% remaining" }))
+      .toBeVisible();
+    expect(getProviderUsageSnapshot).toHaveBeenCalledTimes(2);
+  });
+
   it("renders one row per enabled provider with every reported usage window", async () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
@@ -63,9 +190,7 @@ describe("EnvironmentUsageSection", () => {
     });
     await expect.element(codex).toBeVisible();
     await expect
-      .element(
-        page.getByRole("button", { name: "Claude usage: Weekly 46% remaining" }),
-      )
+      .element(page.getByRole("button", { name: "Claude usage: Weekly 46% remaining" }))
       .toBeVisible();
     await expect.element(codex.getByText("5h", { exact: true })).toBeVisible();
     await expect.element(codex.getByText("Weekly", { exact: true })).toBeVisible();
