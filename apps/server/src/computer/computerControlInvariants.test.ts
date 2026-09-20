@@ -170,9 +170,12 @@ describe("Provider authority invariants", () => {
         "pi",
         "antigravity",
       ] as const) {
+        // A distinct text per provider keeps every call's repeat-guard key
+        // distinct — the guard would refuse a third identical unverified
+        // send before the approval gate this test measures.
         await Effect.runPromise(
           type.handler(
-            { text: "check", window_id: "fake-terminal", include_screenshot: false },
+            { text: `check-${provider}`, window_id: "fake-terminal", include_screenshot: false },
             {
               ...context(),
               callerProvider: provider,

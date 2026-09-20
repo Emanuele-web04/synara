@@ -568,8 +568,10 @@ export async function buildPiAgentGatewayCustomTools(input: {
   // A session without Computer control gets no computer_* entries in the
   // catalog; a Pi-native call to one would fail inside the SDK as a bare
   // unknown tool instead of reaching the gateway's capability_denied (and
-  // its denial card). Register forwarders for the absent family names so
-  // the gateway itself produces the refusal.
+  // its denial card). Discovery-only names are absent from the catalog on
+  // granted sessions too, and their calls must reach the same real handler.
+  // Register forwarders for the absent family names either way so the
+  // gateway itself produces the answer.
   const catalog = new Set(tools.map((tool) => tool.name));
   for (const name of SYNARA_COMPUTER_TOOL_NAMES) {
     if (catalog.has(name)) continue;
@@ -577,7 +579,8 @@ export async function buildPiAgentGatewayCustomTools(input: {
       input.defineTool({
         name,
         label: name,
-        description: "Computer control is not enabled for this conversation.",
+        description:
+          "Synara computer tool served by the gateway: a session with Computer control can call it — computer_help's tools chapter lists it — and a session without gets a capability denial.",
         parameters: { type: "object", properties: {} } as ToolDefinition["parameters"],
         execute: async (_toolCallId, params, signal) =>
           piGatewayToolResult(

@@ -36,15 +36,11 @@ describe("computerToolName", () => {
       "computer_get_cursor_position",
       "computer_help",
       "computer_click",
-      "computer_double_click",
-      "computer_triple_click",
-      "computer_right_click",
       "computer_move_cursor",
       "computer_drag",
       "computer_scroll",
       "computer_type_text",
       "computer_press_key",
-      "computer_hotkey",
       "computer_set_value",
       "computer_select_text",
       "computer_perform_action",
@@ -60,13 +56,6 @@ describe("computerToolName", () => {
       "computer_write_clipboard",
       "computer_paste",
       "computer_run",
-      "computer_recording_start",
-      "computer_recording_stop",
-      "computer_recording_list",
-      "computer_recording_read",
-      "computer_recording_export",
-      "computer_recording_delete",
-      "computer_replay",
     ]);
   });
 
@@ -155,14 +144,14 @@ describe("describeComputerToolCall", () => {
     expect(run?.params).toEqual([{ name: "Steps", value: "click → type_text → press_key" }]);
   });
 
-  it("gives a scroll a direction and a shortcut its keys", () => {
+  it("gives a scroll a direction and a key press its chord", () => {
     expect(
       describeComputerToolCall({ toolName: "computer_scroll", args: { delta_y: 240 } })?.summary,
     ).toBe("Scroll down");
+    // Hotkeys folded into press_key: a chord arrives as the `key` string.
     expect(
-      describeComputerToolCall({ toolName: "computer_hotkey", args: { keys: ["cmd", "s"] } })
-        ?.summary,
-    ).toBe("Press a shortcut cmd+s");
+      describeComputerToolCall({ toolName: "computer_press_key", args: { key: "cmd+s" } })?.summary,
+    ).toBe("Press a key cmd+s");
   });
 
   it("renders a coordinate pair as one row, because it is one fact", () => {
@@ -182,13 +171,13 @@ describe("describeComputerToolCall", () => {
     expect(described?.params).toContainEqual({ name: "Range", value: "0, 12" });
   });
 
-  it("describes triple-click, activation, wait, and nested drag targets", () => {
+  it("describes a labelled click, activation, wait, and nested drag targets", () => {
     expect(
       describeComputerToolCall({
-        toolName: "computer_triple_click",
+        toolName: "computer_click",
         args: { label: "Address" },
       })?.summary,
-    ).toBe("Triple-click on “Address”");
+    ).toBe("Click on “Address”");
     expect(
       describeComputerToolCall({
         toolName: "computer_activate_window",

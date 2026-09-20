@@ -65,21 +65,6 @@ import {
   type ComputerAuditEntry,
 } from "../computer/computerAuditLog.ts";
 import {
-  withComputerRecordingCapture,
-  type ComputerRecordingCapture,
-} from "../computer/computerCallContext.ts";
-import {
-  computerRecordingHistoryLines,
-  redactComputerRecordingArgs,
-  redactComputerRecordingResult,
-  ComputerRecordingError,
-  type ComputerRecordingActionClass,
-  type ComputerRecordingApproval,
-  type ComputerRecordingDeclaredTarget,
-  type ComputerRecordingFidelity,
-  type ComputerRecordingStepInput,
-} from "../computer/computerRecording.ts";
-import {
   ScreenshotFrameRegistry,
   screenshotDeltaToDesktop,
   screenshotPointToDesktop,
@@ -165,16 +150,12 @@ export const COMPUTER_APPROVAL_REQUIRED_TOOLS = new Set([
   "computer_read_clipboard",
   "computer_launch_app",
   "computer_click",
-  "computer_double_click",
-  "computer_triple_click",
-  "computer_right_click",
   // Overlay changes still require computer authority.
   "computer_move_cursor",
   "computer_drag",
   "computer_scroll",
   "computer_type_text",
   "computer_press_key",
-  "computer_hotkey",
   "computer_write_clipboard",
   "computer_set_value",
   "computer_perform_action",
@@ -197,13 +178,6 @@ export const COMPUTER_APPROVAL_REQUIRED_TOOLS = new Set([
   "computer_kill_app",
   "computer_set_window_minimized",
   "computer_set_app_visibility",
-  // Starting a session decides what evidence gets kept — `full` fidelity
-  // captures text payloads verbatim — so it is consented like the actions it
-  // records. Deleting a recording destroys evidence; replaying one re-issues
-  // real input. Neither is ever silent.
-  "computer_recording_start",
-  "computer_recording_delete",
-  "computer_replay",
 ]);
 
 export function computerToolRequiresApproval(name: string): boolean {
@@ -278,83 +252,6 @@ function computerAuditSuccessEffect(name: string, value: unknown): ComputerAudit
   return "dispatched-unknown";
 }
 
-/**
- * The action family a step record carries — descriptive for the reader and
- * the replay classifier; dispatch decisions are made on the tool name, not
- * this field.
- */
-function computerRecordingActionClass(name: string): ComputerRecordingActionClass {
-  switch (name) {
-    case "computer_click":
-    case "computer_double_click":
-    case "computer_triple_click":
-    case "computer_right_click":
-    case "computer_move_cursor":
-    case "computer_drag":
-    case "computer_scroll":
-      return "pointer";
-    case "computer_press_key":
-    case "computer_hotkey":
-      return "keyboard";
-    case "computer_type_text":
-      return "text";
-    case "computer_set_value":
-    case "computer_perform_action":
-    case "computer_select_text":
-      return "semantic";
-    case "computer_read_clipboard":
-    case "computer_write_clipboard":
-    case "computer_paste":
-      return "clipboard";
-    case "computer_activate_window":
-    case "computer_set_window_frame":
-    case "computer_invoke_menu":
-    case "computer_set_window_minimized":
-      return "window";
-    case "computer_launch_app":
-    case "computer_kill_app":
-    case "computer_set_app_visibility":
-      return "lifecycle";
-    case "computer_run":
-      return "batch";
-    case "computer_recording_start":
-    case "computer_recording_stop":
-    case "computer_recording_list":
-    case "computer_recording_read":
-    case "computer_recording_export":
-    case "computer_recording_delete":
-    case "computer_replay":
-      return "replay";
-    default:
-      // Perception calls — the read side of a session's history.
-      return "observation";
-  }
-}
-
-/**
- * The target the call declared, verbatim — the replay key. Only fields the
- * model could actually have written are read; a `computer_run`'s per-step
- * declarations ride on the inner step records, not this one.
- */
-function computerRecordingDeclaredTarget(
-  args: Record<string, unknown>,
-): ComputerRecordingDeclaredTarget | undefined {
-  const target: {
-    -readonly [K in keyof ComputerRecordingDeclaredTarget]?: ComputerRecordingDeclaredTarget[K];
-  } = {};
-  if (typeof args.x === "number" && Number.isFinite(args.x)) target.x = args.x;
-  if (typeof args.y === "number" && Number.isFinite(args.y)) target.y = args.y;
-  if (typeof args.label === "string" && args.label.length > 0) target.label = args.label;
-  if (typeof args.role === "string" && args.role.length > 0) target.role = args.role;
-  const windowId = readWindowIdArg(args);
-  if (windowId !== undefined) target.windowId = windowId;
-  if (typeof args.pid === "number" && Number.isSafeInteger(args.pid) && args.pid > 0) {
-    target.pid = args.pid;
-  }
-  if (typeof args.app === "string" && args.app.trim().length > 0) target.app = args.app;
-  return Object.keys(target).length === 0 ? undefined : (target as ComputerRecordingDeclaredTarget);
-}
-
 /** The effect/code pair a failed call reports — a typed refusal or a fault. */
 export function computerAuditErrorOutcome(error: unknown): {
   readonly effect: ComputerAuditEffect;
@@ -365,9 +262,6 @@ export function computerAuditErrorOutcome(error: unknown): {
     return { effect: error.effect, code: error.code ?? "cua_action_error" };
   if (error instanceof ComputerTargetError) return { effect: "refused", code: error.code };
   if (error instanceof ComputerLeaseError) return { effect: "refused", code: error.code };
-  if (error instanceof ComputerRecordingError) {
-    return { effect: "refused", code: "computer_recording_error" };
-  }
   if (error instanceof ComputerBackendError) {
     return error.inputPause !== undefined
       ? { effect: "refused", code: "computer_input_paused" }
@@ -449,9 +343,9 @@ const SCREENSHOT_FRAME_NOTE =
 const SHARED_CLIPBOARD_NOTE =
   "The desktop has a single clipboard shared with the human user, not a private one for the agent.";
 
-/** The short form each pointer tool carries in place of the paragraph above. */
+/** The coordinate rule each pointer tool carries, self-contained. */
 const POINTER_COORDINATE_HINT =
-  'x/y are screenshot pixels, never desktop coordinates. See "Pointing at the desktop" in the active Synara host context.';
+  "x/y are screenshot pixels, never desktop coordinates — pass them as they appear in the image you received.";
 
 /**
  * The parity lever for visual grounding: when the model knows a control's
@@ -462,7 +356,7 @@ const SEMANTIC_TARGETING_NOTE = "Prefer label and role from computer_get_state o
 
 /** The short form the action tools carry. */
 const ACTION_SCREENSHOT_HINT =
-  'See "The screenshot on every action" in the active Synara host context.';
+  "Returns a screenshot of the affected window unless include_screenshot:false.";
 
 const INCLUDE_ACTION_SCREENSHOT_PROPERTY = {
   include_screenshot: {
@@ -477,11 +371,11 @@ const WINDOW_FOCUS_NOTE =
 
 /** The short form the keyboard tools carry. */
 const KEYBOARD_TARGET_HINT =
-  'Pass window_id or use the last aimed window; hover does not aim keys. Exact-window text uses the sole writable control without activation; pass its label and optional role when several exist. See "Aiming the keyboard".';
+  "Pass window_id or use the last aimed window; hover does not aim keys. Exact-window text uses the sole writable control without activation; pass its label and optional role when several exist.";
 
 /** The short form the input tools carry. */
 const DELIVERY_HINT =
-  'delivery.verified and delivery.effect report evidence, not retry permission. See "Reading a delivery verdict".';
+  "delivery.verified and delivery.effect report evidence, not retry permission — never replay an uncertain action.";
 
 /** Longest step list one computer_run accepts. */
 const COMPUTER_RUN_MAX_STEPS = 25;
@@ -537,9 +431,10 @@ function textTargetProperty(): Record<string, unknown> {
 /**
  * Modifiers held down for the whole gesture and released after it.
  *
- * Not expressible with computer_hotkey, which presses and releases: by the time
- * the click arrived nothing was held and the application saw a plain click. So
- * shift-click, cmd-click and ctrl-scroll had no reachable spelling at all.
+ * Not expressible as a computer_press_key chord, which presses and releases:
+ * by the time the click arrived nothing was held and the application saw a
+ * plain click. So shift-click, cmd-click and ctrl-scroll had no reachable
+ * spelling at all.
  */
 const MODIFIERS_PROPERTY = {
   modifiers: {
@@ -547,7 +442,7 @@ const MODIFIERS_PROPERTY = {
     items: { type: "string", enum: ["ctrl", "alt", "shift", "meta"] },
     maxItems: COMPUTER_MODIFIERS_MAX_ITEMS,
     description:
-      'Keys held during the gesture and released afterward; "meta" is Command on macOS. Unlike computer_hotkey, modifiers stay held through the click or drag.',
+      'Keys held during the gesture and released afterward; "meta" is Command on macOS. Unlike a press_key chord, modifiers stay held through the click or drag.',
   },
 } as const;
 
@@ -894,26 +789,58 @@ function readSelectTextTarget(args: Record<string, unknown>): ComputerTarget {
 }
 
 /**
- * The hotkey chord. Every key becomes a press/release pair holding the seat,
- * so thousands of keys would hold it indefinitely; the bound is enforced here
- * rather than trusted to the JSON Schema for the same reason as above.
+ * The click's gesture selectors. `count` carries the gestures the folded
+ * double- and triple-click tools had, `button` the right-click. The manager
+ * owns the support matrix — the primary button at any count, the secondary
+ * button at count 1 — and refuses the rest before dispatch, so this reader
+ * only bounds the shape.
  */
-function readHotkeyKeys(args: Record<string, unknown>): readonly string[] {
-  const keys =
-    readStringArrayArg(args, "keys") ??
-    (() => {
-      throw new ToolInputError('Missing required argument "keys".');
-    })();
-  if (keys.length > COMPUTER_HOTKEY_MAX_KEYS) {
-    throw new ToolInputError(`Argument "keys" accepts at most ${COMPUTER_HOTKEY_MAX_KEYS} keys.`);
+function readClickGesture(
+  args: Record<string, unknown>,
+): { count?: 1 | 2 | 3; button?: "left" | "right" | "middle" } | undefined {
+  const count = readNumberArg(args, "count");
+  const button = readStringArg(args, "button");
+  if (count === undefined && button === undefined) return undefined;
+  if (count !== undefined && (!Number.isSafeInteger(count) || count < 1 || count > 3)) {
+    throw new ToolInputError('Argument "count" must be 1, 2 or 3.');
   }
-  const oversized = keys.find((key) => key.length > COMPUTER_KEY_NAME_MAX_LENGTH);
-  if (oversized !== undefined) {
+  if (button !== undefined && button !== "left" && button !== "right" && button !== "middle") {
+    throw new ToolInputError('Argument "button" must be "left", "right" or "middle".');
+  }
+  return {
+    ...(count !== undefined ? { count: count as 1 | 2 | 3 } : {}),
+    ...(button !== undefined ? { button: button as "left" | "right" | "middle" } : {}),
+  };
+}
+
+/**
+ * The `key` argument: one key name, or one "mod+mod+key" chord. A value with
+ * no "+" is a plain key; a "+"-joined value splits into the chord the
+ * backend's own validation rules on. A part left empty by a stray "+" makes
+ * the whole value a plain key again, so a literal "+" still presses and a
+ * malformed "cmd++s" meets the driver's honest unknown-key refusal instead
+ * of a half-parsed chord.
+ */
+function readKeyOrChord(args: Record<string, unknown>): {
+  readonly key: string;
+  readonly chord: readonly string[] | undefined;
+} {
+  const key = readStringArg(args, "key", { required: true })!;
+  if (!key.includes("+")) return { key, chord: undefined };
+  const parts = key.split("+").map((part) => part.trim());
+  if (parts.some((part) => part.length === 0)) return { key, chord: undefined };
+  if (parts.length > COMPUTER_HOTKEY_MAX_KEYS) {
     throw new ToolInputError(
-      `Each key in "keys" is at most ${COMPUTER_KEY_NAME_MAX_LENGTH} characters; got one of ${oversized.length}.`,
+      `A "+"-joined chord accepts at most ${COMPUTER_HOTKEY_MAX_KEYS} keys; got ${parts.length}.`,
     );
   }
-  return keys;
+  const oversized = parts.find((part) => part.length > COMPUTER_KEY_NAME_MAX_LENGTH);
+  if (oversized !== undefined) {
+    throw new ToolInputError(
+      `Each key in a chord is at most ${COMPUTER_KEY_NAME_MAX_LENGTH} characters; got one of ${oversized.length}.`,
+    );
+  }
+  return { key, chord: parts };
 }
 
 function readActionName(args: Record<string, unknown>): string {
@@ -1560,12 +1487,10 @@ export function makeAgentGatewayComputerTools(
   ): ComputerTarget =>
     resolveTarget(readNestedScreenshotTarget(args, name), context.callerThreadId);
 
-
-
   /**
    * The never-raise authorization a call would carry, resolved only for the
    * calls that can move a window in front of the user — activate, foreground
-   * delivery, a visible launch, and their replay/run-step equivalents. A
+   * delivery, a visible launch, and their run-step equivalents. A
    * resolver failure or an absent resolver is a refusal, never an inferred yes.
    */
   const foregroundAuthorization = async (
@@ -1602,56 +1527,72 @@ export function makeAgentGatewayComputerTools(
   };
 
   /**
-   * Write one session-recording step line — the seam the outer call record
-   * and every `computer_run` inner step share. The fidelity gate, the
-   * secure-window protection flag, arg redaction, declared-target
-   * derivation and the approval/resolutions/dispatches/effect/latency
-   * fields are identical in both; only what the step ran under, what it
-   * captured and the caller's final effect differ. `outcome.resultValue`
-   * carries the one read-back payload a session summarizes (the clipboard
-   * text stays out either way — `result` is chars + hash), for the calls
-   * that return one.
+   * Per-thread ring of the last mutating calls, keyed by tool name plus the
+   * stable JSON of its arguments with `screenshot_id`/`include_screenshot`
+   * stripped — a fresh frame must not disguise a repeat. Three identical calls
+   * in a row with no observed effect is a loop, not progress: the third is
+   * refused before dispatch. A `verified` effect or any different call clears
+   * the ring, so re-observing and then acting differently is never blocked.
    */
-  const writeSessionStep = (input: {
-    readonly threadId: string;
-    readonly turnId: string | null;
-    readonly tool: string;
-    readonly args: Record<string, unknown>;
-    readonly approval: ComputerRecordingApproval;
-    readonly capture: ComputerRecordingCapture | undefined;
-    readonly outcome: {
-      readonly effect: ComputerRecordingStepInput["effect"];
-      readonly code?: string;
-      /** A read-back payload the call returned (clipboard contents), summarized. */
-      readonly resultValue?: string;
-    };
-    readonly startedAt: number;
-  }): void => {
-    const fidelity = manager.recordingFidelityFor(input.threadId);
-    if (fidelity === undefined) return;
-    const secure = (input.capture?.resolutions ?? []).some(
-      (resolution) => resolution.secure === true,
-    );
-    const redacted = redactComputerRecordingArgs(input.args, { fidelity, protected: secure });
-    const declaredTarget = computerRecordingDeclaredTarget(input.args);
-    manager.recordComputerStep(input.threadId, {
-      tool: input.tool,
-      actionClass: computerRecordingActionClass(input.tool),
-      threadId: input.threadId,
-      ...(input.turnId ? { turnId: input.turnId } : {}),
-      approval: input.approval,
-      ...(declaredTarget !== undefined ? { declaredTarget } : {}),
-      resolutions: input.capture?.resolutions ?? [],
-      args: redacted.args,
-      ...(redacted.payload !== undefined ? { payload: redacted.payload } : {}),
-      ...(input.outcome.resultValue !== undefined
-        ? { result: redactComputerRecordingResult(input.outcome.resultValue) }
-        : {}),
-      dispatches: input.capture?.dispatches ?? [],
-      effect: input.outcome.effect,
-      ...(input.outcome.code !== undefined ? { code: input.outcome.code } : {}),
-      latencyMs: Math.max(0, Date.now() - input.startedAt),
-    });
+  interface RepeatedActionEntry {
+    readonly key: string;
+    readonly effect: ComputerAuditEffect;
+  }
+  const actionRings = new Map<string, RepeatedActionEntry[]>();
+  const ACTION_RING_THREAD_CAP = 256;
+
+  /**
+   * The calls that mutate the desktop — the approval taxonomy minus its one
+   * read: the shared clipboard is gated for privacy, and re-reading it is not
+   * a loop hazard the way a repeated keystroke is.
+   */
+  const isMutatingToolCall = (toolName: string): boolean =>
+    computerToolRequiresApproval(toolName) && toolName !== "computer_read_clipboard";
+
+  /** Deterministic key for one call: tool name + args with volatile fields out. */
+  const repeatedActionKey = (toolName: string, args: Record<string, unknown>): string => {
+    const stable = (value: unknown): string =>
+      value === null || typeof value !== "object"
+        ? (JSON.stringify(value) ?? "null")
+        : Array.isArray(value)
+          ? `[${value.map(stable).join(",")}]`
+          : `{${Object.keys(value)
+              .sort()
+              .map(
+                (key) =>
+                  `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key])}`,
+              )
+              .join(",")}}`;
+    const {
+      screenshot_id: _s1,
+      include_screenshot: _s2,
+      screenshotId: _s3,
+      includeScreenshot: _s4,
+      ...rest
+    } = args;
+    return `${toolName}${stable(rest)}`;
+  };
+
+  /**
+   * Fold one finished call into its thread's ring. Only mutating calls enter;
+   * a verified effect or a different call resets the streak. A call refused
+   * before dispatch (approval, this guard) never reaches here, so it can
+   * neither extend nor clear a streak.
+   */
+  const noteActionOutcome = (threadId: string, key: string, effect: ComputerAuditEffect): void => {
+    if (effect === "verified") {
+      actionRings.delete(threadId);
+      return;
+    }
+    let ring = actionRings.get(threadId);
+    if (ring === undefined || ring[ring.length - 1]?.key !== key) {
+      while (actionRings.size >= ACTION_RING_THREAD_CAP && !actionRings.has(threadId))
+        actionRings.delete(actionRings.keys().next().value!);
+      ring = [];
+      actionRings.set(threadId, ring);
+    }
+    ring.push({ key, effect });
+    if (ring.length > 3) ring.shift();
   };
 
   const handle =
@@ -1683,48 +1624,42 @@ export function makeAgentGatewayComputerTools(
           ...(outcome.code !== undefined ? { code: outcome.code } : {}),
         });
       };
-      // The recording seam rides the same outcome points the audit does, plus
-      // the call's own capture: when this thread has an open session the
-      // manager's resolution and dispatch notes land on `capture` as the call
-      // runs, and the step record is written when the outcome is known. No
-      // session means no capture and `record` is a no-op — the hot path is
-      // unchanged.
-      const capture = manager.recordingCaptureFor(context.callerThreadId);
-      const callStartedAt = Date.now();
-      let recordingApproval: ComputerRecordingApproval = {
-        required: computerToolRequiresApproval(name),
-        decision: computerToolRequiresApproval(name) ? "unavailable" : "not-required",
-      };
-      const record = (outcome: {
-        readonly effect: ComputerRecordingStepInput["effect"];
-        readonly code?: string;
-        /** A read-back payload the call returned (clipboard contents), summarized. */
-        readonly resultValue?: string;
-      }): void =>
-        writeSessionStep({
-          threadId: context.callerThreadId,
-          turnId: context.callerTurnId,
-          tool: name,
-          args,
-          approval: recordingApproval,
-          capture,
-          outcome: {
-            ...outcome,
-            // `dispatched-unknown` means "the backend accepted it" — a call
-            // whose capture holds no dispatch (a perception read, a
-            // recording-family call, a file read) must not claim one. The
-            // run container is exempt: its dispatches live on the inner steps.
-            effect:
-              outcome.effect === "dispatched-unknown" &&
-              name !== "computer_run" &&
-              (capture?.dispatches.length ?? 0) === 0
-                ? "not-dispatched"
-                : outcome.effect,
-          },
-          startedAt: callStartedAt,
-        });
+      const mutating = isMutatingToolCall(name);
+      const actionKey = mutating ? repeatedActionKey(name, args) : "";
       return Effect.tryPromise({
         try: async (abortSignal) => {
+          // The loop guard fires before consent and before dispatch: a third
+          // identical call with no observed effect must not spend an approval
+          // prompt on a refusal.
+          if (mutating) {
+            const ring = actionRings.get(context.callerThreadId);
+            const last = ring?.[ring.length - 1];
+            const before = ring?.[ring.length - 2];
+            if (
+              last !== undefined &&
+              before !== undefined &&
+              last.key === actionKey &&
+              before.key === actionKey &&
+              last.effect !== "verified" &&
+              before.effect !== "verified"
+            ) {
+              audit({ effect: "refused", code: "repeated_unverified_action" });
+              return {
+                result: {
+                  ...mcpToolResultJson({
+                    error: {
+                      code: "repeated_unverified_action",
+                      message:
+                        "The same action was sent three times with no observed change. " +
+                        "Take a fresh computer_get_state and change approach, or ask the user.",
+                    },
+                  }),
+                  isError: true,
+                },
+                signal: undefined,
+              };
+            }
+          }
           if (
             computerToolRequiresApproval(name) &&
             (options.authorizeAction !== undefined ||
@@ -1733,9 +1668,7 @@ export function makeAgentGatewayComputerTools(
               name === "computer_activate_window")
           ) {
             if (!options.authorizeAction) {
-              recordingApproval = { required: true, decision: "unavailable" };
               audit({ effect: "refused", code: "approval_unavailable" });
-              record({ effect: "refused", code: "approval_unavailable" });
               return {
                 result: approvalUnavailableResult(name),
                 signal: undefined,
@@ -1751,9 +1684,7 @@ export function makeAgentGatewayComputerTools(
                 abortSignal,
               ))
             ) {
-              recordingApproval = { required: true, decision: "denied" };
               audit({ effect: "refused", code: "approval_denied" });
-              record({ effect: "refused", code: "approval_denied" });
               return {
                 result: mcpToolResultError(
                   "Computer action was denied or cancelled; no input was sent.",
@@ -1761,11 +1692,6 @@ export function makeAgentGatewayComputerTools(
                 signal: undefined,
               };
             }
-            recordingApproval = { required: true, decision: "granted" };
-          } else if (computerToolRequiresApproval(name)) {
-            // Required by the taxonomy but the gate never engaged — the
-            // trusted-baseline case the record must name honestly.
-            recordingApproval = { required: true, decision: "skipped" };
           }
           // Any non-scroll call breaks an unchanged-scroll streak: the model
           // looked or did something else instead of scrolling blindly on.
@@ -1777,24 +1703,22 @@ export function makeAgentGatewayComputerTools(
           // Action targeting and automatic previews do not replace a model's
           // explicit observation after a desktop interruption.
           const invoke = () =>
-            withComputerRecordingCapture(capture, () =>
-              withComputerTask(
-                {
-                  threadId: context.callerThreadId,
-                  ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
-                  ...(context.callerThreadLabel ? { label: context.callerThreadLabel } : {}),
-                },
-                () =>
-                  name === "computer_get_state" ||
-                  name === "computer_screenshot" ||
-                  name === "computer_wait" ||
-                  // A run's internal reads — the wait-step polls and the closing
-                  // state — are the model's observations, with the same authority
-                  // to satisfy a pending observation requirement.
-                  name === "computer_run"
-                    ? withModelDesktopObservation(() => run(args, context))
-                    : run(args, context),
-              ),
+            withComputerTask(
+              {
+                threadId: context.callerThreadId,
+                ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
+                ...(context.callerThreadLabel ? { label: context.callerThreadLabel } : {}),
+              },
+              () =>
+                name === "computer_get_state" ||
+                name === "computer_screenshot" ||
+                name === "computer_wait" ||
+                // A run's internal reads — the wait-step polls and the closing
+                // state — are the model's observations, with the same authority
+                // to satisfy a pending observation requirement.
+                name === "computer_run"
+                  ? withModelDesktopObservation(() => run(args, context))
+                  : run(args, context),
             );
           const value =
             name === "computer_wait"
@@ -1865,16 +1789,9 @@ export function makeAgentGatewayComputerTools(
           // carry. Written before the setup read so a hung permission probe
           // cannot lose a record of input already sent.
           resultWindowId = computerAuditResultWindowId(value);
-          audit({ effect: computerAuditSuccessEffect(name, value) });
-          record({
-            effect: computerAuditSuccessEffect(name, value),
-            // The one read-back payload a session summarizes: the clipboard
-            // text stays out either way — `result` is chars + hash.
-            ...(name === "computer_read_clipboard" &&
-            typeof (value as { value?: unknown } | null | undefined)?.value === "string"
-              ? { resultValue: (value as { value: string }).value }
-              : {}),
-          });
+          const successEffect = computerAuditSuccessEffect(name, value);
+          audit({ effect: successEffect });
+          if (mutating) noteActionOutcome(context.callerThreadId, actionKey, successEffect);
           // A call can succeed and still report that the desktop is out of
           // reach: a perception read answers with a `permission-required`
           // availability, and a missing Screen Recording grant blocks nothing at
@@ -1915,13 +1832,14 @@ export function makeAgentGatewayComputerTools(
         Effect.flatMap(({ result, signal }) => withSetupCard(name, context, signal, result)),
         Effect.catch((error) => {
           // The kill switch writes nothing: a disabled thread refusing input
-          // is a state, not an event, and the log must stay empty for it. The
-          // recording keeps the same rule — `recordComputerStep` also refuses
-          // disabled threads at the manager seam.
+          // is a state, not an event, and the log must stay empty for it.
+          const outcome = computerAuditErrorOutcome(error);
           if (!(error instanceof ComputerBackendError && error.controlRevoked)) {
-            audit(computerAuditErrorOutcome(error));
-            record(computerAuditErrorOutcome(error));
+            audit(outcome);
           }
+          // A failed call still tells the loop guard what it knows: its effect
+          // is never "verified", so three identical failures trip the refusal.
+          if (mutating) noteActionOutcome(context.callerThreadId, actionKey, outcome.effect);
           const failure =
             error instanceof ComputerBackendError && error.inputPause
               ? {
@@ -2005,6 +1923,14 @@ export function makeAgentGatewayComputerTools(
     },
     handler: handle(name, run),
   });
+
+  /**
+   * A tool kept callable by exact name but out of the advertised catalog:
+   * the model reaches it through computer_help's tools chapter or its own
+   * memory. The mark is catalog-only — dispatch, capability, approval and
+   * audit are unchanged.
+   */
+  const discoveryOnly = (entry: ToolEntry): ToolEntry => ({ ...entry, discoveryOnly: true });
 
   /**
    * One wording and one shape for a post-action observation, whoever captured
@@ -2149,32 +2075,33 @@ export function makeAgentGatewayComputerTools(
     additionalProperties: false,
   } as const;
 
-  /** A pointer target that may also hold modifiers across the gesture. */
-  const modifiedTargetSchema = {
+  /**
+   * The folded click's fields: the shared pointer target plus `count` and
+   * `button`, which carry what the separate double-, triple- and right-click
+   * tools used to spell. The manager owns which gesture pairs a desktop
+   * supports and refuses the rest before dispatch.
+   */
+  const clickSchema = {
     type: "object",
-    properties: { ...pointerTargetProperties, ...MODIFIERS_PROPERTY },
+    properties: {
+      ...pointerTargetProperties,
+      ...MODIFIERS_PROPERTY,
+      count: {
+        type: "integer",
+        minimum: 1,
+        maximum: 3,
+        description:
+          "1 for a plain click, 2 for a double-click (opens an item, selects a word in text), 3 for a triple-click (selects the whole line or paragraph — the reliable way to replace a field's contents before typing; three separate clicks are not the same gesture, and a desktop that cannot send one refuses rather than approximating it).",
+      },
+      button: {
+        type: "string",
+        enum: ["left", "right", "middle"],
+        description:
+          '"left" is the primary button and supports every count; "right" opens the context menu at count 1 only. Other button/count pairs are refused before dispatch.',
+      },
+    },
     additionalProperties: false,
   } as const;
-
-  /** One click family, four click counts, one description shape. */
-  const clickEntry = (
-    name: string,
-    title: string,
-    lead: string,
-    run: (
-      threadId: string,
-      target: ComputerTarget,
-      modifiers: readonly ComputerInputModifier[],
-    ) => Promise<ComputerActionResult>,
-  ): ToolEntry =>
-    observedActionEntry(
-      name,
-      title,
-      `${lead} ${SEMANTIC_TARGETING_NOTE} ${POINTER_COORDINATE_HINT}`,
-      modifiedTargetSchema,
-      async (args, context) =>
-        run(context.callerThreadId, readTarget(args, context), readModifiers(args)),
-    );
 
   /**
    * The fields one `computer_run` step type accepts. Listed exhaustively so a
@@ -2197,10 +2124,7 @@ export function makeAgentGatewayComputerTools(
     "windowId",
   ] as const;
   const RUN_STEP_FIELDS: Record<string, readonly string[]> = {
-    click: [...RUN_TARGET_FIELDS, "modifiers"],
-    double_click: [...RUN_TARGET_FIELDS, "modifiers"],
-    triple_click: [...RUN_TARGET_FIELDS, "modifiers"],
-    right_click: [...RUN_TARGET_FIELDS, "modifiers"],
+    click: [...RUN_TARGET_FIELDS, "modifiers", "count", "button"],
     move_cursor: RUN_TARGET_FIELDS,
     drag: ["from", "to", "duration_ms"],
     scroll: [...RUN_TARGET_FIELDS, "delta_x", "delta_y", "modifiers"],
@@ -2215,7 +2139,6 @@ export function makeAgentGatewayComputerTools(
       "windowId",
     ],
     press_key: ["key", "window_id", "windowId"],
-    hotkey: ["keys", "window_id", "windowId"],
     set_value: [...RUN_TARGET_FIELDS, "value"],
     perform_action: [...RUN_TARGET_FIELDS, "action"],
     // Semantic-only like its standalone tool: a range cannot be aimed at a
@@ -2286,19 +2209,11 @@ export function makeAgentGatewayComputerTools(
   ): (() => Promise<unknown>) => {
     const threadId = context.callerThreadId;
     switch (type) {
-      case "click":
-      case "double_click":
-      case "triple_click":
-      case "right_click": {
+      case "click": {
         const target = readTarget(step, context);
         const modifiers = readModifiers(step);
-        const method = {
-          click: manager.click,
-          double_click: manager.doubleClick,
-          triple_click: manager.tripleClick,
-          right_click: manager.rightClick,
-        }[type];
-        return () => method.call(manager, threadId, target, modifiers);
+        const gesture = readClickGesture(step);
+        return () => manager.click(threadId, target, modifiers, gesture);
       }
       case "move_cursor": {
         const target = readTarget(step, context);
@@ -2366,14 +2281,12 @@ export function makeAgentGatewayComputerTools(
             : manager.typeText(threadId, text, target.windowId);
       }
       case "press_key": {
-        const key = readStringArg(step, "key", { required: true })!;
+        const { key, chord } = readKeyOrChord(step);
         const windowId = readWindowIdArg(step);
-        return () => manager.pressKey(threadId, key, windowId);
-      }
-      case "hotkey": {
-        const keys = readHotkeyKeys(step);
-        const windowId = readWindowIdArg(step);
-        return () => manager.hotkey(threadId, keys, windowId);
+        return () =>
+          chord === undefined
+            ? manager.pressKey(threadId, key, windowId)
+            : manager.hotkey(threadId, chord, windowId);
       }
       case "set_value": {
         const target = readTarget(step, context);
@@ -2748,30 +2661,6 @@ export function makeAgentGatewayComputerTools(
     let stopped = false;
     // The window the last step touched scopes the closing state read.
     let lastWindowId: string | undefined;
-    // A run inside an open session records one step line per inner step, each
-    // with its own capture — the outer call's record stays the container. The
-    // approval the batch ran under is inherited verbatim: reaching this point
-    // means the run was granted, or ran on the trusted baseline.
-    const runApproval: ComputerRecordingApproval = {
-      required: true,
-      decision: options.authorizeAction === undefined ? "skipped" : "granted",
-    };
-    const recordRunStep = (
-      preparedStep: PreparedRunStep,
-      stepCapture: ComputerRecordingCapture | undefined,
-      outcome: { readonly effect: ComputerRecordingStepInput["effect"]; readonly code?: string },
-      startedAt: number,
-    ): void =>
-      writeSessionStep({
-        threadId,
-        turnId: context.callerTurnId,
-        tool: `computer_${preparedStep.type}`,
-        args: preparedStep.step,
-        approval: runApproval,
-        capture: stepCapture,
-        outcome,
-        startedAt,
-      });
     for (const [index, preparedStep] of prepared.entries()) {
       // Between steps, not just around the batch: a revocation or a dead turn
       // stops the run before the next dispatch, not after it.
@@ -2779,8 +2668,6 @@ export function makeAgentGatewayComputerTools(
       await Effect.runPromise(context.assertCallerTurnActive(), {
         signal: desktopOperationSignal(),
       });
-      const stepCapture = manager.recordingCaptureFor(threadId);
-      const stepStartedAt = Date.now();
       // Element conditions evaluate against live state at the moment the step
       // would run — the answer a get_state gave ten steps ago is not it.
       const skippedReason = await (async (): Promise<string | undefined> => {
@@ -2799,7 +2686,6 @@ export function makeAgentGatewayComputerTools(
         return undefined;
       })();
       if (skippedReason !== undefined) {
-        recordRunStep(preparedStep, stepCapture, { effect: "not-dispatched" }, stepStartedAt);
         steps.push({
           step: index,
           type: preparedStep.type,
@@ -2813,7 +2699,7 @@ export function makeAgentGatewayComputerTools(
         const value = await manager.cursorActivity.during(
           threadId,
           cursorToolActivity(`computer_${preparedStep.type}`),
-          () => withComputerRecordingCapture(stepCapture, preparedStep.run),
+          preparedStep.run,
         );
         if (
           typeof value === "object" &&
@@ -2822,22 +2708,6 @@ export function makeAgentGatewayComputerTools(
         ) {
           lastWindowId = (value as { windowId: string }).windowId;
         }
-        // A wait dispatched nothing; a step whose capture holds no dispatch
-        // did not reach the backend either — the same honesty rule the outer
-        // record keeps.
-        const stepEffect = computerAuditSuccessEffect(`computer_${preparedStep.type}`, value);
-        recordRunStep(
-          preparedStep,
-          stepCapture,
-          {
-            effect:
-              preparedStep.type === "wait" ||
-              (stepEffect === "dispatched-unknown" && (stepCapture?.dispatches.length ?? 0) === 0)
-                ? "not-dispatched"
-                : stepEffect,
-          },
-          stepStartedAt,
-        );
         steps.push({
           step: index,
           type: preparedStep.type,
@@ -2854,7 +2724,6 @@ export function makeAgentGatewayComputerTools(
         await Effect.runPromise(context.assertCallerTurnActive(), {
           signal: desktopOperationSignal(),
         });
-        recordRunStep(preparedStep, stepCapture, computerAuditErrorOutcome(error), stepStartedAt);
         steps.push({
           step: index,
           type: preparedStep.type,
@@ -2943,7 +2812,34 @@ export function makeAgentGatewayComputerTools(
     }
   };
 
-  return [
+  /**
+   * The tools chapter's index, generated from the catalog itself rather than
+   * written by hand — a renamed or folded tool can never leave the chapter
+   * claiming a name that no longer exists. The advertised half is what
+   * tools/list already shows; the discovery-only half answers to its exact
+   * name all the same.
+   */
+  const computerToolIndexText = (): string => {
+    const line = (entry: ToolEntry): string =>
+      `- ${entry.definition.name}${
+        typeof entry.definition.annotations?.title === "string"
+          ? ` — ${entry.definition.annotations.title}`
+          : ""
+      }`;
+    return [
+      "Advertised on this session:",
+      ...entries.filter((entry) => entry.discoveryOnly !== true).map(line),
+      "",
+      "Also callable by exact name:",
+      ...entries.filter((entry) => entry.discoveryOnly === true).map(line),
+    ].join("\n");
+  };
+
+  // Named rather than returned inline so the computer_help handler can
+  // generate its tools-chapter index from the catalog itself — a folded or
+  // renamed tool can never leave the chapter naming something that no longer
+  // exists.
+  const entries: ToolEntry[] = [
     {
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
       requiresActiveTurn: true,
@@ -2983,7 +2879,7 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_get_state",
-        description: `Read labeled controls and values before acting; prefer label targeting. ${WINDOW_FOCUS_NOTE} By default returns elements without an image or duplicate text. Each element carries a stable ref you can pass as the ref argument on later actions — cheaper than re-quoting label and role, names duplicates a label cannot, and stays bound to the same element while it is present. A one-window listing reports its id once as elementWindowId instead of on every entry. window_id scopes inspection; include_screenshot adds ${overviewScope} (or the selected window). ${SCREENSHOT_FRAME_NOTE} include_text adds full AX text only when elements are insufficient. Use window_id or label_contains to narrow a truncated result; elementsTruncated/elementsOmitted report the remainder.`,
+        description: `Read labeled controls and values before acting; prefer label targeting. ${WINDOW_FOCUS_NOTE} By default returns elements without an image or duplicate text. Each element carries a stable ref you can pass as the ref argument on later actions — cheaper than re-quoting label and role, names duplicates a label cannot, and stays bound to the same element while it is present. A one-window listing reports its id once as elementWindowId. window_id scopes inspection; include_screenshot adds ${overviewScope} (or the selected window). ${SCREENSHOT_FRAME_NOTE} include_text adds full AX text only when elements are insufficient. Use window_id or label_contains to narrow a truncated result; elementsTruncated/elementsOmitted report the remainder.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -3139,7 +3035,7 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_screenshot",
-        description: `Zoom into one part of the desktop when detail is too small to read in a screenshot you have. ${captureTargetNote} ${SCREENSHOT_FRAME_NOTE} A window the desktop cannot photograph honestly — one that is not on screen, or whose position cannot be measured — is refused rather than answered with pixels it cannot place; capture what is visible, or bring the window forward first with computer_activate_window if the user wants it on screen.`,
+        description: `Zoom into one part of the desktop when detail is too small to read in a screenshot you have. ${captureTargetNote} ${SCREENSHOT_FRAME_NOTE} A window that is off-screen or unmeasurable is refused rather than answered with pixels it cannot place; bring it forward with computer_activate_window first if the user asked to see it.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -3231,7 +3127,7 @@ export function makeAgentGatewayComputerTools(
       requiresActiveTurn: true,
       definition: {
         name: "computer_wait",
-        description: `Wait for delayed content without sending input or changing focus. Prefer label plus window_id when you know the next control: duration_ms is then a maximum, and the tool returns as soon as that unique control appears, with a screenshot by default. Target it by label afterward so a layout change cannot leave stale coordinates. An unavailable accessibility tree returns immediately; use the screenshot and do not repeat semantic waits until the environment changes. Alternatively pass settle:true plus window_id: duration_ms is again the maximum, and the tool returns as soon as the window's accessibility surface stops changing — or when it cannot be watched, after a fixed pause reported as mode:"fixed". Without label or settle this is a fixed pause with no screenshot. Never repeat the preceding action merely because a page is still loading. Waiting is capped at ${COMPUTER_WAIT_MAX_MS} ms; one accessibility read may finish after the deadline.`,
+        description: `Wait for delayed content without sending input or changing focus. Prefer label plus window_id when you know the next control: duration_ms is then a maximum, and the tool returns as soon as that unique control appears, with a screenshot by default. Target it by label afterward so a layout change cannot leave stale coordinates. An unavailable accessibility tree returns immediately; use the screenshot and do not repeat semantic waits until the environment changes. Or pass settle:true plus window_id to return as soon as the window's accessibility surface stops changing — duration_ms is again the maximum — or after a fixed pause reported as mode:"fixed" when it cannot be watched. Without label or settle this is a fixed pause with no screenshot. Never repeat the preceding action merely because a page is still loading. Waiting is capped at ${COMPUTER_WAIT_MAX_MS} ms; one accessibility read may finish after the deadline.`,
         inputSchema: {
           type: "object",
           properties: {
@@ -3344,6 +3240,7 @@ export function makeAgentGatewayComputerTools(
     {
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
       requiresActiveTurn: true,
+      discoveryOnly: true,
       definition: {
         name: "computer_read_clipboard",
         description: `Read the desktop clipboard as text, returned as "value". ${SHARED_CLIPBOARD_NOTE} It returns whatever was copied last by anyone, so it may hold something the user copied for their own purposes. An empty clipboard returns an empty string; a clipboard holding an image, other non-text content, or more than ${COMPUTER_TEXT_MAX_LENGTH} characters of text is an error.`,
@@ -3477,6 +3374,7 @@ export function makeAgentGatewayComputerTools(
     {
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
       requiresActiveTurn: true,
+      discoveryOnly: true,
       definition: {
         name: "computer_zoom",
         description:
@@ -3529,6 +3427,7 @@ export function makeAgentGatewayComputerTools(
     {
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
       requiresActiveTurn: true,
+      discoveryOnly: true,
       definition: {
         name: "computer_get_accessibility_tree",
         description:
@@ -3556,6 +3455,7 @@ export function makeAgentGatewayComputerTools(
     {
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
       requiresActiveTurn: true,
+      discoveryOnly: true,
       definition: {
         name: "computer_get_cursor_position",
         description:
@@ -3586,7 +3486,7 @@ export function makeAgentGatewayComputerTools(
       definition: {
         name: "computer_help",
         description:
-          "The detailed Computer playbook the injected guidance points at: situational chapters on browser-tab driving, menus/frames/app exits, explicit visibility controls, form work, and recording/replay. Call with no topic for the index, or pass a topic to read that chapter before touching a surface it covers.",
+          "The detailed Computer playbook the injected guidance points at: situational chapters on browser-tab driving, menus/frames/app exits, explicit visibility controls, form work, and the full tool index including the tools the advertised list does not show. Call with no topic for the index, or pass a topic to read that chapter before touching a surface it covers.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3605,19 +3505,27 @@ export function makeAgentGatewayComputerTools(
         },
       },
       handler: handle("computer_help", async (args) => {
+        // The tools chapter's static intro gains the generated catalog index
+        // on the way out — same text for "tools" alone and inside "all".
+        const sectionText = (name: string): string | undefined => {
+          const text = COMPUTER_HELP_SECTIONS[name as ComputerHelpTopic];
+          return name === "tools" && text !== undefined
+            ? `${text}\n\n${computerToolIndexText()}`
+            : text;
+        };
         const topic = readStringArg(args, "topic");
         if (topic === undefined || topic === "all") {
           const chapters =
             topic === "all"
-              ? Object.entries(COMPUTER_HELP_SECTIONS)
-                  .map(([name, text]) => `## ${name}\n${text}`)
+              ? Object.keys(COMPUTER_HELP_SECTIONS)
+                  .map((name) => `## ${name}\n${sectionText(name)}`)
                   .join("\n\n")
               : undefined;
           return {
             ...(chapters !== undefined ? { chapters } : { topics: COMPUTER_HELP_INDEX }),
           };
         }
-        const section = COMPUTER_HELP_SECTIONS[topic as ComputerHelpTopic];
+        const section = sectionText(topic);
         if (section === undefined) {
           throw new ToolInputError(
             `Unknown computer_help topic "${topic}". Topics: ${COMPUTER_HELP_TOPICS.join(", ")}, all.`,
@@ -3626,94 +3534,100 @@ export function makeAgentGatewayComputerTools(
         return { topic, text: section };
       }),
     },
-    actionEntry(
-      "computer_set_window_frame",
-      "Set window frame",
-      `Move and resize the exact window to x/y/width/height in desktop coordinates — the same space computer_list_windows reports bounds in. The new frame is read back and reported verified only when it matches; an unconfirmed result means the window may not have moved, so observe before relying on it. ${DELIVERY_HINT}`,
-      {
-        type: "object",
-        properties: {
-          window_id: { type: "string", description: "The exact window to move or resize." },
-          x: { type: "number" },
-          y: { type: "number" },
-          width: { type: "number" },
-          height: { type: "number" },
+    discoveryOnly(
+      actionEntry(
+        "computer_set_window_frame",
+        "Set window frame",
+        `Move and resize the exact window to x/y/width/height in desktop coordinates — the same space computer_list_windows reports bounds in. The new frame is read back and reported verified only when it matches; an unconfirmed result means the window may not have moved, so observe before relying on it. ${DELIVERY_HINT}`,
+        {
+          type: "object",
+          properties: {
+            window_id: { type: "string", description: "The exact window to move or resize." },
+            x: { type: "number" },
+            y: { type: "number" },
+            width: { type: "number" },
+            height: { type: "number" },
+          },
+          required: ["window_id", "x", "y", "width", "height"],
+          additionalProperties: false,
         },
-        required: ["window_id", "x", "y", "width", "height"],
-        additionalProperties: false,
-      },
-      async (args, context) => {
-        const windowId = readWindowIdArg(args);
-        if (!windowId) throw new ToolInputError("window_id is required.");
-        const frame = {
-          x: readDelta(args, "x"),
-          y: readDelta(args, "y"),
-          width: readDelta(args, "width"),
-          height: readDelta(args, "height"),
-        };
-        if (!Object.values(frame).every(Number.isFinite) || frame.width <= 0 || frame.height <= 0)
-          throw new ToolInputError("x/y/width/height must be finite, with positive size.");
-        return manager.setWindowFrame(context.callerThreadId, windowId, frame);
-      },
+        async (args, context) => {
+          const windowId = readWindowIdArg(args);
+          if (!windowId) throw new ToolInputError("window_id is required.");
+          const frame = {
+            x: readDelta(args, "x"),
+            y: readDelta(args, "y"),
+            width: readDelta(args, "width"),
+            height: readDelta(args, "height"),
+          };
+          if (!Object.values(frame).every(Number.isFinite) || frame.width <= 0 || frame.height <= 0)
+            throw new ToolInputError("x/y/width/height must be finite, with positive size.");
+          return manager.setWindowFrame(context.callerThreadId, windowId, frame);
+        },
+      ),
     ),
-    actionEntry(
-      "computer_invoke_menu",
-      "Invoke menu item",
-      `Invoke a menu-bar item by path — ["File", "Save"] or ["Edit", "Copy"]. Name the target one way: window_id (that exact window's app, focus-sensitive semantics preserved) or app/pid (the running app's own menu bar — no window needed, so this is the route for an app with no windows yet). One to six levels; disabled or absent items are refused rather than clicked blindly. Menu commands can mutate the app or open dialogs, so read the result's verification and observe afterwards. ${DELIVERY_HINT}`,
-      {
-        type: "object",
-        properties: {
-          window_id: {
-            type: "string",
-            description: "A window owned by the app whose menu to invoke.",
+    discoveryOnly(
+      actionEntry(
+        "computer_invoke_menu",
+        "Invoke menu item",
+        `Invoke a menu-bar item by path — ["File", "Save"] or ["Edit", "Copy"]. Name the target one way: window_id (that exact window's app, focus-sensitive semantics preserved) or app/pid (the running app's own menu bar — no window needed, so this is the route for an app with no windows yet). One to six levels; disabled or absent items are refused rather than clicked blindly. Menu commands can mutate the app or open dialogs, so read the result's verification and observe afterwards. ${DELIVERY_HINT}`,
+        {
+          type: "object",
+          properties: {
+            window_id: {
+              type: "string",
+              description: "A window owned by the app whose menu to invoke.",
+            },
+            app: {
+              type: "string",
+              description:
+                "App name or bundle id, from computer_list_apps. Invokes the app's own menu bar without a window; pass either app or pid, not both.",
+            },
+            pid: {
+              type: "number",
+              description:
+                "Running app's process id, from computer_list_apps. Invokes the app's own menu bar without a window; pass either app or pid, not both.",
+            },
+            path: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 1,
+              maxItems: 6,
+              description: 'Menu titles from the menu bar down, e.g. ["File", "Export As…"].',
+            },
           },
-          app: {
-            type: "string",
-            description:
-              "App name or bundle id, from computer_list_apps. Invokes the app's own menu bar without a window; pass either app or pid, not both.",
-          },
-          pid: {
-            type: "number",
-            description:
-              "Running app's process id, from computer_list_apps. Invokes the app's own menu bar without a window; pass either app or pid, not both.",
-          },
-          path: {
-            type: "array",
-            items: { type: "string" },
-            minItems: 1,
-            maxItems: 6,
-            description: 'Menu titles from the menu bar down, e.g. ["File", "Export As…"].',
-          },
+          required: ["path"],
+          additionalProperties: false,
         },
-        required: ["path"],
-        additionalProperties: false,
-      },
-      async (args, context) => {
-        const target = readMenuTargetArg(args);
-        const path = readMenuPathArg(args, "computer_invoke_menu");
-        return manager.invokeMenu(context.callerThreadId, target, path);
-      },
+        async (args, context) => {
+          const target = readMenuTargetArg(args);
+          const path = readMenuPathArg(args, "computer_invoke_menu");
+          return manager.invokeMenu(context.callerThreadId, target, path);
+        },
+      ),
     ),
-    actionEntry(
-      "computer_kill_app",
-      "Force-quit app",
-      `Force-terminate the app that owns the exact window — the escalation after a cooperative close (computer_invoke_menu ["File","Quit"], or cmd+q via computer_hotkey) has already failed. Unsaved state is lost and every window of that app closes; the kill is refused when the window no longer exists. ${DELIVERY_HINT}`,
-      {
-        type: "object",
-        properties: {
-          window_id: {
-            type: "string",
-            description: "A window owned by the app to force-terminate.",
+    discoveryOnly(
+      actionEntry(
+        "computer_kill_app",
+        "Force-quit app",
+        `Force-terminate the app that owns the exact window — the escalation after a cooperative close (computer_invoke_menu ["File","Quit"], or "cmd+q" via computer_press_key) has already failed. Unsaved state is lost and every window of that app closes; the kill is refused when the window no longer exists. ${DELIVERY_HINT}`,
+        {
+          type: "object",
+          properties: {
+            window_id: {
+              type: "string",
+              description: "A window owned by the app to force-terminate.",
+            },
           },
+          required: ["window_id"],
+          additionalProperties: false,
         },
-        required: ["window_id"],
-        additionalProperties: false,
-      },
-      async (args, context) => {
-        const windowId = readWindowIdArg(args);
-        if (!windowId) throw new ToolInputError("window_id is required.");
-        return manager.killApp(context.callerThreadId, windowId);
-      },
+        async (args, context) => {
+          const windowId = readWindowIdArg(args);
+          if (!windowId) throw new ToolInputError("window_id is required.");
+          return manager.killApp(context.callerThreadId, windowId);
+        },
+      ),
     ),
     {
       // Not actionEntry on purpose: the visibility lifecycle never activates,
@@ -3721,6 +3635,7 @@ export function makeAgentGatewayComputerTools(
       // operation's whole contract is built to refuse.
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
       requiresActiveTurn: true,
+      discoveryOnly: true,
       definition: {
         name: "computer_set_window_minimized",
         description: `Minimize or restore the exact window in place — no activation, no focus change, no Space switch. A minimized window stays open and keeps answering the semantic tools (set_value, clicks by label, get_window_state) but takes no coordinate input and is not on screen. The driver reads the minimized state back; confirmed means the readback matched, anything less means observe before relying on it. ${DELIVERY_HINT}`,
@@ -3757,6 +3672,7 @@ export function makeAgentGatewayComputerTools(
     {
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
       requiresActiveTurn: true,
+      discoveryOnly: true,
       definition: {
         name: "computer_set_app_visibility",
         description: `Hide or unhide a running application by pid — the explicit visibility control for when the user asks to get an app out of the way or bring it back. Every window stays open but leaves the screen, without activating, focusing, or switching Spaces, and the semantic tools keep working. The driver reads the hidden state back; confirmed means the readback matched, anything less means observe before relying on it. ${DELIVERY_HINT}`,
@@ -3791,79 +3707,72 @@ export function makeAgentGatewayComputerTools(
         return manager.setAppVisibility(context.callerThreadId, pid, hidden);
       }),
     },
-    clickEntry(
+    observedActionEntry(
       "computer_click",
       "Click",
-      "Click a coordinate or a uniquely labelled visible control. Ambiguous and off-screen targets are refused.",
-      (threadId, target, modifiers) => manager.click(threadId, target, modifiers),
-    ),
-    clickEntry(
-      "computer_double_click",
-      "Double click",
-      "Double-click a coordinate or a uniquely labelled visible control — opens an item, or selects a word in text.",
-      (threadId, target, modifiers) => manager.doubleClick(threadId, target, modifiers),
-    ),
-    clickEntry(
-      "computer_triple_click",
-      "Triple click",
-      "Triple-click a coordinate or a uniquely labelled visible control, which selects the whole line or paragraph under it — the reliable way to replace a field's contents before typing, where computer_set_value is not available and the range you want is a whole line or paragraph. For an exact character range on a text element use computer_select_text, which writes the selection through the accessibility layer. Three separate clicks are not the same gesture and will not select anything; a desktop that cannot send one refuses rather than approximating it.",
-      (threadId, target, modifiers) => manager.tripleClick(threadId, target, modifiers),
-    ),
-    clickEntry(
-      "computer_right_click",
-      "Right click",
-      "Right-click a coordinate or a uniquely labelled visible control to open its context menu.",
-      (threadId, target, modifiers) => manager.rightClick(threadId, target, modifiers),
-    ),
-    observedActionEntry(
-      "computer_move_cursor",
-      "Move cursor",
-      `Move the dedicated computer-use cursor to a coordinate or uniquely labelled visible control. It posts no click and presses nothing: it moves the agent's own visible cursor so the user can see where you are working. On macOS with Cua this only draws an overlay: it does not deliver hover events or open hover menus, and no synthetic move can — macOS discards posted pointer moves unless the user's own cursor is already inside the target window, so a real background hover is not available on this backend. It does not aim the keyboard, so a move followed by computer_type_text without a window_id is refused rather than typed into whatever the cursor happens to be over. The real system pointer never moves. ${POINTER_COORDINATE_HINT}`,
-      targetSchema,
+      `Click a coordinate or a uniquely labelled visible control — once, or as a double-/triple-click via count, with the secondary button via button:"right". Ambiguous and off-screen targets are refused. ${SEMANTIC_TARGETING_NOTE} ${POINTER_COORDINATE_HINT}`,
+      clickSchema,
       async (args, context) =>
-        manager.moveCursor(context.callerThreadId, readTarget(args, context)),
-      // Not destructive: it changes only where the
-      // agent's own overlay is drawn. `readOnlyHint` stays false because
-      // something on screen does move, so a provider that surfaces write tools
-      // still shows it.
-      {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-    ),
-    observedActionEntry(
-      "computer_drag",
-      "Drag",
-      `Drag between two coordinates or uniquely labelled visible controls, holding the primary button down the whole way — a selection swept across text, a file moved, a slider pulled, a window handle resized. ${dragLimitNote(dialect)} ${POINTER_COORDINATE_HINT}`,
-      {
-        type: "object",
-        properties: {
-          from: targetSchema,
-          to: targetSchema,
-          duration_ms: {
-            type: "integer",
-            minimum: 0,
-            maximum: COMPUTER_DRAG_MAX_DURATION_MS,
-            description: `How long the pointer takes to travel, in milliseconds. Defaults to ${DEFAULT_DRAG_DURATION_MS}; clamped to ${COMPUTER_DRAG_MAX_DURATION_MS}. A longer glide helps an application that needs to see the drag in progress, such as a drag-and-drop target that must highlight before the drop.`,
-          },
-        },
-        required: ["from", "to"],
-        additionalProperties: false,
-      },
-      async (args, context) =>
-        manager.drag(
+        manager.click(
           context.callerThreadId,
-          readNestedTarget(args, "from", context),
-          readNestedTarget(args, "to", context),
-          readDragDurationMs(args),
+          readTarget(args, context),
+          readModifiers(args),
+          readClickGesture(args),
         ),
+    ),
+    discoveryOnly(
+      observedActionEntry(
+        "computer_move_cursor",
+        "Move cursor",
+        `Move the dedicated computer-use cursor to a coordinate or uniquely labelled visible control. It posts no click and presses nothing: it moves the agent's own visible cursor so the user can see where you are working. On macOS with Cua this only draws an overlay: it does not deliver hover events or open hover menus, and no synthetic move can — macOS discards posted pointer moves unless the user's own cursor is already inside the target window, so a real background hover is not available on this backend. It does not aim the keyboard, so a move followed by computer_type_text without a window_id is refused rather than typed into whatever the cursor happens to be over. The real system pointer never moves. ${POINTER_COORDINATE_HINT}`,
+        targetSchema,
+        async (args, context) =>
+          manager.moveCursor(context.callerThreadId, readTarget(args, context)),
+        // Not destructive: it changes only where the
+        // agent's own overlay is drawn. `readOnlyHint` stays false because
+        // something on screen does move, so a provider that surfaces write tools
+        // still shows it.
+        {
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      ),
+    ),
+    discoveryOnly(
+      observedActionEntry(
+        "computer_drag",
+        "Drag",
+        `Drag between two coordinates or uniquely labelled visible controls, holding the primary button down the whole way — a selection swept across text, a file moved, a slider pulled, a window handle resized. ${dragLimitNote(dialect)} ${POINTER_COORDINATE_HINT}`,
+        {
+          type: "object",
+          properties: {
+            from: targetSchema,
+            to: targetSchema,
+            duration_ms: {
+              type: "integer",
+              minimum: 0,
+              maximum: COMPUTER_DRAG_MAX_DURATION_MS,
+              description: `How long the pointer takes to travel, in milliseconds. Defaults to ${DEFAULT_DRAG_DURATION_MS}; clamped to ${COMPUTER_DRAG_MAX_DURATION_MS}. A longer glide helps an application that needs to see the drag in progress, such as a drag-and-drop target that must highlight before the drop.`,
+            },
+          },
+          required: ["from", "to"],
+          additionalProperties: false,
+        },
+        async (args, context) =>
+          manager.drag(
+            context.callerThreadId,
+            readNestedTarget(args, "from", context),
+            readNestedTarget(args, "to", context),
+            readDragDurationMs(args),
+          ),
+      ),
     ),
     observedActionEntry(
       "computer_scroll",
       "Scroll",
-      `Scroll at an optional target. The target is resolved before the gesture and is never guessed. Scroll distance is measured in pixels of the same screenshot the coordinates are in, so a scroll needs a screenshot even when it names no coordinates at all — roughly 80 pixels per notch of a physical wheel in a full-resolution window capture. Both axes may scroll in one request and modifiers may be held during the gesture. Each request is limited to half the captured width or height so observations overlap; scroll.limitedTo reports any reduced request in desktop pixels. Read the returned image before scrolling again, because screenshot scales may differ. Applications may travel a different distance from the injected wheel units; Synara measures what actually moved, reports scroll.traveledY, and pre-divides later requests by what it learned (scroll.gearing). On macOS the wheel is quantized to 120-pixel notches up to 50 notches per axis per dispatch. A traveledY of 0 means the content did not move at all, which usually means the page is already at its edge — a wheel cannot scroll past the top or bottom. If you are scrolling to hunt for a control, stop and call computer_get_state instead: its elements list names the labeled controls on screen, and one of those may already be targetable by label. ${POINTER_COORDINATE_HINT}`,
+      `Scroll at an optional target, resolved before the gesture and never guessed. Distance is in pixels of the same screenshot the coordinates are in, so a scroll needs a screenshot even with no coordinates — roughly 80 pixels per wheel notch at full resolution. Both axes may scroll in one request; modifiers may be held during it. Each request is capped at half the captured width or height so observations overlap; scroll.limitedTo reports a reduced request in desktop pixels. Read the returned image before scrolling again — screenshot scales may differ. Apps may travel a different distance than the injected units; Synara measures actual movement, reports scroll.traveledY, and pre-divides later requests by what it learned (scroll.gearing). traveledY of 0 means the content did not move — usually the page is already at its edge. To hunt for a control, call computer_get_state instead: its elements list may already name it. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
@@ -3995,7 +3904,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_type_text",
       "Type text",
-      `Type text into the focused desktop control, as if typed on the keyboard. It inserts at the caret or replaces the current selection. To overwrite part of a field's contents, select it first — computer_select_text for an exact character range, computer_triple_click for its whole line or paragraph, or the application's own select-all shortcut through computer_hotkey — or use computer_set_value to request a whole-field value change. For browser navigation use the address-bar shortcut, type the URL without a newline, then press Enter with wait_for_label for a known destination control; do not guess address-bar coordinates or repeat Enter on an unchanged page. Type the whole string in one call — a name, an email address, a URL — and do not split it into pieces; splitting only multiplies the chance of a partial result. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
+      `Type text into the focused desktop control, as if typed on the keyboard. It inserts at the caret or replaces the current selection. To overwrite part of a field's contents, select it first — computer_select_text for an exact character range, computer_click with count:3 for its whole line or paragraph, or the application's own select-all shortcut through computer_press_key — or use computer_set_value to request a whole-field value change. For browser navigation use the address-bar shortcut, type the URL without a newline, then press Enter with wait_for_label for a known destination control; do not guess address-bar coordinates or repeat Enter on an unchanged page. Type the whole string in one call — a name, an email address, a URL — without splitting it; pieces only multiply the chance of a partial result. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
       {
         type: "object",
         properties: {
@@ -4018,61 +3927,41 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_press_key",
       "Press key",
-      `Press one keyboard key on the computer-use seat — enter, escape, tab, an arrow, a function key, backspace. For a key with modifiers, use computer_hotkey. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
+      `Press one keyboard key or one keyboard shortcut on the computer-use seat — a key name, or a chord joined with "+" such as "cmd+s". ${hotkeyFormNote(dialect)} ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
       {
         type: "object",
         properties: {
           key: {
             type: "string",
-            description:
-              'One key name: "enter", "escape", "tab", "backspace", "delete" (forward delete), "home", "end", "pageup", "pagedown", an arrow ("arrowdown" or "down"), "f1"-"f12", a modifier ("command", "shift", "option", "ctrl", "fn", "capslock"), or a single printable character. xdotool spellings such as "page_up" and "caps_lock" are accepted. "insert" is refused — macOS has no Insert key; "kp_*" keypad keys, "f13"-"f20", "menu" and "help" need the extended native keymap.',
+            description: keyArgumentNote(dialect),
           },
           ...keyboardTargetProperties,
         },
         required: ["key"],
         additionalProperties: false,
       },
-      async (args, context) =>
-        manager.pressKey(
-          context.callerThreadId,
-          readStringArg(args, "key", { required: true })!,
-          readWindowIdArg(args),
-        ),
+      async (args, context) => {
+        const { key, chord } = readKeyOrChord(args);
+        const windowId = readWindowIdArg(args);
+        return chord === undefined
+          ? manager.pressKey(context.callerThreadId, key, windowId)
+          : manager.hotkey(context.callerThreadId, chord, windowId);
+      },
     ),
-    observedActionEntry(
-      "computer_hotkey",
-      "Press hotkey",
-      `Press one keyboard shortcut. ${hotkeyFormNote(dialect)} ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
-      {
-        type: "object",
-        properties: {
-          keys: {
-            type: "array",
-            items: { type: "string" },
-            minItems: 1,
-            maxItems: COMPUTER_HOTKEY_MAX_KEYS,
-            description: hotkeyKeysNote(dialect),
-          },
-          ...keyboardTargetProperties,
+    discoveryOnly(
+      actionEntry(
+        "computer_write_clipboard",
+        "Write computer clipboard",
+        `Replace the desktop clipboard with text, then paste it with the target application's own paste command. ${SHARED_CLIPBOARD_NOTE} Writing discards whatever the user had copied, so prefer computer_type_text for short input and use this for text too long or too awkward to type.`,
+        {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+          additionalProperties: false,
         },
-        required: ["keys"],
-        additionalProperties: false,
-      },
-      async (args, context) =>
-        manager.hotkey(context.callerThreadId, readHotkeyKeys(args), readWindowIdArg(args)),
-    ),
-    actionEntry(
-      "computer_write_clipboard",
-      "Write computer clipboard",
-      `Replace the desktop clipboard with text, then paste it with the target application's own paste command. ${SHARED_CLIPBOARD_NOTE} Writing discards whatever the user had copied, so prefer computer_type_text for short input and use this for text too long or too awkward to type.`,
-      {
-        type: "object",
-        properties: { text: { type: "string" } },
-        required: ["text"],
-        additionalProperties: false,
-      },
-      async (args, context) =>
-        manager.writeClipboard(context.callerThreadId, readClipboardText(args)),
+        async (args, context) =>
+          manager.writeClipboard(context.callerThreadId, readClipboardText(args)),
+      ),
     ),
     observedActionEntry(
       "computer_paste",
@@ -4146,389 +4035,157 @@ export function makeAgentGatewayComputerTools(
           readSetValueValue(args),
         ),
     ),
-    observedActionEntry(
-      "computer_perform_action",
-      "Perform computer action",
-      `Perform a named semantic action on a uniquely labelled accessible control, through the accessibility layer rather than by clicking. ${performActionNote(dialect)}`,
-      {
-        type: "object",
-        properties: {
-          ...pointerTargetProperties,
-          action: {
-            type: "string",
-            enum: [...semanticActionNames(dialect)],
-            description: performActionArgumentNote(dialect),
+    discoveryOnly(
+      observedActionEntry(
+        "computer_perform_action",
+        "Perform computer action",
+        `Perform a named semantic action on a uniquely labelled accessible control, through the accessibility layer rather than by clicking. ${performActionNote(dialect)}`,
+        {
+          type: "object",
+          properties: {
+            ...pointerTargetProperties,
+            action: {
+              type: "string",
+              enum: [...semanticActionNames(dialect)],
+              description: performActionArgumentNote(dialect),
+            },
           },
+          required: ["action"],
+          additionalProperties: false,
         },
-        required: ["action"],
-        additionalProperties: false,
-      },
-      async (args, context) =>
-        manager.performAction(
-          context.callerThreadId,
-          readTarget(args, context),
-          readActionName(args),
-        ),
+        async (args, context) =>
+          manager.performAction(
+            context.callerThreadId,
+            readTarget(args, context),
+            readActionName(args),
+          ),
+      ),
     ),
-    observedActionEntry(
-      "computer_select_text",
-      "Select text",
-      `Select an exact character range inside a text element, through the accessibility layer rather than by key chord or pointer drag. ${selectTextNote(dialect)}`,
-      {
-        type: "object",
-        properties: {
-          ...textTargetProperties,
-          start: {
-            type: "integer",
-            minimum: 0,
-            maximum: COMPUTER_SELECT_TEXT_RANGE_MAX,
-            description:
-              "Zero-based character offset into the element's value where the selection begins. Counts the same characters a string index does; a start past the end is refused rather than clamped.",
+    discoveryOnly(
+      observedActionEntry(
+        "computer_select_text",
+        "Select text",
+        `Select an exact character range inside a text element, through the accessibility layer rather than by key chord or pointer drag. ${selectTextNote(dialect)}`,
+        {
+          type: "object",
+          properties: {
+            ...textTargetProperties,
+            start: {
+              type: "integer",
+              minimum: 0,
+              maximum: COMPUTER_SELECT_TEXT_RANGE_MAX,
+              description:
+                "Zero-based character offset into the element's value where the selection begins. Counts the same characters a string index does; a start past the end is refused rather than clamped.",
+            },
+            length: {
+              type: "integer",
+              minimum: 0,
+              maximum: COMPUTER_SELECT_TEXT_RANGE_MAX,
+              description:
+                "Number of characters to select; 0 collapses the selection to a caret at start. A range running past the element's end is refused rather than clamped.",
+            },
           },
-          length: {
-            type: "integer",
-            minimum: 0,
-            maximum: COMPUTER_SELECT_TEXT_RANGE_MAX,
-            description:
-              "Number of characters to select; 0 collapses the selection to a caret at start. A range running past the element's end is refused rather than clamped.",
-          },
+          required: ["start", "length"],
+          additionalProperties: false,
         },
-        required: ["start", "length"],
-        additionalProperties: false,
-      },
-      async (args, context) =>
-        manager.selectText(
-          context.callerThreadId,
-          resolveTarget(readSelectTextTarget(args), context.callerThreadId),
-          readSelectTextRange(args),
-        ),
+        async (args, context) =>
+          manager.selectText(
+            context.callerThreadId,
+            resolveTarget(readSelectTextTarget(args), context.callerThreadId),
+            readSelectTextRange(args),
+          ),
+      ),
     ),
-    actionEntry(
-      "computer_run",
-      "Run computer actions",
-      `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click, double_click, triple_click, right_click, move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key), hotkey (keys), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional element target; "absent":true waits for the element to disappear), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden — hidden:false is a visible launch and needs the user's task to have asked to see the app), write_clipboard (text), paste (text). Observation steps: get_state (optional window_id + label_contains — returns a fresh elements listing and mints refs usable by later steps), verify_state (window_id + expect predicates). Any step can carry "if_element"/"unless_element" — a target object checked live at step time, skipping the step when its condition fails — and "continue_on_error":true to keep going past its own failure. Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution, and ref targets name elements from the thread's earlier listings. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen, or make the dependency a condition or a get_state step. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
-      {
-        type: "object",
-        properties: {
-          steps: {
-            type: "array",
-            minItems: 1,
-            maxItems: COMPUTER_RUN_MAX_STEPS,
-            items: {
-              type: "object",
-              required: ["type"],
-              additionalProperties: false,
-              properties: {
-                type: { type: "string", enum: Object.keys(RUN_STEP_FIELDS) },
-                x: { type: "number" },
-                y: { type: "number" },
-                screenshot_id: { type: "string" },
-                label: { type: "string" },
-                role: { type: "string" },
-                ref: { type: "integer", minimum: 0 },
-                ref_ordinal: { type: "integer", minimum: 0 },
-                refOrdinal: { type: "integer", minimum: 0 },
-                window_id: { type: "string" },
-                windowId: { type: "string" },
-                label_contains: { type: "string" },
-                labelContains: { type: "string" },
-                if_element: {
-                  type: "object",
-                  description:
-                    "Run this step only if the element resolves live; the same target fields as a step (label/role/ref/window_id).",
+    discoveryOnly(
+      actionEntry(
+        "computer_run",
+        "Run computer actions",
+        `Run an ordered list of actions in one call — the fast path for a sequence you already know. Each step is {"type": name} plus the fields of the computer_ tool with that name: click (optional count and button for double-/triple-/right-clicks), move_cursor, drag (from/to targets), scroll (delta_x/delta_y), type_text (text), press_key (key — one key name or a "mod+key" chord), set_value (value), perform_action (action), select_text (start, length), wait (duration_ms, optional element target; "absent":true waits for the element to disappear), activate_window (window_id), set_window_frame (x, y, width, height), invoke_menu (path), kill_app, set_window_minimized (minimized), set_app_visibility (pid, hidden), launch_app (app, optional hidden — hidden:false is a visible launch and needs the user's task to have asked to see the app), write_clipboard (text), paste (text). Observation steps: get_state (optional window_id + label_contains — returns a fresh elements listing and mints refs usable by later steps), verify_state (window_id + expect predicates). Any step can carry "if_element"/"unless_element" — a target object checked live at step time, skipping the step when its condition fails — and "continue_on_error":true to keep going past its own failure. Every step runs the same targeting, consent and refusal checks as the tool it names; label targets resolve fresh at execution, and ref targets name elements from the thread's earlier listings. The run stops at the first failure and returns per-step results plus the elements of the affected window — pass only steps that do not depend on screen changes you have not seen, or make the dependency a condition or a get_state step. Steps take no screenshots; set include_screenshot for a final capture. ${POINTER_COORDINATE_HINT}`,
+        {
+          type: "object",
+          properties: {
+            steps: {
+              type: "array",
+              minItems: 1,
+              maxItems: COMPUTER_RUN_MAX_STEPS,
+              items: {
+                type: "object",
+                required: ["type"],
+                additionalProperties: false,
+                properties: {
+                  type: { type: "string", enum: Object.keys(RUN_STEP_FIELDS) },
+                  x: { type: "number" },
+                  y: { type: "number" },
+                  screenshot_id: { type: "string" },
+                  label: { type: "string" },
+                  role: { type: "string" },
+                  ref: { type: "integer", minimum: 0 },
+                  ref_ordinal: { type: "integer", minimum: 0 },
+                  refOrdinal: { type: "integer", minimum: 0 },
+                  window_id: { type: "string" },
+                  windowId: { type: "string" },
+                  label_contains: { type: "string" },
+                  labelContains: { type: "string" },
+                  if_element: {
+                    type: "object",
+                    description:
+                      "Run this step only if the element resolves live; the same target fields as a step (label/role/ref/window_id).",
+                  },
+                  unless_element: {
+                    type: "object",
+                    description:
+                      "Skip this step if the element resolves live; the same target fields as a step.",
+                  },
+                  continue_on_error: { type: "boolean" },
+                  absent: { type: "boolean" },
+                  expect: { type: "array", items: { type: "object" }, minItems: 1, maxItems: 8 },
+                  modifiers: MODIFIERS_PROPERTY.modifiers,
+                  from: {
+                    type: "object",
+                    description: "Drag start; the same target fields as a step.",
+                  },
+                  to: {
+                    type: "object",
+                    description: "Drag end; the same target fields as a step.",
+                  },
+                  duration_ms: { type: "integer", minimum: 0 },
+                  delta_x: { type: "number" },
+                  delta_y: { type: "number" },
+                  text: { type: "string" },
+                  key: { type: "string" },
+                  count: { type: "integer", minimum: 1, maximum: 3 },
+                  button: { type: "string", enum: ["left", "right", "middle"] },
+                  value: { type: "string" },
+                  action: {
+                    type: "string",
+                    enum: [...semanticActionNames(dialect)],
+                  },
+                  start: { type: "integer", minimum: 0, maximum: COMPUTER_SELECT_TEXT_RANGE_MAX },
+                  length: { type: "integer", minimum: 0, maximum: COMPUTER_SELECT_TEXT_RANGE_MAX },
+                  app: { type: "string" },
+                  arguments: { type: "array", items: { type: "string" } },
+                  wait_for_window: { type: "boolean" },
+                  hidden: { type: "boolean" },
+                  minimized: { type: "boolean" },
+                  pid: { type: "integer", minimum: 1 },
                 },
-                unless_element: {
-                  type: "object",
-                  description:
-                    "Skip this step if the element resolves live; the same target fields as a step.",
-                },
-                continue_on_error: { type: "boolean" },
-                absent: { type: "boolean" },
-                expect: { type: "array", items: { type: "object" }, minItems: 1, maxItems: 8 },
-                modifiers: MODIFIERS_PROPERTY.modifiers,
-                from: {
-                  type: "object",
-                  description: "Drag start; the same target fields as a step.",
-                },
-                to: {
-                  type: "object",
-                  description: "Drag end; the same target fields as a step.",
-                },
-                duration_ms: { type: "integer", minimum: 0 },
-                delta_x: { type: "number" },
-                delta_y: { type: "number" },
-                text: { type: "string" },
-                key: { type: "string" },
-                keys: {
-                  type: "array",
-                  items: { type: "string" },
-                  maxItems: COMPUTER_HOTKEY_MAX_KEYS,
-                },
-                value: { type: "string" },
-                action: {
-                  type: "string",
-                  enum: [...semanticActionNames(dialect)],
-                },
-                start: { type: "integer", minimum: 0, maximum: COMPUTER_SELECT_TEXT_RANGE_MAX },
-                length: { type: "integer", minimum: 0, maximum: COMPUTER_SELECT_TEXT_RANGE_MAX },
-                app: { type: "string" },
-                arguments: { type: "array", items: { type: "string" } },
-                wait_for_window: { type: "boolean" },
-                hidden: { type: "boolean" },
-                minimized: { type: "boolean" },
-                pid: { type: "integer", minimum: 1 },
               },
-            },
-            description:
-              "Ordered steps; the whole list is validated before anything runs, so a malformed step refuses the batch untouched.",
-          },
-          include_screenshot: {
-            type: "boolean",
-            description: "Attach a final screenshot of the affected window. Defaults to false.",
-          },
-        },
-        required: ["steps"],
-        additionalProperties: false,
-      },
-      runComputerBatch,
-    ),
-    {
-      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
-      requiresActiveTurn: true,
-      definition: {
-        name: "computer_recording_start",
-        description:
-          'Start a structured recording of this thread\'s computer calls — one bounded local file per session under the server state dir. Records carry the target identity, action class, approval path, dispatch verdict, and verification evidence of every call — never screenshots, never clipboard contents. fidelity "redacted" (default) stores text payloads as length+sha256; "full" keeps them verbatim so they can be replayed, except onto protected fields, which stay hashed at every fidelity. One session per thread; stop it with computer_recording_stop.',
-        inputSchema: {
-          type: "object",
-          properties: {
-            fidelity: {
-              type: "string",
-              enum: ["redacted", "full"],
               description:
-                '"redacted" is the default and the contract; "full" keeps text payloads verbatim so a replay can re-issue them. Secure-field payloads stay hashed either way.',
+                "Ordered steps; the whole list is validated before anything runs, so a malformed step refuses the batch untouched.",
             },
-          },
-          additionalProperties: false,
-        },
-        annotations: {
-          title: "Start computer recording",
-          ...WRITE_TOOL_ANNOTATIONS,
-        },
-      },
-      handler: handle("computer_recording_start", async (args, context) => {
-        const fidelity = readStringArg(args, "fidelity");
-        if (fidelity !== undefined && fidelity !== "redacted" && fidelity !== "full") {
-          throw new ToolInputError('fidelity must be "redacted" or "full".');
-        }
-        return manager.startComputerRecording({
-          threadId: context.callerThreadId,
-          ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
-          ...(fidelity !== undefined ? { fidelity: fidelity as ComputerRecordingFidelity } : {}),
-        });
-      }),
-    },
-    {
-      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
-      requiresActiveTurn: true,
-      definition: {
-        name: "computer_recording_stop",
-        description:
-          "Stop a computer recording session and write its end line. With no recording_id, stops the session open on this thread.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            recording_id: {
-              type: "string",
-              description: "A recording id from computer_recording_list or _start.",
-            },
-          },
-          additionalProperties: false,
-        },
-        annotations: {
-          title: "Stop computer recording",
-          ...READ_ONLY_TOOL_ANNOTATIONS,
-        },
-      },
-      handler: handle("computer_recording_stop", async (args, context) => {
-        const recordingId = readStringArg(args, "recording_id");
-        const summary =
-          recordingId === undefined
-            ? await manager.stopComputerRecordingForThread(context.callerThreadId)
-            : await manager.stopComputerRecording(recordingId);
-        return summary === undefined
-          ? { stopped: false, note: "No open recording session matches." }
-          : { stopped: true, ...summary };
-      }),
-    },
-    {
-      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
-      requiresActiveTurn: true,
-      definition: {
-        name: "computer_recording_list",
-        description:
-          "List computer recording sessions — open ones first, then newest-first — with step counts, fidelity, and close reasons.",
-        inputSchema: { type: "object", properties: {}, additionalProperties: false },
-        annotations: {
-          title: "List computer recordings",
-          ...READ_ONLY_TOOL_ANNOTATIONS,
-        },
-      },
-      handler: handle("computer_recording_list", async () => ({
-        recordings: await manager.listComputerRecordings(),
-      })),
-    },
-    {
-      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
-      requiresActiveTurn: true,
-      definition: {
-        name: "computer_recording_read",
-        description:
-          "Read one recording: the header, the recorded steps, and a plain-English history line per step. Steps carry redacted arguments — hashes stand in for text payloads at redacted fidelity.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            recording_id: {
-              type: "string",
-              description: "A recording id from computer_recording_list.",
-            },
-          },
-          required: ["recording_id"],
-          additionalProperties: false,
-        },
-        annotations: {
-          title: "Read computer recording",
-          ...READ_ONLY_TOOL_ANNOTATIONS,
-        },
-      },
-      handler: handle("computer_recording_read", async (args) => {
-        const recordingId = readStringArg(args, "recording_id", { required: true })!;
-        const document = await manager.readComputerRecording(recordingId);
-        return { ...document, history: computerRecordingHistoryLines(document) };
-      }),
-    },
-    {
-      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
-      requiresActiveTurn: true,
-      definition: {
-        name: "computer_recording_export",
-        description:
-          "Export one recording's raw NDJSON — already redacted at write time. Contents over 200,000 characters are truncated; the file on disk is the full record.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            recording_id: {
-              type: "string",
-              description: "A recording id from computer_recording_list.",
-            },
-          },
-          required: ["recording_id"],
-          additionalProperties: false,
-        },
-        annotations: {
-          title: "Export computer recording",
-          ...READ_ONLY_TOOL_ANNOTATIONS,
-        },
-      },
-      handler: handle("computer_recording_export", async (args) => {
-        const recordingId = readStringArg(args, "recording_id", { required: true })!;
-        const contents = await manager.exportComputerRecording(recordingId);
-        const truncated = contents.length > 200_000;
-        return {
-          recordingId,
-          format: "ndjson",
-          bytes: Buffer.byteLength(contents, "utf8"),
-          contents: truncated ? `${contents.slice(0, 200_000)}…` : contents,
-          ...(truncated ? { truncated: true } : {}),
-        };
-      }),
-    },
-    {
-      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
-      requiresActiveTurn: true,
-      definition: {
-        name: "computer_recording_delete",
-        description:
-          "Delete one recording's file. An open session is closed first. The file is gone — this is evidence deletion, which is why it asks.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            recording_id: {
-              type: "string",
-              description: "A recording id from computer_recording_list.",
-            },
-          },
-          required: ["recording_id"],
-          additionalProperties: false,
-        },
-        annotations: {
-          title: "Delete computer recording",
-          ...WRITE_TOOL_ANNOTATIONS,
-        },
-      },
-      handler: handle("computer_recording_delete", async (args) => {
-        const recordingId = readStringArg(args, "recording_id", { required: true })!;
-        return { deleted: await manager.deleteComputerRecording(recordingId), recordingId };
-      }),
-    },
-    {
-      requiredCapability: COMPUTER_CONTROL_CAPABILITY,
-      requiresActiveTurn: true,
-      definition: {
-        name: "computer_replay",
-        description:
-          "Classify a recording's steps against the live desktop — and with execute:true, re-issue the ready ones through the same resolution, consent, and dispatch paths a live call takes. execute absent or false is the dry run: nothing is dispatched and the report says what would happen. A step is re-issued only after its target re-resolves fresh (window still present, or exactly one same-app window to remap to, or a re-anchored point) — recorded pixels and window ids are hints, never proof. Text payloads re-issue only when the session captured them at full fidelity; protected-field steps are never retyped. Blocked and skipped steps name their reason in the report.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            recording_id: {
-              type: "string",
-              description: "A recording id from computer_recording_list.",
-            },
-            execute: {
+            include_screenshot: {
               type: "boolean",
-              description:
-                "Re-dispatch the steps classified ready. Default false — classify only, send nothing.",
-            },
-            from_seq: {
-              type: "integer",
-              minimum: 1,
-              description: "First recorded step number to consider, inclusive.",
-            },
-            to_seq: {
-              type: "integer",
-              minimum: 1,
-              description: "Last recorded step number to consider, inclusive.",
+              description: "Attach a final screenshot of the affected window. Defaults to false.",
             },
           },
-          required: ["recording_id"],
+          required: ["steps"],
           additionalProperties: false,
         },
-        annotations: {
-          title: "Replay computer recording",
-          ...WRITE_TOOL_ANNOTATIONS,
-        },
-      },
-      handler: handle("computer_replay", async (args, context) => {
-        const recordingId = readStringArg(args, "recording_id", { required: true })!;
-        const execute = readBooleanArg(args, "execute");
-        const fromSeq = readNumberArg(args, "from_seq");
-        const toSeq = readNumberArg(args, "to_seq");
-        const signal = desktopOperationSignal();
-        return manager.replayComputerRecording(context.callerThreadId, recordingId, {
-          ...(execute !== undefined ? { execute } : {}),
-          ...(fromSeq !== undefined ? { fromSeq } : {}),
-          ...(toSeq !== undefined ? { toSeq } : {}),
-          ...(signal !== undefined ? { signal } : {}),
-          ...(context.callerTurnId ? { turnId: context.callerTurnId } : {}),
-          // A replay is not a shortcut around the never-raise gate: a recorded
-          // activate or visible launch re-issues only under the same task-text
-          // authorization the live call needed.
-          foregroundAuthorization: await foregroundAuthorization(context),
-        });
-      }),
-    },
+        runComputerBatch,
+      ),
+    ),
   ];
+  return entries;
 }
 
 /**
@@ -4576,25 +4233,21 @@ function selectTextNote(dialect: ComputerAgentDialect): string {
 }
 
 /**
- * What a shortcut may contain, which is not the same question on the two
- * families.
- *
- * The description said "ordered key sequence" and the schema allowed sixteen
- * keys, and neither backend does that: macOS throws unless exactly one key is
- * not a modifier, and Linux presses every key at once and releases them in
- * reverse. So the same wording taught macOS callers to send sequences that are
- * always refused, and Linux callers to expect a sequence they never get.
+ * What a chord may contain, which is not the same question on the two
+ * families: macOS throws unless exactly one key is not a modifier, and Linux
+ * presses every key at once and releases them in reverse. Neither treats the
+ * chord as a sequence of separate keystrokes, so the note says so on both.
  */
 function hotkeyFormNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? 'One chord: one or more modifiers plus exactly one other key, pressed together and released together — ["meta", "s"] to save, ["meta", "shift", "z"] to redo. More than one non-modifier key is refused; to press two shortcuts, call this twice.'
-    : 'One chord: every key is pressed in the order given, held, then released in reverse — ["ctrl", "s"] to save, ["ctrl", "shift", "z"] to redo. It is not a sequence of separate keystrokes: to press two shortcuts, call this twice.';
+    ? 'A chord is one or more modifiers plus exactly one other key, pressed together and released together — "meta+s" to save, "meta+shift+z" to redo. More than one non-modifier key is refused; to press two shortcuts, call this twice.'
+    : 'A chord presses every key in the order given, holds them, then releases in reverse — "ctrl+s" to save, "ctrl+shift+z" to redo. It is not a sequence of separate keystrokes: to press two shortcuts, call this twice.';
 }
 
-function hotkeyKeysNote(dialect: ComputerAgentDialect): string {
+function keyArgumentNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? 'The chord, modifiers first: any of "meta" (Command), "ctrl", "alt" (Option), "shift" and "fn", then exactly one other key such as "s", "tab", "arrowleft" or "f5".'
-    : 'The chord, modifiers first: any of "ctrl", "alt", "shift" and "meta" (Super), then the key they apply to, such as "s", "tab" or "arrowleft".';
+    ? 'One key name — "enter", "escape", "tab", "backspace", "delete" (forward delete), "home", "end", "pageup", "pagedown", an arrow ("arrowdown" or "down"), "f1"-"f12", a modifier ("command", "shift", "option", "ctrl", "fn", "capslock"), or a single printable character — or one chord joined with "+", modifiers first: "meta" (Command), "ctrl", "alt" (Option), "shift" or "fn", then exactly one other key, as in "meta+s" or "meta+shift+z". xdotool spellings such as "page_up" and "caps_lock" are accepted. "insert" is refused — macOS has no Insert key; "kp_*" keypad keys, "f13"-"f20", "menu" and "help" need the extended keymap.'
+    : 'One key name — "enter", "escape", "tab", "backspace", "delete", "home", "end", "pageup", "pagedown", an arrow, "f1"-"f12", a modifier, or a single printable character — or one chord joined with "+", modifiers first: "ctrl", "alt", "shift" or "meta" (Super), then the key they apply to, as in "ctrl+s" or "ctrl+shift+z".';
 }
 
 function launchAppNote(dialect: ComputerAgentDialect): string {

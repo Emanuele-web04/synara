@@ -5,12 +5,6 @@ export function cursorToolActivity(tool: string): string {
   switch (tool) {
     case "computer_click":
       return "Clicking";
-    case "computer_double_click":
-      return "Double-clicking";
-    case "computer_triple_click":
-      return "Triple-clicking";
-    case "computer_right_click":
-      return "Right-clicking";
     case "computer_scroll":
       return "Scrolling";
     case "computer_type_text":
@@ -23,8 +17,6 @@ export function cursorToolActivity(tool: string): string {
       return "Pasting";
     case "computer_press_key":
       return "Pressing key";
-    case "computer_hotkey":
-      return "Pressing shortcut";
     case "computer_drag":
       return "Dragging";
     case "computer_move_cursor":

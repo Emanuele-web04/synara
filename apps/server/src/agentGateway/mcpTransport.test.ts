@@ -637,6 +637,45 @@ describe("makeAgentGatewayMcpTransport tools/list", () => {
       assert.isFalse("_meta" in tools[0]!);
     }),
   );
+
+  it.effect("withholds discovery-only tools from the list but still dispatches them", () =>
+    Effect.gen(function* () {
+      // The advertised catalog stays small on purpose: a tool marked
+      // discoveryOnly is absent from tools/list yet reaches its handler on an
+      // exact-name tools/call — capability and approval gates unchanged.
+      const discoveryCatalog: ReadonlyArray<ToolEntry> = [
+        ...catalog,
+        {
+          definition: {
+            name: "computer_drag",
+            description: "Drag",
+            inputSchema: { type: "object" },
+          },
+          requiredCapability: "computer:control",
+          discoveryOnly: true,
+          handler: ok,
+        },
+      ];
+      const transport = makeTransport({
+        threads: [makeThread("thread-computer")],
+        tools: discoveryCatalog,
+        leaseCapabilities: { enableComputerControl: true },
+      });
+      const listResponse = yield* post(transport, "token-1", listBody);
+      assert.equal(listResponse.status, 200);
+      assert.deepEqual(
+        listedTools(listResponse.body).map((tool) => tool.name),
+        ["synara_read_thread", "computer_click"],
+      );
+      const callResponse = yield* post(transport, "token-1", toolCallBody("computer_drag"));
+      assert.equal(callResponse.status, 200);
+      assert.equal(
+        (callResponse.body as { result: { content: Array<{ text: string }> } }).result.content[0]
+          ?.text,
+        "ok",
+      );
+    }),
+  );
 });
 
 const toolCallBody = (name: string, args: Record<string, unknown> = {}) => ({

@@ -406,7 +406,7 @@ export function computerDeliveryWarning(
 /**
  * The newest desktop action, in the words a person would use.
  *
- * The backend's `action` is a tool-shaped identifier (`computer_double_click`,
+ * The backend's `action` is a tool-shaped identifier (`computer_click`,
  * `type_text`) and the pane is not a log viewer, so it is spoken rather than
  * printed. A failure keeps its message, because that is the only part of a
  * failed action worth the space.

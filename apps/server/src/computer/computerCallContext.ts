@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { ComputerBackendActionResult } from "./ComputerBackend.ts";
-import type { ComputerRecordedDispatch, ComputerRecordedResolution } from "./computerRecording.ts";
 
 /**
  * Per-computer-call context for the action path, carried on
@@ -111,19 +110,6 @@ export interface ComputerActionProof {
 }
 
 /**
- * The recording capture one call fills while it runs: every target the
- * manager resolved and every backend dispatch it returned, in order. The
- * tool layer attaches it when the calling thread has an open recording
- * session, and the record it builds when the call ends is the session's
- * step line. Bounded by the recording module's per-step cap so a call that
- * resolves hundreds of times cannot grow the record without limit.
- */
-export interface ComputerRecordingCapture {
-  readonly resolutions: ComputerRecordedResolution[];
-  readonly dispatches: ComputerRecordedDispatch[];
-}
-
-/**
  * One line per computer call: the operation name, each instrumented leg's
  * summed milliseconds, counters for repeated or skipped work, and the call's
  * wall time. Durations, counts, and fixed operation names only — window
@@ -187,13 +173,6 @@ export class ComputerCallTiming {
 
 export class ComputerCallContext {
   readonly timing: ComputerCallTiming | undefined;
-  /**
-   * The recording capture attached to this call, when the calling thread has
-   * an open session. Public and mutable: the gateway attaches it around the
-   * tool run and detaches it when the run ends, and the manager's resolution
-   * and dispatch notes push onto it.
-   */
-  recording: ComputerRecordingCapture | undefined;
   private proof: ComputerActionProof | undefined;
 
   constructor(options: { readonly timing?: ComputerCallTiming }) {
@@ -235,47 +214,6 @@ export function createComputerCallContext(): ComputerCallContext | undefined {
   const timing = cuaTimingLogEnabled() ? new ComputerCallTiming() : undefined;
   if (timing === undefined && !cuaConditionalSettleEnabled()) return undefined;
   return new ComputerCallContext(timing === undefined ? {} : { timing });
-}
-
-/**
- * Run `run` with `capture` attached to the call context: the context that
- * exists (a timing or conditional-settle run already created one) gains the
- * capture for the run's duration, and a context created here exists only
- * because recording asked for one — in which case it owns its own timing
- * lifecycle exactly as `withComputerCall` in the manager does.
- *
- * Returns the capture unchanged so the caller can build the step record from
- * it after the run settles.
- */
-export function withComputerRecordingCapture<A>(
-  capture: ComputerRecordingCapture | undefined,
-  run: () => Promise<A>,
-): Promise<A> {
-  if (capture === undefined) return run();
-  const existing = currentComputerCall();
-  if (existing !== undefined) {
-    // A nested capture — a computer_run step inside the batch's own — swaps
-    // the field for the run's duration and restores what was there, so the
-    // outer record keeps seeing the outer capture after the step returns.
-    const previous = existing.recording;
-    existing.recording = capture;
-    return run().finally(() => {
-      if (existing.recording === capture) existing.recording = previous;
-    });
-  }
-  const timing = cuaTimingLogEnabled() ? new ComputerCallTiming() : undefined;
-  const context = new ComputerCallContext(timing === undefined ? {} : { timing });
-  context.recording = capture;
-  return withComputerCallContext(context, async () => {
-    try {
-      return await run();
-    } catch (error) {
-      context.timing?.markFailed();
-      throw error;
-    } finally {
-      context.timing?.finish();
-    }
-  });
 }
 
 /** Records `leg`'s duration on the active call's timing record, when one exists. */

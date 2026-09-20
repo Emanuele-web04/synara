@@ -192,24 +192,11 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
     "read the Computer playbook",
   ),
   synara_computer_click: presentComputerTool("clicking the desktop", "clicked the desktop"),
-  synara_computer_double_click: presentComputerTool(
-    "double-clicking the desktop",
-    "double-clicked the desktop",
-  ),
-  synara_computer_triple_click: presentComputerTool(
-    "triple-clicking the desktop",
-    "triple-clicked the desktop",
-  ),
-  synara_computer_right_click: presentComputerTool(
-    "right-clicking the desktop",
-    "right-clicked the desktop",
-  ),
   synara_computer_move_cursor: presentComputerTool("moving the cursor", "moved the cursor"),
   synara_computer_drag: presentComputerTool("dragging on the desktop", "dragged on the desktop"),
   synara_computer_scroll: presentComputerTool("scrolling the desktop", "scrolled the desktop"),
   synara_computer_type_text: presentComputerTool("typing on the desktop", "typed on the desktop"),
   synara_computer_press_key: presentComputerTool("pressing a key", "pressed a key"),
-  synara_computer_hotkey: presentComputerTool("pressing a shortcut", "pressed a shortcut"),
   synara_computer_set_value: presentComputerTool("setting a field", "set a field"),
   synara_computer_select_text: presentComputerTool("selecting text", "selected text"),
   synara_computer_perform_action: presentComputerTool(
@@ -243,28 +230,6 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
   ),
   synara_computer_paste: presentComputerTool("pasting text", "pasted text"),
   synara_computer_run: presentComputerTool("running a desktop sequence", "ran a desktop sequence"),
-  synara_computer_recording_start: presentComputerTool(
-    "starting a session recording",
-    "started a session recording",
-  ),
-  synara_computer_recording_stop: presentComputerTool(
-    "stopping the recording",
-    "stopped the recording",
-  ),
-  synara_computer_recording_list: presentComputerTool("listing recordings", "listed recordings"),
-  synara_computer_recording_read: presentComputerTool("reading a recording", "read a recording"),
-  synara_computer_recording_export: presentComputerTool(
-    "exporting a recording",
-    "exported a recording",
-  ),
-  synara_computer_recording_delete: presentComputerTool(
-    "deleting a recording",
-    "deleted a recording",
-  ),
-  synara_computer_replay: presentComputerTool(
-    "replaying a recorded session",
-    "replayed a recorded session",
-  ),
 } as const satisfies Record<`synara_${ComputerToolName}`, SynaraMcpToolPresentation>;
 
 function presentComputerTool(present: string, past: string): SynaraMcpToolPresentation {

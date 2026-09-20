@@ -162,40 +162,32 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const definitions = tools.map((tool) => tool.definition);
-    // The 2026-09-19 L5 dedupe pass measured 70,271 chars on the linux
-    // dialect and 71,225 on the macOS dialect (the Mac surface drops region
-    // properties but adds note text) after shortening the repeated
-    // target/delivery blurbs. The bound still trips on accidental bloat, so
-    // raise it only with the new surface measured.
+    // The 2026-09-20 surface cut folded the click variants and hotkey into
+    // their primaries and retired recording/replay, so the registered catalog
+    // is far below the old ~71k. The bound still trips on accidental bloat,
+    // so raise it only with the new surface measured.
     expect(JSON.stringify(definitions).length).toBeLessThan(72_000);
     const notes = computerToolInstructions();
-    // The injected block was 8,404 chars before the L5 trim; the ceiling keeps
-    // every gate string below without letting the block grow back silently.
-    expect(notes.length).toBeLessThanOrEqual(8_300);
-    expect(notes).toContain("never print ALL_TOOLS or the entire Computer catalog");
-    expect(notes).toContain("discover only the small set of tools needed next by exact names");
-    expect(notes).toContain("stop on any refusal");
-    expect(notes).toContain('computer_launch_app({app:"Calculator"})');
-    expect(notes).toContain("omit delivery_mode unless the user asked for visible use");
-    expect(notes).not.toContain("choose delivery_mode:foreground from the first mutation");
-    // Unit-2/6 gate: the three driver refusals the DB proves real tasks hit
-    // must stay mapped to their next step, or the agent retries blindly.
+    // The injected block was 8,404 chars before the surface cut shrank it to
+    // the every-turn core (~3.5k); the ceiling keeps the block from growing
+    // back silently.
+    expect(notes.length).toBeLessThanOrEqual(3_800);
+    expect(notes).toContain("never list the whole catalog");
+    expect(notes).toContain("look them up by these exact names");
+    expect(notes).toContain("computer_launch_app");
+    expect(notes).toContain("foreground_not_requested");
+    // Unit-2/6 gate: the driver refusals real tasks hit must stay mapped to
+    // their next step, or the agent retries blindly.
     expect(notes).toContain("same_pid_keyboard_ambiguity");
     expect(notes).toContain("element_outside_target_window");
-    expect(notes).toContain("background_unavailable");
-    // Failure-loop gate: the dead ends two real Newegg/Helium threads hit.
-    expect(notes).toContain("browser_requires_setup");
-    expect(notes).toContain("foreign_process_termination_denied");
     expect(notes).toContain("input_target_unavailable");
-    // Id-contract gate: the E2E passed the target id in the tab_id slot and
-    // then retried the refusal. The refusal map must name the fix.
-    expect(notes).toContain("browser_tab_required");
-    expect(notes).toContain("browser_tab_not_found");
-    expect(notes).toContain("never target_id");
-    expect(notes).toContain("never tell the user computer control is off");
-    // L23: the hidden-launch choreography is deleted from the shared block.
+    expect(notes).toContain("repeated_unverified_action");
+    // The hidden-launch choreography is deleted from the shared block.
     expect(notes).not.toContain("relaunch visible");
     expect(notes).not.toContain("unhide with computer_set_app_visibility");
+    // Retired surface: the recording/replay names are gone from everywhere.
+    expect(notes).not.toContain("computer_recording");
+    expect(notes).not.toContain("computer_replay");
     await manager.dispose();
   });
 
@@ -308,7 +300,7 @@ describe("agent gateway computer tools", () => {
   it("describes exact targeting separately from foreground promotion", async () => {
     const { byName } = await setup();
     const notes = computerToolInstructions();
-    expect(notes).toContain("select an exact input target");
+    expect(notes).toContain("Act by ref (or exact label plus role)");
     expect(windowIdDescription(byName, "computer_press_key")).toContain("does not activate it");
     expect(windowIdDescription(byName, "computer_click")).toContain(
       "Exact window for label or x/y targeting",
@@ -322,7 +314,7 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const notes = computerToolInstructions();
-    expect(notes).toContain("covered by the active task's Computer consent");
+    expect(notes).toContain("the user's own latest message asked to watch");
     expect(notes).not.toContain("without bringing it to the front");
     expect(windowIdDescription(byName, "computer_click")).toContain(
       "Exact window for label or x/y targeting",
@@ -347,19 +339,19 @@ describe("agent gateway computer tools", () => {
   });
 
   it("spells out all three delivery verdicts once, in the shared notes", async () => {
-    // Collapsing "unverifiable" into "not confirmed" buys a screenshot after
-    // every keystroke on the many native controls that expose no readable value.
-    // The full three-way explanation lives in the active host context now — it was
-    // eleven identical copies across the tool schemas — and each input tool
-    // carries the short form plus a pointer to it.
+    // The three-way verdict lives in the injected block now — it was eleven
+    // identical copies across the tool schemas — and each input tool carries
+    // the short form: evidence, not retry permission.
     const { byName } = await setup();
     const notes = computerToolInstructions();
-    expect(notes).toContain('"unverifiable" means no reliable read-back was available');
-    expect(notes).toContain("Never replay an uncertain action");
-    for (const name of ["computer_type_text", "computer_press_key", "computer_hotkey"]) {
+    expect(notes).toContain('"verified"');
+    expect(notes).toContain('"dispatched-unknown"');
+    expect(notes).toContain('"not-dispatched"');
+    expect(notes).toContain("never replay it");
+    for (const name of ["computer_type_text", "computer_press_key"]) {
       const description = byName.get(name)?.definition.description ?? "";
       expect(description).toContain("delivery.verified");
-      expect(description).toContain("Reading a delivery verdict");
+      expect(description).toContain("never replay an uncertain action");
     }
   });
 
@@ -382,8 +374,12 @@ describe("agent gateway computer tools", () => {
     expect(names).toEqual(["Luna"]);
   });
 
-  it("exposes the full Phase 1 surface behind computer:control", async () => {
+  it("exposes the reduced surface behind computer:control, with 15 tools discovery-only", async () => {
     const { byName, tools } = await setup();
+    // 31 registered desktop tools: the 16 advertised every-turn set plus the
+    // 15 exact-name-only set. The 7 recording/replay tools, the three click
+    // variants and computer_hotkey are gone entirely — their behavior folded
+    // into computer_click's count/button and computer_press_key's chord.
     expect(tools.map((tool) => tool.definition.name)).toEqual([
       "computer_list_windows",
       "computer_get_state",
@@ -404,15 +400,11 @@ describe("agent gateway computer tools", () => {
       "computer_set_window_minimized",
       "computer_set_app_visibility",
       "computer_click",
-      "computer_double_click",
-      "computer_triple_click",
-      "computer_right_click",
       "computer_move_cursor",
       "computer_drag",
       "computer_scroll",
       "computer_type_text",
       "computer_press_key",
-      "computer_hotkey",
       "computer_write_clipboard",
       "computer_paste",
       "computer_activate_window",
@@ -420,13 +412,50 @@ describe("agent gateway computer tools", () => {
       "computer_perform_action",
       "computer_select_text",
       "computer_run",
-      "computer_recording_start",
-      "computer_recording_stop",
-      "computer_recording_list",
-      "computer_recording_read",
-      "computer_recording_export",
-      "computer_recording_delete",
-      "computer_replay",
+    ]);
+    expect(
+      tools.filter((tool) => tool.discoveryOnly !== true).map((tool) => tool.definition.name),
+    ).toEqual([
+      "computer_list_windows",
+      "computer_get_state",
+      "computer_screenshot",
+      "computer_get_screen_size",
+      "computer_wait",
+      "computer_launch_app",
+      "computer_list_apps",
+      "computer_verify_state",
+      "computer_help",
+      "computer_click",
+      "computer_scroll",
+      "computer_type_text",
+      "computer_press_key",
+      "computer_paste",
+      "computer_activate_window",
+      "computer_set_value",
+    ]);
+    // The advertised set fits under the 30k serialized bound only by keeping
+    // the two heaviest specialist tools — the computer_run batcher (whose
+    // schema enumerates every step field) and computer_perform_action (the
+    // named-AX-action path) — exact-name callable behind computer_help. Their
+    // seats are filled by the two cheapest observational primitives.
+    expect(
+      tools.filter((tool) => tool.discoveryOnly === true).map((tool) => tool.definition.name),
+    ).toEqual([
+      "computer_read_clipboard",
+      "computer_zoom",
+      "computer_get_accessibility_tree",
+      "computer_get_cursor_position",
+      "computer_set_window_frame",
+      "computer_invoke_menu",
+      "computer_kill_app",
+      "computer_set_window_minimized",
+      "computer_set_app_visibility",
+      "computer_move_cursor",
+      "computer_drag",
+      "computer_write_clipboard",
+      "computer_perform_action",
+      "computer_select_text",
+      "computer_run",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "computer:control")).toBe(true);
     expect(tools.every((tool) => tool.requiresActiveTurn === true)).toBe(true);
@@ -435,15 +464,11 @@ describe("agent gateway computer tools", () => {
         "computer_read_clipboard",
         "computer_launch_app",
         "computer_click",
-        "computer_double_click",
-        "computer_triple_click",
-        "computer_right_click",
         "computer_move_cursor",
         "computer_drag",
         "computer_scroll",
         "computer_type_text",
         "computer_press_key",
-        "computer_hotkey",
         "computer_write_clipboard",
         "computer_set_value",
         "computer_perform_action",
@@ -456,9 +481,6 @@ describe("agent gateway computer tools", () => {
         "computer_kill_app",
         "computer_set_window_minimized",
         "computer_set_app_visibility",
-        "computer_recording_start",
-        "computer_recording_delete",
-        "computer_replay",
       ]),
     );
     // A hover posts no event, presses nothing, and no longer aims the keyboard,
@@ -688,24 +710,16 @@ describe("agent gateway computer tools", () => {
       expect(description).toContain("pass x/y as pixel coordinates in that image");
       expect(description).not.toContain("region.x");
     }
-    // The full paragraph is said once in the MCP instructions rather than
-    // eleven times across the schemas; each pointer tool carries the short form
-    // and names the section.
-    const notes = computerToolInstructions();
-    expect(notes).toContain("pixel coordinates in a screenshot you received");
-    expect(notes).toContain("Never convert screenshot pixels into desktop coordinates");
+    // Each pointer tool carries the coordinate rule self-contained now — the
+    // compact injected block no longer spends a paragraph on it.
     for (const name of [
       "computer_click",
-      "computer_double_click",
-      "computer_triple_click",
-      "computer_right_click",
       "computer_move_cursor",
       "computer_drag",
       "computer_scroll",
     ]) {
       const description = byName.get(name)?.definition.description ?? "";
       expect(description).toContain("never desktop coordinates");
-      expect(description).toContain("Pointing at the desktop");
       expect(description).not.toContain("global desktop coordinates");
       // The optional id lives beside x/y on every pointer tool.
       expect(JSON.stringify(byName.get(name)?.definition.inputSchema)).toContain("screenshot_id");
@@ -736,7 +750,7 @@ describe("agent gateway computer tools", () => {
 
     // Every pointer tool takes the same target shape, so the escape hatch has
     // to be described on the shared property rather than in one tool.
-    for (const name of ["computer_click", "computer_double_click", "computer_drag"]) {
+    for (const name of ["computer_click", "computer_move_cursor", "computer_drag"]) {
       const schema = JSON.stringify(byName.get(name)?.definition.inputSchema ?? {});
       expect(schema).toContain("Exact window for label or x/y targeting");
     }
@@ -858,10 +872,12 @@ describe("agent gateway computer tools", () => {
     // what converts them.
     expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 6, y: 6 });
 
-    // An id this conversation was never given is refused, naming the ones it has.
+    // An id this conversation was never given is refused, naming the ones it
+    // has. Fresh coordinates keep the repeat guard — which strips
+    // screenshot_id from its key — from preempting the frame lookup.
     const unknown = await call("computer_click", {
-      x: 5,
-      y: 5,
+      x: 7,
+      y: 9,
       screenshot_id: "shot-9",
     });
     expect(resultJson(unknown)).toMatchObject({
@@ -1196,8 +1212,8 @@ describe("agent gateway computer tools", () => {
   it("focuses a named window before keyboard input and zooms the result to it", async () => {
     const { backend, call } = await setup();
 
-    const hotkey = await call("computer_hotkey", {
-      keys: ["ctrl", "t"],
+    const hotkey = await call("computer_press_key", {
+      key: "ctrl+t",
       window_id: "fake-calculator",
     });
     expect(hotkey.isError).not.toBe(true);
@@ -1318,13 +1334,9 @@ describe("agent gateway computer tools", () => {
 
   it("tells the model where keyboard input lands and when not to skip a screenshot", async () => {
     const { byName } = await setup();
-    const notes = computerToolInstructions();
-    expect(notes).toContain("keys go to the last aimed window");
-    expect(notes).toContain("Pass window_id");
-    for (const name of ["computer_type_text", "computer_press_key", "computer_hotkey"]) {
+    for (const name of ["computer_type_text", "computer_press_key", "computer_paste"]) {
       const tool = byName.get(name);
       expect(tool?.definition.description).toContain("Pass window_id or use the last aimed window");
-      expect(tool?.definition.description).toContain("Aiming the keyboard");
       expect(JSON.stringify(tool?.definition.inputSchema)).toContain("window_id");
     }
     // A final text observation can replace an image when it verifies the result.
@@ -1363,7 +1375,11 @@ describe("agent gateway computer tools", () => {
   it("refuses a fourth consecutive unchanged scroll on the same window", async () => {
     const { backend, call, see } = await setup();
     await see();
+    // Alternating distances keep each call's loop-guard key distinct — the
+    // generic repeated-action refusal fires on three identical calls, and this
+    // test exercises the scroll-specific streak instead.
     const args = { window_id: "fake-calculator", delta_x: 0, delta_y: 20 };
+    const otherArgs = { window_id: "fake-calculator", delta_x: 0, delta_y: 40 };
 
     const first = await call("computer_scroll", args);
     expect(first.isError).not.toBe(true);
@@ -1372,7 +1388,7 @@ describe("agent gateway computer tools", () => {
       scroll: { traveledY: 0 },
     });
 
-    const second = await call("computer_scroll", args);
+    const second = await call("computer_scroll", otherArgs);
     expect(second.isError).not.toBe(true);
     expect(resultJson(second)).toMatchObject({ screenshotUnchanged: true });
 
@@ -1380,7 +1396,7 @@ describe("agent gateway computer tools", () => {
     expect(third.isError).not.toBe(true);
     expect(backend.callsFor("scroll")).toHaveLength(3);
 
-    const fourth = await call("computer_scroll", args);
+    const fourth = await call("computer_scroll", otherArgs);
     expect(fourth.isError).toBe(true);
     const failure = fourth.content.find((entry) => entry.type === "text");
     expect(failure?.type === "text" ? failure.text : "").toContain("computer_get_state");
@@ -1408,10 +1424,13 @@ describe("agent gateway computer tools", () => {
     try {
       const { backend, call, see } = await setup();
       await see();
+      // Distinct distances keep the generic repeated-action guard out of the
+      // way so the scroll-specific streak is what refuses.
       const args = { window_id: "fake-calculator", delta_x: 0, delta_y: 20 };
+      const otherArgs = { window_id: "fake-calculator", delta_x: 0, delta_y: 40 };
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        const result = await call("computer_scroll", args);
+        const result = await call("computer_scroll", attempt % 2 === 0 ? args : otherArgs);
         expect(result.isError).not.toBe(true);
       }
 
@@ -1425,22 +1444,153 @@ describe("agent gateway computer tools", () => {
     }
   });
 
+  it("refuses the third identical mutating call that observed nothing", async () => {
+    const { backend, call } = await setup();
+    // A keypress on the fake backend reports no delivery verdict, so its
+    // effect is dispatched-unknown — the unverified repeat this guard exists
+    // for. Two are ordinary retries; the third is a loop.
+    const args = { key: "enter", include_screenshot: false };
+    const first = await call("computer_press_key", args);
+    expect(first.isError).not.toBe(true);
+    const second = await call("computer_press_key", args);
+    expect(second.isError).not.toBe(true);
+    const third = await call("computer_press_key", args);
+    expect(third.isError).toBe(true);
+    expect(resultJson(third)).toMatchObject({
+      error: { code: "repeated_unverified_action" },
+    });
+    expect(backend.callsFor("pressKey")).toHaveLength(2);
+  });
+
+  it("refuses the repeat before the approval prompt and before dispatch", async () => {
+    // The guard fires ahead of consent: a refused loop must not spend an
+    // approval prompt on an action that will not run.
+    let approvals = 0;
+    const { backend, call } = await setup(new FakeComputerBackend(), async () => {
+      approvals += 1;
+      return true;
+    });
+    const args = { key: "enter", include_screenshot: false };
+    await call("computer_press_key", args);
+    await call("computer_press_key", args);
+    const refused = await call("computer_press_key", args);
+    expect(refused.isError).toBe(true);
+    expect(resultJson(refused)).toMatchObject({
+      error: { code: "repeated_unverified_action" },
+    });
+    expect(approvals).toBe(2);
+    expect(backend.callsFor("pressKey")).toHaveLength(2);
+  });
+
+  it("treats screenshot-only argument changes as the same action", async () => {
+    const { backend, call } = await setup();
+    // A fresh frame must not disguise a repeat: include_screenshot and
+    // screenshot_id are stripped from the key the ring compares.
+    const first = await call("computer_press_key", {
+      key: "enter",
+      include_screenshot: false,
+    });
+    const second = await call("computer_press_key", {
+      key: "enter",
+      include_screenshot: true,
+    });
+    const third = await call("computer_press_key", {
+      key: "enter",
+      include_screenshot: false,
+    });
+    expect(first.isError).not.toBe(true);
+    expect(second.isError).not.toBe(true);
+    expect(third.isError).toBe(true);
+    expect(resultJson(third)).toMatchObject({
+      error: { code: "repeated_unverified_action" },
+    });
+    expect(backend.callsFor("pressKey")).toHaveLength(2);
+  });
+
+  it("clears the streak when a call reports verified, so the refusal comes later", async () => {
+    const backend = new FakeComputerBackend();
+    const { call } = await setup(backend);
+    // set_window_frame is the fake's read-back action: frameApplies false is
+    // the dispatched-unverified shape, true the confirmed one — same key, so
+    // only the verified effect explains why the refusal waits for a fresh
+    // pair of unverified repeats.
+    const args = { window_id: "fake-calculator", x: 10, y: 10, width: 400, height: 300 };
+    backend.setFrameApplies(false);
+    expect((await call("computer_set_window_frame", args)).isError).not.toBe(true);
+    backend.setFrameApplies(true);
+    // Verified on the second send: the ring empties instead of arming.
+    expect((await call("computer_set_window_frame", args)).isError).not.toBe(true);
+    backend.setFrameApplies(false);
+    // Two more unverified repeats are ordinary retries again; the one after
+    // them — the third in a row — is the refusal.
+    expect((await call("computer_set_window_frame", args)).isError).not.toBe(true);
+    expect((await call("computer_set_window_frame", args)).isError).not.toBe(true);
+    const refused = await call("computer_set_window_frame", args);
+    expect(refused.isError).toBe(true);
+    expect(resultJson(refused)).toMatchObject({
+      error: { code: "repeated_unverified_action" },
+    });
+    expect(backend.callsFor("setWindowFrame")).toHaveLength(4);
+  });
+
+  it("clears the streak when a different action intervenes", async () => {
+    const { backend, call } = await setup();
+    const args = { key: "enter", include_screenshot: false };
+    await call("computer_press_key", args);
+    await call("computer_press_key", args);
+    // Even another press_key with a different key breaks the repeat — the
+    // model changed what it was doing.
+    const other = await call("computer_press_key", {
+      key: "tab",
+      include_screenshot: false,
+    });
+    expect(other.isError).not.toBe(true);
+    const resumed = await call("computer_press_key", args);
+    expect(resumed.isError).not.toBe(true);
+    expect(backend.callsFor("pressKey")).toHaveLength(4);
+  });
+
+  it("does not guard reads — repeated get_state calls still answer", async () => {
+    const { backend, call } = await setup();
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const result = await call("computer_get_state", { include_screenshot: false });
+      expect(result.isError).not.toBe(true);
+    }
+    // computer_read_clipboard sits in the approval set for privacy, but a
+    // re-read is not a mutating loop: it is deliberately out of the guard.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const result = await call("computer_read_clipboard", {});
+      expect(result.isError).not.toBe(true);
+    }
+    expect(backend.callsFor("readClipboard")).toHaveLength(4);
+  });
+
+  it("keeps a discovery-only tool callable by exact name", async () => {
+    const { backend, call, tools } = await setup();
+    expect(tools.find((tool) => tool.definition.name === "computer_drag")?.discoveryOnly).toBe(
+      true,
+    );
+    const dragged = await call("computer_drag", {
+      from: { label: "Calculate", role: "button" },
+      to: { label: "Display", role: "text-field" },
+    });
+    expect(dragged.isError).not.toBe(true);
+    expect(backend.callsFor("drag")).toHaveLength(1);
+  });
+
   it("tells the model the observation is downscaled and what unchanged means", async () => {
     const { byName } = await setup();
-    const notes = computerToolInstructions();
-
-    expect(notes).toContain(`capped at ${COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION} pixels`);
-    // Knowing where the detail went is the difference between zooming in and
-    // concluding the label is unreadable.
-    expect(notes).toContain("computer_screenshot");
-    expect(notes).toContain("screenshotUnchanged");
-    // And "unchanged" must not read as "your action failed": the server has
-    // already looked for a window the action opened before it says this.
-    expect(notes).toContain("not that the action failed");
-    // Each action still says a screenshot is attached, and points at the rest:
-    // the description carries the pointer, the schema carries the default.
+    // The compact injected block no longer carries the pixel budget; the
+    // detail lives on the tools that produce the images — the screenshot
+    // schema owns the cap, the action tools own the attached-observation rule.
+    const screenshotSchema = JSON.stringify(
+      byName.get("computer_screenshot")?.definition.inputSchema,
+    );
+    expect(screenshotSchema).toContain(`capped at ${DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION}`);
+    // Each action still says a screenshot is attached, and the schema carries
+    // the default.
     const description = byName.get("computer_click")?.definition.description ?? "";
-    expect(description).toContain("The screenshot on every action");
+    expect(description).toContain("Returns a screenshot of the affected window");
     expect(JSON.stringify(byName.get("computer_click")?.definition.inputSchema)).toContain(
       "Post-action screenshot, default true",
     );
@@ -1461,20 +1611,17 @@ describe("agent gateway computer tools", () => {
     const { byName } = await setup();
     for (const name of [
       "computer_click",
-      "computer_double_click",
-      "computer_right_click",
       "computer_move_cursor",
       "computer_drag",
       "computer_scroll",
       "computer_type_text",
       "computer_press_key",
-      "computer_hotkey",
       "computer_set_value",
       "computer_perform_action",
       "computer_select_text",
     ]) {
       const tool = byName.get(name);
-      expect(tool?.definition.description).toContain("The screenshot on every action");
+      expect(tool?.definition.description).toContain("Returns a screenshot of the affected window");
       const schema = JSON.stringify(tool?.definition.inputSchema);
       expect(schema).toContain("include_screenshot");
       expect(schema).toContain("Post-action screenshot, default true");
@@ -1670,22 +1817,25 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("setValue")).toHaveLength(1);
   });
 
-  it("refuses a hotkey chord past the contract's shape before dispatch", async () => {
+  it("refuses a press_key chord past the contract's shape before dispatch", async () => {
     const { backend, call } = await setup();
 
-    const tooMany = await call("computer_hotkey", {
-      keys: Array.from({ length: 17 }, (_, index) => `Key${index}`),
+    const tooMany = await call("computer_press_key", {
+      key: Array.from({ length: 17 }, (_, index) => `Key${index}`).join("+"),
     });
     expect(tooMany.isError).toBe(true);
     expect(backend.callsFor("hotkey")).toHaveLength(0);
 
-    const longKey = await call("computer_hotkey", { keys: ["k".repeat(129)] });
+    const longKey = await call("computer_press_key", {
+      key: `ctrl+${"k".repeat(129)}`,
+    });
     expect(longKey.isError).toBe(true);
     expect(backend.callsFor("hotkey")).toHaveLength(0);
 
-    const within = await call("computer_hotkey", { keys: ["Control", "L"] });
+    const within = await call("computer_press_key", { key: "Control+L" });
     expect(within.isError).not.toBe(true);
     expect(backend.callsFor("hotkey")).toHaveLength(1);
+    expect(backend.callsFor("hotkey")[0]?.args[0]).toEqual(["Control", "L"]);
   });
 
   it("passes xdotool-style key spellings through to the backend unchanged", async () => {
@@ -1698,7 +1848,7 @@ describe("agent gateway computer tools", () => {
     expect(pressed.isError).not.toBe(true);
     expect(backend.callsFor("pressKey").map((entry) => entry.args)).toEqual([["Page_Up"]]);
 
-    const chord = await call("computer_hotkey", { keys: ["meta", "KP_Enter"] });
+    const chord = await call("computer_press_key", { key: "meta+KP_Enter" });
     expect(chord.isError).not.toBe(true);
     expect(backend.callsFor("hotkey").map((entry) => entry.args)).toEqual([[["meta", "KP_Enter"]]]);
   });
@@ -2116,8 +2266,9 @@ describe("agent gateway computer tools", () => {
   );
 
   it("holds modifiers across a click and a scroll, and refuses a name it cannot press", async () => {
-    // Not expressible with computer_hotkey, which releases its keys before the
-    // gesture happens — so shift-click and ctrl-scroll had no spelling at all.
+    // Not expressible as a press_key chord, which releases its keys before the
+    // gesture happens — so shift-click and ctrl-scroll need the pointer tools'
+    // own modifiers field.
     const { backend, call, see } = await setup();
     await see();
 
@@ -2153,11 +2304,14 @@ describe("agent gateway computer tools", () => {
   it("sends a triple click as one gesture, and refuses where it cannot be one", async () => {
     const { backend, call, see } = await setup();
     await see();
-    await call("computer_triple_click", {
+    const tripled = await call("computer_click", {
       x: 40,
       y: 40,
+      count: 3,
       include_screenshot: false,
     });
+    expect(tripled.isError).not.toBe(true);
+    expect(resultJson(tripled)).toMatchObject({ action: "computer_click" });
     expect(backend.callsFor("tripleClick")).toHaveLength(1);
     expect(backend.callsFor("click")).toHaveLength(0);
 
@@ -2169,9 +2323,10 @@ describe("agent gateway computer tools", () => {
     }) as FakeComputerBackend;
     const limited = await setup(without);
     await limited.see();
-    const refused = await limited.call("computer_triple_click", {
+    const refused = await limited.call("computer_click", {
       x: 40,
       y: 40,
+      count: 3,
     });
     expect(refused.isError).toBe(true);
     expect(refused.content[0]).toMatchObject({
@@ -2402,10 +2557,10 @@ describe("agent gateway computer tools", () => {
 
   it("describes the shortcut form and the semantic actions this desktop actually accepts", async () => {
     const linux = await setup();
-    const hotkey = linux.byName.get("computer_hotkey")?.definition.description ?? "";
-    expect(hotkey).toContain("One chord");
+    const hotkey = linux.byName.get("computer_press_key")?.definition.description ?? "";
+    expect(hotkey).toContain("A chord");
     expect(hotkey).not.toContain("ordered key sequence");
-    expect(hotkey).toContain("released in reverse");
+    expect(hotkey).toContain("releases in reverse");
     const linuxActions = schemaEnum(linux.byName, "computer_perform_action", "action");
     expect(linuxActions).toEqual(["activate", "click"]);
     expect(linux.byName.get("computer_launch_app")?.definition.description).toContain(
@@ -2417,7 +2572,7 @@ describe("agent gateway computer tools", () => {
         agentDialect: "macos" as const,
       }),
     );
-    const macHotkey = mac.byName.get("computer_hotkey")?.definition.description ?? "";
+    const macHotkey = mac.byName.get("computer_press_key")?.definition.description ?? "";
     expect(macHotkey).toContain("exactly one other key");
     expect(macHotkey).toContain("More than one non-modifier key is refused");
     const macActions = schemaEnum(mac.byName, "computer_perform_action", "action");
@@ -2446,12 +2601,10 @@ describe("agent gateway computer tools", () => {
 
   it("separates admission refusals from uncertain dispatched input", async () => {
     const notes = computerToolInstructions();
-    expect(notes).toContain("effect=not-dispatched");
-    expect(notes).toContain("effect=dispatched-unknown");
-    expect(notes).toContain("never blindly replay");
-    expect(notes).toContain("computer_controlled_by_other_thread");
-    expect(notes).toContain("computer_target_ambiguous");
-    expect(notes).toContain("ComputerApprovalRequired");
+    expect(notes).toContain('"not-dispatched"');
+    expect(notes).toContain('"dispatched-unknown"');
+    expect(notes).toContain("never replay it");
+    expect(notes).toContain("repeated_unverified_action");
   });
 
   it("matches a label exactly as written, spaces included", async () => {
@@ -4925,9 +5078,10 @@ describe("computer_help", () => {
       const result = await call("computer_help", {});
       expect(result.isError).not.toBe(true);
       const json = resultJson(result) as { topics: string };
-      for (const topic of ["browser", "menus", "hidden", "forms", "recording"]) {
+      for (const topic of ["browser", "menus", "hidden", "foreground", "forms", "tools"]) {
         expect(json.topics).toContain(topic);
       }
+      expect(json.topics).not.toContain("recording");
     } finally {
       await manager.dispose();
     }
@@ -4957,7 +5111,12 @@ describe("computer_help", () => {
       expect(json.chapters).toContain("computer_browser_prepare");
       expect(json.chapters).toContain("computer_invoke_menu");
       expect(json.chapters).toContain("set_window_minimized");
-      expect(json.chapters).toContain("computer_recording_start");
+      // The generated index is part of the "all" read: a discovery-only name
+      // that no chapter's prose names proves the catalog joined the chapters.
+      expect(json.chapters).toContain("computer_select_text");
+      expect(json.chapters).toContain("Also callable by exact name");
+      expect(json.chapters).not.toContain("computer_recording");
+      expect(json.chapters).not.toContain("computer_replay");
     } finally {
       await manager.dispose();
     }
@@ -4977,15 +5136,15 @@ describe("computer_help", () => {
 
   it("keeps the injected block to the every-turn core and points at the tool", async () => {
     // What moved behind computer_help was chosen for being situational: the
-    // injected block still carries consent, the observe-act loop, verdicts and
-    // refusals — everything a first action needs — but not the chapters.
+    // injected block still carries consent, the observe-act loop, verdicts,
+    // refusals and the browser CDP spine — everything a first action needs —
+    // but not the chapters or the full catalog.
     const notes = computerToolInstructions();
     expect(notes).toContain("computer_help");
-    expect(notes).not.toContain("computer_browser_prepare");
     expect(notes).not.toContain("computer_invoke_menu");
     expect(notes).not.toContain("computer_recording_start");
     expect(notes).not.toContain("set_window_minimized");
-    expect(notes).toContain("Never replay an uncertain action");
-    expect(notes).toContain("delivery.verified");
+    expect(notes).toContain("never replay it");
+    expect(notes).toContain("delivery.effect");
   });
 });

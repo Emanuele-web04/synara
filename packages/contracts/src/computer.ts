@@ -99,7 +99,7 @@ export const COMPUTER_PROVISION_SUMMARY_MAX_LENGTH = 4_096;
  * literal there drifted from this one.
  */
 export const COMPUTER_DRAG_MAX_DURATION_MS = 30_000;
-/** Most keys one `computer_hotkey` chord may carry. Exported with the above. */
+/** Most keys one `computer_press_key` chord may carry. Exported with the above. */
 export const COMPUTER_HOTKEY_MAX_KEYS = 16;
 /** Longest single key name in a chord. Exported with the above. */
 export const COMPUTER_KEY_NAME_MAX_LENGTH = 128;
@@ -909,7 +909,7 @@ export const COMPUTER_MODIFIERS_MAX_ITEMS = 4;
 /**
  * Modifiers held down for the duration of one pointer gesture and released
  * after it, in the order given. This is what shift-click, cmd-click and
- * ctrl-scroll are, and it is not expressible as a hotkey: `computer_hotkey`
+ * ctrl-scroll are, and it is not expressible as a hotkey: `computer_press_key`
  * presses and releases, so nothing is still held when the click arrives.
  */
 const ComputerHeldModifiers = Schema.optional(

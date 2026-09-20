@@ -138,15 +138,19 @@ export function makeAgentGatewayMcpTransport(input: {
           return jsonRpcResult(request.id, {});
         case "tools/list":
           return jsonRpcResult(request.id, {
-            tools: filterToolsByCapability(input.tools, context.callerCapabilities).map((tool) => ({
-              ...tool.definition,
-              // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
-              // returns a fresh object for object input, so this restores the static type.
-              inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
-                string,
-                unknown
-              >,
-            })),
+            tools: filterToolsByCapability(input.tools, context.callerCapabilities)
+              // Discovery-only tools stay callable by exact name — toolsByName
+              // is built from the unfiltered catalog — but do not advertise.
+              .filter((tool) => tool.discoveryOnly !== true)
+              .map((tool) => ({
+                ...tool.definition,
+                // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
+                // returns a fresh object for object input, so this restores the static type.
+                inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
+                  string,
+                  unknown
+                >,
+              })),
           });
         case "tools/call": {
           const toolName = request.params.name;

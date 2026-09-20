@@ -216,7 +216,7 @@ it("adds Computer guidance only for an explicitly enabled scoped session across 
         scopedGatewayConnectionAvailable: true,
       }) ?? "";
     assert.equal(on.split("## Synara computer use").length - 1, 1, provider);
-    assert.include(on, "Never replay an uncertain action");
+    assert.include(on, "never replay it");
     assert.isNull(
       takeSynaraHarnessPolicyForProviderSession(state, {
         provider,

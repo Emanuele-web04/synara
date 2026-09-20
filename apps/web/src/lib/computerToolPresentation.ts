@@ -27,15 +27,11 @@ export const COMPUTER_TOOL_TITLES = {
   computer_get_cursor_position: "Read the cursor position",
   computer_help: "Read the Computer playbook",
   computer_click: "Click",
-  computer_double_click: "Double-click",
-  computer_triple_click: "Triple-click",
-  computer_right_click: "Right-click",
   computer_move_cursor: "Move the agent cursor",
   computer_drag: "Drag",
   computer_scroll: "Scroll",
   computer_type_text: "Type",
   computer_press_key: "Press a key",
-  computer_hotkey: "Press a shortcut",
   computer_set_value: "Set a field",
   computer_select_text: "Select text",
   computer_perform_action: "Activate a control",
@@ -51,13 +47,6 @@ export const COMPUTER_TOOL_TITLES = {
   computer_write_clipboard: "Write to the clipboard",
   computer_paste: "Paste text",
   computer_run: "Run a sequence",
-  computer_recording_start: "Start a session recording",
-  computer_recording_stop: "Stop the recording",
-  computer_recording_list: "List recordings",
-  computer_recording_read: "Read a recording",
-  computer_recording_export: "Export a recording",
-  computer_recording_delete: "Delete a recording",
-  computer_replay: "Replay a recorded session",
 } as const;
 
 export type ComputerToolName = keyof typeof COMPUTER_TOOL_TITLES;
@@ -200,10 +189,6 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
   if (tool === "computer_press_key") {
     const key = readString(args.key);
     return key === null ? "" : `${key}`;
-  }
-  if (tool === "computer_hotkey") {
-    const keys = readStringArray(args.keys);
-    return keys.length > 0 ? keys.join("+") : "";
   }
   if (tool === "computer_scroll") {
     const dx = readNumber(args.delta_x) ?? 0;

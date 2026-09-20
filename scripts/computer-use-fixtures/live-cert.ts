@@ -23,9 +23,6 @@
  *                           enabled AX tree + omnibox set_value + readback
  *   grant-lifecycle         per-app always-allow: prompt→mint→silent cover
  *                           →revoke→re-prompt through manager.admitDrivenApp
- *   recording-privacy       real session over a live op: redacted default
- *                           hashes payloads, secure fields stay hashed under
- *                           full, full opt-in captures; replay dry-run classifies
  *   locked-use-reauth       host.pauseDesktop→resume through the real
  *                           desktop-interrupted chain: standing task consent
  *                           revoked (re-prompt), declines held, pending
@@ -55,11 +52,7 @@
  * Usage: bun scripts/computer-use-fixtures/live-cert.ts [--out DIR] [--json]
  *        [--skip row,row] [--keep-targets] [--quiet]
  */
-import {
-  spawn,
-  spawnSync,
-  type ChildProcessWithoutNullStreams,
-} from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -71,7 +64,6 @@ import { ComputerShield } from "../../apps/desktop/src/computerShield";
 import { EscapeKillSwitchMonitor } from "../../apps/desktop/src/escapeKillSwitchMonitor";
 import { CuaComputerBackend } from "../../apps/server/src/computer/CuaComputerBackend";
 import { ComputerManager } from "../../apps/server/src/computer/ComputerManager";
-import { redactComputerRecordingArgs } from "../../apps/server/src/computer/computerRecording";
 import { computerApprovalGate } from "../../apps/server/src/computer/ComputerApprovalGate";
 import {
   analyzeFocusSamples,
@@ -85,10 +77,7 @@ const root = fileURLToPath(new URL("../../", import.meta.url));
 const DRIVER = join(root, "apps/desktop/resources/cua-driver/cua-driver");
 const PROBE_BIN = "/private/tmp/synara-cua-implementation/focus-probe";
 const SPACE_CTL = "/private/tmp/synara-cua-implementation/space-ctl";
-const APPSNAP = join(
-  root,
-  "apps/desktop/.electron-runtime/appsnap/synara-appsnap-helper",
-);
+const APPSNAP = join(root, "apps/desktop/.electron-runtime/appsnap/synara-appsnap-helper");
 const SENTINEL = `livecert-${Date.now().toString(36)}`;
 
 type Verdict = "pass" | "fail" | "skipped";
@@ -190,9 +179,7 @@ function startProbe(label: string) {
   return true;
 }
 
-async function stopProbe(): Promise<
-  ReturnType<typeof analyzeFocusSamples> | undefined
-> {
+async function stopProbe(): Promise<ReturnType<typeof analyzeFocusSamples> | undefined> {
   if (!probe) return undefined;
   probe.stdin.end();
   await new Promise<void>((r) => {
@@ -205,24 +192,16 @@ async function stopProbe(): Promise<
     /* already gone */
   }
   const all = probeLines
-    .filter(
-      (l): l is { kind: "sample"; sample: FocusProbeSample } =>
-        l.kind === "sample",
-    )
+    .filter((l): l is { kind: "sample"; sample: FocusProbeSample } => l.kind === "sample")
     .map((l) => l.sample);
   const samples = all.filter(
-    (sample) =>
-      !exemptSpans.some(
-        (sp) => sample.t >= sp.start - 500 && sample.t <= sp.end + 500,
-      ),
+    (sample) => !exemptSpans.some((sp) => sample.t >= sp.start - 500 && sample.t <= sp.end + 500),
   );
   const report = analyzeFocusSamples(samples, {
     minSamples: 40,
     settleMs: 500,
   });
-  return { ...report, exemptSpans } as ReturnType<
-    typeof analyzeFocusSamples
-  > & {
+  return { ...report, exemptSpans } as ReturnType<typeof analyzeFocusSamples> & {
     exemptSpans: typeof exemptSpans;
   };
 }
@@ -286,9 +265,7 @@ function speedTable(): Array<{
   max: number;
 }> {
   const pct = (sorted: number[], q: number) =>
-    sorted[
-      Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))
-    ] ?? 0;
+    sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))] ?? 0;
   return [...callTimings.entries()]
     .map(([tool, list]) => {
       const sorted = [...list].sort((a, b) => a - b);
@@ -308,8 +285,7 @@ function replyOk(res: CuaReply | undefined): boolean {
   if (!res || res.ok === false) return false;
   const top = res as unknown as Record<string, unknown>;
   if ("code" in top || "error" in top) return false;
-  const sc = res.result?.structuredContent as
-    Record<string, unknown> | undefined;
+  const sc = res.result?.structuredContent as Record<string, unknown> | undefined;
   if (sc && (sc.status === "refused" || "refusal" in sc)) return false;
   return true;
 }
@@ -331,8 +307,7 @@ interface WinInfo {
 
 async function listWindows(pid?: number): Promise<WinInfo[]> {
   const reply = await callReply("list_windows", pid ? { pid } : {});
-  const sc = reply.result?.structuredContent as
-    { windows?: WinInfo[] } | undefined;
+  const sc = reply.result?.structuredContent as { windows?: WinInfo[] } | undefined;
   return sc?.windows ?? [];
 }
 
@@ -354,8 +329,7 @@ async function textAreaToken(
     window_id: windowId,
     max_elements: 512,
   });
-  const sc = reply.result?.structuredContent as
-    { elements?: AxElement[] } | undefined;
+  const sc = reply.result?.structuredContent as { elements?: AxElement[] } | undefined;
   const el = (sc?.elements ?? []).find(
     (e) => e.role === "AXTextArea" && typeof e.element_token === "string",
   );
@@ -364,17 +338,13 @@ async function textAreaToken(
     : undefined;
 }
 
-async function textAreaValue(
-  pid: number,
-  windowId: number,
-): Promise<string | undefined> {
+async function textAreaValue(pid: number, windowId: number): Promise<string | undefined> {
   const reply = await callReply("get_window_state", {
     pid,
     window_id: windowId,
     max_elements: 512,
   });
-  const sc = reply.result?.structuredContent as
-    { elements?: AxElement[] } | undefined;
+  const sc = reply.result?.structuredContent as { elements?: AxElement[] } | undefined;
   const el = (sc?.elements ?? []).find((e) => e.role === "AXTextArea");
   return el?.value;
 }
@@ -459,17 +429,13 @@ async function shieldPanels(): Promise<ShieldPanel[]> {
  * absent. Returns the command's stdout for the `verified=1` check. */
 function switchSpace(spaceId: number | string): string {
   for (const cmd of ["set-current-instant", "set-current"]) {
-    const out =
-      spawnSync(SPACE_CTL, [cmd, String(spaceId)], { encoding: "utf8" })
-        .stdout ?? "";
+    const out = spawnSync(SPACE_CTL, [cmd, String(spaceId)], { encoding: "utf8" }).stdout ?? "";
     if (/verified=1/.test(out)) return out;
   }
   return "";
 }
 
-async function launchTextEdit(
-  extra: string[] = [],
-): Promise<number | undefined> {
+async function launchTextEdit(extra: string[] = []): Promise<number | undefined> {
   const before = new Set(
     spawnSync("pgrep", ["-x", "TextEdit"], { encoding: "utf8" })
       .stdout?.split("\n")
@@ -515,9 +481,7 @@ async function windowOfPid(pid: number): Promise<WinInfo | undefined> {
 // ── main ─────────────────────────────────────────────────────────────────
 
 capability = randomBytes(32).toString("base64url");
-const shieldHost = existsSync(APPSNAP)
-  ? new ComputerShield({ helperPath: APPSNAP })
-  : undefined;
+const shieldHost = existsSync(APPSNAP) ? new ComputerShield({ helperPath: APPSNAP }) : undefined;
 const escArmEvents: boolean[] = [];
 let escMonitor: EscapeKillSwitchMonitor | undefined;
 const host = new CuaDriverHost({
@@ -565,13 +529,9 @@ try {
     await new Promise((r) => setTimeout(r, 900));
   }
   if (!existsSync(SPACE_CTL)) {
-    spawnSync(
-      "sh",
-      [join(root, "scripts/computer-use-fixtures/build-space-ctl.sh")],
-      {
-        stdio: quiet ? "pipe" : "inherit",
-      },
-    );
+    spawnSync("sh", [join(root, "scripts/computer-use-fixtures/build-space-ctl.sh")], {
+      stdio: quiet ? "pipe" : "inherit",
+    });
   }
   const probeStarted = startProbe(SENTINEL);
   log(
@@ -619,9 +579,7 @@ try {
   if (wanted("visible-nonkey-write")) {
     const t = Date.now();
     const win = pidVisible ? await windowOfPid(pidVisible) : undefined;
-    const target = win
-      ? await textAreaToken(win.pid, win.window_id)
-      : undefined;
+    const target = win ? await textAreaToken(win.pid, win.window_id) : undefined;
     if (win && target) {
       const value = `${SENTINEL}-visible`;
       const res = await callReply("set_value", {
@@ -631,8 +589,8 @@ try {
         value,
       });
       const effect =
-        (res.result?.structuredContent as { effect?: string } | undefined)
-          ?.effect ?? (res.result as { effect?: string } | undefined)?.effect;
+        (res.result?.structuredContent as { effect?: string } | undefined)?.effect ??
+        (res.result as { effect?: string } | undefined)?.effect;
       const readback = await textAreaValue(win.pid, win.window_id);
       const ok = replyOk(res) && readback === value;
       row(
@@ -661,9 +619,7 @@ try {
     const t = Date.now();
     const pid = await launchTextEdit(["-j"]);
     const win = pid ? await windowOfPid(pid) : undefined;
-    const target = win
-      ? await textAreaToken(win.pid, win.window_id)
-      : undefined;
+    const target = win ? await textAreaToken(win.pid, win.window_id) : undefined;
     if (win && target) {
       const value = `${SENTINEL}-hidden`;
       const res = await callReply("set_value", {
@@ -690,9 +646,7 @@ try {
       row(
         "hidden-write",
         win ? "fail" : "skipped",
-        win
-          ? "hidden window found but no AXTextArea token"
-          : "open -j produced no listable window",
+        win ? "hidden window found but no AXTextArea token" : "open -j produced no listable window",
         { pid, win: win?.window_id, elements: target?.elements },
         Date.now() - t,
       );
@@ -710,12 +664,9 @@ try {
         minimized: true,
       }).catch(() => undefined);
       await new Promise((r) => setTimeout(r, 1200));
-      const min = (await listWindows(win.pid)).find(
-        (w) => w.window_id === win.window_id,
-      );
+      const min = (await listWindows(win.pid)).find((w) => w.window_id === win.window_id);
       const minimizedObserved =
-        min?.minimized ??
-        (min?.is_on_screen === false ? "off-screen" : undefined);
+        min?.minimized ?? (min?.is_on_screen === false ? "off-screen" : undefined);
       const target = await textAreaToken(win.pid, win.window_id);
       if (target) {
         const value = `${SENTINEL}-minimized`;
@@ -747,23 +698,13 @@ try {
           { minimized: min?.minimized, isOnScreen: min?.is_on_screen },
           Date.now() - t,
         );
-    } else
-      row(
-        "minimized-write",
-        "skipped",
-        "no second TextEdit window",
-        { pid },
-        Date.now() - t,
-      );
+    } else row("minimized-write", "skipped", "no second TextEdit window", { pid }, Date.now() - t);
   }
 
   // ── concurrent-writes ──
   if (wanted("concurrent-writes")) {
     const t = Date.now();
-    const pids = await Promise.all([
-      launchTextEdit(["-g"]),
-      launchTextEdit(["-g"]),
-    ]);
+    const pids = await Promise.all([launchTextEdit(["-g"]), launchTextEdit(["-g"])]);
     const targets = (
       await Promise.all(
         [pidVisible, ...pids]
@@ -774,9 +715,7 @@ try {
             return w && tok ? { w, tok } : undefined;
           }),
       )
-    ).filter(
-      (x): x is { w: WinInfo; tok: { token: string; elements: number } } => !!x,
-    );
+    ).filter((x): x is { w: WinInfo; tok: { token: string; elements: number } } => !!x);
     if (targets.length >= 3) {
       const writes = targets.map(({ w, tok }, i) =>
         callReply("set_value", {
@@ -791,8 +730,7 @@ try {
         targets.map(({ w }) => textAreaValue(w.pid, w.window_id)),
       );
       const ok =
-        results.every(replyOk) &&
-        readbacks.every((rb, i) => rb === `${SENTINEL}-conc-${i}`);
+        results.every(replyOk) && readbacks.every((rb, i) => rb === `${SENTINEL}-conc-${i}`);
       row(
         "concurrent-writes",
         ok ? "pass" : "fail",
@@ -815,9 +753,7 @@ try {
     const t = Date.now();
     const pidAgent = await launchTextEdit(["-j"]);
     const agentWin = pidAgent ? await windowOfPid(pidAgent) : undefined;
-    const agentTok = agentWin
-      ? await textAreaToken(agentWin.pid, agentWin.window_id)
-      : undefined;
+    const agentTok = agentWin ? await textAreaToken(agentWin.pid, agentWin.window_id) : undefined;
     if (opWin && agentWin && agentTok) {
       const humanText = "HUMAN-OPERATOR-TYPING";
       const agentText = `${SENTINEL}-bgagent`;
@@ -882,29 +818,21 @@ end repeat`,
       // Calculator launches are guaranteed-fresh here because the harness
       // only spawns them through this row; quit any strays first.
       for (const stray of (
-        spawnSync("pgrep", ["-x", "Calculator"], { encoding: "utf8" }).stdout ??
-        ""
+        spawnSync("pgrep", ["-x", "Calculator"], { encoding: "utf8" }).stdout ?? ""
       )
         .split("\n")
         .map(Number)
         .filter(Boolean))
         spawnSync("kill", [String(stray)]);
       await new Promise((r) => setTimeout(r, 600));
-      const launch = await manager.launchApp(
-        "live-cert-hidden-default",
-        "Calculator",
-      );
+      const launch = await manager.launchApp("live-cert-hidden-default", "Calculator");
       let launchPid = launch.window?.pid;
       let winNum = Number(/^cua:\d+:(\d+)$/.exec(launch.window?.id ?? "")?.[1]);
       let listed: WinInfo | undefined;
       for (let i = 0; i < 20 && launchPid === undefined; i++) {
         await new Promise((r) => setTimeout(r, 500));
-        const calcWins = (await listWindows()).filter((w) =>
-          w.app_name?.includes("Calculator"),
-        );
-        const fresh = calcWins.sort(
-          (a, b) => (a.z_index ?? 999) - (b.z_index ?? 999),
-        );
+        const calcWins = (await listWindows()).filter((w) => w.app_name?.includes("Calculator"));
+        const fresh = calcWins.sort((a, b) => (a.z_index ?? 999) - (b.z_index ?? 999));
         if (fresh[0]) {
           launchPid = fresh[0].pid;
           winNum = fresh[0].window_id;
@@ -926,10 +854,7 @@ end repeat`,
       const winPid = launchPid;
       const frontAfter = frontmostPid();
       const offScreen = listed?.is_on_screen === false;
-      const ok =
-        winPid !== undefined &&
-        offScreen === true &&
-        frontAfter === frontBefore;
+      const ok = winPid !== undefined && offScreen === true && frontAfter === frontBefore;
       row(
         "hidden-launch-default",
         ok ? "pass" : "fail",
@@ -970,8 +895,7 @@ end repeat`,
     try {
       const frontBefore = frontmostPid();
       for (const stray of (
-        spawnSync("pgrep", ["-x", "Google Chrome"], { encoding: "utf8" })
-          .stdout ?? ""
+        spawnSync("pgrep", ["-x", "Google Chrome"], { encoding: "utf8" }).stdout ?? ""
       )
         .split("\n")
         .map(Number)
@@ -991,16 +915,13 @@ end repeat`,
         name: "Google Chrome",
         hidden: true,
       });
-      const chromePid = (launch.result?.structuredContent as { pid?: number })
-        ?.pid;
+      const chromePid = (launch.result?.structuredContent as { pid?: number })?.pid;
       if (chromePid) spawnedPids.push(chromePid);
       // Chrome needs real startup time before its window + AX tree exist.
       let win: WinInfo | undefined;
       for (let i = 0; i < 24 && !win; i++) {
         await new Promise((r) => setTimeout(r, 500));
-        win = (await listWindows(chromePid)).find(
-          (w) => (w.title ?? "").length > 0,
-        );
+        win = (await listWindows(chromePid)).find((w) => (w.title ?? "").length > 0);
       }
       if (!chromePid || !win) {
         row(
@@ -1025,9 +946,7 @@ end repeat`,
             hidden: true,
           }).catch(() => undefined);
           await new Promise((r) => setTimeout(r, 1000));
-          rehidden = (await listWindows(chromePid)).find(
-            (w) => w.window_id === win.window_id,
-          );
+          rehidden = (await listWindows(chromePid)).find((w) => w.window_id === win.window_id);
           if (rehidden && !rehidden.is_on_screen) break;
         }
         // Elements must appear via the driver's own enablement — nothing
@@ -1045,15 +964,11 @@ end repeat`,
             max_elements: 400,
           });
           elements =
-            (st.result?.structuredContent as { elements?: typeof elements })
-              ?.elements ?? [];
-          if (elements.length === 0)
-            await new Promise((r) => setTimeout(r, 1500));
+            (st.result?.structuredContent as { elements?: typeof elements })?.elements ?? [];
+          if (elements.length === 0) await new Promise((r) => setTimeout(r, 1500));
         }
         const field = elements.find(
-          (e) =>
-            /AXTextField|AXTextArea|AXComboBox/.test(String(e.role)) &&
-            e.element_token,
+          (e) => /AXTextField|AXTextArea|AXComboBox/.test(String(e.role)) && e.element_token,
         );
         const value = `${SENTINEL}-chromium`;
         const write = field?.element_token
@@ -1084,10 +999,7 @@ end repeat`,
             e.value.length > 0,
         )?.value;
         const frontAfter = frontmostPid();
-        const ok =
-          replyOk(write) === true &&
-          readback === value &&
-          frontAfter === frontBefore;
+        const ok = replyOk(write) === true && readback === value && frontAfter === frontBefore;
         row(
           "chromium-semantic",
           ok ? "pass" : "fail",
@@ -1139,8 +1051,7 @@ end repeat`,
       );
       await mkdir(stateDir, { recursive: true });
       for (const stray of (
-        spawnSync("pgrep", ["-x", "Calculator"], { encoding: "utf8" }).stdout ??
-        ""
+        spawnSync("pgrep", ["-x", "Calculator"], { encoding: "utf8" }).stdout ?? ""
       )
         .split("\n")
         .map(Number)
@@ -1152,10 +1063,7 @@ end repeat`,
         await new Promise((r) => setTimeout(r, 400));
         calcPid =
           Number(
-            (
-              spawnSync("pgrep", ["-nx", "Calculator"], { encoding: "utf8" })
-                .stdout ?? ""
-            ).trim(),
+            (spawnSync("pgrep", ["-nx", "Calculator"], { encoding: "utf8" }).stdout ?? "").trim(),
           ) || undefined;
       }
       if (calcPid) spawnedPids.push(calcPid);
@@ -1209,9 +1117,7 @@ end repeat`,
       await admit("live-cert-grants-b", "Calculator");
       const listed = manager.listComputerGrants().grants;
       const calcGrant = listed.find((g) =>
-        `${g.app?.name ?? ""}${g.app?.bundleId ?? ""}`
-          .toLowerCase()
-          .includes("calculator"),
+        `${g.app?.name ?? ""}${g.app?.bundleId ?? ""}`.toLowerCase().includes("calculator"),
       );
       // Revoke → a fresh thread prompts again. Thread C drives a first app
       // first (the first app per thread always records free) so Calculator
@@ -1240,207 +1146,11 @@ end repeat`,
         Date.now() - t,
       );
     } catch (e) {
-      row(
-        "grant-lifecycle",
-        "fail",
-        String(e).slice(0, 200),
-        { error: String(e) },
-        Date.now() - t,
-      );
+      row("grant-lifecycle", "fail", String(e).slice(0, 200), { error: String(e) }, Date.now() - t);
     } finally {
       await manager?.dispose().catch(() => undefined);
       backend?.dispose?.();
       if (calcPid) spawnSync("kill", [String(calcPid)]);
-    }
-  }
-
-  // ── recording-privacy: real session over a live op; redacted default, secure floor ──
-  if (wanted("recording-privacy")) {
-    const t = Date.now();
-    let backend: CuaComputerBackend | undefined;
-    let manager: ComputerManager | undefined;
-    const pid = await launchTextEdit(["-j"]);
-    try {
-      const stateDir = join(
-        process.env.TMPDIR ?? "/tmp",
-        `live-cert-rec-${SENTINEL.toLowerCase()}`,
-      );
-      await mkdir(stateDir, { recursive: true });
-      backend = new CuaComputerBackend({ endpoint, capability });
-      manager = new ComputerManager({
-        backend,
-        controlStatePath: join(stateDir, "control-state.json"),
-        recordingDir: join(stateDir, "recordings"),
-      });
-      const SECRET = `${SENTINEL}-secret`;
-      const win = pid ? await windowOfPid(pid) : undefined;
-      const target = win
-        ? await textAreaToken(win.pid, win.window_id)
-        : undefined;
-      const windowRef = win ? `cua:${win.pid}:${win.window_id}` : undefined;
-
-      // Session A — the default redacted fidelity, recording a real op: the
-      // step mirrors writeSessionStep in computerTools (session fidelity +
-      // secure resolution decide the projection; the store never sees raw args).
-      const sA = await manager.startComputerRecording({
-        threadId: "live-cert-rec-a",
-      });
-      const toolArgs = {
-        ...(win ? { pid: win.pid, window_id: win.window_id } : {}),
-        ...(target ? { element_token: target.token } : {}),
-        value: SECRET,
-      };
-      const res =
-        win && target ? await callReply("set_value", toolArgs) : undefined;
-      const readback = win
-        ? await textAreaValue(win.pid, win.window_id)
-        : undefined;
-      const record = (
-        threadId: string,
-        args: Record<string, unknown>,
-        options: { protected: boolean; resolutions: object[]; effect?: string },
-      ) => {
-        const fidelity = manager!.recordingFidelityFor(threadId);
-        const redacted = redactComputerRecordingArgs(args, {
-          fidelity: fidelity ?? "redacted",
-          protected: options.protected,
-        });
-        manager!.recordComputerStep(threadId, {
-          tool: "computer_set_value",
-          actionClass: "semantic",
-          threadId,
-          approval: { required: true, decision: "granted" },
-          resolutions: options.resolutions as never,
-          args: redacted.args,
-          ...(redacted.payload !== undefined
-            ? { payload: redacted.payload }
-            : {}),
-          dispatches: [
-            {
-              action: "set_value",
-              ...(windowRef ? { windowId: windowRef } : {}),
-            },
-          ],
-          effect: (options.effect ?? "verified") as never,
-          latencyMs: 9,
-        });
-      };
-      record("live-cert-rec-a", toolArgs, {
-        protected: false,
-        resolutions: [
-          {
-            via: "semantic",
-            ...(windowRef ? { windowId: windowRef } : {}),
-            pid: win?.pid,
-            role: "AXTextArea",
-          },
-        ],
-        effect: res !== undefined && replyOk(res) ? "verified" : "error",
-      });
-      await manager.stopComputerRecording(sA.recordingId);
-      const docA = await manager.readComputerRecording(sA.recordingId);
-      const exportA = await manager.exportComputerRecording(sA.recordingId);
-      const stepA = docA.steps[0];
-      const leakedA = `${JSON.stringify(docA)}\n${exportA}`.includes(SECRET);
-      const hashedA =
-        stepA?.payload?.sha256 !== undefined &&
-        typeof stepA.payload.chars === "number";
-
-      // Session B — full fidelity on a protected resolution: plaintext barred anyway.
-      const sB = await manager.startComputerRecording({
-        threadId: "live-cert-rec-b",
-        fidelity: "full",
-      });
-      record(
-        "live-cert-rec-b",
-        { value: SECRET },
-        {
-          protected: true,
-          resolutions: [{ via: "semantic", secure: true }],
-        },
-      );
-      await manager.stopComputerRecording(sB.recordingId);
-      const docB = await manager.readComputerRecording(sB.recordingId);
-      const stepB = docB.steps[0];
-      const leakedB = JSON.stringify(docB).includes(SECRET);
-      const protectedB = stepB?.payload?.protected === true;
-
-      // Session C — full fidelity unprotected: the opt-in really captures, so
-      // B's floor is a floor and not a broken recorder.
-      const sC = await manager.startComputerRecording({
-        threadId: "live-cert-rec-c",
-        fidelity: "full",
-      });
-      record(
-        "live-cert-rec-c",
-        { value: SECRET },
-        {
-          protected: false,
-          resolutions: [{ via: "semantic" }],
-        },
-      );
-      await manager.stopComputerRecording(sC.recordingId);
-      const docC = await manager.readComputerRecording(sC.recordingId);
-      const stepC = docC.steps[0];
-      const capturedC =
-        JSON.stringify(docC).includes(SECRET) &&
-        stepC?.payload?.captured === true;
-
-      // Replay — dry-run classification; mutating steps never re-dispatch
-      // without execute.
-      const rep = await manager.replayComputerRecording(
-        "live-cert-rec-replay",
-        sA.recordingId,
-        {
-          execute: false,
-        },
-      );
-      const listed = await manager.listComputerRecordings();
-      const deleted = await manager.deleteComputerRecording(sC.recordingId);
-
-      const ok =
-        res !== undefined &&
-        replyOk(res) &&
-        readback === SECRET &&
-        !leakedA &&
-        hashedA &&
-        !leakedB &&
-        protectedB &&
-        capturedC &&
-        rep.executed === false &&
-        rep.summary.total >= 1 &&
-        listed.length >= 3 &&
-        deleted === true;
-      row(
-        "recording-privacy",
-        ok ? "pass" : "fail",
-        `redacted=${!leakedA && hashedA} secureFloor=${!leakedB && protectedB} fullOptIn=${capturedC} replay=${rep.summary.total}steps listed=${listed.length}`,
-        {
-          realOp: {
-            dispatched: res !== undefined,
-            confirmed: res !== undefined && replyOk(res),
-            readbackExact: readback === SECRET,
-          },
-          sessionA: { leaked: leakedA, payload: stepA?.payload },
-          sessionB: { leaked: leakedB, payload: stepB?.payload },
-          sessionC: { captured: capturedC, payload: stepC?.payload },
-          replay: { executed: rep.executed, summary: rep.summary },
-          listed: listed.length,
-          deleted,
-        },
-        Date.now() - t,
-      );
-    } catch (e) {
-      row(
-        "recording-privacy",
-        "fail",
-        String(e).slice(0, 200),
-        { error: String(e) },
-        Date.now() - t,
-      );
-    } finally {
-      await manager?.dispose().catch(() => undefined);
-      backend?.dispose?.();
     }
   }
 
@@ -1450,11 +1160,7 @@ end repeat`,
     let backend: CuaComputerBackend | undefined;
     let manager: ComputerManager | undefined;
     const pid = await launchTextEdit(["-j"]);
-    const lockThreads = [
-      "live-cert-lock-a",
-      "live-cert-lock-b",
-      "live-cert-lock-c",
-    ];
+    const lockThreads = ["live-cert-lock-a", "live-cert-lock-b", "live-cert-lock-c"];
     try {
       const stateDir = join(
         process.env.TMPDIR ?? "/tmp",
@@ -1467,9 +1173,7 @@ end repeat`,
         controlStatePath: join(stateDir, "control-state.json"),
       });
       const win = pid ? await windowOfPid(pid) : undefined;
-      const target = win
-        ? await textAreaToken(win.pid, win.window_id)
-        : undefined;
+      const target = win ? await textAreaToken(win.pid, win.window_id) : undefined;
 
       // The first reply only sets the backend's interruption baseline — an
       // advance is the proof a lock/resume cycle ran, so observe pre-pause.
@@ -1478,11 +1182,7 @@ end repeat`,
       await backend.listApps().catch(() => undefined);
 
       const prompts: string[] = [];
-      const ask = (
-        threadId: string,
-        decision: "accept" | "decline",
-        pendingId?: { id?: string },
-      ) =>
+      const ask = (threadId: string, decision: "accept" | "decline", pendingId?: { id?: string }) =>
         computerApprovalGate.requestTask({
           threadId,
           turnId: "turn-1",
@@ -1502,8 +1202,7 @@ end repeat`,
       // turn rides it silently.
       const aGranted = await ask("live-cert-lock-a", "accept");
       const aCached = await ask("live-cert-lock-a", "accept");
-      const aSilent =
-        prompts.filter((p) => p.startsWith("live-cert-lock-a")).length === 1;
+      const aSilent = prompts.filter((p) => p.startsWith("live-cert-lock-a")).length === 1;
 
       // Thread B: decline — a refusal is not authority a lock must break.
       const bDeclined = (await ask("live-cert-lock-b", "decline")) === false;
@@ -1528,9 +1227,7 @@ end repeat`,
               value: `${SENTINEL}-while-locked`,
             }).catch((e) => ({ ok: false, error: String(e) }) as CuaReply)
           : undefined;
-      const pausedRefused = JSON.stringify(pausedReply).includes(
-        "desktop_input_paused",
-      );
+      const pausedRefused = JSON.stringify(pausedReply).includes("desktop_input_paused");
       host.resumeDesktop("screen-lock");
 
       // Any reply now carries the advanced counter → the backend fires
@@ -1540,8 +1237,7 @@ end repeat`,
       // Post-interruption: thread A's same-turn call must re-publish (the
       // re-auth half); answering it restores operation.
       const aReauth = await ask("live-cert-lock-a", "accept");
-      const aReprompted =
-        prompts.filter((p) => p.startsWith("live-cert-lock-a")).length === 2;
+      const aReprompted = prompts.filter((p) => p.startsWith("live-cert-lock-a")).length === 2;
 
       // Thread B stays declined with no new prompt — no nag on unlock.
       const bAfter = await computerApprovalGate.requestTask({
@@ -1551,24 +1247,15 @@ end repeat`,
         publish: async (requestId, dismissal) => {
           if (dismissal !== undefined) return;
           prompts.push("live-cert-lock-b:unexpected");
-          computerApprovalGate.respond(
-            "live-cert-lock-b",
-            requestId,
-            "decline",
-          );
+          computerApprovalGate.respond("live-cert-lock-b", requestId, "decline");
         },
       });
       const bNoReprompt =
-        bAfter === false &&
-        prompts.filter((p) => p.startsWith("live-cert-lock-b")).length === 1;
+        bAfter === false && prompts.filter((p) => p.startsWith("live-cert-lock-b")).length === 1;
 
       // Thread C's surviving prompt settles the post-interruption consent.
       if (pendingId.id !== undefined)
-        computerApprovalGate.respond(
-          "live-cert-lock-c",
-          pendingId.id,
-          "accept",
-        );
+        computerApprovalGate.respond("live-cert-lock-c", pendingId.id, "accept");
       const cGranted = (await cPending) === true;
 
       // And the resume half: after a fresh model observation the desktop
@@ -1587,8 +1274,7 @@ end repeat`,
             },
             { timeoutMs: 10_000, mutation: true },
           ).catch(() => undefined);
-          const sc = obs?.result?.structuredContent as
-            { elements?: unknown[] } | undefined;
+          const sc = obs?.result?.structuredContent as { elements?: unknown[] } | undefined;
           if (!obs?.ok || !Array.isArray(sc?.elements)) {
             await new Promise((r) => setTimeout(r, 400));
             continue;
@@ -1601,8 +1287,7 @@ end repeat`,
           });
           resumedOk =
             replyOk(after) &&
-            (await textAreaValue(win.pid, win.window_id)) ===
-              `${SENTINEL}-post-unlock`;
+            (await textAreaValue(win.pid, win.window_id)) === `${SENTINEL}-post-unlock`;
           if (!resumedOk) await new Promise((r) => setTimeout(r, 400));
         }
       }
@@ -1647,8 +1332,7 @@ end repeat`,
         Date.now() - t,
       );
     } finally {
-      for (const thread of lockThreads)
-        computerApprovalGate.cancelThread(thread);
+      for (const thread of lockThreads) computerApprovalGate.cancelThread(thread);
       host.resumeDesktop("screen-lock");
       // Leave the observation gate clear for later rows: pauseDesktop sets
       // desktopObservationRequired, which only a modelObservation clears.
@@ -1672,8 +1356,7 @@ end repeat`,
               },
               { timeoutMs: 10_000, mutation: true },
             ).catch(() => undefined);
-            const sc = obs?.result?.structuredContent as
-              { elements?: unknown[] } | undefined;
+            const sc = obs?.result?.structuredContent as { elements?: unknown[] } | undefined;
             if (obs?.ok && Array.isArray(sc?.elements)) break;
           }
         }
@@ -1687,33 +1370,19 @@ end repeat`,
   if (wanted("space-roundtrip")) {
     const t = Date.now();
     if (!existsSync(SPACE_CTL)) {
-      spawnSync(
-        "sh",
-        [join(root, "scripts/computer-use-fixtures/build-space-ctl.sh")],
-        {
-          stdio: "pipe",
-        },
-      );
+      spawnSync("sh", [join(root, "scripts/computer-use-fixtures/build-space-ctl.sh")], {
+        stdio: "pipe",
+      });
     }
     if (!existsSync(SPACE_CTL)) {
-      row(
-        "space-roundtrip",
-        "skipped",
-        "space-ctl build failed",
-        undefined,
-        Date.now() - t,
-      );
+      row("space-roundtrip", "skipped", "space-ctl build failed", undefined, Date.now() - t);
     } else {
-      const list =
-        spawnSync(SPACE_CTL, ["list"], { encoding: "utf8" }).stdout ?? "";
-      const desktops = [...list.matchAll(/space (\d+) type=0/g)].map((m) =>
-        Number(m[1]),
-      );
+      const list = spawnSync(SPACE_CTL, ["list"], { encoding: "utf8" }).stdout ?? "";
+      const desktops = [...list.matchAll(/space (\d+) type=0/g)].map((m) => Number(m[1]));
       const active = Number(
-        (
-          spawnSync(SPACE_CTL, ["active-space"], { encoding: "utf8" }).stdout ??
-          ""
-        ).match(/active space (\d+)/)?.[1],
+        (spawnSync(SPACE_CTL, ["active-space"], { encoding: "utf8" }).stdout ?? "").match(
+          /active space (\d+)/,
+        )?.[1],
       );
       const other = desktops.find((d) => d !== active);
       if (other === undefined) {
@@ -1733,9 +1402,7 @@ end repeat`,
         if (/verified=1/.test(sw1)) {
           const pid = await launchTextEdit(["-g"]);
           win = pid ? await windowOfPid(pid) : undefined;
-          const tok = win
-            ? await textAreaToken(win.pid, win.window_id)
-            : undefined;
+          const tok = win ? await textAreaToken(win.pid, win.window_id) : undefined;
           if (tok) {
             const res = await callReply("set_value", {
               pid: win!.pid,
@@ -1745,8 +1412,7 @@ end repeat`,
             });
             writeOk =
               replyOk(res) &&
-              (await textAreaValue(win!.pid, win!.window_id)) ===
-                `${SENTINEL}-space`;
+              (await textAreaValue(win!.pid, win!.window_id)) === `${SENTINEL}-space`;
           }
         }
         const sw2 = switchSpace(active);
@@ -1768,34 +1434,18 @@ end repeat`,
   if (wanted("off-space-refusal")) {
     const t = Date.now();
     if (!existsSync(SPACE_CTL)) {
-      row(
-        "off-space-refusal",
-        "skipped",
-        "space-ctl missing",
-        undefined,
-        Date.now() - t,
-      );
+      row("off-space-refusal", "skipped", "space-ctl missing", undefined, Date.now() - t);
     } else {
-      const list =
-        spawnSync(SPACE_CTL, ["list"], { encoding: "utf8" }).stdout ?? "";
-      const desktops = [...list.matchAll(/space (\d+) type=0/g)].map((m) =>
-        Number(m[1]),
-      );
+      const list = spawnSync(SPACE_CTL, ["list"], { encoding: "utf8" }).stdout ?? "";
+      const desktops = [...list.matchAll(/space (\d+) type=0/g)].map((m) => Number(m[1]));
       const active = Number(
-        (
-          spawnSync(SPACE_CTL, ["active-space"], { encoding: "utf8" }).stdout ??
-          ""
-        ).match(/active space (\d+)/)?.[1],
+        (spawnSync(SPACE_CTL, ["active-space"], { encoding: "utf8" }).stdout ?? "").match(
+          /active space (\d+)/,
+        )?.[1],
       );
       const other = desktops.find((d) => d !== active);
       if (other === undefined) {
-        row(
-          "off-space-refusal",
-          "skipped",
-          "skipped-single-desktop",
-          { desktops },
-          Date.now() - t,
-        );
+        row("off-space-refusal", "skipped", "skipped-single-desktop", { desktops }, Date.now() - t);
       } else {
         // Launch on the other space, return, then ops must report honestly:
         // either refused (stale/off-space) or verifiably delivered — never
@@ -1813,16 +1463,12 @@ end repeat`,
               max_elements: 64,
             })
           : undefined;
-        const sc = res?.result?.structuredContent as
-          { elements?: unknown[] } | undefined;
+        const sc = res?.result?.structuredContent as { elements?: unknown[] } | undefined;
         const elCount = sc?.elements?.length ?? 0;
         let outcome = "unresolved";
         let honest = false;
         if (win) {
-          const tok =
-            elCount > 0
-              ? await textAreaToken(win.pid, win.window_id)
-              : undefined;
+          const tok = elCount > 0 ? await textAreaToken(win.pid, win.window_id) : undefined;
           if (tok) {
             const value = `${SENTINEL}-offspace`;
             const wr = await callReply("set_value", {
@@ -1832,8 +1478,7 @@ end repeat`,
               value,
             });
             const rb = await textAreaValue(win.pid, win.window_id);
-            honest =
-              !replyOk(wr) || rb === value || rb === undefined || rb === null;
+            honest = !replyOk(wr) || rb === value || rb === undefined || rb === null;
             outcome = replyOk(wr)
               ? `verified, readback=${rb === value ? "exact" : rb == null ? "unverifiable(AX-empty)" : "CONTRADICTION"}`
               : `refused (${JSON.stringify(wr).slice(0, 120)})`;
@@ -1856,9 +1501,7 @@ end repeat`,
         row(
           "off-space-refusal",
           ok ? "pass" : win ? "fail" : "skipped",
-          win
-            ? `off-space window: elements=${elCount}, write=${outcome}`
-            : "no window",
+          win ? `off-space window: elements=${elCount}, write=${outcome}` : "no window",
           { win: win?.window_id, elements: elCount, outcome },
           Date.now() - t,
         );
@@ -1902,14 +1545,7 @@ end repeat`,
         },
         Date.now() - t,
       );
-    } else
-      row(
-        "screenshot-fresh",
-        "skipped",
-        "no visible window",
-        undefined,
-        Date.now() - t,
-      );
+    } else row("screenshot-fresh", "skipped", "no visible window", undefined, Date.now() - t);
   }
 
   // ── hidden-screenshot ──
@@ -2011,8 +1647,7 @@ end repeat`,
       value: "forged",
     }).catch((e) => ({ ok: false, error: String(e) }) as CuaReply);
     const refusal = JSON.stringify(res);
-    const refused =
-      res.ok === false || /stale_element_token|stale|refus/i.test(refusal);
+    const refused = res.ok === false || /stale_element_token|stale|refus/i.test(refusal);
     row(
       "stale-token",
       refused ? "pass" : "fail",
@@ -2030,15 +1665,12 @@ end repeat`,
       const res = await callReply("verify_state", {
         pid: win.pid,
         window_id: win.window_id,
-        expect: [
-          { element: { selector: { role: "AXTextArea" }, exists: true } },
-        ],
+        expect: [{ element: { selector: { role: "AXTextArea" }, exists: true } }],
       });
       const sc2 = res.result?.structuredContent as
-        { status?: string; stable?: boolean } | undefined;
-      const verdictOk =
-        replyOk(res) &&
-        (sc2?.status === "satisfied" || sc2?.status === "unknown");
+        | { status?: string; stable?: boolean }
+        | undefined;
+      const verdictOk = replyOk(res) && (sc2?.status === "satisfied" || sc2?.status === "unknown");
       row(
         "verify-state",
         verdictOk ? "pass" : "fail",
@@ -2046,14 +1678,7 @@ end repeat`,
         { reply: res },
         Date.now() - t,
       );
-    } else
-      row(
-        "verify-state",
-        "skipped",
-        "no visible window",
-        undefined,
-        Date.now() - t,
-      );
+    } else row("verify-state", "skipped", "no visible window", undefined, Date.now() - t);
   }
 
   // ── masked-activation (own-window shield over a real activation excursion) ──
@@ -2068,13 +1693,7 @@ end repeat`,
         Date.now() - t,
       );
     } else if (!opWin) {
-      row(
-        "masked-activation",
-        "skipped",
-        "no operator baseline",
-        undefined,
-        Date.now() - t,
-      );
+      row("masked-activation", "skipped", "no operator baseline", undefined, Date.now() - t);
     } else {
       const shieldId = `lc${randomBytes(6).toString("hex")}`;
       let pid: number | undefined;
@@ -2101,14 +1720,9 @@ end repeat`,
           },
           { timeoutMs: 15_000, mutation: true },
         );
-        if (!replyOk(eng))
-          throw new Error(
-            `engage refused: ${JSON.stringify(eng).slice(0, 200)}`,
-          );
+        if (!replyOk(eng)) throw new Error(`engage refused: ${JSON.stringify(eng).slice(0, 200)}`);
         await new Promise((r) => setTimeout(r, 500));
-        const panels = (await shieldPanels()).filter((p) =>
-          boundsNear(p.bounds, win.bounds),
-        );
+        const panels = (await shieldPanels()).filter((p) => boundsNear(p.bounds, win.bounds));
 
         // 2. Activate the real window under the mask. Deliberate excursion —
         //    exempt the probe span; the row asserts the end-state itself.
@@ -2119,9 +1733,7 @@ end repeat`,
         });
         await new Promise((r) => setTimeout(r, 800));
         const frontPid = frontmostPid();
-        const panelsDuring = (await shieldPanels()).filter((p) =>
-          boundsNear(p.bounds, win.bounds),
-        );
+        const panelsDuring = (await shieldPanels()).filter((p) => boundsNear(p.bounds, win.bounds));
 
         // 3. Semantic write while masked+frontmost.
         const token = await textAreaToken(win.pid, win.window_id);
@@ -2146,9 +1758,7 @@ end repeat`,
           { timeoutMs: 10_000, mutation: true },
         );
         await new Promise((r) => setTimeout(r, 600));
-        const panelsAfter = (await shieldPanels()).filter((p) =>
-          boundsNear(p.bounds, win.bounds),
-        );
+        const panelsAfter = (await shieldPanels()).filter((p) => boundsNear(p.bounds, win.bounds));
         exemptEnd(exemptStartMark);
         exemptStartMark = undefined;
         osa(
@@ -2269,8 +1879,7 @@ end repeat`,
         }).catch((e) => ({ ok: false, error: String(e) }) as CuaReply);
         const refusalText = JSON.stringify(refused);
         const refusedOk =
-          refusalText.includes("escape_emergency_stop") ||
-          /escape|stopped/i.test(refusalText);
+          refusalText.includes("escape_emergency_stop") || /escape|stopped/i.test(refusalText);
 
         const rearm = await cuaRequest<CuaReply>(
           endpoint,
@@ -2302,22 +1911,18 @@ end repeat`,
             },
             { timeoutMs: 15_000, mutation: true },
           ).catch((e) => ({ ok: false, error: String(e) }) as CuaReply);
-          const obsSc = obs.result?.structuredContent as
-            { elements?: unknown[] } | undefined;
+          const obsSc = obs.result?.structuredContent as { elements?: unknown[] } | undefined;
           token2 = (obsSc?.elements ?? [])
             .map((e) => e as { role?: string; element_token?: string })
-            .find(
-              (e) =>
-                e.role === "AXTextArea" && typeof e.element_token === "string",
-            )?.element_token
+            .find((e) => e.role === "AXTextArea" && typeof e.element_token === "string")
+            ?.element_token
             ? { token: "", elements: obsSc?.elements?.length ?? 0 }
             : undefined;
           if (!token2) continue;
           const elTok = (obsSc?.elements ?? [])
             .map((e) => e as { role?: string; element_token?: string })
             .find(
-              (e) =>
-                e.role === "AXTextArea" && typeof e.element_token === "string",
+              (e) => e.role === "AXTextArea" && typeof e.element_token === "string",
             )?.element_token;
           if (!elTok) continue;
           afterRearm = await callReply("set_value", {
@@ -2329,15 +1934,9 @@ end repeat`,
           value = await textAreaValue(win.pid, win.window_id);
           if (replyOk(afterRearm) && value === `${SENTINEL}-esc-rearmed`) break;
         }
-        const rearmedOk =
-          replyOk(afterRearm) && value === `${SENTINEL}-esc-rearmed`;
+        const rearmedOk = replyOk(afterRearm) && value === `${SENTINEL}-esc-rearmed`;
 
-        const ok =
-          replyOk(baseline) &&
-          immuneOk &&
-          engaged === true &&
-          refusedOk &&
-          rearmedOk;
+        const ok = replyOk(baseline) && immuneOk && engaged === true && refusedOk && rearmedOk;
         row(
           "escape-kill-switch",
           ok ? "pass" : "fail",
@@ -2364,11 +1963,9 @@ end repeat`,
           Date.now() - t,
         );
       } finally {
-        await cuaRequest(
-          endpoint,
-          { method: "rearm", capability },
-          { timeoutMs: 10_000 },
-        ).catch(() => undefined);
+        await cuaRequest(endpoint, { method: "rearm", capability }, { timeoutMs: 10_000 }).catch(
+          () => undefined,
+        );
         // Leave the observation gate clear for later rows: rearm sets
         // desktopObservationRequired, which only a modelObservation clears.
         if (escWin) {
@@ -2389,8 +1986,7 @@ end repeat`,
               },
               { timeoutMs: 10_000, mutation: true },
             ).catch(() => undefined);
-            const sc = obs?.result?.structuredContent as
-              { elements?: unknown[] } | undefined;
+            const sc = obs?.result?.structuredContent as { elements?: unknown[] } | undefined;
             if (obs?.ok && Array.isArray(sc?.elements)) break;
           }
         }
@@ -2425,7 +2021,8 @@ end repeat`,
       const res = await promise;
       const after = await textAreaValue(opWin.pid, opWin.window_id);
       const sc = res.result?.structuredContent as
-        { effect?: string; delivered_chars?: number } | undefined;
+        | { effect?: string; delivered_chars?: number }
+        | undefined;
       const effect = sc?.effect ?? (res as { effect?: string }).effect;
       const typedChars =
         typeof sc?.delivered_chars === "number"
@@ -2438,16 +2035,11 @@ end repeat`,
         res.ok === false ||
         !replyOk(res) ||
         effect === "dispatched-unknown" ||
-        /cancel|abort|partial|interrupt|stop|refused/i.test(
-          JSON.stringify(res),
-        );
+        /cancel|abort|partial|interrupt|stop|refused/i.test(JSON.stringify(res));
       // Honest outcomes: mid-flight stop with strictly-partial delivery, or a
       // clean not-dispatched cancel (0 chars). Fail = full delivery after
       // abort, or cancellation that couldn't stop the transport.
-      const ok =
-        cancelled &&
-        typeof typedChars === "number" &&
-        typedChars < longText.length;
+      const ok = cancelled && typeof typedChars === "number" && typedChars < longText.length;
       row(
         "cancellation",
         ok ? "pass" : "fail",
@@ -2460,14 +2052,7 @@ end repeat`,
         },
         Date.now() - t,
       );
-    } else
-      row(
-        "cancellation",
-        "skipped",
-        "no operator doc",
-        undefined,
-        Date.now() - t,
-      );
+    } else row("cancellation", "skipped", "no operator doc", undefined, Date.now() - t);
   }
 } catch (e) {
   console.error("HARNESS ERROR", e);
@@ -2477,13 +2062,7 @@ end repeat`,
   const report = await stopProbe();
   if (wanted("focus-invariant")) {
     if (!report) {
-      row(
-        "focus-invariant",
-        "skipped",
-        "probe unavailable — no theft coverage",
-        undefined,
-        0,
-      );
+      row("focus-invariant", "skipped", "probe unavailable — no theft coverage", undefined, 0);
     } else if (!report.ok) {
       row(
         "focus-invariant",
@@ -2497,15 +2076,12 @@ end repeat`,
       // tooltips) — recorded as warnings, not agent theft. Hard theft =
       // frontmost pid, key window, active space, or focused pid changed.
       const HARD = new Set(["pid", "keyWin", "space", "focusedPid"]);
-      const theft = report.offBaseline.filter((v) =>
-        v.changedFields.some((f) => HARD.has(f)),
-      );
+      const theft = report.offBaseline.filter((v) => v.changedFields.some((f) => HARD.has(f)));
       const warnings = report.offBaseline.filter(
         (v) => !v.changedFields.some((f) => HARD.has(f)) && v.durationMs < 2000,
       );
       const persistent = report.offBaseline.filter(
-        (v) =>
-          !v.changedFields.some((f) => HARD.has(f)) && v.durationMs >= 2000,
+        (v) => !v.changedFields.some((f) => HARD.has(f)) && v.durationMs >= 2000,
       );
       const ok = theft.length === 0 && persistent.length === 0;
       const detail = ok
@@ -2535,11 +2111,9 @@ end repeat`,
     }
   }
   try {
-    await cuaRequest(
-      endpoint,
-      { method: "stop", capability },
-      { timeoutMs: 10_000 },
-    ).catch(() => undefined);
+    await cuaRequest(endpoint, { method: "stop", capability }, { timeoutMs: 10_000 }).catch(
+      () => undefined,
+    );
   } catch {
     /* host already down */
   }
@@ -2581,18 +2155,13 @@ end repeat`,
     ``,
     `| Row | Verdict | Detail |`,
     `|---|---|---|`,
-    ...rows.map(
-      (r) =>
-        `| ${r.name} | ${r.verdict} | ${(r.detail ?? "").replaceAll("|", "\\|")} |`,
-    ),
+    ...rows.map((r) => `| ${r.name} | ${r.verdict} | ${(r.detail ?? "").replaceAll("|", "\\|")} |`),
     ``,
     `## Speed budget (driver-call wall clock, ms)`,
     ``,
     `| Tool | n | p50 | p95 | max |`,
     `|---|---|---|---|---|`,
-    ...speed.map(
-      (s) => `| ${s.tool} | ${s.n} | ${s.p50} | ${s.p95} | ${s.max} |`,
-    ),
+    ...speed.map((s) => `| ${s.tool} | ${s.n} | ${s.p50} | ${s.p95} | ${s.max} |`),
     ``,
     `Skipped rows are honest gaps, not passes. Re-run with a second desktop`,
     `Space for the space-* rows.`,

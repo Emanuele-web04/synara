@@ -68,6 +68,13 @@ export interface ToolEntry {
   readonly handler: ToolHandler;
   readonly requiredCapability: AgentGatewayCapability;
   readonly requiresActiveTurn?: boolean;
+  /**
+   * Callable by exact name but withheld from `tools/list`: the advertised
+   * catalog stays small while a tool the model already knows — or finds
+   * through computer_help — still dispatches. Discovery-only is not a
+   * permission: capability checks, approval and audit all apply unchanged.
+   */
+  readonly discoveryOnly?: boolean;
 }
 
 export interface McpToolEntry<Context, Capability extends string> {
