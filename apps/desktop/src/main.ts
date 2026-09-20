@@ -147,6 +147,7 @@ import {
   serializeLaunchVersionRecord,
   shouldRefreshIconCache,
 } from "./macIconCacheRefresh";
+import { persistMacAppIcon } from "./macAppIcon";
 import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { isTrustedMediaPermissionRequest } from "./mediaPermissions";
@@ -2102,9 +2103,8 @@ function configureAppIdentity(): void {
   }
 }
 
-// The packaged bundle icon is a solid, pre-rounded ICNS so Tahoe does not reinterpret
-// the mark as Icon Composer glass. Older macOS gets the same literal rounded artwork as
-// a runtime dock override because it does not apply the modern system mask itself.
+// Older macOS needs pre-rounded artwork as a runtime Dock override. macOS 26+
+// renders the appearance-aware Icon Composer asset when Default is selected.
 function usesLegacyMacDockIcon(): boolean {
   if (process.platform !== "darwin") return false;
   const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
@@ -2259,6 +2259,23 @@ function toWindowsTaskbarIcoBytes(sourcePath: string): Buffer {
 let windowsShellStampTimer: ReturnType<typeof setImmediate> | null = null;
 let windowsShellStampResolve: (() => void) | null = null;
 let desktopAppIconApplyTail: Promise<void> = Promise.resolve();
+let lastPersistedMacAppIcon: DesktopAppIcon | null = null;
+
+async function syncMacAppBundleIcon(
+  icon: DesktopAppIcon,
+  image: Electron.NativeImage | null,
+): Promise<void> {
+  // Do not customize the shared Electron executable used by development runs.
+  if (!app.isPackaged || lastPersistedMacAppIcon === icon) return;
+  const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
+  if (!bundlePath) return;
+  await persistMacAppIcon({
+    bundlePath,
+    cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
+    png: icon === "default" ? null : (image?.toPNG() ?? null),
+  });
+  lastPersistedMacAppIcon = icon;
+}
 
 function cancelDeferredWindowsShellStamp(): void {
   if (windowsShellStampTimer === null) return;
@@ -2352,8 +2369,9 @@ async function applyDesktopAppIconUnlocked(
       usesLegacyDockIcon: usesLegacyMacDockIcon(),
     })
   ) {
-    // Clear any override applied earlier in this session so the Liquid Glass
-    // bundle icon comes back; AppKit restores it when the image is null.
+    // Remove the persistent override before asking AppKit to reload the bundle
+    // icon, otherwise it can read the previous custom artwork again.
+    await syncMacAppBundleIcon(icon, null);
     app.dock?.setIcon(null as unknown as Electron.NativeImage);
     return;
   }
@@ -2371,6 +2389,7 @@ async function applyDesktopAppIconUnlocked(
 
   if (process.platform === "darwin") {
     app.dock?.setIcon(image);
+    await syncMacAppBundleIcon(icon, image);
     return;
   }
   if (process.platform === "win32") {
@@ -2444,13 +2463,9 @@ function applyInitialMacDockIcon(): void {
   if (process.platform !== "darwin" || !app.dock) {
     return;
   }
-  const icon = readDesktopAppIcon();
-  if (
-    usesMacBundleAppIcon({ icon, platform: "darwin", usesLegacyDockIcon: usesLegacyMacDockIcon() })
-  ) {
-    return;
-  }
-  applyDesktopAppIcon(icon);
+  void applyPersistedDesktopAppIcon().catch((error) => {
+    console.warn("[desktop] Failed to persist the macOS app icon", error);
+  });
 }
 
 function registerMacAppearanceIconSync(): void {
@@ -2461,7 +2476,9 @@ function registerMacAppearanceIconSync(): void {
   // changes, so re-apply the persisted preference. On macOS 26 the default
   // preference short-circuits to the bundle icon, which adapts on its own.
   nativeTheme.on("updated", () => {
-    applyDesktopAppIcon(readDesktopAppIcon());
+    void applyPersistedDesktopAppIcon().catch((error) => {
+      console.warn("[desktop] Failed to persist the macOS app icon", error);
+    });
   });
 }
 
@@ -4492,10 +4509,9 @@ function registerIpcHandlers(): void {
   const enqueueDesktopAppIconApply = createExclusiveApplyQueue(async (icon: DesktopAppIcon) => {
     const shouldPersist = shouldUpdateDesktopAppIcon(readDesktopAppIcon(), icon);
     if (shouldPersist) persistDesktopAppIcon(icon);
-    // Renderer hydration mirrors this native preference. Avoid reapplying the
-    // icon selected during boot on macOS. Windows still reapplies so a click
-    // on the already-selected icon can retry a failed Explorer refresh.
-    if (!shouldPersist && process.platform !== "win32") return;
+    // Renderer hydration mirrors this native preference. Explicit clicks on
+    // macOS/Windows can retry a failed shell update even if the choice is saved.
+    if (!shouldPersist && process.platform !== "win32" && process.platform !== "darwin") return;
     await applyDesktopAppIcon(icon, mainWindow, { flushShellIconCache: true });
   });
   ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
