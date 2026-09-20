@@ -1539,6 +1539,7 @@ const ThreadSessionStopCommand = Schema.Struct({
 });
 
 const ThreadActivityAppendCommand = Schema.Struct({
+  requireUnarchived: Schema.optional(Schema.Boolean),
   type: Schema.Literal("thread.activity.append"),
   commandId: CommandId,
   threadId: ThreadId,

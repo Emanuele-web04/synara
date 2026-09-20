@@ -2856,7 +2856,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.activity.append": {
-      yield* requireThread({
+      yield* (command.requireUnarchived ? requireThreadNotArchived : requireThread)({
         readModel,
         command,
         threadId: command.threadId,

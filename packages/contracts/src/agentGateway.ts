@@ -66,6 +66,7 @@ export type SynaraContextResult = typeof SynaraContextResult.Type;
 
 export const SynaraCreateThreadSpec = Schema.Struct({
   prompt: Schema.String.check(Schema.isNonEmpty()),
+  notifyCreatorOnComplete: Schema.optional(Schema.Boolean),
   title: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   target: ModelSelection,
   projectId: Schema.optional(ProjectId),
