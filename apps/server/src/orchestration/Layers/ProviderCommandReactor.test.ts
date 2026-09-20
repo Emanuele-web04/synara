@@ -28,6 +28,7 @@ import {
   MessageId,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectId,
+  ProjectSourceId,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -286,6 +287,10 @@ describe("ProviderCommandReactor", () => {
       ProviderServiceShape["getClaudeCacheObservation"]
     >;
     readonly startClaudeCompaction?: NonNullable<ProviderServiceShape["startClaudeCompaction"]>;
+    readonly projectSources?: {
+      readonly sources: ReadonlyArray<{ readonly id: string; readonly path: string }>;
+      readonly primarySourceId: string;
+    };
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -748,6 +753,15 @@ describe("ProviderCommandReactor", () => {
         title: "Provider Project",
         workspaceRoot: "/tmp/provider-project",
         defaultModelSelection: modelSelection,
+        ...(input?.projectSources
+          ? {
+              sources: input.projectSources.sources.map((source) => ({
+                id: ProjectSourceId.makeUnsafe(source.id),
+                path: source.path,
+              })),
+              primarySourceId: ProjectSourceId.makeUnsafe(input.projectSources.primarySourceId),
+            }
+          : {}),
         createdAt: now,
       }),
     );
@@ -5530,6 +5544,120 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toBe(messageText);
     expect(input?.input?.length).toBe(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
     expect(input?.mentions).toBeUndefined();
+  });
+
+  it("reserves the multi-root preamble when inlining portable skill instructions", async () => {
+    const longRootPath = (name: string) => `/tmp/${name}-${"y".repeat(420)}`;
+    const harness = await createHarness({
+      projectSources: {
+        sources: [
+          { id: "source-primary", path: "/tmp/provider-project" },
+          { id: "source-docs", path: longRootPath("docs") },
+          { id: "source-api", path: longRootPath("api") },
+          { id: "source-web", path: longRootPath("web") },
+          { id: "source-tools", path: longRootPath("tools") },
+          { id: "source-scripts", path: longRootPath("scripts") },
+        ],
+        primarySourceId: "source-primary",
+      },
+    });
+    const now = new Date().toISOString();
+    const skillPath = path.join(harness.stateDir, ".claude", "skills", "long-skill", "SKILL.md");
+    fs.mkdirSync(path.dirname(skillPath), { recursive: true });
+    fs.writeFileSync(skillPath, "s".repeat(4_000));
+    const skill = { name: "long-skill", path: skillPath };
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-multi-root-skill-budget"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("multi-root-skill-budget"),
+          role: "user",
+          text: "x".repeat(114_000),
+          attachments: [],
+          skills: [skill],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).toContain("This project spans several source folders.");
+    expect(input?.input?.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+      PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+    );
+
+    harness.sendTurn.mockClear();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-multi-root-skill-budget-small"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("multi-root-skill-budget-small"),
+          role: "user",
+          text: "short prompt",
+          attachments: [],
+          skills: [skill],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const smallInput = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(smallInput?.input).toContain('<skill name="long-skill"');
+    expect(smallInput?.input?.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+      PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+    );
+  });
+
+  it("rejects a message that cannot fit alongside the multi-root preamble", async () => {
+    const longRootPath = (name: string) => `/tmp/${name}-${"y".repeat(420)}`;
+    const harness = await createHarness({
+      projectSources: {
+        sources: [
+          { id: "source-primary", path: "/tmp/provider-project" },
+          { id: "source-docs", path: longRootPath("docs") },
+          { id: "source-api", path: longRootPath("api") },
+          { id: "source-web", path: longRootPath("web") },
+          { id: "source-tools", path: longRootPath("tools") },
+          { id: "source-scripts", path: longRootPath("scripts") },
+        ],
+        primarySourceId: "source-primary",
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-multi-root-overflow"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("multi-root-overflow"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 50),
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "error");
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect((await readHarnessThread(harness))?.session?.lastError).toContain(
+      "additional source folders",
+    );
   });
 
   it("rejects a provider-max input that cannot also fit the persistent thread goal", async () => {
