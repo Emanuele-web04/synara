@@ -182,6 +182,15 @@ function permissionsChanged(a: HostPermissions, b: HostPermissions): boolean {
 const log = (message: string) => console.info(`[desktop-cua] ${message}`);
 
 /**
+ * How long a physical Escape keeps new mutating dispatch refused while the
+ * interrupted input settles — the cooldown is a deadline, never a latch: it
+ * lapses on its own, a repeated press only re-arms it, and the next action
+ * afterwards dispatches with no user action and no re-arm. Reads are never
+ * gated by it.
+ */
+export const ESCAPE_INPUT_COOLDOWN_MS = 1_500;
+
+/**
  * Match names for a launch_app prime: the agent names an app ("Calculator")
  * or a bundle id ("com.apple.Calculator") while the daemon reports process
  * names ("Calculator"). Compare lowercased, with the bundle tail as a second
@@ -330,6 +339,20 @@ export class CuaDriverHost {
   private closed = false;
   private suspended = false;
   private inputMonitorArmed = false;
+  /**
+   * Deadline until which mutating dispatch is refused after a physical
+   * Escape interrupt — a timestamp, never a flag: it lapses on its own and
+   * a repeated press just re-arms it. Reads are never gated by it.
+   */
+  private inputInterruptCooldownUntil = 0;
+  /**
+   * Abort handles for mutating calls whose driver request is live right now.
+   * The input interrupt aborts them so the caller sees an immediate verdict
+   * instead of waiting on a wedged action; the driver's side finishes on its
+   * own clock and posts its matching releases. Reads never register — an
+   * observation in flight is not input.
+   */
+  private readonly inFlightInputInterrupts = new Set<AbortController>();
   private readonly desktopPauses = new Set<string>();
   private desktopObservationRequired = false;
   private desktopEpoch = 0;
@@ -488,7 +511,16 @@ export class CuaDriverHost {
     )
       throw new Error("Computer host authority is required.");
     if (request.method === "stop") {
-      await this.stop();
+      // The backend's generic input-stop verb — turn Stop, control revoke,
+      // the relayed physical-Escape notice, shutdown — all send it. While the
+      // host is serving it means interrupt input, not retire the driver: the
+      // generation, its sessions, and its browser bindings all survive, so
+      // the next action dispatches without a cold restart. Full retirement
+      // still belongs to the lifecycle callers — suspend(), dispose(),
+      // setup() — and to a stop arriving after the host already left the
+      // serving state.
+      if (this.closed || this.suspended) await this.stop();
+      else await this.interruptInput();
       return { ok: true };
     }
     const task = parseCuaComputerTask(request.task);
@@ -657,6 +689,16 @@ export class CuaDriverHost {
           effect: "not-dispatched",
         } as const;
       if (this.desktopPauses.size > 0) return this.desktopPauseReply();
+      // A physical Escape's cooldown: mutating dispatch is refused with the
+      // desktop-pause dialect until the deadline lapses — checked at dispatch
+      // time, so a call queued past the window runs and one admitted inside
+      // it is refused. Reads are never gated: the generation stays live and
+      // observation flows through the whole cooldown.
+      if (
+        this.inputInterruptCooldownUntil > Date.now() &&
+        (CUA_ACTION_TOOLS.has(name) || CUA_BROWSER_MUTATION_TOOLS.has(name))
+      )
+        return this.inputInterruptedReply();
       if (task && this.userStoppedTasks.has(cuaComputerTaskKey(task))) {
         return {
           ok: false,
@@ -908,12 +950,24 @@ export class CuaDriverHost {
     // thread animates under its own color and name instead of the shared
     // generation session. Minted lazily on dispatch; no extra round trip.
     const agentLabel = !isBrowser && task ? agentSessionLabel(task) : undefined;
-    // A failed cleanup remains the admission barrier. Consume this detached
-    // rejection here; the next call/stop reports the retained failure.
+    // Per-call cancellation. The input interrupt aborts mutating calls
+    // through this signal; a caller's connection closing mid-flight aborts
+    // it too — the reply has no destination, so there is nothing to keep
+    // waiting on. A close after the host wrote its reply is the request's
+    // normal end (`writableEnded` is set) and cancels nothing. Neither
+    // indicts the generation: a vanished caller or a pressed Escape says
+    // nothing about driver health, so the catch below deliberately does not
+    // retire on an aborted call.
+    const callCancel = new AbortController();
+    if (mutation) this.inFlightInputInterrupts.add(callCancel);
     const abort = () => {
-      if (generation) void this.retire(generation).catch(() => undefined);
+      if (!connection.writableEnded) callCancel.abort();
     };
     connection.once("close", abort);
+    // Set only by the deliberate pre-dispatch guard below: a call cancelled
+    // before anything reached the driver has no grounds to retire the
+    // generation — whatever prompted the cancel has its own teardown path.
+    let cancelledBeforeDispatch = false;
     try {
       let reply: CuaReply | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -922,9 +976,12 @@ export class CuaDriverHost {
           connection.destroyed ||
           generation.retired ||
           admittedEpoch !== this.epoch ||
-          this.desktopPauses.size > 0
-        )
+          this.desktopPauses.size > 0 ||
+          callCancel.signal.aborted
+        ) {
+          cancelledBeforeDispatch = !dispatched;
           throw new Error("Cancelled before dispatch.");
+        }
         const args = input && typeof input === "object" && !Array.isArray(input) ? input : {};
         let browserSessionId: string | undefined;
         if (isBrowser && label) {
@@ -995,7 +1052,7 @@ export class CuaDriverHost {
             },
             ...(browserSessionId ? { session_id: browserSessionId } : {}),
           },
-          { timeoutMs: 30_000, mutation },
+          { timeoutMs: 30_000, mutation, signal: callCancel.signal },
         );
         generation.inputInFlight = false;
         if (isDriverSessionDeath(attemptReply)) {
@@ -1057,7 +1114,12 @@ export class CuaDriverHost {
       return reply;
     } catch (error) {
       let detail = String(error);
-      if (generation) {
+      // A call that was cancelled — by the interrupt's abort or before
+      // anything was dispatched — proves nothing about the generation's
+      // health: nothing it observed indicts the driver. Retiring here would
+      // kill the process, its sessions, and its browser bindings on a
+      // host-side verdict alone. Every real dispatch failure still retires.
+      if (generation && !cancelledBeforeDispatch && !callCancel.signal.aborted) {
         try {
           await this.retire(generation);
         } catch (cleanupError) {
@@ -1071,6 +1133,7 @@ export class CuaDriverHost {
       };
     } finally {
       connection.removeListener("close", abort);
+      this.inFlightInputInterrupts.delete(callCancel);
     }
   }
 
@@ -1662,28 +1725,77 @@ export class CuaDriverHost {
   }
 
   /**
-   * Physical Escape interrupt: post the OS-level held-input release
-   * immediately (the press cannot wait on a wedged driver's cancel
-   * acknowledgement), then run the same stop path as an ordinary stop —
-   * epoch bump, cancel_input, generation retirement.
+   * The momentary input interrupt shared by physical Escape and the
+   * backend's `stop` verb while the host is serving. Everything {@link stop}
+   * does to work already admitted — the epoch bumps cancel queued calls and
+   * stale-guard in-flight reads, pending permission probes are cancelled,
+   * the frame tap and shields stop — plus the input half a stop used to get
+   * from retirement: in-flight mutating calls are aborted at the transport
+   * so their callers see an immediate verdict, and the helper posts the
+   * OS-level held-input ups without waiting on a wedged driver.
    *
-   * Momentary by contract: nothing latches, so the next action after the
-   * stop spawns a fresh generation and dispatches normally. There is no
-   * re-arm route and no state here that can refuse later work.
+   * The driver generation, its sessions, and its browser bindings all
+   * survive — that is the whole point: retiring on a momentary press is what
+   * severed every session namespace and `target_id` binding. `cancel_input`
+   * is deliberately not sent: the driver gate it trips is irreversible for
+   * the life of the process (it exists to drain a generation before
+   * termination), so sending it here would turn a momentary interrupt into a
+   * permanent native-input refusal.
+   */
+  private interruptInput(): Promise<void> {
+    this.epoch += 1;
+    this.desktopEpoch += 1;
+    for (const cancel of this.pendingPermissionChecks) cancel();
+    const admitted = this.operations;
+    const frameTapStopped = this.options.frameTap?.stop();
+    const shieldStopped = this.options.shield?.stop();
+    // Same discipline as stop(): the interrupt caller sees failures through
+    // the returned promise, never through an unhandled rejection.
+    void frameTapStopped?.catch(() => undefined);
+    void shieldStopped?.catch(() => undefined);
+    for (const interrupt of this.inFlightInputInterrupts) interrupt.abort();
+    const released = this.options.releaseHeldInput?.().catch((error: unknown) => {
+      log(`interrupted held-input release failed: ${String(error)}`);
+    });
+    const interrupting = this.stopping.then(async () => {
+      await this.starting?.catch(() => undefined);
+      await admitted;
+      await this.retiring;
+      await frameTapStopped;
+      await shieldStopped;
+      await released;
+    });
+    // Same discipline as `retiring`/`stopping` everywhere else: the caller
+    // sees the failure but the chain must not — one failed interrupt must
+    // not refuse every later one for the host's lifetime.
+    this.stopping = interrupting.then(
+      () => undefined,
+      () => undefined,
+    );
+    return interrupting;
+  }
+
+  /**
+   * Physical Escape interrupt — momentary and self-healing. The press arms
+   * the {@link ESCAPE_INPUT_COOLDOWN_MS} cooldown and runs
+   * {@link interruptInput}: queued work is cancelled, in-flight mutating
+   * calls are aborted at the transport, and held input is released at the OS
+   * level immediately — the press cannot wait on a wedged driver. The driver
+   * generation, its sessions, and its browser bindings all survive: nothing
+   * retires and nothing latches, so the next action after the cooldown
+   * dispatches normally, with no user action and no re-arm.
    *
    * Returns whether the press engaged the interrupt. With no live or
    * spawning driver generation, Escape is an ordinary key: the desktop
-   * ignores the event instead of stopping a host nothing was driving.
+   * ignores the event instead of interrupting a host nothing was driving.
    */
   emergencyStopInput(): boolean {
     if (this.closed) return false;
     if (this.generation === undefined && this.starting === undefined) return false;
     log("physical Escape: interrupting computer input");
-    void this.options.releaseHeldInput?.().catch((error: unknown) => {
-      log(`emergency held-input release failed: ${String(error)}`);
-    });
-    void this.stop().catch((error: unknown) => {
-      log(`emergency stop failed: ${String(error)}`);
+    this.inputInterruptCooldownUntil = Date.now() + ESCAPE_INPUT_COOLDOWN_MS;
+    void this.interruptInput().catch((error: unknown) => {
+      log(`emergency input interrupt failed: ${String(error)}`);
     });
     return true;
   }
@@ -1867,6 +1979,30 @@ export class CuaDriverHost {
       this.desktopPauses.size > 0
         ? "Computer input is paused because the desktop is locked, asleep or inactive. Return to the desktop, then read fresh state before continuing."
         : "Computer input remains paused after the desktop resumed. Call computer_screenshot and inspect what it shows before continuing; do not replay an uncertain action.";
+    return {
+      ok: true,
+      result: {
+        isError: true,
+        content: [{ type: "text", text: message }],
+        structuredContent: {
+          effect: "refused",
+          code: "desktop_input_paused",
+          message,
+        },
+      },
+    };
+  }
+
+  /**
+   * The cooldown refusal a mutating call gets inside the physical-Escape
+   * interrupt window. Same dialect as a desktop pause — the backend reads
+   * `effect: "refused"` as `not-dispatched`, so replay is safe the moment the
+   * deadline lapses and no server-side change is needed. It must not read as
+   * a permanent stop: the cooldown is a timestamp that expires on its own.
+   */
+  private inputInterruptedReply(): CuaReply {
+    const message =
+      "Computer input was interrupted by the Escape key; new input is paused for a moment and then resumes automatically. Wait a moment, then retry — do not assume an interrupted action landed.";
     return {
       ok: true,
       result: {

@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, chmod, rm, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createConnection } from "node:net";
-import { CuaDriverHost } from "./cuaDriverHost";
+import { CuaDriverHost, ESCAPE_INPUT_COOLDOWN_MS } from "./cuaDriverHost";
 import {
   cuaRequest as rawCuaRequest,
   CUA_DRIVER_VERSION,
@@ -1735,7 +1735,7 @@ describe("physical Escape interrupt", () => {
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
   });
 
-  it("aborts the in-flight action and admits the next action without any re-arm", async () => {
+  it("aborts the in-flight action, keeps the generation, and reopens input after the cooldown", async () => {
     let releaseCalls = 0;
     const f = await fixture(capability, {
       releaseHeldInput: async () => {
@@ -1754,23 +1754,72 @@ describe("physical Escape interrupt", () => {
     );
     await waitForEvent(f, "dispatch");
     expect(f.host.emergencyStopInput()).toBe(true);
-    // The in-flight call is cancelled through the driver cancel path and the
-    // OS-level release posts beside it — neither waits on the held reply.
+    // The in-flight call is cancelled at the transport and the OS-level
+    // release posts beside it — neither waits on the held reply. The driver
+    // never sees cancel_input: its gate is irreversible for the life of the
+    // process, so sending it here would retire the generation's admission.
     await expect(hung).resolves.toMatchObject({ ok: false });
     expect(releaseCalls).toBeGreaterThanOrEqual(1);
-    await waitForEvent(f, "cancel");
-    const events = await f.events();
-    expect(events.some((event) => event.event === "release")).toBe(true);
-    expect(events.some((event) => event.event === "effect")).toBe(false);
+    const mid = await f.events();
+    expect(mid.some((event) => event.event === "cancel")).toBe(false);
+    expect(mid.some((event) => event.event === "retiring")).toBe(false);
+    expect(mid.filter((event) => event.event === "start")).toHaveLength(1);
 
-    // Momentary: the next mutating admission is not refused by any latch. It
-    // waits for the stop's own retirement, spawns a fresh generation, and
-    // dispatches — there is no re-arm step to perform.
+    // Inside the cooldown a mutating call is refused with the paused
+    // dialect, while reads keep dispatching on the same generation.
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({
+      ok: true,
+      result: {
+        isError: true,
+        structuredContent: { effect: "refused", code: "desktop_input_paused" },
+      },
+    });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "list_windows" }),
+    ).resolves.toMatchObject({ ok: true });
+
+    // Once the deadline lapses the next action dispatches on the same
+    // generation — no respawn, no re-arm, nothing for the user to do.
+    await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 250));
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
     const after = await f.events();
-    expect(after.filter((event) => event.event === "retiring")).toHaveLength(1);
-    expect(after.filter((event) => event.event === "start")).toHaveLength(2);
+    expect(after.filter((event) => event.event === "start")).toHaveLength(1);
     expect(after.filter((event) => event.event === "key")).toHaveLength(2);
+    expect(after.some((event) => event.event === "retiring")).toBe(false);
+  });
+
+  it("interrupts the in-flight action on the backend stop verb without retiring", async () => {
+    let releaseCalls = 0;
+    const f = await fixture(capability, {
+      releaseHeldInput: async () => {
+        releaseCalls += 1;
+      },
+    });
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+    const hung = cuaRequest(
+      f.endpoint,
+      { method: "call", name: "type_text", args: { text: "fixture" } },
+      { timeoutMs: 5_000, mutation: true },
+    );
+    await waitForEvent(f, "dispatch");
+    // The same socket verb the backend's stopInput sends on turn Stop,
+    // control revoke, and the relayed physical-Escape notice.
+    await expect(cuaRequest(f.endpoint, { method: "stop" })).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(hung).resolves.toMatchObject({ ok: false });
+    expect(releaseCalls).toBeGreaterThanOrEqual(1);
+    // No cancel_input, no retirement: the generation and its sessions stay.
+    const mid = await f.events();
+    expect(mid.some((event) => event.event === "cancel")).toBe(false);
+    expect(mid.some((event) => event.event === "retiring")).toBe(false);
+    expect(mid.filter((event) => event.event === "start")).toHaveLength(1);
+    // A bare stop arms no cooldown — the cooldown belongs to the physical
+    // press — so the next action dispatches immediately on the live driver.
+    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
+    const after = await f.events();
+    expect(after.filter((event) => event.event === "key")).toHaveLength(2);
+    expect(after.filter((event) => event.event === "start")).toHaveLength(1);
   });
 
   it("keeps admission closed after a driver crash until the held-input release is confirmed", async () => {
@@ -1782,9 +1831,10 @@ describe("physical Escape interrupt", () => {
       },
     });
     // The fake driver exits on dispatch. The call's own retirement stays
-    // pending on the release gate, so the crashed generation is still the
-    // host's live reference when Escape lands — and the request's reply is
-    // legitimately blocked on that cleanup, which is why it is not awaited yet.
+    // pending on the release gate (or the interrupt's abort lands first —
+    // either way the crashed generation is still the host's live reference
+    // when Escape lands) — and the request's reply is legitimately blocked
+    // on that cleanup, which is why it is not awaited yet.
     const crashing = cuaRequest(
       f.endpoint,
       { method: "call", name: "type_text", args: { text: "fixture" } },
@@ -1799,8 +1849,10 @@ describe("physical Escape interrupt", () => {
     // stop() joins the pending retirement chain, so its return proves the
     // generation cleared rather than merely having had time to.
     await f.host.stop();
-    // The interrupt left no latch behind: the next action spawns a fresh
-    // generation and dispatches, with no re-arm and no observation gate.
+    // The interrupt's cooldown is the only residue of the press: once it
+    // lapses, the next action spawns a fresh generation and dispatches —
+    // no re-arm and no observation gate.
+    await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 250));
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({ ok: true });
   });
 

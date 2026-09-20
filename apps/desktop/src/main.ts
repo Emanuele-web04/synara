@@ -3746,9 +3746,10 @@ async function startCuaHost(): Promise<void> {
     escapeKillSwitchMonitor = new EscapeKillSwitchMonitor({
       helperPath: resolveAppSnapHelperPath(),
       onEscape: () => {
-        // The local latch is the kill: it engages synchronously on the press.
-        // The backend notice only keeps the manager-side latch in step, so it
-        // stays best-effort and never sits on the stop's critical path.
+        // The host-side interrupt is the stop: it engages synchronously on
+        // the press and the driver generation survives it. The backend
+        // notice only relays the momentary interrupted state, so it stays
+        // best-effort and never sits on the interrupt's critical path.
         if (!cuaDriverHost?.emergencyStopInput()) return;
         notifyBackendComputerEmergencyStop({
           backendHttpUrl,
