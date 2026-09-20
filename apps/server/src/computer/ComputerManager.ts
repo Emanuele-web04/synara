@@ -26,15 +26,8 @@ import {
   type ComputerRect,
   type ComputerScreenshot,
   type ComputerGetScreenSizeResult,
-  type ComputerApprovalGrant,
-  type ComputerApprovalGrantOffer,
-  type ComputerGrantActionClass,
-  type ComputerGrantAppIdentity,
-  type ComputerGrantScope,
   type ComputerListAppsResult,
-  type ComputerListGrantsResult,
   type ComputerListWindowsResult,
-  type ComputerRevokeGrantResult,
   type ComputerProvisionResult,
   type ComputerLaunchAppResult,
   type ComputerPermission,
@@ -106,14 +99,6 @@ import {
   COMPUTER_USER_INTERACTION_QUIET_MS,
   type ComputerForegroundAuthorization,
 } from "./computerVisibleUse.ts";
-import {
-  COMPUTER_GRANT_AUDIT_TOOL,
-  ComputerGrantStore,
-  computerGrantIdentityForApp,
-  computerGrantIdentityForPid,
-  computerGrantIdentityForWindow,
-  type ComputerGrantCallContext,
-} from "./computerGrants.ts";
 import {
   cuaMaskedActivationEnabled,
   cuaMaskedActivationOptIn,
@@ -532,7 +517,6 @@ export class ComputerManager {
   private readonly disabledThreads = new Set<string>();
   private readonly controlState: ComputerControlState;
   private readonly auditLog: ComputerAuditLog;
-  private readonly grantStore: ComputerGrantStore;
   /**
    * The `computer_recording` session store. Always constructed; an absent
    * `recordingDir` makes `enabled` false, which is what the tools report.
@@ -615,163 +599,9 @@ export class ComputerManager {
    * never produce evidence rows the feature was already refusing to act on.
    */
   recordComputerAudit(entry: Omit<ComputerAuditEntry, "ts">): void {
-    // Grant-lifecycle rows are exempt: they record authority that changed
-    // (created/expired/used), not attempts the disable refused — dropping
-    // them loses exactly the evidence a security review needs.
-    if (
-      entry.tool !== COMPUTER_GRANT_AUDIT_TOOL &&
-      entry.threadId !== undefined &&
-      this.controlDisabled(entry.threadId)
-    )
-      return;
+    if (entry.threadId !== undefined && this.controlDisabled(entry.threadId)) return;
     this.auditLog.record(entry);
   }
-
-  // ── Durable per-app consent grants ────────────────────────────────
-
-  /**
-   * The stable identity a consent or admission key resolves to — the same
-   * spellings `assertDrivenAppAllowed` accepts: an app name or bundle id, a
-   * `pid <n>` fallback, or a bare window id. Pids and window ids are looked
-   * up in the live inventories; only the app they resolve to becomes an
-   * identity. Best-effort like the rest of the pre-queue consent path: an
-   * enumeration failure answers undefined rather than a guess.
-   */
-  async grantIdentityForAppKey(app: string): Promise<ComputerGrantAppIdentity | undefined> {
-    const trimmed = app.trim();
-    if (trimmed.length === 0) return undefined;
-    const pidMatch = /^pid ([1-9]\d*)$/.exec(trimmed.toLowerCase());
-    if (pidMatch !== null) {
-      return computerGrantIdentityForPid(Number(pidMatch[1]), await this.runningAppsForDenylist());
-    }
-    const apps = await this.runningAppsForDenylist();
-    const window = (await this.readWindows().catch(() => undefined))?.find(
-      (candidate) => candidate.id === trimmed,
-    );
-    if (window !== undefined) return computerGrantIdentityForWindow(window, apps);
-    const listed = apps.find(
-      (candidate) =>
-        candidate.name.trim().toLowerCase() === trimmed.toLowerCase() ||
-        (candidate.bundleId !== undefined &&
-          candidate.bundleId.toLowerCase() === trimmed.toLowerCase()),
-    );
-    if (listed !== undefined) return computerGrantIdentityForApp(listed);
-    // The app's name is all the desktop reported; a name-only identity is
-    // the residual matchable form for backends that expose no bundle ids.
-    return { name: trimmed };
-  }
-
-  /**
-   * Whether live grants cover everything the gated call provably touches —
-   * every resolved app for every action class the call exercises. A hit
-   * waives only the approval prompt: denylist, control-state and admission
-   * checks all still run downstream. The applied grants are marked and the
-   * use is audited.
-   */
-  computerGrantCoversCall(
-    context: ComputerGrantCallContext,
-    call: {
-      readonly toolName: string;
-      readonly threadId?: string | undefined;
-      readonly turnId?: string | undefined;
-    },
-  ): boolean {
-    const covered = this.grantStore.covers(context);
-    if (covered === undefined) return false;
-    this.grantStore.noteUse(
-      covered.map((grant) => grant.id),
-      {
-        toolName: call.toolName,
-        ...(call.threadId !== undefined ? { threadId: call.threadId } : {}),
-        ...(call.turnId !== undefined ? { turnId: call.turnId } : {}),
-      },
-    );
-    return true;
-  }
-
-  /**
-   * The durable-grant offer an approval prompt may present for this call —
-   * the resolved app identities minus any the denylist already excludes, the
-   * exact classes the call needs, and the scopes that can honestly cover it.
-   * `app` scope is offered only when every part of the call resolved to a
-   * stable identity; a call that reaches something unattributable can only
-   * ever be covered by an `any-app` grant. Undefined when the call exercises
-   * no grantable class, so no durable choice exists to offer.
-   */
-  computerGrantOfferFor(context: ComputerGrantCallContext): ComputerApprovalGrantOffer | undefined {
-    if (context.classes.length === 0) return undefined;
-    const apps = context.apps
-      .filter(
-        (identity) =>
-          computerDenylistMatch({
-            name: identity.name,
-            bundleId: identity.bundleId,
-          }) === undefined,
-      )
-      .slice(0, 16);
-    const scopes: Array<"app" | "any-app"> =
-      apps.length > 0 && !context.includesUnattributedTarget ? ["app", "any-app"] : ["any-app"];
-    return {
-      apps,
-      classes: [...context.classes],
-      scopes,
-      defaultTtlMs: this.grantStore.ttlConfig().defaultTtlMs,
-    };
-  }
-
-  /**
-   * Mint the grants an approval response's explicit always-allow choice
-   * asks for. The store clamps the classes to the offer and refuses
-   * denylisted identities; this wrapper adds the live denylist check the
-   * store cannot own.
-   */
-  createComputerGrants(input: {
-    readonly offer: {
-      readonly apps: readonly ComputerGrantAppIdentity[];
-      readonly classes: readonly ComputerGrantActionClass[];
-      readonly scopes: readonly ComputerGrantScope[];
-    };
-    readonly choice: ComputerApprovalGrant;
-    readonly threadId?: string | undefined;
-    readonly turnId?: string | undefined;
-  }): void {
-    this.grantStore.createFromApproval({
-      offer: input.offer,
-      choice: input.choice,
-      ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
-      ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
-      isAppDenied: (identity) =>
-        computerDenylistMatch({
-          name: identity.name,
-          bundleId: identity.bundleId,
-        }) !== undefined,
-    });
-  }
-
-  /** The management surface's read of live grants plus the TTL bounds a client needs to render lifetimes. */
-  listComputerGrants(): ComputerListGrantsResult {
-    const ttl = this.grantStore.ttlConfig();
-    const degraded = this.grantStore.degraded();
-    return {
-      grants: this.grantStore.list(),
-      defaultTtlMs: ttl.defaultTtlMs,
-      minTtlMs: ttl.minTtlMs,
-      maxTtlMs: ttl.maxTtlMs,
-      ...(degraded ? { persistError: degraded.message } : {}),
-    };
-  }
-
-  /** Durable, audited revocation of one grant. */
-  revokeComputerGrant(grantId: string): ComputerRevokeGrantResult {
-    const revoked = this.grantStore.revoke(grantId);
-    const degraded = this.grantStore.degraded();
-    return {
-      revoked,
-      grants: this.grantStore.list(),
-      ...(degraded ? { persistError: degraded.message } : {}),
-    };
-  }
-
   // ── Session recording ────────────────────────────────────────────
 
   /** Whether `computer_recording` sessions can be opened on this server. */
@@ -1528,17 +1358,6 @@ export class ComputerManager {
     this.windowsPublishDebounceMs =
       options.windowsPublishDebounceMs ?? COMPUTER_WINDOWS_PUBLISH_DEBOUNCE_MS;
     this.measureScrollTravel = options.measureScrollTravel ?? measureScrollTravelFromPng;
-    // Beside the control state and audit log: same directory, same
-    // atomicity expectations. Grant lifecycle rows go through
-    // `recordComputerAudit` so a disabled thread records nothing.
-    this.grantStore = new ComputerGrantStore({
-      filePath:
-        options.controlStatePath === undefined
-          ? undefined
-          : join(dirname(options.controlStatePath), "computer-grants.json"),
-      now: () => this.now(),
-      audit: (entry) => this.recordComputerAudit(entry),
-    });
     this.backendHealth = options.backend.health();
     this.transport =
       options.transport ??
@@ -4488,7 +4307,6 @@ export class ComputerManager {
     this.backendUnsubscribe?.();
     await this.backend.dispose();
     this.listeners.clear();
-    await this.grantStore.flush().catch(() => undefined);
     // Open sessions close as `disposed` and their queued appends drain before
     // the audit log's: nothing after this writes, so a flush here cannot hide
     // a late record the way one earlier could.

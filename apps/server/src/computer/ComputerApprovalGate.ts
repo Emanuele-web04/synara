@@ -1,36 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type {
-  ComputerApprovalGrant,
-  ComputerGrantActionClass,
-  ComputerGrantAppIdentity,
-  ComputerGrantScope,
-  ProviderApprovalDecision,
-} from "@synara/contracts";
-
-/**
- * The durable-grant offer a pending computer approval carries. `offer` is
- * what the prompt proposed — the resolved app identities and the exact
- * action classes the triggering call needs — and `create` mints the grants
- * an explicit response choice asks for. Absent means the prompt offered
- * nothing durable, and a grant choice arriving for it is ignored.
- */
-export interface ComputerApprovalGateGrant {
-  readonly offer: {
-    readonly apps: readonly ComputerGrantAppIdentity[];
-    readonly classes: readonly ComputerGrantActionClass[];
-    readonly scopes: readonly ComputerGrantScope[];
-  };
-  readonly create: (
-    choice: ComputerApprovalGrant,
-    context: { readonly threadId: string; readonly turnId?: string | undefined },
-  ) => void;
-}
+import type { ProviderApprovalDecision } from "@synara/contracts";
 
 interface PendingApproval {
   readonly threadId: string;
   readonly turnId?: string | undefined;
   readonly settle: (decision: ProviderApprovalDecision) => void;
-  readonly grant?: ComputerApprovalGateGrant | undefined;
 }
 
 interface TaskApproval {
@@ -59,7 +33,7 @@ export class ComputerApprovalQueueFullError extends Error {
 
 /** Synara-owned Computer consent, scoped to one live turn. Clipboard reads use
  * separate per-call approvals. The runtime routes user decisions here first;
- * restart, Stop and terminal events discard the grant.
+ * restart, Stop and terminal events discard pending prompts.
  */
 export class ComputerApprovalGate {
   private readonly pending = new Map<string, PendingApproval>();
@@ -102,7 +76,6 @@ export class ComputerApprovalGate {
     turnId: string;
     signal: AbortSignal;
     publish: (requestId: string, decision?: ProviderApprovalDecision) => Promise<void>;
-    grant?: ComputerApprovalGateGrant | undefined;
   }): Promise<boolean> {
     input.signal.throwIfAborted();
     let task = this.tasks.get(input.threadId);
@@ -140,30 +113,12 @@ export class ComputerApprovalGate {
     return accepted && this.tasks.get(input.threadId) === current;
   }
 
-  respond(
-    threadId: string,
-    requestId: string,
-    decision: ProviderApprovalDecision,
-    grantChoice?: ComputerApprovalGrant,
-  ): boolean {
+  respond(threadId: string, requestId: string, decision: ProviderApprovalDecision): boolean {
     const pending = this.pending.get(requestId);
     if (!pending || pending.threadId !== threadId) return false;
     this.pending.delete(requestId);
     // Session-wide approval is deliberately unavailable for this gate.
     const effective = decision === "acceptForSession" ? "decline" : decision;
-    if (effective === "accept" && grantChoice !== undefined && pending.grant !== undefined) {
-      // Grant creation must never eat the approval it rode in on: a store
-      // failure leaves the one-time consent intact and the next call simply
-      // prompts again.
-      try {
-        pending.grant.create(grantChoice, {
-          threadId: pending.threadId,
-          turnId: pending.turnId,
-        });
-      } catch {
-        // Swallowed on purpose — see above.
-      }
-    }
     pending.settle(effective);
     return true;
   }
@@ -173,7 +128,6 @@ export class ComputerApprovalGate {
     turnId?: string | undefined;
     signal: AbortSignal;
     publish: (requestId: string, decision?: ProviderApprovalDecision) => Promise<void>;
-    grant?: ComputerApprovalGateGrant | undefined;
   }): Promise<boolean> {
     input.signal.throwIfAborted();
     // A stuck turn must not starve every other chat: each thread gets a small
@@ -198,7 +152,6 @@ export class ComputerApprovalGate {
       threadId: input.threadId,
       turnId: input.turnId,
       settle,
-      ...(input.grant !== undefined ? { grant: input.grant } : {}),
     });
     const cancel = () => settle("cancel");
     input.signal.addEventListener("abort", cancel, { once: true });

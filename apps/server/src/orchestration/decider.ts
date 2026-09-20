@@ -2252,9 +2252,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { lifecycleGeneration: command.lifecycleGeneration }
             : {}),
           decision: command.decision,
-          // The explicit always-allow choice rides through only when the
-          // command carried one; an absent field mints no grant downstream.
-          ...(command.computerGrant !== undefined ? { computerGrant: command.computerGrant } : {}),
           createdAt: command.createdAt,
         },
       };
