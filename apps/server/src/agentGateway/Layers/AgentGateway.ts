@@ -1038,7 +1038,7 @@ export const makeAgentGateway = Effect.gen(function* () {
    */
   const authorizeComputerAction: NonNullable<
     AgentGatewayComputerToolsOptions["authorizeAction"]
-  > = async (name, args, context, signal, grantContext) => {
+  > = async (name, args, context, signal) => {
     await Effect.runPromise(context.assertCallerTurnActive(), { signal });
     const caller = await Effect.runPromise(
       snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(context.callerThreadId)),
@@ -1055,65 +1055,14 @@ export const makeAgentGateway = Effect.gen(function* () {
       ).catch(() => undefined);
       return true;
     }
-    const computerManager =
-      computerService?.supported === true ? computerService.manager : undefined;
-    // A live grant covering everything this call provably touches — every
-    // resolved app for every action class it exercises — waives the prompt
-    // entirely. The store marked the grant used and wrote the grant_applied
-    // audit row inside `computerGrantCoversCall`; the call's own audit row
-    // still records downstream like any other.
-    if (
-      computerManager !== undefined &&
-      grantContext !== undefined &&
-      computerManager.computerGrantCoversCall(grantContext, {
-        toolName: name,
-        threadId: context.callerThreadId,
-        ...(context.callerTurnId !== null ? { turnId: context.callerTurnId } : {}),
-      })
-    ) {
-      await Effect.runPromise(
-        surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
-        { signal },
-      ).catch(() => undefined);
-      return true;
-    }
     const taskConsent = name !== "computer_read_clipboard" && context.callerTurnId !== null;
     const requestApproval = taskConsent
       ? computerApprovalGate.requestTask.bind(computerApprovalGate)
       : computerApprovalGate.request.bind(computerApprovalGate);
-    // What the prompt may offer to pin durably: the resolved identities minus
-    // denylisted ones, the exact classes this call needs, and the scopes that
-    // can honestly cover it. Undefined means the call has no grantable scope,
-    // so the prompt stays one-time.
-    const grantOffer =
-      computerManager !== undefined && grantContext !== undefined
-        ? computerManager.computerGrantOfferFor(grantContext)
-        : undefined;
     const approved = await requestApproval({
       threadId: context.callerThreadId,
       turnId: context.callerTurnId ?? "",
       signal,
-      ...(grantOffer !== undefined && computerManager !== undefined
-        ? {
-            grant: {
-              offer: {
-                apps: grantOffer.apps,
-                classes: grantOffer.classes,
-                scopes: grantOffer.scopes,
-              },
-              create: (choice, grantCreation) =>
-                computerManager.createComputerGrants({
-                  offer: {
-                    apps: grantOffer.apps,
-                    classes: grantOffer.classes,
-                    scopes: grantOffer.scopes,
-                  },
-                  choice,
-                  ...grantCreation,
-                }),
-            },
-          }
-        : {}),
       publish: async (requestId, decision) => {
         const createdAt = isoNow();
         const eventKey = `${requestId}:${decision === undefined ? "open" : "resolved"}`;
@@ -1146,13 +1095,6 @@ export const makeAgentGateway = Effect.gen(function* () {
                 ),
                 sessionApprovalAvailable: false,
                 ...(taskConsent ? { approvalScope: "computer-task" } : {}),
-                // The open prompt carries the offer so the card can render the
-                // always-allow choice — stringified like toolParamsDisplay,
-                // because the activity payload is Schema.Json and the offer's
-                // readonly shape is not directly assignable to it.
-                ...(decision === undefined && grantOffer !== undefined
-                  ? { computerGrantOffer: JSON.stringify(grantOffer) }
-                  : {}),
                 ...(decision === undefined ? {} : { decision }),
               },
               turnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,

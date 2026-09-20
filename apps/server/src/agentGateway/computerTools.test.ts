@@ -4155,7 +4155,6 @@ describe("multi-app driving", () => {
           _args: Record<string, unknown>,
           _context: unknown,
           _signal: unknown,
-          _grantContext: unknown,
         ) => true,
       );
       const { call, manager } = await setup(backend, approval);
@@ -4174,15 +4173,7 @@ describe("multi-app driving", () => {
         expect(dispatched).toEqual({ pid: 6_001 });
         expect(dispatched).not.toHaveProperty("window_id");
         expect(resultJson(result)).not.toHaveProperty("windowId");
-        // The grant scope offered to the user names the app this call drives.
-        const grantContext = approval.mock.calls[0]?.[4] as {
-          apps: readonly { name?: string }[];
-          includesUnattributedTarget: boolean;
-          classes: readonly string[];
-        };
-        expect(grantContext.includesUnattributedTarget).toBe(false);
-        expect(grantContext.apps).toEqual([expect.objectContaining({ name: "Helium" })]);
-        expect(grantContext.classes).toEqual(["lifecycle"]);
+        expect(approval).toHaveBeenCalledOnce();
       } finally {
         await manager.dispose();
       }

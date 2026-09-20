@@ -22,7 +22,6 @@ import {
   type ComputerApp,
   type ComputerAvailability,
   type ComputerBuildSignature,
-  type ComputerGrantAppIdentity,
   type ComputerInputModifier,
   type ComputerPermission,
   type ComputerRect,
@@ -69,15 +68,6 @@ import {
   withComputerRecordingCapture,
   type ComputerRecordingCapture,
 } from "../computer/computerCallContext.ts";
-import { rectContainsPoint, topmostWindowAtPoint } from "../computer/computerGeometry.ts";
-import {
-  computerGrantClassesForTool,
-  computerGrantIdentityForAppArg,
-  computerGrantIdentityForPid,
-  computerGrantIdentityForWindow,
-  computerGrantIdentityKey,
-  type ComputerGrantCallContext,
-} from "../computer/computerGrants.ts";
 import {
   computerRecordingHistoryLines,
   redactComputerRecordingArgs,
@@ -391,19 +381,11 @@ export function computerAuditErrorOutcome(error: unknown): {
  * inactive sessions receive no computer definitions. */
 export interface AgentGatewayComputerToolsOptions {
   readonly manager: ComputerManager;
-  /**
-   * `grantContext` is what a durable always-allow grant would have to cover
-   * for this call — the resolved app identities and the action classes it
-   * exercises. The gate checks live grants against it to waive the prompt,
-   * and offers exactly this scope for the user to pin. Absent means the call
-   * was never attributed, so no grant can cover it and none is offered.
-   */
   readonly authorizeAction?: (
     name: string,
     args: Record<string, unknown>,
     context: ToolContext,
     signal: AbortSignal,
-    grantContext?: ComputerGrantCallContext,
   ) => Promise<boolean>;
   /**
    * Called when a tool call failed because the OS is withholding a privacy
@@ -1579,294 +1561,6 @@ export function makeAgentGatewayComputerTools(
     resolveTarget(readNestedScreenshotTarget(args, name), context.callerThreadId);
 
 
-  /**
-   * What a durable "always allow" grant would have to cover for this call:
-   * the stable app identities it provably drives and the action classes it
-   * exercises. Resolved before the approval prompt so a live grant can waive
-   * it — and so the prompt can offer exactly this scope.
-   *
-   * Best-effort, but stricter about honesty:
-   * the consent keys it computes are display names, while a grant is keyed
-   * on bundle id + signing team where the backend reports them. A target
-   * that cannot be resolved to a stable identity — a bare label search that
-   * may land in any window, the shared clipboard, an ambiguous stack of
-   * windows under a point — is left unattributed, and only an explicit
-   * any-app grant can cover it. Inventory reads fail open to `undefined`,
-   * which marks the affected target unattributed rather than guessing.
-   */
-  const grantCallContextFor = async (
-    name: string,
-    args: Record<string, unknown>,
-    threadId: string,
-  ): Promise<ComputerGrantCallContext> => {
-    const classes = computerGrantClassesForTool(name, args);
-    const identities = new Map<string, ComputerGrantAppIdentity>();
-    let unattributed = false;
-
-    let windowsRead: readonly ComputerWindow[] | undefined;
-    let windowsLoaded = false;
-    const windows = async (): Promise<readonly ComputerWindow[] | undefined> => {
-      if (!windowsLoaded) {
-        windowsLoaded = true;
-        windowsRead = await manager
-          .listWindows()
-          .then((listed) => listed.windows)
-          .catch(() => undefined);
-      }
-      return windowsRead;
-    };
-    let appsRead: readonly ComputerApp[] | undefined;
-    let appsLoaded = false;
-    const apps = async (): Promise<readonly ComputerApp[] | undefined> => {
-      if (!appsLoaded) {
-        appsLoaded = true;
-        appsRead = await manager
-          .listApps()
-          .then((listed) => listed.apps)
-          .catch(() => undefined);
-      }
-      return appsRead;
-    };
-
-    const addIdentity = (identity: ComputerGrantAppIdentity | undefined): boolean => {
-      if (identity === undefined) return false;
-      identities.set(computerGrantIdentityKey(identity), identity);
-      return true;
-    };
-    const addWindow = async (windowId: string | undefined): Promise<boolean> => {
-      if (windowId === undefined) return false;
-      const window = (await windows())?.find((candidate) => candidate.id === windowId);
-      if (window === undefined) return false;
-      return addIdentity(computerGrantIdentityForWindow(window, await apps()));
-    };
-    const addPid = async (pid: number | undefined): Promise<boolean> => {
-      if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 0) return false;
-      return addIdentity(computerGrantIdentityForPid(pid, await apps()));
-    };
-    /** Untargeted keyboard/pointer input lands on the agent's focused window. */
-    const addAimedWindow = async (): Promise<boolean> => {
-      const aimed = (await windows())?.find((candidate) => candidate.focused);
-      if (aimed === undefined) return false;
-      return addIdentity(computerGrantIdentityForWindow(aimed, await apps()));
-    };
-
-    /**
-     * One input-class target — the args of a standalone tool or one run
-     * step's fields. An explicit window id wins; screenshot-scoped
-     * coordinates ride their frame's window, or the windows covering the
-     * resolved desktop point when the frame named none; a bare label/role
-     * search resolves across the whole desktop at dispatch time and is left
-     * unattributed; and a call with no target at all reaches the window the
-     * agent seat has focused.
-     */
-    const addInputTarget = async (targetArgs: Record<string, unknown>): Promise<void> => {
-      const raw = readScreenshotTarget(targetArgs);
-      if (raw.ref !== undefined) {
-        // A ref names a listed element — its window is the attribution, the
-        // same one dispatch resolves. A ref that does not resolve leaves the
-        // call unattributed rather than crediting the focused window.
-        let resolved: ComputerTarget;
-        try {
-          resolved = resolveTarget(raw, threadId);
-        } catch {
-          unattributed = true;
-          return;
-        }
-        if (resolved.windowId !== undefined && (await addWindow(resolved.windowId))) return;
-        unattributed = true;
-        return;
-      }
-      if (raw.windowId !== undefined) {
-        if (!(await addWindow(raw.windowId))) unattributed = true;
-        return;
-      }
-      if (raw.label !== undefined || raw.role !== undefined) {
-        unattributed = true;
-        return;
-      }
-      if (raw.x !== undefined || raw.y !== undefined || raw.screenshotId !== undefined) {
-        let resolved: ComputerTarget;
-        try {
-          resolved = resolveTarget(raw, threadId);
-        } catch {
-          unattributed = true;
-          return;
-        }
-        if (resolved.windowId !== undefined) {
-          if (!(await addWindow(resolved.windowId))) unattributed = true;
-          return;
-        }
-        if (resolved.x === undefined || resolved.y === undefined) {
-          unattributed = true;
-          return;
-        }
-        const listed = await windows();
-        if (listed === undefined) {
-          unattributed = true;
-          return;
-        }
-        // The compositor routes an unscoped point to the topmost window at
-        // it; when stacking cannot name one, every covering window is a
-        // candidate — the same closure the denylist applies to the same
-        // ambiguity.
-        const point = { x: resolved.x, y: resolved.y };
-        const topmost = topmostWindowAtPoint(listed, point);
-        const covering =
-          topmost !== undefined
-            ? [topmost]
-            : listed.filter(
-                (window) =>
-                  window.visible && !window.minimized && rectContainsPoint(window.bounds, point),
-              );
-        if (covering.length === 0) {
-          unattributed = true;
-          return;
-        }
-        for (const window of covering) {
-          if (!addIdentity(computerGrantIdentityForWindow(window, await apps()))) {
-            unattributed = true;
-          }
-        }
-        return;
-      }
-      if (!(await addAimedWindow())) unattributed = true;
-    };
-
-    const addLifecycleStep = async (step: Record<string, unknown>): Promise<void> => {
-      const windowId = readStringArg(step, "window_id") ?? readStringArg(step, "windowId");
-      if (windowId !== undefined) {
-        if (!(await addWindow(windowId))) unattributed = true;
-        return;
-      }
-      // The windowless menu form: an app spelling resolves to its stable
-      // identity when the inventory knows it, and a pid resolves through the
-      // same pid → identity helper set_app_visibility uses. An unresolvable
-      // spelling stays unattributed, exactly like an unknown launch app.
-      const app = readStringArg(step, "app");
-      if (app !== undefined) {
-        if (!addIdentity(computerGrantIdentityForAppArg(app, await apps()))) unattributed = true;
-        return;
-      }
-      const pid = readNumberArg(step, "pid");
-      if (!(await addPid(pid))) unattributed = true;
-    };
-
-    if (name === "computer_launch_app") {
-      const app = typeof args.app === "string" ? args.app : undefined;
-      if (!addIdentity(computerGrantIdentityForAppArg(app ?? "", await apps()))) {
-        unattributed = true;
-      }
-    } else if (name === "computer_set_app_visibility") {
-      const pid = readNumberArg(args, "pid");
-      if (!(await addPid(pid))) unattributed = true;
-    } else if (
-      name === "computer_activate_window" ||
-      name === "computer_set_window_frame" ||
-      name === "computer_invoke_menu" ||
-      name === "computer_kill_app" ||
-      name === "computer_set_window_minimized"
-    ) {
-      await addLifecycleStep(args);
-    } else if (name === "computer_read_clipboard" || name === "computer_write_clipboard") {
-      // The clipboard is the human's shared store — no app owns it, so only
-      // an any-app grant can ever cover it.
-      unattributed = true;
-    } else if (name === "computer_paste") {
-      // A paste writes the clipboard and sends the paste keystroke into one
-      // window: the named window, or the agent's focused one.
-      const windowId = readWindowIdArg(args);
-      if (windowId !== undefined) {
-        if (!(await addWindow(windowId))) unattributed = true;
-      } else if (!(await addAimedWindow())) {
-        unattributed = true;
-      }
-    } else if (name === "computer_run") {
-      for (const step of Array.isArray(args.steps) ? args.steps : []) {
-        if (step === null || typeof step !== "object" || Array.isArray(step)) continue;
-        const type = Reflect.get(step, "type");
-        switch (type) {
-          case "click":
-          case "double_click":
-          case "triple_click":
-          case "right_click":
-          case "move_cursor":
-          case "scroll":
-          case "type_text":
-          case "press_key":
-          case "hotkey":
-          case "set_value":
-          case "perform_action":
-          case "select_text":
-            await addInputTarget(step as Record<string, unknown>);
-            break;
-          case "drag": {
-            const from = readRecordArg(step as Record<string, unknown>, "from");
-            const to = readRecordArg(step as Record<string, unknown>, "to");
-            if (from === undefined || to === undefined) {
-              unattributed = true;
-              break;
-            }
-            await addInputTarget(from);
-            await addInputTarget(to);
-            break;
-          }
-          case "paste": {
-            const windowId =
-              readStringArg(step as Record<string, unknown>, "window_id") ??
-              readStringArg(step as Record<string, unknown>, "windowId");
-            if (windowId !== undefined) {
-              if (!(await addWindow(windowId))) unattributed = true;
-            } else if (!(await addAimedWindow())) {
-              unattributed = true;
-            }
-            break;
-          }
-          case "write_clipboard":
-            unattributed = true;
-            break;
-          case "activate_window":
-          case "set_window_frame":
-          case "invoke_menu":
-          case "kill_app":
-          case "set_window_minimized":
-            await addLifecycleStep(step as Record<string, unknown>);
-            break;
-          case "launch_app": {
-            const app = Reflect.get(step, "app");
-            if (
-              !addIdentity(
-                computerGrantIdentityForAppArg(typeof app === "string" ? app : "", await apps()),
-              )
-            ) {
-              unattributed = true;
-            }
-            break;
-          }
-          case "set_app_visibility": {
-            const pid = Reflect.get(step, "pid");
-            if (!(await addPid(typeof pid === "number" ? pid : undefined))) {
-              unattributed = true;
-            }
-            break;
-          }
-          // `wait` and unknown step types carry no mutation a grant names;
-          // unknown types are refused at dispatch on their own.
-          default:
-            break;
-        }
-      }
-    } else {
-      // click/scroll/type/key/select/set_value/perform_action/move_cursor —
-      // the remaining gated input tools share the one target resolver.
-      await addInputTarget(args);
-    }
-
-    return {
-      apps: [...identities.values()],
-      includesUnattributedTarget: unattributed,
-      classes,
-    };
-  };
 
   /**
    * The never-raise authorization a call would carry, resolved only for the
@@ -2047,16 +1741,6 @@ export function makeAgentGatewayComputerTools(
                 signal: undefined,
               };
             }
-            // Resolved only now that a prompt can actually fire: the read may
-            // list windows and apps to attribute the call, and it feeds both
-            // the grant check that can waive this prompt and the always-allow
-            // scope the prompt offers. A resolution failure denies the
-            // attribution, never the call — the prompt then decides alone.
-            const grantContext = await grantCallContextFor(
-              name,
-              args,
-              context.callerThreadId,
-            ).catch(() => undefined);
             if (
               !(await options.authorizeAction(
                 name,
@@ -2065,7 +1749,6 @@ export function makeAgentGatewayComputerTools(
                   : args,
                 context,
                 abortSignal,
-                grantContext,
               ))
             ) {
               recordingApproval = { required: true, decision: "denied" };
