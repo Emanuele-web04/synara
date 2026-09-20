@@ -56,6 +56,31 @@ function setPlistString(plistPath, key, value) {
   throw new Error(`Failed to update plist key "${key}" at ${plistPath}: ${details}`.trim());
 }
 
+// Same path as LSREGISTER_PATH in src/macIconCacheRefresh.ts; this launcher is
+// a standalone module and cannot import from the bundled sources.
+const LSREGISTER_PATH =
+  "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister";
+
+// macOS caches bundle icons by identifier, so a rebuilt runtime keeps painting
+// the previous icon until Launch Services re-reads the bundle — re-registering
+// alone is not enough once an entry has gone stale. Best effort: a stale icon
+// is a better outcome than refusing to launch.
+function refreshLaunchServicesRegistration(appBundlePath) {
+  if (!existsSync(LSREGISTER_PATH)) {
+    return;
+  }
+  spawnSync(LSREGISTER_PATH, ["-u", appBundlePath], { encoding: "utf8" });
+  const result = spawnSync(LSREGISTER_PATH, ["-f", "-R", appBundlePath], { encoding: "utf8" });
+  if (result.status !== 0) {
+    const details = [result.error?.message, result.stderr].filter(Boolean).join("\n").trim();
+    console.warn(
+      `[desktop] Failed to refresh the Launch Services registration for ${appBundlePath}; the dock may keep showing the previous icon.${
+        details ? ` ${details}` : ""
+      }`,
+    );
+  }
+}
+
 function latestMtimeMs(entryPath) {
   const entryStat = statSync(entryPath);
   if (!entryStat.isDirectory()) {
@@ -225,6 +250,7 @@ function buildMacLauncher(electronBinaryPath) {
     compileGlassAppIcon(targetAppBundlePath, iconComposerPath, runtimeDir);
   }
   patchHelperBundleInfoPlists(targetAppBundlePath);
+  refreshLaunchServicesRegistration(targetAppBundlePath);
   writeFileSync(metadataPath, `${JSON.stringify(expectedMetadata, null, 2)}\n`);
 
   return targetBinaryPath;
