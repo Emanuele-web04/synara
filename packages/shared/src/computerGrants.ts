@@ -14,22 +14,23 @@ import type {
   ComputerBuildSignature,
   ComputerPermission,
   DesktopAppSnapPermissionKind,
+  DesktopAppSnapState,
 } from "@synara/contracts";
 
 /**
- * Fixed order, most consequential first: without Accessibility nothing can be
- * driven, while without Screen Recording the desktop is merely unseeable.
+ * Fixed setup order, shared with the native permission guide.
  */
 export const COMPUTER_PERMISSIONS: readonly ComputerPermission[] = [
   "accessibility",
   "screenRecording",
+  "inputMonitoring",
 ];
 
 /**
  * The same grant set in the AppSnap helper's vocabulary. One definition keeps
  * the desktop host, the composer's setup entry, and the settings panel asking
- * for exactly these grants — Input Monitoring belongs to the AppSnap picker
- * chord, which computer control never engages.
+ * for exactly these grants. Computer uses Input Monitoring for physical Escape
+ * and human takeover; it does not enable AppSnap's picker chord.
  *
  * Kept as an alias, not a second list: the desktop shell and the web settings
  * import this AppSnap vocabulary directly and live outside this slice, so the
@@ -38,30 +39,48 @@ export const COMPUTER_PERMISSIONS: readonly ComputerPermission[] = [
 export const COMPUTER_PERMISSION_KINDS: readonly DesktopAppSnapPermissionKind[] =
   COMPUTER_PERMISSIONS;
 
+/** A grant snapshot is evidence; an idle backend's connectivity is not. */
+export function missingComputerAppSnapPermissions(
+  state: Pick<
+    DesktopAppSnapState,
+    "accessibilityPermission" | "screenRecordingPermission" | "inputMonitoringPermission"
+  >,
+): readonly ComputerPermission[] {
+  const grants = {
+    accessibility: state.accessibilityPermission,
+    screenRecording: state.screenRecordingPermission,
+    inputMonitoring: state.inputMonitoringPermission,
+  };
+  return COMPUTER_PERMISSIONS.filter((permission) => grants[permission] !== "granted");
+}
+
 /**
  * The grants without which the desktop cannot be driven at all.
  *
  * The distinction is the difference between "stop and wait for the user" and
  * "carry on with one hand tied": Accessibility gates every synthetic event and
- * every accessibility read, so nothing works without it, while Screen Recording
- * only takes away the pictures — the window list, the accessibility tree, and
- * every input still work. Telling an agent to stop because it cannot take a
- * screenshot costs the user the whole task for a grant that blocked none of it.
+ * every accessibility read. Input Monitoring is required for interruptible
+ * control. Screen Recording only takes away images; semantic reads remain
+ * available without it.
  *
  * Retained for existing callers; the canonical check is inline in
  * computerGrantsBlockControl below.
  */
-export const COMPUTER_BLOCKING_PERMISSIONS: readonly ComputerPermission[] = ["accessibility"];
+export const COMPUTER_BLOCKING_PERMISSIONS: readonly ComputerPermission[] = [
+  "accessibility",
+  "inputMonitoring",
+];
 
 /** Whether any of these missing grants stops the desktop being driven at all. */
 export function computerGrantsBlockControl(permissions: readonly ComputerPermission[]): boolean {
-  return permissions.includes("accessibility");
+  return COMPUTER_BLOCKING_PERMISSIONS.some((permission) => permissions.includes(permission));
 }
 
 /** Exactly what System Settings › Privacy & Security calls each grant. */
 export const COMPUTER_PERMISSION_LABELS: Readonly<Record<ComputerPermission, string>> = {
   accessibility: "Accessibility",
   screenRecording: "Screen Recording",
+  inputMonitoring: "Input Monitoring",
 };
 
 /**
@@ -77,6 +96,7 @@ export const COMPUTER_PERMISSION_LABELS: Readonly<Record<ComputerPermission, str
 export const TCC_SERVICE_NAMES: Readonly<Record<ComputerPermission, string>> = {
   accessibility: "Accessibility",
   screenRecording: "ScreenCapture",
+  inputMonitoring: "ListenEvent",
 };
 
 /** The missing grants in `COMPUTER_PERMISSIONS` order, deduplicated. */

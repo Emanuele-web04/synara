@@ -88,6 +88,13 @@ export type AppSnapHelperMessage =
   | { type: "ready" }
   | { type: "triggered"; id: string; capturedAt?: string }
   | { type: "escape"; capturedAt?: string }
+  | {
+      type: "physical-input";
+      kind: "keyboard" | "pointer";
+      pid?: number;
+      windowId?: number;
+      capturedAt?: string;
+    }
   | { type: "escape-monitor-state"; armed: boolean; capturedAt?: string }
   | {
       type: "captured";
@@ -338,6 +345,25 @@ export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | 
     return {
       type: "escape-monitor-state",
       armed: value.armed,
+      ...(typeof value.capturedAt === "string" ? { capturedAt: value.capturedAt } : {}),
+    };
+  }
+  if (value.type === "physical-input" && (value.kind === "keyboard" || value.kind === "pointer")) {
+    return {
+      type: "physical-input",
+      kind: value.kind,
+      ...(typeof value.pid === "number" &&
+      Number.isSafeInteger(value.pid) &&
+      value.pid > 0 &&
+      value.pid <= 0x7fffffff
+        ? { pid: value.pid }
+        : {}),
+      ...(typeof value.windowId === "number" &&
+      Number.isSafeInteger(value.windowId) &&
+      value.windowId > 0 &&
+      value.windowId <= 0xffffffff
+        ? { windowId: value.windowId }
+        : {}),
       ...(typeof value.capturedAt === "string" ? { capturedAt: value.capturedAt } : {}),
     };
   }

@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -19,8 +20,8 @@ private func escapeEventTapCallback(
 
 /// The physical Escape kill switch for computer use.
 ///
-/// A dedicated session event tap in `.listenOnly` mode observes keyDown events
-/// and reports a plain, unmodified Escape that came from the keyboard itself.
+/// A dedicated session event tap in `.listenOnly` mode observes physical input.
+/// It reports unmodified Escape globally and other input with target metadata.
 /// The tap never consumes or rewrites the event — the same Escape still reaches
 /// the focused application — and it fires only while the parent has armed the
 /// monitor, i.e. while a driver generation is live and computer input can
@@ -37,7 +38,6 @@ final class EscapeKillSwitchMonitor {
     private var runLoopSource: CFRunLoopSource?
     private var retryTimer: Timer?
     private var lastInstallErrorCode: String?
-    private var emittedReady = false
     /// Whether the parent process marked computer control live. Nothing is
     /// emitted while disarmed — an Escape on a desktop no agent can drive is
     /// an ordinary key, not a stop request.
@@ -49,39 +49,46 @@ final class EscapeKillSwitchMonitor {
     }
 
     func start() {
-        if !installEventTap() {
+        if armed {
+            _ = installEventTap()
             scheduleRetry()
         }
     }
 
-    /// Parent-driven arm/disarm. The event tap stays installed either way; the
-    /// gate is applied at emit time so a disarm racing an in-flight keypress
-    /// still wins.
+    /// Parent-driven arm/disarm. Idle computer use owns no event tap or polling
+    /// timer. The emit gate also rejects a callback racing the disarm.
     func setArmed(_ armed: Bool) {
         guard armed != self.armed else {
             return
         }
         self.armed = armed
+        if armed {
+            lastInstallErrorCode = nil
+            _ = installEventTap()
+            scheduleRetry()
+        } else {
+            retryTimer?.invalidate()
+            retryTimer = nil
+            tearDownEventTap()
+        }
         emitter.emitEscapeMonitorState(armed: armed, capturedAt: appSnapTimestamp())
     }
 
     fileprivate func handleEvent(type: CGEventType, event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let eventTap {
-                CGEvent.tapEnable(tap: eventTap, enable: true)
-            }
+            tearDownEventTap()
             emitter.emitError(
                 AppSnapFailure(
                     code: "event_tap_disabled",
-                    message: "macOS disabled the Escape listener; the helper re-enabled it."
+                    message: "macOS disabled the computer input listener; checking access before reconnecting."
                 ),
                 capturedAt: appSnapTimestamp()
             )
+            _ = installEventTap()
             return
         }
 
-        guard type == .keyDown,
-              EscapePhysicalClassifier.isPhysicalEscape(
+        if EscapePhysicalClassifier.isPhysicalEscape(
                   type: type,
                   keyCode: CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)),
                   flags: event.flags,
@@ -89,29 +96,66 @@ final class EscapeKillSwitchMonitor {
                   sourceStateID: event.getIntegerValueField(.eventSourceStateID),
                   sourceUserData: event.getIntegerValueField(.eventSourceUserData),
                   armed: armed
-              )
-        else {
+              ) {
+            onEscape()
             return
         }
-        onEscape()
+        guard EscapePhysicalClassifier.isPhysicalInput(
+            type: type,
+            sourceProcessID: event.getIntegerValueField(.eventSourceUnixProcessID),
+            sourceStateID: event.getIntegerValueField(.eventSourceStateID),
+            sourceUserData: event.getIntegerValueField(.eventSourceUserData),
+            armed: armed
+        ) else { return }
+        let keyboard = type == .keyDown || type == .flagsChanged
+        let target = physicalTarget(event: event, keyboard: keyboard)
+        emitter.emitPhysicalInput(
+            kind: keyboard ? "keyboard" : "pointer",
+            pid: target.pid,
+            windowID: target.windowID,
+            capturedAt: appSnapTimestamp()
+        )
+    }
+
+    /// Keyboard input belongs to the frontmost application; pointer takeover
+    /// belongs to the first visible application window at the click/scroll.
+    /// Ignore overlay layers and omit unknown attribution rather than guessing.
+    private func physicalTarget(event: CGEvent, keyboard: Bool) -> (pid: pid_t?, windowID: CGWindowID?) {
+        if keyboard {
+            return (NSWorkspace.shared.frontmostApplication?.processIdentifier, nil)
+        }
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
+            return (nil, nil)
+        }
+        for window in windows {
+            guard let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
+                  let pid = window[kCGWindowOwnerPID as String] as? Int32, pid > 0,
+                  let windowID = window[kCGWindowNumber as String] as? UInt32,
+                  let rawBounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let bounds = CGRect(dictionaryRepresentation: rawBounds as CFDictionary),
+                  bounds.contains(event.location) else { continue }
+            return (pid, windowID)
+        }
+        return (nil, nil)
     }
 
     private func installEventTap() -> Bool {
-        guard eventTap == nil else {
-            return true
-        }
-
+        guard armed else { return false }
         guard CGPreflightListenEventAccess() else {
+            tearDownEventTap()
             reportInstallFailure(
                 AppSnapFailure(
                     code: "input-monitoring-required",
-                    message: "Input Monitoring permission is required to watch for the Escape key."
+                    message: "Input Monitoring permission is required for Escape and human takeover detection."
                 )
             )
             return false
         }
+        if let eventTap, CGEvent.tapIsEnabled(tap: eventTap) { return true }
+        tearDownEventTap()
 
-        let mask = CGEventMask(1) << CGEventType.keyDown.rawValue
+        let observed: [CGEventType] = [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]
+        let mask = observed.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -145,13 +189,17 @@ final class EscapeKillSwitchMonitor {
         lastInstallErrorCode = nil
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
-        if !emittedReady {
-            emittedReady = true
-            emitter.emitReady()
-        }
-        retryTimer?.invalidate()
-        retryTimer = nil
+        emitter.emitReady()
         return true
+    }
+
+    private func tearDownEventTap() {
+        if let runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+        if let eventTap { CFMachPortInvalidate(eventTap) }
+        runLoopSource = nil
+        eventTap = nil
     }
 
     private func scheduleRetry() {

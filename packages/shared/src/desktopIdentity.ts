@@ -21,6 +21,8 @@ export const SYNARA_SOURCE_DESKTOP_BUILD_MARKER = "synara-source-desktop-build-v
 export const SYNARA_DESKTOP_SMOKE_USER_DATA_ENV = "SYNARA_DESKTOP_SMOKE_USER_DATA";
 
 export type SynaraDesktopFlavor = "production" | "development" | "canary" | "cua";
+export const SYNARA_PACKAGED_DESKTOP_FLAVORS = ["production", "canary", "cua"] as const;
+export type SynaraPackagedDesktopFlavor = (typeof SYNARA_PACKAGED_DESKTOP_FLAVORS)[number];
 
 export interface SynaraDesktopIdentity {
   readonly flavor: SynaraDesktopFlavor;
@@ -53,6 +55,41 @@ export function resolveSynaraDesktopFlavor(input: {
     return "development";
   }
   return input.isDevelopment ? "development" : "production";
+}
+
+/** Packaged identity is fixed when the artifact is staged, before it is signed. */
+export function resolveSynaraDesktopRuntimeFlavor(input: {
+  readonly isPackaged: boolean;
+  readonly isDevelopment: boolean;
+  readonly packagedFlavor?: unknown;
+  readonly requestedFlavor?: string | undefined;
+  readonly allowDevelopmentOverride?: boolean | undefined;
+}): SynaraDesktopFlavor {
+  if (input.isPackaged && input.packagedFlavor !== undefined) {
+    const flavor = input.packagedFlavor;
+    if (flavor === "production" || flavor === "canary" || flavor === "cua") {
+      return flavor;
+    }
+    throw new Error("The packaged Synara desktop flavor is invalid. Rebuild the application.");
+  }
+  // Source launchers also use an app bundle on macOS. Their build marker keeps
+  // the existing environment-based routing, while legacy packaged apps remain
+  // Stable even when a developer shell happens to export a different flavor.
+  if (input.isPackaged && input.allowDevelopmentOverride !== true) {
+    return "production";
+  }
+  return resolveSynaraDesktopFlavor(input);
+}
+
+export function canOverrideDesktopSmokeUserData(input: {
+  readonly packagedFlavor?: unknown;
+  readonly sourceBuildMarker?: string | undefined;
+}): boolean {
+  return (
+    input.packagedFlavor === "cua" ||
+    (input.packagedFlavor === undefined &&
+      input.sourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER)
+  );
 }
 
 export function synaraDesktopIdentity(flavor: SynaraDesktopFlavor): SynaraDesktopIdentity {

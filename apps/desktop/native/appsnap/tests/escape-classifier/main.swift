@@ -91,6 +91,33 @@ expect("hardware escape key up", classify(type: .keyUp), false)
 expect("flags changed on escape", classify(type: .flagsChanged), false)
 expect("another hardware key", classify(keyCode: CGKeyCode(0x24)), false)
 
+func classifyInput(
+    type: CGEventType,
+    sourceProcessID: Int64 = 0,
+    sourceStateID: Int64 = Int64(CGEventSourceStateID.hidSystemState.rawValue),
+    sourceUserData: Int64 = 0,
+    armed: Bool = true
+) -> Bool {
+    EscapePhysicalClassifier.isPhysicalInput(
+        type: type,
+        sourceProcessID: sourceProcessID,
+        sourceStateID: sourceStateID,
+        sourceUserData: sourceUserData,
+        armed: armed
+    )
+}
+
+for type: CGEventType in [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel] {
+    expect("physical takeover \(type.rawValue)", classifyInput(type: type), true)
+    expect("synthetic takeover \(type.rawValue)", classifyInput(type: type, sourceProcessID: 99), false)
+    expect("disarmed takeover \(type.rawValue)", classifyInput(type: type, armed: false), false)
+}
+for type: CGEventType in [.mouseMoved, .leftMouseDragged, .keyUp, .leftMouseUp] {
+    expect("non-triggering input \(type.rawValue)", classifyInput(type: type), false)
+}
+expect("combined session takeover", classifyInput(type: .keyDown, sourceStateID: 0), false)
+expect("marked synthetic pointer", classifyInput(type: .leftMouseDown, sourceUserData: 88), false)
+
 if failures > 0 {
     print("\(failures)/\(checks) escape classifier checks failed")
     exit(1)

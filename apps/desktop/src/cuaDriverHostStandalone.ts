@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Standalone Cua driver host — runs the same {@link CuaDriverHost} the macOS
- * desktop embeds, outside Electron, against a provisioned upstream
+ * desktop embeds, outside Electron, against a provisioned
  * `cua-driver`. This is the Windows/Linux deployment path: the Synara server
  * reaches the socket this host listens on through `SYNARA_CUA_HOST_SOCKET`
  * and authenticates every request with the shared capability
@@ -10,26 +10,23 @@
  *   bun apps/desktop/src/cuaDriverHostStandalone.ts \
  *     --driver /opt/synara/cua-driver [--socket /run/synara-cua/host.sock]
  *
- * What the standalone host is not: a port of the macOS safety layer. The
- * provisioned driver is the unpatched upstream build (`nativeRevision: null`
- * below), so the compact cursor and the Synara observation-timing envs do
- * not exist — the host reports `driverNativeRevision: 0` on every reply and
- * the backend narrows advertised capabilities accordingly. Upstream also
- * implements no `cancel_input` method: cancels on a reads-only generation
- * kill and respawn the driver, while a generation that dispatched input
- * fails closed ("admission closed; driver not killed") — the next action
- * respawns cleanly, but held OS input cannot be released without the
- * macOS-only `releaseHeldInput` helper. There is no AppSnap helper, so no
- * masked-activation shield, no frame tap, and no permission setup path;
- * `check_permissions` falls through to the driver's own platform report.
+ * This is not a port of the macOS safety layer. `nativeRevision: null` permits
+ * upstream artifacts; their transport cancellation cannot acknowledge native
+ * input drain. A patched Linux artifact may advertise the separately verified
+ * browser-only cancellation capability, but native desktop input stays closed.
+ * This host has no global Escape adapter, so Linux browser mutations also stay
+ * closed: native cleanup support alone is insufficient for input admission.
+ * Browser observation and passive endpoint detection remain available.
+ * There is no AppSnap helper, masked-activation shield, frame tap, or permission
+ * setup path; `check_permissions` uses the driver's own platform report.
  */
 
 import { randomBytes } from "node:crypto";
-import { createConnection } from "node:net";
-import { access, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { access, readFile, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
+import { clearStaleCuaHostSocket } from "./cuaHostSocket";
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -43,34 +40,6 @@ function usage(message: string): never {
       "[--socket <unix-path|\\\\.\\pipe\\name>] [--capability-file <path>]",
   );
   process.exit(2);
-}
-
-/**
- * A unix socket path that survives the host is safe to replace only when
- * nothing answers on it — unlinking a live listener would strand every
- * client without killing the owning process.
- */
-async function clearStaleSocket(endpoint: string): Promise<void> {
-  if (process.platform === "win32") return;
-  try {
-    await access(endpoint);
-  } catch {
-    return;
-  }
-  const live = await new Promise<boolean>((resolve) => {
-    const socket = createConnection(endpoint);
-    socket.once("connect", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once("error", () => resolve(false));
-    socket.setTimeout(1_000, () => {
-      socket.destroy();
-      resolve(false);
-    });
-  });
-  if (live) throw new Error(`A live host already listens on ${endpoint}.`);
-  await unlink(endpoint);
 }
 
 async function main(): Promise<void> {
@@ -107,7 +76,7 @@ async function main(): Promise<void> {
     );
 
   const endpoint = option("--socket");
-  if (endpoint) await clearStaleSocket(endpoint);
+  if (endpoint) await clearStaleCuaHostSocket(endpoint);
 
   sweepOrphanedCuaDrivers();
   const host = new CuaDriverHost({
@@ -117,6 +86,14 @@ async function main(): Promise<void> {
     bundleId: `synara-cua-standalone-${process.platform}`,
     capability,
     nativeRevision: null,
+    ...(process.platform === "linux"
+      ? {
+          inputMonitorState: () => ({
+            ready: false,
+            error: "linux_global_escape_unavailable",
+          }),
+        }
+      : {}),
     ...(endpoint ? { hostEndpoint: endpoint } : {}),
     setup: async () => {
       throw new Error(
@@ -129,8 +106,13 @@ async function main(): Promise<void> {
   const bound = await host.listen();
   const shutdown = async (signal: string) => {
     console.info(`[cua-driver-host] ${signal} received; disposing`);
-    await host.dispose().catch(() => undefined);
-    process.exit(0);
+    try {
+      await host.dispose();
+      process.exit(0);
+    } catch (error) {
+      console.error("[cua-driver-host] cleanup failed:", error);
+      process.exit(1);
+    }
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
@@ -153,7 +135,13 @@ async function main(): Promise<void> {
       bound +
       " SYNARA_BROWSER_HOST_CAPABILITY=<capability>",
   );
-  console.info(`[cua-driver-host] driver: ${basename(binaryPath)} (unpatched upstream)`);
+  console.info(
+    `[cua-driver-host] driver: ${basename(binaryPath)} (capabilities checked at handshake)`,
+  );
+  if (process.platform === "linux")
+    console.info(
+      "[cua-driver-host] no global Escape adapter: Linux browser observation is available; browser actions are disabled.",
+    );
 }
 
 main().catch((error: unknown) => {

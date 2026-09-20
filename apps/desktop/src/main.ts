@@ -1,4 +1,6 @@
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
+import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
+import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
 import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
@@ -68,7 +70,8 @@ import {
   SYNARA_DESKTOP_BUNDLE_ID_ENV,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
-  resolveSynaraDesktopFlavor,
+  canOverrideDesktopSmokeUserData,
+  resolveSynaraDesktopRuntimeFlavor,
   synaraDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
@@ -333,11 +336,24 @@ const shellEnvironmentSync = syncShellEnvironment();
 
 const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
-const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const desktopFlavor = resolveSynaraDesktopFlavor({
+const packagedDesktopFlavor = app.isPackaged
+  ? (
+      JSON.parse(FS.readFileSync(Path.join(app.getAppPath(), "package.json"), "utf8")) as {
+        synaraDesktopFlavor?: unknown;
+      }
+    ).synaraDesktopFlavor
+  : undefined;
+const isSourceDesktopBuild =
+  requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER &&
+  packagedDesktopFlavor === undefined;
+const isDevelopment =
+  (!app.isPackaged || isSourceDesktopBuild) && Boolean(process.env.VITE_DEV_SERVER_URL);
+const desktopFlavor = resolveSynaraDesktopRuntimeFlavor({
+  isPackaged: app.isPackaged,
   isDevelopment,
-  requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR ?? "cua",
-  allowDevelopmentOverride: requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
+  packagedFlavor: packagedDesktopFlavor,
+  requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
+  allowDevelopmentOverride: isSourceDesktopBuild,
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const BASE_DIR =
@@ -2125,10 +2141,12 @@ function resolveUserDataPath(): string {
   return resolveDesktopUserDataPath({
     appDataBase,
     userDataDirectoryName: desktopIdentity.userDataDirectoryName,
-    testOverridePath:
-      requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER
-        ? process.env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]
-        : undefined,
+    testOverridePath: canOverrideDesktopSmokeUserData({
+      packagedFlavor: packagedDesktopFlavor,
+      sourceBuildMarker: requestedSourceBuildMarker,
+    })
+      ? process.env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]
+      : undefined,
   });
 }
 
@@ -3675,12 +3693,62 @@ let cuaDriverHost: CuaDriverHost | undefined;
 let disposeComputerDesktopLifecycle: (() => void) | undefined;
 let cuaHostEndpoint: string | undefined;
 let escapeKillSwitchMonitor: EscapeKillSwitchMonitor | undefined;
+let linuxEscapeKillSwitchMonitor: LinuxEscapeKillSwitchMonitor | undefined;
+
+function stopComputerInputFromEscape(): void {
+  // Native interruption owns the drain. The backend notice only relays the
+  // interrupted state; a slow provider must not delay the local stop.
+  if (!cuaDriverHost?.emergencyStopInput()) return;
+  notifyBackendComputerEmergencyStop({
+    backendHttpUrl,
+    shutdownToken: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
+    onError: (message) => safeConsoleError(`[desktop] ${message}`),
+  });
+}
+
+async function attachCuaHost(host: CuaDriverHost): Promise<void> {
+  cuaHostEndpoint = await host.listen();
+  cuaDriverHost = host;
+  disposeComputerDesktopLifecycle = registerComputerDesktopLifecycle(powerMonitor, host, (error) =>
+    safeConsoleError("[desktop] computer input pause failed", error),
+  );
+}
 
 async function startCuaHost(): Promise<void> {
-  if (process.platform !== "darwin" || cuaDriverHost) return;
+  if ((process.platform !== "darwin" && process.platform !== "linux") || cuaDriverHost) return;
   sweepOrphanedCuaDrivers();
+  if (process.platform === "linux") {
+    linuxEscapeKillSwitchMonitor ??= new LinuxEscapeKillSwitchMonitor({
+      shortcutRegistry: globalShortcut,
+      sessionType: linuxEscapeSession(
+        app.commandLine.getSwitchValue("ozone-platform") ||
+          app.commandLine.getSwitchValue("ozone-platform-hint") ||
+          process.env.ELECTRON_OZONE_PLATFORM_HINT,
+      ),
+      onEscape: stopComputerInputFromEscape,
+      onStateChange: (state) => cuaDriverHost?.inputMonitorStateChanged(state),
+      onError: (message) => safeConsoleError(`[desktop] Escape monitor: ${message}`),
+    });
+    await attachCuaHost(
+      createLinuxCuaDriverHost({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        appRoot: resolveAppRoot(),
+        bundleId: desktopIdentity.bundleId,
+        capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+        inputMonitor: linuxEscapeKillSwitchMonitor,
+        ownPids: () => new Set([process.pid, ...app.getAppMetrics().map((metric) => metric.pid)]),
+      }),
+    );
+    return;
+  }
   const host = new CuaDriverHost({
     onInputMonitorArmedChange: (armed) => escapeKillSwitchMonitor?.setArmed(armed),
+    inputMonitorState: () =>
+      escapeKillSwitchMonitor?.state ?? { ready: false, error: "input_monitor_starting" },
+    activateInputMonitor: async () => {
+      await escapeKillSwitchMonitor?.activate();
+    },
     binaryPath: app.isPackaged
       ? Path.join(process.resourcesPath, "cua-driver", "cua-driver")
       : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver"),
@@ -3698,8 +3766,16 @@ async function startCuaHost(): Promise<void> {
       // still disabled.
       initializeDesktopAppSnap();
       const state = await appSnapManager!.refreshState(COMPUTER_PERMISSION_KINDS);
+      if (
+        host.isInputMonitorRequested &&
+        state.inputMonitoringPermission === "granted" &&
+        escapeKillSwitchMonitor?.state.error === "input-monitoring-required"
+      ) {
+        await escapeKillSwitchMonitor.activate(true);
+      }
       return {
         accessibility: state.accessibilityPermission === "granted",
+        inputMonitoring: state.inputMonitoringPermission === "granted",
         screenRecording: state.screenRecordingPermission === "granted",
       };
     },
@@ -3748,35 +3824,22 @@ async function startCuaHost(): Promise<void> {
       return result;
     },
   });
-  cuaHostEndpoint = await host.listen();
-  cuaDriverHost = host;
-  disposeComputerDesktopLifecycle = registerComputerDesktopLifecycle(powerMonitor, host, (error) =>
-    safeConsoleError("[desktop] computer input pause failed", error),
-  );
+  await attachCuaHost(host);
   // The physical Escape kill switch lives in a dedicated helper process: its
   // listen-only event tap can report a hardware Escape even while Electron's
-  // main process is busy, and a missing Input Monitoring grant degrades it to
-  // silence rather than breaking the key. The host's armed callback (wired at
-  // construction above) is what scopes reporting to live driver generations.
+  // main process is busy. Readiness is exposed through Computer status and
+  // gates input until Input Monitoring and the listener are both healthy.
   if (!escapeKillSwitchMonitor) {
     escapeKillSwitchMonitor = new EscapeKillSwitchMonitor({
       helperPath: resolveAppSnapHelperPath(),
-      onEscape: () => {
-        // The host-side interrupt is the stop: it engages synchronously on
-        // the press and the driver generation survives it. The backend
-        // notice only relays the momentary interrupted state, so it stays
-        // best-effort and never sits on the interrupt's critical path.
-        if (!cuaDriverHost?.emergencyStopInput()) return;
-        notifyBackendComputerEmergencyStop({
-          backendHttpUrl,
-          shutdownToken: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
-          onError: (message) => safeConsoleError(`[desktop] ${message}`),
-        });
+      onPhysicalInput: (event) => {
+        cuaDriverHost?.physicalInput(event);
       },
+      onStateChange: (state) => cuaDriverHost?.inputMonitorStateChanged(state),
+      onEscape: stopComputerInputFromEscape,
       onError: (message) => safeConsoleError(`[desktop] Escape monitor: ${message}`),
     });
   }
-  escapeKillSwitchMonitor.start();
 }
 
 function backendEnv(): NodeJS.ProcessEnv {
@@ -4438,6 +4501,8 @@ async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<
   disposeComputerDesktopLifecycle = undefined;
   escapeKillSwitchMonitor?.dispose();
   escapeKillSwitchMonitor = undefined;
+  linuxEscapeKillSwitchMonitor?.dispose();
+  linuxEscapeKillSwitchMonitor = undefined;
   await cuaDriverHost?.dispose();
   cuaDriverHost = undefined;
   cuaHostEndpoint = undefined;

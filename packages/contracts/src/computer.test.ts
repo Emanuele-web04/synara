@@ -12,8 +12,42 @@ import {
   ComputerSetupRequiredPayload,
   ComputerState,
   ComputerStatusResult,
+  ComputerWindow,
   ThreadComputerState,
 } from "./computer";
+
+describe("ComputerWindow observed Space membership", () => {
+  const window = {
+    id: "cua:1:2",
+    title: "Fixture",
+    focused: false,
+    minimized: false,
+    visible: false,
+  };
+
+  it("preserves per-display membership without making it mandatory on other platforms", () => {
+    for (const input of [
+      window,
+      { ...window, spaceIds: [], onCurrentSpace: false },
+      { ...window, spaceIds: [3, 8], currentSpaceId: 8, onCurrentSpace: true },
+    ]) {
+      const decoded = Schema.decodeUnknownSync(ComputerWindow)(input);
+      expect(decoded).toEqual(input);
+      expect(Schema.encodeUnknownSync(ComputerWindow)(decoded)).toEqual(input);
+    }
+  });
+
+  it("rejects invalid or lossy native Space identifiers", () => {
+    for (const id of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "3"]) {
+      expect(() =>
+        Schema.decodeUnknownSync(ComputerWindow)({ ...window, spaceIds: [id] }),
+      ).toThrow();
+      expect(() =>
+        Schema.decodeUnknownSync(ComputerWindow)({ ...window, currentSpaceId: id }),
+      ).toThrow();
+    }
+  });
+});
 
 function decodes(input: unknown): boolean {
   try {
@@ -60,7 +94,8 @@ describe("ComputerAvailability permission-required", () => {
   });
 
   it("refuses an unknown grant name and an unknown signature", () => {
-    expect(decodes({ ...PERMISSION_REQUIRED, missing: ["inputMonitoring"] })).toBe(false);
+    expect(decodes({ ...PERMISSION_REQUIRED, missing: ["inputMonitoring"] })).toBe(true);
+    expect(decodes({ ...PERMISSION_REQUIRED, missing: ["camera"] })).toBe(false);
     expect(decodes({ ...PERMISSION_REQUIRED, buildSignature: "notarized" })).toBe(false);
   });
 });
@@ -95,7 +130,8 @@ describe("ComputerSetupRequiredPayload", () => {
     expect(decodes({ toolName: "computer_click", missing: [], buildSignature: "notarized" })).toBe(
       false,
     );
-    expect(decodes({ toolName: "computer_click", missing: ["inputMonitoring"] })).toBe(false);
+    expect(decodes({ toolName: "computer_click", missing: ["inputMonitoring"] })).toBe(true);
+    expect(decodes({ toolName: "computer_click", missing: ["camera"] })).toBe(false);
   });
 });
 

@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   resolveSynaraDesktopFlavor,
+  resolveSynaraDesktopRuntimeFlavor,
+  canOverrideDesktopSmokeUserData,
+  SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   SYNARA_CANARY_BUNDLE_ID,
   SYNARA_CANARY_DESKTOP_ENTRY_URL,
   SYNARA_CANARY_DESKTOP_ORIGIN,
@@ -97,5 +100,79 @@ describe("desktopIdentity", () => {
     expect(synaraDesktopIdentity("canary").defaultHomeDirectoryName).toBe(".synara-canary");
     expect(synaraDesktopIdentity("cua").defaultHomeDirectoryName).toBe(".synara-cua");
     expect(synaraDesktopIdentity("production").defaultHomeDirectoryName).toBe(".synara");
+  });
+
+  it.each(["production", "canary", "cua"] as const)(
+    "uses the immutable %s package flavor despite inherited source settings",
+    (packagedFlavor) => {
+      expect(
+        resolveSynaraDesktopRuntimeFlavor({
+          isPackaged: true,
+          isDevelopment: true,
+          packagedFlavor,
+          requestedFlavor: "development",
+          allowDevelopmentOverride: true,
+        }),
+      ).toBe(packagedFlavor);
+    },
+  );
+
+  it("keeps legacy packaged Stable independent from a source shell's flavor", () => {
+    expect(
+      resolveSynaraDesktopRuntimeFlavor({
+        isPackaged: true,
+        isDevelopment: false,
+        requestedFlavor: "cua",
+      }),
+    ).toBe("production");
+  });
+
+  it("preserves source launcher routing, including its bundled macOS bootstrap", () => {
+    expect(
+      resolveSynaraDesktopRuntimeFlavor({
+        isPackaged: true,
+        isDevelopment: false,
+        requestedFlavor: "development",
+        allowDevelopmentOverride: true,
+      }),
+    ).toBe("development");
+    expect(
+      resolveSynaraDesktopRuntimeFlavor({
+        isPackaged: false,
+        isDevelopment: true,
+        requestedFlavor: "canary",
+      }),
+    ).toBe("canary");
+  });
+
+  it.each(["development", "CUA", "unknown", null, {}, 1])(
+    "rejects malformed packaged identity %j before opening any profile",
+    (packagedFlavor) => {
+      expect(() =>
+        resolveSynaraDesktopRuntimeFlavor({
+          isPackaged: true,
+          isDevelopment: false,
+          packagedFlavor,
+        }),
+      ).toThrow("packaged Synara desktop flavor is invalid");
+    },
+  );
+
+  it("isolates smoke profiles only for source launches or immutable Cua packages", () => {
+    expect(canOverrideDesktopSmokeUserData({ packagedFlavor: "cua" })).toBe(true);
+    expect(
+      canOverrideDesktopSmokeUserData({
+        sourceBuildMarker: SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
+      }),
+    ).toBe(true);
+    for (const packagedFlavor of ["production", "canary", "development", null]) {
+      expect(
+        canOverrideDesktopSmokeUserData({
+          packagedFlavor,
+          sourceBuildMarker: SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
+        }),
+      ).toBe(false);
+    }
+    expect(canOverrideDesktopSmokeUserData({})).toBe(false);
   });
 });

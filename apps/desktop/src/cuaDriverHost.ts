@@ -1,6 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
-import { readdirSync, rmSync, statSync } from "node:fs";
 import { access, chmod, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -25,9 +24,26 @@ import {
   cuaComputerTaskKey,
 } from "@synara/shared/cuaDriverProtocol";
 import type { ComputerFrameTapHost } from "./computerFrameTap";
+import { linuxBrowserCallIsReadOnly, linuxCuaAdmissionRefusal } from "./linuxCuaAdmission";
+import {
+  cuaHostProcessIsAlive,
+  markCuaRuntimeDirectory,
+  sweepOwnedCuaRuntimeDirectories,
+} from "./cuaRuntimeOwnership";
 import type { ComputerShieldHost } from "./computerShield";
+import type { ComputerInputMonitorState, PhysicalComputerInput } from "./escapeKillSwitchMonitor";
+
+interface ControlledTarget {
+  pid: number;
+  windowId?: number;
+  threadId?: string;
+  browserTargetId?: string;
+  browserTabId?: string;
+}
 
 interface Generation {
+  nativeInputEpoch: number;
+  browserInputControl: boolean;
   child: ChildProcess;
   socket: string;
   session: string;
@@ -36,6 +52,7 @@ interface Generation {
   retired: boolean;
   cancellationReady: boolean;
   inputInFlight: boolean;
+  browserInputInFlight: boolean;
   /** Stays set once any action tool was dispatched to this generation, so a
    * driver that wedges before ever receiving input stays distinguishable
    * from one that may still hold OS input it never confirmed releasing. */
@@ -173,6 +190,7 @@ function normalizeCuaCursorStyle(
 interface HostPermissions {
   accessibility: boolean;
   screenRecording: boolean;
+  inputMonitoring?: boolean;
 }
 
 function permissionsChanged(a: HostPermissions, b: HostPermissions): boolean {
@@ -247,12 +265,7 @@ export function sweepOrphanedCuaDrivers(): void {
     }
     const hostPid = Number(env.match(/CUA_DRIVER_EMBEDDED_HOST_PID=(\d+)/)?.[1]);
     if (!hostPid) continue;
-    try {
-      process.kill(hostPid, 0);
-      continue;
-    } catch {
-      // Host is gone: the daemon is an orphan.
-    }
+    if (cuaHostProcessIsAlive(hostPid)) continue;
     try {
       process.kill(pid, "SIGKILL");
       log(`killed orphaned cua-driver pid=${pid} (host pid ${hostPid} gone)`);
@@ -260,29 +273,8 @@ export function sweepOrphanedCuaDrivers(): void {
       // Already gone.
     }
   }
-  // Every generation mkdtemps a synara-cua-* dir (host.sock, driver socket,
-  // state) and nothing reaps it on a crash — hundreds accumulate over days.
-  // A dir survives only while a live daemon still references its socket, or
-  // while it is young enough to belong to a spawn still in flight.
-  let entries: string[];
-  try {
-    entries = readdirSync(tmpdir());
-  } catch {
-    return;
-  }
-  const now = Date.now();
-  for (const entry of entries) {
-    if (!entry.startsWith("synara-cua-")) continue;
-    const dir = join(tmpdir(), entry);
-    if (liveSocketDirs.has(dir)) continue;
-    try {
-      if (now - statSync(dir).mtimeMs < 30_000) continue;
-      rmSync(dir, { recursive: true, force: true });
-      log(`removed stale driver directory ${entry}`);
-    } catch {
-      // Already gone or unreadable.
-    }
-  }
+  for (const entry of sweepOwnedCuaRuntimeDirectories({ directory: tmpdir(), liveSocketDirs }))
+    log(`removed stale owned driver directory ${entry}`);
 }
 
 const DRIVER_SESSION_DEATH_CODES = new Set([
@@ -339,6 +331,15 @@ export class CuaDriverHost {
   private closed = false;
   private suspended = false;
   private inputMonitorArmed = false;
+  private inputMonitorRequested = false;
+  private nativeInputCleanupPending: Generation | undefined;
+  private activeForegroundInput = false;
+  private readonly controlledTargets = new Map<string, ControlledTarget>();
+  private readonly takeoverTargets = new Map<string, ControlledTarget>();
+  private readonly browserTargets = new Map<string, ControlledTarget>();
+  private readonly repliedConnections = new WeakSet<Socket>();
+  private activeInputTaskKey: string | undefined;
+  private readonly monitoredTasks = new Map<string, string>();
   /**
    * Deadline until which mutating dispatch is refused after a physical
    * Escape interrupt — a timestamp, never a flag: it lapses on its own and
@@ -355,6 +356,8 @@ export class CuaDriverHost {
   private readonly inFlightInputInterrupts = new Set<AbortController>();
   private readonly desktopPauses = new Set<string>();
   private desktopObservationRequired = false;
+  private browserObservationRequired = false;
+  private readonly browserRecoveryObservations = new Map<string, number>();
   private desktopEpoch = 0;
   /**
    * Monotonic count of OS desktop interruptions this host has observed —
@@ -377,6 +380,8 @@ export class CuaDriverHost {
   /** Serializes live cursor-style pushes so two rapid changes cannot race. */
   private cursorStyleUpdates: Promise<void> = Promise.resolve();
   private epoch = 0;
+  /** Separates listener failures from real cancellation during activation. */
+  private inputMonitorEpochChanges = 0;
   private readonly connections = new Set<Socket>();
   private permissions: HostPermissions | undefined;
   private readonly pendingPermissionChecks = new Set<() => void>();
@@ -401,6 +406,9 @@ export class CuaDriverHost {
        * The desktop wires this to the helper's `arm`/`disarm` commands.
        */
       onInputMonitorArmedChange?: (armed: boolean) => void;
+      /** macOS listener health; omitted on hosts without this listener. */
+      inputMonitorState?: () => ComputerInputMonitorState;
+      activateInputMonitor?: () => Promise<void>;
       /**
        * The masked-activation shield surface. Absent means `engage` requests
        * are refused as unavailable — the caller must never fall back to an
@@ -439,9 +447,14 @@ export class CuaDriverHost {
     },
   ) {}
 
+  get isInputMonitorRequested(): boolean {
+    return this.inputMonitorRequested;
+  }
+
   async listen(): Promise<string> {
     this.directory = await mkdtemp(join(tmpdir(), "synara-cua-"));
     await chmod(this.directory, 0o700);
+    await markCuaRuntimeDirectory(this.directory);
     // Named pipes are already private to the creating user on Windows; the
     // 0o600 owner check is a unix-socket protection, applied where it exists.
     const endpoint =
@@ -485,8 +498,12 @@ export class CuaDriverHost {
         return;
       }
       void this.handle(request, socket).then(
-        (result) => socket.end(JSON.stringify({ ...result, ...this.desktopState() }) + "\n"),
-        (error) =>
+        (result) => {
+          this.repliedConnections.add(socket);
+          socket.end(JSON.stringify({ ...result, ...this.desktopState() }) + "\n");
+        },
+        (error) => {
+          this.repliedConnections.add(socket);
           socket.end(
             JSON.stringify({
               ok: false,
@@ -494,7 +511,8 @@ export class CuaDriverHost {
               effect: "not-dispatched",
               ...this.desktopState(),
             }) + "\n",
-          ),
+          );
+        },
       );
     });
     socket.setTimeout(60_000, () => socket.destroy());
@@ -527,6 +545,25 @@ export class CuaDriverHost {
     if (request.task !== undefined && !task) throw new Error("Invalid computer task attribution.");
     if (request.method === "end_task") {
       if (!task) throw new Error("Computer task attribution is required.");
+      this.controlledTargets.delete(cuaComputerTaskKey(task));
+      this.takeoverTargets.delete(cuaComputerTaskKey(task));
+      this.monitoredTasks.delete(cuaComputerTaskKey(task));
+      if (task.turnId === undefined) {
+        for (const [key, target] of this.controlledTargets) {
+          if (target.threadId === task.threadId) this.controlledTargets.delete(key);
+        }
+        for (const [key, target] of this.takeoverTargets) {
+          if (target.threadId === task.threadId) this.takeoverTargets.delete(key);
+        }
+        for (const [key, threadId] of this.monitoredTasks) {
+          if (threadId === task.threadId) this.monitoredTasks.delete(key);
+        }
+      }
+      if (this.monitoredTasks.size === 0) {
+        this.inputMonitorRequested = false;
+        this.inputMonitorArmed = false;
+        this.options.onInputMonitorArmedChange?.(false);
+      }
       this.rememberTask(this.endedFrameTasks, task);
       if (
         this.frameTapTask?.threadId === task.threadId &&
@@ -556,6 +593,9 @@ export class CuaDriverHost {
       // label — ending a session under a dispatching call would turn a
       // known-alive capability into a mid-flight session death.
       if (!task) throw new Error("Computer task attribution is required.");
+      for (const [key, target] of this.browserTargets) {
+        if (target.threadId === task.threadId) this.browserTargets.delete(key);
+      }
       const endTask = task;
       const previousEnd = this.operations;
       const endOperation = (async () => {
@@ -607,6 +647,50 @@ export class CuaDriverHost {
     if (this.closed) throw new Error("Computer host is closed.");
     if (this.suspended)
       throw new Error("Computer host is suspended while the backend is stopping.");
+    const activeComputerWork =
+      request.method === "call" &&
+      typeof request.name === "string" &&
+      request.name !== "check_permissions" &&
+      (process.platform !== "linux" || task !== undefined) &&
+      (CUA_ACTION_TOOLS.has(request.name) ||
+        (CUA_BROWSER_MUTATION_TOOLS.has(request.name) &&
+          (process.platform !== "linux" ||
+            !linuxBrowserCallIsReadOnly(request.name, request.args))) ||
+        (task !== undefined &&
+          request.modelObservation === true &&
+          (CUA_READ_TOOLS.has(request.name) || CUA_BROWSER_TOOLS.has(request.name))));
+    if (activeComputerWork) {
+      this.inputMonitorRequested = true;
+      const activationEpoch = this.epoch;
+      const activationMonitorEpochChanges = this.inputMonitorEpochChanges;
+      await this.options.activateInputMonitor?.();
+      if (activationEpoch !== this.epoch || connection.destroyed || this.closed || this.suspended) {
+        const monitor = this.options.inputMonitorState?.();
+        // Listener failure fences input just like Stop. Preserve its useful
+        // diagnosis only when no other cancellation occurred while activating.
+        // The request still ends here without entering the operation queue.
+        if (
+          !connection.destroyed &&
+          !this.closed &&
+          !this.suspended &&
+          monitor?.ready === false &&
+          this.epoch - activationEpoch ===
+            this.inputMonitorEpochChanges - activationMonitorEpochChanges
+        )
+          return this.inputMonitorUnavailableReply(monitor);
+        return {
+          ok: false,
+          error: "Cancelled before listener activation completed.",
+          effect: "not-dispatched",
+        };
+      }
+      if (this.options.activateInputMonitor) this.inputMonitorArmed = true;
+      if (task) {
+        this.monitoredTasks.set(cuaComputerTaskKey(task), task.threadId);
+        while (this.monitoredTasks.size > 256)
+          this.monitoredTasks.delete(this.monitoredTasks.keys().next().value!);
+      }
+    }
     // A probe or a permission check is the host's first touch: both answer
     // without the driver, which is exactly what makes them the cheap moment
     // to warm its spawn plus handshake in the background.
@@ -649,6 +733,10 @@ export class CuaDriverHost {
       (!CUA_READ_TOOLS.has(name) && !CUA_ACTION_TOOLS.has(name) && !CUA_BROWSER_TOOLS.has(name))
     )
       throw new Error("Unsupported computer host request.");
+    if (process.platform === "linux" && !CUA_BROWSER_TOOLS.has(name)) {
+      const refusal = linuxCuaAdmissionRefusal(name, request.args, request.deliveryMode);
+      if (refusal) return refusal;
+    }
     // Browser calls mint session-scoped capabilities. Without task attribution
     // there is no lifecycle label to scope them under, so they are refused at
     // admission rather than dropped into an anonymous namespace.
@@ -679,7 +767,7 @@ export class CuaDriverHost {
     const previous = this.operations;
     const stopping = this.stopping;
     const epoch = this.epoch;
-    const operation = (async () => {
+    const operation = (async (): Promise<CuaReply> => {
       await previous;
       await stopping;
       if (this.closed || this.suspended || connection.destroyed || epoch !== this.epoch)
@@ -689,6 +777,42 @@ export class CuaDriverHost {
           effect: "not-dispatched",
         } as const;
       if (this.desktopPauses.size > 0) return this.desktopPauseReply();
+      if (process.platform === "linux" && CUA_BROWSER_TOOLS.has(name)) {
+        // Capability comes only from the embedded child handshake. A cold
+        // browser call must not trust model arguments or a configured path as
+        // evidence that this Linux artifact implements input cancellation.
+        const generation = await this.ensureSpawned();
+        if (
+          this.closed ||
+          this.suspended ||
+          connection.destroyed ||
+          epoch !== this.epoch ||
+          generation.retired ||
+          generation.didExit
+        )
+          return { ok: false, error: "Cancelled before dispatch.", effect: "not-dispatched" };
+        const refusal = linuxCuaAdmissionRefusal(
+          name,
+          request.args,
+          request.deliveryMode,
+          generation.browserInputControl,
+        );
+        if (refusal) return refusal;
+      }
+      if (!this.inputMonitorAvailable(name, request.args))
+        return this.inputMonitorUnavailableReply();
+      if (
+        (CUA_ACTION_TOOLS.has(name) || CUA_BROWSER_MUTATION_TOOLS.has(name)) &&
+        this.nativeInputCleanupPending
+      ) {
+        await this.interruptNativeInput(this.nativeInputCleanupPending);
+        if (epoch !== this.epoch || connection.destroyed)
+          return {
+            ok: false,
+            error: "Cancelled while waiting for native input cleanup.",
+            effect: "not-dispatched",
+          };
+      }
       // A physical Escape's cooldown: mutating dispatch is refused with the
       // desktop-pause dialect until the deadline lapses — checked at dispatch
       // time, so a call queued past the window runs and one admitted inside
@@ -739,6 +863,7 @@ export class CuaDriverHost {
           this.epoch += 1;
           this.desktopEpoch += 1;
           this.desktopObservationRequired = true;
+          this.browserObservationRequired = true;
           log(
             `permission state changed accessibility ${this.permissions.accessibility} -> ${permissions.accessibility}, ` +
               `screen_recording ${this.permissions.screenRecording} -> ${permissions.screenRecording}; requiring fresh desktop observation`,
@@ -748,12 +873,22 @@ export class CuaDriverHost {
           if (this.generation) await this.retire(this.generation);
         }
         this.permissions = permissions;
+        const monitor = this.inputMonitorRequested ? this.options.inputMonitorState?.() : undefined;
         return {
           ok: true,
           result: {
             structuredContent: {
               accessibility: permissions.accessibility,
               screen_recording: permissions.screenRecording,
+              ...(permissions.inputMonitoring !== undefined
+                ? { input_monitoring: permissions.inputMonitoring }
+                : {}),
+              ...(monitor
+                ? {
+                    input_monitor_ready: monitor.ready,
+                    ...(monitor.error ? { input_monitor_error: monitor.error } : {}),
+                  }
+                : {}),
               source: {
                 attribution: "host",
                 host_bundle_id: this.options.bundleId,
@@ -763,9 +898,22 @@ export class CuaDriverHost {
           },
         };
       }
+      const browserRecoverySetup = this.isIsolatedBrowserSetup(name, request.args);
+      const browserRecoveryObserved = this.hasBrowserRecoveryObservation(request.args, task);
       if (
-        this.desktopObservationRequired &&
-        (CUA_ACTION_TOOLS.has(name) || name === "check_input_ready")
+        (this.desktopObservationRequired &&
+          (CUA_ACTION_TOOLS.has(name) || name === "check_input_ready")) ||
+        (this.browserObservationRequired &&
+          CUA_BROWSER_MUTATION_TOOLS.has(name) &&
+          !browserRecoverySetup &&
+          !browserRecoveryObserved) ||
+        ((this.takeoverTargets.has(task ? cuaComputerTaskKey(task) : "anonymous") ||
+          (!task && this.takeoverTargets.size > 0)) &&
+          (CUA_ACTION_TOOLS.has(name) ||
+            (CUA_BROWSER_MUTATION_TOOLS.has(name) &&
+              !browserRecoverySetup &&
+              !browserRecoveryObserved) ||
+            name === "check_input_ready"))
       ) {
         log(`refused ${name}: fresh desktop observation still required`);
         return this.desktopPauseReply();
@@ -783,6 +931,7 @@ export class CuaDriverHost {
         connection,
         request.modelObservation === true,
         task,
+        request.deliveryMode === "foreground",
       );
       // Frame tap updates carry no frames through this queue: they only point
       // the dedicated helper channel at the task's window target.
@@ -934,6 +1083,7 @@ export class CuaDriverHost {
     connection: Socket,
     modelObservation: boolean,
     task?: CuaComputerTask,
+    foregroundDelivery = false,
   ): Promise<CuaReply> {
     let generation: Generation | undefined;
     let dispatched = false;
@@ -953,15 +1103,26 @@ export class CuaDriverHost {
     // Per-call cancellation. The input interrupt aborts mutating calls
     // through this signal; a caller's connection closing mid-flight aborts
     // it too — the reply has no destination, so there is nothing to keep
-    // waiting on. A close after the host wrote its reply is the request's
-    // normal end (`writableEnded` is set) and cancels nothing. Neither
+    // waiting on. Optional preview priming may outlive a replied launch, so
+    // only the host's explicit reply marker recognizes normal completion.
+    // Node also sets writableEnded after peer EOF when allowHalfOpen is false. Neither
     // indicts the generation: a vanished caller or a pressed Escape says
     // nothing about driver health, so the catch below deliberately does not
     // retire on an aborted call.
     const callCancel = new AbortController();
     if (mutation) this.inFlightInputInterrupts.add(callCancel);
     const abort = () => {
-      if (!connection.writableEnded) callCancel.abort();
+      if (this.repliedConnections.has(connection)) return;
+      const alreadyInterrupted = callCancel.signal.aborted;
+      callCancel.abort();
+      if (mutation && dispatched && !alreadyInterrupted) {
+        // Closing a socket does not stop a native input loop. Fence queued
+        // work immediately and keep subsequent admission behind the real
+        // native drain, just as an explicit Stop does.
+        void this.interruptInput().catch((error: unknown) =>
+          log(`disconnected input cleanup failed: ${String(error)}`),
+        );
+      }
     };
     connection.once("close", abort);
     // Set only by the deliberate pre-dispatch guard below: a call cancelled
@@ -1033,15 +1194,55 @@ export class CuaDriverHost {
         // session cursor from its launch template. The user's colors must be
         // applied to the session the action actually paints, once per task.
         if (agentLabel) await this.applyCursorStyleForSession(generation, agentLabel);
+        // Session setup can await I/O. Stop must win even if it arrived after
+        // the initial dispatch guard and before the native request is sent.
+        if (admittedEpoch !== this.epoch || connection.destroyed || callCancel.signal.aborted) {
+          cancelledBeforeDispatch = !dispatched;
+          throw new Error("Cancelled before dispatch.");
+        }
+        if (process.platform === "linux" && isBrowser) {
+          const refusal = linuxCuaAdmissionRefusal(
+            name,
+            input,
+            foregroundDelivery ? "foreground" : undefined,
+            generation.browserInputControl,
+          );
+          if (refusal) return refusal;
+        }
+        if (!this.inputMonitorAvailable(name, input)) return this.inputMonitorUnavailableReply();
+        if (mutation || modelObservation) {
+          const target = this.controlledTarget(input, task, isBrowser);
+          if (target) {
+            this.controlledTargets.set(task ? cuaComputerTaskKey(task) : "anonymous", target);
+            while (this.controlledTargets.size > 256)
+              this.controlledTargets.delete(this.controlledTargets.keys().next().value!);
+          }
+        }
+        this.activeInputTaskKey = mutation
+          ? task
+            ? cuaComputerTaskKey(task)
+            : "anonymous"
+          : undefined;
+        this.activeForegroundInput =
+          mutation &&
+          (foregroundDelivery ||
+            (args as Record<string, unknown>).delivery_mode === "foreground" ||
+            name === "bring_to_front");
         dispatched = true;
         if (label) generation.liveBrowserSessions.add(label);
-        generation.inputInFlight = CUA_ACTION_TOOLS.has(name);
+        if (mutation || this.nativeInputCleanupPending !== generation) {
+          generation.inputInFlight = mutation;
+          generation.browserInputInFlight = isBrowser && mutation;
+        }
         generation.inputEverDispatched ||= generation.inputInFlight;
         const attemptReply = await cuaRequest<CuaReply>(
           generation.socket,
           {
             method: "call",
             name,
+            ...(mutation && (this.options.nativeRevision !== null || generation.browserInputControl)
+              ? { expected_input_epoch: generation.nativeInputEpoch }
+              : {}),
             // The daemon sanitizes reserved keys anyway, but the spread order
             // is the real guard: the label overwrites any caller `session`,
             // and `_session_id`/`_transport_session_id` are injected by the
@@ -1054,7 +1255,17 @@ export class CuaDriverHost {
           },
           { timeoutMs: 30_000, mutation, signal: callCancel.signal },
         );
-        generation.inputInFlight = false;
+        if (attemptReply.result?.structuredContent?.input_cleanup_unconfirmed === true) {
+          // A tool reply is not a release acknowledgement. Keep CDP input
+          // uncertainty across later reads and process exits; OS key-ups
+          // cannot prove that the browser received its matching release.
+          generation.inputInFlight = true;
+          generation.browserInputInFlight ||= isBrowser;
+          this.nativeInputCleanupPending = generation;
+        } else if (this.nativeInputCleanupPending !== generation) {
+          generation.inputInFlight = false;
+          generation.browserInputInFlight = false;
+        }
         if (isDriverSessionDeath(attemptReply)) {
           if (isBrowser && label) {
             // A browser session can die without the generation dying — the
@@ -1085,12 +1296,17 @@ export class CuaDriverHost {
         break;
       }
       if (!reply || !generation) throw new Error("Cancelled before dispatch.");
-      if (admittedDesktopEpoch !== this.desktopEpoch && CUA_READ_TOOLS.has(name)) {
+      if (
+        admittedDesktopEpoch !== this.desktopEpoch &&
+        (CUA_READ_TOOLS.has(name) || name === "get_browser_state")
+      ) {
         log(
           `refused stale ${name} read (desktop epoch ${admittedDesktopEpoch} -> ${this.desktopEpoch})`,
         );
         return this.desktopPauseReply();
       }
+      if (isBrowser && task && reply.ok && !reply.result?.isError)
+        this.rememberBrowserTarget(input, reply.result, task);
       if (
         modelObservation &&
         !connection.destroyed &&
@@ -1098,16 +1314,33 @@ export class CuaDriverHost {
         !generation.didExit &&
         admittedEpoch === this.epoch &&
         this.desktopPauses.size === 0 &&
-        (name === "get_window_state" || name === "get_desktop_state") &&
         reply.ok &&
         !reply.result?.isError &&
-        reply.result !== undefined &&
-        reply.result.structuredContent?.screenshot_frame_valid !== false &&
-        (reply.result.content?.some((part) => part.type === "image" && !!part.data) ||
-          Array.isArray(reply.result.structuredContent?.elements))
+        reply.result !== undefined
       ) {
-        this.desktopObservationRequired = false;
-        log(`fresh desktop observation via ${name}; input gate cleared`);
+        const nativeObservation =
+          (name === "get_window_state" || name === "get_desktop_state") &&
+          reply.result.structuredContent?.screenshot_frame_valid !== false &&
+          (reply.result.content?.some((part) => part.type === "image" && !!part.data) ||
+            Array.isArray(reply.result.structuredContent?.elements));
+        const browserObservation =
+          name === "get_browser_state" && this.isBrowserSnapshot(input, reply.result);
+        if (nativeObservation || browserObservation) {
+          if (nativeObservation) this.desktopObservationRequired = false;
+          if (browserObservation) {
+            const key = this.browserRecoveryKey(input, task);
+            if (key) this.browserRecoveryObservations.set(key, this.desktopEpoch);
+            while (this.browserRecoveryObservations.size > 256)
+              this.browserRecoveryObservations.delete(
+                this.browserRecoveryObservations.keys().next().value!,
+              );
+          }
+          const key = task ? cuaComputerTaskKey(task) : "anonymous";
+          const interrupted = this.takeoverTargets.get(key);
+          if (interrupted && this.observationMatchesTarget(name, input, interrupted, reply.result))
+            this.takeoverTargets.delete(key);
+          log(`fresh model observation via ${name}; matching input gate cleared`);
+        }
       }
       if (name === "get_desktop_state" && reply.result && this.options.normalizeOverview)
         this.options.normalizeOverview(reply.result);
@@ -1132,6 +1365,8 @@ export class CuaDriverHost {
         effect: dispatched && mutation ? "dispatched-unknown" : "not-dispatched",
       };
     } finally {
+      this.activeForegroundInput = false;
+      this.activeInputTaskKey = undefined;
       connection.removeListener("close", abort);
       this.inFlightInputInterrupts.delete(callCancel);
     }
@@ -1296,6 +1531,8 @@ export class CuaDriverHost {
         if (stderrTail.length) log(`driver stderr tail: ${stderrTail.join(" | ")}`);
       });
       const generation: Generation = {
+        nativeInputEpoch: 0,
+        browserInputControl: false,
         child,
         socket: endpoint,
         session: `synara-${randomUUID()}`,
@@ -1304,6 +1541,7 @@ export class CuaDriverHost {
         retired: false,
         cancellationReady: false,
         inputInFlight: false,
+        browserInputInFlight: false,
         inputEverDispatched: false,
         controlSession: `synara-transport-${randomUUID()}`,
         controlSocket: undefined,
@@ -1355,9 +1593,14 @@ export class CuaDriverHost {
           typeof reportedRevision === "number" && Number.isSafeInteger(reportedRevision)
             ? reportedRevision
             : 0;
+        generation.browserInputControl =
+          process.platform === "linux" &&
+          reportedRevision === CUA_NATIVE_REVISION &&
+          metadata.result?.synara_browser_input_control === 1;
         if (generation.retired || generation.didExit)
           throw new Error("Cua Driver stopped during startup.");
-        generation.cancellationReady = true;
+        generation.cancellationReady =
+          expectedNativeRevision !== null || generation.browserInputControl;
         if (process.platform !== "win32") await chmod(endpoint, 0o600);
         if (generation.retired || generation.didExit)
           throw new Error("Cua Driver stopped during startup.");
@@ -1483,6 +1726,9 @@ export class CuaDriverHost {
   private retire(generation: Generation): Promise<void> {
     if (generation.retirement) return generation.retirement;
     generation.retired = true;
+    this.browserTargets.clear();
+    this.browserRecoveryObservations.clear();
+    if (this.nativeInputCleanupPending === generation) this.nativeInputCleanupPending = undefined;
     this.updateInputMonitorArmed();
     // Browser teardown rides the control connection's lifetime: closing it
     // now lets the driver's EOF reaper end every session this transport owns
@@ -1497,7 +1743,8 @@ export class CuaDriverHost {
       // is held, and a user click landing under it feels dead system-wide.
       const inputUncertain = generation.inputInFlight;
       const releaseHeldInput = async () => {
-        if (!inputUncertain || !this.options.releaseHeldInput) return false;
+        if (!inputUncertain || generation.browserInputInFlight || !this.options.releaseHeldInput)
+          return false;
         try {
           await this.options.releaseHeldInput();
           log("released held input left by the dead driver generation");
@@ -1690,6 +1937,16 @@ export class CuaDriverHost {
   }
 
   stop(): Promise<void> {
+    this.inputMonitorRequested = false;
+    if (this.inputMonitorArmed) {
+      this.inputMonitorArmed = false;
+      this.options.onInputMonitorArmedChange?.(false);
+    }
+    this.controlledTargets.clear();
+    this.takeoverTargets.clear();
+    this.browserTargets.clear();
+    this.browserRecoveryObservations.clear();
+    this.monitoredTasks.clear();
     this.epoch += 1;
     // A read dispatched before a stop must not be admitted as a fresh
     // observation afterwards: bumping the desktop epoch turns that silent
@@ -1724,24 +1981,9 @@ export class CuaDriverHost {
     return stopping;
   }
 
-  /**
-   * The momentary input interrupt shared by physical Escape and the
-   * backend's `stop` verb while the host is serving. Everything {@link stop}
-   * does to work already admitted — the epoch bumps cancel queued calls and
-   * stale-guard in-flight reads, pending permission probes are cancelled,
-   * the frame tap and shields stop — plus the input half a stop used to get
-   * from retirement: in-flight mutating calls are aborted at the transport
-   * so their callers see an immediate verdict, and the helper posts the
-   * OS-level held-input ups without waiting on a wedged driver.
-   *
-   * The driver generation, its sessions, and its browser bindings all
-   * survive — that is the whole point: retiring on a momentary press is what
-   * severed every session namespace and `target_id` binding. `cancel_input`
-   * is deliberately not sent: the driver gate it trips is irreversible for
-   * the life of the process (it exists to drain a generation before
-   * termination), so sending it here would turn a momentary interrupt into a
-   * permanent native-input refusal.
-   */
+  /** Interrupt native input without retiring browser/session identity. Socket
+   * abort gives callers a prompt uncertain result; only the native gate's
+   * acknowledged drain authorizes later input. */
   private interruptInput(): Promise<void> {
     this.epoch += 1;
     this.desktopEpoch += 1;
@@ -1754,16 +1996,13 @@ export class CuaDriverHost {
     void frameTapStopped?.catch(() => undefined);
     void shieldStopped?.catch(() => undefined);
     for (const interrupt of this.inFlightInputInterrupts) interrupt.abort();
-    const released = this.options.releaseHeldInput?.().catch((error: unknown) => {
-      log(`interrupted held-input release failed: ${String(error)}`);
-    });
     const interrupting = this.stopping.then(async () => {
       await this.starting?.catch(() => undefined);
+      if (this.generation) await this.interruptNativeInput(this.generation);
       await admitted;
       await this.retiring;
       await frameTapStopped;
       await shieldStopped;
-      await released;
     });
     // Same discipline as `retiring`/`stopping` everywhere else: the caller
     // sees the failure but the chain must not — one failed interrupt must
@@ -1775,15 +2014,59 @@ export class CuaDriverHost {
     return interrupting;
   }
 
+  private async interruptNativeInput(generation: Generation): Promise<void> {
+    if (generation.retired || generation.didExit) return;
+    // The upstream Linux driver has no macOS native input gate. Preserve its
+    // existing transport stop; this branch makes no native cleanup claim.
+    if (this.options.nativeRevision === null && !generation.browserInputControl) return;
+    this.nativeInputCleanupPending = generation;
+    let confirmed = false;
+    try {
+      const reply = await cuaRequest<CuaReply>(
+        generation.socket,
+        { method: "interrupt_input", args: { expected_pid: generation.child.pid } },
+        { timeoutMs: 5_000 },
+      );
+      const state = reply.result;
+      confirmed =
+        reply.ok === true &&
+        state !== undefined &&
+        state.pid === generation.child.pid &&
+        state.input_interrupted === true &&
+        state.input_admission_open === true &&
+        state.cleanup_complete === true &&
+        state.pending_input === 0 &&
+        typeof state.input_epoch === "number" &&
+        Number.isSafeInteger(state.input_epoch) &&
+        state.input_epoch > generation.nativeInputEpoch;
+      if (confirmed) generation.nativeInputEpoch = state!.input_epoch as number;
+    } catch {
+      confirmed = false;
+    }
+    if (generation.retired || generation.didExit) return;
+    if (!confirmed) {
+      // The native barrier stays closed. OS releases are only a fallback for
+      // unconfirmed cleanup, never proof that the old input loop has stopped.
+      if (!generation.browserInputInFlight)
+        await this.options.releaseHeldInput?.().catch((error: unknown) => {
+          log(`interrupted held-input release failed: ${String(error)}`);
+        });
+      throw new Error(
+        "Cua Driver has not confirmed input interruption and cleanup. Input remains paused; a later attempt will recheck the native drain.",
+      );
+    }
+    generation.inputInFlight = false;
+    generation.browserInputInFlight = false;
+    if (this.nativeInputCleanupPending === generation) this.nativeInputCleanupPending = undefined;
+  }
+
   /**
    * Physical Escape interrupt — momentary and self-healing. The press arms
    * the {@link ESCAPE_INPUT_COOLDOWN_MS} cooldown and runs
    * {@link interruptInput}: queued work is cancelled, in-flight mutating
-   * calls are aborted at the transport, and held input is released at the OS
-   * level immediately — the press cannot wait on a wedged driver. The driver
-   * generation, its sessions, and its browser bindings all survive: nothing
-   * retires and nothing latches, so the next action after the cooldown
-   * dispatches normally, with no user action and no re-arm.
+   * calls receive an uncertain result, and native input drains with its own
+   * matching releases. The driver and browser bindings survive. A fresh model
+   * observation is required before resuming, with no extra approval dialog.
    *
    * Returns whether the press engaged the interrupt. With no live or
    * spawning driver generation, Escape is an ordinary key: the desktop
@@ -1793,6 +2076,8 @@ export class CuaDriverHost {
     if (this.closed) return false;
     if (this.generation === undefined && this.starting === undefined) return false;
     log("physical Escape: interrupting computer input");
+    this.desktopObservationRequired = true;
+    this.browserObservationRequired = true;
     this.inputInterruptCooldownUntil = Date.now() + ESCAPE_INPUT_COOLDOWN_MS;
     void this.interruptInput().catch((error: unknown) => {
       log(`emergency input interrupt failed: ${String(error)}`);
@@ -1800,12 +2085,74 @@ export class CuaDriverHost {
     return true;
   }
 
+  /** A human changing the controlled target invalidates the model's view.
+   * Typing in a different app does not interrupt background control. */
+  physicalInput(event: PhysicalComputerInput): boolean {
+    if (this.closed || !this.generation || this.generation.retired) return false;
+    const affected = [...this.controlledTargets].filter(
+      ([key, target]) =>
+        (this.activeForegroundInput && key === this.activeInputTaskKey) ||
+        (event.pid !== undefined &&
+          target.pid === event.pid &&
+          (event.windowId === undefined ||
+            target.windowId === undefined ||
+            target.windowId === event.windowId)),
+    );
+    if (!this.activeForegroundInput && affected.length === 0) return false;
+    const alreadyPaused =
+      this.desktopObservationRequired ||
+      this.browserObservationRequired ||
+      this.takeoverTargets.size > 0;
+    for (const [key, target] of affected) this.takeoverTargets.set(key, { ...target });
+    if (this.activeForegroundInput && affected.length === 0) {
+      this.desktopObservationRequired = true;
+      this.browserObservationRequired = true;
+    }
+    const affectedInputInFlight =
+      (this.activeForegroundInput || affected.some(([key]) => key === this.activeInputTaskKey)) &&
+      [...this.inFlightInputInterrupts].some((input) => !input.signal.aborted);
+    this.inputInterruptCooldownUntil = Date.now() + ESCAPE_INPUT_COOLDOWN_MS;
+    if (alreadyPaused && !affectedInputInFlight) {
+      // Repeated typing keeps observations stale without sending one native
+      // cancellation RPC per key. No new mutation can enter this paused gate.
+      this.epoch += 1;
+      this.desktopEpoch += 1;
+      return true;
+    }
+    void this.interruptInput().catch((error: unknown) =>
+      log(`human takeover interrupt failed: ${String(error)}`),
+    );
+    return true;
+  }
+
+  inputMonitorStateChanged(state: ComputerInputMonitorState): void {
+    if (
+      state.ready ||
+      state.error === "input_monitor_idle" ||
+      state.error === "input_monitor_starting" ||
+      this.closed ||
+      !this.generation ||
+      this.generation.retired
+    )
+      return;
+    this.desktopObservationRequired = true;
+    this.browserObservationRequired = true;
+    this.inputMonitorEpochChanges += 1;
+    void this.interruptInput().catch((error: unknown) =>
+      log(`input listener interruption failed: ${String(error)}`),
+    );
+  }
+
   /**
    * The helper only reports Escape while a live generation could dispatch
    * input: armed on spawn, disarmed on retire, kill, or close.
    */
   private updateInputMonitorArmed(): void {
-    const armed = !this.closed && this.generation !== undefined && !this.generation.retired;
+    const armed =
+      !this.closed &&
+      this.generation !== undefined &&
+      !this.generation.retired &&
+      (!this.options.activateInputMonitor || this.inputMonitorRequested);
     if (armed === this.inputMonitorArmed) return;
     this.inputMonitorArmed = armed;
     try {
@@ -1828,6 +2175,172 @@ export class CuaDriverHost {
   private rememberTask(set: Set<string>, task: CuaComputerTask): void {
     set.add(cuaComputerTaskKey(task));
     while (set.size > 256) set.delete(set.values().next().value!);
+  }
+
+  private inputMonitorAvailable(name: string, input: unknown): boolean {
+    const linuxBrowserMutation =
+      process.platform === "linux" &&
+      CUA_BROWSER_MUTATION_TOOLS.has(name) &&
+      !linuxBrowserCallIsReadOnly(name, input);
+    const required =
+      CUA_ACTION_TOOLS.has(name) ||
+      linuxBrowserMutation ||
+      (process.platform === "darwin" &&
+        this.options.nativeRevision !== null &&
+        CUA_BROWSER_MUTATION_TOOLS.has(name));
+    if (!required) return true;
+    const monitor = this.options.inputMonitorState?.();
+    // Existing portable native paths do not have a listener contract. The
+    // verified Linux browser port does: missing integration is not readiness.
+    return monitor?.ready ?? !linuxBrowserMutation;
+  }
+
+  /** A separate owned browser can be set up while old targets remain paused.
+   * Setup itself grants no recovery: its exact target/tab still needs a model
+   * snapshot before input, and a fresh page never unlocks an older target. */
+  private isIsolatedBrowserSetup(name: string, input: unknown): boolean {
+    if (name !== "browser_prepare" || !input || typeof input !== "object" || Array.isArray(input))
+      return false;
+    const args = input as Record<string, unknown>;
+    const profile = args.profile;
+    return (
+      args.allow_launch === true &&
+      args.pid === undefined &&
+      args.window_id === undefined &&
+      args.target_id === undefined &&
+      args.strategy === undefined &&
+      profile !== null &&
+      typeof profile === "object" &&
+      !Array.isArray(profile) &&
+      ((profile as Record<string, unknown>).mode === "isolated_new" ||
+        (profile as Record<string, unknown>).mode === "isolated_named")
+    );
+  }
+
+  private browserRecoveryKey(
+    input: unknown,
+    task: CuaComputerTask | undefined,
+  ): string | undefined {
+    if (!task || !input || typeof input !== "object" || Array.isArray(input)) return undefined;
+    const args = input as Record<string, unknown>;
+    if (
+      typeof args.target_id !== "string" ||
+      args.target_id.length === 0 ||
+      typeof args.tab_id !== "string" ||
+      args.tab_id.length === 0
+    )
+      return undefined;
+    return JSON.stringify([cuaComputerTaskKey(task), args.target_id, args.tab_id]);
+  }
+
+  private hasBrowserRecoveryObservation(
+    input: unknown,
+    task: CuaComputerTask | undefined,
+  ): boolean {
+    const key = this.browserRecoveryKey(input, task);
+    return key !== undefined && this.browserRecoveryObservations.get(key) === this.desktopEpoch;
+  }
+
+  private controlledTarget(
+    input: unknown,
+    task: CuaComputerTask | undefined,
+    browser: boolean,
+  ): ControlledTarget | undefined {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+    const args = input as Record<string, unknown>;
+    if (browser && task && typeof args.target_id === "string") {
+      const bound = this.browserTargets.get(JSON.stringify([task.threadId, args.target_id]));
+      if (bound)
+        return {
+          ...bound,
+          ...(typeof args.tab_id === "string" ? { browserTabId: args.tab_id } : {}),
+        };
+    }
+    if (
+      typeof args.pid !== "number" ||
+      !Number.isSafeInteger(args.pid) ||
+      args.pid <= 0 ||
+      args.pid > 0x7fffffff
+    )
+      return undefined;
+    return {
+      pid: args.pid,
+      ...(task ? { threadId: task.threadId } : {}),
+      ...(typeof args.window_id === "number" &&
+      Number.isSafeInteger(args.window_id) &&
+      args.window_id > 0 &&
+      args.window_id <= 0xffffffff
+        ? { windowId: args.window_id }
+        : {}),
+    };
+  }
+
+  private rememberBrowserTarget(
+    input: unknown,
+    result: CuaToolResult | undefined,
+    task: CuaComputerTask,
+  ): void {
+    const data = result?.structuredContent;
+    if (data?.status !== "ok" || data.mode !== "bind" || typeof data.target_id !== "string") return;
+    const target = this.controlledTarget(input, task, false);
+    if (!target) return;
+    const bound = { ...target, browserTargetId: data.target_id };
+    this.browserTargets.set(JSON.stringify([task.threadId, data.target_id]), bound);
+    while (this.browserTargets.size > 256)
+      this.browserTargets.delete(this.browserTargets.keys().next().value!);
+    this.controlledTargets.set(cuaComputerTaskKey(task), bound);
+  }
+
+  private isBrowserSnapshot(input: unknown, result: CuaToolResult): boolean {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+    const args = input as Record<string, unknown>;
+    const data = result.structuredContent;
+    const snapshot = data?.snapshot;
+    const snapshotId =
+      data?.snapshot_id ??
+      (snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+        ? (snapshot as Record<string, unknown>).id
+        : undefined);
+    return (
+      data?.status === "ok" &&
+      data.mode === "snapshot" &&
+      typeof args.target_id === "string" &&
+      args.target_id.length > 0 &&
+      typeof args.tab_id === "string" &&
+      args.tab_id.length > 0 &&
+      data.target_id === args.target_id &&
+      data.tab_id === args.tab_id &&
+      typeof snapshotId === "string" &&
+      /^p[0-9]+$/.test(snapshotId) &&
+      Array.isArray(data.refs)
+    );
+  }
+
+  private observationMatchesTarget(
+    name: string,
+    input: unknown,
+    target: ControlledTarget,
+    result: CuaToolResult,
+  ): boolean {
+    if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+    const args = input as Record<string, unknown>;
+    if (target.browserTargetId !== undefined) {
+      if (name !== "get_browser_state") return false;
+      return (
+        args.target_id === target.browserTargetId &&
+        (target.browserTabId === undefined || args.tab_id === target.browserTabId)
+      );
+    }
+    // An overview can omit off-Space/hidden windows. Only the exact native
+    // window observation can resume the task whose controlled target changed.
+    return (
+      name === "get_window_state" &&
+      args.pid === target.pid &&
+      result.structuredContent?.pid === target.pid &&
+      (target.windowId === undefined ||
+        (args.window_id === target.windowId &&
+          result.structuredContent?.window_id === target.windowId))
+    );
   }
 
   /** The native call args carry the agent's window target; task attribution
@@ -1946,6 +2459,7 @@ export class CuaDriverHost {
     | "desktopPauses"
     | "desktopInterruptions"
     | "driverNativeRevision"
+    | "driverBrowserInputControl"
     | "hostPlatform"
   > {
     return {
@@ -1956,6 +2470,14 @@ export class CuaDriverHost {
       ...(this.observedNativeRevision !== undefined
         ? { driverNativeRevision: this.observedNativeRevision }
         : {}),
+      ...(process.platform === "linux"
+        ? {
+            driverBrowserInputControl:
+              this.generation?.browserInputControl === true &&
+              !this.generation.retired &&
+              !this.generation.didExit,
+          }
+        : {}),
     };
   }
 
@@ -1965,6 +2487,7 @@ export class CuaDriverHost {
     this.desktopPauses.add(reason);
     this.desktopInterruptionCount += 1;
     this.desktopObservationRequired = true;
+    this.browserObservationRequired = true;
     log(`desktop input paused (${reason}); requiring fresh desktop observation`);
     return this.stop();
   }
@@ -1978,7 +2501,7 @@ export class CuaDriverHost {
     const message =
       this.desktopPauses.size > 0
         ? "Computer input is paused because the desktop is locked, asleep or inactive. Return to the desktop, then read fresh state before continuing."
-        : "Computer input remains paused after the desktop resumed. Call computer_screenshot and inspect what it shows before continuing; do not replay an uncertain action.";
+        : "Computer input was interrupted or the user changed the controlled window. Read fresh computer state and inspect it before continuing; do not replay an uncertain action.";
     return {
       ok: true,
       result: {
@@ -1996,13 +2519,34 @@ export class CuaDriverHost {
   /**
    * The cooldown refusal a mutating call gets inside the physical-Escape
    * interrupt window. Same dialect as a desktop pause — the backend reads
-   * `effect: "refused"` as `not-dispatched`, so replay is safe the moment the
-   * deadline lapses and no server-side change is needed. It must not read as
-   * a permanent stop: the cooldown is a timestamp that expires on its own.
+   * `effect: "refused"` as `not-dispatched`. The deadline bounds the quiet
+   * period; a separate fresh-observation gate prevents blind continuation.
    */
+  private inputMonitorUnavailableReply(monitor = this.options.inputMonitorState?.()): CuaReply {
+    const message =
+      process.platform === "linux"
+        ? "A working global Escape stop is unavailable in this Linux desktop session. Computer browser actions remain paused; browser observation is still available."
+        : monitor?.error === "input-monitoring-required"
+          ? "Allow Input Monitoring in System Settings, then wait for the computer input listener to reconnect before continuing."
+          : "The computer input listener is unavailable. Input remains paused until the listener reconnects.";
+    return {
+      ok: true,
+      result: {
+        isError: true,
+        content: [{ type: "text", text: message }],
+        structuredContent: {
+          effect: "refused",
+          code: "input_monitor_unavailable",
+          message,
+          ...(monitor?.error ? { input_monitor_error: monitor.error } : {}),
+        },
+      },
+    };
+  }
+
   private inputInterruptedReply(): CuaReply {
     const message =
-      "Computer input was interrupted by the Escape key; new input is paused for a moment and then resumes automatically. Wait a moment, then retry — do not assume an interrupted action landed.";
+      "Computer input was interrupted by physical input. Wait for the user to finish, then read fresh computer state before continuing. Do not replay an uncertain action.";
     return {
       ok: true,
       result: {

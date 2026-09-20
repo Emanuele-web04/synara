@@ -36,6 +36,22 @@ let escapeDisqualifyingFlags: CGEventFlags = [
 /// The classifier is pure so the rules can be exercised without a live event
 /// tap; `EscapeKillSwitchMonitor` passes each event's fields through.
 enum EscapePhysicalClassifier {
+    /// Only input that can change the human's target state counts as takeover.
+    /// Pointer motion is deliberately excluded so background work can coexist
+    /// with an idle cursor. No key code, text, or coordinates leave the helper.
+    static func isPhysicalInput(
+        type: CGEventType,
+        sourceProcessID: Int64,
+        sourceStateID: Int64,
+        sourceUserData: Int64,
+        armed: Bool
+    ) -> Bool {
+        armed && [.keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel].contains(type)
+            && sourceProcessID == 0
+            && sourceStateID == Int64(CGEventSourceStateID.hidSystemState.rawValue)
+            && sourceUserData == 0
+    }
+
     static func isPhysicalEscape(
         type: CGEventType,
         keyCode: CGKeyCode,
@@ -45,13 +61,16 @@ enum EscapePhysicalClassifier {
         sourceUserData: Int64,
         armed: Bool
     ) -> Bool {
-        guard armed,
+        guard isPhysicalInput(
+                  type: type,
+                  sourceProcessID: sourceProcessID,
+                  sourceStateID: sourceStateID,
+                  sourceUserData: sourceUserData,
+                  armed: armed
+              ),
               type == .keyDown,
               keyCode == escapeKeyCode,
-              flags.intersection(escapeDisqualifyingFlags).isEmpty,
-              sourceProcessID == 0,
-              sourceStateID == Int64(CGEventSourceStateID.hidSystemState.rawValue),
-              sourceUserData == 0
+              flags.intersection(escapeDisqualifyingFlags).isEmpty
         else {
             return false
         }

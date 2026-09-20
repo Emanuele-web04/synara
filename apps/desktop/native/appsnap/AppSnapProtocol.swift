@@ -92,7 +92,7 @@ struct AppSnapOptions {
                 guard let permission = AppSnapPermission(rawValue: value) else {
                     throw AppSnapFailure(
                         code: "invalid_arguments",
-                        message: "--permission requires accessibility, or screenRecording."
+                        message: "--permission requires accessibility, inputMonitoring, or screenRecording."
                     )
                 }
                 permissions.insert(permission)
@@ -129,11 +129,11 @@ struct AppSnapOptions {
         case "--permission-guide":
             try rejectWatchArguments("The permission guide does not accept watch arguments.")
             guard permissions.isEmpty, let guidePane,
-                  guidePane == "accessibility" || guidePane == "screen-recording",
+                  guidePane == "accessibility" || guidePane == "input-monitoring" || guidePane == "screen-recording",
                   let appPath = guideAppPath, appPath.hasPrefix("/"),
                   appPath.hasSuffix(".app"), FileManager.default.fileExists(atPath: appPath),
                   let appName = guideAppName, !appName.isEmpty, appName.count <= 256 else {
-                throw AppSnapFailure(code: "invalid_arguments", message: "The permission guide requires --pane accessibility, or screen-recording, the running app bundle, and its name.")
+                throw AppSnapFailure(code: "invalid_arguments", message: "The permission guide requires --pane accessibility, input-monitoring, or screen-recording, the running app bundle, and its name.")
             }
             return AppSnapOptions(
                 mode: .permissionGuide(pane: guidePane, appPath: appPath, appName: appName)
@@ -141,12 +141,12 @@ struct AppSnapOptions {
         case "--check-permissions":
             try rejectWatchArguments("Permission checks do not accept watch arguments.")
             return AppSnapOptions(mode: .checkPermissions(
-                permissions.isEmpty ? [.accessibility, .screenRecording] : permissions
+                permissions.isEmpty ? [.inputMonitoring, .screenRecording] : permissions
             ))
         case "--request-permissions":
             try rejectWatchArguments("Permission requests do not accept watch arguments.")
             return AppSnapOptions(mode: .requestPermissions(
-                permissions.isEmpty ? [.accessibility, .screenRecording] : permissions
+                permissions.isEmpty ? [.inputMonitoring, .screenRecording] : permissions
             ))
         case "--release-held-input":
             try rejectWatchArguments("Held-input release does not accept watch arguments.")
@@ -353,6 +353,17 @@ final class NDJSONEmitter {
         ])
     }
 
+    func emitPhysicalInput(kind: String, pid: pid_t?, windowID: CGWindowID?, capturedAt: String) {
+        var payload: [String: Any] = [
+            "type": "physical-input",
+            "kind": kind,
+            "capturedAt": capturedAt,
+        ]
+        if let pid { payload["pid"] = pid }
+        if let windowID { payload["windowId"] = windowID }
+        emit(payload)
+    }
+
     func emitEscapeMonitorState(armed: Bool, capturedAt: String) {
         emit([
             "type": "escape-monitor-state",
@@ -372,6 +383,9 @@ final class NDJSONEmitter {
         var payload: [String: Any] = ["type": "permissions"]
         if let accessibility = permissions.accessibility {
             payload["accessibility"] = accessibility ? "granted" : "denied"
+        }
+        if let inputMonitoring = permissions.inputMonitoring {
+            payload["inputMonitoring"] = inputMonitoring ? "granted" : "denied"
         }
         if let screenRecording = permissions.screenRecording {
             payload["screenRecording"] = screenRecording ? "granted" : "denied"

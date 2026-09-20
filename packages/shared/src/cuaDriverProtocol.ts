@@ -401,6 +401,10 @@ export interface CuaReply {
    * capabilities the live driver actually has.
    */
   driverNativeRevision?: number;
+  /** Verified Linux browser-only dispatch-epoch and input-drain support.
+   * This never certifies native desktop input, focus neutrality, or Escape.
+   * False/absent until the running child completes the exact host handshake. */
+  driverBrowserInputControl?: boolean;
   /**
    * The platform the host — and therefore the driver it supervises — runs
    * on (`"darwin"`, `"win32"`, `"linux"`). Always present on host replies;

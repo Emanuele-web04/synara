@@ -6,9 +6,32 @@ import {
   computerStaleGrantAdvice,
   listComputerPermissions,
   sortComputerPermissions,
+  missingComputerAppSnapPermissions,
 } from "./computerGrants";
 
 describe("computer permission copy", () => {
+  it("requires positive AppSnap grant evidence for every Computer permission", () => {
+    expect(
+      missingComputerAppSnapPermissions({
+        screenRecordingPermission: "denied",
+        inputMonitoringPermission: "unknown",
+      }),
+    ).toEqual(["accessibility", "screenRecording", "inputMonitoring"]);
+    expect(
+      missingComputerAppSnapPermissions({
+        accessibilityPermission: "granted",
+        screenRecordingPermission: "granted",
+        inputMonitoringPermission: "denied",
+      }),
+    ).toEqual(["inputMonitoring"]);
+    expect(
+      missingComputerAppSnapPermissions({
+        accessibilityPermission: "granted",
+        screenRecordingPermission: "granted",
+        inputMonitoringPermission: "granted",
+      }),
+    ).toEqual([]);
+  });
   it("names grants in one fixed order whatever order they arrive in", () => {
     // Two surfaces describing the same state as "Screen Recording and
     // Accessibility" and "Accessibility and Screen Recording" is how this got
@@ -22,6 +45,9 @@ describe("computer permission copy", () => {
     );
     expect(listComputerPermissions(["screenRecording"])).toBe("Screen Recording");
     expect(listComputerPermissions([])).toBe("");
+    expect(listComputerPermissions(["inputMonitoring", "screenRecording", "accessibility"])).toBe(
+      "Accessibility, Screen Recording and Input Monitoring",
+    );
   });
 
   it("explains a stale grant on an ad-hoc build, naming the right tccutil service", () => {
@@ -89,6 +115,7 @@ describe("computerGrantsBlockControl", () => {
     expect(computerGrantsBlockControl(["accessibility"])).toBe(true);
     expect(computerGrantsBlockControl(["accessibility", "screenRecording"])).toBe(true);
     expect(computerGrantsBlockControl(["screenRecording"])).toBe(false);
+    expect(computerGrantsBlockControl(["inputMonitoring"])).toBe(true);
     expect(computerGrantsBlockControl([])).toBe(false);
   });
 });

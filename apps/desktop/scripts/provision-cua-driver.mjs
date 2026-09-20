@@ -4,8 +4,16 @@ import { mkdir, readFile, writeFile, chmod, mkdtemp, rm, copyFile, cp } from "no
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  assertCuaArtifactProvenance,
+  assertLinuxCuaBinaryIdentity,
+  assertLinuxCuaBuildHost,
+  assertLinuxCuaSidecarChecksums,
+  LINUX_CUA_INPUT_SCOPE,
+  LINUX_CUA_SIDECAR_PATHS,
+} from "./cua-artifact-provenance.mjs";
 const release = JSON.parse(
   await readFile(
     new URL("../../../packages/shared/src/cuaDriverRelease.json", import.meta.url),
@@ -26,9 +34,12 @@ const targets = {
   win32: { arm64: "windows-arm64", x64: "windows-x86_64" },
   linux: { arm64: "linux-arm64", x64: "linux-x86_64" },
 };
-// Only macOS builds the Synara-patched binary today; Windows and Linux stage
-// the upstream release artifact for the same pinned version instead — the
-// unpatched driver carries none of the native safety layers the patch adds.
+const sourceTargets = {
+  darwin: targets.darwin,
+  linux: { arm64: "aarch64-unknown-linux-gnu", x64: "x86_64-unknown-linux-gnu" },
+};
+// Windows keeps the pinned upstream artifact. Linux builds the browser-only
+// cancellation delta after the base patch; this does not enable native input.
 const upstreamAsset = {
   win32: { binary: "cua-driver.exe", suffix: "zip" },
   linux: { binary: "cua-driver", suffix: "tar.gz" },
@@ -43,6 +54,9 @@ const patchPath = fileURLToPath(
   new URL("../patches/cua-driver/0001-synara-native.patch", import.meta.url),
 );
 const patch = await readFile(patchPath);
+const linuxPatchPath = fileURLToPath(
+  new URL("../patches/cua-driver/0002-synara-linux-browser.patch", import.meta.url),
+);
 if (
   !targets[platform] ||
   architectures.some((value) => !targets[platform][value]) ||
@@ -59,11 +73,28 @@ if (option("--archive"))
     "The upstream binary lacks Synara's native patch. Use --source-checkout or --artifact-dir instead.",
   );
 if (digest(patch) !== release.patchSha256) throw new Error("Cua native patch checksum mismatch.");
+if (platform === "linux") {
+  if (digest(await readFile(linuxPatchPath)) !== release.linuxBrowserPatchSha256)
+    throw new Error("Cua Linux browser patch checksum mismatch.");
+  assertLinuxCuaBuildHost({
+    platform,
+    hostPlatform: process.platform,
+    arch,
+    hostArch: process.arch,
+    artifact,
+  });
+}
 const temporary = await mkdtemp(join(tmpdir(), "synara-cua-package-"));
 const environment = {
   ...process.env,
   CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
   GIT_TERMINAL_PROMPT: "0",
+  // The pinned Rust toolchain's debug stripping can misalign proc-macro
+  // dylibs, which macOS 27 refuses to load (rust-lang/rust#157750). Preserve
+  // symbols during this build; do not change the pinned compiler or source.
+  ...(platform === "darwin"
+    ? { CARGO_PROFILE_RELEASE_STRIP: process.env.CARGO_PROFILE_RELEASE_STRIP ?? "none" }
+    : {}),
 };
 const run = (binary, args, cwd) =>
   execFileSync(binary, args, { cwd, env: environment, stdio: "inherit" });
@@ -76,26 +107,35 @@ const output = (binary, args, cwd) =>
 try {
   let binary;
   let provenance;
+  let linuxSidecars;
   if (artifact) {
     binary = join(resolve(artifact), upstreamAsset?.binary ?? "cua-driver");
     provenance = JSON.parse(await readFile(join(resolve(artifact), "provenance.json"), "utf8"));
-    if (
-      provenance.version !== release.version ||
-      provenance.source !== release.source ||
-      provenance.nativeRevision !== release.nativeRevision ||
-      // The native patch exists only for macOS; an unpatched platform
-      // artifact declares `patched:false` and carries no patch checksum.
-      (provenance.patched === false
-        ? platform === "darwin"
-        : provenance.patchSha256 !== release.patchSha256) ||
-      provenance.rustVersion !== release.rustVersion ||
-      architectures.some((value) => !provenance.architectures?.includes(value)) ||
-      digest(await readFile(binary)) !== provenance.binarySha256
-    ) {
-      throw new Error("Cua artifact identity, architecture or binary checksum mismatch.");
+    assertCuaArtifactProvenance({
+      provenance,
+      release,
+      platform,
+      architectures,
+      binarySha256: digest(await readFile(binary)),
+    });
+    if (platform === "linux" && provenance.patched === true) {
+      linuxSidecars = Object.fromEntries(
+        await Promise.all(
+          LINUX_CUA_SIDECAR_PATHS.map(async (path) => [
+            path,
+            await readFile(join(resolve(artifact), path)),
+          ]),
+        ),
+      );
+      assertLinuxCuaSidecarChecksums(
+        provenance,
+        Object.fromEntries(
+          Object.entries(linuxSidecars).map(([path, bytes]) => [path, digest(bytes)]),
+        ),
+      );
     }
-  } else if (upstreamAsset) {
-    // Windows/Linux: stage the upstream release binary for the pinned
+  } else if (platform === "win32") {
+    // Windows: stage the upstream release binary for the pinned
     // version. The authoritative checksum comes from the release's own
     // checksums.txt, verified before anything reaches the destination.
     const releaseBase = `https://github.com/trycua/cua/releases/download/cua-driver-rs-v${release.version}`;
@@ -159,6 +199,9 @@ try {
     await mkdir(build);
     run("tar", ["-xf", archive, "-C", build]);
     run("patch", ["--batch", "--forward", "-p1", "-i", patchPath], build);
+    if (platform === "linux") {
+      run("patch", ["--batch", "--forward", "-p1", "-i", linuxPatchPath], build);
+    }
     const rust = join(build, "libs/cua-driver/rust");
     const rustcVersion = output("rustc", ["--version"], rust);
     if (!rustcVersion.startsWith(`rustc ${release.rustVersion} `))
@@ -171,7 +214,7 @@ try {
     const targetDir = resolve(process.env.CARGO_TARGET_DIR || join(temporary, "target"));
     const binaries = [];
     for (const architecture of architectures) {
-      const target = targets[platform][architecture];
+      const target = sourceTargets[platform][architecture];
       run(
         "cargo",
         [
@@ -184,6 +227,7 @@ try {
           target,
           "-p",
           "cua-driver",
+          ...(platform === "linux" ? ["-p", "cursor-theme-cli"] : []),
           ...(process.argv.includes("--offline") ? ["--offline"] : []),
         ],
         rust,
@@ -193,16 +237,45 @@ try {
     binary = join(temporary, "cua-driver");
     if (binaries.length > 1) run("lipo", ["-create", ...binaries, "-output", binary]);
     else await copyFile(binaries[0], binary);
+    if (platform === "linux") {
+      const target = sourceTargets.linux[architectures[0]];
+      linuxSidecars = Object.fromEntries(
+        await Promise.all(
+          LINUX_CUA_SIDECAR_PATHS.map(async (path) => [
+            path,
+            await readFile(
+              path === "cua-cursor-theme"
+                ? join(targetDir, target, "release/cua-cursor-theme")
+                : join(build, "libs/cua-driver", path),
+            ),
+          ]),
+        ),
+      );
+    }
     provenance = {
       version: release.version,
       source: release.source,
       nativeRevision: release.nativeRevision,
+      platform,
+      patched: true,
       patchSha256: release.patchSha256,
+      ...(platform === "linux"
+        ? {
+            linuxBrowserPatchSha256: release.linuxBrowserPatchSha256,
+            browserInputControl: release.linuxBrowserInputControl,
+            inputScope: LINUX_CUA_INPUT_SCOPE,
+            sidecarSha256: Object.fromEntries(
+              Object.entries(linuxSidecars).map(([path, bytes]) => [path, digest(bytes)]),
+            ),
+          }
+        : {}),
       rustVersion: release.rustVersion,
       rustcVersion,
       architectures,
       binarySha256: digest(await readFile(binary)),
-      upstreamArchiveSha256: release.sha256,
+      ...(platform === "linux"
+        ? { sourceArchiveSha256: digest(await readFile(archive)) }
+        : { upstreamArchiveSha256: release.sha256 }),
     };
   }
   if (platform === "darwin") {
@@ -211,9 +284,14 @@ try {
     const present = output("lipo", ["-archs", binary]).split(/\s+/);
     if (architectures.some((value) => !present.includes(value === "x64" ? "x86_64" : "arm64")))
       throw new Error("Cua Mach-O is missing a requested architecture.");
+  } else if (platform === "linux") {
+    assertLinuxCuaBinaryIdentity(await readFile(binary), architectures);
+    if (linuxSidecars) {
+      assertLinuxCuaBinaryIdentity(linuxSidecars["cua-cursor-theme"], architectures);
+    }
   }
   await mkdir(destination, { recursive: true });
-  if (upstreamAsset) {
+  if (platform === "win32" || (platform === "linux" && provenance.patched === false)) {
     // The upstream archive is a bundle — driver plus its sidecars (cursor
     // theme, SDK, node runtime, UIA/Wayland helpers). Stage them all — from
     // the verified artifact dir when one was supplied, else the download.
@@ -221,6 +299,25 @@ try {
       recursive: true,
     });
     if (platform !== "win32") await chmod(join(destination, upstreamAsset.binary), 0o755);
+  } else if (platform === "linux") {
+    // A previous upstream install may have left separately loadable SDK
+    // binaries here. They are not used by Synara's direct daemon transport
+    // and must not masquerade as this newly patched runtime.
+    for (const obsolete of [
+      "libcua_driver_sdk.so",
+      "cua_driver_node_runtime.node",
+      "cua_driver_abi.h",
+    ]) {
+      await rm(join(destination, obsolete), { force: true });
+    }
+    await writeFile(join(destination, "cua-driver"), await readFile(binary));
+    await chmod(join(destination, "cua-driver"), 0o755);
+    for (const [path, bytes] of Object.entries(linuxSidecars)) {
+      const stagedPath = join(destination, path);
+      await mkdir(dirname(stagedPath), { recursive: true });
+      await writeFile(stagedPath, bytes);
+      if (path === "cua-cursor-theme" || path.endsWith(".sh")) await chmod(stagedPath, 0o755);
+    }
   } else {
     // Stage via a content write, not copyFile: macOS clonefile carries the
     // protected com.apple.provenance xattr, and Gatekeeper kills the staged
@@ -246,13 +343,16 @@ try {
     if (signIdentity) provenance.signedIdentity = signIdentity;
     provenance.binarySha256 = digest(await readFile(join(destination, "cua-driver")));
   }
+  // Legacy Mac artifacts predate the platform field; Mach-O/lipo verification
+  // above establishes it without invalidating or recompiling their signed bytes.
+  provenance.platform = platform;
   await writeFile(join(destination, "provenance.json"), JSON.stringify(provenance, null, 2) + "\n");
   await copyFile(
     fileURLToPath(new URL("../../../docs/computer-use-cua/CUA-LICENSE.txt", import.meta.url)),
     join(destination, "LICENSE.txt"),
   );
   console.log(
-    `Cua ${release.version} ${platform === "darwin" ? `native revision ${release.nativeRevision}` : "upstream (unpatched)"} (${architectures.join("+")}) staged at ${destination}`,
+    `Cua ${release.version} ${provenance.patched === false ? "upstream (unpatched, no browser input control)" : platform === "linux" ? `browser input control ${provenance.browserInputControl}, native desktop input unavailable` : `native revision ${release.nativeRevision}`} (${architectures.join("+")}) staged at ${destination}`,
   );
 } finally {
   await rm(temporary, { recursive: true, force: true });

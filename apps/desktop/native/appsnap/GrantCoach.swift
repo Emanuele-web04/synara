@@ -104,7 +104,11 @@ final class GrantCoach {
         self.pane = pane
     }
     private var paneTitle: String {
-        pane == "accessibility" ? "Accessibility" : "Screen Recording"
+        switch pane {
+        case "accessibility": "Accessibility"
+        case "input-monitoring": "Input Monitoring"
+        default: "Screen Recording"
+        }
     }
     private var headline: String {
         "Drop \(appName) on the list above."
@@ -161,7 +165,12 @@ final class GrantCoach {
         }
     }
     private func checkGranted() {
-        let granted = pane == "accessibility" ? AXIsProcessTrusted() : CGPreflightScreenCaptureAccess()
+        let granted: Bool
+        switch pane {
+        case "accessibility": granted = AXIsProcessTrusted()
+        case "input-monitoring": granted = CGPreflightListenEventAccess()
+        default: granted = CGPreflightScreenCaptureAccess()
+        }
         if granted {
             onGranted?()
             dismiss()

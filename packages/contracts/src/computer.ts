@@ -9,6 +9,7 @@ export const COMPUTER_WS_METHODS = {
   // such as the settings screen. Everything else on this surface either acts on
   // the desktop or answers for one thread.
   getStatus: "computer.getStatus",
+  getAuditHistory: "computer.getAuditHistory",
   // Installs or compiles whatever this desktop is missing, on the user's
   // explicit request from the settings panel. Separate from `getStatus`
   // because reading status must never be the thing that compiles a helper.
@@ -211,16 +212,19 @@ export type ComputerWindowId = typeof ComputerWindowId.Type;
  *
  * Named rather than described so every surface says the same words: the chat's
  * setup card, the settings panel, and the tool result the agent reads all key
- * off these two identifiers, and their user-facing labels live in one place
+ * off these identifiers, and their user-facing labels live in one place
  * (`@synara/shared/computerGrants`). There is no fourth surface — the
  * Electron-side permission preflight that used to be one was deleted, because
  * the prompt has to come from the process that actually needs the grant.
  *
- * macOS is the only platform with such a model today. The two are not
- * equivalent: without Accessibility nothing can be driven at all, while without
- * Screen Recording the desktop is driveable but unseeable.
+ * Accessibility enables input and semantic reads; Screen Recording enables
+ * images. Input Monitoring enables the physical Escape and takeover listener.
  */
-export const ComputerPermission = Schema.Literals(["accessibility", "screenRecording"]);
+export const ComputerPermission = Schema.Literals([
+  "accessibility",
+  "screenRecording",
+  "inputMonitoring",
+]);
 export type ComputerPermission = typeof ComputerPermission.Type;
 
 /**
@@ -431,6 +435,10 @@ export const ComputerScreenSize = Schema.Struct({
 });
 export type ComputerScreenSize = typeof ComputerScreenSize.Type;
 
+const ObservedComputerSpaceId = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+);
+
 export const ComputerWindow = Schema.Struct({
   id: ComputerWindowId,
   title: Schema.String.check(Schema.isMaxLength(COMPUTER_LABEL_MAX_LENGTH)),
@@ -455,6 +463,19 @@ export const ComputerWindow = Schema.Struct({
   active: Schema.optional(Schema.Boolean),
   minimized: Schema.Boolean,
   visible: Schema.Boolean,
+  /**
+   * Native membership for this observed window only. It is not an inventory
+   * of every Space, permission to manage them, or proof of agent ownership.
+   * Absent means unknown; an explicitly empty list means no reported membership.
+   */
+  spaceIds: Schema.optional(
+    Schema.Array(ObservedComputerSpaceId).check(
+      Schema.isMaxLength(COMPUTER_WINDOW_LIST_MAX_LENGTH),
+    ),
+  ),
+  /** Active Space on this window's display; other displays can differ. */
+  currentSpaceId: Schema.optional(ObservedComputerSpaceId),
+  onCurrentSpace: Schema.optional(Schema.Boolean),
   /**
    * Depth in the compositor stacking order, `0` being the topmost reported
    * window. Optional because a backend need not expose a stacking order.
