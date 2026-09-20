@@ -1,5 +1,10 @@
 # Computer efficiency implementation — 8 September 2026
 
+> Historical implementation and test record. The composer modes and exact
+> zero-context claims below are not the current UI or a current all-provider
+> measurement. See [current tools and context cost](README.md#tools-and-context-cost)
+> and the qualification gates there.
+
 The approved efficiency plan is implemented locally. Automated verification passes; the new native artifact is built and staged. Release qualification remains incomplete: the signed fixture's nonprompting check found no Accessibility or Screen Recording grants, so it stopped before capture or input. No all-provider live-success, billed-token savings or matched RAM/CPU claim is made.
 
 ## What changes for the user

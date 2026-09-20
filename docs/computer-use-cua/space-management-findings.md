@@ -1,5 +1,11 @@
 # macOS Space management — verified findings (SIP, arm64)
 
+> Historical fixture experiments on their recorded OS and driver revisions.
+> Synara currently exposes observed window membership only, not a complete
+> Space inventory or create/switch/move/owned-Space tools. These experiments do
+> not make an agent-owned workspace available in the product. See the
+> [current platform boundaries](README.md#linux-and-spaces-boundaries).
+
 Environment: macOS 26.5.2 (build 25F84), arm64, SIP enabled, single display
 `9D56AE12-E0EA-49ED-9273-DEDAEC174B00`, one user desktop Space (id 1, type 0).
 All results produced by `scripts/computer-use-fixtures/space_ctl.m` plus

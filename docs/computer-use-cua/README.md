@@ -5,15 +5,81 @@ not a release certification. Results belong to the exact application, driver
 revision, platform and provider named in each report; an older passing fixture
 does not qualify the current branch.
 
-The current macOS driver is Cua 0.28.2 with Synara native revision 31. The
+The current driver is Cua 0.28.2 with Synara native revision 32. The
 [release manifest](../../packages/shared/src/cuaDriverRelease.json) is the source
 of truth for source, patch checksum and Rust version. Packaging must verify the
 staged artifact against that manifest. The checked-in
 [patch](../../apps/desktop/patches/cua-driver/0001-synara-native.patch) and
-[upstream license](CUA-LICENSE.txt) preserve provenance. Linux provisioning uses
-the upstream, unpatched driver and does not inherit macOS guarantees.
+[upstream license](CUA-LICENSE.txt) preserve provenance. The separate
+[Linux browser patch](../../apps/desktop/patches/cua-driver/0002-synara-linux-browser.patch)
+adds a narrow headless-browser runtime; it does not inherit macOS desktop-input
+guarantees. Its runtime admission requirements are listed below.
 
-## Current behavior
+## Isolated packaged build
+
+Build the test application with an explicit flavor, rather than modifying a
+production bundle after packaging:
+
+```bash
+bun run dist:desktop:artifact --platform mac --target zip --arch arm64 --flavor cua --keep-stage
+```
+
+This produces `Synara Cua.app`, bundle ID `com.emanueledipietro.synara.cua`,
+origin `synara-cua://app`, default home `~/.synara-cua`, and Electron profile
+`synara-cua`. Artifacts go to `release-cua/`. The flavor is embedded in the
+staged package before signing and cannot be changed by `SYNARA_DESKTOP_FLAVOR`
+at launch. The production updater is disabled for Cua and Canary packages.
+Use the release signing options when a signed build is required; an unsigned
+local artifact is not evidence of release signing or persistent TCC grants.
+
+`--flavor canary` follows the same identity rules. Omitting the flag builds
+production, including when the invoking shell has a source flavor set. Isolated
+flavors support macOS and Linux; Windows continues to use its existing production
+installer registration. Source development launchers keep their existing
+environment-based flavor selection. For a new packaged Cua smoke run, set both
+`SYNARA_HOME` and `SYNARA_DESKTOP_SMOKE_USER_DATA` to separate empty test
+directories; no source launcher marker is needed.
+
+## Using Computer
+
+Type `/computer-use` followed by a task, for example `/computer-use open
+Calculator and calculate 123 × 45`. The shared slash menu offers this command
+for every provider. It enables native Synara Computer for that request only;
+the next ordinary turn has no new Computer tools or guidance. The command is
+stored with your message but removed before provider delivery. An empty command
+stays in the composer so you can add the task.
+
+To use Computer by default, enable **Computer control** in Settings. That is a
+separate opt-in for every turn and adds Computer context to ordinary requests.
+An app name, quoted command, attached file or agent-generated text does not
+invoke Computer. The **Getting started** guide explains setup, approval, preview
+and Stop and can be dismissed and reopened without another startup dialog.
+
+An explicit invocation checks the actual AppSnap grant state for the local
+macOS host; idle backend connectivity does not prove permissions. Remote hosts
+and unsupported AppSnap platforms do not request the client Mac's grants. If
+local grants are missing, the shared permission guide opens
+and the task stays unsent in the composer. Send it after setup; granting access
+never sends it automatically. Queued requests retain their original activation
+and generation, so a later Stop or revoke cannot silently re-arm old work.
+System permission grants and an AppSnap attachment do not themselves authorize
+Computer actions.
+
+When the selected approval mode requires it, one Computer approval covers
+routine actions in the active task. Clipboard reads keep their existing
+separate approval rule. Provider reviews and consequential-action policies
+still apply: task consent is not a detector for every Delete, Send or Purchase
+button. Full access does not authorize foreground use. To watch an app in front,
+request it explicitly, for example “Show me the browser.” Naming an app alone
+does not grant that authorization.
+
+The transcript uses the Computer cursor icon and human action labels for native
+and browser calls, including compact inspection calls. Summaries omit typed
+text, clipboard contents and upload paths. [Preview](native-preview.md) shows
+the addressed window or browser tab. Closing the preview hides it; **Stop** in
+the chat ends the task.
+
+## Tools and context cost
 
 - Synara owns provider capability, task consent, targeting and cancellation.
   The authenticated desktop host owns the native child process. A socket path
@@ -22,69 +88,188 @@ the upstream, unpatched driver and does not inherit macOS guarantees.
   across all nine providers on the current packaged build remains unverified.
 - Computer tools are conditional on the session's capability. Pi installs no
   Computer descriptors in disabled sessions and retains its existing specialist
-  forwarders while enabled. Shared host guidance retains a short discovery sentence; this is
-  not a claim of literally zero added context on every provider.
-- Routine actions share task consent where the selected approval mode requires
-  it. Full access does not authorize visible use. Foreground native actions and
-  visible browser preparation require an explicit visible-use request in the
-  latest user-authored message. Negative or ambiguous requests remain
-  background. This is conservative text matching, not a general natural
-  language authorization system.
-- Browser work can use a driver-owned isolated Chromium profile. Reusing the
-  same browser executable does not attach to the user's profile or cookies.
-  Existing-profile attachment is unsupported in this embedding.
-- The advertised computer_run tool batches known desktop steps. Exact-tool
-  help provides schemas on demand. Specialists without batch steps require a
-  direct gateway client or Pi's compatibility forwarders; a shared provider
-  route remains missing. Help lookup does not install a provider tool.
+  forwarders while enabled. Disabled turns receive no new Computer schemas or
+  Computer block in shared host guidance. Previous Computer observations can
+  remain in provider-managed history; removing current exposure does not erase
+  historical token cost.
+- Foreground native actions and visible browser preparation require an explicit
+  visible-use request in the latest user-authored message. Negative or ambiguous
+  requests remain background. This is conservative text matching, not a general
+  natural language authorization system.
+- On macOS, browser work can use a driver-owned headless Chromium profile.
+  Reusing the same browser executable does not attach to the user's profile or
+  cookies. Existing-profile launch/attachment through that prepare route is
+  unsupported in this embedding. Linux launch has separate limits below.
+- The advertised `computer_run` batches up to 25 known desktop steps. All steps
+  are validated before dispatch and retain targeting, consent and refusal
+  checks. It stops on failure by default. It accepts no browser steps or
+  per-step screenshots; a final screenshot can cover the affected window.
+- `computer_inspect` reaches the existing clipboard-read, zoom, desktop-inventory
+  and cursor-position handlers. It retains their permission and cancellation
+  behavior. `computer_help({tool: "computer_zoom"})`, for example, returns the
+  exact schema and inspection route. Other hidden specialists expose a batch
+  route. Help lookup does not install another tool in the provider catalog.
+- `computer_help` serves guidance only when requested. Topics include browser,
+  menus, forms, foreground use, Finder, Notes/editors, terminals, Electron,
+  Calculator, Slack and Spaces. These app chapters are not all injected into
+  every active turn. See the [shared guidance](../../apps/server/src/agentGateway/computerGuidance.ts).
 - State reads default to bounded text/element data without an image. Actions
   still include a post-action screenshot by default; short batches can omit
   intermediate images and finish with fresh state or a screenshot. Internal
   text-field readback disables screenshot capture. Unknown dispatch
   remains unknown until there is action-specific evidence. Successful dispatch
   or a changed tree alone is not proof that the requested task succeeded.
-- [Preview](native-preview.md) shows the addressed window or browser tab. It is
-  view-only and has a native macOS stream plus a still-image fallback.
-- The local audit log covers mutations, not every tool call. It has no
-  user-facing history viewer. Recording/replay, durable per-app grants and
-  manual re-arm APIs were removed; their documents are historical.
+- Browser navigation proof covers the destination, not the requested page
+  task. DOM value readback covers a field, not submission. Download completion
+  needs the driver's completed receipt and file proof. Pointer/key dispatch
+  can still be unverified; observe the expected result instead of replaying it.
+- Preview frames are local UI feedback, not an automatic screenshot stream to
+  the provider. Resource and token savings still require equal-workload
+  measurement; smaller descriptors alone do not establish billing or latency.
 
 ## Permissions and interruption
 
 Computer and AppSnap reuse the same desktop permission service and native setup
-guide. Computer setup requests Accessibility and Screen Recording. Passive
-checks do not request grants; active setup rechecks in a fresh helper and
-advances to the next missing permission. UI state refreshes on permission events
-and return from System Settings. Rebuilds still require verification of the
-running bundle's signing identity; permanent TCC persistence is not promised.
+guide. Computer requests three macOS grants:
 
-Physical Escape additionally depends on Input Monitoring for the native listener.
-The current Computer setup does not establish that third grant. Without it,
-Escape may be unavailable even when the two Computer setup checks are green.
-The visible Stop path remains separate. Escape currently interrupts the host
-transport and releases held input without retiring the native generation; no
-manual re-arm is required. Native proof that a running input loop stops after
-Escape is still required. Ordinary physical typing/clicking in a target app does
-not yet implement a complete human-takeover and fresh-observation gate.
+| Grant            | Purpose                                                        |
+| ---------------- | -------------------------------------------------------------- |
+| Accessibility    | Read controls and deliver native input.                        |
+| Input Monitoring | Detect physical Escape and human takeover during Computer use. |
+| Screen Recording | Capture screenshots and preview frames.                        |
+
+Choose **Set up** in Computer settings. The guide checks the running app and
+opens only its next missing pane, in Accessibility → Screen Recording → Input
+Monitoring order. Use the app chip where the pane accepts drag and drop, or
+enable the exact existing app entry. Fresh helper checks advance the guide
+while System Settings is in front; merely dropping the app or seeing its name
+in the list never counts as granted. The renderer also refreshes when returning
+from Settings. Guide monitoring stops on completion, dismissal or its bounded
+timeout; setup does not make model calls or send screenshots.
+
+AppSnap remains independent. Its shortcut/picker uses Input Monitoring and
+Screen Recording; granting these for Computer does not enable the AppSnap
+shortcut. Missing Screen Recording removes image capture while supported
+semantic reads can remain available. Missing Accessibility or Input Monitoring
+blocks native control. The Input Monitoring grant and listener health are
+checked separately: a granted switch cannot stand in for a working listener.
+The listener starts lazily for Computer and reports readiness/failure; while
+unavailable, native input is refused. It stops its tap and recovery work when
+disarmed.
+
+If Settings shows a switch on but the fresh check reports denied, verify the
+exact running app and signing identity. Local ad-hoc rebuilds can leave a stale
+grant. Remove and re-add only that app if the guide advises it, and complete
+macOS authentication or Quit & Reopen when requested. Synara does not reset
+grants automatically or treat a rebuild as permission. Signed-build grant
+persistence still needs real validation.
+
+| Event                                   | Implemented recovery boundary                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chat Stop or task cancellation          | Ends the current task and fences its queued work. A subsequent user request can start a new task; old actions are not replayed.                                                                                                                                                                                                    |
+| Physical Escape                         | Interrupts native and browser input. Each route requires a fresh model observation before continuing. No manual re-arm or repeated routine-task approval is added.                                                                                                                                                                 |
+| Human input in the controlled target    | Invalidates the model's view of the exact task/window or browser target/tab and interrupts input. Repeated typing keeps observations stale. Input in another app does not interrupt a background target; during foreground input, physical input does. Input resumes after quiet and fresh state, retaining the same task consent. |
+| Lock, sleep or inactive desktop session | Pauses input. Returning requires fresh state and renews routine-task consent in approval-required mode. Full access retains its standing approval mode.                                                                                                                                                                            |
+| Permission or listener loss             | Refuses new native input; recovery must restore the relevant grant/listener and obtain fresh state.                                                                                                                                                                                                                                |
+
+The patched macOS driver acknowledges an input epoch, drained operations and
+matching releases before input can reopen. Transport cancellation alone is
+not cleanup proof. A missing acknowledgement leaves input paused. Escape and
+takeover preserve browser bindings. Native and browser observation gates are
+separate: previews, readiness probes, discovery, and another task/window/tab
+cannot clear them. Isolated browser setup may create a new target while the old
+one is paused; the new page still needs its own model observation. Physical-input
+and signed-app qualification remain required for this revision.
+
+## Recent action history
+
+**Settings → Computer use → Recent Computer actions** reads retained mutations
+across chats on the current server. Open it to load 30 entries, request older
+entries up to 100, or refresh explicitly. It does not poll while working.
+Rows distinguish **Effect observed**, **Sent; effect unconfirmed**, **Not sent**,
+**Blocked** and **Failed**; a row is not proof that the whole task succeeded.
+
+The owner-only `computer.getAuditHistory` API exposes no arguments, results,
+targets, titles or paths. Read bounds are 2 MiB and 10,000 lines; retention,
+invalid records or an expired cursor can omit older entries and are surfaced
+as truncation. I/O failures remain errors. The viewer is not a complete tool
+transcript, replay system or token-accounting source. Recording/replay, durable
+per-app grants and manual re-arm APIs remain removed; their older documents
+are historical.
+
+## Linux and Spaces boundaries
+
+Linux packaging stages the driver outside ASAR and starts an authenticated
+host. Browser mutations open only when that host validates revision 32 and the
+`synara_browser_input_control: 1` capability from its own driver generation,
+and a task-scoped Escape shortcut is available. The qualified code path owns
+isolated headless browser profiles and pairs browser cancellation with release
+cleanup. Visible browser launch, personal-profile setup and native desktop
+input remain unavailable; foreground consent does not bypass those boundaries.
+
+The Escape adapter works only on a positively identified direct X11 session.
+It registers while attributed Computer tasks are active and unregisters on the
+last task ending, Stop or disposal. It consumes Escape and is not the macOS
+listen-only human-input monitor. Native Wayland and XWayland refuse mutation
+because portal callback registration does not prove a working, task-scoped
+global Escape binding. A shortcut conflict or lost/suspended registration also
+closes mutation admission.
+
+Without both runtime capability and Escape availability, browser support is
+observation-only: current state, dialog inspection and passive detection of an
+existing endpoint. Standalone Linux has no global Escape adapter and stays
+observation-only even with the patched artifact. Missing capabilities must not
+trigger a visible-launch or personal-profile workaround.
+
+Native pointer/keyboard input, semantic writes, app launch, menus, activation
+and window-frame changes are refused on Linux, including with foreground
+consent. Clipboard, process-control and the agent overlay retain their existing
+approval rules. Native accessibility reads can be available even when integrated desktop
+observation cannot start. On pure Weston and Sway, the upstream screen-geometry query
+requires unavailable X11 support and exact-window capture can refuse
+`surface_identity_unproven`; Synara reports backend unavailability rather than
+inventing geometry. The still-image transport previews a selected target only
+where capture works. Settings details distinguish observation capabilities
+from native input availability. Build and protocol tests do not establish packaged
+X11/Wayland behavior, physical Escape or sustained performance.
+
+The isolated Linux runtime checks exercised X11 observation/still preview and
+the final browser port with Electron 43, including injected Escape, cancellation,
+release cleanup and fresh-state recovery. Native-Wayland browser mutation was
+refused before shortcut registration. These are component-level runtime results;
+the injected event does not qualify physical-human Escape, and no full Linux
+Synara package/provider flow is certified by them.
+
+Reported `spaceIds`, `currentSpaceId` and `onCurrentSpace` describe observed
+window membership only. They do not list every Space or empty Spaces. There
+are no model-facing create, switch, move-window or owned-Space operations.
+Experimental fixture results in [Space findings](space-management-findings.md)
+do not expose such operations in Synara. A refused off-Space action is not
+permission to switch Spaces or raise the app.
 
 ## Qualification still required
 
-1. Current signed, packaged macOS artifact: background action plus readback,
-   cancellation, recovery, permission revocation, focus and Dock/window checks.
-2. Action-specific proof for browser/native mutations that still return
-   dispatched-unknown, without reclassifying dispatch as verified success.
+1. Current signed, packaged macOS artifact: three-grant setup and listener
+   readiness, background action plus readback, physical Escape/takeover,
+   cancellation and recovery, permission revocation, focus and Dock/window checks.
+2. Verify the implemented browser mutation admission after Escape/takeover
+   end to end: it requires a fresh model snapshot for the same task and tab,
+   independently of native cleanup. Add action-specific proof for browser/native mutations that still
+   return dispatched-unknown, without reclassifying dispatch as verified success.
 3. Nine fresh provider sessions with a small real task and cancellation/recovery.
-4. Linux package provisioning/startup and real X11/Wayland tests. A manually
-   connected standalone host is not proof of packaged Linux support. Validate
-   the existing still preview before adding another capture implementation.
-5. Model-facing space operations and ownership: currently absent. Existing
-   cross-Space refusal tests do not certify an agent-owned space broker.
+4. Current Linux packaged startup, direct-X11 headless browser tasks, Escape
+   and cancellation, still preview, and expected Wayland/XWayland refusals. A standalone connected host does not qualify the package;
+   build success does not establish compositor-specific runtime behavior.
+5. Spaces management and ownership remain absent. Treat them as a separate
+   capability project, not a passing-test claim or a release feature.
 6. Browser-heavy performance benchmarks with fresh-thread and complete-evidence
    gates. The live SQLite database is exclusively owned by the application;
    collect through its diagnostic APIs or an owner-created coherent snapshot.
    Do not copy live DB/WAL files separately or infer zero usage from empty reads.
-7. Audit history UI, first-run guidance, broader app playbooks, browser-call
-   presentation and visible preview failure states.
+7. User-visible smoke checks for the implemented onboarding, history pagination
+   and truncation, browser action labels, and errors before the first preview
+   frame. Repository tests and runtime measurements for this implementation
+   wave must be recorded separately before claiming qualification.
 
 ## Historical references
 

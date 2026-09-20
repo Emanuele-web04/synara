@@ -1,5 +1,9 @@
 # Shared macOS permission flow — 10 September 2026
 
+> Historical service fix for the commit named below. For the current three-grant
+> guide, automatic checks and listener readiness, follow
+> [current permission setup](README.md#permissions-and-interruption).
+
 This records the initial service fix, now in commit `671cf5e46`. The subsequent [automatic permission guide](permission-guide.md) adds the floating drag target, background setup checks and automatic step progression requested after testing that build.
 
 The reported stuck Computer setup card exposed several code defects. Computer requested Accessibility but merely opened the Screen Recording settings pane; it never made AppSnap's native Screen Recording request. Passive status came from the long-running embedded Cua process, which could retain a negative preflight result. The card also preferred historical missing grants over current status.

@@ -20,8 +20,11 @@ expand/Stop workflow are retired.
 
 Preview frames are local UI feedback. They are not automatically included in
 provider context; model screenshots are separate explicit tool requests.
-Linux has no macOS native tap, but can use the existing still transport when a
-working backend is supplied. That path still needs real Linux GUI validation.
+Linux has no macOS native tap. Its packaged host uses the existing still transport when its backend can
+capture the selected target. Headless-browser mutations have separate verified
+runtime and direct-X11 Escape requirements; still preview alone proves neither.
+Packaged GUI behavior remains a qualification gate, and macOS native guarantees
+do not apply to it.
 
 ## Ownership
 
@@ -37,10 +40,17 @@ permissions and bounded frames isolate its transport. Helper lifecycle output
 and image bytes use separate channels. These implementation boundaries are
 covered by host, store and renderer tests; they do not replace packaged testing.
 
-## Known limits
+## Failure visibility and known limits
 
-- Errors before the first decoded frame can remain hidden behind the current
-  card visibility latch. The UI needs an observable persistent failure state.
+- An explicit stream error or unsupported-source status opens the card before
+  its first decoded frame. Connecting alone stays quiet. A user-dismissed card
+  stays hidden for that task instead of reopening because an error arrives.
+  This is not a promise that every native helper failure reaches the UI: native
+  frame loss can still fall back to stills, and reconnecting can clear the
+  current error status.
+- Closing the card only hides it. Use chat Stop to end the task. Preview frames
+  cannot authorize input or satisfy the fresh model-observation gate after
+  Escape, human takeover or desktop interruption.
 - Current packaged end-to-end behavior, other-Space targets, multi-display
   behavior, permission loss and sustained CPU/RSS still require qualification.
 - Historical capture reports elsewhere in this directory apply to their named

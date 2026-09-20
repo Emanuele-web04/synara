@@ -1,5 +1,10 @@
 # Browser surface — driver `browser_*` family through Synara
 
+> Historical wiring and runtime record for the revisions named below. Current
+> browser profile, authorization, effect and cancellation boundaries are in the
+> [implementation overview](README.md). Earlier successful protocol runs do not
+> qualify the current packaged driver.
+
 Status: wired. Verified against the pinned driver (0.28.2, native rev 17)
 schemas on 2026-09-17, and end-to-end against the shipped driver binary the
 same day through the exact protocol path `cuaDriverHost.ts` implements:

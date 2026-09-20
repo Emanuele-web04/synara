@@ -1,5 +1,11 @@
 # Automatic macOS permission setup — 10 September 2026
 
+> Historical implementation and evidence record. The current shared guide asks
+> Computer for Accessibility, Input Monitoring and Screen Recording, and checks
+> listener health separately. Follow [current setup and recovery](README.md#permissions-and-interruption);
+> the two-grant flow, polling intervals and verification results below describe
+> their named earlier builds.
+
 The earlier permission service fix provided fresh native checks, but the setup UI still depended mainly on returning to Synara. It did not provide a floating guide or a desktop-owned loop that could advance while System Settings was foreground. The reporter's screenshot also contains two differently named app entries; it does not establish that the running build has a valid grant.
 
 [PR #913](https://github.com/Emanuele-web04/synara/pull/913), head `fc77265cd26f5e11197fe72dfbbc26163ef0f38a`, was reviewed as a design reference. This change adopts the floating app-drag guide idea. It does not import that PR's picker, global Escape hook, repeated window-follow scans or same-process permission polling.

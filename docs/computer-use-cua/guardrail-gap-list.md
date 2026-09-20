@@ -1,5 +1,10 @@
 # Guardrail gap list — workstream F deliverable
 
+> Historical workstream assessment. Its “exists today” entries, source line
+> references and open decisions describe that scan; several APIs and consent
+> rules have since changed. Use the [current implementation and qualification
+> gates](README.md) for the present branch.
+
 What exists today versus what must be built before the open release. The spec
 rule stands: no guardrail may be cut to hit a date, and a missing guardrail
 blocks the release. Negative findings below come from source scans; each is
