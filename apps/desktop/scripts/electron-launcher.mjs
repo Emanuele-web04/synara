@@ -24,7 +24,13 @@ const desktopFlavor = resolveSynaraDesktopFlavor({
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
-const LAUNCHER_VERSION = 2;
+const LAUNCHER_VERSION = 3;
+// Kept in sync with BRAND_ASSET_PATHS.productionMacIconComposer and the macOS
+// icon constants in scripts/lib/desktop-platform-build-config.ts. The packaged
+// build compiles the same asset; this launcher does it for dev and Canary,
+// which run from a renamed Electron bundle instead of a packaged app.
+const ICON_COMPOSER_ASSET_NAME = "Synara";
+const ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
 const MICROPHONE_USAGE_DESCRIPTION =
   "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
 
@@ -48,6 +54,65 @@ function setPlistString(plistPath, key, value) {
 
   const details = [replaceResult.stderr, insertResult.stderr].filter(Boolean).join("\n");
   throw new Error(`Failed to update plist key "${key}" at ${plistPath}: ${details}`.trim());
+}
+
+function latestMtimeMs(entryPath) {
+  const entryStat = statSync(entryPath);
+  if (!entryStat.isDirectory()) {
+    return entryStat.mtimeMs;
+  }
+  let latest = entryStat.mtimeMs;
+  for (const child of readdirSync(entryPath)) {
+    latest = Math.max(latest, latestMtimeMs(join(entryPath, child)));
+  }
+  return latest;
+}
+
+// macOS 26 renders the Liquid Glass material only from a compiled Icon Composer
+// asset, never from an ICNS. actool ships with Xcode, so this stays optional: a
+// machine without it keeps the flat icon instead of failing to launch.
+function compileGlassAppIcon(appBundlePath, iconComposerPath, scratchDir) {
+  const resourcesDir = join(appBundlePath, "Contents", "Resources");
+  const partialPlistPath = join(scratchDir, "icon-partial.plist");
+  const result = spawnSync(
+    "xcrun",
+    [
+      "actool",
+      iconComposerPath,
+      "--compile",
+      resourcesDir,
+      "--platform",
+      "macosx",
+      "--minimum-deployment-target",
+      ICON_COMPOSER_DEPLOYMENT_TARGET,
+      "--app-icon",
+      ICON_COMPOSER_ASSET_NAME,
+      "--include-all-app-icons",
+      "--output-partial-info-plist",
+      partialPlistPath,
+      "--output-format",
+      "human-readable-text",
+    ],
+    { encoding: "utf8" },
+  );
+  rmSync(partialPlistPath, { force: true });
+
+  if (result.status !== 0 || !existsSync(join(resourcesDir, "Assets.car"))) {
+    const details = [result.error?.message, result.stderr].filter(Boolean).join("\n").trim();
+    console.warn(
+      `[desktop] Skipping the Liquid Glass app icon; actool did not produce an asset catalog.${
+        details ? ` ${details}` : ""
+      }`,
+    );
+    return false;
+  }
+
+  setPlistString(
+    join(appBundlePath, "Contents", "Info.plist"),
+    "CFBundleIconName",
+    ICON_COMPOSER_ASSET_NAME,
+  );
+  return true;
 }
 
 function patchMainBundleInfoPlist(appBundlePath, iconPath) {
@@ -129,6 +194,8 @@ function buildMacLauncher(electronBinaryPath) {
   const targetAppBundlePath = join(runtimeDir, `${APP_DISPLAY_NAME}.app`);
   const targetBinaryPath = join(targetAppBundlePath, "Contents", "MacOS", "Electron");
   const iconPath = join(desktopDir, "resources", "icon.icns");
+  const iconComposerPath = resolve(desktopDir, "../../assets/prod/Synara.icon");
+  const hasIconComposerSource = existsSync(iconComposerPath);
   const metadataPath = join(runtimeDir, "metadata.json");
 
   mkdirSync(runtimeDir, { recursive: true });
@@ -138,6 +205,8 @@ function buildMacLauncher(electronBinaryPath) {
     sourceAppBundlePath,
     sourceAppMtimeMs: statSync(sourceAppBundlePath).mtimeMs,
     iconMtimeMs: statSync(iconPath).mtimeMs,
+    // Layered artwork lives in several files, so track the newest of them.
+    iconComposerMtimeMs: hasIconComposerSource ? latestMtimeMs(iconComposerPath) : null,
   };
 
   const currentMetadata = readJson(metadataPath);
@@ -152,6 +221,9 @@ function buildMacLauncher(electronBinaryPath) {
   rmSync(targetAppBundlePath, { recursive: true, force: true });
   copyMacAppBundle(sourceAppBundlePath, targetAppBundlePath);
   patchMainBundleInfoPlist(targetAppBundlePath, iconPath);
+  if (hasIconComposerSource) {
+    compileGlassAppIcon(targetAppBundlePath, iconComposerPath, runtimeDir);
+  }
   patchHelperBundleInfoPlists(targetAppBundlePath);
   writeFileSync(metadataPath, `${JSON.stringify(expectedMetadata, null, 2)}\n`);
 
