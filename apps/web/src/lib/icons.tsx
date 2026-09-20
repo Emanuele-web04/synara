@@ -102,6 +102,7 @@ export const AppsIcon: LucideIcon = (props) => (
 // Composer stacked-panel glyphs (subagent strip / workflow run card).
 export const BackgroundTrayIcon: LucideIcon = centralIconWrapper("arrow-down-wall");
 export const ContextCompactionIcon: LucideIcon = centralIconWrapper("arrows-hide");
+export const ComputerUseIcon: LucideIcon = centralIconWrapper("cursor-1");
 export const PanelExpandIcon: LucideIcon = centralIconWrapper("expand-45");
 export const PanelCollapseIcon: LucideIcon = centralIconWrapper("minimize-45");
 export const BackToParentIcon: LucideIcon = centralIconWrapper("arrow-share-left");

@@ -19,7 +19,7 @@ export const COMPUTER_TOOL_TITLES = {
   computer_screenshot: "Take a screenshot",
   computer_get_state: "Read the screen",
   computer_get_screen_size: "Measure the screen",
-  computer_list_windows: "List windows",
+  computer_list_windows: "Find open windows",
   computer_list_apps: "List apps",
   computer_verify_state: "Verify state",
   computer_zoom: "Zoom into a window",
@@ -82,7 +82,7 @@ export interface ComputerToolCallDescription {
 }
 
 /**
- * "Click at (812, 344) in Safari — Google".
+ * "Click on “Save” in Safari — Google".
  *
  * `windows` is the live window list, used only to turn an opaque `window_id`
  * into the app and title a person recognises. Without a match the id is dropped
@@ -100,19 +100,38 @@ export function describeComputerToolCall(input: {
   // The visibility pair's flag is the verb's direction: an approval that reads
   // "Minimize or restore" makes the user guess which half is being asked for.
   const verb =
-    (tool === "computer_set_window_minimized"
-      ? directionVerb(args.minimized, "Minimize a window", "Restore a window")
-      : tool === "computer_set_app_visibility"
-        ? directionVerb(args.hidden, "Hide an app", "Unhide an app")
-        : undefined) ?? COMPUTER_TOOL_TITLES[tool];
-  const where =
     tool === "computer_launch_app"
+      ? "Open"
+      : tool === "computer_activate_window"
+        ? `Switch to ${
+            readString(args.app_name) ??
+            readString(args.application) ??
+            readString(args.app) ??
+            resolveWindow(args.window_id, input.windows) ??
+            ""
+          }`.trimEnd()
+        : ((tool === "computer_set_window_minimized"
+            ? directionVerb(args.minimized, "Minimize a window", "Restore a window")
+            : tool === "computer_set_app_visibility"
+              ? directionVerb(args.hidden, "Hide an app", "Unhide an app")
+              : undefined) ?? COMPUTER_TOOL_TITLES[tool]);
+  const where =
+    tool === "computer_launch_app" || tool === "computer_activate_window"
       ? ""
       : tool === "computer_drag"
         ? describeDragTarget(args, input.windows)
         : tool === "computer_set_app_visibility"
           ? describePidTarget(args, input.windows)
-          : describeTarget(args, input.windows, tool === "computer_wait" ? "for" : "on");
+          : describeTarget(
+              args,
+              input.windows,
+              tool === "computer_wait"
+                ? "for"
+                : tool === "computer_type_text" || tool === "computer_set_value"
+                  ? "in"
+                  : "on",
+              tool === "computer_zoom",
+            );
   const what = describePayload(tool, args);
 
   const summary = [verb, what, where].filter((part) => part.length > 0).join(" ");
@@ -139,23 +158,32 @@ function describePidTarget(
 function describeTarget(
   args: Readonly<Record<string, unknown>>,
   windows: readonly ComputerWindow[] | undefined,
-  labelPreposition: "on" | "for" = "on",
+  labelPreposition: "on" | "for" | "in" = "on",
+  alwaysShowCoordinates = false,
 ): string {
   const parts: string[] = [];
   const label = readString(args.label);
   const x = readNumber(args.x);
   const y = readNumber(args.y);
-  if (label) {
-    parts.push(`${labelPreposition} “${label}”`);
-  } else if (x !== null && y !== null) {
-    parts.push(`at (${x}, ${y})`);
-  }
+  const coordinates = x !== null && y !== null ? `at (${x}, ${y})` : null;
   const window = resolveWindow(args.window_id, windows);
   const app = readString(args.app_name) ?? readString(args.application) ?? readString(args.app);
+  if (label) {
+    parts.push(`${labelPreposition} “${label}”`);
+  } else if (alwaysShowCoordinates && coordinates) {
+    parts.push(coordinates);
+  }
   if (window) {
     parts.push(`in ${window}`);
   } else if (app) {
     parts.push(`in ${app}`);
+  }
+  // Coordinates appear only when nothing else names the target: a window or
+  // app title is what a person checks against their screen, and the raw pair
+  // stays in the parameter rows either way. Zoom is the exception — the region
+  // is the whole point of the call.
+  if (parts.length === 0 && coordinates) {
+    parts.push(coordinates);
   }
   return parts.join(" ");
 }
@@ -215,6 +243,47 @@ function describePayload(tool: ComputerToolName, args: Readonly<Record<string, u
   return "";
 }
 
+function appName(value: unknown): string | null {
+  const name = readString(value)?.trim();
+  if (!name) return null;
+  const basename = name
+    .split(/[\\/]/)
+    .at(-1)!
+    .replace(/\.app$/i, "");
+  const label = /^(?:[a-z][a-z0-9-]*\.){2,}/i.test(basename)
+    ? basename.split(".").at(-1)!
+    : basename;
+  return truncate(label.charAt(0).toUpperCase() + label.slice(1), 80);
+}
+
+const KEY_NAMES: Readonly<Record<string, string>> = {
+  cmd: "Command",
+  command: "Command",
+  super: "Super",
+  meta: "Meta",
+  ctrl: "Control",
+  control: "Control",
+  alt: "Alt",
+  option: "Option",
+  shift: "Shift",
+  return: "Enter",
+  enter: "Enter",
+  esc: "Escape",
+  escape: "Escape",
+  space: "Space",
+  tab: "Tab",
+  backspace: "Backspace",
+  delete: "Delete",
+  arrowup: "Up arrow",
+  arrowdown: "Down arrow",
+  arrowleft: "Left arrow",
+  arrowright: "Right arrow",
+};
+
+function keyName(key: string): string {
+  return KEY_NAMES[key.toLowerCase()] ?? (key.length === 1 ? key.toUpperCase() : key);
+}
+
 /**
  * The argument rows, named for a reader rather than for the wire. A coordinate
  * pair is one row, not two, because it is one fact.
@@ -262,9 +331,9 @@ function describeParams(
     });
   }
   const key = readString(args.key);
-  if (key) rows.push({ name: "Key", value: key });
+  if (key) rows.push({ name: "Key", value: keyName(key) });
   const keys = readStringArray(args.keys);
-  if (keys.length > 0) rows.push({ name: "Shortcut", value: keys.join("+") });
+  if (keys.length > 0) rows.push({ name: "Shortcut", value: keys.map(keyName).join(" + ") });
   const dx = readNumber(args.delta_x);
   const dy = readNumber(args.delta_y);
   if (dx !== null || dy !== null) {

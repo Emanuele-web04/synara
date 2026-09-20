@@ -79,7 +79,7 @@ describe("describeComputerToolCall", () => {
       args: { x: 812, y: 344, window_id: "win-7" },
       windows: [SAFARI],
     });
-    expect(described?.summary).toBe("Click at (812, 344) in Safari — Google");
+    expect(described?.summary).toBe("Click in Safari — Google");
   });
 
   it("names the agent cursor, not the user's cursor, for move_cursor", () => {
@@ -184,7 +184,7 @@ describe("describeComputerToolCall", () => {
         args: { window_id: "win-7" },
         windows: [SAFARI],
       })?.summary,
-    ).toBe("Activate a window in Safari — Google");
+    ).toBe("Switch to Safari — Google");
     expect(
       describeComputerToolCall({
         toolName: "computer_wait",
@@ -221,7 +221,7 @@ describe("describeComputerToolCall", () => {
       args: { window_id: "win-7", x: 40, y: 60, width: 900, height: 700 },
       windows: [SAFARI],
     });
-    expect(frame?.summary).toBe("Move or resize a window at (40, 60) in Safari — Google");
+    expect(frame?.summary).toBe("Move or resize a window in Safari — Google");
     expect(frame?.params).toEqual([
       { name: "New position", value: "40, 60" },
       { name: "Size", value: "900×700" },
@@ -279,7 +279,7 @@ describe("describeComputerToolCall", () => {
       toolName: "computer_launch_app",
       args: { app: "TextEdit", hidden: true },
     });
-    expect(hiddenLaunch?.summary).toBe("Open an app TextEdit");
+    expect(hiddenLaunch?.summary).toBe("Open TextEdit");
     expect(hiddenLaunch?.params).toContainEqual({ name: "Hidden", value: "yes" });
     expect(
       describeComputerToolCall({
