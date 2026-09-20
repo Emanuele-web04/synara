@@ -29,6 +29,7 @@ afterEach(async () => {
 async function fixture(
   authority = capability,
   options: {
+    platform?: "darwin" | "linux";
     cleanup?: "incomplete" | "wrong-pid" | "missing-admission";
     interruptCleanup?: "incomplete" | "wrong-pid" | "missing-admission" | "once-incomplete";
     inputMonitorState?: (() => ComputerInputMonitorState) | undefined;
@@ -84,6 +85,12 @@ async function fixture(
     listWindows?: Array<Record<string, unknown>>;
   } = {},
 ) {
+  // Model the driver's platform explicitly, independently of the CI runner.
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: options.platform ?? "darwin" });
+  cleanups.push(async () => {
+    Object.defineProperty(process, "platform", platformDescriptor);
+  });
   const directory = await mkdtemp(join(tmpdir(), "synara-cua-host-test-"));
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
   const log = join(directory, "events.jsonl");
@@ -253,7 +260,7 @@ async function waitForEvent(
   );
 }
 
-describe("Cua GUI host retirement", () => {
+describe("Cua macOS host retirement", () => {
   it("starts the compact cursor once per generation and owns the observation budget", async () => {
     const f = await fixture();
     for (let i = 0; i < 2; i++) {
@@ -263,6 +270,7 @@ describe("Cua GUI host retirement", () => {
         args: { key: "enter", _synara_foreground_observation_ms: 0 },
       });
       expect(reply.ok).toBe(true);
+      expect(reply.hostPlatform).toBe("darwin");
     }
     const events = (await f.events()).map((row) => row.event);
     expect(events.filter((event) => event === "motion-100-0")).toHaveLength(1);
@@ -2232,51 +2240,45 @@ describe("physical Escape interrupt", () => {
     },
   );
 
-  it.runIf(process.platform === "darwin")(
-    "requires a live Escape listener for browser mutations but keeps browser reads available",
-    async () => {
-      let state: ComputerInputMonitorState = { ready: false, error: "event_tap_unavailable" };
-      const f = await fixture(capability, { inputMonitorState: () => state });
-      const task = { threadId: "listener-browser", turnId: "turn" };
-      const action = () =>
-        cuaRequest(f.endpoint, { method: "call", name: "browser_navigate", args: {}, task });
-      await expect(action()).resolves.toMatchObject({
-        result: { structuredContent: { code: "input_monitor_unavailable" } },
-      });
-      await expect(
-        cuaRequest(f.endpoint, { method: "call", name: "get_browser_state", args: {}, task }),
-      ).resolves.toMatchObject({ ok: true, result: {} });
-      state = { ready: true };
-      await expect(action()).resolves.toMatchObject({ ok: true, result: {} });
-      expect(
-        (await f.events()).filter((event) => event.event.startsWith("browser:browser_navigate:")),
-      ).toHaveLength(1);
-    },
-  );
+  it("requires a live Escape listener for browser mutations but keeps browser reads available", async () => {
+    let state: ComputerInputMonitorState = { ready: false, error: "event_tap_unavailable" };
+    const f = await fixture(capability, { inputMonitorState: () => state });
+    const task = { threadId: "listener-browser", turnId: "turn" };
+    const action = () =>
+      cuaRequest(f.endpoint, { method: "call", name: "browser_navigate", args: {}, task });
+    await expect(action()).resolves.toMatchObject({
+      result: { structuredContent: { code: "input_monitor_unavailable" } },
+    });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "get_browser_state", args: {}, task }),
+    ).resolves.toMatchObject({ ok: true, result: {} });
+    state = { ready: true };
+    await expect(action()).resolves.toMatchObject({ ok: true, result: {} });
+    expect(
+      (await f.events()).filter((event) => event.event.startsWith("browser:browser_navigate:")),
+    ).toHaveLength(1);
+  });
 
-  it.runIf(process.platform === "darwin")(
-    "rechecks browser listener readiness after asynchronous session setup",
-    async () => {
-      let checks = 0;
-      const f = await fixture(capability, {
-        inputMonitorState: () =>
-          ++checks === 1 ? { ready: true } : { ready: false, error: "event_tap_unavailable" },
-      });
-      await expect(
-        cuaRequest(f.endpoint, {
-          method: "call",
-          name: "browser_navigate",
-          args: {},
-          task: { threadId: "late-listener-failure", turnId: "turn" },
-        }),
-      ).resolves.toMatchObject({
-        result: { structuredContent: { code: "input_monitor_unavailable" } },
-      });
-      expect(
-        (await f.events()).some((event) => event.event.startsWith("browser:browser_navigate:")),
-      ).toBe(false);
-    },
-  );
+  it("rechecks browser listener readiness after asynchronous session setup", async () => {
+    let checks = 0;
+    const f = await fixture(capability, {
+      inputMonitorState: () =>
+        ++checks === 1 ? { ready: true } : { ready: false, error: "event_tap_unavailable" },
+    });
+    await expect(
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "browser_navigate",
+        args: {},
+        task: { threadId: "late-listener-failure", turnId: "turn" },
+      }),
+    ).resolves.toMatchObject({
+      result: { structuredContent: { code: "input_monitor_unavailable" } },
+    });
+    expect(
+      (await f.events()).some((event) => event.event.startsWith("browser:browser_navigate:")),
+    ).toBe(false);
+  });
 
   it("does not mistake OS releases or later reads for an unconfirmed browser release", async () => {
     const releaseHeldInput = vi.fn(async () => {});
@@ -2502,12 +2504,8 @@ describe("physical Escape interrupt", () => {
 describe("verified Linux browser input capability", () => {
   const task = { threadId: "linux-browser", turnId: "turn" };
   async function linuxFixture(options: Parameters<typeof fixture>[1] = {}) {
-    const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { value: "linux" });
-    cleanups.push(async () => {
-      Object.defineProperty(process, "platform", descriptor);
-    });
     return fixture(capability, {
+      platform: "linux",
       unpatched: true,
       nativeRevision: null,
       reportedRevision: CUA_NATIVE_REVISION,
@@ -2532,6 +2530,7 @@ describe("verified Linux browser input capability", () => {
       task,
     });
     expect(reply).toMatchObject({
+      hostPlatform: "linux",
       driverBrowserInputControl: false,
       result: { structuredContent: { code: "linux_browser_cleanup_unavailable" } },
     });

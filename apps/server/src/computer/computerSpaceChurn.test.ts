@@ -25,7 +25,8 @@ function spaceFixture(): {
   const request = vi.fn(async (_endpoint: string, req: Record<string, unknown>) => {
     calls.push({ ...(typeof req.name === "string" ? { name: req.name } : {}) });
     const method = req.method as string | undefined;
-    if (method === "probe" || method === "stop") return { ok: true };
+    // Spaces and background native input belong to the simulated macOS host.
+    if (method === "probe" || method === "stop") return { ok: true, hostPlatform: "darwin" };
     if (req.name === "check_permissions")
       return {
         ok: true,

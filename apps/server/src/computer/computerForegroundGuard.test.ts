@@ -33,7 +33,9 @@ function guardFixture(): {
   const request = vi.fn(async (_endpoint: string, req: Record<string, unknown>) => {
     calls.push({ ...(typeof req.name === "string" ? { name: req.name } : {}) });
     const method = req.method as string | undefined;
-    if (method === "probe" || method === "stop") return { ok: true };
+    // This fixture models macOS auth sheets and Secure Input, even when the
+    // backend's test runner is on Linux and talks to that host remotely.
+    if (method === "probe" || method === "stop") return { ok: true, hostPlatform: "darwin" };
     if (req.name === "check_permissions")
       return {
         ok: true,
