@@ -16,7 +16,7 @@ import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { extractWebFetchUrl } from "../../lib/toolCallLabel";
 import { LinkChipIcon } from "../LinkChipIcon";
 import type { WorkLogEntry } from "../../session-logic";
-import type { ToolCallGroupSummary } from "./toolCallGroup.logic";
+import { multiFileEditLabel, type ToolCallGroupSummary } from "./toolCallGroup.logic";
 import {
   renderWorkEntryIcon,
   workEntryDisplayText,
@@ -75,7 +75,9 @@ export function ToolCallGroupSummaryRow(props: {
           )}
         </span>
         <span className="min-w-0 truncate" data-tool-group-live={liveEntry ? "true" : undefined}>
-          {liveEntry ? workEntryDisplayText(liveEntry) : summary.label}
+          {liveEntry
+            ? (multiFileEditLabel(liveEntry) ?? workEntryDisplayText(liveEntry))
+            : summary.label}
         </span>
         {/* One step quieter than the label, matching the per-row disclosure chevron. */}
         <DisclosureChevron open={open} className="text-muted-foreground/70" />

@@ -1684,6 +1684,34 @@ describe("capOpenWorkEntryRenderChunks", () => {
   });
 });
 
+describe("multi-file edit folding", () => {
+  const patch = toolItem("patch", {
+    itemType: "file_change",
+    changedFiles: ["a.swift", "b.swift", "c.swift"],
+  }).entry;
+
+  it("folds a lone patch that would list a column of edited-file rows", () => {
+    const [settled] = planWorkEntryRenderChunks([patch], { tailIsLive: false });
+
+    expect(settled?.summary?.label).toBe("Edited 3 files");
+    expect(resolveWorkEntryChunkFold(settled!)?.entries).toEqual([patch]);
+  });
+
+  it("keeps the patch's file rows behind its live line", () => {
+    const [live] = planWorkEntryRenderChunks([patch], { tailIsLive: true });
+
+    expect(live?.liveEntry).toBe(patch);
+    expect(resolveWorkEntryChunkFold(live!)?.entries).toEqual([patch]);
+  });
+
+  it("leaves a single-file edit as a plain row", () => {
+    const edit = toolItem("edit", { itemType: "file_change", changedFiles: ["a.swift"] }).entry;
+    const [chunk] = planWorkEntryRenderChunks([edit], { tailIsLive: false });
+
+    expect(resolveWorkEntryChunkFold(chunk!)).toBeNull();
+  });
+});
+
 describe("resolveWorkEntryChunkFold", () => {
   it("reveals only the calls before the one a live line wears", () => {
     const [chunk] = planWorkEntryRenderChunks(

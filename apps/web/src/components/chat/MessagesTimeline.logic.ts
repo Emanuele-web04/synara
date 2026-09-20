@@ -11,6 +11,7 @@ import {
   isSummarizableToolCallEntry,
   MIN_COLLAPSIBLE_TOOL_GROUP_SIZE,
   summarizeToolCallGroup,
+  workEntryRowCount,
   type ToolCallGroupSummary,
 } from "./toolCallGroup.logic";
 import {
@@ -57,7 +58,11 @@ export function chunkCollapsedTurnItems(
 
   const flushPendingRun = () => {
     if (pendingRun.length === 0) return;
-    if (pendingRun.length >= MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
+    const pendingRowCount = pendingRun.reduce(
+      (total, item) => total + workEntryRowCount(item.entry),
+      0,
+    );
+    if (pendingRowCount >= MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
       chunks.push({
         kind: "tool-group",
         id: pendingRun[0]!.id,
@@ -160,7 +165,11 @@ export function resolveWorkEntryChunkFold(
   if (!liveSummary) return null;
   return {
     summary: liveSummary,
-    entries: chunk.entries.filter((entry) => entry !== chunk.liveEntry),
+    // A multi-file edit wears a count ("Edited 9 files"), so its own file rows
+    // still belong behind the line.
+    entries: chunk.entries.filter(
+      (entry) => entry !== chunk.liveEntry || workEntryRowCount(entry) > 1,
+    ),
     keySuffix: ":live",
   };
 }
