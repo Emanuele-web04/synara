@@ -136,7 +136,7 @@ function FeedbackDialogForm({
         onChange={(event) => setDetails(event.target.value)}
       />
 
-      <p className="text-xs leading-relaxed text-muted-foreground">
+      <p className="text-ui leading-relaxed text-muted-foreground">
         Diagnostics include app version, OS, provider/model, modes, and session state — never
         prompts, messages, paths, or logs.
       </p>

@@ -499,6 +499,94 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
+  it("reports providers without positive token totals without inventing usage", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+        for (const provider of ["codex", "grok"]) {
+          const selection = JSON.stringify({ provider, model: `${provider}-model` });
+          yield* sql`
+            INSERT INTO projection_threads (
+              thread_id, project_id, title, model_selection_json, runtime_mode,
+              interaction_mode, env_mode, created_at, updated_at
+            ) VALUES (
+              ${provider}, 'project-profile', ${provider}, ${selection}, 'full-access',
+              'default', 'local', '2026-06-13T09:00:00.000Z', '2026-06-13T09:00:00.000Z'
+            )
+          `;
+          const payload = JSON.stringify({
+            threadId: provider,
+            modelSelection: { provider, model: `${provider}-model` },
+          });
+          yield* sql`
+            INSERT INTO orchestration_events (
+              event_id, aggregate_kind, stream_id, stream_version, event_type,
+              occurred_at, actor_kind, payload_json, metadata_json
+            ) VALUES (
+              ${provider}, 'thread', ${provider}, 1, 'thread.turn-start-requested',
+              '2026-06-13T09:05:00.000Z', 'client', ${payload}, '{}'
+            )
+          `;
+        }
+
+        const withoutTokens = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(withoutTokens.available).toBe(false);
+        expect(withoutTokens.unavailableProviders).toEqual(["codex", "grok"]);
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES (
+            'codex-tokens', 'codex', 'codex-turn', 'info', 'context-window.updated', 'tokens',
+            '{"totalProcessedTokens":1000}', 1, '2026-06-13T09:06:00.000Z'
+          )
+        `;
+        const missingTelemetry = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(missingTelemetry.unavailableProviders).toEqual(["grok"]);
+        expect(missingTelemetry.lifetimeTotalTokens).toBe(1000);
+
+        // An observed zero is not a positive token total. The coverage notice must
+        // describe the missing positive totals, without claiming telemetry is absent.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES (
+            'grok-zero-tokens', 'grok', 'grok-turn', 'info', 'context-window.updated', 'tokens',
+            '{"totalProcessedTokens":0}', 1, '2026-06-13T09:06:00.000Z'
+          )
+        `;
+        const partial = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(partial.available).toBe(true);
+        expect(partial.lifetimeTotalTokens).toBe(1000);
+        expect(partial.topProviderPercent).toBe(100);
+        expect(partial.unavailableProviders).toEqual(["grok"]);
+        expect(partial.models).toEqual([
+          { provider: "codex", model: "codex-model", tokens: 1000, percent: 100 },
+        ]);
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        expect(stats.providerModels).toContainEqual({
+          provider: "grok",
+          model: "grok-model",
+          turnCount: 1,
+          percent: 50,
+        });
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+          ) VALUES (
+            'grok-tokens', 'grok', 'grok-turn', 'info', 'context-window.updated', 'tokens',
+            '{"totalProcessedTokens":1000}', 2, '2026-06-13T09:07:00.000Z'
+          )
+        `;
+        const complete = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+        expect(complete.unavailableProviders).toEqual([]);
+        expect(complete.lifetimeTotalTokens).toBe(2000);
+      }),
+    );
+  });
+
   it("reports token-based provider ranking separately from turn-count profile stats", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {

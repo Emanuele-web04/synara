@@ -12,6 +12,29 @@ import { makeProviderLifecycleCoordinator } from "./providerLifecycleCoordinator
 const threadId = ThreadId.makeUnsafe("thread-lifecycle-coordinator");
 
 describe("makeProviderLifecycleCoordinator", () => {
+  it("keeps the old generation through preparation and does not rotate on rejection", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const coordinator = makeProviderLifecycleCoordinator();
+        coordinator.adoptCurrent(threadId, "old");
+        const result = yield* coordinator
+          .run(
+            threadId,
+            () => Effect.die("must not start"),
+            Effect.gen(function* () {
+              expect(coordinator.currentGeneration(threadId)).toBe("old");
+              yield* Effect.yieldNow;
+              expect(coordinator.currentGeneration(threadId)).toBe("old");
+              return yield* Effect.fail("busy");
+            }),
+          )
+          .pipe(Effect.result);
+        expect(result._tag).toBe("Failure");
+        expect(coordinator.currentGeneration(threadId)).toBe("old");
+      }),
+    );
+  });
+
   it("publishes the run generation for the duration of a committed run", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {

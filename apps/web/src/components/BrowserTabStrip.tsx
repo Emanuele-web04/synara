@@ -79,7 +79,7 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
               data-browser-tab-active={isActive ? "true" : undefined}
               className={cn(
                 BROWSER_CHROME_CONTROL_CLASS_NAME,
-                "group flex h-7 min-w-0 max-w-[12rem] shrink-0 items-center pr-0.5 text-left text-[length:var(--app-font-size-ui,12px)] transition-colors",
+                "group flex h-7 min-w-0 max-w-[12rem] shrink-0 items-center pr-0.5 text-left text-ui transition-colors",
                 isActive
                   ? cn(BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME, "text-foreground")
                   : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-background/40 hover:text-foreground",
@@ -136,7 +136,7 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
       {props.status ? (
         <div
           className={cn(
-            "ml-auto max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-[11px] leading-none sm:max-w-[16rem]",
+            "ml-auto max-w-[13rem] shrink-0 truncate rounded-full border px-2.5 py-1 text-ui-sm leading-none sm:max-w-[16rem]",
             props.status.tone === "error"
               ? "border-destructive/25 bg-destructive/8 text-destructive"
               : "border-border/60 bg-background/80 text-muted-foreground",

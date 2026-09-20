@@ -66,6 +66,23 @@ describe("WebSocket compatibility bootstrap", () => {
     ).toBeNull();
   });
 
+  it("rejects revision-one clients after the commit-author wire shape change", async () => {
+    const error = await Effect.runPromise(
+      negotiateWsCompatibility({
+        protocolEpoch: WS_PROTOCOL_EPOCH,
+        minRevision: 1,
+        maxRevision: 1,
+        clientBuild: "stale-client",
+        requiredCapabilities: [],
+      }).pipe(Effect.flip),
+    );
+
+    expect(error).toMatchObject({
+      code: "WS_PROTOCOL_INCOMPATIBLE",
+      action: "update-client",
+    });
+  });
+
   it("rejects a missing required capability with terminal server-update guidance", async () => {
     const error = await Effect.runPromise(
       negotiateWsCompatibility({

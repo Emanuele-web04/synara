@@ -316,7 +316,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 
     const discoveryError = props.discoveryErrorsByProvider?.[provider];
     const discoveryErrorElement = discoveryError ? (
-      <div className="px-2 py-1.5 text-xs text-destructive">{discoveryError}</div>
+      <div className="px-2 py-1.5 text-ui leading-snug text-destructive">{discoveryError}</div>
     ) : null;
 
     const content =
@@ -337,7 +337,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           />
         </MenuRadioGroup>
       ) : (
-        <div className="px-2 py-2 text-muted-foreground text-sm">
+        <div className="px-2 py-2 text-muted-foreground text-ui leading-snug">
           {provider === "pi" && normalizedModelSearchQuery.length === 0
             ? "No Pi models found"
             : "No matches"}
@@ -410,7 +410,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                 )}
               />
               <span>{option.label}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80">
+              <span className="ms-auto text-ui-sm text-muted-foreground/80">
                 {availability.label}
               </span>
             </MenuItem>
@@ -576,7 +576,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
                 <span>Change model</span>
                 <ShortcutKbd
                   shortcutLabel={props.shortcutLabel}
-                  className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
+                  className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
                 />
               </span>
             </TooltipPopup>

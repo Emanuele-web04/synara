@@ -139,7 +139,7 @@ export const ComposerSubagentStrip = function ComposerSubagentStrip({
                   onClick={() => onOpenThread(item.threadId)}
                 >
                   <BackToParentIcon className="size-3 shrink-0 text-muted-foreground/55" />
-                  <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
+                  <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">
                     {item.label}
                   </span>
                 </button>
@@ -166,20 +166,20 @@ export const ComposerSubagentStrip = function ComposerSubagentStrip({
                       subagentStatusDotClassName(item.statusKind),
                     )}
                   />
-                  <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
+                  <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">
                     <span>{item.primaryLabel}</span>
                     {item.role ? (
-                      <span className="ml-1 text-[11px] font-normal text-muted-foreground/55">
+                      <span className="ml-1 text-ui-sm font-normal text-muted-foreground/55">
                         ({item.role})
                       </span>
                     ) : null}
                     {item.modelLabel ? (
-                      <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/45">
+                      <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">
                         {item.modelLabel}
                       </span>
                     ) : null}
                     {item.isBackground ? (
-                      <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/45">
+                      <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">
                         background
                       </span>
                     ) : null}
@@ -187,7 +187,7 @@ export const ComposerSubagentStrip = function ComposerSubagentStrip({
                   {item.statusLabel ? (
                     <span
                       className={cn(
-                        "shrink-0 text-[11px]",
+                        "shrink-0 text-ui-sm",
                         subagentStatusTextToneClassName(item.statusKind),
                       )}
                     >

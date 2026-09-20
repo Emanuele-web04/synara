@@ -107,7 +107,7 @@ export function TerminalWorkspaceTabBar(props: {
               }
               trailing={
                 terminalGroup.terminalIds.length > 1 ? (
-                  <span className="shrink-0 text-[10px] text-current/55">
+                  <span className="shrink-0 text-ui-xs text-current/55">
                     {terminalGroup.terminalIds.length}
                   </span>
                 ) : null
@@ -157,7 +157,7 @@ export function TerminalSidebar(props: {
               {props.showGroupHeaders && (
                 <button
                   type="button"
-                  className={`flex w-full items-center px-1 py-0.5 text-[10px] ${
+                  className={`flex w-full items-center px-1 py-0.5 text-ui-xs ${
                     isGroupActive
                       ? "bg-[var(--sidebar-accent-active)] text-foreground"
                       : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground"
@@ -183,14 +183,14 @@ export function TerminalSidebar(props: {
                   return (
                     <div
                       key={terminalId}
-                      className={`group flex items-center gap-1 px-1 py-0.5 text-[11px] ${
+                      className={`group flex items-center gap-1 px-1 py-0.5 text-ui-sm ${
                         isActive
                           ? "bg-[var(--sidebar-accent-active)] text-foreground"
                           : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground"
                       }`}
                     >
                       {props.showGroupHeaders && (
-                        <span className="text-[10px] text-muted-foreground/80">└</span>
+                        <span className="text-ui-xs text-muted-foreground/80">└</span>
                       )}
                       <button
                         type="button"
@@ -216,7 +216,7 @@ export function TerminalSidebar(props: {
                             render={
                               <button
                                 type="button"
-                                className="inline-flex size-3.5 items-center justify-center rounded text-xs font-medium leading-none text-muted-foreground opacity-0 transition hover:bg-[var(--sidebar-accent)] hover:text-foreground group-hover:opacity-100"
+                                className="inline-flex size-3.5 items-center justify-center rounded text-ui font-medium leading-none text-muted-foreground opacity-0 transition hover:bg-[var(--sidebar-accent)] hover:text-foreground group-hover:opacity-100"
                                 onClick={() => props.onCloseTerminal(terminalId)}
                                 aria-label={closeTerminalLabel}
                               />

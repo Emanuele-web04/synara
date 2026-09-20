@@ -2,6 +2,7 @@ import { appendAppSnapPromptContext } from "../../provider/appSnapPromptContext.
 import { computerActivationMetadata } from "../../computer/computerActivation.ts";
 import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
 import { ComputerService } from "../../computer/Services/ComputerService";
+import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
 // FILE: ProviderCommandReactor.ts
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
@@ -1807,6 +1808,23 @@ const make = Effect.gen(function* () {
 
     // Only reuse projected session state when the runtime still has a live session to attach to.
     const activeSessionBeforeEnsure = yield* resolveActiveSession(threadId);
+    const workspaceChanged =
+      activeSessionBeforeEnsure !== undefined &&
+      providerWorkspaceChanged(activeSessionBeforeEnsure.cwd, effectiveCwd);
+    // Background tasks may share the old process. Never kill them merely to
+    // apply a project relocation, including when metadata cleared the projection.
+    if (
+      workspaceChanged &&
+      providerService.hasLiveRuntimeTasks &&
+      (yield* providerService.hasLiveRuntimeTasks({ threadId }))
+    ) {
+      return yield* new ProviderAdapterValidationError({
+        provider: preferredProvider,
+        operation: "thread.turn.start",
+        issue:
+          "Finish or stop this thread's background tasks before resuming in the new project path.",
+      });
+    }
     const reusableSession =
       thread.session && thread.session.status !== "stopped" ? activeSessionBeforeEnsure : undefined;
     if (reusableSession) {
@@ -1824,24 +1842,22 @@ const make = Effect.gen(function* () {
         requestedModelSelection.model !== activeSessionBeforeEnsure?.model;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
       const previousModelSelection = threadSessionModelSelections.get(threadId);
-      // Claude restarts resume via `--resume`, which replays the whole conversation
-      // as uncached input tokens. Only spawn-fixed options (currently `max` effort)
-      // may force that; model and context-window changes switch in-session via
-      // setModel, and effort/fastMode/ultracode/thinking apply via flag settings.
+      // Spawn-fixed max effort and auto-compaction overrides resume the same
+      // conversation. Claude owns prefix caching; a resume does not guarantee a hit.
       // When the dispatch cache has no entry (the session was started by a turn
       // without a selection), compare against the projected thread selection the
       // session was actually spawned from so spawn-fixed changes still restart.
       const shouldRestartForModelSelectionChange =
-        requestedModelSelection !== undefined &&
-        (currentProvider === "claudeAgent"
+        currentProvider === "claudeAgent"
           ? claudeSelectionRequiresRestart(
               previousModelSelection ?? thread.modelSelection,
-              requestedModelSelection,
+              desiredModelSelection,
             )
           : (currentProvider === "droid" ||
               currentProvider === "grok" ||
               currentProvider === "devin") &&
-            !Equal.equals(previousModelSelection, requestedModelSelection));
+            requestedModelSelection !== undefined &&
+            !Equal.equals(previousModelSelection, requestedModelSelection);
       const requestedComputerControl = options?.enableComputerControl;
       // A missing cache entry means the session was started by a dispatch that
       // carried no computer-control flag, which provisions the default (off), so
@@ -1860,6 +1876,7 @@ const make = Effect.gen(function* () {
       if (
         !runtimeModeChanged &&
         !providerChanged &&
+        !workspaceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
         !computerControlChanged
@@ -1889,6 +1906,7 @@ const make = Effect.gen(function* () {
         computerControlChanged &&
         !runtimeModeChanged &&
         !providerChanged &&
+        !workspaceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
         (yield* hasLiveProviderTurn(threadId))
@@ -1902,6 +1920,14 @@ const make = Effect.gen(function* () {
           computerControlRestartDeferred: true,
           forkComputerControl: undefined,
         };
+      }
+
+      if (currentProvider === "claudeAgent" && reusableSession.activeTurnId != null) {
+        return yield* new ProviderAdapterValidationError({
+          provider: currentProvider,
+          operation: "session/reconfigure",
+          issue: "Wait for Claude's active turn to finish before changing session settings.",
+        });
       }
 
       // A computer-control-only restart keeps the resume cursor: provisioning is
@@ -1921,13 +1947,20 @@ const make = Effect.gen(function* () {
         desiredRuntimeMode,
         runtimeModeChanged,
         providerChanged,
+        workspaceChanged,
         modelChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
         computerControlChanged,
         hasResumeCursor: resumeCursor !== undefined,
       });
-      const restartedOutcome = yield* startProviderSessionWithOutcome(resumeCursor);
+      // Keep the provider cursor when only cwd changes. The existing lifecycle
+      // proves teardown before replacement and persists transcript fallback when
+      // a provider cannot restore its native context at the new location.
+      const restartedOutcome = yield* startProviderSessionWithOutcome(
+        resumeCursor,
+        workspaceChanged && shouldRegisterContextBootstrap,
+      );
       const restartedSession = restartedOutcome.session;
       if (
         shouldRegisterContextBootstrap &&
@@ -3579,6 +3612,48 @@ const make = Effect.gen(function* () {
                   turnId: null,
                   createdAt: event.payload.createdAt,
                 });
+                const failure = Option.getOrUndefined(Cause.findErrorOption(cause));
+                // A refused configuration change leaves the existing runtime and
+                // its live turn intact. Do not project a false terminal state.
+                if (
+                  failure instanceof ProviderAdapterValidationError &&
+                  failure.operation === "session/reconfigure"
+                ) {
+                  const optimisticSession = turnStartSession ?? thread.session;
+                  const runtime = (yield* providerService.listSessions()).find(
+                    (session) => session.threadId === event.payload.threadId,
+                  );
+                  if (
+                    optimisticSession?.status === "starting" &&
+                    runtime &&
+                    runtime.activeTurnId == null
+                  ) {
+                    yield* setThreadSession({
+                      threadId: event.payload.threadId,
+                      session: {
+                        threadId: event.payload.threadId,
+                        providerName: runtime.provider,
+                        runtimeMode: runtime.runtimeMode,
+                        status:
+                          runtime.status === "closed"
+                            ? "stopped"
+                            : runtime.status === "connecting"
+                              ? "starting"
+                              : runtime.status,
+                        activeTurnId: null,
+                        lastError: runtime.lastError ?? null,
+                        updatedAt: runtime.updatedAt,
+                      },
+                      expectedSession: {
+                        status: optimisticSession.status,
+                        updatedAt: optimisticSession.updatedAt,
+                      },
+                      createdAt: event.payload.createdAt,
+                    });
+                  }
+                  if (isPendingQueuedDispatch) yield* clearPendingQueuedDispatch;
+                  return yield* Effect.failCause(cause);
+                }
                 yield* setThreadSessionError({
                   threadId: event.payload.threadId,
                   runtimeMode: event.payload.runtimeMode,

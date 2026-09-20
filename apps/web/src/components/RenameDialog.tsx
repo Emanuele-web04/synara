@@ -58,6 +58,7 @@ export function RenameDialog({
             after the close transition — each open seeds a fresh value from
             initialValue without a reset effect. */}
         <RenameDialogForm
+          inputLabel={title}
           initialValue={initialValue}
           allowEmpty={allowEmpty}
           placeholder={placeholder}
@@ -71,6 +72,7 @@ export function RenameDialog({
 }
 
 function RenameDialogForm({
+  inputLabel,
   initialValue,
   allowEmpty,
   placeholder,
@@ -78,6 +80,7 @@ function RenameDialogForm({
   onOpenChange,
   onSave,
 }: {
+  inputLabel: string;
   initialValue: string;
   allowEmpty: boolean;
   placeholder: string | undefined;
@@ -124,6 +127,7 @@ function RenameDialogForm({
         >
           <Input
             ref={inputRef}
+            aria-label={inputLabel}
             size="lg"
             value={value}
             placeholder={placeholder}

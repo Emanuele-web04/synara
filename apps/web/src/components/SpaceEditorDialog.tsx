@@ -193,11 +193,7 @@ export function SpaceEditorDialog(props: {
               placeholder={isVoid ? "Unfiled" : "Work"}
             />
             {visibleNameError ? (
-              <p
-                id={nameErrorId}
-                role="alert"
-                className="text-[length:var(--app-font-size-ui-xs,10px)] text-destructive"
-              >
+              <p id={nameErrorId} role="alert" className="text-ui-xs text-destructive">
                 {visibleNameError}
               </p>
             ) : null}
@@ -243,10 +239,7 @@ export function SpaceEditorDialog(props: {
             </div>
           </fieldset>
           {submitError ? (
-            <p
-              role="alert"
-              className="text-[length:var(--app-font-size-ui-xs,10px)] text-destructive"
-            >
+            <p role="alert" className="text-ui-xs text-destructive">
               {submitError}
             </p>
           ) : null}

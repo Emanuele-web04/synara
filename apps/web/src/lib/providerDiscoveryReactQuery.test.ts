@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isInitialModelDiscoveryPending,
   prioritizeProviderModelDiscovery,
+  providerCommandsQueryOptions,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
 import * as nativeApi from "../nativeApi";
@@ -436,5 +437,18 @@ describe("providerModelsQueryOptions", () => {
 
     const queryClient = new QueryClient();
     await expect(queryClient.fetchQuery(options)).resolves.toEqual(catalog);
+  });
+});
+
+describe("providerCommandsQueryOptions", () => {
+  const keyFor = (provider: "claudeAgent" | "codex", threadId: string) =>
+    hashKey(providerCommandsQueryOptions({ provider, cwd: "/repo", threadId }).queryKey);
+
+  it("keys Claude commands per thread because a session fixes its Artifact opt-in", () => {
+    expect(keyFor("claudeAgent", "thread-a")).not.toBe(keyFor("claudeAgent", "thread-b"));
+  });
+
+  it("shares other providers' commands across threads of a workspace", () => {
+    expect(keyFor("codex", "thread-a")).toBe(keyFor("codex", "thread-b"));
   });
 });

@@ -3,8 +3,11 @@ import { Schema } from "effect";
 import { NonNegativeInt } from "./baseSchemas";
 
 export const WS_PROTOCOL_EPOCH = 1;
-export const WS_PROTOCOL_MIN_REVISION = 1;
-export const WS_PROTOCOL_MAX_REVISION = 1;
+// Revision 2 changes PullRequestCommit.authors to permit name-only authors.
+// Keep revision 1 out of the compatibility range so older clients cannot
+// decode the new nullable login shape and fail while rendering PR details.
+export const WS_PROTOCOL_MIN_REVISION = 2;
+export const WS_PROTOCOL_MAX_REVISION = 2;
 export const WS_BOOTSTRAP_METHOD = "bootstrap.negotiate";
 export const WS_BOOTSTRAP_PATH = "/ws/bootstrap";
 export const WS_NEGOTIATE_HTTP_PATH = "/ws/negotiate";

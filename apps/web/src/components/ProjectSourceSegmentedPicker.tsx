@@ -71,7 +71,7 @@ export function ProjectSourceSegmentedPicker(props: {
                 sourceUnavailable ? "Update the Synara server to add GitHub projects." : undefined
               }
               className={cn(
-                "relative z-10 flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors duration-200 disabled:opacity-50",
+                "relative z-10 flex flex-1 items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-ui-sm font-medium transition-colors duration-200 disabled:opacity-50",
                 active
                   ? "text-[var(--color-text-foreground)]"
                   : "text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]",

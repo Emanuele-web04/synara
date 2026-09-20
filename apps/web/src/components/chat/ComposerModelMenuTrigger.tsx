@@ -5,6 +5,7 @@
 // Depends on: menu/tooltip primitives, provider icons, and composer picker text tokens.
 
 import type { ProviderKind } from "@synara/contracts";
+import { useState } from "react";
 
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -25,17 +26,42 @@ export function ComposerModelMenuTrigger(props: {
   provider: ProviderKind;
   modelLabel: string;
   statusLabel: string | null;
+  contextWindowLabel?: string | null | undefined;
   showsFastBadge: boolean;
   hideModelLabel?: boolean | undefined;
   hideStatusLabel?: boolean | undefined;
   disabled?: boolean | undefined;
   isMenuOpen: boolean;
+  /** Laid over the model/effort text while the menu is open. The text underneath stays in
+   *  place, invisible and frozen at its open-time value, so it keeps sizing the pill:
+   *  tuning effort in the open panel cannot resize the trigger and drag the popup sideways. */
+  openPlaceholderLabel?: string | null | undefined;
   shortcutLabel?: string | null | undefined;
 }) {
+  const freezesLabel = props.isMenuOpen && Boolean(props.openPlaceholderLabel);
+  // A compact (icon-only) trigger has no room for the placeholder; it only freezes.
+  const showsPlaceholder = freezesLabel && !props.hideModelLabel;
+  // Opening must not move the trigger at all: Base UI opens on mousedown and cancels the
+  // open when the matching mouseup lands outside the trigger, so a resize under the cursor
+  // eats the first click.
+  const liveLabel = {
+    modelLabel: props.modelLabel,
+    statusLabel: props.statusLabel,
+    contextWindowLabel: props.contextWindowLabel,
+    showsFastBadge: props.showsFastBadge,
+  };
+  const [frozenLabel, setFrozenLabel] = useState<typeof liveLabel | null>(null);
+  if (freezesLabel && frozenLabel === null) setFrozenLabel(liveLabel);
+  if (!freezesLabel && frozenLabel !== null) setFrozenLabel(null);
+  const label = freezesLabel && frozenLabel !== null ? frozenLabel : liveLabel;
+  // The label only plays its entry once it has actually been covered, never on mount.
+  const [hasShownPlaceholder, setHasShownPlaceholder] = useState(false);
+  if (showsPlaceholder && !hasShownPlaceholder) setHasShownPlaceholder(true);
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[props.provider];
   const hiddenTriggerTitle = [
     props.hideModelLabel ? props.modelLabel : null,
     props.hideStatusLabel ? props.statusLabel : null,
+    props.hideStatusLabel ? props.contextWindowLabel : null,
   ]
     .filter((part): part is string => typeof part === "string" && part.length > 0)
     .join(" · ");
@@ -55,43 +81,73 @@ export function ComposerModelMenuTrigger(props: {
   );
 
   const triggerContent = (
-    <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-      <ProviderIcon
-        aria-hidden="true"
-        className={cn(
-          // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
-          "size-3.5 shrink-0 opacity-100",
-          getProviderIconClassName(props.provider, "text-[var(--color-text-foreground)]"),
-        )}
-      />
-      {props.hideModelLabel ? (
-        <span className="sr-only">{props.modelLabel}</span>
-      ) : (
-        <span className="min-w-0 truncate text-[var(--color-text-foreground)]">
-          {props.modelLabel}
-        </span>
-      )}
-      {props.showsFastBadge ? (
-        <FastModeIcon
-          aria-hidden="true"
-          className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
-        />
-      ) : null}
-      {props.statusLabel ? (
-        props.hideStatusLabel ? (
-          <>
-            <SettingsIcon
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="relative flex min-w-0 items-center">
+        <span
+          className={cn(
+            "flex min-w-0 items-center gap-1.5 overflow-hidden",
+            showsPlaceholder ? "invisible" : hasShownPlaceholder && "composer-trigger-label-enter",
+          )}
+        >
+          <ProviderIcon
+            aria-hidden="true"
+            className={cn(
+              // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
+              "size-3.5 shrink-0 opacity-100",
+              getProviderIconClassName(props.provider, "text-[var(--color-text-foreground)]"),
+            )}
+          />
+          {props.hideModelLabel ? (
+            <span className="sr-only">{label.modelLabel}</span>
+          ) : (
+            <span className="min-w-0 truncate text-[var(--color-text-foreground)]">
+              {label.modelLabel}
+            </span>
+          )}
+          {label.showsFastBadge ? (
+            <FastModeIcon
               aria-hidden="true"
               className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
             />
-            <span className="sr-only">{props.statusLabel}</span>
-          </>
-        ) : (
-          <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
-            {props.statusLabel}
+          ) : null}
+          {label.statusLabel ? (
+            props.hideStatusLabel ? (
+              <>
+                <SettingsIcon
+                  aria-hidden="true"
+                  className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
+                />
+                <span className="sr-only">{label.statusLabel}</span>
+              </>
+            ) : (
+              <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
+                {label.statusLabel}
+              </span>
+            )
+          ) : null}
+          {label.contextWindowLabel ? (
+            <span
+              className={
+                props.hideStatusLabel
+                  ? "sr-only"
+                  : cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)
+              }
+            >
+              {label.contextWindowLabel}
+            </span>
+          ) : null}
+        </span>
+        {showsPlaceholder ? (
+          <span
+            className={cn(
+              "composer-trigger-label-enter absolute inset-0 truncate text-center",
+              COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+            )}
+          >
+            {props.openPlaceholderLabel}
           </span>
-        )
-      ) : null}
+        ) : null}
+      </span>
       <ChevronDownIcon aria-hidden="true" className="ms-0.5 size-3 shrink-0 opacity-60" />
     </span>
   );
@@ -110,7 +166,7 @@ export function ComposerModelMenuTrigger(props: {
             <span>Change model</span>
             <ShortcutKbd
               shortcutLabel={props.shortcutLabel}
-              className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
+              className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
             />
           </span>
         </TooltipPopup>

@@ -18,6 +18,7 @@ import {
   DEFAULT_TERMINAL_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
+  didProviderCommandDiscoverySettingsChange,
   didProviderEnablementChange,
   getAppModelOptions,
   getCustomBinaryPathForProvider,
@@ -183,6 +184,26 @@ describe("server-backed provider enablement", () => {
       didProviderEnablementChange(DEFAULT_SERVER_SETTINGS_VIEW, DEFAULT_SERVER_SETTINGS_VIEW),
     ).toBe(false);
     expect(didProviderEnablementChange(DEFAULT_SERVER_SETTINGS_VIEW, disabledOpenCode)).toBe(true);
+  });
+
+  it("invalidates command discovery when another client toggles Claude Artifacts", () => {
+    const artifactsOn = {
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS_VIEW.providers,
+        claudeAgent: {
+          ...DEFAULT_SERVER_SETTINGS_VIEW.providers.claudeAgent,
+          enableArtifacts: true,
+        },
+      },
+    };
+
+    expect(
+      didProviderCommandDiscoverySettingsChange(DEFAULT_SERVER_SETTINGS_VIEW, artifactsOn),
+    ).toBe(true);
+    expect(didProviderCommandDiscoverySettingsChange(artifactsOn, artifactsOn)).toBe(false);
+    // The first snapshot is covered by didProviderEnablementChange.
+    expect(didProviderCommandDiscoverySettingsChange(undefined, artifactsOn)).toBe(false);
   });
 });
 
@@ -563,7 +584,7 @@ describe("timestamp format defaults", () => {
 
 describe("chat font size defaults", () => {
   it("defaults chat font size to 12px", () => {
-    expect(DEFAULT_CHAT_FONT_SIZE_PX).toBe(12);
+    expect(DEFAULT_CHAT_FONT_SIZE_PX).toBe(13);
   });
 
   it("clamps chat font size updates into the supported range", () => {

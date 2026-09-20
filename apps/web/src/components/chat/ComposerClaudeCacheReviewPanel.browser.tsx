@@ -94,31 +94,48 @@ describe("ComposerClaudeCacheReviewPanel", () => {
     }
   });
 
-  it.each(["responding", "compacting", "uncertain"] as const)(
-    "disables every response during %s",
+  it.each(["responding", "compacting"] as const)(
+    "leaves progress to the transcript during %s",
     async (status) => {
-      const onRespond = vi.fn();
       const screen = await render(
         <ComposerClaudeCacheReviewPanel
           review={makeReview({ status })}
           compactDisabledReason={null}
-          onRespond={onRespond}
+          onRespond={vi.fn()}
         />,
       );
       try {
-        for (const label of [
-          /^Continue with full context/,
-          /^Compact, then send/,
-          /^Cancel this send/,
-        ]) {
-          await expect.element(page.getByRole("button", { name: label })).toBeDisabled();
-        }
-        expect(onRespond).not.toHaveBeenCalled();
+        await expect
+          .element(page.getByRole("region", { name: "Claude cache review" }))
+          .not.toBeInTheDocument();
       } finally {
         await screen.unmount();
       }
     },
   );
+
+  it("disables every response while the request status is uncertain", async () => {
+    const onRespond = vi.fn();
+    const screen = await render(
+      <ComposerClaudeCacheReviewPanel
+        review={makeReview({ status: "uncertain" })}
+        compactDisabledReason={null}
+        onRespond={onRespond}
+      />,
+    );
+    try {
+      for (const label of [
+        /^Continue with full context/,
+        /^Compact, then send/,
+        /^Cancel this send/,
+      ]) {
+        await expect.element(page.getByRole("button", { name: label })).toBeDisabled();
+      }
+      expect(onRespond).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
 
   it("supports a failed review without offering unavailable compaction", async () => {
     const review = makeReview({ status: "failed", error: "Compaction did not complete." });

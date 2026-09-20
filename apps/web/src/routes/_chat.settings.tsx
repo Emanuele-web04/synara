@@ -966,7 +966,7 @@ function SettingsRouteView() {
                 }}
                 aria-label="Base font size in pixels"
               />
-              <span className="text-xs text-muted-foreground">px</span>
+              <span className="text-ui leading-snug text-muted-foreground">px</span>
             </div>
           }
         />
@@ -1007,7 +1007,7 @@ function SettingsRouteView() {
                 }}
                 aria-label="Terminal font size in pixels"
               />
-              <span className="text-xs text-muted-foreground">px</span>
+              <span className="text-ui leading-snug text-muted-foreground">px</span>
             </div>
           }
         />
@@ -1307,7 +1307,7 @@ function SettingsRouteView() {
                         </Badge>
                       ) : null}
                     </h1>
-                    <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                    <p className="mt-1.5 text-ui leading-relaxed text-muted-foreground">
                       {activeSectionItem.description}
                     </p>
                   </div>

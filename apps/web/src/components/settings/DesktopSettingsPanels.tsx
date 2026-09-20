@@ -376,7 +376,11 @@ export function AppSnapSettingsPanel({
         <SettingsRow
           title="Destination"
           description="Snaps join the task you interacted with in the last minute, and consecutive snaps stay together. Otherwise Synara opens a fresh task with the capture attached."
-          control={<span className="text-xs font-medium text-muted-foreground">Automatic</span>}
+          control={
+            <span className="text-ui leading-snug font-medium text-muted-foreground">
+              Automatic
+            </span>
+          }
         />
 
         <SettingsRow

@@ -1,8 +1,13 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
   findBrandIdentityViolations,
   findVisualBrandAssetViolations,
+  readTrackedFiles,
 } from "./check-brand-identity";
 
 const characters = (...codes: number[]): string => String.fromCharCode(...codes);
@@ -18,6 +23,36 @@ const releaseAttribution = `**A review of the Synara codebase found an analytics
 const inAppReleaseAttribution = `"A review of the Synara codebase found an analytics configuration that came from the original ${firstSpacedDisplayName} codebase when Synara was created as a clone in March.",`;
 
 describe("brand identity guard", () => {
+  it("scans owned files while ignoring initialized and absent gitlinks", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "synara-brand-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+    try {
+      git("init", "--quiet");
+      const path = "source with spaces.ts";
+      writeFileSync(join(cwd, path), `const value = "${secondName}:state";`);
+      git("add", "--", path);
+      const oid = git("hash-object", "-w", path);
+      git("update-index", "--add", "--cacheinfo", `160000,${oid},nested`);
+      git("update-index", "--add", "--cacheinfo", `160000,${oid},absent`);
+      mkdirSync(join(cwd, "nested"));
+      writeFileSync(join(cwd, "nested", "outside.ts"), firstName);
+
+      const files = readTrackedFiles(cwd);
+      expect(files.map((file) => file.path)).toEqual([path]);
+      expect(
+        findBrandIdentityViolations(
+          files.map((file) => ({ ...file, contents: Buffer.from(file.contents).toString("utf8") })),
+        ),
+      ).toHaveLength(1);
+
+      // Missing owned files must still fail rather than silently weakening the guard.
+      rmSync(join(cwd, path));
+      expect(() => readTrackedFiles(cwd)).toThrow();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("detects retired names in paths and text", () => {
     const violations = findBrandIdentityViolations([
       { path: `docs/${firstName}.md`, contents: "Synara" },

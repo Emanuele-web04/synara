@@ -24,6 +24,7 @@ describe("isProviderInstallSettingsDirty", () => {
       { openCodeBinaryPath: "/opt/opencode" },
       { openCodeServerUrl: "http://127.0.0.1:5001" },
       { openCodeExperimentalWebSockets: true },
+      { claudeEnableArtifacts: true },
       { piBinaryPath: "/opt/pi" },
       { piAgentDir: "/tmp/pi-agent" },
     ] satisfies ReadonlyArray<Partial<AppSettings>>;
@@ -58,6 +59,7 @@ describe("createProviderInstallResetPatch", () => {
       [
         "antigravityBinaryPath",
         "claudeBinaryPath",
+        "claudeEnableArtifacts",
         "codexBinaryPath",
         "codexHomePath",
         "cursorApiEndpoint",

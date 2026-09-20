@@ -19,6 +19,11 @@ import {
 } from "../../composerDraftStore";
 import { STARRED_MODELS_STORAGE_KEY, type StarredModel } from "../../lib/starredModels";
 import { type ProviderModelOption } from "../../providerModelOptions";
+import {
+  deriveComposerContextWindowLabel,
+  deriveContextWindowSelectionStatus,
+  deriveSelectedContextWindowSnapshot,
+} from "../../lib/contextWindow";
 import { ComposerModelPicker } from "./ComposerModelPicker";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-composer-model-picker");
@@ -59,6 +64,9 @@ function readyProvider(provider: ProviderKind): ServerProviderStatus {
 
 type HarnessProps = {
   lockedProvider?: ProviderKind | null;
+  modelOptionsByProvider?: React.ComponentProps<
+    typeof ComposerModelPicker
+  >["modelOptionsByProvider"];
   effortControl?: "menu" | "slider";
   onProviderModelChange?: React.ComponentProps<typeof ComposerModelPicker>["onProviderModelChange"];
 };
@@ -80,7 +88,7 @@ function Harness(props: HarnessProps) {
       lockedProvider={props.lockedProvider ?? null}
       effortControl={props.effortControl ?? "menu"}
       providers={[readyProvider("codex"), readyProvider("claudeAgent")]}
-      modelOptionsByProvider={MODEL_OPTIONS_BY_PROVIDER}
+      modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
       onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
       threadId={THREAD_ID}
       modelOptions={modelOptions?.codex}
@@ -220,6 +228,73 @@ describe("ComposerModelPicker", () => {
     }
   });
 
+  it("keeps retired presets removable while blocking clicks and shortcuts", async () => {
+    const onProviderModelChange = vi.fn();
+    const screen = await mountPicker(
+      {
+        onProviderModelChange,
+        modelOptionsByProvider: {
+          ...MODEL_OPTIONS_BY_PROVIDER,
+          codex: [{ slug: GPT_5_5, name: "GPT-5.5" }],
+        },
+      },
+      undefined,
+      [{ provider: "codex", model: GPT_5_4, effort: "low", fastMode: null, thinking: null }],
+    );
+    try {
+      const retired = page.getByRole("menuitem", { name: /GPT-5\.4.*Unavailable/u });
+      await expect.element(retired).toHaveAttribute("aria-disabled", "true");
+      retired.element().dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await userEvent.keyboard("{Control>}1{/Control}");
+      expect(onProviderModelChange).not.toHaveBeenCalled();
+
+      await page.getByRole("button", { name: "Remove GPT-5.4 from starred" }).click();
+      expect(readStoredStars()).toEqual([]);
+      expect(onProviderModelChange).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("enables a saved custom preset when its catalog becomes available", async () => {
+    const onProviderModelChange = vi.fn();
+    const model = "private-model" as ModelSlug;
+    const preset: StarredModel = {
+      provider: "codex",
+      model,
+      effort: null,
+      fastMode: null,
+      thinking: null,
+    };
+    const screen = await mountPicker(
+      { onProviderModelChange, modelOptionsByProvider: EMPTY_BY_PROVIDER },
+      undefined,
+      [preset],
+    );
+    try {
+      await expect
+        .element(page.getByRole("menuitem", { name: /Private Model.*Unavailable/u }))
+        .toHaveAttribute("aria-disabled", "true");
+      expect(readStoredStars()).toEqual([preset]);
+
+      await screen.rerender(
+        <Harness
+          onProviderModelChange={onProviderModelChange}
+          modelOptionsByProvider={{
+            ...EMPTY_BY_PROVIDER,
+            codex: [{ slug: model, name: "Private Model" }],
+          }}
+        />,
+      );
+      const available = page.getByRole("menuitem", { name: /Private Model/u });
+      await expect.element(available).not.toHaveAttribute("aria-disabled", "true");
+      await available.click();
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", model);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("renders the effort ladder as a footer slider and commits keyboard steps", async () => {
     const screen = await mountPicker({ effortControl: "slider" }, { reasoningEffort: "medium" });
     try {
@@ -267,13 +342,37 @@ describe("ComposerModelPicker", () => {
       await expect.element(slider).toBeVisible();
       await expect.element(otherModel).toHaveAttribute("aria-current", "true");
 
-      // Stop labels are a second way to set the level.
-      await page.getByRole("button", { name: "Set effort to High" }).click();
-      await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
-
       // Picking the model that is already current is the "done" gesture.
       await otherModel.click();
       await expect.element(slider).not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps the trigger's size while the slider panel is open", async () => {
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+      provider: "codex",
+      model: GPT_5_5,
+      options: { reasoningEffort: "medium" },
+    });
+    const screen = await render(<Harness effortControl="slider" />);
+    try {
+      const trigger = page.getByRole("button", { name: "Change model and reasoning" });
+      const closedWidth = trigger.element().getBoundingClientRect().width;
+      await trigger.click();
+
+      // The covered label keeps sizing the pill; a resize under the cursor would make
+      // Base UI cancel the open on mouseup.
+      await expect.element(page.getByText("Select effort")).toBeVisible();
+      const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      await expect.element(slider).toBeVisible();
+      expect(trigger.element().getBoundingClientRect().width).toBeCloseTo(closedWidth, 1);
+
+      slider.element().focus();
+      await userEvent.keyboard("{ArrowRight}{ArrowRight}");
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "Extra High");
+      expect(trigger.element().getBoundingClientRect().width).toBeCloseTo(closedWidth, 1);
     } finally {
       await screen.unmount();
     }
@@ -307,9 +406,78 @@ describe("ComposerModelPicker", () => {
       expect(page.getByRole("tab", { name: "Claude" }).elements()).toHaveLength(0);
       await page.getByRole("tab", { name: "Starred" }).click();
       expect(page.getByRole("menuitem", { name: /Claude Sonnet/u }).elements()).toHaveLength(0);
-      await expect.element(page.getByText(/1 starred from other providers/u)).toBeVisible();
     } finally {
       await screen.unmount();
     }
   });
+});
+
+describe("Claude composer budget suffix", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+  it.each([
+    ["claude-fable-5-1", "Fable 5.1", "high", "(1M)", false, "Fable 5.1High(1M)"],
+    ["claude-opus-4-7", "Opus", undefined, "(1M)", false, "OpusHigh(1M)"],
+    [
+      "claude-fable-5-1",
+      "Fable 5.1",
+      "high",
+      "(200k · 1M next)",
+      false,
+      "Fable 5.1High(200k · 1M next)",
+    ],
+    ["claude-fable-5-1", "Fable 5.1", "high", "(1M next)", false, "Fable 5.1High(1M next)"],
+    ["claude-fable-5-1", "Fable 5.1", "high", "(1M)", true, "Fable 5.1High(1M)"],
+  ] as const)(
+    "renders %s %s %s %s compact=%s",
+    async (slug, name, effort, label, compact, expected) => {
+      const snapshot = {
+        ...deriveSelectedContextWindowSnapshot("1m")!,
+        maxTokens: 967000,
+        claudeCache: {
+          model: `${slug}[1m]`,
+          observedAt: "2026-09-17T00:00:00.000Z",
+          state: "unknown" as const,
+          source: "request-usage" as const,
+        },
+      };
+      const runtimeLabel = deriveComposerContextWindowLabel({
+        provider: "claudeAgent",
+        model: slug,
+        snapshot,
+        status: deriveContextWindowSelectionStatus({
+          activeSnapshot: snapshot,
+          appliedValue: "1m",
+          selectedValue: "1m",
+        }),
+      });
+      const screen = await render(
+        <ComposerModelPicker
+          provider="claudeAgent"
+          model={slug as ModelSlug}
+          lockedProvider={null}
+          modelOptionsByProvider={{
+            ...EMPTY_BY_PROVIDER,
+            claudeAgent: [{ slug: slug as ModelSlug, name }],
+          }}
+          onProviderModelChange={vi.fn()}
+          threadId={THREAD_ID}
+          modelOptions={{ ...(effort ? { effort } : {}), fastMode: true }}
+          prompt=""
+          onPromptChange={vi.fn()}
+          contextWindowLabel={label === "(1M)" ? runtimeLabel : label}
+          hideModelLabel={compact}
+          hideStatusLabel={compact}
+        />,
+      );
+      const button = page.getByRole("button", { name: "Change model and reasoning" });
+      expect(button.element().textContent).toBe(expected);
+      if (compact) {
+        await expect.element(button).toHaveAttribute("title", `Fable 5.1 · High · ${label}`);
+        expect(button.element().getBoundingClientRect().width).toBeLessThan(150);
+      }
+      await screen.unmount();
+    },
+  );
 });

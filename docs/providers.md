@@ -77,13 +77,27 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
+For Codex, successful model discovery determines the built-in choices, including when the returned
+catalog is empty. Models absent from that catalog are not added back from Synara's static list.
+Custom models remain available. Until discovery succeeds, Synara uses a static fallback; a failed
+refresh keeps the last successful catalog. The shared discovery cache refreshes catalogs in the
+background after its ten-minute fresh window.
+
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
 saves it together with its current effort and speed, so one click (or `mod+1`…`mod+9` while the
 picker is open) restores the whole combination. A task that has started stays on its provider: only
 that provider's tab and starred entries are offered. Supported provider executables can be pointed
 at custom binary locations.
 
+Starred models absent from the current catalog remain saved and can be removed, but cannot be
+selected. They become selectable again when discovery or custom model settings add them to the
+catalog.
+
 ## Provider sessions
+
+Use [Import projects](project-import.md) to bring local Codex and Claude Code projects and
+conversations into Synara. The flow links existing folders, merges matching project destinations,
+and creates independent conversation copies without replacing your existing Synara work.
 
 Each task owns a provider session.
 
@@ -99,6 +113,41 @@ The session may preserve provider-specific behavior such as:
 - Provider-native subagents or workflows
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
+
+### Claude Auto / 200k / 1M selection
+
+The auto-compact selector chooses an override, not a measured context limit. Auto leaves the
+window to Claude Code's settings and runtime. Explicit 200k or 1M targets are applied when the
+Claude process starts. Changing this override resumes the same native conversation in a new
+process once it is idle. Model-only changes, non-max effort, thinking and fast mode retain their
+existing live controls; max effort also requires a restart.
+
+On Claude CLI 2.1.259 and 2.1.274, the SDK's live `applyFlagSettings` accepts an auto-compact
+window without updating the window used by the runtime. Synara therefore never announces that
+live setting as applied. A replacement is refused while a turn, background task, workflow,
+subagent, approval, question or send preparation is active. The existing session and event
+ownership remain intact. Finish that work and retry; the desired selection remains saved.
+Persistent TODO entries survive resume and do not by themselves block replacement.
+
+The meter uses fresh runtime reporting for its denominator and percentage. The applied target
+comes from the configuration event, including an explicit Auto state; when that history is
+unavailable, Synara does not infer a target from a threshold. Output reserves, environment
+settings and model caps can make the effective threshold differ from the target (for example,
+967k for 1M or 167k for 200k). Old usage is invalidated after a new configuration or compaction.
+The composer model button shows the observed budget after the model and effort, for example
+`Fable 5.1 High (1M)`. Auto can show `(1M)` when matching-model runtime reporting supports it;
+the tooltip still identifies Auto as the target. A pending change shows `(200k · 1M next)`.
+A new thread or missing/mismatched runtime provenance shows the explicit choice as `(1M next)`;
+an applied target with an unrecognized runtime budget is labeled `(1M target)`, not confirmed.
+No budget is inferred from the model catalog. Compact layouts retain the suffix in the button's
+title and accessible text alongside the hidden effort. Other providers are unchanged.
+See [Claude context configuration](https://code.claude.com/docs/en/model-config#context-window-and-auto-compaction).
+
+Restart/resume preserves the conversation and Synara's cache observations and counters, but
+cannot guarantee a cache hit. The existing large cold-context preflight still applies after
+resume. This behavior does not change SDK `snapshot` configuration: enabling prompt recording
+with appended system instructions can change instruction freshness on resume and needs separate
+validation. See the [implementation plan and evidence](claude-context-switch-plan.md).
 
 ### Claude prompt caching and resumed sessions
 
@@ -147,6 +196,17 @@ after a matching native compaction boundary and successful completion. Failure o
 keeps the message on hold. If delivery is uncertain, Synara does not automatically repeat the send.
 See [cache recovery behavior and verification](claude-cache-recovery.md) for the implementation
 boundaries and remaining live validation.
+
+### Claude Artifacts, `/design` and `/slides`
+
+Claude Code keeps [Artifacts](https://code.claude.com/docs/en/artifacts) off by default for Agent
+SDK sessions, so `/design` and `/slides` cannot publish until the host opts in. Turn on **Settings →
+Providers → Claude → Artifacts, /design and /slides** and start a new session; Synara then launches
+Claude with `CLAUDE_CODE_ARTIFACT=1`. Claude's own requirements still apply: a claude.ai login on a
+Pro, Max, Team, or Enterprise plan, Claude Code 2.1.234 or later, and an organization policy that
+allows Artifacts. While Artifacts are off or unavailable, the composer marks both commands with a
+warning that explains what is missing. Published pages are hosted on claude.ai; Claude returns the
+link in its reply.
 
 ## Switching providers
 

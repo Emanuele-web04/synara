@@ -27,8 +27,8 @@ export function PanelStateMessage(props: {
         "flex w-full items-center justify-center text-center",
         fill === "full" ? "h-full min-h-0" : "flex-1",
         density === "comfortable"
-          ? "p-6 text-sm text-muted-foreground"
-          : "px-5 text-xs text-muted-foreground/70",
+          ? "p-6 text-ui leading-snug text-muted-foreground"
+          : "px-5 text-ui leading-snug text-muted-foreground/70",
         props.className,
       )}
     >

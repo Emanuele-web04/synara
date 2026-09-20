@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { type ProviderKind } from "@synara/contracts";
 
 import {
   normalizeStarredModels,
@@ -7,12 +8,14 @@ import {
   type StarredModel,
 } from "~/lib/starredModels";
 import {
+  buildStarredTabRows,
   buildStarredModelOptionsPatch,
   formatStarredTraitsLabel,
   modelPickerShortcutRowIndex,
   resolveStarredTraits,
 } from "./ComposerModelPicker.logic";
 import { getComposerTraitSelection } from "./composerTraits";
+import { type ProviderModelOption } from "../../providerModelOptions";
 
 const CODEX_HIGH_FAST: StarredModel = {
   provider: "codex",
@@ -22,7 +25,38 @@ const CODEX_HIGH_FAST: StarredModel = {
   thinking: null,
 };
 
+const EMPTY_MODEL_OPTIONS: Record<ProviderKind, ReadonlyArray<ProviderModelOption>> = {
+  codex: [],
+  claudeAgent: [],
+  cursor: [],
+  devin: [],
+  antigravity: [],
+  grok: [],
+  droid: [],
+  opencode: [],
+  pi: [],
+};
+
 describe("starred model presets", () => {
+  it.each([
+    { options: [], expectedModel: null },
+    { options: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }], expectedModel: null },
+    { options: [{ slug: "gpt-5.5", name: "GPT-5.5" }], expectedModel: "gpt-5.5" },
+  ])("only enables presets present in the current catalog: %j", ({ options, expectedModel }) => {
+    const [row] = buildStarredTabRows({
+      starredModels: [CODEX_HIGH_FAST],
+      modelOptionsByProvider: { ...EMPTY_MODEL_OPTIONS, codex: options },
+      query: "",
+      current: CODEX_HIGH_FAST,
+      effortLevelsFor: () => [],
+    });
+
+    expect(row?.selectableModel).toBe(expectedModel);
+    expect(row?.selected).toBe(expectedModel !== null);
+    expect(row?.preset).toBe(CODEX_HIGH_FAST);
+    if (expectedModel === null) expect(row?.detail).toBe("Unavailable");
+  });
+
   it("snapshots the traits currently resolved for a model", () => {
     const selection = getComposerTraitSelection("codex", "gpt-5.5", "", {
       reasoningEffort: "high",

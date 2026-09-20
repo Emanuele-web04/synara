@@ -200,10 +200,10 @@ export function ProvidersStep() {
                 htmlFor={checkboxId}
                 className="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5"
               >
-                <span className="truncate text-[length:var(--app-font-size-ui-lg,13px)] font-medium text-foreground">
+                <span className="truncate text-ui-lg font-medium text-foreground">
                   {descriptor.displayName}
                 </span>
-                <span className="flex items-center gap-1.5 text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
+                <span className="flex items-center gap-1.5 text-ui-sm text-muted-foreground">
                   <span
                     aria-hidden
                     className={cn("size-1.5 shrink-0 rounded-full", presentation.dotClassName)}
@@ -247,7 +247,7 @@ export function ProvidersStep() {
         })}
       </div>
 
-      <div className="flex items-center justify-between gap-3 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
+      <div className="flex items-center justify-between gap-3 text-ui text-muted-foreground">
         <span>
           {summary.connected} connected · {summary.needsSignIn} need sign-in ·{" "}
           {summary.notInstalled} not installed
@@ -268,7 +268,7 @@ export function ProvidersStep() {
           <div ref={terminalRegionRef} className="flex flex-col gap-1.5">
             {/* Always-available close: the card's "Done" link disappears once the
                 provider is detected as connected, but the terminal stays mounted. */}
-            <div className="flex items-center justify-between text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
+            <div className="flex items-center justify-between text-ui text-muted-foreground">
               <span>
                 Signing in to {connecting.descriptor.displayName} ·{" "}
                 <code className="text-foreground/80">{connectingSignInCommand}</code>

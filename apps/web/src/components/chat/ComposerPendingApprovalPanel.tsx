@@ -161,16 +161,16 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "overflow-hidden px-3.5 py-3")}
     >
       <div className="flex items-start justify-between gap-3">
-        <p className="min-w-0 text-[13px] font-medium leading-snug text-foreground/90">
+        <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
           {computerTask ? "Allow Computer for this task?" : KIND_PROMPT[approval.requestKind]}
           {!computerTask && (approval.toolName ?? parsed.tool) ? (
-            <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/50">
+            <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
               {approval.toolName ?? parsed.tool}
             </span>
           ) : null}
         </p>
         {pendingCount > 1 ? (
-          <span className="flex h-4 shrink-0 items-center rounded bg-[var(--color-background-elevated-secondary)] px-1 text-[9.5px] font-medium tabular-nums text-[var(--color-text-foreground-secondary)]">
+          <span className="flex h-4 shrink-0 items-center rounded bg-[var(--color-background-elevated-secondary)] px-1 text-ui-2xs font-medium tabular-nums text-[var(--color-text-foreground-secondary)]">
             1/{pendingCount}
           </span>
         ) : null}
@@ -213,12 +213,12 @@ function ApprovalDetail({
     return (
       <div className="mt-2">
         {parsed.fallback ? (
-          <p className="mb-1.5 text-[11.5px] leading-snug text-muted-foreground/70">
+          <p className="mb-1.5 text-ui-sm leading-snug text-muted-foreground/70">
             {parsed.fallback}
           </p>
         ) : null}
         <pre
-          className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground/85"
+          className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 font-mono text-ui-sm leading-relaxed text-foreground/85"
           title="Requested permission profile"
         >
           <code>{JSON.stringify(permissionProfile, null, 2)}</code>
@@ -255,14 +255,14 @@ function ApprovalDetail({
     return (
       <div className="mt-2">
         <p
-          className="truncate text-[12.5px] font-medium leading-tight text-foreground/85"
+          className="truncate text-ui-lg font-medium leading-tight text-foreground/85"
           title={parsed.fileDir ? `${parsed.fileDir}/${parsed.fileName}` : parsed.fileName}
         >
           {parsed.fileName}
         </p>
         {parsed.fileDir ? (
           <p
-            className="mt-0.5 truncate font-mono text-[10.5px] leading-tight text-muted-foreground/55"
+            className="mt-0.5 truncate font-mono text-ui-xs leading-tight text-muted-foreground/55"
             title={parsed.fileDir}
           >
             {shortenPath(parsed.fileDir)}
@@ -276,7 +276,7 @@ function ApprovalDetail({
   if (code) {
     return (
       <pre
-        className="mt-2 overflow-hidden rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-1.5 font-mono text-[11.5px] leading-snug text-foreground/85"
+        className="mt-2 overflow-hidden rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-1.5 font-mono text-ui-sm leading-snug text-foreground/85"
         title={code}
       >
         <code className="block truncate">{code}</code>
@@ -284,9 +284,7 @@ function ApprovalDetail({
     );
   }
 
-  return (
-    <p className="mt-2 text-[12px] text-muted-foreground/65">Review the request to continue.</p>
-  );
+  return <p className="mt-2 text-ui text-muted-foreground/65">Review the request to continue.</p>;
 }
 
 function formatToolParameterValue(value: unknown): string {

@@ -23,7 +23,7 @@ describe("composerStackedPanelStyles", () => {
   it("keeps stacked panel rows on one shared compact padding and type scale", () => {
     expect(COMPOSER_STACKED_PANEL_ROW_CLASS_NAME).toContain("px-2.5");
     expect(COMPOSER_STACKED_PANEL_ROW_CLASS_NAME).toContain("py-1.5");
-    expect(COMPOSER_STACKED_PANEL_ROW_CLASS_NAME).toContain("text-[12px]");
+    expect(COMPOSER_STACKED_PANEL_ROW_CLASS_NAME).toContain("text-ui");
   });
 
   it("keeps unbounded row lists capped so large agent fleets cannot push the composer off-screen", () => {

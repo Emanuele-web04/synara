@@ -120,13 +120,13 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
           onOverwrite={session.overwrite}
         />
       ) : originalTruncated ? (
-        <div className="shrink-0 border-b border-border bg-[var(--color-background-elevated-secondary)] px-3 py-1.5 text-[11px] text-muted-foreground">
+        <div className="shrink-0 border-b border-border bg-[var(--color-background-elevated-secondary)] px-3 py-1.5 text-ui-sm text-muted-foreground">
           The base revision of this file is too large to load in full, so this diff is read-only.
         </div>
       ) : null}
       {(session.loadError ?? originalError) ? (
         <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
-          <p className="text-left text-[11px] text-destructive/85">
+          <p className="text-left text-ui-sm text-destructive/85">
             {session.loadError ?? originalError}
           </p>
         </PanelStateMessage>

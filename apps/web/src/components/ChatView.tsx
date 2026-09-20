@@ -100,7 +100,11 @@ import {
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { isElectron } from "../env";
 import { useFeatureFlags } from "../featureFlags";
-import { useComposerCommandMenuItems } from "../hooks/useComposerCommandMenuItems";
+import {
+  resolveThreadMentionForThreadId,
+  useComposerCommandMenuItems,
+} from "../hooks/useComposerCommandMenuItems";
+import { useComposerThreadMentionDrop } from "../hooks/useComposerThreadMentionDrop";
 import { splitComposerDropzoneFiles, useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useComposerImageIntake } from "../hooks/useComposerImageIntake";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
@@ -129,9 +133,10 @@ import {
 } from "../lib/composerSend";
 import {
   deriveContextWindowSelectionStatus,
+  deriveComposerContextWindowLabel,
+  deriveAppliedContextWindowSelection,
   deriveCumulativeCostUsd,
   deriveLatestContextWindowState,
-  deriveSelectedContextWindowSnapshot,
 } from "../lib/contextWindow";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import {
@@ -240,6 +245,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "./SynaraLogo";
+import { ProjectImportLandingBanner } from "~/projectImport/ProjectImportLandingBanner";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
@@ -268,6 +274,7 @@ import {
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import {
   ComposerClaudeCacheReviewPanel,
+  isClaudeCacheReviewPanelVisible,
   type ClaudeCacheReviewDecision,
 } from "./chat/ComposerClaudeCacheReviewPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
@@ -469,7 +476,7 @@ function ComposerModelLoadingControl(props: { widthClassName: string }) {
       )}
     >
       <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
-      <span className="truncate text-[length:var(--app-font-size-ui-xs,11px)]">Loading models</span>
+      <span className="truncate text-ui-xs">Loading models</span>
     </div>
   );
 }
@@ -1893,6 +1900,7 @@ export default function ChatView({
     isLocalFolderBrowserOpen,
     providerPlugins,
     providerNativeCommands,
+    providerArtifacts,
     providerSkills,
     workspaceEntries,
     effectiveComposerTrigger,
@@ -2077,6 +2085,7 @@ export default function ChatView({
     canOfferForkCommand,
     canOfferSideCommand,
     canOfferExportCommand,
+    providerArtifacts,
     dynamicAgents,
     threadMentionSources: {
       threads: composerThreadSummaries,
@@ -3683,6 +3692,35 @@ export default function ChatView({
     setIsDragOverComposer,
   });
 
+  // Dropping a sidebar/activity chat row on the composer references it exactly
+  // like picking it from the `@` menu: token in the prompt + mention binding.
+  const { isThreadDragOverComposer, threadMentionDropzoneProps } = useComposerThreadMentionDrop({
+    disabled: isSidechatExpired,
+    currentThreadId: threadId,
+    onDropThread: (droppedThreadId) => {
+      const mention = resolveThreadMentionForThreadId({
+        threads: composerThreadSummaries,
+        projects: composerThreadProjects,
+        currentThreadId: threadId,
+        threadId: droppedThreadId,
+      });
+      if (!mention) {
+        toastManager.add({
+          type: "error",
+          title: "Could not reference this chat",
+          description: "This chat is unavailable or cannot be mentioned here.",
+        });
+        return;
+      }
+      discardPromptHistoryNavigationForComposerMutation();
+      appendComposerPromptText(threadId, formatComposerMentionToken(mention.name));
+      updateSelectedComposerMentions((existing) => [
+        ...existing.filter((existingMention) => existingMention.name !== mention.name),
+        mention,
+      ]);
+    },
+  });
+
   const onRevertToTurnCount = useCallback(
     async (turnCount: number) => {
       const api = readNativeApi();
@@ -4123,30 +4161,34 @@ export default function ChatView({
     selectedProviderModelOptions,
     selectedRuntimeModel,
   );
-  const runtimeUsageContextWindow = useMemo(
-    () =>
-      activeContextWindowState.invalidatedByCompaction
-        ? null
-        : (activeContextWindow ??
-          (selectedProvider === "claudeAgent"
-            ? deriveSelectedContextWindowSnapshot(composerTraitSelection.contextWindow)
-            : null)),
-    [
-      activeContextWindow,
-      activeContextWindowState.invalidatedByCompaction,
-      composerTraitSelection.contextWindow,
-      selectedProvider,
-    ],
+  const runtimeUsageContextWindow = activeContextWindow;
+  const appliedContextWindowSelection = useMemo(
+    () => deriveAppliedContextWindowSelection(threadActivities),
+    [threadActivities],
   );
   const contextWindowSelectionStatus = useMemo(
     () =>
       deriveContextWindowSelectionStatus({
         activeSnapshot: runtimeUsageContextWindow,
+        ...(selectedProvider === "claudeAgent"
+          ? { appliedValue: appliedContextWindowSelection }
+          : {}),
         selectedValue:
           selectedProvider === "claudeAgent" ? composerTraitSelection.contextWindow : null,
       }),
-    [runtimeUsageContextWindow, composerTraitSelection.contextWindow, selectedProvider],
+    [
+      runtimeUsageContextWindow,
+      composerTraitSelection.contextWindow,
+      selectedProvider,
+      appliedContextWindowSelection,
+    ],
   );
+  const composerContextWindowLabel = deriveComposerContextWindowLabel({
+    provider: selectedProvider,
+    model: selectedModel,
+    snapshot: runtimeUsageContextWindow,
+    status: contextWindowSelectionStatus,
+  });
   const composerFooterControlsPlan = useMemo(
     () => composerFooterPlanForTier(composerFooterTier, Boolean(runtimeUsageContextWindow)),
     [composerFooterTier, runtimeUsageContextWindow],
@@ -4171,6 +4213,7 @@ export default function ChatView({
   const composerFooterPlanInputsKey = [
     composerFooterModelLabel,
     composerFooterTraitsSummary.summaryText,
+    composerContextWindowLabel,
     Boolean(runtimeUsageContextWindow),
   ].join(":");
   useLayoutEffect(() => {
@@ -4212,6 +4255,7 @@ export default function ChatView({
     <ComposerModelPicker
       hideModelLabel={!composerFooterControlsPlan.showModelLabel}
       hideStatusLabel={!composerFooterControlsPlan.showTraitsLabel}
+      contextWindowLabel={composerContextWindowLabel}
       effortControl={settings.composerEffortSlider ? "slider" : "menu"}
       provider={selectedProvider}
       model={selectedModelForPickerWithCustomFallback}
@@ -4704,7 +4748,7 @@ export default function ChatView({
           <header className={cn(CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, "px-3 py-2 md:hidden")}>
             <div className="flex items-center gap-2">
               <SidebarHeaderTrigger className="size-7 shrink-0" />
-              <span className="text-sm font-medium text-[var(--color-text-foreground)]">
+              <span className="text-ui-lg font-medium text-[var(--color-text-foreground)]">
                 Threads
               </span>
             </div>
@@ -4720,12 +4764,14 @@ export default function ChatView({
             )}
           >
             <SidebarHeaderNavigationControls />
-            <span className="text-xs text-muted-foreground/50">No active thread</span>
+            <span className="text-ui leading-snug text-muted-foreground/50">No active thread</span>
           </div>
         )}
         <div className="flex flex-1 items-center justify-center">
           <div className="text-center">
-            <p className="text-sm">Select a thread or create a new one to get started.</p>
+            <p className="text-ui leading-snug">
+              Select a thread or create a new one to get started.
+            </p>
           </div>
         </div>
       </div>
@@ -4953,8 +4999,7 @@ export default function ChatView({
             "ml-auto shrink-0 gap-1.5 whitespace-nowrap px-2 sm:px-2.5",
             COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME,
             COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
-            isThreadTemporary &&
-              "text-[var(--color-text-accent)] hover:text-[var(--color-text-accent)]",
+            isThreadTemporary && "!text-[var(--color-text-accent)]",
           )}
         >
           <TemporaryThreadIcon className="size-3.5" />
@@ -5263,7 +5308,8 @@ export default function ChatView({
                   />
                 </div>
               ) : null}
-              {activeThread?.claudeCacheReview ? (
+              {activeThread?.claudeCacheReview &&
+              isClaudeCacheReviewPanelVisible(activeThread.claudeCacheReview) ? (
                 <div className="pb-2">
                   <ComposerClaudeCacheReviewPanel
                     key={`${threadId}:${activeThread.claudeCacheReview.reviewId}`}
@@ -5298,8 +5344,10 @@ export default function ChatView({
                 composerProviderState.composerFrameClassName,
                 composerOverlayOpen && !isComposerApprovalState && "overflow-visible",
                 isSidechatExpired && "pointer-events-none opacity-60",
+                isThreadDragOverComposer && "ring-1 ring-info/65",
               )}
               aria-disabled={isSidechatExpired}
+              {...threadMentionDropzoneProps}
             >
               <div
                 className={cn(
@@ -5386,7 +5434,7 @@ export default function ChatView({
                     pendingUserInputs.length === 0 &&
                     isPreparingComposerImages && (
                       <div
-                        className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground"
+                        className="flex items-center gap-1.5 px-1 text-ui leading-snug text-muted-foreground"
                         role="status"
                       >
                         <LoaderCircleIcon className="size-3.5 animate-spin" />
@@ -5791,7 +5839,12 @@ export default function ChatView({
                     anchored to the bottom of the pane (with its workspace-tools rail
                     stacked on top of the input) so starting a chat keeps the composer
                     where it lives for the rest of the conversation. */}
-                <div className="flex min-h-0 flex-1 items-center justify-center">
+                <div className="relative flex min-h-0 flex-1 items-center justify-center">
+                  {/* Pinned to the top so the heading stays optically centered; hidden on
+                      short panes where it would crowd the heading. */}
+                  <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
+                    <ProjectImportLandingBanner className="w-full max-w-[520px]" />
+                  </div>
                   <div
                     className={cn(
                       "flex flex-col items-center gap-4 px-6 text-center select-none",

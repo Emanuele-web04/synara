@@ -7,6 +7,12 @@ import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
 
 export type ClaudeCacheReviewDecision = "continue" | "compact" | "cancel";
 
+// An accepted choice is already visible in the transcript (compaction progress
+// or the resumed turn), so the panel only returns if the review fails.
+export function isClaudeCacheReviewPanelVisible(review: PendingClaudeCacheReview): boolean {
+  return review.status !== "responding" && review.status !== "compacting";
+}
+
 export function ComposerClaudeCacheReviewPanel({
   review,
   compactDisabledReason,
@@ -28,15 +34,11 @@ export function ComposerClaudeCacheReviewPanel({
   const disabled = !actionable || submittedReview === review;
   const contextTokens = review.assessment.contextTokens;
   const title =
-    review.status === "compacting"
-      ? "Compacting before sending"
-      : review.status === "responding"
-        ? "Resuming your saved message"
-        : review.status === "uncertain"
-          ? "Request status is uncertain"
-          : isCompactionRequest
-            ? "Compaction will read the expired context"
-            : "Claude's prompt cache likely expired";
+    review.status === "uncertain"
+      ? "Request status is uncertain"
+      : isCompactionRequest
+        ? "Compaction will read the expired context"
+        : "Claude's prompt cache likely expired";
 
   const respondOnce = (decision: ClaudeCacheReviewDecision) => {
     if (disabled || submittedReviewRef.current === review) return;
@@ -54,33 +56,27 @@ export function ComposerClaudeCacheReviewPanel({
     });
   };
 
+  if (!isClaudeCacheReviewPanelVisible(review)) return null;
+
   return (
     <section
       aria-label="Claude cache review"
-      aria-busy={
-        review.status === "responding" ||
-        review.status === "compacting" ||
-        submittedReview === review
-      }
+      aria-busy={submittedReview === review}
       className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "overflow-hidden px-3.5 py-3")}
     >
-      <p className="text-[13px] font-medium leading-snug text-foreground/90">{title}</p>
-      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+      <p className="text-ui-lg font-medium leading-snug text-foreground/90">{title}</p>
+      <p className="mt-1.5 text-ui leading-relaxed text-muted-foreground">
         {review.status === "uncertain"
           ? "Claude may have accepted the request. Sending is paused until its status can be confirmed."
-          : review.status === "compacting"
-            ? "Your message stays on hold until Claude confirms that compaction has finished."
-            : review.status === "responding"
-              ? "Waiting for Claude to accept the saved message."
-              : `Your message is saved and on hold. Continuing may reprocess ${contextTokens === undefined ? "the conversation's context" : `about ${formatContextWindowTokens(contextTokens)} tokens`}.`}
+          : `Your message is saved and on hold. Continuing may reprocess ${contextTokens === undefined ? "the conversation's context" : `about ${formatContextWindowTokens(contextTokens)} tokens`}.`}
       </p>
       {actionable ? (
-        <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+        <p className="mt-1.5 text-ui leading-relaxed text-muted-foreground">
           Compacting also processes the full history once. Later requests use its summary.
         </p>
       ) : null}
       {review.error || dispatchError ? (
-        <p role="alert" className="mt-2 text-xs leading-relaxed text-destructive">
+        <p role="alert" className="mt-2 text-ui leading-relaxed text-destructive">
           {dispatchError ?? review.error}
         </p>
       ) : null}

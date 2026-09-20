@@ -1,8 +1,30 @@
 diff --git a/dist/NodeChildProcessSpawner.js b/dist/NodeChildProcessSpawner.js
-index ff15212e4..e7cf12c4d 100644
+index 7e51c00..fbf5eb7 100644
 --- a/dist/NodeChildProcessSpawner.js
 +++ b/dist/NodeChildProcessSpawner.js
-@@ -314,7 +314,9 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+@@ -240,6 +240,12 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+     });
+   });
+   const killProcessGroup = (command, childProcess, signal) => {
++    const pid = childProcess.pid;
++    // Never turn an invalid child handle into a broadcast/group target.
++    // A valid group can outlive its leader, so do not require a live leader.
++    if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 1 || pid > 0x7fffffff) {
++      return Effect.void;
++    }
+     if (globalThis.process.platform === "win32") {
+       return Effect.callback(resume => {
+         NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, error => {
+@@ -253,7 +259,7 @@ const make = /*#__PURE__*/Effect.gen(function* () {
+     }
+     return Effect.try({
+       try: () => {
+-        globalThis.process.kill(-childProcess.pid, signal);
++        globalThis.process.kill(-pid, signal);
+       },
+       catch: error => toPlatformError("kill", toError(error), command)
+     });
+@@ -314,7 +320,9 @@ const make = /*#__PURE__*/Effect.gen(function* () {
              env,
              stdio,
              detached: cmd.options.detached ?? process.platform !== "win32",
@@ -14,10 +36,32 @@ index ff15212e4..e7cf12c4d 100644
              const exited = yield* Deferred.isDone(exitSignal);
              const killWithTimeout = withTimeout(childProcess, cmd, cmd.options);
 diff --git a/src/NodeChildProcessSpawner.ts b/src/NodeChildProcessSpawner.ts
-index dc53bafb7..fe867fbfc 100644
+index dc53baf..110ce95 100644
 --- a/src/NodeChildProcessSpawner.ts
 +++ b/src/NodeChildProcessSpawner.ts
-@@ -430,7 +430,17 @@ const make = Effect.gen(function*() {
+@@ -324,6 +324,12 @@ const make = Effect.gen(function*() {
+     childProcess: NodeChildProcess.ChildProcess,
+     signal: NodeJS.Signals
+   ) => {
++    const pid = childProcess.pid
++    // Never turn an invalid child handle into a broadcast/group target.
++    // A valid group can outlive its leader, so do not require a live leader.
++    if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 1 || pid > 0x7fffffff) {
++      return Effect.void
++    }
+     if (globalThis.process.platform === "win32") {
+       return Effect.callback<void, PlatformError.PlatformError>((resume) => {
+         NodeChildProcess.exec(`taskkill /pid ${childProcess.pid} /T /F`, (error) => {
+@@ -337,7 +343,7 @@ const make = Effect.gen(function*() {
+     }
+     return Effect.try({
+       try: () => {
+-        globalThis.process.kill(-childProcess.pid!, signal)
++        globalThis.process.kill(-pid, signal)
+       },
+       catch: (error) => toPlatformError("kill", toError(error), command)
+     })
+@@ -430,7 +436,17 @@ const make = Effect.gen(function*() {
              env,
              stdio,
              detached: cmd.options.detached ?? process.platform !== "win32",
