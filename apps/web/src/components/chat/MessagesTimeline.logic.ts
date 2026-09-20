@@ -103,7 +103,7 @@ export function chunkWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkEntr
 // One renderable block of a work group: `summary` is non-null when the block
 // renders collapsed behind a "Ran N commands..." disclosure. `liveEntry` is
 // non-null while a tool run is still open: the run renders as one line wearing
-// that entry (the newest call), and the line toggles the earlier calls.
+// the latest status description, falling back to the newest call.
 export interface WorkEntryRenderPlanChunk {
   id: string;
   entries: WorkLogEntry[];
@@ -111,10 +111,9 @@ export interface WorkEntryRenderPlanChunk {
   liveEntry: WorkLogEntry | null;
 }
 
-// The call a live run's line wears: the newest real tool call. Iconless status
-// rows (reasoning updates) only win when the run holds nothing else.
+// Keep the latest activity description visible as technical calls arrive.
 function pickLiveToolEntry(entries: ReadonlyArray<WorkLogEntry>): WorkLogEntry {
-  return entries.findLast((entry) => !isCodexActivityStatusWorkEntry(entry)) ?? entries.at(-1)!;
+  return entries.findLast(isCodexActivityStatusWorkEntry) ?? entries.at(-1)!;
 }
 
 // Plans a work group's entries block by block. Boundaries are the entries a
@@ -123,7 +122,7 @@ function pickLiveToolEntry(entries: ReadonlyArray<WorkLogEntry>): WorkLogEntry {
 // only while it still has running work, or while it is the trailing block of
 // the live transcript tail (`tailIsLive`): the moment a new narration block
 // starts after it, it stops being the tail and collapses mid-turn. An expanded
-// run never lists its rows: it folds to a single line for its newest call.
+// run never lists its rows: it folds to a single line for its selected entry.
 export function planWorkEntryRenderChunks(
   entries: ReadonlyArray<WorkLogEntry>,
   options: { tailIsLive: boolean },
@@ -153,7 +152,7 @@ export function isFoldedWorkEntryChunk(chunk: WorkEntryRenderPlanChunk): boolean
 
 // How a folded chunk renders: the line's summary, the rows its disclosure
 // reveals, and a suffix for the open-state key. A live line reveals only the
-// calls before the one it wears, and keeps its own open state so the run
+// other entries, and keeps its own open state so the run
 // settles collapsed even when the live line was opened.
 export function resolveWorkEntryChunkFold(
   chunk: WorkEntryRenderPlanChunk,

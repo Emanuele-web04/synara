@@ -135,6 +135,57 @@ describe("MessagesTimeline tool group collapse", () => {
     document.body.innerHTML = "";
   });
 
+  it("keeps the latest status above tool calls and reveals the other entries on expansion", async () => {
+    const host = createTimelineHost();
+    const statusEntry = (id: string, preview: string): TimelineEntry => ({
+      id,
+      kind: "work",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      entry: {
+        id,
+        createdAt: "2026-03-17T19:12:28.000Z",
+        label: "Reasoning summary",
+        tone: "tool",
+        preview,
+      },
+    });
+    const entries = [
+      assistantEntry("narration", "Checking the integrations.", true),
+      commandEntry("first-command", LIVE_COMMANDS[0]!),
+      statusEntry("first-status", "Inspecting integrations"),
+    ];
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} />, {
+      container: host,
+    });
+
+    try {
+      await expect.poll(() => findSummaryTrigger("Inspecting integrations") !== null).toBe(true);
+      entries.push(commandEntry("last-command", LIVE_COMMANDS[1]!));
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} />);
+      expect(findSummaryTrigger("Inspecting integrations")?.getAttribute("aria-expanded")).toBe(
+        "false",
+      );
+      for (const command of LIVE_COMMANDS) {
+        expect(document.body.textContent).not.toContain(command);
+      }
+
+      entries.push(statusEntry("last-status", "Verifying the adapter"));
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} />);
+      await expect.poll(() => findSummaryTrigger("Verifying the adapter") !== null).toBe(true);
+      expect(document.body.textContent).not.toContain("Inspecting integrations");
+      expect(document.querySelectorAll('[data-tool-group-live="true"]')).toHaveLength(1);
+
+      findSummaryTrigger("Verifying the adapter")!.click();
+      for (const text of [...LIVE_COMMANDS, "Inspecting integrations"]) {
+        await expect.poll(() => isVisibleOutsideClosedDisclosure(text)).toBe(true);
+      }
+      expect(document.body.textContent?.match(/Verifying the adapter/g)).toHaveLength(1);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
   it("keeps calls made after steering reachable from the live tool line", async () => {
     const host = createTimelineHost();
     const turnId = TurnId.makeUnsafe("steered-turn");

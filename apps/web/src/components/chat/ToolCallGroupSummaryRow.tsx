@@ -1,7 +1,7 @@
 // FILE: ToolCallGroupSummaryRow.tsx
 // Purpose: One-line disclosure for a run of tool calls. Settled runs read as a
 //          summary ("Ran 2 commands, Edited 2 files"); a live run wears its
-//          newest call instead. Either way it expands to the individual rows.
+//          latest status or call instead. Both expand to the individual rows.
 // Layer: Web chat presentation component
 // Exports: ToolCallGroupSummaryRow
 // Depends on: DisclosureRegion/DisclosureChevron (shared disclosure motion)
@@ -25,7 +25,7 @@ import {
 
 export function ToolCallGroupSummaryRow(props: {
   summary: ToolCallGroupSummary;
-  // Newest call of a still-open run: the line shows it instead of the summary.
+  // Selected status or call of a live run, shown instead of the summary.
   liveEntry?: WorkLogEntry | null;
   open: boolean;
   onToggle: (open: boolean) => void;

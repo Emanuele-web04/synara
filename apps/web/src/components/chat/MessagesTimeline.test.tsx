@@ -1838,7 +1838,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("+2 more tool calls");
   });
 
-  it("folds a live run with reasoning activity to its newest tool call while Thinking remains live", async () => {
+  it("folds a live run to its latest status description while Thinking remains live", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const activeTurnId = TurnId.makeUnsafe("turn-reasoning-live");
     const markup = renderToStaticMarkup(
@@ -1923,10 +1923,9 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // The live run folds to one line wearing its newest real tool call; the
-    // iconless reasoning rows wait behind the line's disclosure.
     expect(markup.match(/data-tool-group-live="true"/g) ?? []).toHaveLength(1);
-    expect(markup).toContain("MCP tool call");
+    expect(markup).toContain("Running the focused tests");
+    expect(markup).not.toContain("MCP tool call");
     expect(markup).not.toContain('data-codex-status-row="true"');
     expect(markup).toContain(">Thinking<");
   });

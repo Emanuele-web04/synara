@@ -1563,6 +1563,30 @@ const planSignature = (
   });
 
 describe("planWorkEntryRenderChunks", () => {
+  it("keeps the latest status description visible when more tool calls arrive", () => {
+    const earlierStatus = toolItem("status-1", {
+      toolTitle: "Reasoning summary",
+      preview: "Inspecting integrations",
+    }).entry;
+    const latestStatus = toolItem("status-2", {
+      toolTitle: "Reasoning summary",
+      preview: "Checking the adapter",
+    }).entry;
+    const entries = [earlierStatus, toolItem("w1").entry, latestStatus, toolItem("w2").entry];
+    const [live] = planWorkEntryRenderChunks(entries, { tailIsLive: true });
+
+    expect(live?.liveEntry).toBe(latestStatus);
+    expect(resolveWorkEntryChunkFold(live!)?.entries).toEqual([
+      earlierStatus,
+      entries[1],
+      entries[3],
+    ]);
+
+    const [settled] = planWorkEntryRenderChunks(entries, { tailIsLive: false });
+    expect(settled?.liveEntry).toBeNull();
+    expect(resolveWorkEntryChunkFold(settled!)?.entries).toEqual(entries);
+  });
+
   it("collapses the earlier run across a thinking boundary while the live tail wears its newest call", () => {
     expect(
       planSignature(
