@@ -56,7 +56,6 @@ import {
   summarizeComputerAuditArgs,
   type ComputerAuditEffect,
 } from "../computer/computerAuditLog.ts";
-import type { ComputerGrantCallContext } from "../computer/computerGrants.ts";
 
 export interface AgentGatewayComputerBrowserToolsOptions {
   readonly manager: ComputerManager;
@@ -71,12 +70,6 @@ export interface AgentGatewayComputerBrowserToolsOptions {
     args: Record<string, unknown>,
     context: ToolContext,
     signal: AbortSignal,
-    /**
-     * What a durable always-allow grant would have to cover for this call —
-     * the desktop tools resolve real app identities; a browser target has
-     * none, so only an any-app grant can ever cover these calls.
-     */
-    grantContext?: ComputerGrantCallContext,
   ) => Promise<boolean>;
   /**
    * The caller thread's canonical workspace root, for bounding upload and
@@ -538,19 +531,11 @@ export function makeAgentGatewayComputerBrowserTools(
               audit({ effect: "refused", code: "approval_unavailable" });
               return approvalUnavailableResult(name);
             }
-            // A CDP target resolves to no desktop app, so the only durable
-            // consent that can cover this call is an any-app grant carrying
-            // the browser class — the per-action prompt stays the fallback.
             const approved = await options.authorizeAction(
               name,
               effectiveArgs,
               context,
               abortSignal,
-              {
-                apps: [],
-                includesUnattributedTarget: true,
-                classes: ["browser"],
-              },
             );
             if (!approved) {
               audit({ effect: "refused", code: "approval_denied" });
