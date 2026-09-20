@@ -59,6 +59,7 @@ export const SYNARA_COMPUTER_TOOL_NAMES = [
   "computer_browser_upload",
   "computer_browser_download",
   "computer_browser_pointer",
+  "computer_browser_press",
 ] as const;
 
 export type SynaraComputerToolName = (typeof SYNARA_COMPUTER_TOOL_NAMES)[number];

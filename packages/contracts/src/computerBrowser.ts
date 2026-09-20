@@ -26,6 +26,7 @@ export const COMPUTER_BROWSER_TOOL_NAMES = [
   "computer_browser_upload",
   "computer_browser_download",
   "computer_browser_pointer",
+  "computer_browser_press",
 ] as const;
 
 export type ComputerBrowserToolName = (typeof COMPUTER_BROWSER_TOOL_NAMES)[number];
@@ -112,4 +113,5 @@ export const COMPUTER_BROWSER_DRIVER_NAMES: Record<ComputerBrowserToolName, stri
   computer_browser_upload: "browser_set_input_files",
   computer_browser_download: "browser_download",
   computer_browser_pointer: "browser_pointer",
+  computer_browser_press: "browser_type",
 };

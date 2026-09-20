@@ -24,7 +24,7 @@
  * @module computer/stillFramePublisher
  */
 import type { ComputerFrameListener, ComputerStreamFrame } from "./ComputerBackend.ts";
-import { StillFrameDedupe } from "./stillFrameDedupe.ts";
+import { createHash } from "node:crypto";
 
 /**
  * Immediate retries a failed forced publish may buy before the request is
@@ -51,6 +51,69 @@ export const MIN_STILL_INTERVAL_MS = 100;
 /** The one clamp both Tier-1 backends apply to their configured interval. */
 export function resolveStillIntervalMs(intervalMs: number | undefined): number {
   return Math.max(MIN_STILL_INTERVAL_MS, intervalMs ?? DEFAULT_STILL_INTERVAL_MS);
+}
+/**
+ * Byte-identity key for a captured still. Length first so two frames of
+ * different sizes never even reach the hash, then a digest of the pixels —
+ * cheap next to the PNG encode that produced them.
+ */
+export function frameDigest(bytes: Uint8Array): string {
+  return `${bytes.byteLength}:${createHash("sha1").update(bytes).digest("hex")}`;
+}
+
+/**
+ * Suppresses still frames that carry no new picture. Owned by the ticker in
+ * this file: one interval, one capture in flight, one digest memory. A
+ * receiver with nothing to draw still gets a picture via `force`, including
+ * a force that arrives mid-capture.
+ */
+export class StillFrameDedupe {
+  #publishedDigest: string | undefined;
+  #pendingForce = false;
+
+  /**
+   * Records a keyframe request that could not be served now. The next publish
+   * consumes it, so a request arriving mid-capture is not lost.
+   */
+  deferForce(): void {
+    this.#pendingForce = true;
+  }
+
+  /**
+   * Whether this publish must go out regardless of the digest, consuming any
+   * deferred request. Call once per publish attempt, before capturing.
+   */
+  takeForce(explicit: boolean): boolean {
+    const force = explicit || this.#pendingForce;
+    this.#pendingForce = false;
+    return force;
+  }
+
+  /** True when a deferred keyframe is still owed to the receiver. */
+  get forcePending(): boolean {
+    return this.#pendingForce;
+  }
+
+  /**
+   * Whether `bytes` should go on the wire, recording it as published when so.
+   * `force` comes from `takeForce`.
+   */
+  shouldPublish(bytes: Uint8Array, force: boolean): boolean {
+    const digest = frameDigest(bytes);
+    if (!force && digest === this.#publishedDigest) return false;
+    this.#publishedDigest = digest;
+    return true;
+  }
+
+  /**
+   * Forgets what was published. Called whenever the receiver changes or goes
+   * away: a re-attached pane has seen nothing, so the memory of what the last
+   * one saw must not suppress its first frame.
+   */
+  reset(): void {
+    this.#publishedDigest = undefined;
+    this.#pendingForce = false;
+  }
 }
 
 export interface StillFramePublisherOptions {

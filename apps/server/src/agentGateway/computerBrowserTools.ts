@@ -530,6 +530,9 @@ export function makeAgentGatewayComputerBrowserTools(
             return browserRefusalResult(resolution.refusal);
           }
           if (resolution.kind === "resolved") effectiveArgs = resolution.args;
+          if (name === "computer_browser_press") {
+            effectiveArgs = { ...effectiveArgs, mode: "keystrokes", text: "\n" };
+          }
           if (computerBrowserToolRequiresApproval(name, effectiveArgs)) {
             if (!options.authorizeAction) {
               audit({ effect: "refused", code: "approval_unavailable" });
@@ -878,6 +881,21 @@ export function makeAgentGatewayComputerBrowserTools(
           input_route: { type: "string", enum: ["trusted", "dom_event"] },
         },
         required: ["target_id", "action"],
+        additionalProperties: false,
+      },
+    ),
+    entry(
+      "computer_browser_press",
+      "Press key in browser tab",
+      `Submit a focused browser field: sends Enter through the driver's trusted keystroke path (mode "keystrokes", text "\\n"). Works headless with no window activation. Use after computer_browser_type to submit search or a form. Pass the bind result's target_id and the tab's own tab_id; tab_id may be omitted when the target has one (or one active) tab.`,
+      {
+        type: "object",
+        properties: {
+          target_id: TARGET_ID_PROPERTY,
+          tab_id: TAB_ID_PROPERTY,
+          ref: REF_PROPERTY,
+        },
+        required: ["target_id", "ref"],
         additionalProperties: false,
       },
     ),

@@ -2394,7 +2394,9 @@ export class CuaComputerBackend implements ComputerBackend {
    * Remembers the browser tab the pane should mirror. A bind result mints the
    * target id; a snapshot call names it directly. The tab id comes from the
    * call, or from a bind whose tabs resolve to one — an ambiguous bind leaves
-   * the still target unset until a call names the tab.
+   * the still target unset until a call names the tab. The tab id is sticky:
+   * a reply carrying neither an explicit tab nor resolvable tabs keeps the
+   * prior tab for the same target instead of clearing it.
    */
   private noteBrowserStillTarget(
     args: Record<string, unknown>,
@@ -2404,8 +2406,9 @@ export class CuaComputerBackend implements ComputerBackend {
     const structured = result.structuredContent ?? {};
     const targetId = text(structured.target_id) || text(args.target_id);
     if (!targetId) return;
-    const tabId = text(args.tab_id) || resolvableStillTab(structured.tabs);
-    this.stillTarget = { kind: "browser", targetId, tabId: tabId || undefined, task };
+    const resolved = text(args.tab_id) || resolvableStillTab(structured.tabs);
+    const prior = this.stillTarget?.kind === "browser" && this.stillTarget.targetId === targetId ? this.stillTarget.tabId : undefined;
+    this.stillTarget = { kind: "browser", targetId, tabId: resolved || prior || undefined, task };
   }
   async attachStream(listener: ComputerFrameListener) {
     await this.stills.attach(listener);

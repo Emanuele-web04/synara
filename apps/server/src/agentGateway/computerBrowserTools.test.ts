@@ -594,6 +594,7 @@ describe("browser id ergonomics", () => {
       "computer_browser_upload",
       "computer_browser_download",
       "computer_browser_pointer",
+      "computer_browser_press",
     ]) {
       const required = byName.get(name)?.definition.inputSchema.required as string[];
       expect(required).toContain("target_id");
