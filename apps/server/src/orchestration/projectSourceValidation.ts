@@ -9,13 +9,16 @@ export function validateProjectSources(
 ): string | null {
   if (sources.length === 0) return "A project needs at least one source folder.";
   const seenPaths = new Set<string>();
+  const seenIds = new Set<ProjectSourceId>();
   for (const source of sources) {
     if (!isAbsolute(source.path)) return `Source folder must be an absolute path: ${source.path}`;
     const normalized = normalizeWorkspaceRootForComparison(source.path, {
       platform: process.platform,
     });
     if (seenPaths.has(normalized)) return `Duplicate source folder: ${source.path}`;
+    if (seenIds.has(source.id)) return `Duplicate source id: ${source.id}`;
     seenPaths.add(normalized);
+    seenIds.add(source.id);
   }
   return sources.some((source) => source.id === primarySourceId)
     ? null
