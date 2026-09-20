@@ -2367,7 +2367,6 @@ describe("agent gateway computer tools", () => {
       expect.objectContaining({ delivery_mode: "foreground" }),
       expect.anything(),
       expect.anything(),
-      expect.objectContaining({ classes: ["lifecycle"], includesUnattributedTarget: false }),
     );
     expect(result.isError).not.toBe(true);
     expect(raised).toEqual(["fake-terminal"]);
@@ -3333,7 +3332,6 @@ describe("computer_activate_window foreground restore", () => {
         expect.objectContaining({ delivery_mode: "foreground" }),
         expect.anything(),
         expect.anything(),
-        expect.objectContaining({ classes: ["lifecycle"], includesUnattributedTarget: false }),
       );
       // The whole excursion — raise plus restore — runs in foreground scope.
       expect(deliveryModes).toEqual(["foreground", "foreground"]);
@@ -3990,7 +3988,6 @@ describe("multi-app driving", () => {
           expect.objectContaining({ window_id: "fake-calculator" }),
           expect.anything(),
           expect.anything(),
-          expect.objectContaining({ classes: ["lifecycle"], includesUnattributedTarget: false }),
         );
         expect(backend.callsFor("setWindowFrame").map((entry) => entry.args)).toEqual([
           ["fake-calculator", { x: 300, y: 200, width: 500, height: 400 }],

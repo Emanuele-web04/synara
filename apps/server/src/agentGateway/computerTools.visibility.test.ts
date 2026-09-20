@@ -104,7 +104,6 @@ describe("computer_set_window_minimized", () => {
       expect.objectContaining({ window_id: "fake-calculator", minimized: true }),
       expect.anything(),
       expect.anything(),
-      expect.objectContaining({ classes: ["lifecycle"], includesUnattributedTarget: false }),
     );
     expect(result.isError).not.toBe(true);
     const payload = resultJson(result) as {
@@ -254,7 +253,6 @@ describe("computer_set_app_visibility", () => {
       expect.objectContaining({ pid: 1_002, hidden: true }),
       expect.anything(),
       expect.anything(),
-      expect.objectContaining({ classes: ["lifecycle"], includesUnattributedTarget: false }),
     );
     expect(result.isError).not.toBe(true);
     const payload = resultJson(result) as {
