@@ -53,11 +53,17 @@ await writeFile(
   ),
 );
 // This AppKit binary is only the test target. All input comes from Cua.
+const swiftCompiler = execFileSync("/usr/bin/xcrun", ["--find", "swiftc"], {
+  encoding: "utf8",
+}).trim();
+const macSdk = execFileSync("/usr/bin/xcrun", ["--sdk", "macosx", "--show-sdk-path"], {
+  encoding: "utf8",
+}).trim();
 execFileSync(
-  "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+  swiftCompiler,
   [
     "-sdk",
-    "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
+    macSdk,
     "-module-cache-path",
     "/private/tmp/synara-cua-implementation/swift-module-cache",
     join(root, "scripts/computer-use-fixtures/NativeFixture.swift"),

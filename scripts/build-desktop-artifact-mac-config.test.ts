@@ -110,7 +110,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
   });
 
-  it("leaves non-macOS platform configs unchanged", () => {
+  it("packages the Linux driver as an external executable and leaves Windows unchanged", () => {
     const linux = createDesktopPlatformBuildConfig({
       platform: "linux",
       target: "AppImage",
@@ -123,6 +123,11 @@ describe("createDesktopPlatformBuildConfig", () => {
 
     assert.equal(linux.mac, undefined);
     assert.equal(linux.extraFiles, undefined);
+    assert.deepStrictEqual(linux.extraResources, [
+      { from: "apps/desktop/resources/cua-driver", to: "cua-driver" },
+    ]);
+    assert.ok(linux.files?.includes("!apps/desktop/resources/cua-driver/**"));
+    assert.ok(linux.files?.includes("!apps/desktop/prod-resources/cua-driver/**"));
     assert.deepStrictEqual(linux.asarUnpack, ["node_modules/node-pty/**"]);
     assert.deepStrictEqual(linux.linux, {
       target: ["AppImage"],
@@ -138,6 +143,7 @@ describe("createDesktopPlatformBuildConfig", () => {
 
     assert.equal(win.mac, undefined);
     assert.equal(win.extraFiles, undefined);
+    assert.equal(win.extraResources, undefined);
     assert.deepStrictEqual(win.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(WINDOWS_INSTALLER_GUID, "368107a8-afe6-5db5-ab3b-d4f331684868");
     assert.deepStrictEqual(win.nsis, {

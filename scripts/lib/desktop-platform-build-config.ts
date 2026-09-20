@@ -34,6 +34,7 @@ export interface DesktopPlatformBuildConfig {
   readonly asarUnpack?: ReadonlyArray<string>;
   readonly dmg?: Record<string, unknown>;
   readonly extraFiles?: ReadonlyArray<Record<string, string>>;
+  readonly extraResources?: ReadonlyArray<Record<string, string>>;
   readonly files?: ReadonlyArray<string>;
   readonly linux?: Record<string, unknown>;
   readonly mac?: Record<string, unknown>;
@@ -156,6 +157,15 @@ export function createDesktopPlatformBuildConfig(
   if (input.platform === "linux") {
     return {
       ...nativePackaging,
+      // The driver is spawned by path; an executable inside app.asar cannot
+      // serve that path. Keep the staged copy outside the archive and omit
+      // both source and runtime-resource copies from the application bundle.
+      files: [
+        ...files,
+        "!apps/desktop/resources/cua-driver/**",
+        "!apps/desktop/prod-resources/cua-driver/**",
+      ],
+      extraResources: [{ from: "apps/desktop/resources/cua-driver", to: "cua-driver" }],
       linux: {
         target: [input.target],
         executableName: "synara",

@@ -74,6 +74,14 @@ DispatchQueue.global().async {
       switch line {
       case "state": fixtures.forEach { $0.report() }
       case "select-a": fixtures[0].window.makeFirstResponder(fixtures[0].text); fixtures[0].text.selectText(nil)
+      // Setup only: a second fixture process represents the human's window.
+      // The runner arms its focus sampler after this explicit activation.
+      case "focus-a":
+        app.activate(ignoringOtherApps: true)
+        fixtures[0].window.makeKeyAndOrderFront(nil)
+        fixtures[0].window.makeFirstResponder(fixtures[0].text)
+        fixtures[0].text.selectText(nil)
+        fixtures[0].report()
       case "move-a": fixtures[0].window.setFrameOrigin(NSPoint(x: 160, y: 240))
       case "minimize-a": fixtures[0].window.miniaturize(nil)
       case "restore-a": fixtures[0].window.deminiaturize(nil)

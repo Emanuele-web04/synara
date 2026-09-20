@@ -1,4 +1,5 @@
-// Control-plane probe only: never requests a capture, permission or input tool.
+// Control-plane probe: no captures or permission requests. One stale input
+// envelope names an impossible target and must be refused before native dispatch.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -95,28 +96,90 @@ try {
   assert.equal(readiness.result?.structuredContent?.window_id, 4_294_967_295);
   report.cases.push({ name: "read-only-target-readiness-refusal", passed: true });
 
-  const wrongPid = await request({ method: "cancel_input", args: { expected_pid: child.pid + 1 } });
-  assert.equal(wrongPid.ok, false);
-  report.cases.push({ name: "wrong-generation-refused", passed: true });
+  for (const method of ["cancel_input", "interrupt_input"]) {
+    const wrongPid = await request({ method, args: { expected_pid: child.pid + 1 } });
+    assert.equal(wrongPid.ok, false);
+    report.cases.push({ name: `${method}-wrong-generation-refused`, passed: true });
 
-  const outsiderScript = `import {createConnection} from 'node:net';
-    const s=createConnection(${JSON.stringify(socketPath)}); let data='';
-    s.setTimeout(4000,()=>s.destroy(new Error('peer timeout')));
-    s.once('connect',()=>s.write(${JSON.stringify(JSON.stringify({ method: "cancel_input", args: { expected_pid: child.pid } }) + "\n")}));
-    s.on('data',chunk=>{ data+=chunk; if(data.includes('\\n')){ process.stdout.write(data); s.end(); }});
-    s.on('error',()=>process.exitCode=1);`;
-  const outsider = spawn(process.execPath, ["--input-type=module", "-e", outsiderScript], {
-    stdio: ["ignore", "pipe", "pipe"],
+    const outsiderScript = `import {createConnection} from 'node:net';
+      const s=createConnection(${JSON.stringify(socketPath)}); let data='';
+      s.setTimeout(4000,()=>s.destroy(new Error('peer timeout')));
+      s.once('connect',()=>s.write(${JSON.stringify(JSON.stringify({ method, args: { expected_pid: child.pid } }) + "\n")}));
+      s.on('data',chunk=>{ data+=chunk; if(data.includes('\\n')){ process.stdout.write(data); s.end(); }});
+      s.on('error',()=>process.exitCode=1);`;
+    const outsider = spawn(process.execPath, ["--input-type=module", "-e", outsiderScript], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let outsiderReply = "";
+    outsider.stdout.on("data", (chunk) => {
+      outsiderReply += chunk;
+    });
+    outsider.stderr.resume();
+    const [code] = await once(outsider, "exit");
+    assert.equal(code, 0);
+    assert.equal(JSON.parse(outsiderReply).ok, false);
+    report.cases.push({ name: `${method}-non-host-peer-refused`, passed: true });
+  }
+
+  // Admit old bytes to a socket but withhold the newline until interruption
+  // has reopened. The daemon must retain the host's epoch, not capture a new
+  // one when it finally parses the buffered command. The impossible exact
+  // target is a second no-input safeguard even if this assertion regresses.
+  const buffered = createConnection(socketPath);
+  await once(buffered, "connect");
+  buffered.write(
+    JSON.stringify({
+      method: "call",
+      name: "click",
+      expected_input_epoch: 0,
+      args: { pid: 2_147_483_647, window_id: 4_294_967_295, x: 0, y: 0 },
+    }),
+  );
+  let bufferedResponse = "";
+  const bufferedReply = new Promise((resolve, reject) => {
+    buffered.setTimeout(4_000, () =>
+      buffered.destroy(new Error("Buffered epoch probe timed out.")),
+    );
+    buffered.on("data", (chunk) => {
+      bufferedResponse += chunk;
+      if (!bufferedResponse.includes("\n")) return;
+      buffered.end();
+      try {
+        resolve(JSON.parse(bufferedResponse.split("\n")[0]));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    buffered.once("error", reject);
   });
-  let outsiderReply = "";
-  outsider.stdout.on("data", (chunk) => {
-    outsiderReply += chunk;
-  });
-  outsider.stderr.resume();
-  const [code] = await once(outsider, "exit");
-  assert.equal(code, 0);
-  assert.equal(JSON.parse(outsiderReply).ok, false);
-  report.cases.push({ name: "non-host-peer-refused", passed: true });
+  void bufferedReply.catch(() => undefined);
+  let inputEpoch = 0;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const interrupted = await request({
+      method: "interrupt_input",
+      args: { expected_pid: child.pid },
+    });
+    assert.equal(interrupted.ok, true);
+    assert.equal(interrupted.result?.input_interrupted, true);
+    assert.equal(interrupted.result?.cleanup_complete, true);
+    assert.equal(interrupted.result?.input_admission_open, true);
+    assert.equal(interrupted.result?.pending_input, 0);
+    assert.equal(interrupted.result?.pid, child.pid);
+    assert.equal(interrupted.result?.input_epoch, inputEpoch + 1);
+    inputEpoch = interrupted.result.input_epoch;
+    report.cases.push({
+      name: attempt ? "interrupt-reuses-live-generation" : "host-interrupt-drain-acknowledged",
+      passed: true,
+    });
+  }
+  buffered.write("\n");
+  report.inputToolsCalled += 1;
+  const stale = await bufferedReply;
+  assert.equal(stale.ok, true);
+  assert.equal(stale.result?.isError, true);
+  assert.equal(stale.result?.structuredContent?.effect, "refused");
+  assert.equal(stale.result?.structuredContent?.code, "input_admission_closed");
+  report.cases.push({ name: "buffered-pre-interrupt-call-cannot-dispatch", passed: true });
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const cancelled = await request({ method: "cancel_input", args: { expected_pid: child.pid } });
@@ -130,6 +193,13 @@ try {
       passed: true,
     });
   }
+  const retiredInterrupt = await request({
+    method: "interrupt_input",
+    args: { expected_pid: child.pid },
+  });
+  assert.equal(retiredInterrupt.ok, true);
+  assert.equal(retiredInterrupt.result?.input_admission_open, false);
+  report.cases.push({ name: "interrupt-never-reopens-retired-generation", passed: true });
   await request({ method: "shutdown_if_pid", args: { expected_pid: child.pid } });
 } catch (error) {
   report.failure = String(error);

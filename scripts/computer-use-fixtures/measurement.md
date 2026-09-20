@@ -29,7 +29,10 @@ collector could not obtain/save trustworthy evidence.
 
 The importable `collectComputerRun(callTool, scope)` accepts a caller that returns
 the diagnostic tool's decoded JSON result, so an existing authenticated MCP
-harness can reuse its own transport. `scope.auditEntries` optionally cross-checks
+harness can reuse its own transport. The [packaged fixture runner](packaged-e2e.md)
+instead uses the authenticated owner `server.readThreadDiagnostics` RPC, whose
+readers are shared with those MCP tools; it needs no borrowed provider token.
+`scope.auditEntries` optionally cross-checks
 already-read audit entries for the exact thread and turn. Audit entries without a
 turn ID are counted as unscoped and ignored. The audit records mutations only,
 has no call IDs and is bounded; its row count is never a total-tool-call metric.

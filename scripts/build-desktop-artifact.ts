@@ -24,7 +24,11 @@ import {
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
-import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
+import {
+  SYNARA_PACKAGED_DESKTOP_FLAVORS,
+  type SynaraPackagedDesktopFlavor,
+} from "@synara/shared/desktopIdentity";
+import { createDesktopArtifactIdentity } from "./lib/desktop-artifact-identity.ts";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
 import { finalizeSignedMacDmg, rebuildUnsignedMacDmg } from "./lib/mac-dmg-finalize.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
@@ -55,6 +59,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
+const BuildFlavor = Schema.Literals(SYNARA_PACKAGED_DESKTOP_FLAVORS);
 const requireFromScriptsWorkspace = createRequire(new URL("./package.json", import.meta.url));
 
 const RepoRoot = Effect.service(Path.Path).pipe(
@@ -121,6 +126,7 @@ const PLATFORM_CONFIG: Record<typeof BuildPlatform.Type, PlatformConfig> = {
 
 interface BuildCliInput {
   readonly platform: Option.Option<typeof BuildPlatform.Type>;
+  readonly flavor: Option.Option<SynaraPackagedDesktopFlavor>;
   readonly target: Option.Option<string>;
   readonly arch: Option.Option<typeof BuildArch.Type>;
   readonly buildVersion: Option.Option<string>;
@@ -220,6 +226,7 @@ function resolvePythonForNodeGyp(): string | undefined {
 
 interface ResolvedBuildOptions {
   readonly platform: typeof BuildPlatform.Type;
+  readonly flavor: SynaraPackagedDesktopFlavor;
   readonly target: string;
   readonly arch: typeof BuildArch.Type;
   readonly version: string | undefined;
@@ -237,6 +244,8 @@ interface ResolvedBuildOptions {
 
 interface StagePackageJson {
   readonly name: string;
+  readonly productName: string;
+  readonly synaraDesktopFlavor: SynaraPackagedDesktopFlavor;
   readonly version: string;
   readonly buildVersion: string;
   readonly synaraCommitHash: string;
@@ -325,6 +334,13 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   }
 
   const target = mergeOptions(input.target, env.target, PLATFORM_CONFIG[platform].defaultTarget);
+  // Flavor is deliberately a build flag, never inherited from a source
+  // launcher's SYNARA_DESKTOP_FLAVOR environment variable.
+  const flavor = Option.getOrElse(input.flavor, () => "production" as const);
+  const artifactIdentity = yield* Effect.try({
+    try: () => createDesktopArtifactIdentity({ platform, flavor }),
+    catch: (cause) => new BuildScriptError({ message: String(cause), cause }),
+  });
   const arch = mergeOptions(input.arch, env.arch, getDefaultArch(platform));
   const version = mergeOptions(input.buildVersion, env.version, undefined);
   const sourceCommit = mergeOptions(input.sourceCommit, env.sourceCommit, undefined);
@@ -336,8 +352,8 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const envVerbose = yield* resolveBooleanEnv("SYNARA_DESKTOP_VERBOSE", env.verbose);
   const envMockUpdates = yield* resolveBooleanEnv("SYNARA_DESKTOP_MOCK_UPDATES", env.mockUpdates);
   const releaseDir = resolveBooleanFlag(input.mockUpdates, envMockUpdates)
-    ? "release-mock"
-    : "release";
+    ? `${artifactIdentity.releaseDirectoryName}-mock`
+    : artifactIdentity.releaseDirectoryName;
   const outputDir = path.resolve(
     repoRoot,
     mergeOptions(input.outputDir, env.outputDir, releaseDir),
@@ -356,6 +372,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   return {
     platform,
+    flavor,
     target,
     arch,
     version,
@@ -773,22 +790,24 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
-  productName: string,
+  artifactIdentity: ReturnType<typeof createDesktopArtifactIdentity>,
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: string | undefined,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: SYNARA_PRODUCTION_BUNDLE_ID,
-    productName,
-    artifactName: "Synara-${version}-${arch}.${ext}",
+    ...artifactIdentity.buildConfig,
     directories: {
       buildResources: "apps/desktop/resources",
     },
     forceCodeSigning: signed,
   };
   const publishConfig = resolveGitHubPublishConfig();
-  if (publishConfig) {
+  if (artifactIdentity.identity.usesScriptedUpdates) {
+    // Experimental bundles must never contain a Stable updater feed, even
+    // when built from a shell used by the release workflow.
+    buildConfig.publish = null;
+  } else if (publishConfig) {
     buildConfig.publish = [publishConfig];
   } else if (mockUpdates) {
     buildConfig.publish = [
@@ -821,6 +840,16 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   } as const;
 
   Object.assign(buildConfig, createDesktopPlatformBuildConfig(platformBuildConfigInput));
+  if (platform === "linux" && artifactIdentity.identity.flavor !== "production") {
+    const linux = buildConfig.linux as Record<string, unknown>;
+    buildConfig.linux = {
+      ...linux,
+      executableName: artifactIdentity.identity.userDataDirectoryName,
+      desktop: {
+        entry: { StartupWMClass: artifactIdentity.identity.userDataDirectoryName },
+      },
+    };
+  }
 
   return {
     buildConfig,
@@ -913,6 +942,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const repoRoot = yield* RepoRoot;
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
+  const artifactIdentity = createDesktopArtifactIdentity({
+    platform: options.platform,
+    flavor: options.flavor,
+  });
 
   const platformConfig = PLATFORM_CONFIG[options.platform];
   if (!platformConfig) {
@@ -1039,7 +1072,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
-    prefix: `synara-desktop-${options.platform}-stage-`,
+    prefix: `synara-desktop-${options.flavor}-${options.platform}-stage-`,
   });
 
   const stageAppDir = path.join(stageRoot, "app");
@@ -1089,16 +1122,19 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
-  if (options.platform === "mac") {
+  if (options.platform === "mac" || options.platform === "linux") {
     const provisionCua = path.join(repoRoot, "apps/desktop/scripts/provision-cua-driver.mjs");
     const cuaDestination = path.join(stageResourcesDir, "cua-driver");
+    const cuaPlatform = options.platform === "mac" ? "darwin" : "linux";
     yield* Effect.log("[desktop-artifact] Verifying and staging pinned Cua Driver...");
     yield* runCommand(
       ChildProcess.make({
         cwd: repoRoot,
         ...commandOutputOptions(options.verbose),
-      })`node ${provisionCua} --destination ${cuaDestination} --arch ${options.arch}`,
+      })`node ${provisionCua} --destination ${cuaDestination} --platform ${cuaPlatform} --arch ${options.arch}`,
     );
+  }
+  if (options.platform === "mac") {
     yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
   }
 
@@ -1110,14 +1146,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const resolvedBuildConfig = yield* createBuildConfig(
     options.platform,
     options.target,
-    desktopPackageJson.productName ?? "Synara",
+    artifactIdentity,
     options.signed,
     options.mockUpdates,
     options.mockUpdateServerPort,
   );
 
   const stagePackageJson: StagePackageJson = {
-    name: "synara-desktop",
+    ...artifactIdentity.packageMetadata,
     version: appVersion,
     buildVersion: appVersion,
     synaraCommitHash: commitHash,
@@ -1178,7 +1214,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   yield* Effect.log(
-    `[desktop-artifact] Building ${options.platform}/${options.target} (arch=${options.arch}, version=${appVersion})...`,
+    `[desktop-artifact] Building ${options.flavor} ${options.platform}/${options.target} (arch=${options.arch}, version=${appVersion})...`,
   );
   const electronBuilderCliPath = requireFromScriptsWorkspace.resolve("electron-builder/cli.js");
   yield* runCommand(
@@ -1197,7 +1233,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   if (options.platform === "mac") {
-    yield* assertPackagedMacDeviceHelper(stageDistDir, desktopPackageJson.productName ?? "Synara");
+    yield* assertPackagedMacDeviceHelper(stageDistDir, artifactIdentity.identity.displayName);
   }
 
   if (options.platform === "mac" && options.target === "dmg" && !options.signed) {
@@ -1206,7 +1242,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       try: () =>
         rebuildUnsignedMacDmg({
           stageDistDir,
-          productName: desktopPackageJson.productName ?? "Synara",
+          productName: artifactIdentity.identity.displayName,
           verbose: options.verbose,
         }),
       catch: (cause) =>
@@ -1291,6 +1327,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 });
 
 const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
+  flavor: Flag.choice("flavor", BuildFlavor.literals).pipe(
+    Flag.withDescription("Packaged identity: production (default), canary, or cua."),
+    Flag.optional,
+  ),
   platform: Flag.choice("platform", BuildPlatform.literals).pipe(
     Flag.withDescription("Build platform (env: SYNARA_DESKTOP_PLATFORM)."),
     Flag.optional,
