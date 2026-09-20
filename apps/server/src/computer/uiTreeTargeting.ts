@@ -14,6 +14,7 @@ import type {
   ComputerPoint,
   ComputerRect,
   ComputerScreenSize,
+  ComputerSpaceErrorCode,
   ComputerTarget,
   ComputerUiNode,
 } from "@synara/contracts";
@@ -39,6 +40,7 @@ export interface ComputerTargetMatch {
 }
 
 export type ComputerTargetErrorCode =
+  | ComputerSpaceErrorCode
   | "computer_target_invalid"
   | "computer_target_not_found"
   | "computer_target_ambiguous"

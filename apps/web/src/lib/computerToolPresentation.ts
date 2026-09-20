@@ -48,6 +48,7 @@ export const COMPUTER_TOOL_TITLES = {
   computer_paste: "Paste text",
   computer_run: "Run a sequence",
   computer_inspect: "Inspect the computer",
+  computer_spaces: "Inspect desktop Spaces",
   computer_browser_state: "Read the browser page",
   computer_browser_prepare: "Prepare a browser",
   computer_browser_navigate: "Open a browser page",
@@ -114,7 +115,8 @@ export function describeComputerToolCall(input: {
       selectedTool === "computer_read_clipboard" ||
       selectedTool === "computer_zoom" ||
       selectedTool === "computer_get_accessibility_tree" ||
-      selectedTool === "computer_get_cursor_position"
+      selectedTool === "computer_get_cursor_position" ||
+      selectedTool === "computer_spaces"
     ) {
       const description = describeComputerToolCall({
         toolName: selectedTool,
@@ -127,6 +129,22 @@ export function describeComputerToolCall(input: {
         params: selectedTool === "computer_read_clipboard" ? [] : description.params,
       };
     }
+  }
+  if (tool === "computer_spaces") {
+    const summaries: Record<string, string> = {
+      list: "Inspect desktop Spaces",
+      reserve: "Reserve a desktop Space for this task",
+      release: "Release the task's desktop Space",
+      select: "Select a window in the task's Space",
+      peek: "Inspect a window without switching Spaces",
+    };
+    return {
+      tool,
+      summary: Object.hasOwn(summaries, readString(args.operation) ?? "list")
+        ? summaries[readString(args.operation) ?? "list"]!
+        : "Check a desktop Space operation",
+      params: describeParams(tool, args, input.windows),
+    };
   }
   if (tool.startsWith("computer_browser_")) {
     return {
@@ -404,6 +422,9 @@ function describeParams(
   windows: readonly ComputerWindow[] | undefined,
 ): ReadonlyArray<{ readonly name: string; readonly value: string }> {
   const rows: Array<{ name: string; value: string }> = [];
+  const nativeSpaceId = readNumber(args.space_id);
+  if (tool === "computer_spaces" && nativeSpaceId !== null)
+    rows.push({ name: "Space ID", value: String(nativeSpaceId) });
   const x = readNumber(args.x);
   const y = readNumber(args.y);
   if (x !== null && y !== null) {

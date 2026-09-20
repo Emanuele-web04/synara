@@ -108,8 +108,8 @@ the chat ends the task.
   are validated before dispatch and retain targeting, consent and refusal
   checks. It stops on failure by default. It accepts no browser steps or
   per-step screenshots; a final screenshot can cover the affected window.
-- `computer_inspect` reaches the existing clipboard-read, zoom, desktop-inventory
-  and cursor-position handlers. It retains their permission and cancellation
+- `computer_inspect` reaches the clipboard-read, zoom, desktop-inventory,
+  cursor-position and managed-Space handlers. It retains their permission and cancellation
   behavior. `computer_help({tool: "computer_zoom"})`, for example, returns the
   exact schema and inspection route. Other hidden specialists expose a batch
   route. Help lookup does not install another tool in the provider catalog.
@@ -254,12 +254,44 @@ refused before shortcut registration. These are component-level runtime results;
 the injected event does not qualify physical-human Escape, and no full Linux
 Synara package/provider flow is certified by them.
 
-Reported `spaceIds`, `currentSpaceId` and `onCurrentSpace` describe observed
-window membership only. They do not list every Space or empty Spaces. There
-are no model-facing create, switch, move-window or owned-Space operations.
-Experimental fixture results in [Space findings](space-management-findings.md)
-do not expose such operations in Synara. A refused off-Space action is not
-permission to switch Spaces or raise the app.
+On macOS, the native managed-Space inventory can include empty Spaces, with
+session-local IDs, identity and current-Space information for each display.
+Window fields `spaceIds`, `currentSpaceId` and `onCurrentSpace` remain observed
+membership; they are not substitutes for that inventory. Incomplete identity
+or current-state information prevents a reservation. Linux has no managed-Space
+inventory.
+
+`computer_spaces` is available on demand through
+`computer_inspect({tool: "computer_spaces", arguments: {...}})`; its schema is
+returned by `computer_help({tool: "computer_spaces"})`. It adds no idle schema.
+
+| Operation        | Behavior                                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list` (default) | Read the managed-Space inventory and observed windows, optionally filtered by Space ID.                                                     |
+| `reserve`        | Reserve an existing, noncurrent desktop Space explicitly designated by the user for this turn; optionally select one exact existing window. |
+| `select`         | Change the task's logical target to an exact existing window in its reservation.                                                            |
+| `peek`           | Read inventory metadata and, when an exact window is specified, its semantic text without a screenshot or activation.                       |
+| `release`        | Remove this task's reservation without changing the desktop.                                                                                |
+
+Designation uses an explicit current user instruction such as **Use Space ID
+42 for this task.** Replace 42 with the actual ID from the inventory, not a
+Mission Control position. Tool arguments, quoted content and full access do
+not designate a Space. A reservation coordinates Synara tasks for one turn;
+it provides neither OS ownership nor continuous desktop isolation. It does
+not add input or capture support to an off-Space window.
+
+Before input, the broker rechecks the exact Space identity and selected window.
+Entering the reserved Space or changing its identity invalidates the reservation
+until it is explicitly replaced; moving the selected window or losing its
+proven membership prevents input. Stop, turn completion and teardown release
+the bookkeeping. Native app launch, app-wide or visibility changes, and
+unscoped input cannot use a reservation.
+
+Native Space creation, window movement between Spaces, switching and following
+remain explicitly unsupported. Historical fixture results in
+[Space findings](space-management-findings.md) do not establish those abilities.
+A refused off-Space action is not permission to switch Spaces or raise the app.
+The new inventory/reservation path still requires runtime qualification.
 
 ## Qualification still required
 
@@ -274,8 +306,11 @@ permission to switch Spaces or raise the app.
 4. Current Linux packaged startup, direct-X11 headless browser tasks, Escape
    and cancellation, still preview, and expected Wayland/XWayland refusals. A standalone connected host does not qualify the package;
    build success does not establish compositor-specific runtime behavior.
-5. Spaces management and ownership remain absent. Treat them as a separate
-   capability project, not a passing-test claim or a release feature.
+5. Qualify managed-Space inventory, including empty Spaces, and per-turn
+   reservations in the packaged macOS app: exact-window selection, concurrent
+   tasks, user entry, identity/window changes and Stop cleanup. Physical
+   create/move/switch/follow and OS ownership remain unsupported; passing unit
+   tests does not qualify them or off-Space input/capture.
 6. Browser-heavy performance benchmarks with fresh-thread and complete-evidence
    gates. The live SQLite database is exclusively owned by the application;
    collect through its diagnostic APIs or an owner-created coherent snapshot.

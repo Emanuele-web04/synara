@@ -57,6 +57,7 @@ describe("computerToolName", () => {
       "computer_paste",
       "computer_run",
       "computer_inspect",
+      "computer_spaces",
       "computer_browser_state",
       "computer_browser_prepare",
       "computer_browser_navigate",
@@ -394,4 +395,51 @@ describe("describeComputerToolCall", () => {
       })?.summary,
     ).toBe("Inspect the computer");
   });
+
+  it.each([
+    ["list", "Inspect desktop Spaces"],
+    ["reserve", "Reserve a desktop Space for this task"],
+    ["release", "Release the task's desktop Space"],
+    ["select", "Select a window in the task's Space"],
+    ["peek", "Inspect a window without switching Spaces"],
+  ])("describes Space %s consistently through direct and inspect routes", (operation, summary) => {
+    const args = { operation, space_id: 42, window_id: "win-7" };
+    const direct = describeComputerToolCall({
+      toolName: "mcp__synara__computer_spaces",
+      args,
+      windows: [SAFARI],
+    });
+    const inspect = describeComputerToolCall({
+      toolName: "computer_inspect",
+      args: { tool: "computer_spaces", arguments: args },
+      windows: [SAFARI],
+    });
+    expect(direct).toEqual({
+      tool: "computer_spaces",
+      summary,
+      params: [
+        { name: "Space ID", value: "42" },
+        { name: "Window", value: "Safari — Google" },
+      ],
+    });
+    expect(inspect).toEqual({ ...direct, tool: "computer_inspect" });
+    expect(direct?.summary).not.toMatch(/42|win-7|computer_spaces/);
+  });
+
+  it("uses the default inventory label without inventing a target", () => {
+    expect(describeComputerToolCall({ toolName: "computer_spaces", args: {} })).toEqual({
+      tool: "computer_spaces",
+      summary: "Inspect desktop Spaces",
+      params: [],
+    });
+  });
+
+  it.each(["create", "move", "switch", "follow", "unknown", "__proto__", "constructor"])(
+    "does not describe unsupported Space operation %s as a performed desktop change",
+    (operation) => {
+      expect(
+        describeComputerToolCall({ toolName: "computer_spaces", args: { operation } })?.summary,
+      ).toBe("Check a desktop Space operation");
+    },
+  );
 });

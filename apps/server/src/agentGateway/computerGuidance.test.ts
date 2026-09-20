@@ -171,11 +171,12 @@ describe("computer guidance", () => {
     expect(COMPUTER_HELP_SECTIONS.editors).toContain("not that it was saved or synced");
   });
 
-  it("limits Space metadata to observed membership without promising workspace control", () => {
+  it("describes managed inventory and explicit reservation without promising OS ownership", () => {
     const spaces = COMPUTER_HELP_SECTIONS.spaces;
-    expect(spaces).toContain("spaceIds, currentSpaceId and onCurrentSpace");
-    expect(spaces).toContain("do not enumerate every Space or empty Spaces");
-    expect(spaces).toContain("cannot create, switch, move windows between or own Spaces");
+    expect(spaces).toContain("including empty ones");
+    expect(spaces).toContain("Use Space ID 42 for this task");
+    expect(spaces).toContain("Native create, switch, move and follow are unsupported");
+    expect(spaces).toContain("not OS ownership or continuous isolation");
     expect(computerToolInstructions()).not.toContain(spaces);
   });
 });

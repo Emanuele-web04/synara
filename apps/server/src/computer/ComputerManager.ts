@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { ComputerSpaceBroker, ComputerSpaceError } from "./ComputerSpaceBroker.ts";
 import { ComputerControlState } from "./ComputerControlState.ts";
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
 import { currentComputerTask } from "./computerTaskContext.ts";
@@ -466,6 +467,7 @@ export class ComputerManager {
   }
   private readonly operations = new DesktopOperationQueue();
   readonly cursorActivity: CursorActivity;
+  readonly spaceBroker: ComputerSpaceBroker;
   private activity: string | null = null;
   /**
    * The window ids the last window read saw, kept so a post-action read can be
@@ -685,6 +687,22 @@ export class ComputerManager {
     if (agentThreadId(threadId) === undefined) return;
     const match = await this.deniedMatchForWindow(window);
     if (match) throw new ComputerDenylistError(match.app, match.matched);
+    await this.spaceBroker.assertWindowAllowed(
+      { threadId: threadId!, turnId: currentComputerTask()?.turnId ?? null },
+      window,
+    );
+  }
+
+  private async assertSpaceAppMutationAllowed(
+    threadId: string | undefined,
+    pid: number,
+  ): Promise<void> {
+    const owner = agentThreadId(threadId);
+    if (owner === undefined) return;
+    await this.spaceBroker.assertAppMutationAllowed(
+      { threadId: owner, turnId: currentComputerTask()?.turnId ?? null },
+      pid,
+    );
   }
 
   /**
@@ -1022,6 +1040,20 @@ export class ComputerManager {
 
   constructor(options: ComputerManagerOptions) {
     this.backend = options.backend;
+    this.spaceBroker = new ComputerSpaceBroker({
+      assertActive: assertDesktopOperationActive,
+      readSnapshot: async () => {
+        if (!this.backend.listSpaces)
+          throw new ComputerSpaceError(
+            "computer_spaces_unavailable",
+            "This backend does not expose managed Space inventory. Drive an exact existing window in place instead.",
+          );
+        this.engageBackend();
+        const inventory = await this.backend.listSpaces();
+        const windows = await this.readWindows();
+        return { inventory, windows };
+      },
+    });
     this.controlState = new ComputerControlState(options.controlStatePath);
     // Beside the control state file: same directory, same local-only lifetime.
     this.auditLog = new ComputerAuditLog(options.auditLogPath);
@@ -1753,6 +1785,7 @@ export class ComputerManager {
       markComputerCall("computer_launch_app");
       assertDesktopOperationActive();
       this.assertDrivenAppAllowed(app);
+      this.spaceBroker.assertNativeLaunchAllowed(agentThreadId(threadId));
       const hidden = options?.hidden ?? true;
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.launchApp(app, args, hidden ? { hidden: true } : options),
@@ -1822,7 +1855,8 @@ export class ComputerManager {
     return this.withDesktopControl(threadId, async () => {
       const setter = this.backend.setWindowFrame?.bind(this.backend);
       if (!setter) throw new ComputerBackendError("This backend cannot move or resize windows.");
-      await this.resolveWindowTarget(threadId, windowId);
+      const target = await this.resolveWindowTarget(threadId, windowId);
+      if (target.pid !== undefined) await this.assertSpaceAppMutationAllowed(threadId, target.pid);
       const result = await timedComputerLeg("dispatch", () => setter(windowId, frame));
       return this.actionResult(threadId, "computer_set_window_frame", undefined, result, windowId);
     });
@@ -1847,7 +1881,9 @@ export class ComputerManager {
       const invoke = this.backend.invokeMenu?.bind(this.backend);
       if (!invoke) throw new ComputerBackendError("This backend cannot invoke menu items.");
       if ("windowId" in target) {
-        await this.resolveWindowTarget(threadId, target.windowId);
+        const window = await this.resolveWindowTarget(threadId, target.windowId);
+        if (window.pid !== undefined)
+          await this.assertSpaceAppMutationAllowed(threadId, window.pid);
         const result = await timedComputerLeg("dispatch", () =>
           invoke({ windowId: target.windowId }, path),
         );
@@ -1868,6 +1904,7 @@ export class ComputerManager {
         const denied = await this.deniedMatchForPid(resolved.pid, resolved.name);
         if (denied) throw new ComputerDenylistError(denied.app, denied.matched);
       }
+      await this.assertSpaceAppMutationAllowed(threadId, resolved.pid);
       const result = await timedComputerLeg("dispatch", () => invoke({ pid: resolved.pid }, path));
       return this.actionResult(threadId, "computer_invoke_menu", undefined, result);
     });
@@ -1928,7 +1965,8 @@ export class ComputerManager {
       const setter = this.backend.setWindowMinimized?.bind(this.backend);
       if (!setter)
         throw new ComputerBackendError("This backend cannot minimize or restore windows.");
-      await this.resolveWindowTarget(threadId, windowId);
+      const target = await this.resolveWindowTarget(threadId, windowId);
+      if (target.pid !== undefined) await this.assertSpaceAppMutationAllowed(threadId, target.pid);
       const result = await timedComputerLeg("dispatch", () => setter(windowId, minimized));
       return this.actionResult(
         threadId,
@@ -1968,6 +2006,7 @@ export class ComputerManager {
         const denied = await this.deniedMatchForPid(pid, named);
         if (denied) throw new ComputerDenylistError(denied.app, denied.matched);
       }
+      await this.assertSpaceAppMutationAllowed(threadId, pid);
       const result = await timedComputerLeg("dispatch", () => setter(pid, hidden));
       const base = this.actionResult(threadId, "computer_set_app_visibility", undefined, result);
       // An unhide on an app with no windows shows nothing, and a bare
@@ -2031,6 +2070,7 @@ export class ComputerManager {
       const target = windows.find((candidate) => candidate.id === windowId);
       if (!target?.pid) throw windowNotFoundError(windowId);
       await this.admitWindowTarget(threadId, target);
+      await this.assertSpaceAppMutationAllowed(threadId, target.pid);
       const result = await timedComputerLeg("dispatch", () => kill(target.pid!));
       return this.actionResult(threadId, "computer_kill_app", undefined, result, windowId);
     });
@@ -2259,7 +2299,8 @@ export class ComputerManager {
         throw activationUnsupportedError();
       }
       this.assertForegroundAllowed(threadId, authorization);
-      await this.resolveWindowTarget(threadId, windowId);
+      const target = await this.resolveWindowTarget(threadId, windowId);
+      if (target.pid !== undefined) await this.assertSpaceAppMutationAllowed(threadId, target.pid);
       await timedComputerLeg("dispatch", async () => {
         await raise(windowId);
         // Aiming after the raise, never before: a raise that refuses must not leave
@@ -2319,6 +2360,7 @@ export class ComputerManager {
         windows.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
       this.assertDrivenAppAllowed(target.appName ?? windowId);
       await this.assertWindowInputAllowedWindow(threadId, target);
+      if (target.pid !== undefined) await this.assertSpaceAppMutationAllowed(threadId, target.pid);
       // The masked-activation shield arms after admission and before the
       // raise: an opt-in that cannot shield refuses here rather than
       // degrading to an unmasked excursion.
@@ -2426,6 +2468,7 @@ export class ComputerManager {
       // click is an excursion from the user's point of view, and it refuses
       // before the wrapped action can raise anything.
       this.assertForegroundAllowed(threadId, authorization);
+      this.spaceBroker.assertForegroundAllowed(agentThreadId(threadId));
       const before = await timedComputerLeg("resolve", () => this.readWindows());
       const previousId =
         before.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
@@ -3538,6 +3581,8 @@ export class ComputerManager {
         // that arrives while this asynchronous check is still running.
         if (beforeDispatch) await beforeDispatch();
         operationSignal.throwIfAborted();
+        if (name === "browser_prepare" && args.windowed === true)
+          this.spaceBroker.assertForegroundAllowed(threadId);
         const invoke = () =>
           browser.call({
             name,
@@ -3813,6 +3858,7 @@ export class ComputerManager {
   async releaseDesktopControl(threadId: string, turnId?: string): Promise<void> {
     const owner = agentThreadId(threadId);
     if (owner === undefined) return;
+    this.spaceBroker.release(owner, turnId);
     // Capture cleanup must not delay or prevent release of desktop control —
     // the catch is part of the promise, so the finally-await below can never
     // re-throw a wedged or refused endTask. A cleanup failure is evidence on
@@ -3924,6 +3970,7 @@ export class ComputerManager {
   }
 
   async handleThreadRemoved(threadId: string): Promise<void> {
+    this.spaceBroker.release(threadId);
     // Cancel first, synchronously, before the suspend below can yield: removal
     // revokes authority, and a prompt admitted a millisecond earlier must
     // settle now rather than at the gate's timeout.
@@ -3969,6 +4016,7 @@ export class ComputerManager {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
+    this.spaceBroker.dispose();
     this.cursorActivity.dispose();
     // Teardown cannot depend on the host still answering: an unreachable
     // endpoint means the input path it owned is already gone, so the wait is
@@ -4050,6 +4098,7 @@ export class ComputerManager {
     threadId: string | undefined,
   ): Promise<ResolvedPointTarget> {
     if (hasCoordinates(target) && !hasLabelFields(target)) {
+      this.spaceBroker.assertTargetBound(agentThreadId(threadId), target.windowId);
       const point = await this.resolveCoordinatePoint(target);
       if (target.windowId === undefined) {
         // The compositor routes a bare point to whatever is topmost at it, so
@@ -4238,6 +4287,7 @@ export class ComputerManager {
     threadId: string | undefined,
   ): Promise<void> {
     const windowId = target?.windowId;
+    this.spaceBroker.assertTargetBound(agentThreadId(threadId), windowId);
     if (windowId !== undefined) await this.assertWindowInputAllowed(threadId, windowId);
     if (windowId === undefined) {
       assertDesktopOperationActive();
@@ -4280,6 +4330,7 @@ export class ComputerManager {
     windowId: string | undefined,
     threadId: string | undefined,
   ): Promise<void> {
+    this.spaceBroker.assertTargetBound(agentThreadId(threadId), windowId);
     if (windowId === undefined) return;
     const windows = await this.readWindows();
     const window = windows.find((candidate) => candidate.id === windowId);

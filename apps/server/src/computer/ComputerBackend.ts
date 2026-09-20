@@ -20,6 +20,7 @@ import {
   type ComputerPoint,
   type ComputerRect,
   type ComputerScreenSize,
+  type ComputerSpaceInventory,
   type ComputerScreenshot,
   type ComputerState,
   type ComputerTarget,
@@ -473,6 +474,8 @@ export interface ComputerBackend {
    */
   buildSignature?(): ComputerBuildSignature | undefined;
   listWindows(): Promise<readonly ComputerWindow[]>;
+  /** Optional real managed-display inventory, including empty Spaces. Never changes the desktop. */
+  listSpaces?(): Promise<ComputerSpaceInventory>;
   getScreenSize(): Promise<ComputerScreenSize>;
   getState(options: {
     readonly includeScreenshot?: boolean;

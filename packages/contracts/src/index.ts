@@ -41,6 +41,7 @@ export * from "./studio";
 export * from "./filesystem";
 export * from "./device";
 export * from "./computer";
+export * from "./computerSpaces";
 export * from "./computerAudit";
 export * from "./computerBrowser";
 export * from "./rpc";

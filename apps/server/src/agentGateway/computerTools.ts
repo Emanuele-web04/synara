@@ -1,3 +1,4 @@
+import { makeComputerSpaceTools } from "./computerSpaceTools.ts";
 import { cursorToolActivity } from "../computer/cursorActivity.ts";
 import { waitForControl } from "../computer/waitForControl.ts";
 import {
@@ -276,6 +277,7 @@ export function computerAuditErrorOutcome(error: unknown): {
  * inactive sessions receive no computer definitions. */
 export interface AgentGatewayComputerToolsOptions {
   readonly manager: ComputerManager;
+  readonly resolveSpaceDesignation?: (context: ToolContext) => Promise<readonly number[]>;
   readonly authorizeAction?: (
     name: string,
     args: Record<string, unknown>,
@@ -387,6 +389,7 @@ const COMPUTER_INSPECTION_TOOL_NAMES = [
   "computer_zoom",
   "computer_get_accessibility_tree",
   "computer_get_cursor_position",
+  "computer_spaces",
 ] as const;
 
 function isInspectionToolName(name: string): boolean {
@@ -394,7 +397,7 @@ function isInspectionToolName(name: string): boolean {
 }
 
 /**
- * These four canonical schemas are flat string/number objects. Validate the
+ * These canonical schemas are flat string/number objects. Validate the
  * selected definition itself, rather than copy its fields into a second
  * schema. Reject unfamiliar schema constraints instead of ignoring them.
  */
@@ -2904,6 +2907,13 @@ export function makeAgentGatewayComputerTools(
   // renamed tool can never leave the chapter naming something that no longer
   // exists.
   const entries: ToolEntry[] = [
+    ...makeComputerSpaceTools({
+      manager,
+      handle,
+      ...(options.resolveSpaceDesignation
+        ? { resolveSpaceDesignation: options.resolveSpaceDesignation }
+        : {}),
+    }),
     {
       requiredCapability: COMPUTER_CONTROL_CAPABILITY,
       requiresActiveTurn: true,

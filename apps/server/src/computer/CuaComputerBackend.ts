@@ -1,3 +1,5 @@
+import { cuaSpaceInventory } from "./cuaSpaceInventory.ts";
+import { ComputerSpaceError } from "./ComputerSpaceBroker.ts";
 import { COMPUTER_WINDOW_LIST_MAX_LENGTH } from "@synara/contracts";
 import type {
   ComputerAccessibilityTreeApp,
@@ -861,6 +863,20 @@ export class CuaComputerBackend implements ComputerBackend {
       .slice(0, 512);
     return this.windows;
   }
+  async listSpaces() {
+    let result: Record<string, unknown>;
+    try {
+      result = (await this.call("list_spaces")).structuredContent ?? {};
+    } catch (error) {
+      assertDesktopOperationActive();
+      throw new ComputerSpaceError(
+        "computer_spaces_unavailable",
+        `Managed Space inventory is unavailable: ${error instanceof Error ? error.message : String(error)}. Drive an exact existing window in place instead.`,
+      );
+    }
+    return cuaSpaceInventory(result);
+  }
+
   async listWindows() {
     await this.refresh();
     return this.windows;

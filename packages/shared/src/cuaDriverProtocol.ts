@@ -427,6 +427,7 @@ export const CUA_READ_TOOLS = new Set([
   "check_permissions",
   "check_input_ready",
   "list_windows",
+  "list_spaces",
   "list_apps",
   "get_window_state",
   "get_screen_size",

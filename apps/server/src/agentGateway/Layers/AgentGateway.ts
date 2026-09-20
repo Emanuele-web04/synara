@@ -13,6 +13,7 @@
  *
  * @module agentGateway/Layers/AgentGateway
  */
+import { computerSpaceDesignationForMessages } from "../../computer/computerSpaceDesignation.ts";
 import { randomUUID } from "node:crypto";
 
 import {
@@ -1153,6 +1154,15 @@ export const makeAgentGateway = Effect.gen(function* () {
       : computerForegroundAuthorizationForMessages(detail.value.messages);
   };
 
+  const resolveComputerSpaceDesignation: NonNullable<
+    AgentGatewayComputerToolsOptions["resolveSpaceDesignation"]
+  > = async (context) => {
+    const detail = await Effect.runPromise(
+      snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(context.callerThreadId)),
+    );
+    return Option.isNone(detail) ? [] : computerSpaceDesignationForMessages(detail.value.messages);
+  };
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -1175,6 +1185,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           onSetupRequired: surfaceComputerSetupRequired,
           authorizeAction: authorizeComputerAction,
           resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
+          resolveSpaceDesignation: resolveComputerSpaceDesignation,
         })
       : []),
     // The driver-backed CDP browser family. Advertised only when the backend

@@ -231,6 +231,10 @@ const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
   synara_computer_paste: presentComputerTool("pasting text", "pasted text"),
   synara_computer_run: presentComputerTool("running a desktop sequence", "ran a desktop sequence"),
   synara_computer_inspect: presentComputerTool("inspecting the computer", "inspected the computer"),
+  synara_computer_spaces: presentComputerTool(
+    "inspecting desktop Spaces",
+    "inspected desktop Spaces",
+  ),
   synara_computer_browser_state: presentComputerTool(
     "reading the browser page",
     "read the browser page",
