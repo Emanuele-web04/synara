@@ -2284,87 +2284,6 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("cancels a multi-question prompt with choices through the orchestration command", async () => {
-    const requestId = ApprovalRequestId.makeUnsafe("question-cancel");
-    const lifecycleGeneration = "cancel-generation";
-    const questions = [1, 2].map((id) => ({
-      id: String(id),
-      header: `Question ${id}`,
-      question: `Choose option ${id}?`,
-      options: [{ label: `Choice ${id}`, description: "Selected answer" }],
-    }));
-    const snapshot = createSnapshotForTargetUser({
-      targetMessageId: MessageId.makeUnsafe("msg-question-cancel"),
-      targetText: "Ask for a decision",
-    });
-    const thread = snapshot.threads[0]!;
-    const pendingThread = {
-      ...thread,
-      activities: [
-        {
-          id: EventId.makeUnsafe("question-cancel-request"),
-          createdAt: NOW_ISO,
-          kind: "user-input.requested",
-          summary: "Questions",
-          tone: "info" as const,
-          turnId: null,
-          sequence: 900,
-          payload: { requestId, lifecycleGeneration, questions },
-        },
-      ],
-      pendingInteractions: [
-        {
-          interactionKind: "userInput" as const,
-          requestId,
-          threadId: thread.id,
-          turnId: null,
-          lifecycleGeneration,
-          status: "pending" as const,
-          decision: null,
-          responseCommandId: null,
-          responseRequestedAt: null,
-          createdAt: NOW_ISO,
-          resolvedAt: null,
-        },
-      ],
-    };
-    const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      snapshot: { ...snapshot, threads: [pendingThread] },
-    });
-    const previousNativeApi = window.nativeApi;
-    const api = readNativeApi()!;
-    const dispatchCommand = vi.fn(async () => {});
-    Object.defineProperty(window, "nativeApi", {
-      configurable: true,
-      value: { ...api, orchestration: { ...api.orchestration, dispatchCommand } },
-    });
-    try {
-      await page.getByRole("button", { name: /Choice 1/ }).click();
-      await page.getByRole("button", { name: "Cancel", exact: true }).click();
-      await vi.waitFor(() => expect(dispatchCommand).toHaveBeenCalledTimes(1));
-      expect(dispatchCommand).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "thread.user-input.respond",
-          threadId: THREAD_ID,
-          requestId,
-          lifecycleGeneration,
-          answers: {},
-        }),
-      );
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      await expect.element(page.getByText("Choose option 2?")).not.toBeInTheDocument();
-    } finally {
-      if (previousNativeApi)
-        Object.defineProperty(window, "nativeApi", {
-          configurable: true,
-          value: previousNativeApi,
-        });
-      else Reflect.deleteProperty(window, "nativeApi");
-      await mounted.cleanup();
-    }
-  });
-
   it.each(["manual", "auto-advance", "custom"] as const)(
     "preserves three answers (%s) on transient failure and restores expired questions without sending a message",
     async (navigation) => {
@@ -2604,6 +2523,87 @@ describe("ChatView transcript geometry (full app)", () => {
       nearCap.reactCommitTotalMs,
       `Issue #550 benchmark: ${JSON.stringify(reports)}`,
     ).toBeLessThan(short.reactCommitTotalMs * 1.6);
+  });
+
+  it("cancels a multi-question prompt with choices through the orchestration command", async () => {
+    const requestId = ApprovalRequestId.makeUnsafe("question-cancel");
+    const lifecycleGeneration = "cancel-generation";
+    const questions = [1, 2].map((id) => ({
+      id: String(id),
+      header: `Question ${id}`,
+      question: `Choose option ${id}?`,
+      options: [{ label: `Choice ${id}`, description: "Selected answer" }],
+    }));
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("msg-question-cancel"),
+      targetText: "Ask for a decision",
+    });
+    const thread = snapshot.threads[0]!;
+    const pendingThread = {
+      ...thread,
+      activities: [
+        {
+          id: EventId.makeUnsafe("question-cancel-request"),
+          createdAt: NOW_ISO,
+          kind: "user-input.requested",
+          summary: "Questions",
+          tone: "info" as const,
+          turnId: null,
+          sequence: 900,
+          payload: { requestId, lifecycleGeneration, questions },
+        },
+      ],
+      pendingInteractions: [
+        {
+          interactionKind: "userInput" as const,
+          requestId,
+          threadId: thread.id,
+          turnId: null,
+          lifecycleGeneration,
+          status: "pending" as const,
+          decision: null,
+          responseCommandId: null,
+          responseRequestedAt: null,
+          createdAt: NOW_ISO,
+          resolvedAt: null,
+        },
+      ],
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...snapshot, threads: [pendingThread] },
+    });
+    const previousNativeApi = window.nativeApi;
+    const api = readNativeApi()!;
+    const dispatchCommand = vi.fn(async () => {});
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: { ...api, orchestration: { ...api.orchestration, dispatchCommand } },
+    });
+    try {
+      await page.getByRole("button", { name: /Choice 1/ }).click();
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      await vi.waitFor(() => expect(dispatchCommand).toHaveBeenCalledTimes(1));
+      expect(dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "thread.user-input.respond",
+          threadId: THREAD_ID,
+          requestId,
+          lifecycleGeneration,
+          answers: {},
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await expect.element(page.getByText("Choose option 2?")).not.toBeInTheDocument();
+    } finally {
+      if (previousNativeApi)
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      else Reflect.deleteProperty(window, "nativeApi");
+      await mounted.cleanup();
+    }
   });
 
   it("dispatches a rapid access-mode reversal while the server projection is stale", async () => {
