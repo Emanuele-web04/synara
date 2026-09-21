@@ -1,3 +1,5 @@
+import { parseCuaActionDiagnostics } from "@synara/shared/cuaActionDiagnostics";
+import { beginComputerTurnCall } from "../computer/computerTurnTiming.ts";
 import { makeComputerSpaceTools } from "./computerSpaceTools.ts";
 import { cursorToolActivity } from "../computer/cursorActivity.ts";
 import { waitForControl } from "../computer/waitForControl.ts";
@@ -24,6 +26,7 @@ import {
   type ComputerAvailability,
   type ComputerBuildSignature,
   type ComputerInputModifier,
+  type ComputerLaunchAppResult,
   type ComputerPermission,
   type ComputerRect,
   type ComputerScreenshot,
@@ -132,8 +135,15 @@ const COMPUTER_TOOL_REFRESH_GUIDANCE =
  * cadence: a launch that yields no window is the exact moment the next step
  * matters, and the description alone does not stop a relaunch loop.
  */
+const INPUT_PAUSE_REQUERY_HINT =
+  "Observe a usable window of the affected app after physical input stops; never replay an uncertain action.";
+
 const LAUNCH_NULL_WINDOW_GUIDANCE =
-  "No window yet — this is not a failure. Call computer_list_windows with the app name next; never launch again. For a browser task that needs clicks, bind the driver-owned headless browser with computer_browser_prepare and computer_browser_state.";
+  "No usable window was established. The launch may already have started the app; never launch again automatically. Inspect computer_list_windows once using the returned app identity. If no usable target exists, report the limitation instead of looping. An isolated browser via computer_browser_prepare is an alternative only when compatible with the requested task; do not silently replace a requested personal browser or incognito window.";
+
+function withLaunchGuidance(result: ComputerLaunchAppResult) {
+  return result.window === null ? { ...result, toolGuidance: LAUNCH_NULL_WINDOW_GUIDANCE } : result;
+}
 
 /**
  * Re-exported so a caller reaching for the computer family's gate finds it, and
@@ -222,6 +232,7 @@ function computerAuditTarget(
 
 /** The window id a successful call resolved, when the result reports one. */
 function computerAuditResultWindowId(value: unknown): string | undefined {
+  if (isToolResult(value)) return computerAuditResultWindowId(toolResultPayload(value));
   if (value === null || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
   if (typeof record.windowId === "string") return record.windowId;
@@ -240,6 +251,7 @@ function computerAuditResultWindowId(value: unknown): string | undefined {
  * `dispatched-unknown` exists to say.
  */
 function computerAuditSuccessEffect(name: string, value: unknown): ComputerAuditEffect {
+  if (isToolResult(value)) return computerAuditSuccessEffect(name, toolResultPayload(value));
   const delivery = (value as { delivery?: { effect?: unknown } } | null | undefined)?.delivery;
   if (
     delivery?.effect === "verified" ||
@@ -618,6 +630,8 @@ export function cuaActionErrorPayload(error: CuaActionError): {
   readonly retryAllowed: false;
   readonly diagnostics?: ComputerAuditEntry["diagnostics"];
   readonly layer?: ComputerAuditEntry["layer"];
+  readonly wait_seconds?: number;
+  readonly requery_hint?: string;
 } {
   return {
     error: error.code,
@@ -626,6 +640,8 @@ export function cuaActionErrorPayload(error: CuaActionError): {
     retryAllowed: false,
     ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}),
     ...(error.layer ? { layer: error.layer } : {}),
+    ...(error.waitSeconds !== undefined ? { wait_seconds: error.waitSeconds } : {}),
+    ...(error.code === "computer_input_paused" ? { requery_hint: INPUT_PAUSE_REQUERY_HINT } : {}),
   };
 }
 
@@ -1814,6 +1830,21 @@ export function makeAgentGatewayComputerTools(
                   ? withModelDesktopObservation(() => run(args, context))
                   : run(args, context),
             );
+          const finishTurnTiming =
+            name !== "computer_run" &&
+            (mutating ||
+              [
+                "computer_get_state",
+                "computer_screenshot",
+                "computer_get_accessibility_tree",
+                "computer_wait",
+              ].includes(name))
+              ? beginComputerTurnCall(
+                  context.callerThreadId,
+                  context.callerTurnId ?? undefined,
+                  mutating ? "write" : "observation",
+                )
+              : undefined;
           const value =
             name === "computer_wait"
               ? await (async () => {
@@ -1888,7 +1919,25 @@ export function makeAgentGatewayComputerTools(
           // cannot lose a record of input already sent.
           resultWindowId = computerAuditResultWindowId(value);
           const successEffect = computerAuditSuccessEffect(name, value);
-          audit({ effect: successEffect });
+          finishTurnTiming?.(
+            successEffect !== "not-dispatched" &&
+              successEffect !== "refused" &&
+              successEffect !== "error" &&
+              resultAvailability(value)?.kind !== "permission-required",
+          );
+          const payload = isToolResult(value) ? toolResultPayload(value) : value;
+          const measured = payload as
+            | { scroll?: { traveledY?: unknown }; observationEvidence?: unknown }
+            | undefined;
+          audit({
+            effect: successEffect,
+            diagnostics: parseCuaActionDiagnostics({
+              diagnostics: {
+                scroll_delta_y: measured?.scroll?.traveledY,
+                observation: measured?.observationEvidence,
+              },
+            }),
+          });
           if (mutating) noteActionOutcome(context.callerThreadId, actionKey, successEffect);
           // A call can succeed and still report that the desktop is out of
           // reach: a perception read answers with a `permission-required`
@@ -1947,6 +1996,13 @@ export function makeAgentGatewayComputerTools(
                       ...error.inputPause,
                       layer: error instanceof CuaActionError ? error.layer : "server-manager",
                       retryable: false,
+                      ...(error instanceof CuaActionError
+                        ? { cause: error.code, diagnostics: error.diagnostics }
+                        : {}),
+                      requery_hint: INPUT_PAUSE_REQUERY_HINT,
+                      ...(error instanceof CuaActionError && error.waitSeconds !== undefined
+                        ? { wait_seconds: error.waitSeconds }
+                        : {}),
                     },
                     ...(error instanceof CuaActionError
                       ? { effect: error.effect, retryAllowed: false }
@@ -2051,6 +2107,7 @@ export function makeAgentGatewayComputerTools(
       return {
         ...result,
         targetWindowClosed: true,
+        observationEvidence: "target-window-closed",
         note: "The window this action targeted no longer exists — the action likely closed it, so no post-action screenshot was taken. Use computer_list_windows or computer_get_state to see the desktop now.",
       };
     }
@@ -2058,6 +2115,7 @@ export function makeAgentGatewayComputerTools(
     if (reused) {
       return {
         ...result,
+        observationEvidence: "frame-unchanged",
         screenshotUnchanged: true,
         screenshotId: reused.id,
         screenshot: {
@@ -2071,7 +2129,12 @@ export function makeAgentGatewayComputerTools(
         note: "The screen is byte-for-byte what your previous screenshot showed, with the same coordinates. Continue using this screenshotId. This does not prove the action missed; wait and look again before repeating an action.",
       };
     }
-    return deliverScreenshot(context.callerThreadId, result, capture.screenshot, capture.windowId);
+    return deliverScreenshot(
+      context.callerThreadId,
+      { ...result, observationEvidence: "fresh-frame" },
+      capture.screenshot,
+      capture.windowId,
+    );
   };
 
   /**
@@ -2481,12 +2544,14 @@ export function makeAgentGatewayComputerTools(
               );
             }
           }
-          return manager.launchApp(
-            threadId,
-            app,
-            appArgs,
-            waitMs,
-            hidden !== undefined ? { hidden } : undefined,
+          return withLaunchGuidance(
+            await manager.launchApp(
+              threadId,
+              app,
+              appArgs,
+              waitMs,
+              hidden !== undefined ? { hidden } : undefined,
+            ),
           );
         };
       }
@@ -2678,6 +2743,13 @@ export function makeAgentGatewayComputerTools(
           ...error.inputPause,
           layer: error instanceof CuaActionError ? error.layer : "server-manager",
           ...(error instanceof CuaActionError ? { effect: error.effect } : {}),
+          requery_hint: INPUT_PAUSE_REQUERY_HINT,
+          ...(error instanceof CuaActionError
+            ? { cause: error.code, diagnostics: error.diagnostics }
+            : {}),
+          ...(error instanceof CuaActionError && error.waitSeconds !== undefined
+            ? { wait_seconds: error.waitSeconds }
+            : {}),
         }
       : error instanceof CuaActionError
         ? {
@@ -2764,6 +2836,7 @@ export function makeAgentGatewayComputerTools(
 
     const steps: Record<string, unknown>[] = [];
     let stopped = false;
+    let stoppedReason: "no_usable_window" | undefined;
     // The window the last step touched scopes the closing state read.
     let lastWindowId: string | undefined;
     for (const [index, preparedStep] of prepared.entries()) {
@@ -2822,6 +2895,16 @@ export function makeAgentGatewayComputerTools(
               ? (({ computerId: _omitted, ...rest }) => rest)(value as Record<string, unknown>)
               : value,
         });
+        if (
+          preparedStep.type === "launch_app" &&
+          (value as ComputerLaunchAppResult).windowStatus === "no_usable_window"
+        ) {
+          // Launch may have succeeded, but the next planned input has no
+          // established target. Preserve its result; never call it unexecuted.
+          stopped = true;
+          stoppedReason = "no_usable_window";
+          break;
+        }
       } catch (error) {
         // A cancelled desktop operation or dead turn is the call ending, not a
         // step failing: propagate it rather than file it as batch data.
@@ -2897,6 +2980,7 @@ export function makeAgentGatewayComputerTools(
       completed: steps.filter((entry) => entry.ok === true && entry.skipped !== true).length,
       ...(skippedCount > 0 ? { skipped: skippedCount } : {}),
       stopped,
+      ...(stoppedReason ? { stoppedReason } : {}),
       ...stateFields,
     };
     if (readBooleanArg(args, "include_screenshot") !== true) return payload;
@@ -3390,7 +3474,7 @@ export function makeAgentGatewayComputerTools(
     actionEntry(
       "computer_launch_app",
       "Launch computer app",
-      `Launch an application. ${launchAppNote(dialect)} Waits briefly for one unambiguous matching window and returns its id without a screenshot. A null window is not a launch failure; observe instead of launching again.`,
+      `Launch an application. ${launchAppNote(dialect)} Checks briefly for one unambiguous usable window and returns its id without a screenshot. windowStatus distinguishes readiness from launch delivery. no_usable_window must not trigger automatic relaunches.`,
       {
         type: "object",
         properties: {
@@ -3408,7 +3492,7 @@ export function makeAgentGatewayComputerTools(
           hidden: {
             type: "boolean",
             description:
-              "Launch posture. true keeps the app off the user's screen: its windows are created off-screen, nothing activates, focuses or switches Spaces, and the semantic tools (set_value, clicks by label, get_window_state) keep working; omitting the flag does the same. false is a visible launch — the app's window and Dock entry appear — and is refused with foreground_not_requested unless the user's own task asked to see the app.",
+              "Launch posture. true requests a hidden launch (also the default); some apps create no usable window in this mode. false requests a visible launch and is refused with foreground_not_requested unless the user's own task asked to see the app.",
           },
         },
         required: ["app"],
@@ -3438,10 +3522,7 @@ export function makeAgentGatewayComputerTools(
           readBooleanArg(args, "wait_for_window") === false ? 0 : 2_000,
           hidden !== undefined ? { hidden } : undefined,
         );
-        if (result.window == null) {
-          return { ...result, toolGuidance: LAUNCH_NULL_WINDOW_GUIDANCE };
-        }
-        return result;
+        return withLaunchGuidance(result);
       },
     ),
     {
@@ -4116,11 +4197,18 @@ export function makeAgentGatewayComputerTools(
               ? {
                   scrollObservation: {
                     status: "no-visible-movement",
+                    code: "scroll_noop",
+                    ...(traveledY === undefined ? {} : { measuredDeltaY: traveledY }),
                     message:
                       "No content movement was observed. This may be an edge, a non-scrollable target, or dropped delivery. Inspect fresh state and choose a scrollable element; do not blindly repeat the wheel event.",
                   },
                 }
-              : {}),
+              : {
+                  scrollObservation:
+                    traveledY !== undefined
+                      ? { status: "movement-observed", measuredDeltaY: traveledY }
+                      : { status: "unknown", reason: "movement_not_measurable" },
+                }),
             ...(outcome.result.scroll &&
             (limited.deltaX !== delta.deltaX || limited.deltaY !== delta.deltaY)
               ? {
@@ -4433,7 +4521,7 @@ function keyArgumentNote(dialect: ComputerAgentDialect): string {
 
 function launchAppNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? "Names an application the way macOS does. The launch stays off the user's screen: it does not come to the foreground, does not take focus and does not switch Spaces. Pass hidden:false only when the user's own task asked to see the app — a visible launch is refused otherwise."
+    ? "Names an application the way macOS does. Hidden launch requests no foreground activation; it may create no usable window. Pass hidden:false only when the user's own task asked to see the app — a visible launch is refused otherwise."
     : "Names an executable on PATH or a desktop application id.";
 }
 

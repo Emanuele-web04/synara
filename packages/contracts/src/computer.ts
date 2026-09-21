@@ -566,6 +566,8 @@ export type ComputerScreenshot = typeof ComputerScreenshot.Type;
 
 export const ComputerInputPause = Schema.Struct({
   windowId: Schema.optional(ComputerWindowId),
+  /** Native app affected by takeover; never inferred from a display name. */
+  pid: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 0x7fffffff }))),
   message: Schema.String.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH)),
 });
 export type ComputerInputPause = typeof ComputerInputPause.Type;
@@ -904,6 +906,12 @@ export type ComputerLaunchAppInput = typeof ComputerLaunchAppInput.Type;
 export const ComputerLaunchAppResult = Schema.Struct({
   computerId: ComputerId,
   app: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  pid: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 0x7fffffff }))),
+  /** Launch delivery and usable-window readiness are separate facts. */
+  windowStatus: Schema.optional(Schema.Literals(["ready", "no_usable_window", "not_checked"])),
+  windowReason: Schema.optional(
+    Schema.Literals(["no_window", "ambiguous", "off_space", "hidden", "input_unavailable"]),
+  ),
   /**
    * The executable the requested name resolved to. Reported back so a caller
    * that passed a flatpak app id or a .desktop id learns what actually ran.

@@ -170,7 +170,7 @@ net.createServer(s=>{
       write('permitted-native:'+r.name); reply({});
     }
     else if(r.name==='press_key') { if(!options.unpatched&&r.expected_input_epoch!==inputEpoch) { reply({isError:true,structuredContent:{effect:'refused',code:'input_admission_closed'}}); return; } write('key'); write('observation-budget-'+process.env.SYNARA_CUA_FOREGROUND_OBSERVATION_MS); reply(options.actionResult??{}); }
-    else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:[],pid:r.args?.pid,window_id:r.args?.fixture_wrong_window?99999:r.args?.window_id}}),options.delayObservation?60:0); }
+    else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:r.args?.fixture_usable?[{role:"AXWindow"}]:[],window_is_on_screen:r.args?.fixture_usable===true,window_on_current_space:r.args?.fixture_usable===true,degraded:r.args?.fixture_degraded,screenshot_frame_valid:r.args?.fixture_stale!==true,pid:r.args?.pid,window_id:r.args?.fixture_wrong_window?99999:r.args?.window_id}}),options.delayObservation?60:0); }
     else if(r.name==='get_desktop_state') reply({content:[{type:'image',data:'fixture-image'}]});
     else if(r.name==='list_windows') { write('list-windows'); reply({structuredContent:{windows:options.listWindows||[]}}); }
     // Browser family observability: the persistent control connection opens
@@ -2508,6 +2508,76 @@ describe("physical Escape interrupt", () => {
     });
     await observe(taskB, windowB);
     await expect(click(taskB, windowB)).resolves.toMatchObject({ ok: true, result: {} });
+  });
+
+  it("fences input after uncertain focus restoration until a fresh model observation", async () => {
+    const result = {
+      isError: true,
+      structuredContent: { effect: "unverifiable", code: "focus_restore_failed" },
+    };
+    const f = await fixture(capability, { actionResult: result });
+    const task = { threadId: "restore-failure", turnId: "turn" };
+    const target = { pid: 700, window_id: 900 };
+    const act = () =>
+      cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        args: { ...target, key: "enter" },
+        task,
+      });
+    const read = (modelObservation: boolean) =>
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "get_window_state",
+        args: target,
+        modelObservation,
+        task,
+      });
+    expect((await act()).result).toEqual(result);
+    await read(false);
+    expect((await act()).result?.structuredContent?.code).toBe("computer_input_paused");
+    expect((await f.events()).filter((e) => e.event === "key")).toHaveLength(1);
+    await read(true);
+    // The fixture fails again, but exactly one new explicitly observed action ran.
+    expect((await act()).result).toEqual(result);
+    expect((await f.events()).filter((e) => e.event === "key")).toHaveLength(2);
+  });
+
+  it("recovers native takeover through a fresh usable sibling, never an empty or stale read", async () => {
+    const f = await fixture();
+    const task = { threadId: "sibling-recovery", turnId: "turn" };
+    const observe = (args: Record<string, unknown>) =>
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "get_window_state",
+        args,
+        modelObservation: true,
+        task,
+      });
+    const act = () =>
+      cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        args: { pid: 700, window_id: 901, key: "enter" },
+        task,
+      });
+    await observe({ pid: 700, window_id: 900 });
+    f.host.physicalInput({ type: "physical-input", kind: "pointer", pid: 700, windowId: 900 });
+    await waitForEvent(f, "interrupt-ack");
+    const cooldown = await act();
+    expect(cooldown.result?.structuredContent?.wait_seconds).toBeGreaterThan(0);
+    expect(cooldown.result?.structuredContent?.requery_hint).toBeTypeOf("string");
+    await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+    for (const extra of [
+      {},
+      { fixture_usable: true, fixture_degraded: "ax_window_unresolved" },
+      { fixture_usable: true, fixture_stale: true },
+    ]) {
+      await observe({ pid: 700, window_id: 901, ...extra });
+      expect((await act()).result?.structuredContent?.code).toBe("computer_input_paused");
+    }
+    await observe({ pid: 700, window_id: 901, fixture_usable: true });
+    expect(await act()).toMatchObject({ ok: true, result: {} });
   });
 
   it.each(["dom_refs_v1", "semantic_v2"])(

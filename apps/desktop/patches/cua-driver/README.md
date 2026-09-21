@@ -554,3 +554,15 @@ Current integration verification and limits are recorded in
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records
 the historical revision 1 GUI qualification. Revision 2 compilation, pure tests
 and control-plane checks do not establish a fresh GUI or RAM qualification.
+
+### Revision 35: background delivery and report recovery
+
+Background clicks no longer use real activation and take/restore. Chromium
+clicks omit the off-target primer that could dismiss popups. Observation stops
+arming wildcard focus restoration; the reactive guard yields to recent HID
+input or closed admission. Exact-window Enter prefers advertised AXConfirm;
+otherwise native keyboard ambiguity remains guarded. Known background popup
+presses refuse before dispatch. No synthetic activation-belief protocol ships.
+
+See [the report follow-up](../../../../docs/computer-use-cua/live-report-followup-2026-09-20.md)
+for coverage and outstanding live Chromium acceptance criteria.

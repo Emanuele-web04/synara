@@ -1394,6 +1394,22 @@ export class CuaDriverHost {
       }
       if (!reply || !generation) throw new Error("Cancelled before dispatch.");
       if (
+        mutation &&
+        (reply.result?.structuredContent?.code === "focus_restore_failed" ||
+          parseCuaActionDiagnostics(reply.result?.structuredContent)?.error_code ===
+            "focus_restore_failed")
+      ) {
+        // Input may already have landed. Preserve that uncertain result, but
+        // fence queued work and automatic observations after losing user focus.
+        // Only a fresh model observation may reopen admission; never replay.
+        this.desktopObservationRequired = true;
+        this.epoch += 1;
+        this.desktopEpoch += 1;
+        const key = task ? cuaComputerTaskKey(task) : "anonymous";
+        const target = this.controlledTargets.get(key);
+        if (target) this.takeoverTargets.set(key, { ...target });
+      }
+      if (
         admittedDesktopEpoch !== this.desktopEpoch &&
         (CUA_READ_TOOLS.has(name) || name === "get_browser_state")
       ) {
@@ -2597,15 +2613,25 @@ export class CuaDriverHost {
         (target.browserTabId === undefined || args.tab_id === target.browserTabId)
       );
     }
-    // An overview can omit off-Space/hidden windows. Only the exact native
-    // window observation can resume the task whose controlled target changed.
+    // A model may deliberately re-aim at a usable sibling after the old window
+    // closes or moves off-Space. Never let an overview, another app, a degraded
+    // capture, or an empty sibling tree clear the task's takeover gate.
+    const state = result.structuredContent;
+    const exactWindow = args.window_id === target.windowId;
     return (
       name === "get_window_state" &&
       args.pid === target.pid &&
-      result.structuredContent?.pid === target.pid &&
+      state?.pid === target.pid &&
+      safeNativeId(args.window_id) !== undefined &&
+      state.window_id === args.window_id &&
+      !state.degraded &&
+      state.screenshot_frame_valid !== false &&
       (target.windowId === undefined ||
-        (args.window_id === target.windowId &&
-          result.structuredContent?.window_id === target.windowId))
+        exactWindow ||
+        (state.window_is_on_screen === true &&
+          state.window_on_current_space === true &&
+          Array.isArray(state.elements) &&
+          state.elements.length > 0))
     );
   }
 
@@ -2778,6 +2804,8 @@ export class CuaDriverHost {
           code: "computer_input_paused",
           layer: "driver-host",
           message,
+          requery_hint:
+            "After physical input stops, observe a usable window of the affected app with computer_get_state and its exact window_id. Do not replay an uncertain action.",
         },
       },
     };
@@ -2824,6 +2852,9 @@ export class CuaDriverHost {
           code: "computer_input_paused",
           layer: "driver-host",
           message,
+          wait_seconds: Math.max(0, (this.inputInterruptCooldownUntil - Date.now()) / 1000),
+          requery_hint:
+            "Wait, then observe the affected target before deciding the next action. Waiting alone does not resume input.",
         },
       },
     };

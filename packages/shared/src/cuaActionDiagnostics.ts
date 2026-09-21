@@ -18,6 +18,7 @@ const RESTORE_STATUSES = [
   "unobservable",
   "user-changed",
 ] as const;
+const OBSERVATIONS = ["frame-unchanged", "fresh-frame", "target-window-closed"] as const;
 const ERROR_MESSAGES = {
   ax_action_refused: "The accessibility action was refused before dispatch.",
   ax_action_uncertain: "The accessibility action was submitted but its result is uncertain.",
@@ -34,6 +35,8 @@ export interface CuaActionDiagnostics {
   readonly focus_mutation?: (typeof FOCUS_MUTATIONS)[number];
   readonly restore_status?: (typeof RESTORE_STATUSES)[number];
   readonly error_code?: keyof typeof ERROR_MESSAGES;
+  readonly observation?: (typeof OBSERVATIONS)[number];
+  readonly scroll_delta_y?: number;
   readonly ax_error?: number;
   readonly prior_pid?: number;
   readonly prior_window_id?: number;
@@ -65,6 +68,13 @@ export function parseCuaActionDiagnostics(value: unknown): CuaActionDiagnostics 
       source.error_code,
       Object.keys(ERROR_MESSAGES) as (keyof typeof ERROR_MESSAGES)[],
     ),
+    observation: member(source.observation, OBSERVATIONS),
+    scroll_delta_y:
+      typeof source.scroll_delta_y === "number" &&
+      Number.isFinite(source.scroll_delta_y) &&
+      Math.abs(source.scroll_delta_y) <= 1_000_000
+        ? source.scroll_delta_y
+        : undefined,
     ax_error: integer(source.ax_error, -0x80000000, 0x7fffffff),
     prior_pid: integer(source.prior_pid, 1, 0x7fffffff),
     prior_window_id: integer(source.prior_window_id, 1, 0xffffffff),

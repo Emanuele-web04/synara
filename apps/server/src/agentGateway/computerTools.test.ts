@@ -250,6 +250,51 @@ describe("agent gateway computer tools", () => {
     }
   });
 
+  it("returns the same no-relaunch guidance for batched launches", async () => {
+    const backend = new FakeComputerBackend();
+    backend.launchApp = async (app: string) => ({ computerId: "desktop", app, window: null });
+    const { call, manager } = await setup(backend);
+    try {
+      const result = await call("computer_run", {
+        steps: [{ type: "launch_app", app: "Helium", wait_for_window: false }],
+      });
+      expect(result.isError).not.toBe(true);
+      expect(JSON.stringify(resultJson(result))).toContain("never launch again automatically");
+      expect(JSON.stringify(resultJson(result))).toContain("not_checked");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("stops a batch after a delivered launch with no usable window", async () => {
+    const backend = new FakeComputerBackend();
+    backend.launchApp = async (app: string) => ({
+      computerId: "desktop",
+      app,
+      window: null,
+      windowStatus: "no_usable_window",
+      windowReason: "off_space",
+    });
+    const { call, manager } = await setup(backend);
+    try {
+      const result = resultJson(
+        await call("computer_run", {
+          steps: [
+            { type: "launch_app", app: "Helium", wait_for_window: false, continue_on_error: true },
+            { type: "press_key", key: "enter" },
+          ],
+        }),
+      );
+      expect(result).toMatchObject({
+        stopped: true,
+        stoppedReason: "no_usable_window",
+        completed: 1,
+      });
+      expect(backend.callsFor("pressKey")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
   it("leaves an off-screen launch result without unhide choreography", async () => {
     // L23: a hidden launch is an ordinary off-screen workspace now, so the
     // result must not route the model into set_app_visibility or a visible
@@ -1407,6 +1452,8 @@ describe("agent gateway computer tools", () => {
       scroll: { traveledY: 0 },
       scrollObservation: {
         status: "no-visible-movement",
+        code: "scroll_noop",
+        measuredDeltaY: 0,
         message: expect.stringContaining("dropped delivery"),
       },
     });
@@ -1520,6 +1567,33 @@ describe("agent gateway computer tools", () => {
         });
       }
       expect(key).toHaveBeenCalledTimes(4);
+    } finally {
+      key.mockRestore();
+      await manager.dispose();
+    }
+  });
+  it("preserves verified delivery and window identity when the result includes an image", async () => {
+    const { backend, manager, call } = await setup();
+    const key = vi.spyOn(backend, "pressKey").mockResolvedValue({
+      effect: "verified",
+      verified: "confirmed",
+      deliveryPath: "semantic",
+      windowId: "fake-calculator",
+    });
+    const audit = vi.spyOn(manager, "recordComputerAudit");
+    try {
+      const result = await call("computer_press_key", {
+        key: "enter",
+        window_id: "fake-calculator",
+      });
+      expect(result.content.some((part) => part.type === "image")).toBe(true);
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          effect: "verified",
+          target: expect.objectContaining({ windowId: "fake-calculator" }),
+          diagnostics: { observation: "fresh-frame" },
+        }),
+      );
     } finally {
       key.mockRestore();
       await manager.dispose();
@@ -2727,8 +2801,9 @@ describe("agent gateway computer tools", () => {
     const macLaunchAppDescription =
       mac.byName.get("computer_launch_app")?.definition.description ?? "";
     expect(macLaunchAppDescription).toContain("the way macOS does");
-    // Launch is non-activating by contract: the app never becomes frontmost.
-    expect(macLaunchAppDescription).toContain("does not come to the foreground");
+    // Launch posture is a request, not proof that the resulting window is usable.
+    expect(macLaunchAppDescription).toContain("requests no foreground activation");
+    expect(macLaunchAppDescription).toContain("may create no usable window");
     const macLaunchApp = schemaPropertyDescription(mac.byName, "computer_launch_app", "app");
     expect(macLaunchApp).toContain("com.apple.Safari");
     expect(macLaunchApp).not.toContain("/Applications/Safari.app");

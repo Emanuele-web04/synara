@@ -703,6 +703,30 @@ describe("Cua native boundary", () => {
     for (const read of reads) expect(read.args?.include_screenshot).toBe(false);
   });
 
+  it("refuses a stale semantic field when fresh state has two matching controls", async () => {
+    const f = fixture();
+    const field = {
+      role: "AXTextField",
+      label: "Message",
+      frame: { x: -290, y: 30, width: 120, height: 20 },
+      element_token: "one",
+      element_index: 2,
+      in_web_content: true,
+      value: "seed",
+    };
+    f.setElements([field]);
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const node = state.root!.children[0]!;
+    f.setElements([field, { ...field, element_token: "two", element_index: 3 }]);
+    await expect(
+      f.backend.setValue(
+        { target: { label: "Message", windowId: "cua:10:20" }, node, point: node.activationPoint! },
+        "replacement",
+      ),
+    ).rejects.toMatchObject({ effect: "not-dispatched", code: "stale_target" });
+    expect(f.calls.filter((call) => call.name === "set_value")).toHaveLength(0);
+  });
+
   it("reports dispatched-unknown when a web set_value does not land", async () => {
     const f = fixture();
     f.setElements([
@@ -2132,6 +2156,58 @@ describe("Cua native boundary", () => {
     await expect(f.backend.launchApp("/Applications/Calculator.app")).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "unsupported_operation",
+    });
+  });
+
+  it("pauses after focus restoration failure without laundering uncertain delivery", async () => {
+    const f = fixture();
+    f.onTool("press_key", () => ({
+      isError: true,
+      structuredContent: {
+        effect: "unverifiable",
+        code: "focus_restore_failed",
+        diagnostics: {
+          focus_mutation: "without_raise",
+          restore_status: "unobservable",
+          error_code: "focus_restore_failed",
+        },
+      },
+    }));
+    await expect(f.backend.pressKey("enter", "cua:10:20")).rejects.toMatchObject({
+      code: "focus_restore_failed",
+      effect: "dispatched-unknown",
+      inputPause: { windowId: "cua:10:20", pid: 10 },
+      diagnostics: { restore_status: "unobservable" },
+    });
+    expect(f.calls.filter((c) => c.name === "press_key")).toHaveLength(1);
+  });
+  it("preserves bounded cooldown hints and scopes native pause recovery to the app", async () => {
+    const f = fixture();
+    f.onTool("press_key", () => ({
+      isError: true,
+      structuredContent: {
+        effect: "refused",
+        code: "computer_input_paused",
+        layer: "driver-host",
+        wait_seconds: 0.75,
+      },
+    }));
+    await expect(f.backend.pressKey("enter", "cua:10:20")).rejects.toMatchObject({
+      code: "computer_input_paused",
+      waitSeconds: 0.75,
+      inputPause: { windowId: "cua:10:20", pid: 10 },
+      effect: "not-dispatched",
+    });
+  });
+  it("preserves the launched process identity without claiming window readiness", async () => {
+    const f = fixture();
+    f.onTool("launch_app", () => ({
+      structuredContent: { pid: 10, launch_state: { process_running: true, window_ready: false } },
+    }));
+    expect(await f.backend.launchApp("com.apple.Calculator")).toMatchObject({
+      pid: 10,
+      window: null,
+      windowStatus: "not_checked",
     });
   });
   it("uses the Linux launch schema after discovering a remote host's platform", async () => {

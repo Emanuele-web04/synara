@@ -1765,14 +1765,9 @@ export class ComputerManager {
   /**
    * Launching spawns windows on the shared desktop, so it takes the lease too.
    *
-   * Nothing we start may put a window or a Dock entry in front of the user:
-   * an ordinary launch stays off-screen (its windows are created but render
-   * nothing), and only a caller that explicitly asks for a visible launch
-   * (`options.hidden === false`) gets one — the tool layer gates that ask on
-   * the user's own task. Off-screen windows keep their AX trees live, so the
-   * semantic tools (set_value, label clicks, get_window_state) work on them;
-   * `set_app_visibility` and `activate_window` remain the explicit visibility
-   * controls for when the user asks to see or move an app.
+   * Hidden launch requests no visible activation; it does not guarantee a
+   * usable window or a live AX tree. Readiness is checked separately. Only an
+   * explicitly authorized visible launch may request foreground presentation.
    */
   async launchApp(
     threadId: string | undefined,
@@ -1792,18 +1787,31 @@ export class ComputerManager {
       );
       this.emitAction(threadId, "computer_launch_app");
       if (!result.window && waitForWindowMs > 0) {
-        const window = await waitForWindow(
+        const readiness = await waitForWindow(
           () => this.readWindows(),
           app,
           waitForWindowMs,
           desktopOperationSignal(),
+          {
+            ...(result.pid !== undefined ? { pid: result.pid } : {}),
+            ...(this.backend.checkInputReady
+              ? { checkInputReady: (windowId: string) => this.backend.checkInputReady!(windowId) }
+              : {}),
+          },
         ).catch(() => {
           assertDesktopOperationActive();
-          return null;
+          return {
+            window: null,
+            windowStatus: "no_usable_window" as const,
+            windowReason: "input_unavailable" as const,
+          };
         });
-        return { ...result, window };
+        return { ...result, ...readiness };
       }
-      return result;
+      return {
+        ...result,
+        windowStatus: result.windowStatus ?? (result.window ? "ready" : "not_checked"),
+      };
     });
   }
 
@@ -3720,12 +3728,21 @@ export class ComputerManager {
     windows: readonly ComputerWindow[],
   ): Promise<void> {
     if (!this.backend.checkInputReady) return;
+    const observingThread = currentComputerTask()?.threadId;
+    const observedWindow = windows.find((window) => window.id === windowId);
     const paused = [...this.threads.entries()].filter(
-      ([, state]) =>
+      ([threadId, state]) =>
+        (observingThread === undefined || observingThread === threadId) &&
         state.inputPause &&
         (!state.inputPause.windowId ||
           state.inputPause.windowId === windowId ||
-          !windows.some((window) => window.id === state.inputPause?.windowId)),
+          (state.inputPause.pid !== undefined &&
+            observedWindow?.pid === state.inputPause.pid &&
+            observedWindow.visible &&
+            !observedWindow.minimized &&
+            observedWindow.onCurrentSpace !== false) ||
+          (state.inputPause.pid === undefined &&
+            !windows.some((window) => window.id === state.inputPause?.windowId))),
     );
     if (paused.length === 0) return;
     const snapshots = paused.map(([threadId, state]) => ({

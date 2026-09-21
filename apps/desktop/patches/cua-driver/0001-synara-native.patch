@@ -5565,10 +5565,9 @@ diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cu
      fn host_driver() -> Arc<cua_driver_sdk::CuaDriver> {
          cua_driver_sdk::CuaDriver::create_for_host(cua_driver_sdk::DriverHostOptions {
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123bc7..f499100fb 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-@@ -464,9 +464,36 @@ fn observe_daemon_error(
+@@ -464,9 +464,36 @@
      crate::telemetry::capture_tool_completed(timer.finish(&response), transport);
  }
 
@@ -5605,7 +5604,7 @@ index 67e123bc7..f499100fb 100644
  ) -> DaemonResponse {
      if let Some(response) = permission_gate_pending_response(&req) {
          return response;
-@@ -571,7 +598,10 @@ async fn invoke_daemon_tool(
+@@ -571,7 +598,10 @@
          sdk.begin_tool_call(&tool_name, &args, transport, client_kind)
      });
 
@@ -5617,7 +5616,7 @@ index 67e123bc7..f499100fb 100644
          Ok(result) => result,
          Err(error) => {
              observe_daemon_error(observation, 1);
-@@ -676,10 +706,69 @@ fn permission_gate_response_for_state(
+@@ -676,10 +706,69 @@
  }
 
  fn daemon_metadata_response() -> DaemonResponse {
@@ -5629,7 +5628,7 @@ index 67e123bc7..f499100fb 100644
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(34);
++        metadata["synara_native_revision"] = serde_json::json!(35);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -5691,7 +5690,7 @@ index 67e123bc7..f499100fb 100644
  }
 
  fn shutdown_response(request: &DaemonRequest) -> (DaemonResponse, bool) {
-@@ -734,6 +823,40 @@ async fn wait_for_parent_stdin_eof() {
+@@ -734,6 +823,40 @@
      }
  }
 
@@ -5732,7 +5731,7 @@ index 67e123bc7..f499100fb 100644
  #[cfg(unix)]
  fn authenticate_unix_peer(stream: &tokio::net::UnixStream) -> anyhow::Result<()> {
      let credentials = stream
-@@ -867,6 +990,46 @@ mod peer_authentication_tests {
+@@ -867,6 +990,46 @@
          history_relaunch_state_response, shutdown_response, DaemonRequest, ToolObservationOrigin,
      };
 
@@ -5779,7 +5778,7 @@ index 67e123bc7..f499100fb 100644
      #[tokio::test]
      async fn same_user_unix_peer_is_accepted() {
          let (left, right) = tokio::net::UnixStream::pair().expect("Unix stream pair");
-@@ -1005,11 +1168,16 @@ pub async fn run_serve(
+@@ -1005,10 +1168,15 @@
          std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
      let mut connection_tasks = tokio::task::JoinSet::new();
      let parent_liveness = async {
@@ -5790,16 +5789,15 @@ index 67e123bc7..f499100fb 100644
 +            && std::env::var_os("CUA_DRIVER_EMBEDDED_HOST_PID").is_none()
 +        {
              std::future::pending::<()>().await;
-         }
++        }
 +        tokio::select! {
 +            _ = wait_for_parent_stdin_eof(),
 +                if cua_driver_core::parent_liveness_stdin_enabled() => {}
 +            _ = wait_for_embedded_host_death() => {}
-+        }
+         }
      };
      tokio::pin!(parent_liveness);
-
-@@ -1072,6 +1240,13 @@ pub async fn run_serve(
+@@ -1072,6 +1240,13 @@
                          ).await;
 
                          match req.method.as_str() {
@@ -5813,7 +5811,7 @@ index 67e123bc7..f499100fb 100644
                              "mcp_envelope_stream" if control_session_id.is_none() && trusted_session.is_none() => {
                                  // Existing local-peer authentication already passed.
                                  // Registry and session lifetime belong to this stream.
-@@ -1193,7 +1368,14 @@ pub async fn run_serve(
+@@ -1193,7 +1368,14 @@
                                  ).await;
                              }
                              "call" => {
@@ -5829,7 +5827,7 @@ index 67e123bc7..f499100fb 100644
                                  let _ = writer.write_all(
                                      (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                  ).await;
-@@ -1418,6 +1600,27 @@ pub async fn run_serve(
+@@ -1418,6 +1600,27 @@
          }
      }
 
@@ -5857,7 +5855,7 @@ index 67e123bc7..f499100fb 100644
      // Accepted connections may still own SDK/session state after the listener
      // stops. Abort and join them before tearing down the SDK runtime.
      connection_tasks.shutdown().await;
-@@ -1729,11 +1932,16 @@ pub async fn run_serve(
+@@ -1729,10 +1932,15 @@
      let trusted_resume_registry: TrustedResumeRegistry =
          std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
      let parent_liveness = async {
@@ -5868,16 +5866,15 @@ index 67e123bc7..f499100fb 100644
 +            && std::env::var_os("CUA_DRIVER_EMBEDDED_HOST_PID").is_none()
 +        {
              std::future::pending::<()>().await;
-         }
++        }
 +        tokio::select! {
 +            _ = wait_for_parent_stdin_eof(),
 +                if cua_driver_core::parent_liveness_stdin_enabled() => {}
 +            _ = wait_for_embedded_host_death() => {}
-+        }
+         }
      };
      tokio::pin!(parent_liveness);
-
-@@ -1934,7 +2142,7 @@ pub async fn run_serve(
+@@ -1934,7 +2142,7 @@
                                  ).await;
                              }
                              "call" => {
@@ -11724,10 +11721,9 @@ index 5a7d655b9..77a6f6764 100644
      }
  }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
-index 371773760..db1e2abfc 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
-@@ -9,56 +9,227 @@ fn is_selectable_container_role(role: &str) -> bool {
+@@ -9,56 +9,231 @@
      matches!(role, "AXRow" | "AXCell" | "AXListItem" | "AXImage")
  }
 
@@ -11749,6 +11745,7 @@ index 371773760..db1e2abfc 100644
 -pub fn select_nearest_container(element_ptr: usize) -> Option<String> {
 -    let mut current = element_ptr as AXUIElementRef;
 -    let mut owns_current = false;
+-
 +/// An AX error can be returned after the target processed a mutation. Only
 +/// `NotAttempted` permits choosing another ancestor or a different actuator.
 +#[derive(Debug, PartialEq, Eq)]
@@ -11763,21 +11760,7 @@ index 371773760..db1e2abfc 100644
 +        selected: Option<bool>,
 +    },
 +}
-
--    for _ in 0..MAX_SELECTION_ANCESTORS {
--        let role = unsafe { copy_string_attr(current, "AXRole") }.unwrap_or_default();
--        if is_selectable_container_role(&role)
--            && unsafe { copy_bool_attr(current, "AXSelected") }.is_some()
--        {
--            let err = unsafe { set_bool_attr_true(current, "AXSelected") };
--            if err == kAXErrorSuccess
--                && unsafe { copy_bool_attr(current, "AXSelected") } == Some(true)
--            {
--                if owns_current {
--                    unsafe { CFRelease(current as CFTypeRef) };
--                }
--                return Some(role);
--            }
++
 +/// Preserve whether a mutation crossed the AX boundary when reporting errors.
 +/// A failed preflight is a refusal; a failed AX call may already have acted.
 +#[derive(Debug)]
@@ -11797,12 +11780,13 @@ index 371773760..db1e2abfc 100644
 +            ax_error: None,
 +            actuator: "ax_action",
 +            message: message.into(),
-         }
++        }
 +    }
-
--        let parent = unsafe { copy_element_attr(current, "AXParent") };
--        if owns_current {
--            unsafe { CFRelease(current as CFTypeRef) };
++
++    pub fn refused_with_code(code: &'static str, message: impl Into<String>) -> Self {
++        Self { code: Some(code), ..Self::refused(message) }
++    }
++
 +    pub fn before_dispatch(error: anyhow::Error) -> Self {
 +        Self {
 +            attempted: false,
@@ -11812,9 +11796,7 @@ index 371773760..db1e2abfc 100644
 +            ax_error: None,
 +            actuator: "ax_action",
 +            message: error.to_string(),
-         }
--        let Some(parent) = parent else {
--            return None;
++        }
 +    }
 +
 +    pub fn uncertain(message: impl Into<String>) -> Self {
@@ -11930,7 +11912,28 @@ index 371773760..db1e2abfc 100644
 +    mut attempt: impl FnMut(&Element) -> anyhow::Result<SelectionOutcome>,
 +    mut parent: impl FnMut(&Element) -> Option<Element>,
 +) -> anyhow::Result<SelectionOutcome> {
-+    for _ in 0..MAX_SELECTION_ANCESTORS {
+     for _ in 0..MAX_SELECTION_ANCESTORS {
+-        let role = unsafe { copy_string_attr(current, "AXRole") }.unwrap_or_default();
+-        if is_selectable_container_role(&role)
+-            && unsafe { copy_bool_attr(current, "AXSelected") }.is_some()
+-        {
+-            let err = unsafe { set_bool_attr_true(current, "AXSelected") };
+-            if err == kAXErrorSuccess
+-                && unsafe { copy_bool_attr(current, "AXSelected") } == Some(true)
+-            {
+-                if owns_current {
+-                    unsafe { CFRelease(current as CFTypeRef) };
+-                }
+-                return Some(role);
+-            }
+-        }
+-
+-        let parent = unsafe { copy_element_attr(current, "AXParent") };
+-        if owns_current {
+-            unsafe { CFRelease(current as CFTypeRef) };
+-        }
+-        let Some(parent) = parent else {
+-            return None;
 +        match attempt(&current)? {
 +            SelectionOutcome::NotAttempted => {}
 +            terminal => return Ok(terminal),
@@ -11940,13 +11943,17 @@ index 371773760..db1e2abfc 100644
          };
 -        current = parent;
 -        owns_current = true;
-+        current = next;
-     }
-+    Ok(SelectionOutcome::NotAttempted)
-+}
-
+-    }
+-
 -    if owns_current {
 -        unsafe { CFRelease(current as CFTypeRef) };
+-    }
+-    None
++        current = next;
++    }
++    Ok(SelectionOutcome::NotAttempted)
++}
++
 +struct SelectionElement {
 +    ptr: AXUIElementRef,
 +    owned: bool,
@@ -11957,8 +11964,7 @@ index 371773760..db1e2abfc 100644
 +        if self.owned {
 +            unsafe { CFRelease(self.ptr as CFTypeRef) };
 +        }
-     }
--    None
++    }
 +}
 +
 +/// Select the nearest writable collection item before attempting AXPress.
@@ -11997,7 +12003,7 @@ index 371773760..db1e2abfc 100644
  }
 
  /// Read the selection state of the nearest collection-like element without
-@@ -201,7 +372,8 @@ fn ensure_ax_enabled(enabled: Option<bool>, action: &str) -> anyhow::Result<()>
+@@ -201,7 +376,8 @@
      if enabled == Some(false) {
          anyhow::bail!(
              "refusing {action}: the target reports AXEnabled=false. \
@@ -12007,12 +12013,13 @@ index 371773760..db1e2abfc 100644
          );
      }
      Ok(())
-@@ -220,24 +392,38 @@ pub fn ensure_ax_action_enabled(element_ptr: usize, action: &str) -> anyhow::Res
+@@ -220,24 +396,38 @@
  /// Perform an AX action on a cached element.
  pub fn perform_ax_action(element_ptr: usize, action: &str) -> anyhow::Result<()> {
      let ax_action = map_action(action);
 -    ensure_ax_action_enabled(element_ptr, ax_action)?;
 -    let err = unsafe { perform_action(element_ptr as AXUIElementRef, ax_action) };
+-
 +    dispatch_ax_action_with(
 +        ax_action,
 +        || {
@@ -12022,7 +12029,7 @@ index 371773760..db1e2abfc 100644
 +        || unsafe { perform_action(element_ptr as AXUIElementRef, ax_action) },
 +    )
 +}
-
++
 +fn dispatch_ax_action_with(
 +    action: &str,
 +    before_dispatch: impl FnOnce() -> anyhow::Result<()>,
@@ -12055,7 +12062,7 @@ index 371773760..db1e2abfc 100644
          _ => "AXPress",
      }
  }
-@@ -245,6 +431,27 @@ fn map_action(action: &str) -> &'static str {
+@@ -245,6 +435,27 @@
  #[cfg(test)]
  mod tests {
      use super::*;
@@ -12083,7 +12090,7 @@ index 371773760..db1e2abfc 100644
 
      #[test]
      fn disabled_elements_are_refused_before_dispatch() {
-@@ -270,10 +477,179 @@ mod tests {
+@@ -270,10 +481,179 @@
              assert!(!is_selectable_container_role(role), "{role}");
          }
      }
@@ -12263,7 +12270,7 @@ index 371773760..db1e2abfc 100644
      let err = unsafe { set_bool_attr_true(element_ptr as AXUIElementRef, "AXFocused") };
      if err == kAXErrorSuccess {
          Ok(())
-@@ -309,10 +685,16 @@ pub fn is_element_focused(pid: i32, element_ptr: usize) -> bool {
+@@ -309,10 +689,16 @@
 
  /// Set the AXValue of an element (for dropdowns, text fields, etc.).
  pub fn set_ax_value(element_ptr: usize, value: &str) -> anyhow::Result<()> {
@@ -12275,12 +12282,14 @@ index 371773760..db1e2abfc 100644
          Ok(())
      } else {
 -        anyhow::bail!("AXUIElementSetAttributeValue(AXValue) failed with error {err}")
+-    }
+-}
 +        Err(AxActionFailure::uncertain(format!(
 +            "AXUIElementSetAttributeValue(AXValue) returned {err} after dispatch; do not replay"
 +        ))
 +        .into())
-     }
- }
++    }
++}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs
 new file mode 100644
 --- /dev/null
@@ -13671,10 +13680,9 @@ index 7411233b9..42e5a800c 100644
  pub use ax_actions::perform_ax_action;
  pub use interactive::{
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
-index 8ace326f7..0f24d558d 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs
-@@ -92,6 +92,23 @@ pub fn click_at_xy_desktop_with_modifiers_preserving_cursor(
+@@ -92,6 +92,23 @@
      click_at_xy_desktop_inner(x, y, count, button, modifiers, true)
  }
 
@@ -13698,7 +13706,7 @@ index 8ace326f7..0f24d558d 100644
  fn click_at_xy_desktop_inner(
      x: f64,
      y: f64,
-@@ -100,7 +117,6 @@ fn click_at_xy_desktop_inner(
+@@ -100,7 +117,6 @@
      modifiers: &[&str],
      preserve_cursor: bool,
  ) -> anyhow::Result<()> {
@@ -13706,7 +13714,7 @@ index 8ace326f7..0f24d558d 100644
      use core_graphics::event::CGEventTapLocation;
      let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
          .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
-@@ -136,11 +152,11 @@ fn click_at_xy_desktop_inner(
+@@ -136,11 +152,11 @@
      // cursor, and AppKit hit-tests some clicks against the actual cursor
      // position, so without the warp the down/up can miss the target. Desktop
      // scope is the foreground modality, so moving the visible cursor is expected.
@@ -13723,7 +13731,7 @@ index 8ace326f7..0f24d558d 100644
      let result = super::keyboard::with_global_modifier_keys(modifiers, |flags| {
          for pair_index in 0..count.max(1) {
              let down = CGEvent::new_mouse_event(source.clone(), down_ty, point, btn)
-@@ -150,8 +166,6 @@ fn click_at_xy_desktop_inner(
+@@ -150,8 +166,6 @@
                  core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE,
                  (pair_index + 1) as i64,
              );
@@ -13732,7 +13740,7 @@ index 8ace326f7..0f24d558d 100644
              let up = CGEvent::new_mouse_event(source.clone(), up_ty, point, btn)
                  .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(up) failed"))?;
              up.set_flags(flags);
-@@ -159,9 +173,22 @@ fn click_at_xy_desktop_inner(
+@@ -159,9 +173,22 @@
                  core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE,
                  (pair_index + 1) as i64,
              );
@@ -13757,7 +13765,7 @@ index 8ace326f7..0f24d558d 100644
              }
          }
          Ok(())
-@@ -169,21 +196,15 @@ fn click_at_xy_desktop_inner(
+@@ -169,21 +196,15 @@
 
      // Let AppKit consume the up event before the pointer is restored. The
      // exact foreground guard remains active around this entire helper.
@@ -13782,7 +13790,7 @@ index 8ace326f7..0f24d558d 100644
      Ok(())
  }
 
-@@ -200,7 +221,7 @@ pub fn scroll_wheel_desktop(
+@@ -200,7 +221,7 @@
      use core_graphics::event::{CGEventTapLocation, ScrollEventUnit};
 
      move_cursor_desktop(x, y)?;
@@ -13791,7 +13799,7 @@ index 8ace326f7..0f24d558d 100644
      for _ in 0..ticks.max(1) {
          // AppKit does not reliably consume synthetic LINE-unit events posted
          // through the global HID queue. pynput's proven macOS desktop path uses
-@@ -223,8 +244,8 @@ pub fn scroll_wheel_desktop(
+@@ -223,8 +244,8 @@
              return Err(anyhow::anyhow!("CGEventCreateScrollWheelEvent2 failed"));
          }
          let event = unsafe { CGEvent::from_ptr(event_ref) };
@@ -13802,10 +13810,12 @@ index 8ace326f7..0f24d558d 100644
      }
      Ok(())
  }
-@@ -289,6 +310,35 @@ pub fn click_at_xy_with_window_local(
+@@ -287,6 +308,35 @@
+             MousePostMode::PublicOnly,
+         ),
      }
- }
-
++}
++
 +/// Background delivery through the native AppKit recipe (no Chromium primer).
 +///
 +/// Used when the caller requested synthetic delivery for a non-Chromium
@@ -13833,12 +13843,10 @@ index 8ace326f7..0f24d558d 100644
 +        modifiers,
 +        MousePostMode::Both,
 +    )
-+}
-+
+ }
+
  fn click_at_xy_inner(
-     pid: i32,
-     x: f64,
-@@ -329,7 +379,7 @@ fn click_at_xy_inner(
+@@ -329,7 +379,7 @@
              click_group_id,
              post_mode,
          );
@@ -13847,7 +13855,7 @@ index 8ace326f7..0f24d558d 100644
 
          for pair_index in 0..count {
              let click_state = (pair_index + 1) as i64;
-@@ -345,22 +395,6 @@ fn click_at_xy_inner(
+@@ -345,22 +395,6 @@
                  down.set_flags(flags);
              }
 
@@ -13870,7 +13878,7 @@ index 8ace326f7..0f24d558d 100644
              let up = CGEvent::new_mouse_event(
                  source.clone(),
                  CGEventType::LeftMouseUp,
-@@ -372,20 +406,44 @@ fn click_at_xy_inner(
+@@ -372,20 +406,44 @@
                  up.set_flags(flags);
              }
 
@@ -13927,7 +13935,7 @@ index 8ace326f7..0f24d558d 100644
              }
          }
          Ok(())
-@@ -403,10 +461,23 @@ fn click_at_xy_inner(
+@@ -403,26 +461,36 @@
  /// Returns whether the private focus-without-raise recipe succeeded. Event
  /// posting remains best-effort when the private APIs are unavailable.
  pub fn prepare_background_pixel_click(pid: i32, wid: u32) -> bool {
@@ -13953,16 +13961,45 @@ index 8ace326f7..0f24d558d 100644
      activated
  }
 
-@@ -454,7 +525,7 @@ pub fn click_at_xy_chromium(
+ /// Post the stamped event half of the Chromium-compatible left-click recipe
+ /// matching Swift's `clickViaAuthSignedPost`.
+ ///
+-/// The sequence stays PID/window-routed throughout. The caller must first run
+-/// [`prepare_background_pixel_click`] for background delivery, then re-pin any
+-/// cursor overlay before entering this event stream.
+-///  1. Stamped `mouseMoved` at target coords (f0=2, cursor-state primer).
+-///  2. Off-screen primer down/up at (-1, -1) (f0=1/2) — satisfies Chromium's
+-///     user-activation gate without hitting any DOM element.
+-///  3. Target down/up pair(s) at real coordinates (f0=3/3), clickState 1→N.
++/// The sequence stays PID/window-routed throughout, without real activation
++/// or an off-target primer click that could dismiss a transient popup.
++///  1. Stamped `mouseMoved` at target coords (f0=2).
++///  2. Target down/up pair(s) at real coordinates (f0=3/3), clickState 1→N.
+ ///
+ /// All events carry:
+-///  - f0  = gesture phase marker (move=2, primerDown=1, primerUp=2, target=3)
++///  - f0  = gesture phase marker (move=2, target=3)
+ ///  - f1  = mouseEventClickState (1 for single, 1→2 for double)
+ ///  - f3  = 0  (left button)
+ ///  - f7  = 3  (NSEventSubtypeTouch)
+@@ -450,14 +518,12 @@
+     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+         .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+     let target = CGPoint::new(screen_x, screen_y);
+-    let off_screen = CGPoint::new(-1.0, -1.0);
      let win_local = (win_local_x, win_local_y);
-     let off_local = (-1.0_f64, -1.0_f64);
+-    let off_local = (-1.0_f64, -1.0_f64);
      let flags = parse_modifier_flags(modifiers);
 -    let click_pairs = count.clamp(1, 2);
 +    let click_pairs = count.clamp(1, 3);
      let window_id = wid as i64;
 
-     // All 5 events share the same click-group ID so WindowServer / Chromium
-@@ -488,12 +559,7 @@ pub fn click_at_xy_chromium(
+-    // All 5 events share the same click-group ID so WindowServer / Chromium
++    // All events share the same click-group ID so WindowServer / Chromium
+     // treat the sequence as one gesture (Swift: field 58).
+     let click_group_id = SystemTime::now()
+         .duration_since(UNIX_EPOCH)
+@@ -488,12 +554,7 @@
          }
      };
 
@@ -13976,53 +14013,47 @@ index 8ace326f7..0f24d558d 100644
 
      // Step 1: mouseMoved at target (phase=2, clickState=0).
      let move_event = CGEvent::new_mouse_event(
-@@ -504,8 +570,8 @@ pub fn click_at_xy_chromium(
+@@ -504,33 +565,12 @@
      )
      .map_err(|_| anyhow::anyhow!("mouseMoved event creation failed"))?;
      stamp(&move_event, win_local, 0, 2);
 -    post(&move_event);
 -    std::thread::sleep(std::time::Duration::from_millis(15));
-+    super::cancellation::gate().post(|| post(&move_event))?;
-+    super::cancellation::gate().pause(std::time::Duration::from_millis(15))?;
-
-     // Step 2: off-screen primer click — opens Chromium user-activation gate
-     // at an off-screen coordinate that can't hit any DOM element.
-@@ -517,9 +583,6 @@ pub fn click_at_xy_chromium(
-     )
-     .map_err(|_| anyhow::anyhow!("primer down event creation failed"))?;
-     stamp(&primer_down, off_local, 1, 1);
+-
+-    // Step 2: off-screen primer click — opens Chromium user-activation gate
+-    // at an off-screen coordinate that can't hit any DOM element.
+-    let primer_down = CGEvent::new_mouse_event(
+-        source.clone(),
+-        CGEventType::LeftMouseDown,
+-        off_screen,
+-        CGMouseButton::Left,
+-    )
+-    .map_err(|_| anyhow::anyhow!("primer down event creation failed"))?;
+-    stamp(&primer_down, off_local, 1, 1);
 -    post(&primer_down);
 -    std::thread::sleep(std::time::Duration::from_millis(1));
 -
-     let primer_up = CGEvent::new_mouse_event(
-         source.clone(),
-         CGEventType::LeftMouseUp,
-@@ -528,9 +591,22 @@ pub fn click_at_xy_chromium(
-     )
-     .map_err(|_| anyhow::anyhow!("primer up event creation failed"))?;
-     stamp(&primer_up, off_local, 1, 2);
+-    let primer_up = CGEvent::new_mouse_event(
+-        source.clone(),
+-        CGEventType::LeftMouseUp,
+-        off_screen,
+-        CGMouseButton::Left,
+-    )
+-    .map_err(|_| anyhow::anyhow!("primer up event creation failed"))?;
+-    stamp(&primer_up, off_local, 1, 2);
 -    post(&primer_up);
-+
-+    let held = super::cancellation::gate().press(
-+        || {
-+            post(&primer_down);
-+        },
-+        || {
-+            post(&primer_up);
-+        },
-+    )?;
-+
-+    super::cancellation::gate().pause(std::time::Duration::from_millis(1))?;
-+
-+    drop(held);
-+
-     // ≥1 frame so Chromium sees primer + target as separate gestures, not run-on.
+-    // ≥1 frame so Chromium sees primer + target as separate gestures, not run-on.
 -    std::thread::sleep(std::time::Duration::from_millis(100));
-+    super::cancellation::gate().pause(std::time::Duration::from_millis(100))?;
++    super::cancellation::gate().post(|| post(&move_event))?;
++    super::cancellation::gate().pause(std::time::Duration::from_millis(15))?;
++
++    // Do not send an off-target down/up to prime activation: it dismisses
++    // omnibox suggestions and native popups before the requested click lands.
++    // Only the caller's requested target receives a button event.
 
      // Step 3: target click pair(s) with clickState stepped 1→N for double-click
      // coalescing (Chromium renderer coalesces pairs into dblclick when state=1→2).
-@@ -545,9 +621,6 @@ pub fn click_at_xy_chromium(
+@@ -545,9 +585,6 @@
          )
          .map_err(|_| anyhow::anyhow!("target down event creation failed"))?;
          stamp(&down, win_local, click_state, 3);
@@ -14032,7 +14063,7 @@ index 8ace326f7..0f24d558d 100644
          let up = CGEvent::new_mouse_event(
              source.clone(),
              CGEventType::LeftMouseUp,
-@@ -556,12 +629,24 @@ pub fn click_at_xy_chromium(
+@@ -556,12 +593,24 @@
          )
          .map_err(|_| anyhow::anyhow!("target up event creation failed"))?;
          stamp(&up, win_local, click_state, 3);
@@ -14059,7 +14090,7 @@ index 8ace326f7..0f24d558d 100644
          }
      }
 
-@@ -692,18 +777,50 @@ where
+@@ -692,18 +741,50 @@
      if flags != CGEventFlags::CGEventFlagNull {
          down.set_flags(flags);
      }
@@ -14121,7 +14152,7 @@ index 8ace326f7..0f24d558d 100644
 
      // Interpolated drag steps.
      for i in 1..=steps {
-@@ -719,35 +836,34 @@ where
+@@ -719,35 +800,34 @@
          if flags != CGEventFlags::CGEventFlagNull {
              drag.set_flags(flags);
          }
@@ -14173,7 +14204,7 @@ index 8ace326f7..0f24d558d 100644
 
      Ok(())
  }
-@@ -803,7 +919,6 @@ pub fn drag_at_xy_foreground_observed<F>(
+@@ -803,7 +883,6 @@
  where
      F: FnMut(f64, f64),
  {
@@ -14181,7 +14212,7 @@ index 8ace326f7..0f24d558d 100644
      use core_graphics::event::CGEventTapLocation;
 
      let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-@@ -841,10 +956,9 @@ where
+@@ -841,10 +920,9 @@
      // Keep WindowServer's hardware cursor and event stream coupled. AppKit
      // hit-tests some pointer-capture surfaces against the actual cursor even
      // when the HID event carries an explicit location.
@@ -14194,19 +14225,20 @@ index 8ace326f7..0f24d558d 100644
 
      // Prime the renderer's tracking state with a genuine HID mouse move.
      if let Ok(move_event) = CGEvent::new_mouse_event(
-@@ -853,9 +967,9 @@ where
+@@ -853,9 +931,9 @@
          CGPoint::new(from_x, from_y),
          cg_button,
      ) {
 -        post(&move_event);
-+        super::cancellation::gate().post(|| post(&move_event))?;
-     }
+-    }
 -    std::thread::sleep(std::time::Duration::from_millis(30));
++        super::cancellation::gate().post(|| post(&move_event))?;
++    }
 +    super::cancellation::gate().pause(std::time::Duration::from_millis(30))?;
 
      let down = CGEvent::new_mouse_event(
          source.clone(),
-@@ -868,8 +982,24 @@ where
+@@ -868,8 +946,24 @@
          down.set_flags(flags);
      }
      down.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE, 1);
@@ -14233,7 +14265,7 @@ index 8ace326f7..0f24d558d 100644
 
      for i in 1..=steps {
          let t = i as f64 / steps as f64;
-@@ -882,24 +1012,27 @@ where
+@@ -882,24 +976,27 @@
              event.set_flags(flags);
          }
          event.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE, 1);
@@ -14250,10 +14282,9 @@ index 8ace326f7..0f24d558d 100644
          observe(x, y);
          if step_delay_ms > 0 {
 -            std::thread::sleep(std::time::Duration::from_millis(step_delay_ms));
-+            super::cancellation::gate().pause(std::time::Duration::from_millis(step_delay_ms))?;
-         }
-     }
-
+-        }
+-    }
+-
 -    let up = CGEvent::new_mouse_event(source, up_type, CGPoint::new(to_x, to_y), cg_button)
 -        .map_err(|_| anyhow::anyhow!("foreground drag mouseUp failed"))?;
 -    if flags != CGEventFlags::CGEventFlagNull {
@@ -14261,6 +14292,10 @@ index 8ace326f7..0f24d558d 100644
 -    }
 -    up.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE, 1);
 -    post(&up);
++            super::cancellation::gate().pause(std::time::Duration::from_millis(step_delay_ms))?;
++        }
++    }
++
 +    drop(held);
 +
      // The foreground wrapper restores the previous app immediately after this
@@ -14271,7 +14306,7 @@ index 8ace326f7..0f24d558d 100644
      Ok(())
  }
 
-@@ -955,9 +1088,6 @@ fn middle_click_at_xy_inner(
+@@ -955,9 +1052,6 @@
      if flags != CGEventFlags::CGEventFlagNull {
          down.set_flags(flags);
      }
@@ -14281,7 +14316,7 @@ index 8ace326f7..0f24d558d 100644
      let up = CGEvent::new_mouse_event(
          source,
          CGEventType::OtherMouseUp,
-@@ -968,7 +1098,19 @@ fn middle_click_at_xy_inner(
+@@ -968,7 +1062,19 @@
      if flags != CGEventFlags::CGEventFlagNull {
          up.set_flags(flags);
      }
@@ -14302,7 +14337,7 @@ index 8ace326f7..0f24d558d 100644
 
      Ok(())
  }
-@@ -1032,7 +1174,7 @@ fn right_click_at_xy_inner(
+@@ -1032,7 +1138,7 @@
          click_group_id,
          MousePostMode::Both,
      );
@@ -14311,7 +14346,7 @@ index 8ace326f7..0f24d558d 100644
 
      let down = CGEvent::new_mouse_event(
          source.clone(),
-@@ -1046,9 +1188,6 @@ fn right_click_at_xy_inner(
+@@ -1046,9 +1152,6 @@
      }
      // button_number = 1 (right). Stamping 0 here routes the event as a left
      // button-number on the receiving side even though the type is rightMouseDown.
@@ -14321,7 +14356,7 @@ index 8ace326f7..0f24d558d 100644
      let up = CGEvent::new_mouse_event(
          source,
          CGEventType::RightMouseUp,
-@@ -1059,19 +1198,28 @@ fn right_click_at_xy_inner(
+@@ -1059,19 +1162,28 @@
      if flags != CGEventFlags::CGEventFlagNull {
          up.set_flags(flags);
      }
@@ -14357,7 +14392,7 @@ index 8ace326f7..0f24d558d 100644
  ///
  /// Field stamps applied (always):
  /// - f40 = `pid`  (Chromium's synthetic-event filter)
-@@ -1152,15 +1300,24 @@ fn post_mouse_event_with_mode(
+@@ -1152,12 +1264,21 @@
      crate::input::skylight::set_integer_field(event_ptr, 40, pid as i64);
 
      match mode {
@@ -14368,9 +14403,9 @@ index 8ace326f7..0f24d558d 100644
 -        }
 +        MousePostMode::Both => post_mouse_once(pid, event),
          MousePostMode::PublicOnly => event.post_to_pid(pid as libc::pid_t),
-     }
- }
-
++    }
++}
++
 +/// Submit one synthetic event to the target process.
 +///
 +/// Posting through both SkyLight and CoreGraphics delivers duplicate down/up
@@ -14381,13 +14416,10 @@ index 8ace326f7..0f24d558d 100644
 +    let event_ptr = event.as_ptr() as *mut std::ffi::c_void;
 +    if !crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false) {
 +        event.post_to_pid(pid as libc::pid_t);
-+    }
-+}
-+
- /// Post a stamped `mouseMoved` to `pid` at `point` before a down/up pair.
- ///
- /// AppKit hit-tests a button/`NSView` against the cursor-tracking state the
-@@ -1187,7 +1344,9 @@ fn post_mouse_moved_primer(
+     }
+ }
+
+@@ -1187,7 +1308,9 @@
          point,
          CGMouseButton::Left,
      ) {
@@ -14398,7 +14430,7 @@ index 8ace326f7..0f24d558d 100644
      }
  }
 
-@@ -1232,6 +1391,8 @@ pub fn scroll_wheel_at_xy(
+@@ -1232,6 +1355,8 @@
      delta_y_per_tick: i32,
      delta_x_per_tick: i32,
      ticks: usize,
@@ -14407,7 +14439,7 @@ index 8ace326f7..0f24d558d 100644
  ) -> anyhow::Result<()> {
      use core_graphics::event::ScrollEventUnit;
 
-@@ -1255,20 +1416,35 @@ pub fn scroll_wheel_at_xy(
+@@ -1255,20 +1380,35 @@
          ),
          MousePostMode::Both,
      );
@@ -14451,20 +14483,21 @@ index 8ace326f7..0f24d558d 100644
 
          let event_ptr = event.as_ptr() as *mut std::ffi::c_void;
 
-@@ -1294,10 +1470,9 @@ pub fn scroll_wheel_at_xy(
+@@ -1294,10 +1434,9 @@
 
          // Belt+suspenders post: SkyLight reaches backgrounded Chromium/Catalyst;
          // the public path lands on AppKit/WKWebView. Mouse-class → no auth envelope.
 -        crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false);
 -        event.post_to_pid(pid as libc::pid_t);
-+        super::cancellation::gate().post(|| post_mouse_once(pid, &event))?;
-
+-
 -        std::thread::sleep(std::time::Duration::from_millis(30));
++        super::cancellation::gate().post(|| post_mouse_once(pid, &event))?;
++
 +        super::cancellation::gate().pause(std::time::Duration::from_millis(30))?;
      }
      Ok(())
  }
-@@ -1312,7 +1487,7 @@ extern "C" {
+@@ -1312,7 +1451,7 @@
      fn CGEventSetLocation(event: *mut std::ffi::c_void, x: f64, y: f64);
  }
 
@@ -14473,7 +14506,7 @@ index 8ace326f7..0f24d558d 100644
      let mut flags = CGEventFlags::CGEventFlagNull;
      for m in modifiers {
          match m.to_lowercase().as_str() {
-@@ -1325,3 +1500,7 @@ fn parse_modifier_flags(modifiers: &[&str]) -> CGEventFlags {
+@@ -1325,3 +1464,7 @@
      }
      flags
  }
@@ -15660,10 +15693,9 @@ index 000000000..81e4f0ff8
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs
-index af99862ce..e7e3a2284 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs
-@@ -26,11 +26,12 @@ use std::sync::Arc;
+@@ -26,11 +26,12 @@
  use crate::apps;
  use crate::ax::bindings::{
      copy_action_names, copy_children, copy_string_attr, element_at_screen_position,
@@ -15678,7 +15710,32 @@ index af99862ce..e7e3a2284 100644
 
  use super::ToolState;
 
-@@ -98,27 +99,17 @@ fn pixel_activation_policy(
+@@ -51,9 +52,6 @@
+ enum PixelActivationPolicy {
+     /// Standard background delivery: suppress activation of the target.
+     SuppressTarget,
+-    /// Left-click with a concrete window: intentionally make the target
+-    /// AppKit-active without raising it, while suppressing every other app.
+-    AllowTargetWithoutRaise,
+     /// Explicit foreground rung owns its brief activation and restoration.
+     ForegroundAssist,
+ }
+@@ -85,40 +83,28 @@
+ const SELECTION_READBACK_STABILITY: std::time::Duration = std::time::Duration::from_millis(250);
+
+ fn pixel_activation_policy(
+-    button: &str,
++    _button: &str,
+     effective_foreground: bool,
+-    has_window: bool,
++    _has_window: bool,
+ ) -> PixelActivationPolicy {
+     if effective_foreground {
+         PixelActivationPolicy::ForegroundAssist
+-    } else if button == "left" && has_window {
+-        PixelActivationPolicy::AllowTargetWithoutRaise
+     } else {
+         PixelActivationPolicy::SuppressTarget
      }
  }
 
@@ -15717,7 +15774,7 @@ index af99862ce..e7e3a2284 100644
  }
 
  fn def() -> &'static ToolDef {
-@@ -159,6 +150,9 @@ fn def() -> &'static ToolDef {
+@@ -159,6 +145,9 @@
              // cua_driver_core::tool_schema.)
              "required": [],
              "properties": {
@@ -15727,7 +15784,7 @@ index af99862ce..e7e3a2284 100644
                  "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
                  "pid":           { "type": "integer", "description": "Target process ID." },
                  "window_id":     { "type": "integer", "description": "Target window ID. Required for element_index. Optional when element_token is supplied (the token carries it)." },
-@@ -398,6 +392,10 @@ impl Tool for ClickTool {
+@@ -398,6 +387,10 @@
              button_str
          };
          let count = args.u64_or("count", 1) as usize;
@@ -15738,7 +15795,20 @@ index af99862ce..e7e3a2284 100644
          let from_zoom = args.bool_or("from_zoom", false);
          let debug_image_out = args.opt_str("debug_image_out");
          let modifiers: Vec<String> = args.str_array("modifier");
-@@ -538,11 +536,9 @@ impl Tool for ClickTool {
+@@ -447,6 +440,12 @@
+             } else {
+                 None
+             };
++
++            if !delivery_mode.is_foreground() && button_str == "left" && action == "press"
++                && unsafe { copy_string_attr(element_ptr as AXUIElementRef, "AXRole") }.as_deref() == Some("AXPopUpButton")
++            {
++                return background_popup_refusal();
++            }
+
+             // Surface 5: button=right on the AX path → AXShowMenu (the same surface
+             // the dedicated `right_click` tool dispatches). Threads through the
+@@ -538,11 +537,9 @@
                  self.state.cursor_registry.note_press(&cursor_key, cx, cy);
              }
 
@@ -15753,7 +15823,7 @@ index af99862ce..e7e3a2284 100644
              let selection_candidate = if effective_action == "press" {
                  let selection_guard = element_guard.clone();
                  tokio::task::spawn_blocking(move || {
-@@ -700,15 +696,9 @@ impl Tool for ClickTool {
+@@ -700,15 +697,9 @@
                          tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                      }
                      msg.push_str(&changes.result_suffix());
@@ -15772,7 +15842,7 @@ index af99862ce..e7e3a2284 100644
                      let mut structured = serde_json::json!({
                          "path": if selection_via_pixel {
                              if fronted { "cgevent_fg" } else { "cgevent" }
-@@ -717,11 +707,15 @@ impl Tool for ClickTool {
+@@ -717,11 +708,15 @@
                          } else {
                              "ax"
                          },
@@ -15790,7 +15860,7 @@ index af99862ce..e7e3a2284 100644
                          } else {
                              "unverifiable"
                          },
-@@ -732,18 +726,12 @@ impl Tool for ClickTool {
+@@ -732,18 +727,12 @@
                          ]);
                      }
                      if suspected_noop {
@@ -15812,7 +15882,7 @@ index af99862ce..e7e3a2284 100644
              }
          } else if let (Some(mut cx), Some(mut cy)) = (x, y) {
              // ── Pixel path ─────────────────────────────────────────────────
-@@ -805,7 +793,12 @@ impl Tool for ClickTool {
+@@ -805,7 +794,12 @@
                          ))
                      }
                  }
@@ -15826,7 +15896,7 @@ index af99862ce..e7e3a2284 100644
                  // Coordinates are in the downscaled image space; scale back to native pixels.
                  cx *= ratio;
                  cy *= ratio;
-@@ -822,7 +815,7 @@ impl Tool for ClickTool {
+@@ -822,7 +816,7 @@
              // win_local_x/y: window-local logical-pixel coords needed for
              // CGEventSetWindowLocation in the Chromium recipe.
              let (screen_x, screen_y, win_local_x, win_local_y) = if let Some(wid) = window_id {
@@ -15835,7 +15905,7 @@ index af99862ce..e7e3a2284 100644
                      Ok(frame) => {
                          let (sx, sy, lx, ly) = frame.to_screen(cx, cy);
                          // A window-local point outside the live frame would
-@@ -886,6 +879,7 @@ impl Tool for ClickTool {
+@@ -886,6 +880,7 @@
              // targeting (PX) orthogonal to delivery (AX) and avoids making a
              // Chromium/AppKit window key merely to satisfy first-mouse rules.
              if !delivery_mode.is_foreground()
@@ -15843,7 +15913,7 @@ index af99862ce..e7e3a2284 100644
                  && window_id.is_some()
                  && button_str == "left"
                  && count == 1
-@@ -893,32 +887,74 @@ impl Tool for ClickTool {
+@@ -893,32 +888,81 @@
              {
                  let focus_only = action == "focus";
                  let hit_test_wid = window_id.expect("guarded by window_id.is_some() above");
@@ -15889,6 +15959,13 @@ index af99862ce..e7e3a2284 100644
 +                            {
 +                                CFRelease(element as _);
 +                                return Ok(false);
++                            }
++                            if !focus_only && copy_string_attr(element, "AXRole").as_deref() == Some("AXPopUpButton") {
++                                CFRelease(element as _);
++                                return Err(crate::input::ax_actions::AxActionFailure::refused_with_code(
++                                    "background_popup_unavailable",
++                                    "Native popup menus require visible interaction; use set_value on the exact select control or explicitly authorize foreground use.",
++                                ).into());
 +                            }
 +                            if !focus_only
 +                                && !copy_action_names(element)
@@ -15941,7 +16018,7 @@ index af99862ce..e7e3a2284 100644
                          let label = if focus_only { "focused" } else { "pressed" };
                          return ToolResult::text(format!(
                              "✅ PX hit-test {label} the background element via AX."
-@@ -926,7 +962,13 @@ impl Tool for ClickTool {
+@@ -926,7 +970,13 @@
                          .with_structured(serde_json::json!({
                              "path": "ax",
                              "verified": false,
@@ -15956,7 +16033,7 @@ index af99862ce..e7e3a2284 100644
                          }));
                      }
                      Ok(Ok(false)) if focus_only => {
-@@ -937,13 +979,9 @@ impl Tool for ClickTool {
+@@ -937,13 +987,9 @@
                              "code": "background_unavailable"
                          }));
                      }
@@ -15973,7 +16050,15 @@ index af99862ce..e7e3a2284 100644
                  }
              }
 
-@@ -989,48 +1027,9 @@ impl Tool for ClickTool {
+@@ -981,56 +1027,14 @@
+                 PixelActivationPolicy::SuppressTarget => {
+                     WindowChangeDetector::snapshot(prior_front)
+                 }
+-                PixelActivationPolicy::AllowTargetWithoutRaise => {
+-                    WindowChangeDetector::snapshot_allowing_activation(prior_front, pid)
+-                }
+                 PixelActivationPolicy::ForegroundAssist => {
+                     WindowChangeDetector::snapshot_without_suppression(prior_front)
                  }
              };
 
@@ -16024,31 +16109,20 @@ index af99862ce..e7e3a2284 100644
              // Surface 5: route to the right/middle CGEvent primitives when
              // button != left. Left-button path stays on the existing Chromium-
              // routed `click_at_xy_with_window_local` for back-compat.
-@@ -1045,6 +1044,23 @@ impl Tool for ClickTool {
+@@ -1045,6 +1049,12 @@
                  "click.pixel",
                  || async move {
                      tokio::task::spawn_blocking(move || {
-+                        let mut restore = if activation_policy == PixelActivationPolicy::AllowTargetWithoutRaise {
-+                            Some(crate::input::skylight::BackgroundFocusRestore::capture(
-+                                pid, window_id.expect("activation policy requires window_id"),
-+                            ).ok_or("focus_restore_unavailable")?)
-+                        } else { None };
-+                        let focus_without_raise = if let Some(restore) = restore.as_mut() {
-+                            if restore.needs_activation() {
-+                                restore.arm();
-+                                let wid = window_id.expect("activation policy requires window_id");
-+                                let activated = crate::input::mouse::prepare_background_pixel_click(pid, wid);
-+                                crate::cursor::overlay::send_command(action_cursor_key.clone(),
-+                                    cursor_overlay::OverlayCommand::PinAbove(wid as u64));
-+                                activated
-+                            } else { false }
-+                        } else { false };
++                        // Background input never takes the user's key window. A
++                        // dropped PID-routed event remains uncertain; it is not
++                        // permission to activate the target or replay the click.
++                        let focus_without_raise = false;
 +                        crate::cursor::overlay::send_command(action_cursor_key,
 +                            cursor_overlay::OverlayCommand::ClickPulse { x: screen_x, y: screen_y });
                          let has_modifiers = !mods_owned.is_empty();
                          let do_click = move || -> anyhow::Result<()> {
                              let m: Vec<&str> = mods_owned.iter().map(String::as_str).collect();
-@@ -1081,11 +1097,25 @@ impl Tool for ClickTool {
+@@ -1081,11 +1091,25 @@
                                      // and Chromium-specific fields (f40, f51, f58, f91, f92) onto events
                                      // for better backgrounded-target delivery.
                                      if let Some(wid) = window_id {
@@ -16076,7 +16150,7 @@ index af99862ce..e7e3a2284 100644
                                          );
                                      }
                                      crate::input::mouse::click_at_xy(pid, screen_x, screen_y, count, &m)
-@@ -1095,7 +1125,7 @@ impl Tool for ClickTool {
+@@ -1095,7 +1119,7 @@
                          // Foreground rung: brief front → click → restore.
                          // Returns whether the window was ACTUALLY fronted, so the
                          // reported `path` honestly reflects the rung that ran.
@@ -16085,7 +16159,7 @@ index af99862ce..e7e3a2284 100644
                              (true, Some(wid), true) => {
                                  crate::input::skylight::with_foreground_hid_activation(
                                      pid as libc::pid_t,
-@@ -1112,36 +1142,32 @@ impl Tool for ClickTool {
+@@ -1112,36 +1136,23 @@
                                  )
                              }
                              _ => do_click().map(|_| false),
@@ -16093,18 +16167,9 @@ index af99862ce..e7e3a2284 100644
 +                        let mut diagnostics = serde_json::json!({
 +                            "delivery_path": "pixel",
 +                            "actuator": "pixel_click",
-+                            "focus_mutation": if fg { "foreground" } else if restore.as_ref().is_some_and(|r| r.needs_activation()) { "without_raise" } else { "none" },
++                            "focus_mutation": if fg { "foreground" } else { "none" },
 +                            "restore_status": if fg { "unobservable" } else { "not-needed" }
 +                        });
-+                        if let Some(restore) = restore.as_mut() {
-+                            diagnostics["prior_pid"] = serde_json::json!(restore.prior_pid);
-+                            diagnostics["prior_window_id"] = serde_json::json!(restore.prior_window_id);
-+                            let status = restore.restore();
-+                            diagnostics["restore_status"] = serde_json::json!(status);
-+                            if matches!(status, "failed" | "unobservable") {
-+                                diagnostics["error_code"] = serde_json::json!("focus_restore_failed");
-+                            }
-+                        }
 +                        if action.is_err() && diagnostics.get("error_code").is_none() {
 +                            diagnostics["error_code"] = serde_json::json!("pixel_dispatch_failed");
                          }
@@ -16141,7 +16206,7 @@ index af99862ce..e7e3a2284 100644
              let changes = super::finish_window_observation(snapshot, &args).await;
 
              let button_label = match button_str.as_str() {
-@@ -1149,31 +1175,55 @@ impl Tool for ClickTool {
+@@ -1149,31 +1160,55 @@
                  "middle" => "middle-click",
                  _ => "click",
              };
@@ -16191,21 +16256,22 @@ index af99862ce..e7e3a2284 100644
 +                        "Posted {button_label} to pid {pid} ({mode_label}; not driver-verified — confirm via screenshot).{}",
                          changes.result_suffix()
 -                    ))
--                    .with_structured(serde_json::json!({
++                    )).with_structured(serde_json::json!({
++                        "path": path, "verified": false, "effect": "unverifiable",
++                        "focus_without_raise": outcome.focus_without_raise
++                    }))
++                }
++                Err(_) => ToolResult::error("Pixel dispatch failed; its effect is unknown. Observe fresh state; do not replay.")
+                     .with_structured(serde_json::json!({
 -                        "path": path,
 -                        "verified": false,
 -                        "effect": "unverifiable",
 -                        "focus_without_raise": focus_without_raise
-+                    )).with_structured(serde_json::json!({
-+                        "path": path, "verified": false, "effect": "unverifiable",
-+                        "focus_without_raise": outcome.focus_without_raise
-                     }))
-                 }
+-                    }))
+-                }
 -                Ok(Err(e)) => ToolResult::error(format!("{button_label} failed: {e}")),
 -                Err(e) => ToolResult::error(format!("Task error: {e}")),
 -            }
-+                Err(_) => ToolResult::error("Pixel dispatch failed; its effect is unknown. Observe fresh state; do not replay.")
-+                    .with_structured(serde_json::json!({
 +                        "code": "cua_action_failed", "verified": false, "effect": "unverifiable"
 +                    })),
 +            };
@@ -16213,10 +16279,17 @@ index af99862ce..e7e3a2284 100644
          } else {
              ToolResult::error(
                  "Provide either (element_index + window_id) or (x + y). pid is always required.",
-@@ -1184,14 +1234,25 @@ impl Tool for ClickTool {
+@@ -1182,16 +1217,32 @@
+     }
+ }
 
++fn background_popup_refusal() -> ToolResult {
++    ToolResult::error("Native popup menus require visible interaction; use set_value on the exact select control or explicitly authorize foreground use.")
++        .with_structured(serde_json::json!({"code": "background_popup_unavailable", "effect": "refused", "verified": false}))
++}
++
  // ── AX click implementation (blocking) ───────────────────────────────────────
-
++
 +fn ax_click_failure(error: anyhow::Error) -> ToolResult {
 +    crate::input::ax_actions::action_failure_result(error, "AX action failed")
 +}
@@ -16230,7 +16303,7 @@ index af99862ce..e7e3a2284 100644
 +        error
 +    })
 +}
-+
+
  /// Returns `(summary_text, needs_webkit_delay, suspected_noop,
  /// selection_verified, selection_via_pixel)`.
  ///
@@ -16244,7 +16317,7 @@ index af99862ce..e7e3a2284 100644
  fn perform_ax_click(
      element_ptr: usize,
      idx: usize,
-@@ -1210,7 +1271,8 @@ fn perform_ax_click(
+@@ -1210,7 +1261,8 @@
      // enable menu items that were disabled in the cached snapshot, while a
      // background transition can disable them after that snapshot. macOS may
      // otherwise return success for a disabled action that did nothing.
@@ -16254,7 +16327,7 @@ index af99862ce..e7e3a2284 100644
 
      // Capture advertised actions BEFORE dispatching so we can detect silent no-ops
      // (AX returns success even when the element doesn't advertise the action).
-@@ -1225,19 +1287,35 @@ fn perform_ax_click(
+@@ -1225,19 +1277,35 @@
      // or forcing the caller onto a less stable pixel coordinate.
      if ax_action == "AXPress" && !advertised.iter().any(|action| action == ax_action) {
          if modifiers.is_empty() {
@@ -16303,7 +16376,7 @@ index af99862ce..e7e3a2284 100644
              }
          }
 
-@@ -1247,7 +1325,10 @@ fn perform_ax_click(
+@@ -1247,7 +1315,10 @@
          ) {
              let selected_role = selection.role().to_owned();
              let Some((before, _)) = selection.observe() else {
@@ -16315,7 +16388,7 @@ index af99862ce..e7e3a2284 100644
              };
              let modifier_refs: Vec<&str> = modifiers.iter().map(String::as_str).collect();
              if foreground && !modifier_refs.is_empty() {
-@@ -1324,41 +1405,21 @@ fn perform_ax_click(
+@@ -1324,41 +1395,21 @@
              if modifiers.is_empty() {
                  anyhow::bail!(
                      "coordinate click did not produce a stable AXSelected transition; \
@@ -16362,7 +16435,7 @@ index af99862ce..e7e3a2284 100644
 
      let mut summary = format!("✅ Performed {ax_action} on [{idx}] {role} \"{title}\".");
 
-@@ -1412,7 +1473,7 @@ fn perform_ax_click(
+@@ -1412,7 +1463,7 @@
          };
          summary.push_str(&format!(
              "\n⚠️ Element does not advertise {ax_action} (actions: {adv_list}). \
@@ -16371,7 +16444,7 @@ index af99862ce..e7e3a2284 100644
          ));
      }
 
-@@ -1446,7 +1507,48 @@ fn perform_ax_click(
+@@ -1446,7 +1497,48 @@
 
  #[cfg(test)]
  mod selection_fallback_tests {
@@ -16421,7 +16494,20 @@ index af99862ce..e7e3a2284 100644
 
      #[test]
      fn plain_click_requires_selected_readback() {
-@@ -1582,42 +1684,4 @@ mod tests {
+@@ -1560,10 +1652,10 @@
+     /// without raising it. Other background buttons retain strict suppression,
+     /// and the explicit foreground rung owns its separate activation.
+     #[test]
+-    fn raw_background_left_click_restores_focus_without_raise_policy() {
++    fn focus_restore_policy_background_never_activates() {
+         assert_eq!(
+             pixel_activation_policy("left", false, true),
+-            PixelActivationPolicy::AllowTargetWithoutRaise
++            PixelActivationPolicy::SuppressTarget
+         );
+         assert_eq!(
+             pixel_activation_policy("left", false, false),
+@@ -1582,42 +1674,4 @@
              PixelActivationPolicy::ForegroundAssist
          );
      }
@@ -17321,10 +17407,28 @@ index 5b2ce9ed5..1661cbabe 100644
          state.clone(),
      )));
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
-index 393f17c3a..00c21f9c2 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
-@@ -194,7 +194,9 @@ fn def() -> &'static ToolDef {
+@@ -54,6 +54,18 @@
+         Ok(false) => PressKeyDeliveryOutcome::Unverifiable,
+         Err(error) => PressKeyDeliveryOutcome::Failed(error),
+     }
++}
++
++fn semantic_confirm_key(key: &str, modifiers: &[String]) -> bool {
++    modifiers.is_empty() && matches!(key.to_ascii_lowercase().as_str(), "return" | "enter")
++}
++
++#[test]
++fn focus_restore_policy_semantic_enter_does_not_translate_shortcuts() {
++    assert!(semantic_confirm_key("Return", &[]));
++    assert!(semantic_confirm_key("enter", &[]));
++    assert!(!semantic_confirm_key("escape", &[]));
++    assert!(!semantic_confirm_key("return", &["cmd".to_owned()]));
+ }
+
+ fn validate_post_target(pid: i32) -> anyhow::Result<()> {
+@@ -194,7 +206,9 @@
              changes on the same control. Otherwise a successfully attempted post remains \
              effect:\"unverifiable\" without implying delivery failure or recommending foreground. \
              Key names: return, tab, escape, up/down/left/right, space, delete, \
@@ -17335,6 +17439,54 @@ index 393f17c3a..00c21f9c2 100644
              Modifiers array: cmd, shift, option/alt, ctrl, fn.".into(),
          input_schema: serde_json::json!({
              "type": "object",
+@@ -323,6 +337,47 @@
+         }
+
+         let pre_focus_ptr: Option<usize> = pre_focus_guard.as_ref().map(|g| g.as_ptr());
++
++        // Enter can use an advertised semantic confirmation on the exact
++        // focused element. Unlike PID-scoped keys this is safe with sibling
++        // windows. Never guess a default button, synthesize a DOM submission,
++        // or send a key after an uncertain AX action.
++        if !fg && semantic_confirm_key(&key, &modifiers) && px.is_none() && py.is_none() {
++            if let Some(wid) = window_id {
++                let explicit = pre_focus_guard.clone();
++                let candidate = tokio::task::spawn_blocking(move || {
++                    let element = explicit.or_else(|| unsafe {
++                        let raw = crate::ax::exact_target::focused_element_in_window(pid, wid)?;
++                        let retained = crate::ax::cache::RetainedElement::retain(raw as usize);
++                        CFRelease(raw as _);
++                        Some(retained)
++                    })?;
++                    let actions = unsafe { crate::ax::bindings::copy_action_names(element.as_ptr() as AXUIElementRef) };
++                    actions.iter().any(|action| action == "AXConfirm").then_some(element)
++                }).await;
++                if let Ok(Some(element)) = candidate {
++                    let _lease = match super::gate_background_window_action(
++                        pid, wid, Some(element.as_ptr()),
++                        cua_driver_core::background_input::BackgroundAction::AxSemantic,
++                    ).await {
++                        Ok(lease) => lease,
++                        Err(refusal) => return refusal,
++                    };
++                    let result = focus_guard::with_focus_suppressed_now(Some(pid), "press_key.confirm", || async move {
++                        tokio::task::spawn_blocking(move || {
++                            crate::input::ax_actions::perform_ax_action(element.as_ptr(), "AXConfirm")
++                        }).await
++                    }).await;
++                    return match result {
++                        Ok(Ok(())) => ToolResult::text("Submitted AXConfirm to the exact focused control; inspect the returned state to verify submission.")
++                            .with_structured(serde_json::json!({"path":"ax", "effect":"unverifiable", "verified":false,
++                                "diagnostics":{"delivery_path":"semantic", "actuator":"ax_action", "focus_mutation":"none", "restore_status":"not-needed"}})),
++                        Ok(Err(error)) => crate::input::ax_actions::action_failure_result(error, "Semantic Enter failed"),
++                        Err(error) => crate::input::ax_actions::action_failure_result(error.into(), "Semantic Enter task failed"),
++                    };
++                }
++            }
++        }
+
+         // ── Exact-target background gate (macOS background input v1) ──
+         // A window-addressed background key is process-scoped transport: it
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs
 index 19d54df23..37008fb2f 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs
@@ -21332,3 +21484,57 @@ index 000000000..3a5fcc69f
 +        );
 +    }
 +}
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/window_change_detector.rs b/libs/cua-driver/rust/crates/platform-macos/src/window_change_detector.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/window_change_detector.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/window_change_detector.rs
+@@ -179,7 +179,10 @@
+     /// Safe to call from any thread — `CGWindowListCopyWindowInfo` is
+     /// documented as thread-safe.
+     pub fn snapshot(prior_front: Option<i32>) -> Snapshot {
+-        Self::capture(prior_front, true, None)
++        // Observation cannot distinguish agent-caused activation from a
++        // user's app switch. Never install a wildcard focus-restoration lease.
++        // The actuator's own targeted guard handles its scoped side effects.
++        Self::capture(prior_front, false, None)
+     }
+
+     /// Capture the same before-state without arming reactive focus suppression.
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs b/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs
+@@ -515,10 +515,35 @@
+         pid as i32
+     };
+
++    // A physical interaction wins over reactive focus restoration. The HID
++    // table includes hardware and HID-level synthetic input; treating either
++    // as user intent is conservative. This never consumes or modifies events.
++    unsafe extern "C" {
++        fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
++    }
++    let idle = unsafe { CGEventSourceSecondsSinceLastEventType(1, u32::MAX) };
++    if !restore_allowed_after_input(idle)
++        || crate::input::cancellation::gate().ensure_active().is_err()
++    {
++        return;
++    }
+     let restore_pids = dispatcher.snapshot_matches(activated_pid);
+     for pid in restore_pids {
+         restore_focus(pid);
+     }
++}
++
++fn restore_allowed_after_input(idle_seconds: f64) -> bool {
++    idle_seconds.is_finite() && idle_seconds >= 0.25
++}
++
++#[test]
++fn focus_restore_policy_yields_to_recent_or_unknown_input() {
++    assert!(!restore_allowed_after_input(0.0));
++    assert!(!restore_allowed_after_input(0.249));
++    assert!(!restore_allowed_after_input(f64::NAN));
++    assert!(!restore_allowed_after_input(-1.0));
++    assert!(restore_allowed_after_input(0.3));
+ }
+
+ /// Re-activate `pid` if it's still running. Safe to call from any

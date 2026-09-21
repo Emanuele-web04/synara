@@ -20,6 +20,7 @@ import {
   ComputerCallTiming,
   withComputerCallContext,
 } from "./computerCallContext.ts";
+import { withComputerTask } from "./computerTaskContext.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import type { FrameSink } from "@synara/shared/frameTransport";
 
@@ -3177,6 +3178,81 @@ it("holds refused input until a scoped observation establishes readiness", async
   await manager.typeText("thread-a", "hello");
   expect(backend.attempts).toBe(2);
   await manager.dispose();
+});
+
+it("clears an app pause only for the observing task and a ready same-pid sibling", async () => {
+  const windows = coveredCalculatorWindows().map((window, index) => ({
+    ...window,
+    pid: index === 0 ? 20 : 10,
+  }));
+  windows.push({ ...windows[1]!, id: "sibling", onCurrentSpace: true } as (typeof windows)[number]);
+  class PausedBackend extends FakeComputerBackend {
+    attempts = 0;
+    checks = 0;
+    override async typeText(text: string) {
+      if (++this.attempts === 1)
+        throw new ComputerBackendError("Observe the app again", {
+          inputPause: { windowId: "fake-calculator", pid: 10, message: "Observe the app again" },
+        });
+      return super.typeText(text);
+    }
+    async checkInputReady() {
+      this.checks += 1;
+    }
+  }
+  const backend = new PausedBackend({ windows });
+  const manager = new ComputerManager({ backend });
+  try {
+    await expect(manager.typeText("owner", "hello")).rejects.toHaveProperty("inputPause");
+    await manager.releaseDesktopControl("owner");
+    await withComputerTask({ threadId: "other", turnId: "turn" }, () =>
+      manager.getState({ windowId: "sibling" }),
+    );
+    expect(backend.checks).toBe(0);
+    await withComputerTask({ threadId: "owner", turnId: "turn" }, () =>
+      manager.getState({ windowId: "fake-browser" }),
+    );
+    expect(backend.checks).toBe(0);
+    expect((await manager.getThreadState("owner")).inputPause).toBeDefined();
+    await withComputerTask({ threadId: "owner", turnId: "turn" }, () =>
+      manager.getState({ windowId: "sibling" }),
+    );
+    expect(backend.checks).toBe(1);
+    expect((await manager.getThreadState("owner")).inputPause).toBeUndefined();
+  } finally {
+    await manager.dispose();
+  }
+});
+
+it("reports a launched app with an unusable window without replaying launch", async () => {
+  class LaunchBackend extends FakeComputerBackend {
+    launches = 0;
+    override async launchApp(app: string) {
+      this.launches += 1;
+      return { computerId: "desktop", app, pid: 10, window: null };
+    }
+    async checkInputReady() {
+      throw new Error("ax_window_unresolved");
+    }
+  }
+  const backend = new LaunchBackend({
+    windows: coveredCalculatorWindows().map((window) => ({
+      ...window,
+      pid: window.id === "fake-calculator" ? 10 : 20,
+    })),
+  });
+  const manager = new ComputerManager({ backend });
+  try {
+    expect(await manager.launchApp("owner", "com.apple.Calculator", [], 2_000)).toMatchObject({
+      pid: 10,
+      window: null,
+      windowStatus: "no_usable_window",
+      windowReason: "input_unavailable",
+    });
+    expect(backend.launches).toBe(1);
+  } finally {
+    await manager.dispose();
+  }
 });
 
 it("publishes activity without additional desktop reads", async () => {

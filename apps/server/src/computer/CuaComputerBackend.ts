@@ -26,6 +26,7 @@ import type {
   ComputerInputModifier,
   ComputerInputPause,
   ComputerPermission,
+  ComputerLaunchAppResult,
 } from "@synara/contracts";
 import {
   computerPermissionSetupMessage,
@@ -84,10 +85,13 @@ export class CuaActionError extends ComputerBackendError {
     inputPause?: ComputerInputPause,
     readonly diagnostics?: CuaActionDiagnostics,
     readonly layer?: "driver-host" | "native-driver",
+    readonly waitSeconds?: number,
   ) {
     super(`${message} [effect=${effect}; automatic replay is forbidden]`, {
       retryable: false,
-      ...(effect === "not-dispatched" && inputPause ? { inputPause } : {}),
+      ...((effect === "not-dispatched" || code === "focus_restore_failed") && inputPause
+        ? { inputPause }
+        : {}),
     });
   }
 }
@@ -612,17 +616,30 @@ export class CuaComputerBackend implements ComputerBackend {
           " Inspect computer_get_state for this exact window_id, then use computer_type_text with an observed ref (or label and role), or computer_set_value to replace the field. " +
           "These semantic writes do not send keydown/keyup events. Do not retry physical keys or activate the app without the user's visible-use request.";
       }
+      if (refused && ["stale_element_token", "stale_geometry", "stale_target"].includes(code)) {
+        message +=
+          " The original element or coordinate frame is no longer valid. Read fresh state and select the intended control again; do not substitute another same-label control or replay uncertain input.";
+      }
       if (refused && code === "computer_input_paused") {
         this.observedGeometry.clear();
       }
       const inputPause =
-        refused &&
-        (code === "target_not_on_active_space" ||
-          code === "computer_input_paused" ||
-          code === "auth_sheet_focused") &&
+        ((refused &&
+          (code === "target_not_on_active_space" ||
+            code === "computer_input_paused" ||
+            code === "auth_sheet_focused")) ||
+          code === "focus_restore_failed") &&
         Number.isSafeInteger(args.pid) &&
         Number.isSafeInteger(args.window_id)
-          ? { windowId: `cua:${args.pid}:${args.window_id}`, message }
+          ? {
+              windowId: `cua:${args.pid}:${args.window_id}`,
+              ...(code === "computer_input_paused" ||
+              code === "target_not_on_active_space" ||
+              code === "focus_restore_failed"
+                ? { pid: args.pid as number }
+                : {}),
+              message,
+            }
           : undefined;
       throw new CuaActionError(
         message,
@@ -633,6 +650,12 @@ export class CuaComputerBackend implements ComputerBackend {
         structured.layer === "driver-host" || nativeCode === "desktop_input_paused"
           ? "driver-host"
           : "native-driver",
+        refused &&
+          code === "computer_input_paused" &&
+          typeof structured.wait_seconds === "number" &&
+          Number.isFinite(structured.wait_seconds)
+          ? Math.min(60, Math.max(0, structured.wait_seconds))
+          : undefined,
       );
     }
     return result;
@@ -1945,6 +1968,7 @@ export class CuaComputerBackend implements ComputerBackend {
     });
     const elements = result.structuredContent?.elements;
     if (!Array.isArray(elements)) return undefined;
+    let match: { token: string; index: number; value: string | null } | undefined;
     for (const value of elements) {
       const element = record(value);
       if (element.in_web_content !== true) continue;
@@ -1954,13 +1978,14 @@ export class CuaComputerBackend implements ComputerBackend {
       if (!frame || !sameRect(frame, node.frame)) continue;
       if (typeof element.element_token !== "string") continue;
       const index = number(element.element_index);
-      return {
+      if (match) return undefined;
+      match = {
         token: element.element_token,
         index: Number.isFinite(index) ? index : 0,
         value: typeof element.value === "string" ? element.value : null,
       };
     }
-    return undefined;
+    return match;
   }
   pressKey(key: string, w?: string) {
     return this.input("press_key", { key: cuaKey(key) }, w);
@@ -2084,7 +2109,11 @@ export class CuaComputerBackend implements ComputerBackend {
     assertComputerClipboardWriteFits(value);
     await this.call("clipboard_write", { text: value }, true);
   }
-  async launchApp(app: string, args?: readonly string[], options?: { readonly hidden?: boolean }) {
+  async launchApp(
+    app: string,
+    args?: readonly string[],
+    options?: { readonly hidden?: boolean },
+  ): Promise<ComputerLaunchAppResult> {
     // A standalone endpoint can run on a different OS than the server.
     // Learn that OS before choosing a launch schema or dispatching input.
     if (this.hostPlatform === undefined) await this.host({ method: "probe" });
@@ -2111,7 +2140,7 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "unsupported_operation",
       );
-    await this.call(
+    const result = await this.call(
       "launch_app",
       {
         ...(linux
@@ -2128,7 +2157,14 @@ export class CuaComputerBackend implements ComputerBackend {
       },
       true,
     );
-    return { computerId: this.computerId, app, window: null };
+    const pid = number(result.structuredContent?.pid);
+    return {
+      computerId: this.computerId,
+      app,
+      window: null,
+      windowStatus: "not_checked",
+      ...(Number.isSafeInteger(pid) && pid > 0 && pid <= 0x7fffffff ? { pid } : {}),
+    };
   }
   async listApps(): Promise<readonly ComputerApp[]> {
     const result = await this.call("list_apps");

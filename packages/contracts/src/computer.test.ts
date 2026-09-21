@@ -8,6 +8,7 @@ import {
   ComputerActionResult,
   ComputerAvailability,
   ComputerInputPause,
+  ComputerLaunchAppResult,
   ComputerSelectTextInput,
   ComputerSetupRequiredPayload,
   ComputerState,
@@ -279,6 +280,39 @@ describe("ComputerSelectTextInput", () => {
       { label: "Display", start: COMPUTER_SELECT_TEXT_RANGE_MAX + 1, length: 0 },
     ]) {
       expect(() => Schema.decodeUnknownSync(ComputerSelectTextInput)(bad)).toThrow();
+    }
+  });
+});
+
+describe("Computer recovery RPC metadata", () => {
+  it("preserves launch identity and failed readiness independently through the wire schema", () => {
+    const result = {
+      computerId: "desktop",
+      app: "com.vendor.Helium",
+      pid: 42,
+      window: null,
+      windowStatus: "no_usable_window",
+      windowReason: "off_space",
+    };
+    const wire = Schema.encodeUnknownSync(ComputerLaunchAppResult)(result);
+    expect(Schema.decodeUnknownSync(ComputerLaunchAppResult)(wire)).toEqual(result);
+    expect(
+      Schema.decodeUnknownSync(ComputerLaunchAppResult)({
+        computerId: "desktop",
+        app: "Helium",
+        window: null,
+      }),
+    ).toEqual({ computerId: "desktop", app: "Helium", window: null });
+  });
+  it("retains the affected app in a pause and refuses invalid process identities", () => {
+    const pause = { windowId: "cua:42:7", pid: 42, message: "Observe again" };
+    expect(
+      Schema.decodeUnknownSync(ComputerInputPause)(
+        Schema.encodeUnknownSync(ComputerInputPause)(pause),
+      ),
+    ).toEqual(pause);
+    for (const pid of [0, -1, 1.5, 0x80000000]) {
+      expect(() => Schema.decodeUnknownSync(ComputerInputPause)({ ...pause, pid })).toThrow();
     }
   });
 });

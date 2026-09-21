@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { cuaActionDiagnosticMessage, parseCuaActionDiagnostics } from "./cuaActionDiagnostics";
 
 describe("persisted native action diagnostics", () => {
+  it("keeps finite measured scroll evidence without trusting prose", () => {
+    expect(
+      parseCuaActionDiagnostics({
+        diagnostics: { scroll_delta_y: -120.5, observation: "fresh-frame", message: "private" },
+      }),
+    ).toEqual({ scroll_delta_y: -120.5, observation: "fresh-frame" });
+    expect(
+      parseCuaActionDiagnostics({
+        diagnostics: { scroll_delta_y: Infinity, observation: "private window title" },
+      }),
+    ).toBeUndefined();
+  });
+
   it("retains actionable native evidence without app content or raw error messages", () => {
     const diagnostics = parseCuaActionDiagnostics({
       message: "secret selected text",

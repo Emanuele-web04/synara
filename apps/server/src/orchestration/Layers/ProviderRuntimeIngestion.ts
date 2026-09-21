@@ -1,4 +1,8 @@
 import {
+  startComputerTurnTiming,
+  endComputerTurnTiming,
+} from "../../computer/computerTurnTiming.ts";
+import {
   type AssistantDeliveryMode,
   CommandId,
   EventId,
@@ -2199,6 +2203,7 @@ const make = Effect.gen(function* () {
       // later turn.started cannot replace the active lifecycle, it still binds
       // exactly one queued delivery policy for that provider turn.
       if (event.type === "turn.started" && eventTurnId) {
+        startComputerTurnTiming(thread.id, eventTurnId);
         yield* matchStartedTurnAssistantDeliveryMode(thread.id, eventTurnId);
       }
       // A terminal event can be the first lifecycle signal for a provider
@@ -2233,6 +2238,7 @@ const make = Effect.gen(function* () {
         const releasedTurnId = isTerminalTurnEvent
           ? eventTurnId
           : (rawEventTurnId ?? activeTurnId ?? undefined);
+        endComputerTurnTiming(thread.id, releasedTurnId);
         yield* Effect.tryPromise(() =>
           computerService.value.manager.releaseDesktopControl(thread.id, releasedTurnId),
         ).pipe(
