@@ -15,6 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
+import { TCC_SERVICE_NAMES } from "@synara/shared/computerGrants";
 import { resolveSynaraDesktopFlavor, synaraDesktopIdentity } from "@synara/shared/desktopIdentity";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -275,6 +276,39 @@ function signMacLauncherBundle(appBundlePath, runCommand) {
   }
 }
 
+function readCdhash(appBundlePath, runCommand) {
+  const result = runCommand("/usr/bin/codesign", ["--display", "--verbose=3", appBundlePath], {
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  if (result.error || result.status !== 0) return null;
+  // codesign prints its description on stderr.
+  return (
+    /^CDHash=([0-9a-f]+)$/m.exec(`${result.stderr ?? ""}\n${result.stdout ?? ""}`)?.[1] ?? null
+  );
+}
+
+// macOS pins an ad-hoc bundle's privacy grants to its cdhash. Re-signing a
+// changed bundle leaves rows that System Settings still shows switched on but
+// that never match again, and neither the toggle nor a re-drop replaces them.
+// Clear only this flavor's dead rows so the permission guide adds a valid one.
+function resetStalePrivacyGrants(runCommand) {
+  for (const service of Object.values(TCC_SERVICE_NAMES)) {
+    const result = runCommand("/usr/bin/tccutil", ["reset", service, APP_BUNDLE_ID], {
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    if (result.error || result.status !== 0) {
+      console.warn(
+        `[electron-launcher] Could not clear the stale ${service} grant for ${APP_BUNDLE_ID}. Remove ${APP_DISPLAY_NAME} from System Settings › Privacy & Security › ${service} and add it again.`,
+      );
+    }
+  }
+  console.warn(
+    `[electron-launcher] ${APP_DISPLAY_NAME} was re-signed, so its old macOS privacy grants were cleared. Grant Accessibility, Screen Recording and Input Monitoring again.`,
+  );
+}
+
 export function buildMacLauncher(
   electronBinaryPath,
   { desktopDirectory = desktopDir, runCommand = spawnSync } = {},
@@ -311,6 +345,9 @@ export function buildMacLauncher(
     return targetBinaryPath;
   }
 
+  const previousCdhash = existsSync(targetBinaryPath)
+    ? readCdhash(targetAppBundlePath, runCommand)
+    : null;
   // A failed rebuild must not retain metadata that could accept its partial bundle.
   rmSync(metadataPath, { force: true });
   rmSync(targetAppBundlePath, { recursive: true, force: true });
@@ -330,6 +367,9 @@ export function buildMacLauncher(
   // Plist/icon changes invalidate Electron's signature. Sign only our generated
   // copy, once per rebuild, so ordinary launches retain a stable TCC identity.
   signMacLauncherBundle(targetAppBundlePath, runCommand);
+  if (previousCdhash && readCdhash(targetAppBundlePath, runCommand) !== previousCdhash) {
+    resetStalePrivacyGrants(runCommand);
+  }
   refreshLaunchServicesRegistration(targetAppBundlePath, runCommand);
   writeFileSync(metadataPath, `${JSON.stringify(expectedMetadata, null, 2)}\n`);
 

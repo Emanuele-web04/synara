@@ -17,8 +17,7 @@ import type {
 } from "@synara/contracts";
 import { computerStaleGrantAdvice, listComputerPermissions } from "@synara/shared/computerGrants";
 
-import { Button } from "~/components/ui/button";
-import { MonitorIcon } from "~/lib/icons";
+import { ComputerActionCard } from "./ComputerActionCard";
 
 export function ComputerSetupRequiredCard({
   missing,
@@ -116,49 +115,22 @@ export function ComputerSetupRequiredCard({
       ? computerStaleGrantAdvice(currentMissing, currentSignature, currentBundleId)
       : null;
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3 py-2.5">
-      <span className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] text-amber-500">
-        <MonitorIcon className="size-5" aria-hidden />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p
-          className="truncate font-medium text-[var(--color-text-foreground)]"
-          style={textFontSizePx ? { fontSize: `${textFontSizePx}px` } : undefined}
-        >
-          {title}
-        </p>
-        <p
-          className="text-[var(--color-text-foreground-secondary)]"
-          style={metaFontSizePx ? { fontSize: `${metaFontSizePx}px` } : undefined}
-        >
-          {description}
-        </p>
-        {staleGrantAdvice ? (
-          <p
-            className="mt-1 text-[var(--color-text-foreground-secondary)]"
-            style={metaFontSizePx ? { fontSize: `${metaFontSizePx}px` } : undefined}
-          >
-            {staleGrantAdvice}
-          </p>
-        ) : null}
-      </div>
-      {onSetUp && canSetUp ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="shrink-0"
-          disabled={isPending}
-          onClick={onSetUp}
-        >
-          {isPending ? "Setting up…" : "Set up"}
-        </Button>
-      ) : statusError && onRecheck ? (
-        <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={onRecheck}>
-          Recheck
-        </Button>
-      ) : null}
-    </div>
+    <ComputerActionCard
+      tone={statusError ? "error" : ready ? "success" : "warning"}
+      title={title}
+      textFontSizePx={textFontSizePx}
+      metaFontSizePx={metaFontSizePx}
+      action={
+        onSetUp && canSetUp
+          ? { label: isPending ? "Setting up…" : "Set up", disabled: isPending, onClick: onSetUp }
+          : statusError && onRecheck
+            ? { label: "Recheck", onClick: onRecheck }
+            : undefined
+      }
+    >
+      <p>{description}</p>
+      {staleGrantAdvice ? <p>{staleGrantAdvice}</p> : null}
+    </ComputerActionCard>
   );
 }
 

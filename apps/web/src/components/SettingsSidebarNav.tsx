@@ -218,7 +218,11 @@ export function SettingsSidebarNav(props: {
                             {item.label}
                           </span>
                           {item.badge ? (
-                            <Badge variant="warning" size="sm" className="ml-auto">
+                            <Badge
+                              variant="outline"
+                              size="sm"
+                              className="ml-auto rounded-full px-1.5 font-normal text-muted-foreground"
+                            >
                               {item.badge}
                             </Badge>
                           ) : null}

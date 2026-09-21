@@ -1302,7 +1302,10 @@ function SettingsRouteView() {
                     <h1 className="flex items-center gap-2 text-xl font-medium tracking-tight text-foreground">
                       {activeSectionItem.label}
                       {activeSectionItem.badge ? (
-                        <Badge variant="warning" size="lg">
+                        <Badge
+                          variant="outline"
+                          className="rounded-full px-2 font-normal tracking-normal text-muted-foreground"
+                        >
                           {activeSectionItem.badge}
                         </Badge>
                       ) : null}

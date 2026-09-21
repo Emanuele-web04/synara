@@ -3285,6 +3285,68 @@ describe("MessagesTimeline", () => {
     );
   });
 
+  it("shows the Computer setup card after the answer instead of inside the settled fold", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          nowIso="2026-03-17T19:12:31.000Z"
+          isWorking={false}
+          activeTurnInProgress={false}
+          timelineEntries={[
+            {
+              id: "entry-computer-tool",
+              kind: "work",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              entry: {
+                id: "work-computer-tool",
+                createdAt: "2026-03-17T19:12:28.000Z",
+                label: "MCP tool call",
+                tone: "tool",
+                itemType: "mcp_tool_call",
+                toolTitle: "Listed windows",
+                activityKind: "tool.completed",
+              },
+            },
+            {
+              id: "entry-computer-setup",
+              kind: "work",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              entry: {
+                id: "work-computer-setup",
+                createdAt: "2026-03-17T19:12:29.000Z",
+                label: "Computer setup required",
+                tone: "error",
+                computerSetupRequired: { missing: ["screenRecording"] },
+              },
+            },
+            {
+              id: "entry-computer-setup-assistant",
+              kind: "message",
+              createdAt: "2026-03-17T19:12:30.000Z",
+              message: {
+                id: MessageId.makeUnsafe("message-computer-setup"),
+                role: "assistant",
+                text: "Synara needs macOS permissions first.",
+                createdAt: "2026-03-17T19:12:30.000Z",
+                completedAt: "2026-03-17T19:12:31.000Z",
+                streaming: false,
+              },
+            },
+          ]}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("Worked for");
+    expect(markup.match(/Computer control needs Screen Recording/g)).toHaveLength(1);
+    expect(markup.indexOf("Synara needs macOS permissions first.")).toBeLessThan(
+      markup.indexOf("Computer control needs Screen Recording"),
+    );
+  });
+
   it("anchors the changed-files summary at the end of a collapsed file-change turn", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const assistantMessageId = MessageId.makeUnsafe("message-assistant-inline-multi-edit");

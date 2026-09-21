@@ -362,12 +362,12 @@ export function ComputerSettingsPanel({
   );
   const attentionAction =
     needsSetup && !statusQuery.isError ? (
-      <Button size="xs" variant="default" disabled={setup.isPending} onClick={setup.provision}>
+      <Button size="sm" variant="outline" disabled={setup.isPending} onClick={setup.provision}>
         {setup.isPending ? "Setting up…" : "Set up"}
       </Button>
     ) : statusQuery.isError ? (
       <Button
-        size="xs"
+        size="sm"
         variant="outline"
         disabled={statusQuery.isFetching}
         onClick={() => {

@@ -46,6 +46,7 @@ function createLauncherFixture(t, { iconComposer = false } = {}) {
   const commands = [];
   let codeSignFailure;
   let iconCompileFailure;
+  let displayedCdhashes = [];
   const runCommand = (command, arguments_, options) => {
     commands.push({ command, arguments_, options });
     if (command === "ditto") {
@@ -57,6 +58,9 @@ function createLauncherFixture(t, { iconComposer = false } = {}) {
       const partialPlistPath = arguments_[arguments_.indexOf("--output-partial-info-plist") + 1];
       writeFileSync(join(resourcesDirectory, "Assets.car"), "compiled layered icon");
       writeFileSync(partialPlistPath, "partial plist");
+    }
+    if (command === "/usr/bin/codesign" && arguments_[0] === "--display") {
+      return { status: 0, stdout: "", stderr: `CDHash=${displayedCdhashes.shift() ?? ""}\n` };
     }
     if (command === "/usr/bin/codesign") {
       assert.equal(existsSync(metadataPath), false, "cache is committed only after verification");
@@ -78,6 +82,9 @@ function createLauncherFixture(t, { iconComposer = false } = {}) {
     },
     failIconCompilation: (result) => {
       iconCompileFailure = result;
+    },
+    displayCdhashes: (...cdhashes) => {
+      displayedCdhashes = cdhashes;
     },
   };
 }
@@ -225,6 +232,42 @@ describe("macOS Electron launcher signature", () => {
     );
     assert.equal(JSON.parse(readFileSync(fixture.metadataPath, "utf8")).launcherVersion, 6);
   });
+
+  for (const [label, cdhashes, expectReset] of [
+    [
+      "clears this flavor's stale privacy grants when a rebuild changes the cdhash",
+      ["aa", "bb"],
+      true,
+    ],
+    ["keeps privacy grants when a rebuild reproduces the same cdhash", ["aa", "aa"], false],
+  ]) {
+    it(label, (t) => {
+      const fixture = createLauncherFixture(t);
+      fixture.build();
+      const metadata = JSON.parse(readFileSync(fixture.metadataPath, "utf8"));
+      writeFileSync(fixture.metadataPath, JSON.stringify({ ...metadata, appVersion: "0.0.1" }));
+      fixture.commands.length = 0;
+      fixture.displayCdhashes(...cdhashes);
+      t.mock.method(console, "warn", () => {});
+
+      fixture.build();
+      const resets = fixture.commands.filter(({ command }) => command === "/usr/bin/tccutil");
+      assert.deepEqual(
+        resets.map(({ arguments_ }) => arguments_.slice(0, 2)),
+        expectReset
+          ? [
+              ["reset", "Accessibility"],
+              ["reset", "ScreenCapture"],
+              ["reset", "ListenEvent"],
+            ]
+          : [],
+      );
+      assert.equal(
+        resets.every(({ arguments_ }) => /^com\.[\w.]*synara/i.test(arguments_[2])),
+        true,
+      );
+    });
+  }
 
   for (const [argument, label, result] of [
     ["--force", "signing", { status: 1, stderr: "resource envelope is invalid" }],
