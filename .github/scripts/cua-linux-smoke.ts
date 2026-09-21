@@ -27,7 +27,13 @@ async function eventually(check: () => boolean, description: string) {
 }
 
 function successful(reply: CuaReply, name: string): Record<string, unknown> {
-  assert(reply.ok && !reply.result?.isError, name + ": " + JSON.stringify(reply));
+  assert(
+    reply.ok &&
+      !reply.result?.isError &&
+      reply.result?.structuredContent?.status !== "refused" &&
+      reply.result?.structuredContent?.effect !== "refused",
+    name + ": " + JSON.stringify(reply),
+  );
   return reply.result?.structuredContent ?? {};
 }
 
@@ -116,7 +122,7 @@ async function main() {
     const prepared = successful(preparedReply, "prepare");
     assert.equal(preparedReply.driverNativeRevision, release.nativeRevision);
     assert.equal(preparedReply.driverBrowserInputControl, true);
-    assert.equal(prepared.action, "launched_isolated_browser");
+    assert.equal(prepared.action, "launched_isolated_browser", JSON.stringify(preparedReply));
     assert.equal(typeof prepared.prepared_pid, "number");
     browserPid = prepared.prepared_pid as number;
     assert(monitor.state.ready && globalShortcut.isRegistered("Escape"));
