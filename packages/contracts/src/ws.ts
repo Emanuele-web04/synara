@@ -1,4 +1,5 @@
 import { Schema, Struct } from "effect";
+import { ImportProjectInput, ListProjectImportsInput } from "./projectImport";
 import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 
 import {
@@ -37,6 +38,8 @@ import {
 } from "./orchestration";
 import {
   GitActionProgressEvent,
+  GitBlameLineInput,
+  GitReadFileAtRevInput,
   GitCheckoutInput,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
@@ -46,6 +49,7 @@ import {
   GitCreateWorktreeInput,
   GitInitInput,
   GitListBranchesInput,
+  GitListRecentCommitsInput,
   GitPullInput,
   GitPullRequestRefInput,
   GitPullRequestSnapshotInput,
@@ -124,6 +128,7 @@ import {
   ServerLifecycleStreamEvent,
   ServerProviderUpdateInput,
   ServerUpdateSettingsInput,
+  ServerConsumeCodexResetCreditInput,
   ServerGetProviderUsageSnapshotInput,
   ServerListProviderUsageInput,
   ServerProviderStatusesUpdatedPayload,
@@ -198,10 +203,13 @@ export const WS_METHODS = {
   gitGithubRepository: "git.githubRepository",
   gitStatus: "git.status",
   gitReadWorkingTreeDiff: "git.readWorkingTreeDiff",
+  gitBlameLine: "git.blameLine",
+  gitReadFileAtRev: "git.readFileAtRev",
   gitWorkingTreeDiffStats: "git.workingTreeDiffStats",
   gitSummarizeDiff: "git.summarizeDiff",
   gitRunStackedAction: "git.runStackedAction",
   gitListBranches: "git.listBranches",
+  gitListRecentCommits: "git.listRecentCommits",
   gitCreateWorktree: "git.createWorktree",
   gitCreateDetachedWorktree: "git.createDetachedWorktree",
   gitRemoveWorktree: "git.removeWorktree",
@@ -253,6 +261,7 @@ export const WS_METHODS = {
   serverStopLocalServer: "server.stopLocalServer",
   serverGetProviderUsageSnapshot: "server.getProviderUsageSnapshot",
   serverListProviderUsage: "server.listProviderUsage",
+  serverConsumeCodexResetCredit: "server.consumeCodexResetCredit",
   statsGetProfileStats: "stats.getProfileStats",
   statsGetProfileTokenStats: "stats.getProfileTokenStats",
   serverGetDiagnostics: "server.getDiagnostics",
@@ -330,6 +339,8 @@ const WebSocketRequestBody = Schema.Union([
     Schema.Struct({ command: ClientOrchestrationCommand }),
   ),
   tagRequestBody(ORCHESTRATION_WS_METHODS.importThread, OrchestrationImportThreadInput),
+  tagRequestBody(ORCHESTRATION_WS_METHODS.listProjectImports, ListProjectImportsInput),
+  tagRequestBody(ORCHESTRATION_WS_METHODS.importProject, ImportProjectInput),
   tagRequestBody(
     ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
     OrchestrationRegenerateThreadTitleInput,
@@ -413,10 +424,13 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitGithubRepository, GitHubRepositoryInput),
   tagRequestBody(WS_METHODS.gitStatus, GitStatusInput),
   tagRequestBody(WS_METHODS.gitReadWorkingTreeDiff, GitReadWorkingTreeDiffInput),
+  tagRequestBody(WS_METHODS.gitBlameLine, GitBlameLineInput),
+  tagRequestBody(WS_METHODS.gitReadFileAtRev, GitReadFileAtRevInput),
   tagRequestBody(WS_METHODS.gitWorkingTreeDiffStats, GitReadWorkingTreeDiffInput),
   tagRequestBody(WS_METHODS.gitSummarizeDiff, GitSummarizeDiffInput),
   tagRequestBody(WS_METHODS.gitRunStackedAction, GitRunStackedActionInput),
   tagRequestBody(WS_METHODS.gitListBranches, GitListBranchesInput),
+  tagRequestBody(WS_METHODS.gitListRecentCommits, GitListRecentCommitsInput),
   tagRequestBody(WS_METHODS.gitCreateWorktree, GitCreateWorktreeInput),
   tagRequestBody(WS_METHODS.gitCreateDetachedWorktree, GitCreateDetachedWorktreeInput),
   tagRequestBody(WS_METHODS.gitRemoveWorktree, GitRemoveWorktreeInput),
@@ -468,6 +482,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverStopLocalServer, ServerStopLocalServerInput),
   tagRequestBody(WS_METHODS.serverGetProviderUsageSnapshot, ServerGetProviderUsageSnapshotInput),
   tagRequestBody(WS_METHODS.serverListProviderUsage, ServerListProviderUsageInput),
+  tagRequestBody(WS_METHODS.serverConsumeCodexResetCredit, ServerConsumeCodexResetCreditInput),
   tagRequestBody(WS_METHODS.statsGetProfileStats, StatsGetProfileStatsInput),
   tagRequestBody(WS_METHODS.statsGetProfileTokenStats, StatsGetProfileTokenStatsInput),
   tagRequestBody(WS_METHODS.serverGetDiagnostics, Schema.Struct({})),

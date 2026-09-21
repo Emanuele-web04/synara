@@ -21,6 +21,8 @@ import {
   MessageId,
   THREAD_GOAL_MAX_CHARS,
   ThreadId,
+  type ModelSelection,
+  type ProjectId,
   type ProviderKind,
   type RuntimeMode,
   type ServerProviderStatus,
@@ -49,6 +51,7 @@ import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   AGENT_GATEWAY_TARGET_OPTIONS_DESCRIPTION,
+  resolveAgentGatewayTarget,
   type AgentGatewayProviderAvailability,
 } from "../targetResolver.ts";
 import { mcpToolResultError, mcpToolResultJson } from "../protocol.ts";
@@ -67,6 +70,7 @@ import {
 } from "../toolInput.ts";
 import { WRITE_TOOL_ANNOTATIONS, type ToolEntry } from "../toolRuntime.ts";
 import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
+import { deliverGatewayCompletions } from "../completionDelivery.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
@@ -167,6 +171,20 @@ export const makeAgentGateway = Effect.gen(function* () {
     git,
   });
 
+  yield* Effect.forkScoped(
+    Effect.forever(
+      deliverGatewayCompletions({
+        repository: operationRepository.completions,
+        snapshotQuery,
+        projectionTurns,
+        orchestrationEngine,
+      }).pipe(
+        Effect.catch((error) => Effect.logWarning("gateway completion scan failed", { error })),
+        Effect.andThen(Effect.sleep(1000)),
+      ),
+    ),
+  );
+
   const requireThreadShell = (threadId: string) =>
     snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(threadId)).pipe(
       Effect.mapError((error) => new ToolInputError(errorText(error))),
@@ -177,6 +195,33 @@ export const makeAgentGateway = Effect.gen(function* () {
         }),
       ),
     );
+
+  // Automation targets resolve like thread-creation targets: live provider availability
+  // and model discovery, against the workspace of the project the automation belongs to.
+  const resolveAutomationTarget = (input: {
+    readonly target: ModelSelection;
+    readonly projectId: ProjectId;
+  }): Effect.Effect<ModelSelection, unknown> =>
+    Effect.gen(function* () {
+      const project = yield* snapshotQuery.getProjectShellById(input.projectId).pipe(
+        Effect.mapError((error) => new ToolInputError(errorText(error))),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(new ToolInputError(`Project "${input.projectId}" was not found.`)),
+            onSome: Effect.succeed,
+          }),
+        ),
+      );
+      const providerAvailabilities = yield* loadProviderAvailabilities;
+      const availability = providerAvailabilities.get(input.target.provider);
+      return yield* resolveAgentGatewayTarget({
+        target: input.target,
+        discovery: providerDiscovery,
+        ...(availability !== undefined ? { availability } : {}),
+        cwd: project.workspaceRoot,
+      });
+    });
 
   // Privilege boundary shared by every tool that makes another thread execute
   // work or mutates another thread's state: a caller must not drive a thread
@@ -262,6 +307,11 @@ export const makeAgentGateway = Effect.gen(function* () {
             items: {
               type: "object",
               properties: {
+                notifyCreatorOnComplete: {
+                  type: "boolean",
+                  description:
+                    "Passively return the initial run result to this creating thread. Does not wake the creator; goal runs are unsupported.",
+                },
                 prompt: { type: "string" },
                 title: { type: "string" },
                 target: {
@@ -315,6 +365,11 @@ export const makeAgentGateway = Effect.gen(function* () {
         type: "object",
         properties: {
           requestId: { type: "string", maxLength: 256 },
+          notifyCreatorOnComplete: {
+            type: "boolean",
+            description:
+              "Passively return the initial run result to this creating thread. Does not wake the creator; goal runs are unsupported.",
+          },
           prompt: { type: "string" },
           title: { type: "string" },
           target: {
@@ -373,6 +428,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           "baseBranch",
           "branchName",
           "runtimeMode",
+          "notifyCreatorOnComplete",
         ]) {
           const value = args[key];
           if (value !== undefined) spec[key] = value;
@@ -750,6 +806,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     automationService,
     requireThreadShell,
     assertCallerMayDriveThread,
+    resolveAutomationTarget,
     surfaceAutomationProposal: ({ callerThreadId, definition }) => {
       const createdAt = isoNow();
       return orchestrationEngine

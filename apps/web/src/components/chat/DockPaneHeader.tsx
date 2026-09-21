@@ -25,7 +25,7 @@ export function DockPaneHeader(props: {
 }) {
   return (
     <header className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "gap-1 px-4")}>
-      <span className="text-[13px] font-medium tracking-[-0.01em] text-foreground">
+      <span className="text-ui-lg font-medium tracking-[-0.01em] text-foreground">
         {props.title}
       </span>
       <div className="ml-auto flex items-center gap-0.5">

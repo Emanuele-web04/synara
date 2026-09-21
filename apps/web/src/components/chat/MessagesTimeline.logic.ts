@@ -6,10 +6,12 @@
 import { type MessageId, type TurnId } from "@synara/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
+import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
 import {
   isSummarizableToolCallEntry,
   MIN_COLLAPSIBLE_TOOL_GROUP_SIZE,
   summarizeToolCallGroup,
+  workEntryRowCount,
   type ToolCallGroupSummary,
 } from "./toolCallGroup.logic";
 import {
@@ -56,7 +58,11 @@ export function chunkCollapsedTurnItems(
 
   const flushPendingRun = () => {
     if (pendingRun.length === 0) return;
-    if (pendingRun.length >= MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
+    const pendingRowCount = pendingRun.reduce(
+      (total, item) => total + workEntryRowCount(item.entry),
+      0,
+    );
+    if (pendingRowCount >= MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
       chunks.push({
         kind: "tool-group",
         id: pendingRun[0]!.id,
@@ -95,11 +101,19 @@ export function chunkWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkEntr
 }
 
 // One renderable block of a work group: `summary` is non-null when the block
-// renders collapsed behind a "Ran N commands..." disclosure.
+// renders collapsed behind a "Ran N commands..." disclosure. `liveEntry` is
+// non-null while a tool run is still open: the run renders as one line wearing
+// the latest status description, falling back to the newest call.
 export interface WorkEntryRenderPlanChunk {
   id: string;
   entries: WorkLogEntry[];
   summary: ToolCallGroupSummary | null;
+  liveEntry: WorkLogEntry | null;
+}
+
+// Keep the latest activity description visible as technical calls arrive.
+function pickLiveToolEntry(entries: ReadonlyArray<WorkLogEntry>): WorkLogEntry {
+  return entries.findLast(isCodexActivityStatusWorkEntry) ?? entries.at(-1)!;
 }
 
 // Plans a work group's entries block by block. Boundaries are the entries a
@@ -107,7 +121,8 @@ export interface WorkEntryRenderPlanChunk {
 // each tool run between boundaries folds independently. A run stays expanded
 // only while it still has running work, or while it is the trailing block of
 // the live transcript tail (`tailIsLive`): the moment a new narration block
-// starts after it, it stops being the tail and collapses mid-turn.
+// starts after it, it stops being the tail and collapses mid-turn. An expanded
+// run never lists its rows: it folds to a single line for its selected entry.
 export function planWorkEntryRenderChunks(
   entries: ReadonlyArray<WorkLogEntry>,
   options: { tailIsLive: boolean },
@@ -115,13 +130,47 @@ export function planWorkEntryRenderChunks(
   const chunks = chunkWorkEntries(entries);
   return chunks.map((chunk, index) => {
     if (chunk.kind === "item") {
-      return { id: chunk.id, entries: [chunk.entry], summary: null };
+      return { id: chunk.id, entries: [chunk.entry], summary: null, liveEntry: null };
     }
     const summary = summarizeToolCallGroup(chunk.entries);
     const isLiveTail = options.tailIsLive && index === chunks.length - 1;
     const collapsed = summary !== null && !summary.hasRunningEntry && !isLiveTail;
-    return { id: chunk.id, entries: chunk.entries, summary: collapsed ? summary : null };
+    return {
+      id: chunk.id,
+      entries: chunk.entries,
+      summary: collapsed ? summary : null,
+      liveEntry: summary !== null && !collapsed ? pickLiveToolEntry(chunk.entries) : null,
+    };
   });
+}
+
+// A folded chunk renders as one line (settled summary or live newest call)
+// instead of listing its rows.
+export function isFoldedWorkEntryChunk(chunk: WorkEntryRenderPlanChunk): boolean {
+  return chunk.summary !== null || chunk.liveEntry !== null;
+}
+
+// How a folded chunk renders: the line's summary, the rows its disclosure
+// reveals, and a suffix for the open-state key. A live line reveals only the
+// other entries, and keeps its own open state so the run
+// settles collapsed even when the live line was opened.
+export function resolveWorkEntryChunkFold(
+  chunk: WorkEntryRenderPlanChunk,
+): { summary: ToolCallGroupSummary; entries: WorkLogEntry[]; keySuffix: string } | null {
+  if (chunk.summary !== null) {
+    return { summary: chunk.summary, entries: chunk.entries, keySuffix: "" };
+  }
+  const liveSummary = chunk.liveEntry ? summarizeToolCallGroup(chunk.entries) : null;
+  if (!liveSummary) return null;
+  return {
+    summary: liveSummary,
+    // A multi-file edit wears a count ("Edited 9 files"), so its own file rows
+    // still belong behind the line.
+    entries: chunk.entries.filter(
+      (entry) => entry !== chunk.liveEntry || workEntryRowCount(entry) > 1,
+    ),
+    keySuffix: ":live",
+  };
 }
 
 export interface CappedWorkEntryRenderPlan {
@@ -144,7 +193,7 @@ export function capOpenWorkEntryRenderChunks(
 ): CappedWorkEntryRenderPlan {
   const shouldCapEntry = options.shouldCapEntry ?? (() => true);
   const openEntries = chunks.flatMap((chunk) =>
-    chunk.summary === null ? chunk.entries.filter(shouldCapEntry) : [],
+    isFoldedWorkEntryChunk(chunk) ? [] : chunk.entries.filter(shouldCapEntry),
   );
   const maxVisibleEntries = Math.max(0, options.maxVisibleEntries);
   const hiddenEntryCount = Math.max(0, openEntries.length - maxVisibleEntries);
@@ -164,7 +213,7 @@ export function capOpenWorkEntryRenderChunks(
 
   return {
     chunks: chunks.map((chunk) => {
-      if (chunk.summary !== null) return chunk;
+      if (isFoldedWorkEntryChunk(chunk)) return chunk;
       return {
         ...chunk,
         entries: chunk.entries.filter(
@@ -822,6 +871,7 @@ function collapseSettledTurns(
     const row = rows[pass]!;
     if (row.kind !== "message" || row.message.role !== "assistant") continue;
     const message = row.message;
+    if (message.asyncUserInput) continue;
     // Only the terminal message of a turn owns the collapsed group.
     if (!terminalAssistantMessageIds.has(message.id)) continue;
     // Never collapse the live turn: streaming text or the in-progress turn stays
@@ -847,6 +897,7 @@ function collapseSettledTurns(
         continue;
       }
       if (prev.kind === "message" && prev.message.role === "assistant") {
+        if (prev.message.asyncUserInput) break;
         foldIndices.push(scan);
         continue;
       }

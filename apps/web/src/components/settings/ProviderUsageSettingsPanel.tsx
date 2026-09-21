@@ -17,6 +17,7 @@ import { useAppSettings } from "~/appSettings";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { ProviderUsageLimitRows } from "~/components/ProviderUsageLimitRows";
 import { ProviderUsageLineList } from "~/components/ProviderUsageLineList";
+import { ProviderUsageResetCredits } from "~/components/ProviderUsageResetCredits";
 import { SettingsCard, SettingsSectionShell } from "~/components/settings/SettingsPanelPrimitives";
 import { Button } from "~/components/ui/button";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
@@ -32,7 +33,7 @@ import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
 import { createAllThreadsSelector } from "~/storeSelectors";
 
-const PILL_CLASS_NAME = "shrink-0 rounded-full px-2 py-1 text-[11px] font-medium leading-none";
+const PILL_CLASS_NAME = "shrink-0 rounded-full px-2 py-1 text-ui-sm font-medium leading-none";
 
 interface StatusPill {
   label: string;
@@ -74,8 +75,9 @@ function ProviderUsageCard({
   });
   const meterRows = deriveProviderUsageDisplayRows(usageSummary.rateLimits);
   const usageLines = usageSummary.usageLines;
-
-  const hasUsage = meterRows.length > 0 || usageLines.length > 0;
+  const resetCredits = provider === "codex" ? snapshot.resetCredits : undefined;
+  const hasResetCredits = Boolean(resetCredits && resetCredits.availableCount > 0);
+  const hasUsage = meterRows.length > 0 || usageLines.length > 0 || hasResetCredits;
   const pill = status === "ok" ? null : statusPill(snapshot.status);
 
   return (
@@ -86,7 +88,7 @@ function ProviderUsageCard({
             <span className="flex size-7 shrink-0 items-center justify-center rounded-lg border border-[color:var(--color-border)] bg-muted/60">
               <ProviderIcon provider={provider} className="size-4" />
             </span>
-            <span className="truncate text-sm font-semibold text-foreground">
+            <span className="truncate text-ui-lg font-semibold text-foreground">
               {providerUsageDisplayName(provider)}
             </span>
           </div>
@@ -102,7 +104,7 @@ function ProviderUsageCard({
         {status === "ok" && hasUsage ? (
           <>
             {usageSummary.usageNotice ? (
-              <p className="flex items-start gap-1.5 text-xs leading-relaxed text-amber-600 dark:text-amber-300/90">
+              <p className="flex items-start gap-1.5 text-ui leading-relaxed text-amber-600 dark:text-amber-300/90">
                 <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
                 <span>{usageSummary.usageNotice}</span>
               </p>
@@ -110,10 +112,14 @@ function ProviderUsageCard({
             {meterRows.length > 0 ? (
               <ProviderUsageLimitRows rows={meterRows} surface="settings" />
             ) : null}
+            {hasResetCredits && resetCredits ? (
+              <ProviderUsageResetCredits resetCredits={resetCredits} />
+            ) : null}
             {usageLines.length > 0 ? (
               <ProviderUsageLineList
                 className={cn(
-                  meterRows.length > 0 && "border-t border-[color:var(--color-border)] pt-3",
+                  (meterRows.length > 0 || hasResetCredits) &&
+                    "border-t border-[color:var(--color-border)] pt-3",
                 )}
                 lines={usageLines}
                 surface="settings"
@@ -121,7 +127,7 @@ function ProviderUsageCard({
             ) : null}
           </>
         ) : (
-          <p className="text-xs leading-relaxed text-muted-foreground">
+          <p className="text-ui leading-relaxed text-muted-foreground">
             {status === "ok"
               ? "No usage data reported yet."
               : (snapshot.detail ?? providerUsageNeedsAuthDetail(provider))}
@@ -190,7 +196,9 @@ export function ProviderUsageSettingsPanel() {
     >
       {showInitialLoading ? (
         <SettingsCard>
-          <div className="px-4 py-3.5 text-xs text-muted-foreground">Loading provider usage…</div>
+          <div className="px-4 py-3.5 text-ui leading-snug text-muted-foreground">
+            Loading provider usage…
+          </div>
         </SettingsCard>
       ) : (
         <div className="flex flex-col gap-3">
@@ -205,7 +213,7 @@ export function ProviderUsageSettingsPanel() {
         </div>
       )}
 
-      <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
+      <p className="px-2 text-ui-sm leading-relaxed text-muted-foreground">
         Usage is read locally from each provider CLI&apos;s stored credentials and fetched directly
         from the provider. The list follows whatever you are signed into; unsigned providers stay
         visible until any account is connected, then drop away. Short-lived tokens are refreshed

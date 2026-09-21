@@ -84,6 +84,9 @@ export type ProviderSteerTurnInput = typeof ProviderSteerTurnInput.Type;
 export const ProviderForkThreadInput = Schema.Struct({
   sourceThreadId: ThreadId,
   threadId: ThreadId,
+  lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
+  /** External imports must pin a completed native transcript boundary. */
+  requireCompletedSource: Schema.optional(Schema.Boolean),
   sourceResumeCursor: Schema.optional(Schema.Unknown),
   sourceCwd: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),

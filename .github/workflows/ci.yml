@@ -1,8 +1,6 @@
-# Lane rule: static-fast is fast checks with no special runtime, static-typecheck is tsc,
-# unit is bun test per package, browser owns Playwright (stable only, sharded) and is the long pole,
-# build owns Electron and desktop output. Geometry quarantine lives in ci-nightly.yml.
-# Gate (quality) aggregates only: add no run steps there. A new fast check with no runtime goes to static-fast.
-# Setup-workspace runs once per lane, not once for all: never put checks in the shared action.
+# Independent feedback lanes; the quality job only aggregates results.
+# Install scope/cache decisions and measured tradeoffs: .github/CI.md.
+# Stable browser coverage blocks PRs; geometry quarantine stays nightly.
 name: CI
 
 on:
@@ -10,6 +8,9 @@ on:
   push:
     branches:
       - main
+
+permissions:
+  contents: read
 
 # Stale runs cancelled by a newer push show the gate red, not grey. Main never cancels.
 concurrency:
@@ -53,17 +54,19 @@ jobs:
               # Directory exclusions stay scoped to code-free trees: marketing
               # src ships .tsx under docs/ dirs and web ships a .ts module
               # under assets/, so '**/docs/**' / '**/assets/**' would let real
-              # code skip the gate. Runtime images stay on the code path:
-              # browser tests validate app icon transparency and layout.
+              # code skip the gate. Every image under .github/ is code-free
+              # (PR evidence screenshots, docs assets). Runtime images stay on
+              # the code path: browser tests validate app icon transparency
+              # and layout.
               - '**'
               - '!**/*.md'
               - '!docs/**'
               - '!**/*.mdx'
               - '!apps/marketing/content/**'
-              - '!.github/assets/**/*.{png,jpg,jpeg,gif,svg,webp,ico}'
+              - '!.github/**/*.{png,jpg,jpeg,gif,svg,webp,ico}'
 
-  # Phase 1b: the old static lane split. Fast checks (no special runtime) stay
-  # unblocked so docs-only PRs get a signal in ~1min.
+  # Root + scripts dependencies suffice for every static check and release smoke.
+  # Never wait for the changes job to report formatting or lint failures.
   static-fast:
     name: Static Checks (fast)
     runs-on: ubuntu-24.04
@@ -74,6 +77,11 @@ jobs:
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          scope: "static"
+
+      - name: Verify CI contracts
+        run: node --test .github/scripts/ci-contracts.test.mjs
 
       - name: Verify Synara identity
         run: bun run brand:check
@@ -86,6 +94,9 @@ jobs:
 
       - name: Lint
         run: bun run lint
+
+      - name: Exercise release-only workflow steps
+        run: node scripts/release-smoke.ts
 
   static-typecheck:
     name: Static Checks (typecheck)
@@ -103,10 +114,9 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-  # Phase 2f: one shard per workspace package via --filter. Going through turbo
-  # keeps the ^build contract (test dependsOn ^build) working per shard. The
-  # server package script keeps its serial flags (--maxWorkers=1
-  # --no-file-parallelism) inside its own shard.
+  # Keep each server shard serial internally, but use three independent runners.
+  # The measured native 3-way split lowers the slowest shard without changing
+  # collected tests. Turbo still runs each package's build prerequisites.
   unit:
     name: Unit Tests (${{ matrix.pkg }})
     runs-on: ubuntu-24.04
@@ -119,39 +129,43 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - pkg: contracts
-            filter: "@synara/contracts"
-          - pkg: shared
-            filter: "@synara/shared"
-          - pkg: scripts
-            filter: "@synara/scripts"
-          - pkg: desktop
-            filter: "@synara/desktop"
+          - pkg: core
+            filters: "--filter=@synara/contracts --filter=@synara/shared --filter=@synara/scripts --filter=@synara/desktop"
+            test-args: ""
           - pkg: web
-            filter: "@synara/web"
+            filters: "--filter=@synara/web"
+            test-args: ""
           # Server lane tests the CLI package (package name @synara/cli).
-          - pkg: server
-            filter: "@synara/cli"
+          - pkg: server 1/3
+            filters: "--filter=@synara/cli"
+            test-args: "--shard=1/3"
+          - pkg: server 2/3
+            filters: "--filter=@synara/cli"
+            test-args: "--shard=2/3"
+          - pkg: server 3/3
+            filters: "--filter=@synara/cli"
+            test-args: "--shard=3/3"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
+        with:
+          turbo: "true"
 
       - name: Verify Linux terminal PTY native dependency
-        if: matrix.pkg == 'server'
+        if: matrix.filters == '--filter=@synara/cli'
         run: node scripts/node-pty-smoke.mjs
 
       - name: Test (${{ matrix.pkg }})
-        run: bunx turbo run test --filter=${{ matrix.filter }}
+        run: bunx turbo run test ${{ matrix.filters }} -- ${{ matrix.test-args }}
 
-  # Phase 2e: stable browser suite split 3 ways. fileParallelism:false stays in
-  # vitest.browser.stable.config.ts (untouched); --shard splits test FILES
-  # across shards, never parallelizes within a file. Each shard provisions its
-  # own chromium on its own runner.
+  # ChatView is one large file, so split it by complementary test-name groups.
+  # Other browser files use native 3-way file sharding. Every runner keeps serial
+  # execution and the stable geometry quarantine; only distribution changes.
   browser:
-    name: Browser Tests (stable ${{ matrix.shard }}/3)
+    name: Browser Tests (${{ matrix.project }} ${{ matrix.shard }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     needs: [changes]
@@ -161,9 +175,19 @@ jobs:
       # shards, so every lane reports complete signal for the gate.
       fail-fast: false
       matrix:
-        # Single source of the shard count: resharding must also update the /3
-        # in the job name above and the --shard arg in the run step below.
-        shard: [1, 2, 3]
+        include:
+          - project: chat-follow
+            shard: 1/1
+          - project: chat-projects
+            shard: 1/1
+          - project: chat-workflows
+            shard: 1/1
+          - project: components
+            shard: 1/3
+          - project: components
+            shard: 2/3
+          - project: components
+            shard: 3/3
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -177,20 +201,20 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('bun.lock') }}
 
-      # Run the workspace-local playwright binary directly: bunx stalled after
-      # the chromium download on hosted runners. The step timeout stops any
-      # remaining apt/download stalls from eating the whole job budget.
+      # GitHub's pinned Ubuntu image already provides the Chromium shared-library
+      # dependencies used by this stable suite. Avoid a redundant apt/font pass on
+      # every shard; nightly geometry still uses --with-deps for rendering coverage.
       - name: Install browser test runtime
         timeout-minutes: 15
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           cd apps/web
-          ./node_modules/.bin/playwright install --with-deps chromium
+          ./node_modules/.bin/playwright install chromium
 
-      - name: Browser test (stable shard ${{ matrix.shard }}/3)
+      - name: Browser test (${{ matrix.project }} ${{ matrix.shard }})
         timeout-minutes: 20
-        run: bun run --cwd apps/web test:browser:stable -- --shard=${{ matrix.shard }}/3
+        run: bun run --cwd apps/web test:browser:ci -- --project=${{ matrix.project }} --shard=${{ matrix.shard }}
 
   build:
     name: Desktop Build
@@ -206,21 +230,33 @@ jobs:
         uses: ./.github/actions/setup-workspace
         with:
           electron: "true"
+          turbo: "true"
 
       - name: Build desktop pipeline
         run: bun run build:desktop
+
+      - name: Configure Electron sandbox helper
+        run: |
+          sandbox_helper="$(node -p "require('node:path').join(require('node:path').dirname(require('./apps/desktop/node_modules/electron')), 'chrome-sandbox')")"
+          sudo chown root:root "$sandbox_helper"
+          sudo chmod 4755 "$sandbox_helper"
+
+      - name: Verify live Electron browser lifecycle
+        run: xvfb-run -a bun run --cwd apps/desktop smoke:browser-lifecycle
 
       - name: Verify preload bundle output
         run: |
           test -f apps/desktop/dist-electron/preload.js
           grep -nE "desktopBridge|getWsUrl|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.js
 
-  # Aggregate only: no checkout, no run steps. Keep the old display name for branch protection. if: always() is intended, do not remove.
-  # Phase 2g: needs every required lane. Matrix jobs report one result covering
+  # Aggregate only: no checkout, install, build or test execution.
+  # Preserve the branch-protection display name and always() failure handling.
+  # Needs every required lane. Matrix jobs report one result covering
   # all shards, so ANY failed shard fails the gate. Docs-only runs pass with
   # heavy lanes skipped (static-fast must still succeed).
   quality:
     name: Format, Lint, Typecheck, Test, Browser Test, Build
+    permissions: {}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     needs:
@@ -232,7 +268,6 @@ jobs:
       - build
       - windows_process
       - migration_lineage
-      - release_smoke
     if: always()
     steps:
       - name: Aggregate lane results
@@ -246,7 +281,6 @@ jobs:
           BUILD: ${{ needs.build.result }}
           WINDOWS_PROCESS: ${{ needs.windows_process.result }}
           MIGRATION_LINEAGE: ${{ needs.migration_lineage.result }}
-          RELEASE_SMOKE: ${{ needs.release_smoke.result }}
         run: |
           fail=0
           # The docs-only filter itself must have run: without it a skip proves nothing.
@@ -263,7 +297,7 @@ jobs:
             echo "static-fast=$STATIC_FAST"
             fail=1
           fi
-          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE" "release-smoke=$RELEASE_SMOKE"; do
+          for lane in "typecheck=$TYPECHECK" "unit=$UNIT" "browser=$BROWSER" "build=$BUILD" "windows-process=$WINDOWS_PROCESS" "migration-lineage=$MIGRATION_LINEAGE"; do
             name="${lane%%=*}"
             result="${lane#*=}"
             if [ "$CODE" != "true" ]; then
@@ -292,26 +326,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
         with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Install dependencies
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-        run: bun install --frozen-lockfile
+          scope: "runtime"
 
       - name: Verify Windows terminal PTY native dependency under Bun
         run: bun scripts/node-pty-smoke.mjs
-
-      - name: Verify Windows runtime boundary
-        run: bun run windows-runtime:check
 
       - name: Test Windows process runtime
         run: >-
@@ -326,6 +347,7 @@ jobs:
         run: >-
           bun run --cwd apps/server test
           src/platform/processTreeController.test.ts
+          src/platform/effectProcessSignals.test.ts
           src/provider/supervisedProcessTeardown.test.ts
           src/provider/providerStartupLifecycle.test.ts
           src/processRunner.test.ts
@@ -361,7 +383,7 @@ jobs:
   # Released (id, name) migration pairs are recorded in every user's
   # effect_sql_migrations table, so renumbering or renaming one corrupts existing
   # installs. This job needs the release tags, hence the unshallow checkout; the
-  # guard itself is dependency-free and skips with a warning if tags are missing.
+  # dependency-free guard needs a real tag history, never a missing-history skip.
   migration_lineage:
     name: Migration Lineage
     runs-on: ubuntu-24.04
@@ -380,33 +402,6 @@ jobs:
           node-version-file: package.json
 
       - name: Verify released migration lineage
-        run: node scripts/check-migration-lineage.ts
-
-  release_smoke:
-    name: Release Smoke
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    needs: [changes]
-    if: needs.changes.outputs.code == 'true'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile --ignore-scripts
-
-      - name: Verify Synara identity
-        run: bun run brand:check
-
-      - name: Exercise release-only workflow steps
-        run: node scripts/release-smoke.ts
+        run: |
+          test -n "$(git tag --list 'v[0-9]*')" || { echo "::error::Release tags are missing; lineage cannot be verified."; exit 1; }
+          node scripts/check-migration-lineage.ts

@@ -1,3 +1,4 @@
+import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
   PROVIDER_DISPLAY_NAMES,
   ThreadId,
@@ -11,6 +12,7 @@ import {
   type WsCompatibilityError,
 } from "@synara/contracts";
 import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
+import { BrowserVaultDialog } from "~/components/BrowserVault";
 import { isThreadDetailEventFor } from "@synara/shared/threadDetailEvents";
 import {
   Outlet,
@@ -20,7 +22,16 @@ import {
   useParams,
   useRouterState,
 } from "@tanstack/react-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
@@ -29,6 +40,10 @@ import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoordinator";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
 import { AppSnapWelcomeDialog } from "../components/AppSnapWelcomeDialog";
+import { useOnboarding } from "../onboarding/useOnboarding";
+import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportAnnouncementDialog";
+import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
+import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
 import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
@@ -79,7 +94,10 @@ import {
 } from "../wsTransportEvents";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { invalidateProjectFileQueriesForCwds, projectQueryKeys } from "../lib/projectReactQuery";
-import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import {
+  collectActiveTerminalThreadIds,
+  removeOrphanedTerminalRuntimes,
+} from "../lib/terminalStateCleanup";
 import { useProjectRunStore } from "../projectRunStore";
 import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
@@ -135,7 +153,11 @@ import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
 import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import { providerDiscoveryQueryKeys } from "../lib/providerDiscoveryReactQuery";
-import { didProviderEnablementChange, useAppSettings } from "../appSettings";
+import {
+  didProviderCommandDiscoverySettingsChange,
+  didProviderEnablementChange,
+  useAppSettings,
+} from "../appSettings";
 import { getNavigatorPlatform } from "../lib/utils";
 import {
   getNotifiableProviderUpdateStatuses,
@@ -284,7 +306,7 @@ function RootRouteView() {
       <>
         <div className="flex h-screen flex-col bg-background text-foreground">
           <div className="flex flex-1 items-center justify-center">
-            <p className="text-sm text-muted-foreground">
+            <p className="text-ui leading-snug text-muted-foreground">
               Connecting to {APP_DISPLAY_NAME} server...
             </p>
           </div>
@@ -300,13 +322,20 @@ function RootRouteView() {
         <AnchoredToastProvider>
           <GitProgressToastPreviewDev />
           <EventRouter />
+          <EditorDirtyRouteGuard />
           <ProviderStatusRefreshCoordinator />
           <GlobalShortcutsDialog />
+          <BrowserVaultDialog />
           <GlobalFeedbackDialog />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          <AppSnapWelcomeDialog />
+          <SafariAccessOnboarding>
+            <AppSnapWelcomeDialog />
+          </SafariAccessOnboarding>
+          <GlobalOnboardingDialog />
+          <ProjectImportAnnouncementDialog />
+          <GlobalProjectImportDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
           <Outlet />
@@ -338,11 +367,11 @@ function TransportCompatibilityView({ issue }: { issue: WsCompatibilityError }) 
         <div className="absolute inset-0 bg-[linear-gradient(145deg,color-mix(in_srgb,var(--background)_90%,var(--color-black))_0%,var(--background)_55%)]" />
       </div>
       <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
-        <p className="text-[11px] font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
+        <p className="text-ui-sm font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
         <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">{title}</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{issue.message}</p>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{guidance}</p>
-        <p className="mt-4 text-xs text-muted-foreground/80">
+        <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{issue.message}</p>
+        <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{guidance}</p>
+        <p className="mt-4 text-ui leading-snug text-muted-foreground/80">
           Client {APP_VERSION} · Server {issue.serverBuild}
         </p>
         <div className="mt-5">
@@ -774,6 +803,54 @@ function GlobalFeedbackDialog() {
   return <FeedbackDialog open={isOpen} context={context} onOpenChange={setOpen} />;
 }
 
+// The dialog pulls in the provider sign-in terminal (xterm and addons), so it stays out
+// of the eager router graph and only loads the first time the tour actually opens.
+const OnboardingDialog = lazy(() =>
+  import("../onboarding/OnboardingDialog").then((module) => ({
+    default: module.OnboardingDialog,
+  })),
+);
+
+function GlobalOnboardingDialog() {
+  const onboarding = useOnboarding();
+  // Stay mounted after the first open so the close animation can play and a replay
+  // from Settings does not re-suspend.
+  const [hasOpened, setHasOpened] = useState(false);
+  useEffect(() => {
+    if (onboarding.isOpen) setHasOpened(true);
+  }, [onboarding.isOpen]);
+  if (!hasOpened) return null;
+  return (
+    <Suspense fallback={null}>
+      <OnboardingDialog
+        open={onboarding.isOpen}
+        onOpenChange={onboarding.onOpenChange}
+        onComplete={onboarding.complete}
+      />
+    </Suspense>
+  );
+}
+
+const ProjectImportDialog = lazy(() =>
+  import("../projectImport/ProjectImportDialog").then((module) => ({
+    default: module.ProjectImportDialog,
+  })),
+);
+
+function GlobalProjectImportDialog() {
+  const isOpen = useProjectImportDialogStore((store) => store.isOpen);
+  const [hasOpened, setHasOpened] = useState(false);
+  useEffect(() => {
+    if (isOpen) setHasOpened(true);
+  }, [isOpen]);
+  if (!isOpen && !hasOpened) return null;
+  return (
+    <Suspense fallback={null}>
+      <ProjectImportDialog />
+    </Suspense>
+  );
+}
+
 function GlobalWhatsNewSurface() {
   // Single mount point per app session. The hook owns the "popout visible" and
   // "dialog open" booleans and the seen-marker persistence; this component is
@@ -827,9 +904,9 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
       </div>
 
       <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
-        <p className="text-[11px] font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
+        <p className="text-ui-sm font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
         <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">Something went wrong.</h1>
-        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
+        <p className="mt-2 text-ui leading-relaxed text-muted-foreground">{message}</p>
 
         <div className="mt-5 flex flex-wrap gap-2">
           <Button size="sm" className={dialogActionButtonClassName} onClick={() => reset()}>
@@ -846,7 +923,7 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
         </div>
 
         <details className="group mt-5 overflow-hidden rounded-lg border border-border/70 bg-background/55">
-          <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-muted-foreground">
+          <summary className="cursor-pointer list-none px-3 py-2 text-ui leading-snug font-medium text-muted-foreground">
             <span className="group-open:hidden">Show error details</span>
             <span className="hidden group-open:inline">Hide error details</span>
           </summary>
@@ -1524,8 +1601,8 @@ function EventRouter() {
       shellSnapshotSequence = snapshot.snapshotSequence;
       syncServerShellSnapshot(snapshot);
       reconcilePromotedDraftsFromShellThreads(snapshot.threads);
-      removeOrphanedTerminalsForCurrentState();
       flushShellBuffer(snapshot.snapshotSequence);
+      removeOrphanedTerminalsForCurrentState();
       reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
       return true;
     };
@@ -1664,6 +1741,7 @@ function EventRouter() {
         activeThreadIds.add(dockTerminalThreadId(activeThreadId));
       }
       removeOrphanedTerminalStates(activeThreadIds);
+      removeOrphanedTerminalRuntimes(activeThreadIds);
     };
 
     const flushPendingDomainEvents = () => {
@@ -1885,7 +1963,7 @@ function EventRouter() {
         // turn, the resync belongs to the turn that requested it, and the new turn must
         // still get its own.
         const catchupEntryBeforeApply = resolveThreadCatchupBackoff(threadId);
-        syncServerThreadDetailHotPath(snapshot.thread);
+        syncServerThreadDetailHotPath(snapshot.thread, snapshot.snapshotSequence);
         reconcilePromotedDraftFromThreadDetail(snapshot.thread);
         flushThreadBuffer(threadId, snapshot.snapshotSequence);
         projectionConfirmed = true;
@@ -1967,8 +2045,8 @@ function EventRouter() {
         shellSnapshotSequence = item.snapshot.snapshotSequence;
         syncServerShellSnapshot(item.snapshot);
         reconcilePromotedDraftsFromShellThreads(item.snapshot.threads);
-        removeOrphanedTerminalsForCurrentState();
         flushShellBuffer(item.snapshot.snapshotSequence);
+        removeOrphanedTerminalsForCurrentState();
         reconcileMissingSubscribedThreadProjections(promotedDraftThreadIds);
         return;
       }
@@ -1984,6 +2062,13 @@ function EventRouter() {
       applyShellEvent(item);
       if (item.kind === "thread-upserted") {
         reconcilePromotedDraftsFromShellThreads([item.thread]);
+      }
+      if (
+        item.kind === "thread-removed" ||
+        item.kind === "project-removed" ||
+        (item.kind === "thread-upserted" && item.thread.archivedAt != null)
+      ) {
+        removeOrphanedTerminalsForCurrentState();
       }
       if (
         item.kind === "thread-upserted" &&
@@ -2043,7 +2128,7 @@ function EventRouter() {
           clearThreadDetailResumeCursor(threadId);
           return;
         }
-        syncServerThreadDetailHotPath(item.snapshot.thread);
+        syncServerThreadDetailHotPath(item.snapshot.thread, item.snapshot.snapshotSequence);
         // The projection can discard a tombstoned snapshot (deleted thread or
         // project) instead of applying it; committing the cursor or the stream
         // fence first would leave resume bookkeeping vouching for detail that
@@ -2319,6 +2404,9 @@ function EventRouter() {
       if (didProviderEnablementChange(previousSettings, payload.settings)) {
         void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
         void invalidateProviderUsageQueries(queryClient);
+      } else if (didProviderCommandDiscoverySettingsChange(previousSettings, payload.settings)) {
+        // Another window toggled it; the local patch path already invalidates its own.
+        void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
       }
       void queryClient.invalidateQueries({
         queryKey: serverSettingsQueryOptions().queryKey,

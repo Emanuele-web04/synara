@@ -1,4 +1,10 @@
-import { ApprovalRequestId, MessageId, ThreadId, TurnId } from "@synara/contracts";
+import {
+  ApprovalRequestId,
+  MessageId,
+  ThreadId,
+  TurnId,
+  type PendingClaudeCacheReview,
+} from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { QueuedComposerTurn } from "../composerDraftStore";
@@ -11,10 +17,13 @@ import type { Thread, ThreadSession } from "../types";
 import {
   armQueuedComposerSteerGate,
   claimQueuedComposerAutoDispatch,
+  clearQueuedComposerAutoDispatchRetry,
   endQueuedComposerAutoDispatch,
+  getQueuedComposerAutoDispatchRetryDelay,
   getQueuedComposerSteerGate,
   isQueuedComposerAwaitingTurnStart,
   releaseQueuedComposerAutoDispatch,
+  recordQueuedComposerAutoDispatchFailure,
   resetQueuedComposerDrainForTests,
   shouldAutoDispatchQueuedComposerTurn,
   startQueuedComposerDrainWatcher,
@@ -24,6 +33,23 @@ import {
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
 const LIVE_TURN_ID = TurnId.makeUnsafe("turn-live");
+
+function makeCacheReview(
+  status: PendingClaudeCacheReview["status"] = "pending",
+): PendingClaudeCacheReview {
+  return {
+    reviewId: "cache-review-1",
+    messageId: MessageId.makeUnsafe("held-message"),
+    sourceEventSequence: 8,
+    assessment: {
+      observedAt: "2026-09-16T10:00:00.000Z",
+      state: "likely-expired",
+      source: "session-start",
+    },
+    status,
+    createdAt: "2026-09-16T10:00:00.000Z",
+  };
+}
 
 const OPEN_GATES: QueuedComposerAutoDispatchGates = {
   hasQueueableLiveTurn: false,
@@ -52,6 +78,7 @@ function makeQueuedChatTurn(id: string): QueuedComposerTurn {
     terminalContexts: [],
     fileComments: [],
     pastedTexts: [],
+    pullRequestContexts: [],
     skills: [],
     mentions: [],
     selectedProvider: "codex",
@@ -141,6 +168,12 @@ describe("shouldAutoDispatchQueuedComposerTurn", () => {
   it("blocks drain when the queue is empty", () => {
     expect(shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, queuedTurnCount: 0 })).toBe(false);
   });
+
+  it("blocks drain while a cache review holds the previous message", () => {
+    expect(
+      shouldAutoDispatchQueuedComposerTurn({ ...OPEN_GATES, hasPendingCacheReview: true }),
+    ).toBe(false);
+  });
 });
 
 describe("queued composer drain watcher", () => {
@@ -163,6 +196,142 @@ describe("queued composer drain watcher", () => {
     resetQueuedComposerDrainForTests();
     resetComposerDraftStore();
     useStore.setState(initialState);
+  });
+
+  it("holds every cache review status without consuming retries and resumes after clearance", async () => {
+    vi.useFakeTimers();
+    const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
+    seedThread({ ...idleThread, claudeCacheReview: makeCacheReview() });
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-held"));
+
+    for (const status of ["pending", "responding", "compacting", "failed", "uncertain"] as const) {
+      seedThread({ ...idleThread, claudeCacheReview: makeCacheReview(status) });
+      await flushDrain();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-held")).toBeUndefined();
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns,
+      ).toHaveLength(1);
+    }
+
+    seedThread({ ...idleThread, claudeCacheReview: null });
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0]?.[0].queuedTurn.id).toBe("queued-held");
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? [],
+    ).toHaveLength(0);
+  });
+
+  it("does not charge a failed drain attempt to retries when a cache review appeared during dispatch", async () => {
+    const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
+    seedThread(idleThread);
+    dispatch.mockImplementationOnce(async () => {
+      seedThread({ ...idleThread, claudeCacheReview: makeCacheReview() });
+      return false;
+    });
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-race"));
+
+    await flushDrain();
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-race")).toBeUndefined();
+    expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns).toHaveLength(
+      1,
+    );
+
+    seedThread({ ...idleThread, claudeCacheReview: null });
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("acknowledges the held message by id without draining or resending it", async () => {
+    const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
+    seedThread(idleThread);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-first"));
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-second"));
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(isQueuedComposerAwaitingTurnStart(THREAD_ID)).toBe(true);
+
+    seedThread({
+      ...idleThread,
+      claudeCacheReview: { ...makeCacheReview(), reviewId: "unrelated-review" },
+    });
+    await flushDrain();
+    expect(isQueuedComposerAwaitingTurnStart(THREAD_ID)).toBe(true);
+
+    const messageId = dispatch.mock.calls[0]?.[0].messageId;
+    expect(messageId).toBeDefined();
+    seedThread({
+      ...idleThread,
+      claudeCacheReview: { ...makeCacheReview(), messageId: messageId! },
+    });
+    await flushDrain();
+    expect(isQueuedComposerAwaitingTurnStart(THREAD_ID)).toBe(false);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns.map(({ id }) => id),
+    ).toEqual(["queued-second"]);
+
+    seedThread({ ...idleThread, claudeCacheReview: null });
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch.mock.calls[1]?.[0].queuedTurn.id).toBe("queued-second");
+  });
+
+  it("consumes a queued message whose durable review arrived despite a lost dispatch acknowledgement", async () => {
+    const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
+    seedThread(idleThread);
+    dispatch.mockImplementationOnce(async ({ messageId }) => {
+      seedThread({
+        ...idleThread,
+        claudeCacheReview: { ...makeCacheReview(), messageId: messageId! },
+      });
+      return false;
+    });
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("accepted-held"));
+    await flushDrain();
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? [],
+    ).toHaveLength(0);
+    seedThread({ ...idleThread, claudeCacheReview: null });
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets an exhausted retry budget when a claimed chat resolves its cache review", async () => {
+    const idleThread = makeThread({ id: THREAD_ID, session: makeSession("ready") });
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    seedThread({ ...idleThread, claudeCacheReview: makeCacheReview() });
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-claimed"));
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      recordQueuedComposerAutoDispatchFailure(THREAD_ID, "queued-claimed");
+    }
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed")).toBeNull();
+
+    seedThread({ ...idleThread, claudeCacheReview: null });
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed")).toBeUndefined();
+    await flushDrain();
+    expect(dispatch).not.toHaveBeenCalled();
+    releaseQueuedComposerAutoDispatch(THREAD_ID);
+    await flushDrain();
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("drains a backgrounded thread when its live turn settles and ChatView is unmounted", async () => {
@@ -272,6 +441,52 @@ describe("queued composer drain watcher", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     await flushDrain();
     expect(dispatch).toHaveBeenCalledTimes(4);
+  });
+
+  it("shares the bounded retry budget with a claimed ChatView drain", () => {
+    resetQueuedComposerDrainForTests();
+    let now = 10_000;
+    startQueuedComposerDrainWatcher({ dispatch, now: () => now });
+    claimQueuedComposerAutoDispatch(THREAD_ID);
+    useComposerDraftStore
+      .getState()
+      .enqueueQueuedTurn(THREAD_ID, makeQueuedChatTurn("queued-claimed-failing"));
+
+    recordQueuedComposerAutoDispatchFailure(THREAD_ID, "queued-claimed-failing");
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing")).toBe(
+      1_000,
+    );
+    seedThread(
+      makeThread({
+        id: THREAD_ID,
+        session: makeSession("ready"),
+        error: "Turn start failed for test.",
+      }),
+    );
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing")).toBe(
+      1_000,
+    );
+
+    now += 1_000;
+    recordQueuedComposerAutoDispatchFailure(THREAD_ID, "queued-claimed-failing");
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing")).toBe(
+      5_000,
+    );
+
+    now += 5_000;
+    recordQueuedComposerAutoDispatchFailure(THREAD_ID, "queued-claimed-failing");
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing")).toBe(
+      15_000,
+    );
+
+    now += 15_000;
+    recordQueuedComposerAutoDispatchFailure(THREAD_ID, "queued-claimed-failing");
+    expect(getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing")).toBeNull();
+
+    clearQueuedComposerAutoDispatchRetry(THREAD_ID);
+    expect(
+      getQueuedComposerAutoDispatchRetryDelay(THREAD_ID, "queued-claimed-failing"),
+    ).toBeUndefined();
   });
 
   it("does not schedule drain work for unrelated streaming message updates", async () => {

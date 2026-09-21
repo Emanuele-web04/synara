@@ -64,6 +64,11 @@ describe("buildShortcutSheetSections", () => {
         (entry) => entry.id === "sidebar.activity" && entry.shortcutLabel === "⌥⌘U",
       ),
     ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "editor.file.save" && entry.label === "Save file",
+      ),
+    ).toBe(true);
     expect(sections[1]?.title).toBe("In workspace mode");
     expect(sections[2]?.entries[0]?.shortcutLabel).toBe("⌘R");
   });
@@ -157,5 +162,18 @@ describe("listEditableShortcutDefinitions", () => {
     expect(listEditableShortcutDefinitions().map((definition) => definition.command)).toEqual(
       STATIC_KEYBINDING_COMMANDS,
     );
+  });
+
+  it("shows a friendly label instead of the raw command id for every built-in command", () => {
+    const definitions = listEditableShortcutDefinitions();
+    const unlabeledCommands = definitions
+      .filter(
+        (definition) =>
+          definition.label === definition.command ||
+          definition.description === "Assign a shortcut to this built-in command.",
+      )
+      .map((definition) => definition.command);
+
+    expect(unlabeledCommands).toEqual([]);
   });
 });

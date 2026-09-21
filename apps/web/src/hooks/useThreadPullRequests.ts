@@ -27,7 +27,9 @@ export type ThreadPullRequestSource = Pick<
 >;
 
 const THREAD_PR_STALE_TIME_MS = 30_000;
-const THREAD_PR_REFETCH_INTERVAL_MS = 60_000;
+// Every visible row costs one GitHub API call per tick, so badges poll at the relaxed git-status
+// cadence. Local pushes, merges, and turn activity still refresh them through git invalidation.
+const THREAD_PR_REFETCH_INTERVAL_MS = 300_000;
 
 // Also accepts persisted `lastKnownPr` entries, whose draft/mergeability/diff fields are
 // optional because older rows predate them.
@@ -144,9 +146,9 @@ export function useThreadPullRequests(input: {
       ...gitResolvePullRequestQueryOptions({
         cwd: target.cwd,
         reference: target.lastKnownPr.url,
+        pollIntervalMs: THREAD_PR_REFETCH_INTERVAL_MS,
       }),
       staleTime: THREAD_PR_STALE_TIME_MS,
-      refetchInterval: THREAD_PR_REFETCH_INTERVAL_MS,
     })),
   });
   return useMemo(() => {

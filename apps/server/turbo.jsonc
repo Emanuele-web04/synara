@@ -2,6 +2,11 @@
   "$schema": "https://turbo.build/schema.json",
   "extends": ["//"],
   "tasks": {
+    "test": {
+      // Server tests import web source and create their own static fixtures.
+      // The desktop build lane validates the production web bundle separately.
+      "dependsOn": ["@synara/contracts#build"],
+    },
     "start": {
       "dependsOn": ["build"],
       "cache": false,

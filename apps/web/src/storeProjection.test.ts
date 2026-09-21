@@ -7,16 +7,15 @@ import {
   ProjectId,
   SpaceId,
   ThreadId,
-  ThreadMarkerId,
   TurnId,
   type OrchestrationReadModel,
   type OrchestrationShellStreamEvent,
-  type ThreadMarker,
 } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyShellEvent,
+  applyThreadUpdate,
   clearThreadDetailSyncFailureInClientState,
   evictThreadDetailFromClientState,
   markThreadDetailSyncFailedInClientState,
@@ -35,6 +34,7 @@ import type { AppState } from "./storeState";
 import { getThreadFromState } from "./threadDerivation";
 import {
   makeThread,
+  makeDomainEvent,
   makeActivity,
   makeState,
   makeProject,
@@ -45,8 +45,249 @@ import {
   threadsOf,
 } from "./storeTestFixtures";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
+import { applyOrchestrationEvents } from "./storeEventReducer";
 
 describe("store projection", () => {
+  it("retains an active resend timestamp through binding updates and rollback", () => {
+    const at = (minute: number) => `2026-09-17T10:0${minute}:00.000Z`;
+    const messageId = MessageId.makeUnsafe("resent");
+    const thread = makeThread({
+      latestHumanMessageAt: at(1),
+      messages: [
+        {
+          id: messageId,
+          role: "user",
+          text: "Original",
+          dispatchOrigin: "user",
+          turnId: null,
+          streaming: false,
+          createdAt: at(1),
+        },
+      ],
+    });
+    let state = makeState(thread);
+    const upsertUserMessage = (input: {
+      messageId: MessageId;
+      createdAt: string;
+      updatedAt: string;
+      sequence: number;
+    }) => {
+      const { sequence, ...message } = input;
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.message-sent",
+          {
+            threadId: thread.id,
+            role: "user",
+            text: "Edited",
+            dispatchOrigin: "user",
+            turnId: null,
+            streaming: false,
+            source: "native",
+            ...message,
+          },
+          { sequence, occurredAt: at(sequence) },
+        ),
+      ]);
+    };
+    upsertUserMessage({ messageId, createdAt: at(2), updatedAt: at(2), sequence: 2 });
+    expect(threadsOf(state)[0]?.latestHumanMessageAt).toBe(at(2));
+    expect(threadsOf(state)[0]?.messages[0]?.createdAt).toBe(at(1));
+    upsertUserMessage({ messageId, createdAt: at(1), updatedAt: at(2), sequence: 3 });
+    expect(threadsOf(state)[0]?.latestHumanMessageAt).toBe(at(2));
+    const nextMessageId = MessageId.makeUnsafe("next");
+    upsertUserMessage({
+      messageId: nextMessageId,
+      createdAt: at(4),
+      updatedAt: at(4),
+      sequence: 4,
+    });
+    state = applyOrchestrationEvents(state, [
+      makeDomainEvent(
+        "thread.conversation-rolled-back",
+        {
+          threadId: thread.id,
+          messageId: nextMessageId,
+          numTurns: 1,
+        },
+        { sequence: 5, occurredAt: at(5) },
+      ),
+    ]);
+    expect(threadsOf(state)[0]?.latestHumanMessageAt).toBe(at(2));
+    expect(state.sidebarThreadSummaryById[thread.id]?.latestHumanMessageAt).toBe(at(2));
+  });
+
+  it.each(["2026-09-17T10:00:00.000Z", null])(
+    "preserves authoritative human recency %s while stale detail awaits hydration",
+    (latestHumanMessageAt) => {
+      const staleAt = "2026-09-17T10:20:00.000Z";
+      const incoming = makeReadModelThread({ latestHumanMessageAt, messages: [] });
+      const thread = makeThread({
+        id: incoming.id,
+        latestHumanMessageAt: staleAt,
+        messages: [
+          {
+            id: MessageId.makeUnsafe("rolled-back-human"),
+            role: "user",
+            text: "Removed remotely",
+            dispatchOrigin: "user",
+            turnId: null,
+            streaming: false,
+            createdAt: staleAt,
+          },
+        ],
+      });
+      let state = syncServerShellSnapshot(makeState(thread), {
+        ...makeShellSnapshot(incoming),
+        snapshotSequence: 20,
+      });
+      expect(getThreadFromState(state, thread.id)?.messages).toHaveLength(1);
+      state = applyThreadUpdate(state, thread.id, (current) => ({
+        ...current,
+        lastVisitedAt: "2026-09-17T10:30:00.000Z",
+      }));
+      expect(getThreadFromState(state, thread.id)?.latestHumanMessageAt).toBe(latestHumanMessageAt);
+      expect(state.sidebarThreadSummaryById[thread.id]?.latestHumanMessageAt).toBe(
+        latestHumanMessageAt,
+      );
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.message-sent",
+          {
+            threadId: thread.id,
+            messageId: MessageId.makeUnsafe("automatic-followup"),
+            role: "user",
+            dispatchOrigin: "automation",
+            text: "Continue",
+            streaming: false,
+            turnId: null,
+            source: "native",
+            createdAt: "2026-09-17T10:31:00.000Z",
+            updatedAt: "2026-09-17T10:31:00.000Z",
+          },
+          { sequence: 21, occurredAt: "2026-09-17T10:31:00.000Z" },
+        ),
+      ]);
+      expect(getThreadFromState(state, thread.id)?.latestHumanMessageAt).toBe(latestHumanMessageAt);
+      expect(state.sidebarThreadSummaryById[thread.id]?.latestHumanMessageAt).toBe(
+        latestHumanMessageAt,
+      );
+    },
+  );
+
+  it("retains human recency through partial hydration, reads, agent sends, eviction, and reconnect", () => {
+    const humanAt = "2026-09-17T10:00:00.000Z";
+    const incoming = makeReadModelThread({ latestHumanMessageAt: humanAt, messages: [] });
+    const threadId = incoming.id;
+    let state = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(incoming));
+    state = syncServerThreadDetailHotPath(state, incoming);
+    state = applyThreadUpdate(state, threadId, (thread) => ({
+      ...thread,
+      lastVisitedAt: "2026-09-17T10:10:00.000Z",
+    }));
+    for (const [index, dispatchOrigin] of (["agent", "automation", "user"] as const).entries()) {
+      const createdAt = `2026-09-17T10:2${index}:00.000Z`;
+      state = applyOrchestrationEvents(state, [
+        makeDomainEvent(
+          "thread.message-sent",
+          {
+            threadId,
+            messageId: MessageId.makeUnsafe(`recency-${index}`),
+            role: "user",
+            dispatchOrigin,
+            text: "Follow-up",
+            streaming: false,
+            turnId: null,
+            source: "native",
+            createdAt,
+            updatedAt: createdAt,
+          },
+          { sequence: 10 + index, occurredAt: createdAt },
+        ),
+      ]);
+      expect(getThreadFromState(state, threadId)?.latestHumanMessageAt).toBe(
+        dispatchOrigin === "user" ? createdAt : humanAt,
+      );
+      expect(state.sidebarThreadSummaryById[threadId]?.latestHumanMessageAt).toBe(
+        dispatchOrigin === "user" ? createdAt : humanAt,
+      );
+    }
+    state = evictThreadDetailFromClientState(state, threadId);
+    expect(getThreadFromState(state, threadId)?.latestHumanMessageAt).toBe(
+      "2026-09-17T10:22:00.000Z",
+    );
+    state = syncServerShellSnapshot(state, {
+      ...makeShellSnapshot({ ...incoming, latestHumanMessageAt: humanAt }),
+      snapshotSequence: 20,
+    });
+    expect(state.sidebarThreadSummaryById[threadId]?.latestHumanMessageAt).toBe(humanAt);
+  });
+
+  it("restores cache reviews from shell snapshots and retains them during detail eviction", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const incoming = makeReadModelThread({
+      claudeCacheReview: {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe("held-message"),
+        sourceEventSequence: 8,
+        assessment: {
+          observedAt: "2026-09-16T10:00:00.000Z",
+          state: "likely-expired",
+          source: "session-start",
+          contextTokens: 800_000,
+        },
+        status: "pending",
+        createdAt: "2026-09-16T10:00:00.000Z",
+      },
+    });
+    const restored = syncServerShellSnapshot(makeState(makeThread()), makeShellSnapshot(incoming));
+    expect(restored.threadShellById?.[threadId]?.claudeCacheReview).toEqual(
+      incoming.claudeCacheReview,
+    );
+    expect(getThreadFromState(restored, threadId)?.claudeCacheReview).toEqual(
+      incoming.claudeCacheReview,
+    );
+
+    const hydrated = syncServerThreadDetailHotPath(restored, incoming);
+    const evicted = evictThreadDetailFromClientState(hydrated, threadId);
+    expect(getThreadFromState(evicted, threadId)?.claudeCacheReview).toEqual(
+      incoming.claudeCacheReview,
+    );
+
+    const cleared = applyShellEvent(evicted, {
+      kind: "thread-upserted",
+      sequence: 9,
+      thread: { ...incoming, claudeCacheReview: null },
+    });
+    expect(getThreadFromState(cleared, threadId)?.claudeCacheReview).toBeNull();
+  });
+
+  it("restores a failed cache review and clears it from an authoritative full snapshot", () => {
+    const incoming = makeReadModelThread({
+      claudeCacheReview: {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe("held-message"),
+        sourceEventSequence: 8,
+        assessment: {
+          observedAt: "2026-09-16T10:00:00.000Z",
+          state: "likely-expired",
+          source: "session-start",
+        },
+        status: "failed",
+        error: "Compaction was interrupted",
+        createdAt: "2026-09-16T10:00:00.000Z",
+      },
+    });
+    const restored = syncServerReadModel(makeState(makeThread()), makeReadModel(incoming));
+    expect(threadsOf(restored)[0]?.claudeCacheReview).toEqual(incoming.claudeCacheReview);
+
+    const cleared = syncServerReadModel(restored, {
+      ...makeReadModel({ ...incoming, claudeCacheReview: null }),
+      snapshotSequence: 2,
+    });
+    expect(threadsOf(cleared)[0]?.claudeCacheReview).toBeNull();
+  });
+
   it("preserves a semantic branch when a temp worktree branch arrives from the read model", () => {
     const initialThread = makeThread({
       branch: "feature/semantic-branch",
@@ -455,32 +696,6 @@ describe("store projection", () => {
     expect(threadsOf(next)[0]?.pinnedMessages).toEqual(pinnedMessages);
     expect(threadsOf(next)[0]?.notes).toBe("remember to rerun typecheck");
     expect(threadsOf(next)[0]?.goal).toBe("Finish the release safely");
-  });
-
-  it("preserves threadMarkers through the normalized read-model projection", () => {
-    const marker: ThreadMarker = {
-      id: ThreadMarkerId.makeUnsafe("marker-1"),
-      messageId: MessageId.makeUnsafe("assistant-marker-1"),
-      startOffset: 6,
-      endOffset: 20,
-      selectedText: "important text",
-      style: "highlight",
-      color: "yellow",
-      label: null,
-      done: false,
-      createdAt: "2026-02-27T00:01:00.000Z",
-      updatedAt: "2026-02-27T00:01:00.000Z",
-    };
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          threadMarkers: [marker],
-        }),
-      ),
-    );
-
-    expect(threadsOf(next)[0]?.threadMarkers).toEqual([marker]);
   });
 
   it("applies shell goals without clobbering detail annotations", () => {

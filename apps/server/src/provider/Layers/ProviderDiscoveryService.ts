@@ -95,9 +95,8 @@ const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
   // One catalog cache for every provider: adapters that spawn a CLI/ACP process
-  // per listModels call (cursor, grok, antigravity, opencode, pi) get the same
-  // stale-while-revalidate, single-flight, and failure-replay behaviour that
-  // codex/claude implement privately.
+  // per listModels call share stale-while-revalidate, single-flight, and
+  // failure-replay behaviour with adapters that reuse a running process.
   const modelDiscoveryCache = makeProviderModelDiscoveryCache<ProviderDiscoveryError>();
   const providerIsEnabled = Effect.fn("providerIsEnabled")(function* (
     provider: ProviderGetComposerCapabilitiesInput["provider"],
@@ -212,7 +211,18 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      return yield* adapter.listCommands(parsed);
+      if (parsed.provider !== "claudeAgent") {
+        return yield* adapter.listCommands(parsed);
+      }
+      // Server-owned like the session start options, so discovery lists the
+      // same commands a new Claude session will actually have.
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.orElseSucceed(() => DEFAULT_SERVER_SETTINGS),
+      );
+      return yield* adapter.listCommands({
+        ...parsed,
+        enableArtifacts: settings.providers.claudeAgent.enableArtifacts,
+      });
     });
 
   const listPlugins: ProviderDiscoveryServiceShape["listPlugins"] = (input) =>

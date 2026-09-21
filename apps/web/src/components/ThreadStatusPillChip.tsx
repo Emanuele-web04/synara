@@ -16,7 +16,7 @@ export function ThreadStatusPillChip({
 }) {
   return (
     <span
-      className={cn("flex min-w-0 items-center gap-1.5 text-[11px]", pill.colorClass, className)}
+      className={cn("flex min-w-0 items-center gap-1.5 text-ui-sm", pill.colorClass, className)}
     >
       <span
         className={cn(

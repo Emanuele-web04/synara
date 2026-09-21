@@ -10,16 +10,13 @@ const THREAD_SHELL_SUMMARY_ACTIVITY_KINDS = new Set([
 ]);
 
 export const THREAD_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.claude-cache-set",
   "thread.created",
   "thread.meta-updated",
   "thread.pinned-message-added",
   "thread.pinned-message-removed",
   "thread.pinned-message-done-set",
   "thread.pinned-message-label-set",
-  "thread.marker-added",
-  "thread.marker-removed",
-  "thread.marker-done-set",
-  "thread.marker-label-set",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.turn-start-requested",

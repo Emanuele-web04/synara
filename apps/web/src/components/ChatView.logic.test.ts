@@ -1,11 +1,13 @@
 import {
   CheckpointRef,
+  DEFAULT_MODEL_BY_PROVIDER,
   EventId,
   MessageId,
   ThreadId,
   TurnId,
   type GitWorktreeSetupProgressEvent,
   type ModelSlug,
+  type PendingClaudeCacheReview,
   type RuntimeMode,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -25,6 +27,8 @@ import {
   derivePromptHistoryFromMessages,
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
+  threadHasProviderLockingActivity,
+  threadHasProviderLockingMessages,
   hasFileUndoSettled,
   isComposerCursorOnFirstLine,
   isComposerCursorOnLastLine,
@@ -847,6 +851,56 @@ describe("voice helpers", () => {
     ]);
   });
 
+  it("does not lock Side chat providers on fork-import history alone", () => {
+    const importedOnly = {
+      sidechatSourceThreadId: ThreadId.makeUnsafe("source-thread"),
+      latestTurn: null,
+      session: null,
+      messages: [
+        {
+          id: "message-imported" as never,
+          role: "assistant" as const,
+          text: "Previous context",
+          turnId: null,
+          streaming: false,
+          source: "fork-import" as const,
+          createdAt: "2026-05-02T10:00:00.000Z",
+          completedAt: "2026-05-02T10:00:00.000Z",
+        },
+      ],
+    };
+
+    expect(threadHasProviderLockingMessages(importedOnly)).toBe(false);
+    expect(threadHasProviderLockingActivity(importedOnly)).toBe(false);
+
+    const withNative = {
+      ...importedOnly,
+      messages: [
+        ...importedOnly.messages,
+        {
+          id: "message-native" as never,
+          role: "user" as const,
+          text: "Fresh side question",
+          turnId: null,
+          streaming: false,
+          source: "native" as const,
+          createdAt: "2026-05-02T10:01:00.000Z",
+          completedAt: "2026-05-02T10:01:00.000Z",
+        },
+      ],
+    };
+
+    expect(threadHasProviderLockingMessages(withNative)).toBe(true);
+    expect(threadHasProviderLockingActivity(withNative)).toBe(true);
+
+    expect(
+      threadHasProviderLockingMessages({
+        sidechatSourceThreadId: null,
+        messages: importedOnly.messages,
+      }),
+    ).toBe(true);
+  });
+
   it("appends a transcript to the existing prompt without disturbing spacing", () => {
     expect(appendVoiceTranscriptToPrompt("Hello there   ", "  next line  ")).toBe(
       "Hello there\nnext line",
@@ -1497,6 +1551,7 @@ describe("deriveComposerSendState", () => {
         },
       ],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("");
@@ -1526,6 +1581,7 @@ describe("deriveComposerSendState", () => {
         },
       ],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("yoo  waddup");
@@ -1543,6 +1599,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1558,6 +1615,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 1,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1573,6 +1631,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -1588,6 +1647,7 @@ describe("deriveComposerSendState", () => {
       fileCommentCount: 0,
       terminalContexts: [],
       pastedTexts: [],
+      pullRequestContexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -2077,6 +2137,49 @@ describe("runWorktreeCreationFlow", () => {
     expect(harness.unsubscribeCount()).toBe(1);
     expect(harness.removedPaths).toEqual([]);
   });
+});
+
+describe("Claude cache review dispatch acknowledgement", () => {
+  it.each([
+    { expectedId: "held-message", reviewedId: "held-message", acknowledged: true },
+    { expectedId: "new-message", reviewedId: "old-message", acknowledged: false },
+    { expectedId: null, reviewedId: "held-message", acknowledged: false },
+  ])(
+    "only acknowledges the exact held message ($expectedId / $reviewedId)",
+    ({ expectedId, reviewedId, acknowledged }) => {
+      const localDispatch = createLocalDispatchSnapshot(
+        undefined,
+        expectedId === null
+          ? undefined
+          : { expectedUserMessageId: MessageId.makeUnsafe(expectedId) },
+      );
+      const claudeCacheReview: PendingClaudeCacheReview = {
+        reviewId: "cache-review-1",
+        messageId: MessageId.makeUnsafe(reviewedId),
+        sourceEventSequence: 8,
+        assessment: {
+          observedAt: "2026-09-16T10:00:00.000Z",
+          state: "likely-expired",
+          source: "session-start",
+        },
+        status: "pending",
+        createdAt: "2026-09-16T10:00:00.000Z",
+      };
+      const input = {
+        localDispatch,
+        claudeCacheReview,
+        phase: "ready" as const,
+        latestTurn: null,
+        session: null,
+        messages: [],
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      };
+      expect(hasServerAcknowledgedLocalDispatch(input)).toBe(acknowledged);
+      expect(hasLiveTurnTakenOver(input)).toBe(acknowledged);
+    },
+  );
 });
 
 describe("hasServerAcknowledgedLocalDispatch", () => {
@@ -2932,7 +3035,7 @@ describe("resolveDraftFallbackModelSelection", () => {
         projectDefault: null,
         settingsDefaultProvider: "pi",
       }),
-    ).toEqual({ provider: "codex", model: "gpt-5.5" });
+    ).toEqual({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
   });
 
   it("uses the settings provider default model when no project default exists", () => {

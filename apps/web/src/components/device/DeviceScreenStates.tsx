@@ -50,7 +50,7 @@ export function DeviceSetupScreen(props: {
         <h3 className={cn("text-balance font-semibold text-[13px] leading-tight", SCREEN_TEXT)}>
           {props.title}
         </h3>
-        <p className={cn("text-pretty text-[10px] leading-snug", SCREEN_MUTED)}>
+        <p className={cn("text-pretty text-ui-xs leading-snug", SCREEN_MUTED)}>
           {props.description}
         </p>
       </div>
@@ -77,7 +77,7 @@ export function DeviceSetupScreen(props: {
                 <span className="min-w-0 flex-1 space-y-0.5">
                   <span
                     className={cn(
-                      "block text-[11px] leading-tight",
+                      "block text-ui-sm leading-tight",
                       blocked ? SCREEN_DIM : SCREEN_TEXT,
                     )}
                   >
@@ -86,7 +86,7 @@ export function DeviceSetupScreen(props: {
                   {step.detail ? (
                     <span
                       className={cn(
-                        "block text-pretty text-[9.5px] leading-snug",
+                        "block text-pretty text-ui-2xs leading-snug",
                         blocked ? SCREEN_DIM : SCREEN_MUTED,
                       )}
                     >
@@ -103,7 +103,7 @@ export function DeviceSetupScreen(props: {
       {props.checkingLabel ? (
         <p
           aria-live="polite"
-          className={cn("mt-4 flex items-center gap-1.5 text-[10px]", SCREEN_MUTED)}
+          className={cn("mt-4 flex items-center gap-1.5 text-ui-xs", SCREEN_MUTED)}
         >
           <ScreenSpinner />
           {props.checkingLabel}
@@ -120,7 +120,7 @@ export function DeviceSetupScreen(props: {
           <button
             type="button"
             onClick={props.action.onClick}
-            className="w-full rounded-full bg-white px-3 py-2 text-[11px] font-medium text-black outline-none transition-opacity duration-220 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-white/70 motion-reduce:transition-none"
+            className="w-full rounded-full bg-white px-3 py-2 text-ui-sm font-medium text-black outline-none transition-opacity duration-220 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-white/70 motion-reduce:transition-none"
           >
             {props.action.label}
           </button>
@@ -133,7 +133,7 @@ export function DeviceSetupScreen(props: {
 export function DeviceEmptyScreen(props: { message: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-1 px-[12%] text-center">
-      <p className={cn("text-balance text-[11px] leading-snug", SCREEN_MUTED)}>{props.message}</p>
+      <p className={cn("text-balance text-ui-sm leading-snug", SCREEN_MUTED)}>{props.message}</p>
     </div>
   );
 }
@@ -142,8 +142,8 @@ export function DeviceEmptyScreen(props: { message: string }) {
 export function DeviceBootingScreen(props: { deviceName: string; label: string }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-[12%] text-center">
-      <p className={cn("text-[11px] font-medium", SCREEN_TEXT)}>{props.deviceName}</p>
-      <span className={cn("flex items-center gap-1.5 text-[10px]", SCREEN_MUTED)}>
+      <p className={cn("text-ui-sm font-medium", SCREEN_TEXT)}>{props.deviceName}</p>
+      <span className={cn("flex items-center gap-1.5 text-ui-xs", SCREEN_MUTED)}>
         <ScreenSpinner />
         {props.label}
       </span>

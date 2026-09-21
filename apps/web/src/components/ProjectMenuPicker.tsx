@@ -155,7 +155,7 @@ function ProjectMenuPickerList(props: {
           ))}
         </MenuRadioGroup>
       ) : (
-        <p className="px-3 py-6 text-center text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/60">
+        <p className="px-3 py-6 text-center text-ui-sm text-muted-foreground/60">
           {props.projectOptions.length === 0 ? "No projects yet" : "No matching projects"}
         </p>
       )}

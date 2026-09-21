@@ -1,7 +1,7 @@
 // FILE: storeNormalization.test.ts
 // Purpose: Pins the incremental activity accumulator to the `normalizeActivities` fold it replaces.
 
-import { MessageId, TurnId } from "@synara/contracts";
+import { MessageId, TurnId, type PendingClaudeCacheReview } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -10,12 +10,86 @@ import {
   dedupeActivitiesByIdAfterAppend,
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
+  normalizeChatMessage,
+  normalizeThreadFromReadModel,
+  normalizeThreadShellSnapshot,
+  threadShellsEqual,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
 import type { Thread } from "./types";
 
 type ThreadActivity = Thread["activities"][number];
+
+const cacheReview: PendingClaudeCacheReview = {
+  reviewId: "cache-review-1",
+  messageId: MessageId.makeUnsafe("held-message"),
+  sourceEventSequence: 8,
+  assessment: {
+    observedAt: "2026-09-16T10:00:00.000Z",
+    contextTokens: 800_000,
+    state: "likely-expired",
+    source: "session-start",
+  },
+  status: "pending",
+  createdAt: "2026-09-16T10:00:00.000Z",
+};
+
+describe("Claude cache review normalization", () => {
+  it("reuses equivalent reviews and updates reviews when only their status changes", () => {
+    const incoming = makeReadModelThread({ claudeCacheReview: cacheReview });
+    const initial = normalizeThreadFromReadModel(incoming, undefined);
+    const replay = normalizeThreadFromReadModel(structuredClone(incoming), initial);
+    expect(replay).toBe(initial);
+    expect(replay.claudeCacheReview).toBe(initial.claudeCacheReview);
+
+    const changed = normalizeThreadFromReadModel(
+      { ...incoming, claudeCacheReview: { ...cacheReview, status: "compacting" } },
+      initial,
+    );
+    expect(changed).not.toBe(initial);
+    expect(changed.claudeCacheReview?.status).toBe("compacting");
+    const cleared = normalizeThreadFromReadModel({ ...incoming, claudeCacheReview: null }, changed);
+    expect(cleared.claudeCacheReview).toBeNull();
+  });
+
+  it("includes the durable review in shell equality without invalidating equivalent snapshots", () => {
+    const incoming = makeReadModelThread({ claudeCacheReview: cacheReview });
+    const thread = normalizeThreadFromReadModel(incoming, undefined);
+    const initial = normalizeThreadShellSnapshot(incoming, thread).shell;
+    const replay = normalizeThreadShellSnapshot(structuredClone(incoming), thread).shell;
+    expect(replay.claudeCacheReview).toBe(initial.claudeCacheReview);
+    expect(threadShellsEqual(initial, replay)).toBe(true);
+    expect(threadShellsEqual(initial, { ...replay, claudeCacheReview: null })).toBe(false);
+    expect(
+      threadShellsEqual(initial, {
+        ...replay,
+        claudeCacheReview: { ...cacheReview, status: "failed", error: "Compaction failed" },
+      }),
+    ).toBe(false);
+  });
+
+  it.each([cacheReview, null])(
+    "preserves live review state across older detail hydration (%j)",
+    (review) => {
+      const previous = makeThread({
+        claudeCacheReview: review,
+        updatedAt: "2026-09-16T10:01:00.000Z",
+      });
+      const stale = makeReadModelThread({
+        claudeCacheReview: review === null ? cacheReview : null,
+        updatedAt: "2026-09-16T10:00:00.000Z",
+      });
+      const merged = mergeReadModelThreadDetailWithLiveHotPath(stale, previous);
+      expect(merged.claudeCacheReview).toBe(review);
+
+      const current = { ...stale, updatedAt: "2026-09-16T10:02:00.000Z" };
+      expect(mergeReadModelThreadDetailWithLiveHotPath(current, previous).claudeCacheReview).toBe(
+        current.claudeCacheReview,
+      );
+    },
+  );
+});
 
 interface FoldStep {
   readonly changed: boolean;
@@ -374,5 +448,89 @@ describe("mergeReadModelThreadDetailWithLiveHotPath", () => {
 
     expect(merged.messages.find((message) => message.id === assistantId)?.text).toBe(localText);
     expect(merged.messages.find((message) => message.id === assistantId)?.streaming).toBe(true);
+  });
+});
+
+describe("accounting activity retention", () => {
+  it("keeps 3000 accounting turns within the existing transcript cap", () => {
+    const activities = Array.from({ length: 6000 }, (_, index) =>
+      makeActivity({
+        id: "accounting-" + index,
+        turnId: TurnId.makeUnsafe("turn-" + Math.floor(index / 2)),
+        kind: index % 2 === 0 ? "context-window.updated" : "turn.completed",
+        sequence: index + 1,
+      }),
+    );
+    const normalized = normalizeActivities(activities, undefined);
+    expect(normalized).toHaveLength(2000);
+    const accumulator = createThreadActivityAccumulator(normalized);
+    accumulator.append(
+      makeActivity({ id: "new-tool", turnId: TurnId.makeUnsafe("new-turn"), sequence: 6001 }),
+    );
+    expect(accumulator.result()).toHaveLength(1999);
+  });
+});
+
+it("keeps the source-message signal stable for equivalent snapshots and work-only changes", () => {
+  const incoming = makeReadModelThread({
+    messages: [
+      {
+        id: MessageId.makeUnsafe("signal-message"),
+        source: "native",
+        role: "assistant",
+        text: "Hello",
+        turnId: TurnId.makeUnsafe("signal-turn"),
+        streaming: true,
+        createdAt: "2026-09-13T00:00:00.000Z",
+        updatedAt: "2026-09-13T00:00:00.000Z",
+        textSegments: [
+          {
+            text: "Hello",
+            sequence: 1,
+            startedAt: "2026-09-13T00:00:00.000Z",
+            endedAt: "2026-09-13T00:00:00.000Z",
+          },
+        ],
+      },
+    ],
+  });
+  const initial = normalizeThreadFromReadModel(incoming, undefined);
+  const replay = normalizeThreadFromReadModel(structuredClone(incoming), initial);
+  expect(replay.messages).toBe(initial.messages);
+  const workOnly = normalizeThreadFromReadModel(
+    { ...structuredClone(incoming), activities: [makeActivity({ id: "tool-status" })] },
+    replay,
+  );
+  expect(workOnly.messages).toBe(initial.messages);
+  const textDelta = normalizeThreadFromReadModel(
+    { ...incoming, messages: [{ ...incoming.messages[0]!, text: "Hello world" }] },
+    workOnly,
+  );
+  expect(textDelta.messages).not.toBe(initial.messages);
+  expect(textDelta.messages[0]?.text).toBe("Hello world");
+});
+
+describe("asynchronous question hydration", () => {
+  it("keeps the accepted answer when a lagging snapshot still has a pending question", () => {
+    const createdAt = "2026-09-15T00:00:00.000Z";
+    const pending = {
+      id: MessageId.makeUnsafe("question"),
+      role: "assistant" as const,
+      text: "When does it happen?",
+      streaming: false,
+      source: "native" as const,
+      turnId: null,
+      createdAt,
+      updatedAt: createdAt,
+      asyncUserInput: { questions: [{ title: "When does it happen?" }] },
+    };
+    const response = { messageId: MessageId.makeUnsafe("answer"), answers: ["On reconnect"] };
+    const answered = normalizeChatMessage(
+      { ...pending, asyncUserInput: { ...pending.asyncUserInput, response } },
+      undefined,
+    );
+    const restored = normalizeChatMessage(pending, answered);
+    expect(restored.asyncUserInput?.response).toEqual(response);
+    expect(restored.completedAt).toBe(createdAt);
   });
 });

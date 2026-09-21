@@ -127,3 +127,28 @@ describe("runProcess", () => {
     });
   });
 });
+
+// The owned ChildProcess handle is sufficient for POSIX cancellation. A missing
+// ps executable must never turn a timeout/abort into a wait for natural exit.
+describe.skipIf(process.platform === "win32")("cancellation without ps on PATH", () => {
+  it.each(["timeout", "abort"] as const)("terminates an owned child on %s", async (cause) => {
+    const previousPath = process.env.PATH;
+    const controller = new AbortController();
+    const started = Date.now();
+    let abortTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      process.env.PATH = "/synara-test-no-executables";
+      const running = runProcess(process.execPath, ["-e", "setTimeout(() => {}, 4000)"], {
+        timeoutMs: cause === "timeout" ? 30 : 5000,
+        signal: controller.signal,
+      });
+      if (cause === "abort") abortTimer = setTimeout(() => controller.abort(), 30);
+      await expect(running).rejects.toThrow(cause === "timeout" ? "timed out" : "aborted");
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally {
+      if (abortTimer) clearTimeout(abortTimer);
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+});

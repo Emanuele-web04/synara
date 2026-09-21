@@ -79,19 +79,118 @@ const MODEL_NAME_BY_SLUG = new Map(
     .map((option) => [option.slug.toLowerCase(), option.name] as const),
 );
 
-// Turns a raw model slug into a readable label when no built-in name exists.
-// GPT slugs keep their canonical "GPT-x" casing; provider-scoped custom ids
-// ("vendor/model") stay verbatim; everything else is title-cased on -/_ .
-export function humanizeModelSlug(slug: string): string {
-  if (slug.toLowerCase().startsWith("gpt-")) {
-    const [, version, ...rest] = slug.split("-");
-    if (rest.length === 0) return `GPT-${version}`;
-    return `GPT-${version} ${rest.map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join(" ")}`;
+const MODEL_TOKEN_DISPLAY_NAMES: Readonly<Record<string, string>> = {
+  deepseek: "DeepSeek",
+  glm: "GLM",
+  gpt: "GPT",
+  minimax: "MiniMax",
+  openai: "OpenAI",
+  opencode: "OpenCode",
+  swe: "SWE",
+  xai: "xAI",
+  xhigh: "XHigh",
+};
+
+// First tokens that mark a provider-supplied label as a model-family name
+// worth normalizing: the brand tokens plus families whose casing is already
+// title-case. Anything else (custom names like "MyModel", "K2P6") keeps its
+// original casing untouched.
+const MODEL_FAMILY_TOKENS: ReadonlySet<string> = new Set([
+  ...Object.keys(MODEL_TOKEN_DISPLAY_NAMES),
+  "adaptive",
+  "auto",
+  "claude",
+  "codex",
+  "composer",
+  "cursor",
+  "devin",
+  "gemini",
+  "grok",
+  "inkling",
+  "kimi",
+  "nemotron",
+]);
+
+function humanizeModelToken(token: string): string {
+  const key = token.toLowerCase();
+  const displayName = Object.prototype.hasOwnProperty.call(MODEL_TOKEN_DISPLAY_NAMES, key)
+    ? MODEL_TOKEN_DISPLAY_NAMES[key]
+    : undefined;
+  return displayName ?? token.charAt(0).toUpperCase() + token.slice(1);
+}
+
+const MODEL_DATE_OR_BUILD_TOKEN_PATTERN = /^\d{8}$/u;
+
+// Rejoins version fragments split on "-"/"_": a pure-digit token merges onto a
+// preceding token that already ends in a digit, so "swe-1-6" reads as 1.6,
+// "claude-opus-4-8" as 4.8, and "kimi-k2-6" as K2.6. Zero-prefixed tokens and
+// eight-digit provider date/build stamps stay separate, never version minors.
+function joinModelVersionTokens(tokens: string[]): string[] {
+  const merged: string[] = [];
+  for (const token of tokens) {
+    const previous = merged[merged.length - 1];
+    if (
+      /^\d+$/u.test(token) &&
+      (token === "0" || !token.startsWith("0")) &&
+      !MODEL_DATE_OR_BUILD_TOKEN_PATTERN.test(token) &&
+      previous !== undefined &&
+      /\d$/u.test(previous)
+    ) {
+      merged[merged.length - 1] = `${previous}.${token}`;
+    } else {
+      merged.push(token);
+    }
   }
+  return merged;
+}
+
+// Canonical brand shapes that differ from plain space-joined words.
+function restoreModelNameSeparators(name: string): string {
+  return name.replace(/\bGPT (\d)/gu, "GPT-$1");
+}
+
+// Turns a raw model slug into a readable label when no built-in name exists.
+// Provider-scoped custom ids ("vendor/model") stay verbatim; everything else is
+// tokenized on -/_, version fragments rejoined with ".", known model-family
+// brands restored to their canonical casing, and GPT versions rehyphenated.
+export function humanizeModelSlug(slug: string): string {
   if (slug.includes("/")) {
     return slug;
   }
-  return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+  const tokens = joinModelVersionTokens(slug.split(/[-_]+/g)).map(humanizeModelToken);
+  return restoreModelNameSeparators(tokens.join(" "));
+}
+
+/**
+ * Normalizes a provider-supplied display name to Synara's canonical casing:
+ * known brand tokens are re-cased ("Swe" → "SWE", "Deepseek" → "DeepSeek"),
+ * slug separators become spaces ("GLM-5.3-Flash" → "GLM 5.3 Flash"), digit
+ * fragments rejoin as versions, and GPT versions keep their hyphen. Gated on a
+ * known family first token so freeform names keep their casing; non-brand
+ * tokens and a parenthesized tail pass through unchanged.
+ */
+export function normalizeModelDisplayName(name: string): string {
+  const trimmed = name.trim();
+  const parenIndex = trimmed.indexOf("(");
+  const head = parenIndex >= 0 ? trimmed.slice(0, parenIndex).trimEnd() : trimmed;
+  const tail = parenIndex >= 0 ? trimmed.slice(parenIndex) : "";
+  const tokens = head.split(/[-_\s]+/u).filter(Boolean);
+  const [firstToken] = tokens;
+  if (firstToken === undefined || !MODEL_FAMILY_TOKENS.has(firstToken.toLowerCase())) {
+    return trimmed;
+  }
+  const normalized = joinModelVersionTokens(tokens)
+    .map((token) => {
+      const displayName = Object.prototype.hasOwnProperty.call(
+        MODEL_TOKEN_DISPLAY_NAMES,
+        token.toLowerCase(),
+      )
+        ? MODEL_TOKEN_DISPLAY_NAMES[token.toLowerCase()]
+        : undefined;
+      return displayName ?? token;
+    })
+    .join(" ");
+  return `${restoreModelNameSeparators(normalized)}${tail ? ` ${tail}` : ""}`;
 }
 
 export function formatModelDisplayName(model: string | null | undefined): string | undefined {
@@ -685,8 +784,8 @@ export function normalizeClaudeModelOptions(
 export function resolveApiModelId(modelSelection: ModelSelection): string {
   if (
     modelSelection.provider === "claudeAgent" &&
-    (modelSelection.options?.autoCompactWindow ?? modelSelection.options?.contextWindow) === "1m" &&
-    hasAutoCompactWindowOption(getModelCapabilities("claudeAgent", modelSelection.model), "1m") &&
+    normalizeClaudeModelOptions(modelSelection.model, modelSelection.options)?.autoCompactWindow ===
+      "1m" &&
     getClaudeContextWindowSuffix(modelSelection.model) === null
   ) {
     return `${modelSelection.model}[1m]`;
@@ -710,31 +809,23 @@ export function getEffectiveClaudeCodeEffort(
 
 interface ClaudeSpawnProfile {
   readonly maxEffort: boolean;
+  readonly autoCompactWindow: string | undefined;
 }
 
-// Mirrors the spawn-time option derivation in the Claude adapter's startSession:
-// only `max` effort is fixed at subprocess spawn (the query `effort` option;
-// the flag-settings `effortLevel` key caps at xhigh). Every other effort level
-// plus fastMode/ultracode are Settings keys applied live via the SDK's
-// flag-settings control, and model/context window switch via `setModel`.
+// Claude's live flag settings do not refresh the runtime auto-compaction window.
+// Keep this profile aligned with the adapter's normalized spawn settings.
 function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
   const caps = getModelCapabilities("claudeAgent", selection.model);
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
   const effort = requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
   return {
     maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
+    autoCompactWindow: normalizeClaudeModelOptions(selection.model, selection.options)
+      ?.autoCompactWindow,
   } satisfies ClaudeSpawnProfile;
 }
 
-/**
- * Whether switching from `previous` to `next` requires restarting the Claude
- * subprocess. Restarting resumes via `--resume`, which replays the whole
- * conversation as uncached input tokens, so it must only happen for options
- * fixed at spawn — currently only `max` effort, which has no live Settings
- * equivalent. Model changes use `setModel`; other effort levels, fast mode,
- * ultracode, the auto-compact budget, and the thinking toggle all use the
- * SDK's live flag-settings control.
- */
+/** Restart only for spawn-fixed settings; resume preserves identity, not guaranteed cache hits. */
 export function claudeSelectionRequiresRestart(
   previous: ModelSelection | undefined,
   next: ModelSelection,
@@ -755,7 +846,9 @@ export function claudeSelectionRequiresRestart(
   // selected model's capabilities change.
   const prev = claudeSpawnProfile(previous);
   const desired = claudeSpawnProfile(next);
-  return prev.maxEffort !== desired.maxEffort;
+  return (
+    prev.maxEffort !== desired.maxEffort || prev.autoCompactWindow !== desired.autoCompactWindow
+  );
 }
 
 export function normalizeCursorModelOptions(

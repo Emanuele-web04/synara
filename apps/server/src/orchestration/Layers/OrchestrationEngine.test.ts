@@ -31,6 +31,7 @@ import {
   type OrchestrationProjectionPipelineShape,
 } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
+import { ORCHESTRATION_EVENT_PUBSUB_CAPACITY } from "../orchestrationAdmission.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 /**
@@ -141,6 +142,253 @@ function now() {
 }
 
 describe("OrchestrationEngine", () => {
+  it.each([false, true])(
+    "persists async questions and admits one concurrent answer (running=%s)",
+    async (running) => {
+      const system = await createOrchestrationSystem();
+      const { engine } = system;
+      const createdAt = now();
+      const threadId = ThreadId.makeUnsafe("async-question-thread");
+      const projectId = asProjectId("async-question-project");
+      const questionId = asMessageId("assistant:async-question");
+      const turnId = asTurnId("question-turn");
+      let index = 0;
+      const commandId = () => CommandId.makeUnsafe(`async-question-${++index}`);
+      const questions = [
+        { title: "When does it happen?", options: ["On launch", "On reconnect"] },
+        { title: "Any other details?" },
+      ];
+      try {
+        await system.run(
+          engine.dispatch({
+            type: "project.create",
+            commandId: commandId(),
+            projectId,
+            title: "Async input",
+            workspaceRoot: "/tmp/async-input",
+            defaultModelSelection: null,
+            createdAt,
+          }),
+        );
+        await system.run(
+          engine.dispatch({
+            type: "thread.create",
+            commandId: commandId(),
+            threadId,
+            projectId,
+            title: "Async input",
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: "default",
+            runtimeMode: "approval-required",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+          }),
+        );
+        await system.run(
+          engine.dispatch({
+            type: "thread.message.assistant.delta",
+            commandId: commandId(),
+            threadId,
+            messageId: questionId,
+            turnId,
+            delta: "When does it happen?",
+            createdAt,
+          }),
+        );
+        const completeQuestion = () =>
+          engine.dispatch({
+            type: "thread.message.assistant.complete",
+            commandId: commandId(),
+            threadId,
+            messageId: questionId,
+            turnId,
+            asyncQuestions: questions,
+            createdAt,
+          });
+        await system.run(completeQuestion());
+        await system.run(
+          engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId(),
+            threadId,
+            session: {
+              threadId,
+              providerName: "codex",
+              status: running ? "running" : "ready",
+              activeTurnId: running ? turnId : null,
+              runtimeMode: "approval-required",
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+        const before = (await system.run(engine.getReadModel())).threads[0]!;
+        expect(
+          before.messages.find((message) => message.id === questionId)?.asyncUserInput,
+        ).toEqual({ questions });
+        expect(before.activities.some((activity) => activity.kind === "user-input.requested")).toBe(
+          false,
+        );
+        const answer = (suffix: string, answers = ["On reconnect", "Only after sleep"]) =>
+          engine.dispatch({
+            type: "thread.turn.start",
+            commandId: commandId(),
+            threadId,
+            message: {
+              messageId: asMessageId(`answer-${suffix}`),
+              role: "user",
+              text: "client placeholder",
+              attachments: [],
+            },
+            asyncUserInputResponse: { messageId: questionId, answers },
+            dispatchMode: "queue",
+            runtimeMode: "full-access",
+            interactionMode: "plan",
+            createdAt: new Date(Date.parse(createdAt) + 60_000).toISOString(),
+          });
+        await expect(system.run(answer("invalid", ["Only one answer"]))).rejects.toThrow(
+          "one answer per question",
+        );
+        const attempts = await Promise.allSettled([
+          system.run(answer("first")),
+          system.run(answer("duplicate")),
+        ]);
+        expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+        const rejected = attempts.find((attempt) => attempt.status === "rejected");
+        expect(rejected?.status === "rejected" && String(rejected.reason)).toContain(
+          "already been answered",
+        );
+        const answeredThread = (await system.run(engine.getReadModel())).threads[0]!;
+        expect(
+          answeredThread.messages.find((message) => message.id === questionId)?.updatedAt,
+        ).toBe(createdAt);
+        await system.run(completeQuestion()); // A replay must not reopen the answered card.
+        const after = (await system.run(engine.getReadModel())).threads[0]!;
+        const response = after.messages.find((message) => message.id === questionId)?.asyncUserInput
+          ?.response;
+        expect(response?.answers).toEqual(["On reconnect", "Only after sleep"]);
+        const answers = after.messages.filter((message) => message.role === "user");
+        expect(answers).toHaveLength(1);
+        expect(answers[0]).toMatchObject({
+          id: response?.messageId,
+          text: "When does it happen?\nOn reconnect\n\nAny other details?\nOnly after sleep",
+          dispatchMode: "steer",
+          startsNewTurn: !running,
+        });
+        expect(after.runtimeMode).toBe("approval-required");
+        expect(after.interactionMode).toBe("default");
+        expect(after.session?.status).toBe(running ? "running" : "starting");
+      } finally {
+        await system.dispose();
+      }
+    },
+  );
+
+  it("keeps a second checkpoint revert protected after a failed revert with a higher runtime sequence", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const projectId = asProjectId("project-revert-sequence");
+    const threadId = ThreadId.makeUnsafe("thread-revert-sequence");
+    let commandIndex = 0;
+    const commandId = () => CommandId.makeUnsafe(`revert-sequence-${++commandIndex}`);
+    const appendActivity = (kind: string, sequence?: number) =>
+      system.run(
+        engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId(),
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe(`revert-sequence-activity-${commandIndex}`),
+            kind,
+            tone: "info",
+            summary: kind,
+            payload: {},
+            turnId: null,
+            ...(sequence === undefined ? {} : { sequence }),
+            createdAt,
+          },
+          createdAt,
+        }),
+      );
+    const revert = () =>
+      system.run(
+        engine.dispatch({
+          type: "thread.checkpoint.revert",
+          commandId: commandId(),
+          threadId,
+          turnCount: 1,
+          createdAt,
+        }),
+      );
+
+    try {
+      await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: commandId(),
+          projectId,
+          title: "Checkpoint sequence",
+          workspaceRoot: "/tmp/checkpoint-sequence",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      );
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: commandId(),
+          threadId,
+          projectId,
+          title: "Checkpoint sequence",
+          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      await appendActivity("tool.completed", 1_000);
+      await revert();
+      await appendActivity("checkpoint.revert.failed");
+      await revert();
+
+      await expect(
+        system.run(
+          engine.dispatch({
+            type: "thread.delete",
+            commandId: commandId(),
+            threadId,
+          }),
+        ),
+      ).rejects.toThrow("checkpoint revert in progress");
+      await expect(
+        system.run(
+          engine.dispatch({
+            type: "thread.turn.start",
+            commandId: commandId(),
+            threadId,
+            message: {
+              messageId: asMessageId("message-during-revert"),
+              role: "user",
+              text: "Continue",
+              attachments: [],
+            },
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "full-access",
+            createdAt,
+          }),
+        ),
+      ).rejects.toThrow("checkpoint revert in progress");
+      await expect(revert()).rejects.toThrow("checkpoint revert in progress");
+    } finally {
+      await system.dispose();
+    }
+  });
+
   it("preserves large Unicode responses and segment boundaries through completion", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
@@ -257,6 +505,24 @@ describe("OrchestrationEngine", () => {
     );
 
     await system.run(system.engine.quiesce);
+    const diagnostic = {
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe("cmd-engine-quiesce-diagnostic"),
+      threadId,
+      activity: {
+        id: EventId.makeUnsafe("engine-quiesce-diagnostic"),
+        tone: "error",
+        kind: "provider.turn.interrupt.failed",
+        summary: "Provider turn interrupt failed",
+        payload: { detail: "Provider rejected the interrupt during shutdown." },
+        turnId: null,
+        createdAt,
+      },
+      createdAt,
+    } as const;
+    await expect(system.run(system.engine.dispatch(diagnostic))).resolves.toMatchObject({
+      sequence: expect.any(Number),
+    });
     await expect(
       system.run(
         system.engine.dispatch({
@@ -309,6 +575,15 @@ describe("OrchestrationEngine", () => {
     ).resolves.toMatchObject({ sequence: expect.any(Number) });
     await system.run(system.engine.drain);
     await system.run(system.engine.stop);
+
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          ...diagnostic,
+          commandId: CommandId.makeUnsafe("cmd-engine-stopped-diagnostic"),
+        }),
+      ),
+    ).rejects.toMatchObject({ _tag: "OrchestrationCommandAdmissionError", reason: "stopped" });
 
     await expect(
       system.run(
@@ -639,6 +914,50 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("keeps dispatch responsive and replays every event when a subscriber falls behind", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const projectId = asProjectId("project-slow-subscriber");
+    // Overflow by more than one durable replay page (500 events).
+    const count = ORCHESTRATION_EVENT_PUBSUB_CAPACITY + 510;
+    try {
+      const initial = await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-slow-subscriber-create"),
+          projectId,
+          title: "Slow subscriber",
+          workspaceRoot: "/tmp/slow-subscriber",
+          defaultModelSelection: null,
+          createdAt: now(),
+        }),
+      );
+      const result = await system.run(
+        Effect.gen(function* () {
+          // Attach before loading/processing work, as startup and reactors do.
+          const live = yield* engine.subscribeDomainEvents;
+          for (let i = 0; i < count; i++) {
+            yield* engine.dispatch({
+              type: "project.meta.update",
+              commandId: CommandId.makeUnsafe(`cmd-slow-subscriber-${i}`),
+              projectId,
+              title: `Update ${i}`,
+            });
+          }
+          return Array.from(yield* Stream.runCollect(Stream.take(live, count)));
+        }).pipe(Effect.scoped, Effect.timeoutOption("8 seconds")),
+      );
+      expect(Option.isSome(result)).toBe(true);
+      const events = Option.getOrThrow(result);
+      expect(events.map((event) => event.sequence)).toEqual(
+        Array.from({ length: count }, (_, i) => initial.sequence + i + 1),
+      );
+      expect(events.at(-1)?.payload).toMatchObject({ title: `Update ${count - 1}` });
+    } finally {
+      await system.dispose();
+    }
+  }, 15_000);
+
   it("streams persisted domain events in order", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
@@ -903,7 +1222,7 @@ describe("OrchestrationEngine", () => {
             }),
           );
         }
-        return Effect.void;
+        return Effect.succeed({ deferredPhaseSettled: false });
       },
       projectDeferredEvent: () => Effect.void,
     };
@@ -1050,7 +1369,7 @@ describe("OrchestrationEngine", () => {
         return Effect.void;
       },
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => Effect.void,
     };
 
@@ -1168,7 +1487,7 @@ describe("OrchestrationEngine", () => {
             }),
           );
         }
-        return Effect.void;
+        return Effect.succeed({ deferredPhaseSettled: false });
       },
       projectDeferredEvent: () => Effect.void,
     };
@@ -1405,7 +1724,7 @@ describe("OrchestrationEngine", () => {
       }),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => {
         deferredCalls += 1;
         if (deferredCalls === 1) {
@@ -1507,7 +1826,7 @@ describe("OrchestrationEngine", () => {
       bootstrap: Effect.void,
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => Effect.void,
     };
     const runtime = ManagedRuntime.make(
@@ -1571,7 +1890,7 @@ describe("OrchestrationEngine", () => {
       ),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed({ deferredPhaseSettled: false }),
       projectDeferredEvent: () => Effect.void,
     };
     const runtime = ManagedRuntime.make(

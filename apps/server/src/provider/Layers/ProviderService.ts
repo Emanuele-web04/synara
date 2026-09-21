@@ -14,6 +14,8 @@ import {
   ProviderCompactThreadInput,
   ProviderForkThreadInput,
   ModelSelection,
+  RuntimeMode,
+  TrimmedNonEmptyString,
   NonNegativeInt,
   ThreadId,
   ProviderInterruptTurnInput,
@@ -186,6 +188,17 @@ const ClearSessionResumeCursorInput = Schema.Struct({
 
 const CompletePriorTranscriptBootstrapInput = Schema.Struct({
   threadId: ThreadId,
+});
+
+const ImportExternalThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  provider: Schema.Literals(["codex", "claudeAgent"]),
+  externalThreadId: TrimmedNonEmptyString,
+  sourceCwd: TrimmedNonEmptyString,
+  cwd: Schema.optional(TrimmedNonEmptyString),
+  modelSelection: ModelSelection,
+  providerOptions: Schema.optional(ProviderStartOptions),
+  runtimeMode: RuntimeMode,
 });
 
 type StopRuntimeSession = NonNullable<ProviderServiceShape["stopRuntimeSession"]>;
@@ -415,8 +428,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const startAdapterWithStaleDevinFallback = (
       adapter: ProviderAdapterShape<ProviderAdapterError>,
       startInput: ResolvedProviderSessionStartInput,
+      startSession = adapter.startSession,
     ) =>
-      adapter.startSession(startInput).pipe(
+      startSession(startInput).pipe(
         Effect.map((session) => ({ session, staleDevinFallbackOccurred: false })),
         Effect.catchIf(
           (error) =>
@@ -475,6 +489,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     // Fired idle callbacks outlive their timer map entry, so use generations to
     // invalidate async stop work when new user work starts in that gap.
     const runtimeIdleGenerations = new Map<ThreadId, symbol>();
+    const runtimeIdleCleanupGenerations = new Map<ThreadId, symbol>();
     const runtimeIdleStopsInFlight = new Map<ThreadId, Promise<void>>();
     const providerInterruptionFences = new Map<ThreadId, ProviderInterruptionFence>();
     const targetedChildInterruptTombstones = new Map<string, TargetedChildInterruptTombstone>();
@@ -482,10 +497,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       0,
       options?.runtimeIdleStopMs ?? PROVIDER_RUNTIME_IDLE_STOP_MS,
     );
-    let stopIdleRuntimeSession: ((threadId: ThreadId, generation: symbol) => void) | null = null;
+    let stopIdleRuntimeSession:
+      | ((threadId: ThreadId, generation: symbol, cleanupStarted?: boolean) => void)
+      | null = null;
 
     const invalidateRuntimeIdleGeneration = (threadId: ThreadId): symbol => {
       const generation = Symbol(String(threadId));
+      runtimeIdleCleanupGenerations.delete(threadId);
       runtimeIdleGenerations.set(threadId, generation);
       return generation;
     };
@@ -496,6 +514,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const retireRuntimeIdleGeneration = (threadId: ThreadId, generation?: symbol): void => {
       if (generation === undefined || isRuntimeIdleGenerationCurrent(threadId, generation)) {
         runtimeIdleGenerations.delete(threadId);
+        runtimeIdleCleanupGenerations.delete(threadId);
       }
     };
 
@@ -739,6 +758,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return;
         case "session.exited":
           clearLiveRuntimeTasks(event.threadId);
+          // Adapters may emit this before descendant cleanup is verified.
+          // An owned idle teardown must keep its retry until the barrier passes.
+          if (runtimeIdleCleanupGenerations.has(event.threadId)) {
+            return;
+          }
           clearRuntimeIdleTimer(event.threadId);
           retireRuntimeIdleGeneration(event.threadId);
           return;
@@ -1666,10 +1690,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               lifecycleGeneration: lifecycle.currentGeneration(input.threadId),
             } as const;
           }
-          return yield* toValidationError(
-            input.operation,
-            `Cannot route thread '${input.threadId}' because no persisted provider binding exists.`,
-          );
+          return yield* new ProviderValidationError({
+            operation: input.operation,
+            issue: `Cannot route thread '${input.threadId}' because no persisted provider binding exists.`,
+            reason: "runtime-unavailable",
+          });
         }
         const adapter = yield* registry.getByProvider(binding.provider);
         if (input.allowRecovery) {
@@ -1755,220 +1780,246 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const replacementFence = yield* waitForCurrentInterruptionFence(threadId);
         clearRuntimeIdleTimer(threadId);
         yield* waitForRuntimeIdleStop(threadId);
-        return yield* lifecycle.run(threadId, (lease) =>
-          Effect.gen(function* () {
-            const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-            const effectiveResumeCursor =
-              input.forkSourceResumeCursor !== undefined
-                ? undefined
-                : (input.resumeCursor ??
-                  (persistedBinding?.provider === input.provider
-                    ? persistedBinding.resumeCursor
-                    : undefined));
-            const persistedPriorTranscriptBootstrapPending =
-              persistedBinding?.provider === input.provider &&
-              runtimePayloadRecord(persistedBinding.runtimePayload)[
-                PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING
-              ] === true;
-            const { resumeCursor: _inputResumeCursor, ...adapterStartInput } = input;
-            const effectiveProviderOptions =
-              input.providerOptions ??
-              (persistedBinding?.provider === input.provider
-                ? readPersistedProviderOptions(persistedBinding.runtimePayload)
-                : undefined);
-            const adapter = yield* registry.getByProvider(input.provider);
-            let replacementStarted = false;
-            const startupLifecycle = new ProviderStartupLifecycle();
-            const startAndPersistReplacement = Effect.gen(function* () {
-              yield* ensureProviderEnabled(input.provider, "ProviderService.startSession");
-              const resolvedAdapterStartInput = {
-                ...adapterStartInput,
-                lifecycleGeneration: lease.generation,
-                ...(effectiveProviderOptions !== undefined
-                  ? { providerOptions: effectiveProviderOptions }
-                  : {}),
-                ...(hasResumeCursor(effectiveResumeCursor)
-                  ? { resumeCursor: effectiveResumeCursor }
-                  : {}),
-              };
-              // A provider start that never returns holds this thread's
-              // lifecycle lock and the caller's command slot forever. Bound it,
-              // retire whatever the adapter may have half-spawned, and fail
-              // with text the caller can surface as a session error.
-              startupLifecycle.transition("starting");
-              startupLifecycle.transition("handshaking");
-              // The lifecycle is updated inside observeProviderStartup; these taps
-              // only log the already-recorded outcome.
-              const started = yield* observeProviderStartup(
-                startAdapterWithStaleDevinFallback(adapter, resolvedAdapterStartInput),
-                { lifecycle: startupLifecycle, timeout: PROVIDER_START_SESSION_TIMEOUT },
-              ).pipe(
-                Effect.tapError((cause) =>
-                  Effect.logError("provider.session.start_failed", {
-                    threadId,
-                    provider: input.provider,
-                    startup: startupLifecycle.snapshot(),
-                    cause: cause instanceof Error ? cause.message : String(cause),
-                  }),
-                ),
-                Effect.onInterrupt(() =>
-                  Effect.logInfo("provider.session.start_cancelled", {
-                    threadId,
-                    provider: input.provider,
-                    startup: startupLifecycle.snapshot(),
-                  }),
-                ),
-              );
-              if (Option.isNone(started)) {
-                yield* Effect.logError("provider session start exceeded its deadline", {
-                  threadId,
-                  provider: input.provider,
-                  timeoutMs: Duration.toMillis(PROVIDER_START_SESSION_TIMEOUT),
-                  startup: startupLifecycle.snapshot(),
-                });
-                yield* adapter.stopSession(threadId).pipe(
-                  Effect.timeoutOption(PROVIDER_STOP_SESSION_TIMEOUT),
-                  Effect.catchCause((cause) =>
-                    Effect.logWarning("failed to retire a timed-out provider session start", {
+        const adapter = yield* registry.getByProvider(input.provider);
+        let retiredSession: ProviderSession | undefined;
+        let preparedStart: ProviderAdapterShape<ProviderAdapterError>["startSession"] | undefined;
+        const prepareReplacement = adapter.prepareSessionReplacement
+          ? Effect.gen(function* () {
+              const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+              const providerOptions =
+                input.providerOptions ??
+                (binding?.provider === input.provider
+                  ? readPersistedProviderOptions(binding.runtimePayload)
+                  : undefined);
+              const prepared = yield* adapter.prepareSessionReplacement!({
+                ...input,
+                ...(providerOptions !== undefined ? { providerOptions } : {}),
+              });
+              retiredSession = prepared?.previousSession;
+              preparedStart = prepared?.startSession;
+            })
+          : undefined;
+        return yield* lifecycle.run(
+          threadId,
+          (lease) =>
+            Effect.gen(function* () {
+              const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+              const effectiveResumeCursor =
+                input.forkSourceResumeCursor !== undefined
+                  ? undefined
+                  : (input.resumeCursor ??
+                    retiredSession?.resumeCursor ??
+                    (persistedBinding?.provider === input.provider
+                      ? persistedBinding.resumeCursor
+                      : undefined));
+              const persistedPriorTranscriptBootstrapPending =
+                persistedBinding?.provider === input.provider &&
+                runtimePayloadRecord(persistedBinding.runtimePayload)[
+                  PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING
+                ] === true;
+              const { resumeCursor: _inputResumeCursor, ...adapterStartInput } = input;
+              const effectiveProviderOptions =
+                input.providerOptions ??
+                (persistedBinding?.provider === input.provider
+                  ? readPersistedProviderOptions(persistedBinding.runtimePayload)
+                  : undefined);
+              let replacementStarted = false;
+              const startupLifecycle = new ProviderStartupLifecycle();
+              const startAndPersistReplacement = Effect.gen(function* () {
+                yield* ensureProviderEnabled(input.provider, "ProviderService.startSession");
+                const resolvedAdapterStartInput = {
+                  ...adapterStartInput,
+                  lifecycleGeneration: lease.generation,
+                  ...(effectiveProviderOptions !== undefined
+                    ? { providerOptions: effectiveProviderOptions }
+                    : {}),
+                  ...(hasResumeCursor(effectiveResumeCursor)
+                    ? { resumeCursor: effectiveResumeCursor }
+                    : {}),
+                };
+                // A provider start that never returns holds this thread's
+                // lifecycle lock and the caller's command slot forever. Bound it,
+                // retire whatever the adapter may have half-spawned, and fail
+                // with text the caller can surface as a session error.
+                startupLifecycle.transition("starting");
+                startupLifecycle.transition("handshaking");
+                // The lifecycle is updated inside observeProviderStartup; these taps
+                // only log the already-recorded outcome.
+                const started = yield* observeProviderStartup(
+                  startAdapterWithStaleDevinFallback(
+                    adapter,
+                    resolvedAdapterStartInput,
+                    preparedStart,
+                  ),
+                  { lifecycle: startupLifecycle, timeout: PROVIDER_START_SESSION_TIMEOUT },
+                ).pipe(
+                  Effect.tapError((cause) =>
+                    Effect.logError("provider.session.start_failed", {
                       threadId,
                       provider: input.provider,
-                      cause: Cause.pretty(cause),
+                      startup: startupLifecycle.snapshot(),
+                      cause: cause instanceof Error ? cause.message : String(cause),
+                    }),
+                  ),
+                  Effect.onInterrupt(() =>
+                    Effect.logInfo("provider.session.start_cancelled", {
+                      threadId,
+                      provider: input.provider,
+                      startup: startupLifecycle.snapshot(),
                     }),
                   ),
                 );
-                return yield* toValidationError(
-                  "ProviderService.startSession",
-                  `Provider '${input.provider}' did not finish starting within ${Duration.toMillis(
-                    PROVIDER_START_SESSION_TIMEOUT,
-                  )}ms for thread '${threadId}'.`,
-                );
-              }
-              const { session, staleDevinFallbackOccurred } = started.value;
-              startupLifecycle.transition("ready");
-              replacementStarted = true;
-              const nativeResumeAttempted = hasResumeCursor(effectiveResumeCursor);
-              const nativeResumeSucceeded =
-                nativeResumeAttempted && !staleDevinFallbackOccurred
-                  ? (adapter.didResumeSession?.(resolvedAdapterStartInput, session) ?? true)
-                  : false;
-              const priorTranscriptBootstrapPending =
-                persistedPriorTranscriptBootstrapPending ||
-                staleDevinFallbackOccurred ||
-                (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
-                  !nativeResumeSucceeded);
+                if (Option.isNone(started)) {
+                  yield* Effect.logError("provider session start exceeded its deadline", {
+                    threadId,
+                    provider: input.provider,
+                    timeoutMs: Duration.toMillis(PROVIDER_START_SESSION_TIMEOUT),
+                    startup: startupLifecycle.snapshot(),
+                  });
+                  yield* adapter.stopSession(threadId).pipe(
+                    Effect.timeoutOption(PROVIDER_STOP_SESSION_TIMEOUT),
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("failed to retire a timed-out provider session start", {
+                        threadId,
+                        provider: input.provider,
+                        cause: Cause.pretty(cause),
+                      }),
+                    ),
+                  );
+                  return yield* toValidationError(
+                    "ProviderService.startSession",
+                    `Provider '${input.provider}' did not finish starting within ${Duration.toMillis(
+                      PROVIDER_START_SESSION_TIMEOUT,
+                    )}ms for thread '${threadId}'.`,
+                  );
+                }
+                const { session, staleDevinFallbackOccurred } = started.value;
+                startupLifecycle.transition("ready");
+                replacementStarted = true;
+                const nativeResumeAttempted = hasResumeCursor(effectiveResumeCursor);
+                const nativeResumeSucceeded =
+                  nativeResumeAttempted && !staleDevinFallbackOccurred
+                    ? (adapter.didResumeSession?.(resolvedAdapterStartInput, session) ?? true)
+                    : false;
+                const priorTranscriptBootstrapPending =
+                  persistedPriorTranscriptBootstrapPending ||
+                  staleDevinFallbackOccurred ||
+                  (outcomeOptions?.registerPriorTranscriptBootstrapOnFreshStart === true &&
+                    !nativeResumeSucceeded);
 
-              if (session.provider !== adapter.provider) {
-                return yield* toValidationError(
-                  "ProviderService.startSession",
-                  `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
-                );
-              }
+                if (session.provider !== adapter.provider) {
+                  return yield* toValidationError(
+                    "ProviderService.startSession",
+                    `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
+                  );
+                }
 
-              yield* withBindingWriteLock(
-                threadId,
-                upsertSessionBinding(session, threadId, {
-                  modelSelection: input.modelSelection,
-                  providerOptions: effectiveProviderOptions,
-                  lifecycleGeneration: lease.generation,
-                  runtimePayload: {
-                    [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
-                    [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: priorTranscriptBootstrapPending,
-                  },
-                }),
-              );
-              lease.commit();
-              startupLifecycle.transition("running");
-              const startupSnapshot = startupLifecycle.snapshot();
-              yield* Effect.logDebug("provider.session.started", {
-                threadId,
-                provider: input.provider,
-                startup: startupSnapshot,
-                startupDurationsMs: startupPhaseDurations(startupSnapshot),
+                yield* withBindingWriteLock(
+                  threadId,
+                  upsertSessionBinding(session, threadId, {
+                    modelSelection: input.modelSelection,
+                    providerOptions: effectiveProviderOptions,
+                    lifecycleGeneration: lease.generation,
+                    runtimePayload: {
+                      [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
+                      [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: priorTranscriptBootstrapPending,
+                    },
+                  }),
+                );
+                lease.commit();
+                startupLifecycle.transition("running");
+                const startupSnapshot = startupLifecycle.snapshot();
+                yield* Effect.logDebug("provider.session.started", {
+                  threadId,
+                  provider: input.provider,
+                  startup: startupSnapshot,
+                  startupDurationsMs: startupPhaseDurations(startupSnapshot),
+                });
+                if (
+                  replacementFence !== undefined &&
+                  providerInterruptionFences.get(threadId) === replacementFence
+                ) {
+                  providerInterruptionFences.delete(threadId);
+                }
+
+                return {
+                  session,
+                  nativeResumeAttempted,
+                  nativeResumeSucceeded,
+                  priorTranscriptBootstrapPending,
+                };
               });
-              if (
-                replacementFence !== undefined &&
-                providerInterruptionFences.get(threadId) === replacementFence
-              ) {
-                providerInterruptionFences.delete(threadId);
+
+              if (!persistedBinding || persistedBinding.provider === input.provider) {
+                return yield* startAndPersistReplacement;
               }
 
-              return {
-                session,
-                nativeResumeAttempted,
-                nativeResumeSucceeded,
-                priorTranscriptBootstrapPending,
-              };
-            });
+              const previousAdapter = yield* registry.getByProvider(persistedBinding.provider);
+              if (!(yield* previousAdapter.hasSession(threadId))) {
+                return yield* startAndPersistReplacement;
+              }
 
-            if (!persistedBinding || persistedBinding.provider === input.provider) {
-              return yield* startAndPersistReplacement;
-            }
+              const previousGeneration = persistedBinding.lifecycleGeneration ?? "legacy";
+              const previousModelSelection = readPersistedModelSelection(
+                persistedBinding.runtimePayload,
+              );
+              const previousProviderOptions = readPersistedProviderOptions(
+                persistedBinding.runtimePayload,
+              );
+              const previousCwd = readPersistedCwd(persistedBinding.runtimePayload);
+              yield* previousAdapter.stopSession(threadId);
 
-            const previousAdapter = yield* registry.getByProvider(persistedBinding.provider);
-            if (!(yield* previousAdapter.hasSession(threadId))) {
-              return yield* startAndPersistReplacement;
-            }
-
-            const previousGeneration = persistedBinding.lifecycleGeneration ?? "legacy";
-            const previousModelSelection = readPersistedModelSelection(
-              persistedBinding.runtimePayload,
-            );
-            const previousProviderOptions = readPersistedProviderOptions(
-              persistedBinding.runtimePayload,
-            );
-            const previousCwd = readPersistedCwd(persistedBinding.runtimePayload);
-            yield* previousAdapter.stopSession(threadId);
-
-            return yield* startAndPersistReplacement.pipe(
-              Effect.onExit((exit) =>
-                Exit.isSuccess(exit)
-                  ? Effect.void
-                  : Effect.gen(function* () {
-                      // A provider switch is stop-first so one thread is never dual-owned.
-                      // If anything after the stop fails, retire a partially started
-                      // replacement before restoring the exact previous generation.
-                      if (replacementStarted) {
-                        yield* adapter.stopSession(threadId);
-                      }
-                      const restored = yield* previousAdapter.startSession({
-                        threadId,
-                        provider: persistedBinding.provider,
-                        lifecycleGeneration: previousGeneration,
-                        runtimeMode: persistedBinding.runtimeMode ?? "full-access",
-                        ...(previousCwd !== undefined ? { cwd: previousCwd } : {}),
-                        ...(previousModelSelection !== undefined
-                          ? { modelSelection: previousModelSelection }
-                          : {}),
-                        ...(previousProviderOptions !== undefined
-                          ? { providerOptions: previousProviderOptions }
-                          : {}),
-                        ...(persistedBinding.resumeCursor !== undefined
-                          ? { resumeCursor: persistedBinding.resumeCursor }
-                          : {}),
-                      });
-                      if (restored.provider !== previousAdapter.provider) {
-                        return yield* toValidationError(
-                          "ProviderService.startSession",
-                          `Adapter/provider mismatch while restoring '${previousAdapter.provider}': received '${restored.provider}'.`,
-                        );
-                      }
-                      yield* withBindingWriteLock(
-                        threadId,
-                        upsertSessionBinding(restored, threadId, {
+              return yield* startAndPersistReplacement.pipe(
+                Effect.onExit((exit) =>
+                  Exit.isSuccess(exit)
+                    ? Effect.void
+                    : Effect.gen(function* () {
+                        // A provider switch is stop-first so one thread is never dual-owned.
+                        // If anything after the stop fails, retire a partially started
+                        // replacement before restoring the exact previous generation.
+                        if (replacementStarted) {
+                          yield* adapter.stopSession(threadId);
+                        }
+                        const restored = yield* previousAdapter.startSession({
+                          threadId,
+                          provider: persistedBinding.provider,
                           lifecycleGeneration: previousGeneration,
-                          modelSelection: previousModelSelection,
-                          providerOptions: previousProviderOptions,
-                        }),
-                      );
-                      // The restored runtime stamps its events with the exact
-                      // generation persisted above, so the coordinator must end
-                      // the run owning that generation and not the abandoned
-                      // replacement's.
-                      lease.adopt(previousGeneration);
-                    }),
-              ),
-            );
-          }),
+                          runtimeMode: persistedBinding.runtimeMode ?? "full-access",
+                          ...(previousCwd !== undefined ? { cwd: previousCwd } : {}),
+                          ...(previousModelSelection !== undefined
+                            ? { modelSelection: previousModelSelection }
+                            : {}),
+                          ...(previousProviderOptions !== undefined
+                            ? { providerOptions: previousProviderOptions }
+                            : {}),
+                          ...(persistedBinding.resumeCursor !== undefined
+                            ? { resumeCursor: persistedBinding.resumeCursor }
+                            : {}),
+                        });
+                        if (restored.provider !== previousAdapter.provider) {
+                          return yield* toValidationError(
+                            "ProviderService.startSession",
+                            `Adapter/provider mismatch while restoring '${previousAdapter.provider}': received '${restored.provider}'.`,
+                          );
+                        }
+                        yield* withBindingWriteLock(
+                          threadId,
+                          upsertSessionBinding(restored, threadId, {
+                            lifecycleGeneration: previousGeneration,
+                            modelSelection: previousModelSelection,
+                            providerOptions: previousProviderOptions,
+                          }),
+                        );
+                        // The restored runtime stamps its events with the exact
+                        // generation persisted above, so the coordinator must end
+                        // the run owning that generation and not the abandoned
+                        // replacement's.
+                        lease.adopt(previousGeneration);
+                      }),
+                ),
+              );
+            }),
+          prepareReplacement,
         );
       });
 
@@ -2134,6 +2185,158 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           }),
         );
         return forked;
+      });
+
+    const importExternalThread: NonNullable<ProviderServiceShape["importExternalThread"]> = (
+      rawInput,
+    ) =>
+      Effect.gen(function* () {
+        const operation = "ProviderService.importExternalThread";
+        const input = yield* decodeInputOrValidationError({
+          operation,
+          schema: ImportExternalThreadInput,
+          payload: rawInput,
+        });
+        if (input.modelSelection.provider !== input.provider) {
+          return yield* toValidationError(
+            operation,
+            "Import model and source provider must match.",
+          );
+        }
+        yield* ensureProviderEnabled(input.provider, operation);
+        yield* validateAutoRuntimeMode(operation, input.provider, input.runtimeMode);
+        yield* waitForCurrentInterruptionFence(input.threadId);
+        clearRuntimeIdleTimer(input.threadId);
+        yield* waitForRuntimeIdleStop(input.threadId);
+        return yield* lifecycle.run(input.threadId, (lease) =>
+          Effect.gen(function* () {
+            const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+            if (binding) {
+              const payload = runtimePayloadRecord(binding.runtimePayload);
+              if (
+                binding.provider === input.provider &&
+                payload.importExternalThreadId === input.externalThreadId &&
+                payload.importSourceCwd === input.sourceCwd &&
+                hasResumeCursor(binding.resumeCursor)
+              ) {
+                lease.adopt(binding.lifecycleGeneration ?? "legacy");
+                return { threadId: input.threadId, resumeCursor: binding.resumeCursor };
+              }
+              return yield* toValidationError(
+                operation,
+                "The target conversation already has a different provider binding.",
+              );
+            }
+            yield* ensureProviderEnabled(input.provider, operation);
+            const adapter = yield* registry.getByProvider(input.provider);
+            if (!adapter.forkThread) {
+              return yield* toValidationError(
+                operation,
+                "This provider cannot copy native conversations.",
+              );
+            }
+            // An earlier interrupted import may still own a subprocess even when
+            // it never managed to persist a directory binding.
+            yield* adapter.stopSession(input.threadId);
+            return yield* Effect.gen(function* () {
+              const forkedOption = yield* adapter.forkThread!({
+                threadId: input.threadId,
+                sourceThreadId: ThreadId.makeUnsafe(input.externalThreadId),
+                sourceResumeCursor:
+                  input.provider === "codex"
+                    ? { threadId: input.externalThreadId }
+                    : { resume: input.externalThreadId },
+                sourceCwd: input.sourceCwd,
+                ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+                modelSelection: input.modelSelection,
+                runtimeMode: input.runtimeMode,
+                ...(input.providerOptions !== undefined
+                  ? { providerOptions: input.providerOptions }
+                  : {}),
+                lifecycleGeneration: lease.generation,
+                requireCompletedSource: true,
+              }).pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));
+              if (Option.isNone(forkedOption)) {
+                return yield* toValidationError(
+                  operation,
+                  "The native conversation copy timed out.",
+                );
+              }
+              const forked = forkedOption.value;
+              const nativeCopyId = runtimePayloadRecord(forked.resumeCursor)[
+                input.provider === "codex" ? "threadId" : "resume"
+              ];
+              if (
+                forked.threadId !== input.threadId ||
+                typeof nativeCopyId !== "string" ||
+                nativeCopyId.length === 0 ||
+                nativeCopyId === input.externalThreadId
+              ) {
+                return yield* toValidationError(
+                  operation,
+                  "The provider returned an invalid conversation copy.",
+                );
+              }
+              const session = (yield* adapter.listSessions()).find(
+                (candidate) => candidate.threadId === input.threadId,
+              );
+              if (session && session.provider !== input.provider) {
+                return yield* toValidationError(
+                  operation,
+                  "The copied session belongs to a different provider.",
+                );
+              }
+              const runtimePayload = {
+                importExternalThreadId: input.externalThreadId,
+                importSourceCwd: input.sourceCwd,
+                cwd: input.cwd ?? input.sourceCwd,
+                modelSelection: input.modelSelection,
+                model: input.modelSelection.model,
+                ...(input.providerOptions !== undefined
+                  ? { providerOptions: input.providerOptions }
+                  : {}),
+                activeTurnId: null,
+                lastError: null,
+                lastRuntimeEvent: "provider.thread.imported",
+                lastRuntimeEventAt: new Date().toISOString(),
+              };
+              // Persist the native copy's cursor, even if the runtime is already
+              // stopped (Claude forks transcript files without starting a query).
+              yield* withBindingWriteLock(
+                input.threadId,
+                directory.upsert({
+                  threadId: input.threadId,
+                  provider: input.provider,
+                  runtimeMode: input.runtimeMode,
+                  status: session ? toRuntimeStatus(session) : "stopped",
+                  lifecycleGeneration: lease.generation,
+                  resumeCursor: forked.resumeCursor,
+                  runtimePayload,
+                }),
+              );
+              lease.commit();
+              return forked;
+            }).pipe(
+              Effect.onExit((exit) =>
+                Exit.isSuccess(exit)
+                  ? Effect.void
+                  : adapter.stopSession(input.threadId).pipe(
+                      Effect.timeoutOption(PROVIDER_STOP_SESSION_TIMEOUT),
+                      Effect.flatMap((stopped) =>
+                        Option.isSome(stopped)
+                          ? Effect.void
+                          : Effect.fail(
+                              toValidationError(
+                                operation,
+                                "The failed import runtime did not finish stopping.",
+                              ),
+                            ),
+                      ),
+                    ),
+              ),
+            );
+          }),
+        );
       });
 
     const sendTurn: ProviderServiceShape["sendTurn"] = (rawInput) =>
@@ -2563,10 +2766,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             allowRecovery: false,
           });
           if (!routed.isActive) {
-            return yield* toValidationError(
+            return yield* new ProviderValidationError({
               operation,
-              `Cannot respond to request '${input.requestId}' because the provider runtime is not active.`,
-            );
+              issue: `Cannot respond to request '${input.requestId}' because the provider runtime is not active.`,
+              reason: "runtime-unavailable",
+            });
           }
           const routedGeneration = routed.lifecycleGeneration ?? currentGeneration;
           if (
@@ -2583,10 +2787,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             input.lifecycleGeneration !== undefined &&
             input.lifecycleGeneration !== routedGeneration
           ) {
-            return yield* toValidationError(
+            return yield* new ProviderValidationError({
               operation,
-              `Cannot respond to stale request '${input.requestId}' from provider generation '${input.lifecycleGeneration}'.`,
-            );
+              issue: `Cannot respond to stale request '${input.requestId}' from provider generation '${input.lifecycleGeneration}'.`,
+              reason: "stale-interaction",
+            });
           }
           if (response.kind === "approval") {
             yield* routed.adapter.respondToRequest(
@@ -2704,8 +2909,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (activeSession?.resumeCursor !== undefined) {
                 resumeCursor = activeSession.resumeCursor;
               }
-              yield* adapter.stopSession(input.threadId);
             }
+            // A non-routable session may still own an unreaped process tree.
+            // Retry the cleanup barrier before recording a stopped binding.
+            if (!isExpectedIdleStopCurrent()) {
+              return;
+            }
+            yield* adapter.stopSession(input.threadId);
             if (!isExpectedIdleStopCurrent()) {
               return;
             }
@@ -2747,25 +2957,36 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const hasLiveRuntimeTasks: NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]> = (input) =>
       Effect.sync(() => (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0);
 
-    stopIdleRuntimeSession = (threadId, generation) => {
+    stopIdleRuntimeSession = (threadId, generation, cleanupStarted = false) => {
       const stopEffect = Effect.gen(function* () {
+        if (!isRuntimeIdleGenerationCurrent(threadId, generation)) {
+          return;
+        }
         const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
         if (!binding) {
           retireRuntimeIdleGeneration(threadId, generation);
           return;
         }
 
-        const adapter = yield* registry.getByProvider(binding.provider);
-        const sessions = yield* adapter.listSessions();
-        const session = sessions.find((entry) => entry.threadId === threadId);
         const bindingRuntimePayload = runtimePayloadRecord(binding.runtimePayload);
         if (
-          bindingRuntimePayload.activeTurnId !== null &&
-          bindingRuntimePayload.activeTurnId !== undefined
+          (bindingRuntimePayload.activeTurnId !== null &&
+            bindingRuntimePayload.activeTurnId !== undefined) ||
+          (liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0
         ) {
           retireRuntimeIdleGeneration(threadId, generation);
           return;
         }
+        // Once cleanup starts the adapter can disappear from listSessions
+        // before its descendants exit. The same idle generation still owns
+        // that cleanup; new work invalidates it before acquiring the lease.
+        if (cleanupStarted) {
+          yield* stopRuntimeSessionInternal({ threadId }, generation);
+          return;
+        }
+        const adapter = yield* registry.getByProvider(binding.provider);
+        const sessions = yield* adapter.listSessions();
+        const session = sessions.find((entry) => entry.threadId === threadId);
         const isIdleReadySession =
           session?.status === "ready" ||
           (session?.status === "running" &&
@@ -2791,14 +3012,30 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return;
         }
 
+        cleanupStarted = true;
+        runtimeIdleCleanupGenerations.set(threadId, generation);
         yield* stopRuntimeSessionInternal({ threadId }, generation);
       }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("provider.session.idle_stop_failed", {
+        Effect.catchCause((cause) => {
+          if (
+            !Cause.hasInterruptsOnly(cause) &&
+            isRuntimeIdleGenerationCurrent(threadId, generation)
+          ) {
+            const timer = setTimeout(
+              () => {
+                runtimeIdleTimers.delete(threadId);
+                stopIdleRuntimeSession?.(threadId, generation, cleanupStarted);
+              },
+              Math.max(1_000, Math.min(runtimeIdleStopMs, 30_000)),
+            );
+            timer.unref();
+            runtimeIdleTimers.set(threadId, timer);
+          }
+          return Effect.logWarning("provider.session.idle_stop_failed", {
             threadId,
             cause,
-          }),
-        ),
+          });
+        }),
       );
       const stopPromise = Effect.runPromise(stopEffect).finally(() => {
         if (runtimeIdleStopsInFlight.get(threadId) === stopPromise) {
@@ -2910,6 +3147,51 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           }
           return Object.assign({}, session, overrides);
         });
+      });
+
+    const startClaudeCompaction: NonNullable<ProviderServiceShape["startClaudeCompaction"]> = (
+      input,
+    ) =>
+      runTurnDispatch(input.threadId, (generation) =>
+        Effect.gen(function* () {
+          const routed = yield* resolveRoutableSession({
+            threadId: input.threadId,
+            operation: "ProviderService.startClaudeCompaction",
+            allowRecovery: true,
+          });
+          if (!routed.adapter.startClaudeCompaction) {
+            return yield* toValidationError(
+              "ProviderService.startClaudeCompaction",
+              "Native Claude compaction is unavailable.",
+            );
+          }
+          const turn = yield* routed.adapter.startClaudeCompaction(input);
+          const persistenceInput: StartedTurnPersistenceInput = {
+            threadId: input.threadId,
+            provider: routed.adapter.provider,
+            turnId: String(turn.turnId),
+            generation,
+            ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+            lastRuntimeEvent: "provider.startClaudeCompaction",
+          };
+          rememberSuccessfulTurnDispatch(persistenceInput);
+          yield* persistStartedTurn(persistenceInput);
+          return turn;
+        }),
+      );
+
+    const getClaudeCacheObservation: NonNullable<
+      ProviderServiceShape["getClaudeCacheObservation"]
+    > = (threadId) =>
+      Effect.gen(function* () {
+        const routed = yield* resolveRoutableSession({
+          threadId,
+          operation: "ProviderService.getClaudeCacheObservation",
+          allowRecovery: false,
+        });
+        return routed.adapter.getClaudeCacheObservation
+          ? yield* routed.adapter.getClaudeCacheObservation(threadId)
+          : undefined;
       });
 
     const getCapabilities: ProviderServiceShape["getCapabilities"] = (provider) =>
@@ -3094,6 +3376,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             clearLiveRuntimeTasks(threadId);
           }
           runtimeIdleGenerations.clear();
+          runtimeIdleCleanupGenerations.clear();
           runtimeIdleStopsInFlight.clear();
           stopIdleRuntimeSession = null;
         }).pipe(
@@ -3125,6 +3408,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       startSessionWithOutcome,
       completePriorTranscriptBootstrap,
       forkThread,
+      importExternalThread,
       sendTurn,
       steerTurn,
       startReview,
@@ -3140,6 +3424,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       clearSessionResumeCursor,
       listSessions,
       getCapabilities,
+      getClaudeCacheObservation,
+      startClaudeCompaction,
       rollbackConversation,
       compactThread,
       closeRuntimeEvents,

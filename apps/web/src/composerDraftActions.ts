@@ -16,6 +16,12 @@ import * as Schema from "effect/Schema";
 import type { StateCreator } from "zustand";
 
 import {
+  normalizePullRequestContext,
+  normalizePullRequestContexts,
+  pullRequestContextDedupKey,
+} from "./lib/pullRequestContext";
+
+import {
   DRAFT_ATTACHMENT_SLOT,
   PROMPT_HISTORY_ATTACHMENT_SLOT,
   composerFileDedupKey,
@@ -552,6 +558,18 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    setPendingUserInputDrafts: (threadId, drafts) => {
+      set((state) => {
+        const nextDraft = {
+          ...(state.draftsByThreadId[threadId] ?? createEmptyThreadDraft()),
+          pendingUserInputDrafts: drafts,
+        };
+        const draftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) delete draftsByThreadId[threadId];
+        else draftsByThreadId[threadId] = nextDraft;
+        return { draftsByThreadId };
+      });
+    },
     setPrompt: (threadId, prompt) => {
       if (threadId.length === 0) {
         return;
@@ -603,6 +621,7 @@ export const createComposerDraftStoreState =
                 terminalContexts: [],
                 fileComments: [],
                 pastedTexts: [],
+                pullRequestContexts: [],
                 skills: [],
                 mentions: [],
               }
@@ -649,6 +668,7 @@ export const createComposerDraftStoreState =
           ),
           fileComments: normalizeFileComments(savedDraft.fileComments),
           pastedTexts: normalizePastedTexts(savedDraft.pastedTexts),
+          pullRequestContexts: normalizePullRequestContexts(savedDraft.pullRequestContexts),
           skills: [...savedDraft.skills],
           mentions: [...savedDraft.mentions],
         };
@@ -1698,6 +1718,80 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    addPullRequestContext: (threadId, context) => {
+      if (threadId.length === 0) {
+        return false;
+      }
+      const normalized = normalizePullRequestContext(context);
+      if (!normalized) {
+        return false;
+      }
+      set((state) => {
+        const existing = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        // Same PR + scope replaces the older card in place so a re-click refreshes the
+        // snapshot instead of stacking duplicate bubbles.
+        const dedupKey = pullRequestContextDedupKey(normalized);
+        const kept = existing.pullRequestContexts.filter(
+          (entry) => pullRequestContextDedupKey(entry) !== dedupKey && entry.id !== normalized.id,
+        );
+        return {
+          draftsByThreadId: {
+            ...state.draftsByThreadId,
+            [threadId]: {
+              ...existing,
+              pullRequestContexts: [...kept, normalized],
+            },
+          },
+        };
+      });
+      return true;
+    },
+    removePullRequestContext: (threadId, contextId) => {
+      if (threadId.length === 0 || contextId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (!current) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...current,
+          pullRequestContexts: current.pullRequestContexts.filter(
+            (entry) => entry.id !== contextId,
+          ),
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
+    clearPullRequestContexts: (threadId) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const current = state.draftsByThreadId[threadId];
+        if (!current || current.pullRequestContexts.length === 0) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...current,
+          pullRequestContexts: [],
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
     insertTerminalContext: (threadId, prompt, context, index) => {
       if (threadId.length === 0) {
         return false;
@@ -1926,6 +2020,7 @@ export const createComposerDraftStoreState =
           terminalContexts: [],
           fileComments: [],
           pastedTexts: [],
+          pullRequestContexts: [],
           skills: [],
           mentions: [],
           restoredSourceProposedPlan: null,

@@ -21,8 +21,10 @@ This document covers build-only native validation and publishing desktop release
 - Keeps the historical 0.4.x compatibility release unchanged; current stable payloads stay on their own GitHub Latest release.
 - Publishes prerelease installers only on their versioned GitHub prerelease; prereleases never replace the stable `synara` update manifests.
 - Publishes the CLI package (`apps/server`, npm package `@synara/cli`) with OIDC trusted publishing.
-- Published macOS and Windows artifacts must be signed. Build-only runs may
-  produce unsigned artifacts when signing secrets are unavailable.
+- Published macOS artifacts must be signed. Windows publication currently uses
+  an explicit version-scoped unsigned exception; otherwise Azure signing is
+  required. Build-only runs may produce unsigned artifacts when signing secrets
+  are unavailable.
 
 ## Desktop auto-update notes
 
@@ -49,6 +51,8 @@ This document covers build-only native validation and publishing desktop release
   - Clean-release publication fails closed if either the default Latest manifests or the dedicated `synara` aliases are missing.
 - Production desktop builds omit web/server/desktop source maps by default to keep update payloads small. Set `SYNARA_WEB_SOURCEMAP=1`, `SYNARA_SERVER_SOURCEMAP=1`, or `SYNARA_DESKTOP_SOURCEMAP=1` only for a diagnostic release that needs them.
 - macOS metadata note:
+  - Installed macOS apps persist alternate icon choices using `NSWorkspace` custom-icon metadata, and reapply the saved choice on launch after an update. Default removes the override so the bundled icon follows system appearance. This requires a writable app bundle; development Electron bundles are not customized.
+  - Custom icons leave signed `Contents` unchanged, but add Finder metadata that `codesign --verify --strict` rejects on a customized installation. Validate pristine distribution artifacts with the strict checks below. A local notarized app copy retained normal signature verification and Gatekeeper acceptance after customization; signed release/update testing must still cover this path.
   - The build initially emits `latest-mac.yml` for both Intel and Apple Silicon.
   - The workflow merges the per-arch macOS metadata, then keeps the merged manifest as `latest-mac.yml` and copies it to `synara-mac.yml` for stable releases.
   - The desktop build script repacks the macOS update `.zip` with `ditto`, verifies Electron framework symlinks, extracts the zip, validates the extracted app signature, patches the matching `latest-mac*.yml` hash/size, and removes the stale `.zip.blockmap`.
@@ -99,6 +103,38 @@ Use this before publication to validate the real native macOS, Linux, and Window
 
 To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
 
+### Local DMG appearance validation
+
+On an Apple Silicon Mac, build the DMG and macOS update ZIP in `release/` with:
+
+```bash
+SYNARA_DESKTOP_UPDATE_REPOSITORY=Emanuele-web04/synara bun run dist:desktop:dmg:arm64
+```
+
+Use `dist:desktop:dmg:x64` on Intel. The updater repository setting is needed for
+ZIP manifest finalization outside GitHub Actions. The build passes
+`--publish never` to electron-builder and defaults to unsigned; release signing,
+notarization, and updater settings remain controlled by the existing release flow.
+
+The Dmgly layout lives in `scripts/lib/desktop-platform-build-config.ts` and uses
+`apps/desktop/resources/dmgly/assets/dmg-background.png`. The packaging script
+copies this resources directory into its staging app, keeping the background path
+valid there. `scripts/lib/desktop-runtime-resources.ts` excludes the `dmgly`
+directory from the runtime resource copy on every platform, so installer artwork
+and the reference icon stay out of the installed app and update ZIP. The supplied
+642×406 PNG is a 1× background with its text and arrow
+already baked in. Do not add duplicate text or arrows. It has no baked label
+backgrounds. The exported `app-icon.png` is retained alongside it as a reference;
+the app continues to use the existing production ICNS generation pipeline.
+
+Mount the resulting DMG in Finder and check the 642×406 window, 128px icons,
+and icon centers at (172, 135) for `Synara.app` and (514, 241) for `Applications`.
+Verify both real filename labels remain readable and unclipped. Finder renders
+the app icon and Applications link, so their appearance can differ from Dmgly's
+preview; Retina displays also scale the supplied 1× background. Local Finder
+preferences can override the DMG's saved hidden path/status bars, reducing the
+visible background and requiring scrolling to reveal the Applications label.
+
 ## 2) Apple signing + notarization setup (macOS)
 
 Required secrets used by the workflow:
@@ -133,10 +169,17 @@ Notes:
 
 ## 3) Azure Trusted Signing setup (Windows)
 
-Published Windows installers must be signed with Azure Trusted Signing. The
-workflow fails closed when any required signing value is absent; unsigned
-Windows artifacts are supported only for build-only validation runs. Signing
-requires all of the following secrets:
+The current Windows release policy publishes x64 installers unsigned under an
+explicit version-scoped exception. Before pushing the release tag, set the
+repository Actions variable `SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE` to the exact
+version without the `v` prefix (for example, `0.8.4`). The workflow checks equality
+with the resolved release version before packaging; do not use a permanent broad
+opt-out. Packaging, source provenance, startup smoke, and artifact upload must
+still pass. Missing Azure credentials are expected for this unsigned path.
+
+Without the matching exception, published Windows installers must be signed with
+Azure Trusted Signing, and the workflow fails closed when a required signing
+value is absent. A requested signed release requires all of the following secrets:
 
 - `AZURE_TENANT_ID`
 - `AZURE_CLIENT_ID`
@@ -162,7 +205,7 @@ Signing checklist:
 6. Add Azure secrets listed above in GitHub Actions secrets.
 7. Re-run a build-only workflow and confirm the Windows installer is signed.
 
-Before tagging a release, run a build-only workflow and verify the generated
+For a signed release, run a build-only workflow and verify the generated
 installer's Authenticode identity matches both the configured publisher name and
 full subject distinguished name.
 
@@ -186,6 +229,7 @@ full subject distinguished name.
 - macOS build unsigned when expected signed:
   - Check all Apple secrets are populated and non-empty.
 - Published Windows build rejected before packaging:
-  - Check all eight Azure ATS, identity, and auth secrets are populated and non-empty.
+  - For the unsigned release policy, check that `SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE` matches the exact version without `v`.
+  - For a signed release, check all eight Azure ATS, identity, and auth secrets are populated and non-empty.
 - Build fails with signing error:
   - Re-check certificate/profile names and tenant/client credentials.
