@@ -36,6 +36,7 @@ import {
   coordinatorWelcomeText,
   isGroupCoordinatorHostProject,
 } from "../groupCoordinatorHost.ts";
+import { moveLibraryRoot, resolveLibraryRoot } from "../libraryStore.ts";
 import {
   canWriteMemoryDocument,
   decodeProjectAgentListCursor,
@@ -848,6 +849,27 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const existingConfig = Option.isSome(existing) ? existing.value : null;
         if (input.libraryPath !== undefined) {
           yield* assertAbsoluteLibraryPath(input.libraryPath);
+        }
+        // Changing libraryPath relocates the store: copy the whole tree
+        // (including .git history) to the new root before re-pointing the
+        // config. The previous location is left untouched so a failed save
+        // never strands the data.
+        if (input.libraryPath !== undefined && input.libraryPath !== existingConfig?.libraryPath) {
+          const previousRoot = yield* resolveLibraryRoot({
+            stateDir: serverConfig.stateDir,
+            projectId: input.projectId,
+            libraryPath: existingConfig?.libraryPath,
+          }).pipe(Effect.mapError(toServiceError("Failed to resolve the current library.")));
+          const nextRoot = yield* resolveLibraryRoot({
+            stateDir: serverConfig.stateDir,
+            projectId: input.projectId,
+            libraryPath: input.libraryPath,
+          }).pipe(Effect.mapError(toServiceError("Failed to resolve the new library.")));
+          yield* moveLibraryRoot({ fromRoot: previousRoot, toRoot: nextRoot }).pipe(
+            Effect.mapError((cause) =>
+              fail(`Could not move the group library: ${cause.message}`, "invalid"),
+            ),
+          );
         }
         const config: ProjectAgentConfig = {
           projectId: input.projectId,

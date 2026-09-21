@@ -27,6 +27,7 @@ import {
   type ProjectDevServerEvent,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
+  type ProjectId,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
   type ServerConfigStreamEvent,
@@ -40,6 +41,24 @@ import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/un
 
 import { AutomationService } from "./automation/Services/AutomationService";
 import { ProjectAgentService } from "./projectAgent/Services/ProjectAgentService";
+import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
+import {
+  ensureLibraryRepo,
+  listLibraryEntries,
+  normalizeLibraryRelativePath,
+  resolveLibraryCreateTarget,
+  resolveLibraryRoot,
+  resolveLibraryTarget,
+} from "./projectAgent/libraryStore";
+import {
+  commitLibraryChange,
+  libraryHistory,
+  pushLibraryIfConfigured,
+  readLibraryPushStatus,
+  restoreLibraryEntry,
+  withLibraryQueue,
+} from "./projectAgent/libraryGit";
+import { ProjectAgentRepository } from "./persistence/Services/ProjectAgentRepository";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import {
   ServerAuth,
@@ -362,6 +381,7 @@ const makeWsRpcHandlersLayer = () =>
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const automationService = yield* AutomationService;
       const projectAgentService = yield* ProjectAgentService;
+      const projectAgentRepository = yield* ProjectAgentRepository;
       const config = yield* ServerConfig;
       const devServerManager = yield* DevServerManager;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -898,6 +918,61 @@ const makeWsRpcHandlersLayer = () =>
                 )?.id ?? null,
             ),
           );
+
+      // Resolves the caller's library root while enforcing the same
+      // group-container gate ProjectAgentService applies: the project must
+      // exist and be a group/studio container. The coordinator config is
+      // optional — the library works before setup and honors `libraryPath`
+      // overrides when configured.
+      const resolveGroupLibrary = (projectId: ProjectId) =>
+        Effect.gen(function* () {
+          const shell = yield* projectionReadModelQuery
+            .getProjectShellById(projectId)
+            .pipe(Effect.mapError(() => new WsRpcError({ message: "Failed to load project." })));
+          const allowed =
+            Option.isSome(shell) &&
+            isGroupCoordinatorHostProject({
+              kind: shell.value.kind,
+              workspaceRoot: shell.value.workspaceRoot,
+              groupsWorkspaceRoot: config.groupsWorkspaceRoot,
+              studioWorkspaceRoot: config.studioWorkspaceRoot,
+            });
+          if (!allowed) {
+            return yield* new WsRpcError({
+              message: "The group library is only available on group containers.",
+            });
+          }
+          const agentConfig = yield* projectAgentRepository
+            .getConfig(projectId)
+            .pipe(
+              Effect.mapError(
+                () => new WsRpcError({ message: "Failed to load project coordinator." }),
+              ),
+            )
+            .pipe(Effect.map(Option.getOrNull));
+          const root = yield* resolveLibraryRoot({
+            stateDir: config.stateDir,
+            projectId,
+            libraryPath: agentConfig?.libraryPath,
+          });
+          return { root, agentConfig };
+        });
+
+      const pushGroupLibrary = (
+        projectId: ProjectId,
+        root: string,
+        agentConfig: {
+          libraryRemoteUrl?: string | undefined;
+          libraryPushOnChange?: boolean | undefined;
+        } | null,
+      ) =>
+        pushLibraryIfConfigured({
+          git,
+          root,
+          projectId,
+          libraryRemoteUrl: agentConfig?.libraryRemoteUrl,
+          libraryPushOnChange: agentConfig?.libraryPushOnChange,
+        });
 
       const requireOwner = Effect.gen(function* () {
         if (!canManageExternalMcp(yield* CurrentWsSessionRole)) {
@@ -2190,6 +2265,138 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             projectAgentService.refreshDigest(input, { kind: "user" }),
             "Failed to refresh project digest",
+          ),
+        [WS_METHODS.projectAgentLibraryList]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const { root } = yield* resolveGroupLibrary(input.projectId);
+              const entries = yield* withLibraryQueue(
+                input.projectId,
+                Effect.gen(function* () {
+                  yield* ensureLibraryRepo(git, root);
+                  return yield* listLibraryEntries(root, input.relativePath);
+                }),
+              );
+              return { root, entries };
+            }),
+            "Failed to list the group library",
+          ),
+        [WS_METHODS.projectAgentLibraryMkdir]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const { root, agentConfig } = yield* resolveGroupLibrary(input.projectId);
+              return yield* withLibraryQueue(
+                input.projectId,
+                Effect.gen(function* () {
+                  yield* ensureLibraryRepo(git, root);
+                  const target = yield* resolveLibraryCreateTarget(root, input.relativePath);
+                  yield* fileSystem.makeDirectory(target, { recursive: true });
+                  const { commitSha } = yield* commitLibraryChange(
+                    git,
+                    root,
+                    `Create ${input.relativePath}`,
+                  );
+                  yield* pushGroupLibrary(input.projectId, root, agentConfig);
+                  return { commitSha };
+                }),
+              );
+            }),
+            "Failed to create the library folder",
+          ),
+        [WS_METHODS.projectAgentLibraryRename]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const { root, agentConfig } = yield* resolveGroupLibrary(input.projectId);
+              return yield* withLibraryQueue(
+                input.projectId,
+                Effect.gen(function* () {
+                  yield* ensureLibraryRepo(git, root);
+                  const from = yield* resolveLibraryTarget(root, input.from);
+                  const to = yield* resolveLibraryCreateTarget(root, input.to);
+                  yield* fileSystem.rename(from, to);
+                  const { commitSha } = yield* commitLibraryChange(
+                    git,
+                    root,
+                    `Rename ${input.from} to ${input.to}`,
+                  );
+                  yield* pushGroupLibrary(input.projectId, root, agentConfig);
+                  return { commitSha };
+                }),
+              );
+            }),
+            "Failed to rename the library entry",
+          ),
+        [WS_METHODS.projectAgentLibraryDelete]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const { root, agentConfig } = yield* resolveGroupLibrary(input.projectId);
+              return yield* withLibraryQueue(
+                input.projectId,
+                Effect.gen(function* () {
+                  yield* ensureLibraryRepo(git, root);
+                  const target = yield* resolveLibraryTarget(root, input.relativePath);
+                  yield* fileSystem.remove(target, { recursive: true });
+                  const { commitSha } = yield* commitLibraryChange(
+                    git,
+                    root,
+                    `Delete ${input.relativePath}`,
+                  );
+                  yield* pushGroupLibrary(input.projectId, root, agentConfig);
+                  return { commitSha };
+                }),
+              );
+            }),
+            "Failed to delete the library entry",
+          ),
+        [WS_METHODS.projectAgentLibraryHistory]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const { root } = yield* resolveGroupLibrary(input.projectId);
+              const commits = yield* withLibraryQueue(
+                input.projectId,
+                Effect.gen(function* () {
+                  yield* ensureLibraryRepo(git, root);
+                  const relativePath =
+                    input.relativePath === undefined
+                      ? undefined
+                      : yield* normalizeLibraryRelativePath(input.relativePath);
+                  return yield* libraryHistory(git, root, relativePath);
+                }),
+              );
+              return { root, commits };
+            }),
+            "Failed to load library history",
+          ),
+        [WS_METHODS.projectAgentLibraryRestore]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const { root, agentConfig } = yield* resolveGroupLibrary(input.projectId);
+              return yield* withLibraryQueue(
+                input.projectId,
+                Effect.gen(function* () {
+                  yield* ensureLibraryRepo(git, root);
+                  const relativePath = yield* normalizeLibraryRelativePath(input.relativePath);
+                  const result = yield* restoreLibraryEntry(git, root, relativePath, input.sha);
+                  yield* pushGroupLibrary(input.projectId, root, agentConfig);
+                  return result;
+                }),
+              );
+            }),
+            "Failed to restore the library entry",
+          ),
+        [WS_METHODS.projectAgentLibraryStatus]: (input) =>
+          rpcEffect(
+            Effect.gen(function* () {
+              const { root, agentConfig } = yield* resolveGroupLibrary(input.projectId);
+              const pushStatus = readLibraryPushStatus(input.projectId);
+              return {
+                root,
+                remoteConfigured: typeof agentConfig?.libraryRemoteUrl === "string",
+                lastPushAt: pushStatus.lastPushAt,
+                lastPushError: pushStatus.lastPushError,
+              };
+            }),
+            "Failed to load library status",
           ),
         [WS_METHODS.subscribeProjectAgentEvents]: (input, { clientId }) =>
           streamAdmission.guard(

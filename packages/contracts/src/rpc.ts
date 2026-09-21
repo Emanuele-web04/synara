@@ -55,6 +55,17 @@ import {
   ProjectAgentListThreadIndexResult,
   ProjectAgentListEvidenceInput,
   ProjectAgentListEvidenceResult,
+  ProjectAgentLibraryDeleteInput,
+  ProjectAgentLibraryHistoryInput,
+  ProjectAgentLibraryHistoryResult,
+  ProjectAgentLibraryListInput,
+  ProjectAgentLibraryListResult,
+  ProjectAgentLibraryMkdirInput,
+  ProjectAgentLibraryMutationResult,
+  ProjectAgentLibraryRenameInput,
+  ProjectAgentLibraryRestoreInput,
+  ProjectAgentLibraryStatusInput,
+  ProjectAgentLibraryStatusResult,
   ProjectDocumentRevision,
   ProjectGoal,
   ProjectTask,
@@ -1436,6 +1447,41 @@ export const WsProjectAgentRefreshDigestRpc = Rpc.make(WS_METHODS.projectAgentRe
   success: ProjectAgentOverview,
   error: WsRpcError,
 });
+export const WsProjectAgentLibraryListRpc = Rpc.make(WS_METHODS.projectAgentLibraryList, {
+  payload: ProjectAgentLibraryListInput,
+  success: ProjectAgentLibraryListResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryMkdirRpc = Rpc.make(WS_METHODS.projectAgentLibraryMkdir, {
+  payload: ProjectAgentLibraryMkdirInput,
+  success: ProjectAgentLibraryMutationResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryRenameRpc = Rpc.make(WS_METHODS.projectAgentLibraryRename, {
+  payload: ProjectAgentLibraryRenameInput,
+  success: ProjectAgentLibraryMutationResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryDeleteRpc = Rpc.make(WS_METHODS.projectAgentLibraryDelete, {
+  payload: ProjectAgentLibraryDeleteInput,
+  success: ProjectAgentLibraryMutationResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryHistoryRpc = Rpc.make(WS_METHODS.projectAgentLibraryHistory, {
+  payload: ProjectAgentLibraryHistoryInput,
+  success: ProjectAgentLibraryHistoryResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryRestoreRpc = Rpc.make(WS_METHODS.projectAgentLibraryRestore, {
+  payload: ProjectAgentLibraryRestoreInput,
+  success: ProjectAgentLibraryMutationResult,
+  error: WsRpcError,
+});
+export const WsProjectAgentLibraryStatusRpc = Rpc.make(WS_METHODS.projectAgentLibraryStatus, {
+  payload: ProjectAgentLibraryStatusInput,
+  success: ProjectAgentLibraryStatusResult,
+  error: WsRpcError,
+});
 export const WsSubscribeProjectAgentEventsRpc = Rpc.make(WS_METHODS.subscribeProjectAgentEvents, {
   payload: ProjectAgentSubscribeInput,
   success: ProjectAgentStreamEvent,
@@ -1595,6 +1641,13 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectAgentWriteDocumentRpc,
   WsProjectAgentExportDocumentsRpc,
   WsProjectAgentRefreshDigestRpc,
+  WsProjectAgentLibraryListRpc,
+  WsProjectAgentLibraryMkdirRpc,
+  WsProjectAgentLibraryRenameRpc,
+  WsProjectAgentLibraryDeleteRpc,
+  WsProjectAgentLibraryHistoryRpc,
+  WsProjectAgentLibraryRestoreRpc,
+  WsProjectAgentLibraryStatusRpc,
   WsSubscribeProjectAgentEventsRpc,
 );
 

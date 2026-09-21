@@ -9,6 +9,7 @@ import { AuthSessionId } from "@synara/contracts";
 import {
   ATTACHMENT_CANCEL_ROUTE_PATH,
   ATTACHMENT_UPLOAD_ROUTE_PATH,
+  LIBRARY_UPLOAD_ROUTE_PATH,
   VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { DateTime, Effect, Exit, Layer, Scope } from "effect";
@@ -21,8 +22,17 @@ import {
   type SessionCredentialServiceShape,
 } from "./auth/Services/SessionCredentialService";
 import { ServerConfig, type ServerConfigShape } from "./config";
+import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionSnapshotQueryShape,
+} from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
+import {
+  ProjectAgentRepository,
+  type ProjectAgentRepositoryShape,
+} from "./persistence/Services/ProjectAgentRepository";
 import {
   AUTH_JSON_BODY_MAX_BYTES,
   authEffectRouteLayer,
@@ -137,6 +147,16 @@ async function withAuthEffectServer(
             },
           ),
           overrides?.serverSettingsLayer ?? ServerSettingsService.layerTest(),
+          Layer.succeed(GitCore, {
+            execute: () => Effect.die("git is not used in this test"),
+          } as unknown as GitCoreShape),
+          Layer.succeed(ProjectAgentRepository, {
+            getConfig: () => Effect.die("project agent repository is not used in this test"),
+          } as unknown as ProjectAgentRepositoryShape),
+          Layer.succeed(ProjectionSnapshotQuery, {
+            getProjectShellById: () =>
+              Effect.die("projection snapshot query is not used in this test"),
+          } as unknown as ProjectionSnapshotQueryShape),
           ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
           NodeServices.layer,
         ),
@@ -515,6 +535,76 @@ describe("binaryUploadEffectRouteLayer", () => {
       );
     } finally {
       fs.rmSync(attachmentsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unauthenticated library uploads and oversized declared bodies", async () => {
+    const config = {
+      host: "0.0.0.0",
+      publicUrl: new URL("https://synara.example.test/"),
+      stateDir: fs.mkdtempSync(path.join(os.tmpdir(), "synara-library-upload-")),
+    } as ServerConfigShape;
+    try {
+      await withAuthEffectServer(
+        config,
+        makeServerAuth({ count: 0 }),
+        async (serverOrigin) => {
+          const params = new URLSearchParams({
+            projectId: "group-1",
+            name: "note.md",
+            mimeType: "text/markdown",
+          });
+          const url = `${serverOrigin}${LIBRARY_UPLOAD_ROUTE_PATH}?${params.toString()}`;
+
+          const unauthenticatedResponse = await fetch(url, {
+            method: "POST",
+            body: Uint8Array.from([1]),
+          });
+          expect(unauthenticatedResponse.status).toBe(401);
+
+          // Cookie-auth without a trusted origin is rejected before the body
+          // is read, same as the attachment upload path.
+          const cookieResponse = await fetch(url, {
+            method: "POST",
+            headers: { Cookie: "synara_session=cookie-token" },
+            body: Uint8Array.from([1]),
+          });
+          expect(cookieResponse.status).toBe(403);
+
+          const oversizedStatus = await new Promise<number>((resolve, reject) => {
+            const target = new URL(url);
+            const request = http.request(
+              {
+                hostname: target.hostname,
+                port: target.port,
+                path: `${target.pathname}${target.search}`,
+                method: "POST",
+                headers: {
+                  Authorization: "Bearer bearer-token",
+                  "Content-Length": String(25 * 1024 * 1024 + 1),
+                },
+              },
+              (response) => {
+                response.resume();
+                response.once("end", () => resolve(response.statusCode ?? 0));
+              },
+            );
+            request.once("error", reject);
+            request.end();
+          });
+          expect(oversizedStatus).toBe(413);
+
+          const missingMetadata = await fetch(`${serverOrigin}${LIBRARY_UPLOAD_ROUTE_PATH}`, {
+            method: "POST",
+            headers: { Authorization: "Bearer bearer-token" },
+            body: Uint8Array.from([1]),
+          });
+          expect(missingMetadata.status).toBe(400);
+        },
+        binaryUploadEffectRouteLayer,
+      );
+    } finally {
+      fs.rmSync(config.stateDir, { recursive: true, force: true });
     }
   });
 });

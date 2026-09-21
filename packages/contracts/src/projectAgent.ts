@@ -682,3 +682,96 @@ export const PROJECT_AGENT_RESERVED_PATHS = [
 export const PROJECT_AGENT_USER_WRITABLE_PATHS = ["instructions.md", "notes.md"] as const;
 export const PROJECT_AGENT_COORDINATOR_CURATED_PREFIXES = ["decisions.md", "docs/"] as const;
 export const PROJECT_AGENT_WORKER_INBOX_PREFIX = "inbox/";
+
+// ----- Group Library (git-versioned file store) -----
+
+export const LibraryEntry = Schema.Struct({
+  /** File or directory name, e.g. "notes.md". */
+  name: TrimmedNonEmptyString,
+  /** Path relative to the library root, e.g. "Artifacts/brief.pdf". */
+  relativePath: TrimmedNonEmptyString,
+  kind: Schema.Literals(["file", "directory"]),
+  /** 0 for directories. */
+  sizeBytes: NonNegativeInt,
+  modifiedAt: IsoDateTime,
+});
+export type LibraryEntry = typeof LibraryEntry.Type;
+
+export const LibraryCommit = Schema.Struct({
+  sha: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+  at: IsoDateTime,
+  author: TrimmedNonEmptyString,
+});
+export type LibraryCommit = typeof LibraryCommit.Type;
+
+export const ProjectAgentLibraryListInput = Schema.Struct({
+  projectId: ProjectId,
+  /** Directory to list, relative to the library root. Omit for the root. */
+  relativePath: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProjectAgentLibraryListInput = typeof ProjectAgentLibraryListInput.Type;
+
+export const ProjectAgentLibraryListResult = Schema.Struct({
+  root: TrimmedNonEmptyString,
+  entries: Schema.Array(LibraryEntry),
+});
+export type ProjectAgentLibraryListResult = typeof ProjectAgentLibraryListResult.Type;
+
+export const ProjectAgentLibraryMkdirInput = Schema.Struct({
+  projectId: ProjectId,
+  relativePath: TrimmedNonEmptyString,
+});
+export type ProjectAgentLibraryMkdirInput = typeof ProjectAgentLibraryMkdirInput.Type;
+
+export const ProjectAgentLibraryRenameInput = Schema.Struct({
+  projectId: ProjectId,
+  from: TrimmedNonEmptyString,
+  to: TrimmedNonEmptyString,
+});
+export type ProjectAgentLibraryRenameInput = typeof ProjectAgentLibraryRenameInput.Type;
+
+export const ProjectAgentLibraryDeleteInput = Schema.Struct({
+  projectId: ProjectId,
+  relativePath: TrimmedNonEmptyString,
+});
+export type ProjectAgentLibraryDeleteInput = typeof ProjectAgentLibraryDeleteInput.Type;
+
+/** Commit created by a library mutation (`sha` is the previous HEAD when the
+ *  mutation produced no index change). */
+export const ProjectAgentLibraryMutationResult = Schema.Struct({
+  commitSha: TrimmedNonEmptyString,
+});
+export type ProjectAgentLibraryMutationResult = typeof ProjectAgentLibraryMutationResult.Type;
+
+export const ProjectAgentLibraryHistoryInput = Schema.Struct({
+  projectId: ProjectId,
+  relativePath: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProjectAgentLibraryHistoryInput = typeof ProjectAgentLibraryHistoryInput.Type;
+
+export const ProjectAgentLibraryHistoryResult = Schema.Struct({
+  root: TrimmedNonEmptyString,
+  commits: Schema.Array(LibraryCommit),
+});
+export type ProjectAgentLibraryHistoryResult = typeof ProjectAgentLibraryHistoryResult.Type;
+
+export const ProjectAgentLibraryRestoreInput = Schema.Struct({
+  projectId: ProjectId,
+  relativePath: TrimmedNonEmptyString,
+  sha: TrimmedNonEmptyString,
+});
+export type ProjectAgentLibraryRestoreInput = typeof ProjectAgentLibraryRestoreInput.Type;
+
+export const ProjectAgentLibraryStatusInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ProjectAgentLibraryStatusInput = typeof ProjectAgentLibraryStatusInput.Type;
+
+export const ProjectAgentLibraryStatusResult = Schema.Struct({
+  root: TrimmedNonEmptyString,
+  remoteConfigured: Schema.Boolean,
+  lastPushAt: Schema.NullOr(IsoDateTime),
+  lastPushError: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ProjectAgentLibraryStatusResult = typeof ProjectAgentLibraryStatusResult.Type;
