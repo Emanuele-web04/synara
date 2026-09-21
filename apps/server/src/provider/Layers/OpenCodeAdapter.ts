@@ -4001,17 +4001,29 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       )(function* (threadId, requestId, answers) {
         const context = ensureAdapterSessionContext(threadId);
         const request = context.pendingQuestions.get(requestId);
+        const isCancellation = Object.keys(answers).length === 0;
         if (!request) {
           return yield* new ProviderAdapterRequestError({
             provider,
-            method: "question.reply",
+            method: isCancellation ? "question.reject" : "question.reply",
             detail: `Unknown pending user-input request: ${requestId}`,
           });
+        }
+
+        if (isCancellation) {
+          yield* runOpenCodeSdk("question.reject", () =>
+            context.client.question.reject({
+              requestID: requestId,
+              directory: context.directory,
+            }),
+          ).pipe(Effect.mapError(toAdapterRequestError));
+          return;
         }
 
         yield* runOpenCodeSdk("question.reply", () =>
           context.client.question.reply({
             requestID: requestId,
+            directory: context.directory,
             answers: toOpenCodeQuestionAnswers(request, answers),
           }),
         ).pipe(Effect.mapError(toAdapterRequestError));

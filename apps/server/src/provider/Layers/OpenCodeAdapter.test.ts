@@ -96,6 +96,8 @@ function createMockOpenCodeRuntime(options?: {
   const updateCalls: Array<Record<string, unknown>> = [];
   const forkCalls: Array<{ sessionID: string }> = [];
   const permissionReplyCalls: Array<Record<string, unknown>> = [];
+  const questionReplyCalls: Array<Record<string, unknown>> = [];
+  const questionRejectCalls: Array<Record<string, unknown>> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
   const promptCallKinds: Array<"async" | "sync"> = [];
   const mcpAddCalls: Array<Record<string, unknown>> = [];
@@ -174,7 +176,14 @@ function createMockOpenCodeRuntime(options?: {
     question: {
       list: async () =>
         options?.questionList ? options.questionList() : { data: options?.pendingQuestions ?? [] },
-      reply: async () => ({ data: null }),
+      reply: async (input: Record<string, unknown>) => {
+        questionReplyCalls.push(input);
+        return { data: true };
+      },
+      reject: async (input: Record<string, unknown>) => {
+        questionRejectCalls.push(input);
+        return { data: true };
+      },
     },
     command: {
       list: options?.commandList ?? (async () => ({ data: [] })),
@@ -269,6 +278,8 @@ function createMockOpenCodeRuntime(options?: {
     updateCalls,
     forkCalls,
     permissionReplyCalls,
+    questionReplyCalls,
+    questionRejectCalls,
     promptCalls,
     promptCallKinds,
     mcpAddCalls,
@@ -863,6 +874,66 @@ describe("OpenCode host policy delivery", () => {
 });
 
 describe("OpenCodeAdapter runtime lifecycle", () => {
+  it("rejects a cancelled question and routes normal answers to the owning directory", async () => {
+    const threadId = asThreadId("thread-question-cancel");
+    const question = {
+      sessionID: "opencode-session-1",
+      questions: [
+        {
+          question: "Proceed?",
+          header: "Confirm",
+          options: [{ label: "Yes", description: "Continue" }],
+          multiple: false,
+          custom: false,
+        },
+      ],
+    };
+    const runtime = createMockOpenCodeRuntime({
+      pendingQuestions: [
+        { ...question, id: "question-cancel" },
+        { ...question, id: "question-answer" },
+      ],
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const questionsFiber = yield* Stream.runCollect(
+          Stream.take(
+            Stream.filter(adapter.streamEvents, (event) => event.type === "user-input.requested"),
+            2,
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId,
+          runtimeMode: "full-access",
+          resumeCursor: { openCodeSessionId: "opencode-session-1", cwd: process.cwd() },
+        });
+        yield* Fiber.join(questionsFiber);
+        yield* adapter.respondToUserInput(
+          threadId,
+          ApprovalRequestId.makeUnsafe("question-cancel"),
+          {},
+        );
+        yield* adapter.respondToUserInput(
+          threadId,
+          ApprovalRequestId.makeUnsafe("question-answer"),
+          {
+            "question-0-confirm": "Yes",
+          },
+        );
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    expect(runtime.questionRejectCalls).toEqual([
+      { requestID: "question-cancel", directory: process.cwd() },
+    ]);
+    expect(runtime.questionReplyCalls).toEqual([
+      { requestID: "question-answer", directory: process.cwd(), answers: [["Yes"]] },
+    ]);
+  });
+
   it("lists OpenCode models from the CLI before falling back to server inventory", async () => {
     const runtime = createMockOpenCodeRuntime({
       cliModels: [

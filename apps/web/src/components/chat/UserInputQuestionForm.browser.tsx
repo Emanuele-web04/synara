@@ -38,6 +38,29 @@ const props = () => ({
 });
 
 describe("shared question form with blocking prompts", () => {
+  it("offers Cancel with choices and stops pending auto-advance", async () => {
+    const callbacks = props();
+    const screen = await render(<ComposerPendingUserInputPanel {...callbacks} />);
+    await screen.getByRole("button", { name: /Second/ }).click();
+    await screen.getByRole("button", { name: "Cancel" }).click();
+    expect(callbacks.onCancel).toHaveBeenCalledOnce();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(callbacks.onAdvance).not.toHaveBeenCalled();
+  });
+
+  it("keeps Cancel available when a question has no choices", async () => {
+    const callbacks = props();
+    const noChoicePrompt = {
+      ...prompt,
+      questions: [{ ...prompt.questions[0]!, options: [] }],
+    };
+    const screen = await render(
+      <ComposerPendingUserInputPanel {...callbacks} pendingUserInputs={[noChoicePrompt]} />,
+    );
+    await screen.getByRole("button", { name: "Cancel" }).click();
+    expect(callbacks.onCancel).toHaveBeenCalledOnce();
+  });
+
   it("preserves global digit shortcuts and advances with the newly selected answer", async () => {
     const callbacks = props();
     await render(<ComposerPendingUserInputPanel {...callbacks} />);
@@ -55,6 +78,7 @@ describe("shared question form with blocking prompts", () => {
     await screen.rerender(
       <ComposerPendingUserInputPanel {...callbacks} isResponding submissionVersion={1} />,
     );
+    await expect.element(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
     await new Promise((resolve) => setTimeout(resolve, 250));
     expect(callbacks.onAdvance).not.toHaveBeenCalled();
   });
