@@ -4,6 +4,7 @@ import type { WebContents } from "electron";
 import { synaraHostTarget } from "./betterwrightHostTarget";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { BrowserAutomationHostError } from "./hostErrors";
+import { withBrowserPageFocus } from "./betterwrightFocus";
 
 const UNAVAILABLE_SCRIPT_API_ERRORS = new Set([
   ...[
@@ -41,7 +42,7 @@ export async function runBetterwright<T>(options: BetterwrightRunOptions): Promi
   // the worker and its CDP connection have both drained.
   if (throttled) options.contents.setBackgroundThrottling(false);
   try {
-    return await runConnectedBetterwright<T>(options);
+    return await withBrowserPageFocus(options.contents, () => runConnectedBetterwright<T>(options));
   } finally {
     if (throttled && !options.contents.isDestroyed()) {
       options.contents.setBackgroundThrottling(true);

@@ -42,6 +42,9 @@ let contents: WebContents;
 beforeEach(() => {
   vi.resetAllMocks();
   contents = {
+    getType: vi.fn(() => "browserView"),
+    isFocused: vi.fn(() => false),
+    debugger: { isAttached: vi.fn(() => true), sendCommand: vi.fn(async () => ({})) },
     getBackgroundThrottling: vi.fn(),
     setBackgroundThrottling: vi.fn(),
     isDestroyed: vi.fn(),

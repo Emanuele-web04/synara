@@ -530,10 +530,6 @@ async function ensureBrowserHostPipeServer(): Promise<void> {
     vault: browserVault,
     vaultCapture: browserVaultCapture,
     capability: DESKTOP_BROWSER_HOST_CAPABILITY,
-    requestOpenPanel: (threadId) => {
-      if (!threadId) return;
-      mainWindow?.webContents.send(IPC.browser.requestOpenPanel, { threadId });
-    },
   });
   await server.start();
   browserHostPipeServer = server;

@@ -192,7 +192,8 @@ describe("browser automation tool schemas", () => {
       point: { x: 100, y: 80 },
       humanActionRequired: {
         kind: "oauth_popup",
-        instruction: "Complete sign-in in the visible popup before continuing.",
+        instruction:
+          "Open the sign-in popup tab in the browser and complete sign-in before continuing.",
       },
     };
     const pressOutput = {

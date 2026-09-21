@@ -32,6 +32,12 @@ using separate worktrees also have separate working directories and branches.
 You do not need every surface open at once. Bring each one in when it answers a question: what is
 running, what changed, whether the UI works, or whether the task is safe to ship.
 
+Agent browser tools run in the background without selecting a chat, browser tab, or panel, or
+moving keyboard focus. Open the Browser surface yourself to inspect the page. Taking control of
+the same page interrupts its active automation. A live legacy webview that cannot safely receive
+background input is preserved and returns an explicit error; the agent can open a separate native
+tab with `browser_open` and `reuse: false`. See [browser input verification](browser-background-input.md).
+
 ## Projects
 
 A project is the folder Synara works with.

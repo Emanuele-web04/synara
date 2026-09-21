@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { webContents, type WebContents } from "electron";
+import type { WebContents } from "electron";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { betterwrightExpectedInputs } from "./betterwrightInput";
 import { BetterwrightKeyboardPolicy } from "./betterwrightKeyboardPolicy";
-import { withRendererGuestFocus } from "./betterwrightFocus";
+import { assertBackgroundBrowserInput } from "./betterwrightFocus";
 
 type Params = Record<string, unknown>;
 let nativeInputQueue: Promise<unknown> = Promise.resolve();
@@ -40,6 +40,8 @@ const PAGE_DOMAINS = new Set([
   "WebMCP",
 ]);
 const FORBIDDEN_METHODS = new Set([
+  "Page.bringToFront",
+  "Emulation.setFocusEmulationEnabled",
   "Page.close",
   "Page.crash",
   "Page.setDownloadBehavior",
@@ -280,18 +282,17 @@ export class BetterwrightCdpTarget {
       requireWebUrl(params.url);
     }
     if (method === "Input.dispatchKeyEvent") this.keyboardPolicy.check(params);
-    const nativeInput = method.startsWith("Input.") || method === "Page.bringToFront";
+    const nativeInput = method.startsWith("Input.");
     const dispatch = async () => {
       if (this.disposed || this.contents.isDestroyed())
         throw new Error("Browser target lease ended.");
+      if (nativeInput || method === "Runtime.evaluate" || method === "Runtime.callFunctionOn") {
+        assertBackgroundBrowserInput(this.contents);
+      }
       const releases = betterwrightExpectedInputs(method, params).map((input) =>
         this.expectAgentInput?.(input),
       );
-      const previousFocus = nativeInput ? webContents.getFocusedWebContents() : null;
       try {
-        // Native focus is shared across tabs; DOM focus alone cannot route text
-        // to an offscreen preview. Keep focus and dispatch in the same lease.
-        if (nativeInput && previousFocus !== this.contents) this.contents.focus();
         const send = async () => {
           if (
             method === "Input.dispatchMouseEvent" &&
@@ -327,26 +328,9 @@ export class BetterwrightCdpTarget {
             this.childSessions.has(sessionId!) ? sessionId : undefined,
           );
         };
-        if (!nativeInput) return await send();
-        const focusedOperation = withRendererGuestFocus(this.contents, send);
-        this.pending.add(focusedOperation);
-        try {
-          return await focusedOperation;
-        } finally {
-          this.pending.delete(focusedOperation);
-        }
+        return await send();
       } finally {
-        try {
-          if (
-            previousFocus &&
-            previousFocus !== this.contents &&
-            !previousFocus.isDestroyed() &&
-            webContents.getFocusedWebContents() === this.contents
-          )
-            previousFocus.focus();
-        } finally {
-          for (const release of releases) release?.();
-        }
+        for (const release of releases) release?.();
       }
     };
     return nativeInput ? enqueueNativeInput(dispatch) : dispatch();

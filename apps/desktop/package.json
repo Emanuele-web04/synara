@@ -15,7 +15,8 @@
     "test": "vitest run --passWithNoTests",
     "smoke-test": "node scripts/smoke-test.mjs",
     "smoke:browser-lifecycle": "bun build scripts/browser-lifecycle-smoke.ts --target=node --external=electron --external=betterwright --external=betterwright/* --external=ws --external=effect --outfile=.smoke/browser-lifecycle.mjs && electron .smoke/browser-lifecycle.mjs && electron ../../.github/scripts/energy-cloud-probe.cjs 3 10000",
-    "smoke:browser-viewport": "bun build scripts/browser-viewport-smoke.ts --target=node --external=electron --external=betterwright --outfile=.smoke/browser-viewport.mjs && electron .smoke/browser-viewport.mjs"
+    "smoke:browser-viewport": "bun build scripts/browser-viewport-smoke.ts --target=node --external=electron --external=betterwright --outfile=.smoke/browser-viewport.mjs && electron .smoke/browser-viewport.mjs",
+    "smoke:browser-background": "bun build scripts/browser-background-input-smoke.ts --target=node --external=electron --external=betterwright --external=betterwright/* --external=ws --external=effect --outfile=.smoke/browser-background-input.mjs && electron .smoke/browser-background-input.mjs"
   },
   "dependencies": {
     "betterwright": "2.7.3",
