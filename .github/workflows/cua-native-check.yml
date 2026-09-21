@@ -20,9 +20,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  macos:
-    name: macOS native compilation and host IPC
-    runs-on: macos-14
+  native:
+    name: macOS native compilation
+    runs-on: macos-15
     timeout-minutes: 35
     env:
       CUA_DRIVER_RS_TELEMETRY_ENABLED: "0"
@@ -30,11 +30,10 @@ jobs:
       DO_NOT_TRACK: "1"
       CARGO_PROFILE_DEV_STRIP: none
       CARGO_PROFILE_TEST_STRIP: none
+      # The pinned apple-metal Swift bridge needs the macOS 15 SDK.
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
     steps:
       - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-workspace
-        with:
-          scope: runtime
 
       - name: Prepare the pinned native source and compiler
         shell: bash
@@ -65,6 +64,19 @@ jobs:
         run: |
           cargo test --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p platform-macos --lib focus_restore_policy
           cargo test --manifest-path "$CUA_NATIVE_SOURCE/libs/cua-driver/rust/Cargo.toml" --locked -p cursor-overlay --lib compact
+
+  runtime:
+    name: macOS host IPC and computer lifecycle
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-workspace
+        with:
+          scope: runtime
 
       - name: Run host IPC and diagnostic regressions
         run: |
