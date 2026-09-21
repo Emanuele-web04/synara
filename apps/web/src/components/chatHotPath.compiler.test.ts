@@ -157,6 +157,21 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
     requiredFunction: "useChatTurnExecution",
     allowedBailoutReasons: [],
   },
+  {
+    relativePath: "chat/group/LibraryPanel.tsx",
+    requiredFunction: "LibraryPanel",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "chat/group/LibraryToggle.tsx",
+    requiredFunction: "LibraryToggle",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "chat/group/useGroupLibrary.ts",
+    requiredFunction: "useGroupLibrary",
+    allowedBailoutReasons: [],
+  },
   { relativePath: "Sidebar.tsx", allowedBailoutReasons: [] },
   {
     relativePath: "chat/MessagesTimeline.tsx",

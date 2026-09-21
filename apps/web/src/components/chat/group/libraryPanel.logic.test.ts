@@ -139,7 +139,33 @@ describe("flattenLibraryRows", () => {
       expandedDirectories: new Set<string>(),
       query: "plan",
     });
-    expect(found.map((row) => row.entry.relativePath)).toEqual(["Artifacts/plan.pdf"]);
+    // The matching child surfaces with its parent directory for context.
+    expect(found.map((row) => row.entry.relativePath)).toEqual(["Artifacts", "Artifacts/plan.pdf"]);
+  });
+
+  it("hides directories with no loaded matches when a type filter is active", () => {
+    const filtered = flattenLibraryRows({
+      ...base,
+      expandedDirectories: new Set<string>(),
+      typeFilter: "images",
+    });
+    // Artifacts only holds a .pdf (documents), so the folder drops too.
+    expect(filtered.map((row) => row.entry.relativePath)).toEqual([]);
+
+    const withImage = new Map<string, readonly LibraryEntry[]>(entriesByDir);
+    withImage.set("Images", [entry("shot.png", "Images/shot.png", "file", "2026-01-04T00:00:00Z")]);
+    withImage.set("", [
+      entry("Artifacts", "Artifacts", "directory", "2026-01-01T00:00:00Z"),
+      entry("Images", "Images", "directory", "2026-01-01T00:00:00Z"),
+      entry("readme.md", "readme.md", "file", "2026-01-02T00:00:00Z"),
+    ]);
+    const rows = flattenLibraryRows({
+      ...base,
+      entriesByDir: withImage,
+      expandedDirectories: new Set<string>(),
+      typeFilter: "images",
+    });
+    expect(rows.map((row) => row.entry.relativePath)).toEqual(["Images", "Images/shot.png"]);
   });
 });
 

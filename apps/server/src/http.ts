@@ -45,6 +45,7 @@ import {
   withLibraryQueue,
 } from "./projectAgent/libraryGit";
 import {
+  assertLibraryRootLocation,
   ensureLibraryRepo,
   normalizeLibraryRelativePath,
   resolveLibraryRoot,
@@ -993,8 +994,7 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
     const projectIdParam = url.searchParams.get("projectId")?.trim() ?? "";
     const relativeDirectory = url.searchParams.get("relativePath")?.trim() ?? "";
     const name = url.searchParams.get("name") ?? "";
-    const mimeType = url.searchParams.get("mimeType")?.trim() ?? "";
-    if (!projectIdParam || !name || !mimeType) {
+    if (!projectIdParam || !name) {
       return HttpServerResponse.jsonUnsafe(
         { error: "Library upload metadata is invalid." },
         { status: 400, headers: corsHeaders },
@@ -1007,7 +1007,7 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
         { status: 413, headers: corsHeaders },
       );
     }
-    const entry = yield* Effect.gen(function* () {
+    return yield* Effect.gen(function* () {
       const projectId = ProjectId.makeUnsafe(projectIdParam);
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const shell = yield* projectionReadModelQuery.getProjectShellById(projectId);
@@ -1032,6 +1032,13 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
         stateDir: config.stateDir,
         projectId,
         libraryPath: agentConfig?.libraryPath,
+      });
+      yield* assertLibraryRootLocation({
+        root,
+        stateDir: config.stateDir,
+        groupsWorkspaceRoot: config.groupsWorkspaceRoot,
+        studioWorkspaceRoot: config.studioWorkspaceRoot,
+        isCustomPath: agentConfig?.libraryPath !== undefined,
       });
       const normalizedName = yield* normalizeLibraryRelativePath(name);
       if (normalizedName !== name || normalizedName.includes("/")) {
@@ -1073,25 +1080,36 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
         }),
       );
     }).pipe(
-      Effect.mapError((cause) => ({
-        message: cause instanceof Error ? cause.message : "Library upload failed.",
-        status:
-          cause instanceof LibraryError
-            ? cause.code === "forbidden"
-              ? 403
-              : cause.code === "not-found"
-                ? 404
-                : cause.code === "conflict"
-                  ? 409
-                  : 400
-            : cause &&
-                typeof cause === "object" &&
-                typeof (cause as { status?: unknown }).status === "number"
-              ? (cause as { status: number }).status
-              : 500,
-      })),
+      Effect.map((entry) =>
+        HttpServerResponse.jsonUnsafe(entry, { status: 201, headers: corsHeaders }),
+      ),
+      // Errors become responses here (not in the outer catch) so they keep
+      // the CORS headers every other branch of this handler returns.
+      Effect.catch((cause) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: cause instanceof Error ? cause.message : "Library upload failed." },
+            {
+              status:
+                cause instanceof LibraryError
+                  ? cause.code === "forbidden"
+                    ? 403
+                    : cause.code === "not-found"
+                      ? 404
+                      : cause.code === "conflict"
+                        ? 409
+                        : 400
+                  : cause &&
+                      typeof cause === "object" &&
+                      typeof (cause as { status?: unknown }).status === "number"
+                    ? (cause as { status: number }).status
+                    : 500,
+              headers: corsHeaders,
+            },
+          ),
+        ),
+      ),
     );
-    return HttpServerResponse.jsonUnsafe(entry, { status: 201, headers: corsHeaders });
   }
 
   if (url.pathname === VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH) {

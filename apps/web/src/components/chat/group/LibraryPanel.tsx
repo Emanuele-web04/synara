@@ -8,6 +8,7 @@
 // Layer: Chat UI component
 
 import type { LibraryCommit, LibraryEntry, ProjectId } from "@synara/contracts";
+import { formatBytes } from "@synara/shared/formatBytes";
 import { type MouseEvent as ReactMouseEvent, useCallback, useMemo, useRef, useState } from "react";
 
 import { IconButton } from "~/components/ui/icon-button";
@@ -94,6 +95,9 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Set by the row context menu's "Upload here"; cleared after each pick so a
+  // plain + Add still lands at the root.
+  const uploadDirectoryRef = useRef<string | undefined>(undefined);
 
   const rows = useMemo(
     () =>
@@ -157,11 +161,19 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
       const clicked = await api.contextMenu.show(
         [
           { id: "rename" as const, label: "Rename" },
+          ...(entry.kind === "directory"
+            ? [{ id: "upload-here" as const, label: "Upload here" }]
+            : []),
           { id: "delete" as const, label: "Delete" },
           { id: "history" as const, label: "History" },
         ],
         { x: event.clientX, y: event.clientY },
       );
+      if (clicked === "upload-here") {
+        uploadDirectoryRef.current = entry.relativePath;
+        fileInputRef.current?.click();
+        return;
+      }
       if (clicked === "rename") {
         setRenameTarget(entry.relativePath);
         setRenameDraft(entry.name);
@@ -199,8 +211,10 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
       if (!fileList) return;
       // Sequential like composerSend: several max-size uploads must not burst
       // concurrent body buffers.
+      const uploadDirectory = uploadDirectoryRef.current;
+      uploadDirectoryRef.current = undefined;
       for (const file of Array.from(fileList)) {
-        await library.upload(undefined, file);
+        await library.upload(uploadDirectory, file);
       }
       if (fileInputRef.current) fileInputRef.current.value = "";
     },
@@ -563,7 +577,9 @@ function LibraryListRow(props: {
         </button>
       )}
       <span className="pr-1 text-[10px] text-muted-foreground/80">
-        {entry.kind === "file" ? formatRelativeTime(entry.modifiedAt) : ""}
+        {entry.kind === "file"
+          ? `${formatBytes(entry.sizeBytes)} · ${formatRelativeTime(entry.modifiedAt)}`
+          : ""}
       </span>
     </div>
   );

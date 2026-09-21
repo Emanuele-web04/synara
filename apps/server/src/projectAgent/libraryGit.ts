@@ -8,10 +8,10 @@
 //          libraryHistory, restoreLibraryEntry, pushLibraryIfConfigured,
 //          readLibraryPushStatus
 
-import type { LibraryCommit } from "@synara/contracts";
+import { LIBRARY_REMOTE_URL_PATTERN, type LibraryCommit } from "@synara/contracts";
 import { Effect, Semaphore } from "effect";
 
-import type { GitCommandError } from "../git/Errors.ts";
+import { GitCommandError } from "../git/Errors.ts";
 import type { GitCoreShape } from "../git/Services/GitCore.ts";
 
 const LIBRARY_AUTHOR_ENV = {
@@ -173,11 +173,38 @@ export function restoreLibraryEntry(
   relativePath: string,
   sha: string,
 ): Effect.Effect<{ readonly commitSha: string }, GitCommandError> {
+  const invalidSha = () =>
+    new GitCommandError({
+      operation: "library.restore",
+      command: `git checkout ${sha}`,
+      cwd: root,
+      detail: `Commit "${sha}" is not a valid 40-character library commit sha.`,
+    });
   return Effect.gen(function* () {
+    // The contract already enforces the pattern; re-check here so the sha can
+    // never reach argv as an option (leading `-`) or a ref expression.
+    if (!/^[0-9a-f]{40}$/.test(sha)) return yield* invalidSha();
+    yield* runGit(git, "library.verifySha", root, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `${sha}^{commit}`,
+    ]).pipe(
+      Effect.mapError(
+        () =>
+          new GitCommandError({
+            operation: "library.restore",
+            command: `git rev-parse ${sha}`,
+            cwd: root,
+            detail: `Commit "${sha}" does not exist in this library's history.`,
+          }),
+      ),
+    );
     const pathAtSha = yield* resolveLibraryPathAtCommit(git, root, relativePath, sha);
     yield* runGit(git, "library.restoreCheckout", root, ["checkout", sha, "--", pathAtSha]);
     if (pathAtSha !== relativePath) {
-      yield* runGit(git, "library.restoreMove", root, ["mv", "-f", pathAtSha, relativePath]);
+      // `--` keeps names starting with a dash from parsing as options.
+      yield* runGit(git, "library.restoreMove", root, ["mv", "-f", "--", pathAtSha, relativePath]);
     }
     return yield* commitLibraryChange(git, root, `Restore ${relativePath} from ${sha.slice(0, 7)}`);
   });
@@ -220,6 +247,14 @@ export function pushLibraryIfConfigured(input: {
     if (!libraryRemoteUrl || libraryPushOnChange !== true) return;
     const record = (error: string | null) =>
       pushStatusByProject.set(projectId, { at: new Date().toISOString(), error });
+    // The contract validates on write, but stored configs and direct service
+    // calls bypass it — a bad URL must never reach `git remote add`.
+    if (!LIBRARY_REMOTE_URL_PATTERN.test(libraryRemoteUrl)) {
+      record(
+        "The library remote URL must start with https:// or ssh:// or use git@host:path form.",
+      );
+      return;
+    }
     yield* Effect.gen(function* () {
       const remotes = yield* runGitStdout(git, "library.remoteList", root, ["remote"]);
       if (remotes.split("\n").includes(REMOTE_NAME)) {

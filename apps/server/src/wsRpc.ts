@@ -43,9 +43,11 @@ import { AutomationService } from "./automation/Services/AutomationService";
 import { ProjectAgentService } from "./projectAgent/Services/ProjectAgentService";
 import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
 import {
+  assertLibraryRootLocation,
   ensureLibraryRepo,
   listLibraryEntries,
   normalizeLibraryRelativePath,
+  renameLibraryEntry,
   resolveLibraryCreateTarget,
   resolveLibraryRoot,
   resolveLibraryTarget,
@@ -954,6 +956,13 @@ const makeWsRpcHandlersLayer = () =>
             stateDir: config.stateDir,
             projectId,
             libraryPath: agentConfig?.libraryPath,
+          });
+          yield* assertLibraryRootLocation({
+            root,
+            stateDir: config.stateDir,
+            groupsWorkspaceRoot: config.groupsWorkspaceRoot,
+            studioWorkspaceRoot: config.studioWorkspaceRoot,
+            isCustomPath: agentConfig?.libraryPath !== undefined,
           });
           return { root, agentConfig };
         });
@@ -2311,9 +2320,7 @@ const makeWsRpcHandlersLayer = () =>
                 input.projectId,
                 Effect.gen(function* () {
                   yield* ensureLibraryRepo(git, root);
-                  const from = yield* resolveLibraryTarget(root, input.from);
-                  const to = yield* resolveLibraryCreateTarget(root, input.to);
-                  yield* fileSystem.rename(from, to);
+                  yield* renameLibraryEntry(root, input.from, input.to);
                   const { commitSha } = yield* commitLibraryChange(
                     git,
                     root,

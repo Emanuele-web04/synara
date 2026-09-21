@@ -10,19 +10,25 @@ import { describe, expect } from "vitest";
 
 import { ServerConfig } from "../config.ts";
 import { GitCore } from "../git/Services/GitCore.ts";
+import type { GitCoreShape } from "../git/Services/GitCore.ts";
 import { GitCoreLive } from "../git/Layers/GitCore.ts";
+import { GitCommandError } from "../git/Errors.ts";
 import { LibraryError } from "./Errors.ts";
 import {
   commitLibraryChange,
   libraryHistory,
+  pushLibraryIfConfigured,
+  readLibraryPushStatus,
   restoreLibraryEntry,
   withLibraryQueue,
 } from "./libraryGit.ts";
 import {
+  assertLibraryRootLocation,
   ensureLibraryRepo,
   listLibraryEntries,
   moveLibraryRoot,
   normalizeLibraryRelativePath,
+  renameLibraryEntry,
   resolveLibraryCreateTarget,
   resolveLibraryRoot,
   resolveLibraryTarget,
@@ -58,6 +64,15 @@ describe("normalizeLibraryRelativePath", () => {
     expect(Effect.runSync(normalizeLibraryRelativePath("Artifacts\\note.md"))).toBe(
       "Artifacts/note.md",
     );
+  });
+
+  it("rejects case-variant .git segments on case-insensitive filesystems", () => {
+    // On macOS/Windows ".GIT/config" resolves onto ".git/config", so the
+    // segment check must compare case-folded.
+    for (const raw of [".GIT/config", ".Git/objects/x", "sub/.GIT/config", ".git"]) {
+      const exit = Effect.runSync(Effect.exit(normalizeLibraryRelativePath(raw)));
+      expect(Exit.isFailure(exit), raw).toBe(true);
+    }
   });
 });
 
@@ -274,6 +289,169 @@ it.layer(TestLayer)("group library", (it) => {
       const conflict = yield* failureOf(moveLibraryRoot({ fromRoot, toRoot: conflictDest }));
       expect(conflict).toBeInstanceOf(LibraryError);
       expect(conflict.code).toBe("conflict");
+
+      // A destination nested inside the source would copy the tree into itself.
+      const nested = yield* failureOf(
+        moveLibraryRoot({ fromRoot, toRoot: path.join(fromRoot, "inner") }),
+      );
+      expect(nested).toBeInstanceOf(LibraryError);
+      expect(nested.code).toBe("invalid");
+    }),
+  );
+
+  it.effect("refuses to rename onto an existing entry", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root);
+      const a = yield* resolveLibraryWriteTarget(root, "a.md");
+      const b = yield* resolveLibraryWriteTarget(root, "b.md");
+      yield* Effect.promise(() => fs.writeFile(a, "a", "utf8"));
+      yield* Effect.promise(() => fs.writeFile(b, "b", "utf8"));
+
+      const error = yield* failureOf(renameLibraryEntry(root, "a.md", "b.md"));
+      expect(error).toBeInstanceOf(LibraryError);
+      expect(error.code).toBe("conflict");
+      // The destination is untouched.
+      expect(yield* Effect.promise(() => fs.readFile(b, "utf8"))).toBe("b");
+
+      // A fresh destination still renames.
+      yield* renameLibraryEntry(root, "a.md", "c.md");
+      expect(yield* Effect.promise(() => fs.readFile(path.join(root, "c.md"), "utf8"))).toBe("a");
+    }),
+  );
+
+  it.effect("rejects restore shas that are not 40-hex or not in history", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root);
+      const target = yield* resolveLibraryWriteTarget(root, "doc.md");
+      yield* Effect.promise(() => fs.writeFile(target, "v1", "utf8"));
+      const { commitSha } = yield* commitLibraryChange(git, root, "Add doc.md");
+
+      // Abbreviated or option-shaped shas are refused before reaching git argv.
+      const short = yield* failureOf(
+        restoreLibraryEntry(git, root, "doc.md", commitSha.slice(0, 7)),
+      );
+      expect(short).toBeInstanceOf(GitCommandError);
+      const optionLike = yield* failureOf(
+        restoreLibraryEntry(git, root, "doc.md", `-n${"0".repeat(38)}`),
+      );
+      expect(optionLike).toBeInstanceOf(GitCommandError);
+
+      // A well-formed but unknown commit fails explicitly.
+      const unknown = yield* failureOf(restoreLibraryEntry(git, root, "doc.md", "0".repeat(40)));
+      expect(unknown).toBeInstanceOf(GitCommandError);
+      expect(unknown.detail).toContain("does not exist");
+    }),
+  );
+
+  it.effect("rejects unsafe remote URLs without running git", () =>
+    Effect.gen(function* () {
+      const executed: string[] = [];
+      const git = {
+        execute: (input: { readonly args: readonly string[] }) => {
+          executed.push(input.args.join(" "));
+          return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+        },
+      } as unknown as GitCoreShape;
+      const projectId = "project-remote-url";
+
+      // A remote-helper URL would execute on push; it must be rejected before
+      // `git remote add` ever runs.
+      yield* pushLibraryIfConfigured({
+        git,
+        root: "/nonexistent",
+        projectId,
+        libraryRemoteUrl: 'ext::sh -c "echo pwned"',
+        libraryPushOnChange: true,
+      });
+      expect(executed).toEqual([]);
+      expect(readLibraryPushStatus(projectId).lastPushError).toContain("https://");
+
+      const leadingOption = "-upload-pack=sh";
+      yield* pushLibraryIfConfigured({
+        git,
+        root: "/nonexistent",
+        projectId,
+        libraryRemoteUrl: leadingOption,
+        libraryPushOnChange: true,
+      });
+      expect(executed).toEqual([]);
+
+      // A well-formed https remote reaches `git remote add`.
+      yield* pushLibraryIfConfigured({
+        git,
+        root: "/nonexistent",
+        projectId,
+        libraryRemoteUrl: "https://example.com/library.git",
+        libraryPushOnChange: true,
+      });
+      expect(executed.some((args) => args.includes("remote add"))).toBe(true);
+    }),
+  );
+
+  it.effect("confines a custom library path to managed roots or clean picks", () =>
+    Effect.gen(function* () {
+      const base = yield* makeTmpDir;
+      const stateDir = path.join(base, "state");
+      const groupsRoot = path.join(base, "groups");
+      const studioRoot = path.join(base, "studio");
+      const allowed = (root: string, isCustomPath = true) =>
+        assertLibraryRootLocation({
+          root,
+          stateDir,
+          groupsWorkspaceRoot: groupsRoot,
+          studioWorkspaceRoot: studioRoot,
+          isCustomPath,
+        });
+
+      // Inside a managed root, a fresh empty folder, and a missing path all
+      // pass; the default (non-custom) location always passes.
+      yield* allowed(path.join(stateDir, "library"));
+      yield* allowed(path.join(base, "missing"), true);
+      yield* allowed(path.join(base, "anything"), false);
+      const emptyDir = path.join(base, "empty");
+      yield* Effect.promise(() => fs.mkdir(emptyDir));
+      yield* allowed(emptyDir);
+
+      // A foreign git repo and a non-empty user directory are refused.
+      const foreignRepo = path.join(base, "foreign");
+      yield* Effect.promise(() => fs.mkdir(path.join(foreignRepo, ".git"), { recursive: true }));
+      const foreignError = yield* failureOf(allowed(foreignRepo));
+      expect(foreignError.code).toBe("forbidden");
+      const nonEmpty = path.join(base, "nonempty");
+      yield* Effect.promise(() =>
+        fs
+          .mkdir(nonEmpty, { recursive: true })
+          .then(() => fs.writeFile(path.join(nonEmpty, "user.txt"), "x", "utf8")),
+      );
+      const nonEmptyError = yield* failureOf(allowed(nonEmpty));
+      expect(nonEmptyError.code).toBe("forbidden");
+
+      // A Synara-seeded library (marker present) is accepted.
+      const seeded = path.join(base, "seeded");
+      yield* Effect.promise(() =>
+        fs
+          .mkdir(path.join(seeded, ".git"), { recursive: true })
+          .then(() =>
+            fs.writeFile(path.join(seeded, ".synara-library"), "synara-library\n", "utf8"),
+          ),
+      );
+      yield* allowed(seeded);
+    }),
+  );
+
+  it.effect("refuses to adopt a foreign git repository as a library", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      const foreign = path.join(root, "foreign");
+      yield* Effect.promise(() => fs.mkdir(path.join(foreign, ".git"), { recursive: true }));
+      const error = yield* failureOf(ensureLibraryRepo(git, foreign));
+      expect(error).toBeInstanceOf(LibraryError);
+      if (error instanceof LibraryError) expect(error.code).toBe("conflict");
     }),
   );
 

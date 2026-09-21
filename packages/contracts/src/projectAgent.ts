@@ -57,6 +57,15 @@ export const ProjectAgentWorkerRouting = Schema.Struct({
 });
 export type ProjectAgentWorkerRouting = typeof ProjectAgentWorkerRouting.Type;
 
+// Remote URLs are handed to `git remote add` and `git push`; `ext::sh -c ...`
+// executes on push and a leading `-` parses as an option, so only the safe
+// transports are allowed and the anchored pattern rejects option-looking input.
+export const LIBRARY_REMOTE_URL_PATTERN = /^(https|ssh):\/\/\S+$|^git@[A-Za-z0-9._-]+:\S+$/;
+export const LibraryRemoteUrl = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(2_048),
+  Schema.isPattern(LIBRARY_REMOTE_URL_PATTERN),
+);
+
 export const ProjectAgentConfig = Schema.Struct({
   projectId: ProjectId,
   coordinatorThreadId: ThreadId,
@@ -77,7 +86,7 @@ export const ProjectAgentConfig = Schema.Struct({
   autoMemoryEnabled: Schema.optional(Schema.Boolean),
   linkedProjectIds: Schema.optional(Schema.Array(ProjectId)),
   libraryPath: Schema.optional(TrimmedNonEmptyString),
-  libraryRemoteUrl: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
+  libraryRemoteUrl: Schema.optional(LibraryRemoteUrl),
   libraryPushOnChange: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentConfig = typeof ProjectAgentConfig.Type;
@@ -397,7 +406,7 @@ export const ProjectAgentConfigureInput = Schema.Struct({
   autoMemoryEnabled: Schema.optional(Schema.Boolean),
   userDisplayName: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
   libraryPath: Schema.optional(TrimmedNonEmptyString),
-  libraryRemoteUrl: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
+  libraryRemoteUrl: Schema.optional(LibraryRemoteUrl),
   libraryPushOnChange: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentConfigureInput = typeof ProjectAgentConfigureInput.Type;
@@ -759,7 +768,9 @@ export type ProjectAgentLibraryHistoryResult = typeof ProjectAgentLibraryHistory
 export const ProjectAgentLibraryRestoreInput = Schema.Struct({
   projectId: ProjectId,
   relativePath: TrimmedNonEmptyString,
-  sha: TrimmedNonEmptyString,
+  // Full 40-hex sha only: it lands in `git checkout <sha> -- <path>` where a
+  // leading dash or ref expression would become an option/attack surface.
+  sha: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
 });
 export type ProjectAgentLibraryRestoreInput = typeof ProjectAgentLibraryRestoreInput.Type;
 

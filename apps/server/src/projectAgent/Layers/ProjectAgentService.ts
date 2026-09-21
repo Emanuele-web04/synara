@@ -36,7 +36,8 @@ import {
   coordinatorWelcomeText,
   isGroupCoordinatorHostProject,
 } from "../groupCoordinatorHost.ts";
-import { moveLibraryRoot, resolveLibraryRoot } from "../libraryStore.ts";
+import { assertLibraryRootLocation, moveLibraryRoot, resolveLibraryRoot } from "../libraryStore.ts";
+import { withLibraryQueue } from "../libraryGit.ts";
 import {
   canWriteMemoryDocument,
   decodeProjectAgentListCursor,
@@ -865,11 +866,26 @@ export const makeProjectAgentService = Effect.gen(function* () {
             projectId: input.projectId,
             libraryPath: input.libraryPath,
           }).pipe(Effect.mapError(toServiceError("Failed to resolve the new library.")));
-          yield* moveLibraryRoot({ fromRoot: previousRoot, toRoot: nextRoot }).pipe(
+          yield* assertLibraryRootLocation({
+            root: nextRoot,
+            stateDir: serverConfig.stateDir,
+            groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+            studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
+            isCustomPath: true,
+          }).pipe(Effect.mapError(toServiceError("Failed to validate the new library path.")));
+          // Serialize with in-flight library mutations so a concurrent upload
+          // cannot write into the tree mid-copy.
+          const moveResult = yield* withLibraryQueue(
+            input.projectId,
+            moveLibraryRoot({ fromRoot: previousRoot, toRoot: nextRoot }),
+          ).pipe(
             Effect.mapError((cause) =>
               fail(`Could not move the group library: ${cause.message}`, "invalid"),
             ),
           );
+          if (moveResult.moved) {
+            yield* Effect.logInfo(`moved the group library from ${previousRoot} to ${nextRoot}`);
+          }
         }
         const config: ProjectAgentConfig = {
           projectId: input.projectId,

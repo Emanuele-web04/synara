@@ -13,12 +13,24 @@ import {
   type ProjectId,
 } from "@synara/contracts";
 import { LIBRARY_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
 import { readNativeApi } from "~/nativeApi";
 
 const ROOT_DIRECTORY = "";
+
+// Kept at module scope so no value blocks (ternaries, `?.`) live inside the
+// try/catch bodies below — those trip React Compiler bailouts.
+const libraryErrorMessage = (cause: unknown, fallback: string) =>
+  cause instanceof Error ? cause.message : fallback;
+
+const libraryUploadErrorMessage = (payload: unknown, status: number) => {
+  const message = (payload as { readonly error?: unknown } | null)?.error;
+  return typeof message === "string" ? message : `Library upload failed with status ${status}.`;
+};
+
+type NativeLibraryApi = NonNullable<ReturnType<typeof readNativeApi>>["projectAgent"]["library"];
 
 export function useGroupLibrary(input: {
   readonly projectId: ProjectId | null;
@@ -31,215 +43,201 @@ export function useGroupLibrary(input: {
   const [status, setStatus] = useState<ProjectAgentLibraryStatusResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const projectIdRef = useRef(input.projectId);
   const loadGeneration = useRef(0);
   const loadedDirs = useRef<ReadonlySet<string>>(new Set());
-  projectIdRef.current = input.projectId;
 
-  const stillCurrent = (projectId: ProjectId, generation: number) =>
-    projectIdRef.current === projectId && loadGeneration.current === generation;
+  const load = () => setReloadNonce((nonce) => nonce + 1);
 
-  const reset = useCallback(() => {
-    setRoot(null);
+  useEffect(() => {
+    const projectId = input.projectId;
+    projectIdRef.current = projectId;
+    loadGeneration.current += 1;
+    // A mutation in flight for the previous project must not leave the busy
+    // flag stuck on the new one.
+    setBusy(false);
+    const api = readNativeApi();
+    if (!input.enabled || !projectId || !api?.projectAgent) {
+      setRoot(null);
+      setEntriesByDir(new Map());
+      setStatus(null);
+      loadedDirs.current = new Set();
+      return;
+    }
+    const generation = loadGeneration.current;
+    const stillCurrent = () =>
+      projectIdRef.current === projectId && loadGeneration.current === generation;
     setEntriesByDir(new Map());
-    setStatus(null);
     loadedDirs.current = new Set();
-  }, []);
+    void (async () => {
+      try {
+        const [listed, nextStatus] = await Promise.all([
+          api.projectAgent.library.list({ projectId }),
+          api.projectAgent.library.status({ projectId }),
+        ]);
+        // Eagerly list root directories so seeded-expanded folders (Artifacts)
+        // render their contents on first open instead of an empty expander.
+        const rootDirs = listed.entries.filter((entry) => entry.kind === "directory");
+        const childListings = await Promise.all(
+          rootDirs.map((entry) =>
+            api.projectAgent.library.list({
+              projectId,
+              relativePath: entry.relativePath,
+            }),
+          ),
+        );
+        if (!stillCurrent()) return;
+        const entriesByDir = new Map<string, readonly LibraryEntry[]>([
+          [ROOT_DIRECTORY, listed.entries],
+        ]);
+        const dirs = new Set([ROOT_DIRECTORY]);
+        rootDirs.forEach((entry, index) => {
+          const childEntries = childListings[index];
+          if (childEntries) {
+            entriesByDir.set(entry.relativePath, childEntries.entries);
+            dirs.add(entry.relativePath);
+          }
+        });
+        loadedDirs.current = dirs;
+        setEntriesByDir(entriesByDir);
+        setRoot(listed.root);
+        setStatus(nextStatus);
+        setError(null);
+      } catch (cause) {
+        if (!stillCurrent()) return;
+        setError(libraryErrorMessage(cause, "Failed to load the library."));
+      }
+    })();
+  }, [input.enabled, input.projectId, reloadNonce]);
 
-  const loadDirectory = useCallback(async (relativePath: string | undefined) => {
+  const loadDirectory = async (relativePath: string | undefined) => {
     const api = readNativeApi();
     const projectId = projectIdRef.current;
     if (!api?.projectAgent || !projectId) return;
     const dir = relativePath ?? ROOT_DIRECTORY;
+    const listArgs = relativePath === undefined ? { projectId } : { projectId, relativePath };
     try {
-      const listed = await api.projectAgent.library.list({
-        projectId,
-        ...(relativePath !== undefined ? { relativePath } : {}),
-      });
+      const listed = await api.projectAgent.library.list(listArgs);
       if (projectIdRef.current !== projectId) return;
       setRoot(listed.root);
       setEntriesByDir((current) => new Map(current).set(dir, listed.entries));
       loadedDirs.current = new Set([...loadedDirs.current, dir]);
     } catch (cause) {
       if (projectIdRef.current !== projectId) return;
-      setError(cause instanceof Error ? cause.message : "Failed to list the library.");
+      setError(libraryErrorMessage(cause, "Failed to list the library."));
     }
-  }, []);
+  };
 
-  const reloadLoadedDirectories = useCallback(async () => {
+  const reloadLoadedDirectories = async () => {
     for (const dir of loadedDirs.current) {
       await loadDirectory(dir === ROOT_DIRECTORY ? undefined : dir);
     }
-  }, [loadDirectory]);
+  };
 
-  const load = useCallback(async () => {
+  const refreshStatus = async (projectId: ProjectId) => {
+    const api = readNativeApi();
+    if (!api?.projectAgent) return;
+    const nextStatus = await api.projectAgent.library.status({ projectId }).catch(() => null);
+    if (nextStatus && projectIdRef.current === projectId) setStatus(nextStatus);
+  };
+
+  const runMutation = async (
+    work: (library: NativeLibraryApi, projectId: ProjectId) => Promise<void>,
+  ) => {
     const api = readNativeApi();
     const projectId = projectIdRef.current;
-    const generation = ++loadGeneration.current;
-    if (!api?.projectAgent || !projectId) {
-      reset();
-      return;
-    }
-    loadedDirs.current = new Set();
-    setEntriesByDir(new Map());
+    if (!api?.projectAgent || !projectId) return false;
+    setBusy(true);
+    // No finally: a finalizer is a React Compiler bailout, and the busy flag is
+    // also reset by the project-switch effect for stale-project exits.
+    let succeeded = false;
     try {
-      const [listed, nextStatus] = await Promise.all([
-        api.projectAgent.library.list({ projectId }),
-        api.projectAgent.library.status({ projectId }),
-      ]);
-      if (!stillCurrent(projectId, generation)) return;
-      setRoot(listed.root);
-      setStatus(nextStatus);
-      setEntriesByDir(new Map([[ROOT_DIRECTORY, listed.entries]]));
-      loadedDirs.current = new Set([ROOT_DIRECTORY]);
-      setError(null);
-    } catch (cause) {
-      if (!stillCurrent(projectId, generation)) return;
-      setError(cause instanceof Error ? cause.message : "Failed to load the library.");
-    }
-  }, [reset]);
-
-  useEffect(() => {
-    if (!input.enabled || !input.projectId) {
-      reset();
-      return;
-    }
-    void load();
-  }, [input.enabled, input.projectId, load, reset]);
-
-  const runMutation = useCallback(
-    async (
-      work: (
-        api: NonNullable<ReturnType<typeof readNativeApi>>["projectAgent"]["library"],
-        projectId: ProjectId,
-      ) => Promise<void>,
-    ) => {
-      const api = readNativeApi();
-      const projectId = projectIdRef.current;
-      if (!api?.projectAgent || !projectId) return false;
-      setBusy(true);
-      try {
-        await work(api.projectAgent.library, projectId);
-        if (projectIdRef.current !== projectId) return true;
+      await work(api.projectAgent.library, projectId);
+      if (projectIdRef.current === projectId) {
         await reloadLoadedDirectories();
-        try {
-          setStatus(await api.projectAgent.library.status({ projectId }));
-        } catch {
-          // A failed status refresh must not mask the mutation result.
-        }
-        return true;
-      } catch (cause) {
-        if (projectIdRef.current === projectId) {
-          setError(cause instanceof Error ? cause.message : "Library action failed.");
-        }
-        return false;
-      } finally {
-        if (projectIdRef.current === projectId) setBusy(false);
+        await refreshStatus(projectId);
       }
-    },
-    [reloadLoadedDirectories],
-  );
+      succeeded = true;
+    } catch (cause) {
+      if (projectIdRef.current === projectId) {
+        setError(libraryErrorMessage(cause, "Library action failed."));
+      }
+    }
+    if (projectIdRef.current === projectId) setBusy(false);
+    return succeeded;
+  };
 
-  const mkdir = useCallback(
-    async (relativePath: string) =>
-      runMutation(async (library, projectId) => {
-        await library.mkdir({ projectId, relativePath });
-      }),
-    [runMutation],
-  );
+  const mkdir = async (relativePath: string) =>
+    runMutation(async (library, projectId) => {
+      await library.mkdir({ projectId, relativePath });
+    });
 
-  const rename = useCallback(
-    async (from: string, to: string) =>
-      runMutation(async (library, projectId) => {
-        await library.rename({ projectId, from, to });
-      }),
-    [runMutation],
-  );
+  const rename = async (from: string, to: string) =>
+    runMutation(async (library, projectId) => {
+      await library.rename({ projectId, from, to });
+    });
 
-  const deleteEntry = useCallback(
-    async (relativePath: string) =>
-      runMutation(async (library, projectId) => {
-        await library.delete({ projectId, relativePath });
-      }),
-    [runMutation],
-  );
+  const deleteEntry = async (relativePath: string) =>
+    runMutation(async (library, projectId) => {
+      await library.delete({ projectId, relativePath });
+    });
 
-  const history = useCallback(async (relativePath?: string) => {
+  const history = async (relativePath?: string) => {
     const api = readNativeApi();
     const projectId = projectIdRef.current;
     if (!api?.projectAgent || !projectId) return [] as readonly LibraryCommit[];
+    const historyArgs = relativePath === undefined ? { projectId } : { projectId, relativePath };
     try {
-      const result = await api.projectAgent.library.history({
-        projectId,
-        ...(relativePath !== undefined ? { relativePath } : {}),
-      });
+      const result = await api.projectAgent.library.history(historyArgs);
       return result.commits;
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Failed to load library history.");
+      if (projectIdRef.current === projectId) {
+        setError(libraryErrorMessage(cause, "Failed to load library history."));
+      }
       return [] as readonly LibraryCommit[];
     }
-  }, []);
+  };
 
-  const restore = useCallback(
-    async (relativePath: string, sha: string) =>
-      runMutation(async (library, projectId) => {
-        await library.restore({ projectId, relativePath, sha });
-      }),
-    [runMutation],
-  );
+  const restore = async (relativePath: string, sha: string) =>
+    runMutation(async (library, projectId) => {
+      await library.restore({ projectId, relativePath, sha });
+    });
 
-  const upload = useCallback(
-    async (relativeDirectory: string | undefined, file: File) => {
-      const projectId = projectIdRef.current;
-      if (!projectId) return false;
-      const params = new URLSearchParams({
-        projectId,
-        name: file.name,
-        mimeType: file.type || "application/octet-stream",
+  const upload = async (relativeDirectory: string | undefined, file: File) => {
+    const projectId = projectIdRef.current;
+    if (!projectId) return false;
+    const params = new URLSearchParams({ projectId, name: file.name });
+    if (relativeDirectory) params.set("relativePath", relativeDirectory);
+    const url = resolveWsHttpUrl(`${LIBRARY_UPLOAD_ROUTE_PATH}?${params.toString()}`);
+    setBusy(true);
+    let succeeded = false;
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        body: file,
       });
-      if (relativeDirectory) params.set("relativePath", relativeDirectory);
-      setBusy(true);
-      try {
-        const response = await fetch(
-          resolveWsHttpUrl(`${LIBRARY_UPLOAD_ROUTE_PATH}?${params.toString()}`),
-          {
-            method: "POST",
-            credentials: "include",
-            body: file,
-          },
-        );
-        const payload = (await response.json().catch(() => null)) as {
-          readonly error?: unknown;
-        } | null;
+      const payload = (await response.json().catch(() => null)) as unknown;
+      if (projectIdRef.current === projectId) {
         if (!response.ok) {
-          const message =
-            payload && typeof payload.error === "string"
-              ? payload.error
-              : `Library upload failed with status ${response.status}.`;
-          throw new Error(message);
+          setError(libraryUploadErrorMessage(payload, response.status));
+        } else {
+          await reloadLoadedDirectories();
+          await refreshStatus(projectId);
+          succeeded = true;
         }
-        if (projectIdRef.current !== projectId) return true;
-        await reloadLoadedDirectories();
-        const api = readNativeApi();
-        if (api?.projectAgent) {
-          try {
-            setStatus(await api.projectAgent.library.status({ projectId }));
-          } catch {
-            // status refresh failure must not mask a successful upload
-          }
-        }
-        return true;
-      } catch (cause) {
-        if (projectIdRef.current === projectId) {
-          setError(cause instanceof Error ? cause.message : "Library upload failed.");
-        }
-        return false;
-      } finally {
-        if (projectIdRef.current === projectId) setBusy(false);
+      } else {
+        succeeded = true;
       }
-    },
-    [reloadLoadedDirectories],
-  );
+    } catch (cause) {
+      if (projectIdRef.current === projectId) {
+        setError(libraryErrorMessage(cause, "Library upload failed."));
+      }
+    }
+    if (projectIdRef.current === projectId) setBusy(false);
+    return succeeded;
+  };
 
   return {
     root,

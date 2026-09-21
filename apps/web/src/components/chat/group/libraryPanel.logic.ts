@@ -139,17 +139,32 @@ function flattenInto(
   const entries = input.entriesByDir.get(dirPath);
   if (!entries) return;
   const searching = input.query.trim().length > 0;
+  const filtering = input.typeFilter !== "all";
   for (const entry of sortLibraryEntries(entries, input.sort)) {
+    if (entry.kind === "directory") {
+      // Descend into a directory when it is expanded, or when a search/type
+      // filter is active so matching (loaded) descendants still surface.
+      const descend = searching || filtering || input.expandedDirectories.has(entry.relativePath);
+      const childRows: LibraryRow[] = [];
+      if (descend) {
+        flattenInto(childRows, entry.relativePath, depth + 1, input);
+      }
+      // Under a type filter a directory is only a container: show it iff it
+      // yields visible children. While searching, also keep directories whose
+      // own name matches the query.
+      const visible = filtering
+        ? childRows.length > 0
+        : searching
+          ? entryMatchesLibraryFilters(entry, input) || childRows.length > 0
+          : true;
+      if (visible) {
+        rows.push({ entry, depth });
+        rows.push(...childRows);
+      }
+      continue;
+    }
     if (entryMatchesLibraryFilters(entry, input)) {
       rows.push({ entry, depth });
-    }
-    // While searching, descend into directories even when the directory's own
-    // name does not match — a matching child must still surface.
-    if (
-      entry.kind === "directory" &&
-      (searching || input.expandedDirectories.has(entry.relativePath))
-    ) {
-      flattenInto(rows, entry.relativePath, depth + 1, input);
     }
   }
 }

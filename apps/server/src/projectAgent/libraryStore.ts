@@ -18,6 +18,7 @@ import { Effect } from "effect";
 import type { GitCoreShape } from "../git/Services/GitCore.ts";
 import type { GitCommandError } from "../git/Errors.ts";
 import {
+  isContainedPath,
   prepareRealPathForWriteWithinRoot,
   resolveRealPathForCreateWithinRoot,
   resolveRealPathWithinRoot,
@@ -32,16 +33,46 @@ const fail = (message: string, code: "not-found" | "forbidden" | "invalid" | "co
 // The repo metadata is never addressable through library paths; a stray ".git"
 // segment would hand callers raw control over history plumbing.
 const GIT_DIR_SEGMENT = ".git";
+// Written by ensureLibraryRepo on init and carried over by moveLibraryRoot; a
+// repo without it is foreign and must never be adopted as a library.
+const LIBRARY_MARKER_NAME = ".synara-library";
+const LIBRARY_MARKER_CONTENTS = "synara-library\n";
 // Mirrored in the seeded .gitignore (plus the keep file that lands Artifacts/
-// in the initial commit); they are noise rather than artifacts.
+// in the initial commit); they are noise rather than artifacts. `.git` itself
+// is skipped case-insensitively so case-insensitive filesystems cannot surface
+// a differently-cased repo dir.
 const IGNORED_ENTRY_NAMES = new Set([
-  GIT_DIR_SEGMENT,
   ".DS_Store",
   "Thumbs.db",
   ".gitkeep",
   ".gitignore",
   ".gitattributes",
+  LIBRARY_MARKER_NAME,
 ]);
+
+const isGitDirName = (name: string) => name.toLowerCase() === GIT_DIR_SEGMENT;
+
+const hasGitMetadataSegment = (target: string) =>
+  target.split(/[\\/]/).some((segment) => isGitDirName(segment));
+
+// After containment resolution, the resolved path must not pass through the
+// repo dir: on case-insensitive filesystems `.GIT/config` resolves inside the
+// root while still addressing `.git`.
+const rejectGitMetadata = (root: string, resolved: string, displayPath: string) =>
+  Effect.gen(function* () {
+    const realRoot = yield* Effect.tryPromise({
+      try: () => fs.realpath(root),
+      catch: toPathError(`Could not resolve the library root.`),
+    });
+    const relative = path.relative(realRoot, resolved);
+    if (hasGitMetadataSegment(relative)) {
+      return yield* fail(
+        `Library path "${displayPath}" addresses repository metadata.`,
+        "forbidden",
+      );
+    }
+    return resolved;
+  });
 
 export function resolveLibraryRoot(input: {
   readonly stateDir: string;
@@ -71,7 +102,7 @@ export function normalizeLibraryRelativePath(rawPath: string) {
     catch: () => fail(`Library path "${rawPath}" is not a valid relative path.`, "invalid"),
   }).pipe(
     Effect.flatMap((normalized) =>
-      normalized.split("/").includes(GIT_DIR_SEGMENT)
+      normalized.split("/").some(isGitDirName)
         ? Effect.fail(fail("Library paths cannot address repository metadata.", "forbidden"))
         : Effect.succeed(normalized),
     ),
@@ -103,6 +134,7 @@ export function resolveLibraryDir(
         "forbidden",
       );
     }
+    yield* rejectGitMetadata(root, resolved, normalized || ".");
     const stat = yield* Effect.tryPromise({
       try: () => fs.stat(resolved),
       catch: () => fail(`Library path "${normalized || "."}" was not found.`, "not-found"),
@@ -129,7 +161,7 @@ export function resolveLibraryTarget(
     if (resolved === null) {
       return yield* fail(`Library path "${normalized}" escapes the library root.`, "forbidden");
     }
-    return resolved;
+    return yield* rejectGitMetadata(root, resolved, normalized);
   });
 }
 
@@ -150,7 +182,7 @@ export function resolveLibraryCreateTarget(
     if (resolved === null) {
       return yield* fail(`Library path "${normalized}" escapes the library root.`, "forbidden");
     }
-    return resolved;
+    return yield* rejectGitMetadata(root, resolved, normalized);
   });
 }
 
@@ -169,7 +201,31 @@ export function resolveLibraryWriteTarget(
     if (resolved === null) {
       return yield* fail(`Library path "${normalized}" escapes the library root.`, "forbidden");
     }
-    return resolved;
+    return yield* rejectGitMetadata(root, resolved, normalized);
+  });
+}
+
+// Rename with an explicit destination-exists check: POSIX rename would
+// silently clobber an existing file, losing an uncommitted entry.
+export function renameLibraryEntry(
+  root: string,
+  from: string,
+  to: string,
+): Effect.Effect<void, LibraryError> {
+  return Effect.gen(function* () {
+    const source = yield* resolveLibraryTarget(root, from);
+    const destination = yield* resolveLibraryCreateTarget(root, to);
+    const existing = yield* Effect.tryPromise({
+      try: () => fs.stat(destination),
+      catch: () => fail("missing", "invalid"),
+    }).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (existing !== null) {
+      return yield* fail(`A library entry already exists at "${to}".`, "conflict");
+    }
+    yield* Effect.tryPromise({
+      try: () => fs.rename(source, destination),
+      catch: toPathError(`Could not rename "${from}" to "${to}".`),
+    });
   });
 }
 
@@ -189,7 +245,7 @@ export function listLibraryEntries(
     });
     const entries: LibraryEntry[] = [];
     for (const dirent of dirents) {
-      if (IGNORED_ENTRY_NAMES.has(dirent.name)) continue;
+      if (IGNORED_ENTRY_NAMES.has(dirent.name) || isGitDirName(dirent.name)) continue;
       const absolutePath = path.join(dir, dirent.name);
       const stat = yield* Effect.tryPromise({
         try: () => fs.lstat(absolutePath),
@@ -262,6 +318,14 @@ export function ensureLibraryRepo(
       catch: (cause) => new LibraryError({ message: "Failed to create the library root.", cause }),
     });
     if (yield* pathExists(path.join(root, GIT_DIR_SEGMENT))) {
+      // Never adopt a foreign repository: only trees we seeded carry the marker
+      // (moves copy it across), so anything else here is user content.
+      if (!(yield* pathExists(path.join(root, LIBRARY_MARKER_NAME)))) {
+        return yield* fail(
+          `Directory "${root}" is a git repository that was not created by Synara; refusing to use it as a library.`,
+          "conflict",
+        );
+      }
       return;
     }
     yield* initLibraryRepo(git, root);
@@ -269,6 +333,7 @@ export function ensureLibraryRepo(
       try: async () => {
         await fs.writeFile(path.join(root, ".gitignore"), LIBRARY_GITIGNORE, "utf8");
         await fs.writeFile(path.join(root, ".gitattributes"), LIBRARY_GITATTRIBUTES, "utf8");
+        await fs.writeFile(path.join(root, LIBRARY_MARKER_NAME), LIBRARY_MARKER_CONTENTS, "utf8");
         await fs.mkdir(path.join(root, "Artifacts"), { recursive: true });
         // git tracks no empty directories; a keep file makes Artifacts visible
         // in the initial commit and in fresh clones.
@@ -292,13 +357,26 @@ export function moveLibraryRoot(input: {
     const fromRoot = path.resolve(input.fromRoot);
     const toRoot = path.resolve(input.toRoot);
     if (fromRoot === toRoot) return { moved: false };
+    if (isContainedPath(fromRoot, toRoot)) {
+      return yield* fail(
+        `Library destination "${toRoot}" is nested inside the current library.`,
+        "invalid",
+      );
+    }
     if (!(yield* pathExists(fromRoot))) return { moved: false };
     const destinationExists = yield* pathExists(toRoot);
     if (destinationExists) {
-      // Re-running a completed move is safe: a populated .git means the copy
-      // already landed; anything else is user content we must not overwrite.
-      if (yield* pathExists(path.join(toRoot, GIT_DIR_SEGMENT))) {
-        return { moved: true };
+      // Re-running a completed move is safe: a marker-bearing repo means the
+      // copy already landed; anything else is user content we must not touch.
+      const destinationHasRepo = yield* pathExists(path.join(toRoot, GIT_DIR_SEGMENT));
+      if (destinationHasRepo) {
+        if (yield* pathExists(path.join(toRoot, LIBRARY_MARKER_NAME))) {
+          return { moved: true };
+        }
+        return yield* fail(
+          `Library destination "${toRoot}" is a git repository that was not created by Synara.`,
+          "conflict",
+        );
       }
       const remaining = yield* Effect.tryPromise({
         try: () => fs.readdir(toRoot),
@@ -332,5 +410,60 @@ export function moveLibraryRoot(input: {
       );
     }
     return { moved: true };
+  });
+}
+
+const canonicalize = (target: string) =>
+  Effect.tryPromise({
+    try: () => fs.realpath(target),
+    catch: () => fail("unresolvable", "invalid"),
+  }).pipe(Effect.catch(() => Effect.succeed(path.resolve(target))));
+
+// Confinement for a custom `libraryPath`. Allowed: inside a Synara-managed root
+// (state dir, groups/studio workspace roots), a not-yet-created or empty
+// directory, or an existing library we seeded (marker file present). Anything
+// else — a foreign git repo, ~/.ssh, a project checkout — is refused so
+// uploads and the add-all commit can never write into arbitrary directories.
+// The default root (no libraryPath configured) lives under project-context and
+// is always ours.
+export function assertLibraryRootLocation(input: {
+  readonly root: string;
+  readonly stateDir: string;
+  readonly groupsWorkspaceRoot: string;
+  readonly studioWorkspaceRoot: string;
+  readonly isCustomPath: boolean;
+}): Effect.Effect<void, LibraryError> {
+  return Effect.gen(function* () {
+    if (!input.isCustomPath) return;
+    const realRoot = yield* canonicalize(input.root);
+    for (const allowed of [input.stateDir, input.groupsWorkspaceRoot, input.studioWorkspaceRoot]) {
+      const realAllowed = yield* canonicalize(allowed);
+      if (isContainedPath(realAllowed, realRoot)) return;
+    }
+    const stat = yield* Effect.tryPromise({
+      try: () => fs.stat(realRoot),
+      catch: () => fail("missing", "invalid"),
+    }).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (stat === null) return;
+    if (!stat.isDirectory()) {
+      return yield* fail(`Library path "${input.root}" is not a directory.`, "invalid");
+    }
+    if (yield* pathExists(path.join(realRoot, LIBRARY_MARKER_NAME))) return;
+    if (yield* pathExists(path.join(realRoot, GIT_DIR_SEGMENT))) {
+      return yield* fail(
+        `Library path "${input.root}" is a git repository that was not created by Synara.`,
+        "forbidden",
+      );
+    }
+    const remaining = yield* Effect.tryPromise({
+      try: () => fs.readdir(realRoot),
+      catch: (cause) => new LibraryError({ message: "Failed to inspect the library path.", cause }),
+    });
+    if (remaining.length > 0) {
+      return yield* fail(
+        `Library path "${input.root}" is not empty; pick an empty folder or a Synara-managed location.`,
+        "forbidden",
+      );
+    }
   });
 }
