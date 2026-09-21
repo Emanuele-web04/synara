@@ -277,7 +277,10 @@ function ensureCanaryRustToolchain(rustVersion: string, env: NodeJS.ProcessEnv):
   const cargoBin = Path.join(String(env.CARGO_HOME), "bin");
   if (!FS.existsSync(Path.join(cargoBin, "rustup"))) {
     const target = process.arch === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
-    const installer = Path.join(OS.tmpdir(), `synara-canary-rustup-init-${process.pid}`);
+    // rustup-init is a multicall binary that dispatches on its own file name,
+    // so it must keep that exact name; isolate it in a private directory.
+    const installerDirectory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-canary-rustup-"));
+    const installer = Path.join(installerDirectory, "rustup-init");
     try {
       console.log(`[canary] Installing Canary's own Rust ${rustVersion} toolchain...`);
       run(
@@ -300,7 +303,7 @@ function ensureCanaryRustToolchain(rustVersion: string, env: NodeJS.ProcessEnv):
         env,
       );
     } finally {
-      FS.rmSync(installer, { force: true });
+      FS.rmSync(installerDirectory, { recursive: true, force: true });
     }
     return;
   }
