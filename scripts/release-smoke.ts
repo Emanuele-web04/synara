@@ -148,6 +148,23 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     workflow,
+    "- label: macOS arm64\n            runner: macos-15",
+    "Expected the arm64 release runner to support both native and Icon Composer toolchains.",
+  );
+  for (const toolchain of [
+    "native_developer_dir=/Applications/Xcode_16.4.app/Contents/Developer",
+    "icon_developer_dir=/Applications/Xcode_26.3.app/Contents/Developer",
+    'echo "SYNARA_ICON_DEVELOPER_DIR=$icon_developer_dir" >> "$GITHUB_ENV"',
+  ]) {
+    assertContains(workflow, toolchain, "Expected separate native and icon release toolchains.");
+  }
+  assertContains(
+    workflow,
+    "pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev",
+    "Expected the Linux release to install the native driver's build dependencies.",
+  );
+  assertContains(
+    workflow,
     "    permissions:\n      contents: read\n      id-token: write\n    steps:",
     "Expected only CLI publication to combine repository reads with npm OIDC.",
   );

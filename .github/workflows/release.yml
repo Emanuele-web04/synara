@@ -165,7 +165,7 @@ jobs:
       matrix:
         include:
           - label: macOS arm64
-            runner: macos-14
+            runner: macos-15
             platform: mac
             target: dmg
             arch: arm64
@@ -206,6 +206,23 @@ jobs:
         # runtime/build dependencies but do not install the unrelated marketing site.
         run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
 
+      - name: Select macOS release toolchains
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The pinned apple-metal bridge requires the macOS 15 SDK, while
+          # Icon Composer assets require Xcode 26's actool. Scope that newer
+          # toolchain to icon compilation rather than changing native builds.
+          native_developer_dir=/Applications/Xcode_16.4.app/Contents/Developer
+          icon_developer_dir=/Applications/Xcode_26.3.app/Contents/Developer
+          test -d "$native_developer_dir"
+          test -d "$icon_developer_dir"
+          echo "DEVELOPER_DIR=$native_developer_dir" >> "$GITHUB_ENV"
+          echo "SYNARA_ICON_DEVELOPER_DIR=$icon_developer_dir" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$native_developer_dir" xcodebuild -version
+          DEVELOPER_DIR="$icon_developer_dir" xcodebuild -version
+
       - name: Install the pinned Cua Driver compiler
         # The mac and Linux artifacts compile the patched Cua Driver from source,
         # and provisioning refuses any rustc other than the pinned release.
@@ -219,6 +236,13 @@ jobs:
           # Provisioning otherwise compiles into a directory it deletes, so the
           # macOS x64 packaging retries would each recompile the driver.
           echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cua-driver-target" >> "$GITHUB_ENV"
+
+      - name: Install Linux native build dependencies
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev
 
       - id: build_artifact
         name: Build desktop artifact

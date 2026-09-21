@@ -504,9 +504,14 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     // macOS 26 renders the Liquid Glass material only from a layered Icon
     // Composer asset, so compile one into the asset catalog that ships beside
     // the ICNS. Older releases ignore Assets.car and keep the solid mark.
+    const iconDeveloperDir = process.env.SYNARA_ICON_DEVELOPER_DIR?.trim();
     yield* runCommand(
       ChildProcess.make({
         ...commandOutputOptions(verbose),
+        env: {
+          ...process.env,
+          ...(iconDeveloperDir ? { DEVELOPER_DIR: iconDeveloperDir } : {}),
+        },
       })`xcrun actool ${iconComposerSource} --compile ${stageResourcesDir} --platform macosx --minimum-deployment-target ${MAC_ICON_COMPOSER_DEPLOYMENT_TARGET} --app-icon ${MAC_ICON_ASSET_NAME} --include-all-app-icons --output-partial-info-plist ${path.join(tmpRoot, "icon-partial.plist")} --output-format human-readable-text`,
     );
 
