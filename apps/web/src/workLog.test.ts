@@ -338,7 +338,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
     const [paused] = deriveWorkLogEntries(pausedActivities, TurnId.makeUnsafe("turn-1"));
-    expect(paused?.toolStatus).toBeUndefined();
+    expect(paused?.toolStatus).toBe("paused");
     expect(paused?.liveActivity).toMatchObject({ state: "paused", background: true });
     const [resumed] = deriveWorkLogEntries(
       [
