@@ -3777,12 +3777,22 @@ async function startCuaHost(): Promise<void> {
     // Stock by default: a missing preference file reads as null and the host
     // sends no style call at all.
     cursorStyle: () => readAgentCursorPreference(AGENT_CURSOR_PREFERENCE_PATH),
-    checkPermissions: async () => {
+    checkPermissions: async (options) => {
       // The AppSnap manager owns the shared native permission helper; lazily
       // starting it here keeps the CUA host working even when AppSnap itself is
       // still disabled.
       initializeDesktopAppSnap();
-      const state = await appSnapManager!.refreshState(COMPUTER_PERMISSION_KINDS);
+      const state = await appSnapManager!.refreshState(COMPUTER_PERMISSION_KINDS, {
+        force: options?.force === true,
+      });
+      if (
+        state.status === "error" &&
+        (state.accessibilityPermission === "unknown" ||
+          state.inputMonitoringPermission === "unknown" ||
+          state.screenRecordingPermission === "unknown")
+      ) {
+        throw new Error(state.message ?? "The native helper could not verify macOS permissions.");
+      }
       if (
         host.isInputMonitorRequested &&
         state.inputMonitoringPermission === "granted" &&

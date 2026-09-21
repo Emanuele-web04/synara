@@ -128,7 +128,7 @@ export const COMPUTER_CONTROL_FIRST_MUTATION_DISCLOSURE =
   "Computer control ON for this turn: the agent is driving the desktop and the user can switch it off in Settings.";
 
 const COMPUTER_TOOL_REFRESH_GUIDANCE =
-  "Computer routing reminder: observe with computer_get_state and exact window_id before acting; prefer labels and roles over screenshot coordinates. Background text is focus-neutral only when Cua proves one writable Accessibility target. Foreground delivery only when activation is necessary; never replay uncertain delivery; off-Space pixels are not live.";
+  "Computer routing reminder: observe with computer_get_state and exact window_id before acting; prefer labels and roles over screenshot coordinates. Background text is focus-neutral only when Cua proves one writable Accessibility target. Foreground delivery requires the user's visible-use authorization; never replay uncertain delivery; off-Space pixels are not live.";
 
 /**
  * Attached to every null-window launch result, always rather than on
@@ -309,6 +309,8 @@ export function computerAuditErrorOutcome(error: unknown): {
  * inactive sessions receive no computer definitions. */
 export interface AgentGatewayComputerToolsOptions {
   readonly manager: ComputerManager;
+  /** Already registered Computer tools from another family, for on-demand help only. */
+  readonly relatedTools?: readonly ToolEntry[];
   readonly resolveSpaceDesignation?: (context: ToolContext) => Promise<readonly number[]>;
   readonly authorizeAction?: (
     name: string,
@@ -792,6 +794,15 @@ function readDelta(args: Record<string, unknown>, name: string): number {
   const value = readNumberArg(args, name);
   if (value === undefined) throw new ToolInputError(`Missing required argument "${name}".`);
   return value;
+}
+
+function readScrollDelta(args: Record<string, unknown>): { deltaX: number; deltaY: number } {
+  const deltaX = readNumberArg(args, "delta_x") ?? 0;
+  const deltaY = readNumberArg(args, "delta_y") ?? 0;
+  if (deltaX === 0 && deltaY === 0) {
+    throw new ToolInputError('Scroll needs a nonzero "delta_x" or "delta_y".');
+  }
+  return { deltaX, deltaY };
 }
 
 const DEFAULT_DRAG_DURATION_MS = 250;
@@ -2400,11 +2411,8 @@ export function makeAgentGatewayComputerTools(
           !hasTargetFields(resolved) && frame.windowId !== undefined
             ? { ...resolved, windowId: frame.windowId }
             : resolved;
-        const delta = screenshotDeltaToDesktop(
-          frame,
-          readDelta(step, "delta_x"),
-          readDelta(step, "delta_y"),
-        );
+        const requestedDelta = readScrollDelta(step);
+        const delta = screenshotDeltaToDesktop(frame, requestedDelta.deltaX, requestedDelta.deltaY);
         const limited = {
           deltaX:
             Math.sign(delta.deltaX) * Math.min(Math.abs(delta.deltaX), frame.region.width / 2),
@@ -2527,12 +2535,11 @@ export function makeAgentGatewayComputerTools(
         const app = readStringArg(step, "app", { required: true })!;
         const appArgs = readStringArrayArg(step, "arguments") ?? [];
         const waitMs = readBooleanArg(step, "wait_for_window") === false ? 0 : 2_000;
-        // hidden:false is the only visible posture and it takes the same
-        // never-raise authorization as the standalone tool; everything else
-        // stays off the user's screen.
+        // On macOS a normal launch requests activates=false. Hiding the app
+        // is independent from foreground delivery and often disables its UI.
         const hidden = readBooleanArg(step, "hidden");
         return async () => {
-          if (hidden === false) {
+          if (dialect !== "macos" && hidden === false) {
             const authorization = await foregroundAuthorization(context);
             if (!authorization.userRequestedVisibleUse) {
               throw new CuaActionError(
@@ -3014,10 +3021,11 @@ export function makeAgentGatewayComputerTools(
           ? ` — ${entry.definition.annotations.title}`
           : ""
       }`;
-    const hidden = entries.filter((entry) => entry.discoveryOnly === true);
+    const catalog = [...entries, ...(options.relatedTools ?? [])];
+    const hidden = catalog.filter((entry) => entry.discoveryOnly === true);
     return [
       "Advertised by the gateway:",
-      ...entries.filter((entry) => entry.discoveryOnly !== true).map(line),
+      ...catalog.filter((entry) => entry.discoveryOnly !== true).map(line),
       "",
       "Available as computer_run steps (read computer_help with tool for fields):",
       ...hidden.filter((entry) => batchStepTypeFor(entry.definition.name) !== undefined).map(line),
@@ -3492,7 +3500,7 @@ export function makeAgentGatewayComputerTools(
           hidden: {
             type: "boolean",
             description:
-              "Launch posture. true requests a hidden launch (also the default); some apps create no usable window in this mode. false requests a visible launch and is refused with foreground_not_requested unless the user's own task asked to see the app.",
+              "Explicitly hide the launched app. Defaults to false on macOS: its windows remain available for background input without requesting activation. true may prevent the app from creating a usable window. This option never authorizes foreground input.",
           },
         },
         required: ["app"],
@@ -3500,10 +3508,9 @@ export function makeAgentGatewayComputerTools(
       },
       async (args, context) => {
         const hidden = readBooleanArg(args, "hidden");
-        // A visible launch is a raise-shaped call: the same never-raise gate
-        // the activate path takes. The off-screen posture (absent or true)
-        // needs no authorization.
-        if (hidden === false) {
+        // macOS launches without activating regardless of the hidden option.
+        // Other backends retain their explicit visible-launch authorization.
+        if (dialect !== "macos" && hidden === false) {
           const authorization = await foregroundAuthorization(context);
           if (!authorization.userRequestedVisibleUse) {
             throw new CuaActionError(
@@ -3769,7 +3776,9 @@ export function makeAgentGatewayComputerTools(
           if (topic !== undefined) {
             throw new ToolInputError("Use either tool or topic, not both.");
           }
-          const entry = entries.find((candidate) => candidate.definition.name === toolName);
+          const entry = [...entries, ...(options.relatedTools ?? [])].find(
+            (candidate) => candidate.definition.name === toolName,
+          );
           if (!entry) {
             throw new ToolInputError(
               `Unknown desktop tool "${toolName}". Read topic "tools" for the index.`,
@@ -4075,7 +4084,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_scroll",
       "Scroll",
-      `Scroll with delta_x and delta_y in screenshot pixels, e.g. {delta_x:0,delta_y:300}; amount/direction are not supported. Requires a screenshot even without coordinates. Capped at half its width/height for overlap; scroll.limitedTo reports reductions. scroll.traveledY measures vertical movement; 0 may mean an edge or dropped input. Inspect the returned image before another scroll; use computer_get_state to find controls. ${POINTER_COORDINATE_HINT}`,
+      `Scroll with delta_x and delta_y in screenshot pixels; omitted axes default to 0, e.g. {delta_y:300}. amount/direction are not supported. Requires a screenshot even without coordinates. Capped at half its width/height for overlap; scroll.limitedTo reports reductions. scroll.traveledY measures vertical movement; 0 may mean an edge or dropped input. Inspect the returned image before another scroll; use computer_get_state to find controls. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
@@ -4084,15 +4093,14 @@ export function makeAgentGatewayComputerTools(
           delta_x: {
             type: "number",
             description:
-              "Horizontal scroll distance in screenshot pixels; positive scrolls toward the right of the content.",
+              "Horizontal scroll distance in screenshot pixels; defaults to 0. Positive scrolls toward the right of the content.",
           },
           delta_y: {
             type: "number",
             description:
-              "Vertical scroll distance in screenshot pixels; positive scrolls toward the end of the content, the way a wheel notch pulled downward does.",
+              "Vertical scroll distance in screenshot pixels; defaults to 0. Positive scrolls toward the end of the content, the way a wheel notch pulled downward does.",
           },
         },
-        required: ["delta_x", "delta_y"],
         additionalProperties: false,
       },
       async (args, context) => {
@@ -4106,11 +4114,8 @@ export function makeAgentGatewayComputerTools(
             : resolved;
         // The distance is in the same picture's pixels as the point, so a
         // scroll needs a frame even when it names no point at all.
-        const delta = screenshotDeltaToDesktop(
-          frame,
-          readDelta(args, "delta_x"),
-          readDelta(args, "delta_y"),
-        );
+        const requestedDelta = readScrollDelta(args);
+        const delta = screenshotDeltaToDesktop(frame, requestedDelta.deltaX, requestedDelta.deltaY);
         // Keep adjacent observations overlapping even when the model repeats
         // a pixel count after the screenshot changes scale.
         const limited = {
@@ -4521,7 +4526,7 @@ function keyArgumentNote(dialect: ComputerAgentDialect): string {
 
 function launchAppNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? "Names an application the way macOS does. Hidden launch requests no foreground activation; it may create no usable window. Pass hidden:false only when the user's own task asked to see the app — a visible launch is refused otherwise."
+    ? "Names an application the way macOS does. A normal launch requests no foreground activation and keeps its windows available for background input. hidden:true explicitly hides the app and may create no usable window. Reuse the returned process/window; never kill or relaunch it merely because readiness is delayed."
     : "Names an executable on PATH or a desktop application id.";
 }
 
@@ -4548,6 +4553,6 @@ function windowListCompletenessNote(dialect: ComputerAgentDialect): string {
 
 function dragLimitNote(dialect: ComputerAgentDialect): string {
   return dialect === "macos"
-    ? "On macOS an exact-target drag rides the driver's window-local background delivery — it sweeps text selections and other press-drag-release gestures without taking focus on AppKit targets. Surfaces that drop background events report an unverifiable result; retry with delivery_mode:\"foreground\" (covered by the active Computer task's consent) when a drop does not land. The duration is limited to 10 seconds and both endpoints must stay inside the exact target window. Verify the drop from the returned screenshot."
+    ? "On macOS an exact-target drag uses the driver's window-local background delivery. Surfaces that drop background events report an unverifiable result: observe the result and never replay the drag or switch to foreground automatically. The duration is limited to 10 seconds and both endpoints must stay inside the exact target window. Verify the drop from the returned screenshot."
     : "This desktop injects the drag at screen coordinates, so it works for anything the pointer can sweep — selecting text, moving a slider — but cross-application drag-and-drop and dragging a window by its titlebar are handled by the compositor and may not follow. Check the result with computer_screenshot rather than assuming the drop landed.";
 }

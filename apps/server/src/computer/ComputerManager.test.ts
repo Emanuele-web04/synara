@@ -1377,17 +1377,17 @@ describe("ComputerManager and FakeComputerBackend", () => {
     }
   });
 
-  it("launches off-screen unless a visible launch is explicitly asked for", async () => {
+  it("keeps background launch separate from explicitly hiding the application", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend });
     try {
-      // Absent → off-screen default: nothing we start renders a window.
+      // Leave the backend default nonactivating launch intact.
       await manager.launchApp("thread-1", "kcalc");
-      expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", [], { hidden: true }]);
-      // Explicit true → off-screen, same as the default.
+      expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", []]);
+      // Hiding remains an explicit option.
       await manager.launchApp("thread-1", "kcalc", [], 0, { hidden: true });
       expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", [], { hidden: true }]);
-      // Explicit false → the only visible-launch path.
+      // Unhidden windows still do not request foreground activation.
       await manager.launchApp("thread-1", "kcalc", [], 0, { hidden: false });
       expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["kcalc", [], { hidden: false }]);
     } finally {
@@ -3521,6 +3521,41 @@ function foregroundRaisedIds(backend: FakeComputerBackend): readonly unknown[] {
 const VISIBLE_USE_AUTHORIZED = { userRequestedVisibleUse: true } as const;
 
 describe("ComputerManager foreground containment", () => {
+  it.each(["activate", "activate-and-restore", "foreground-input", "menu"])(
+    "refuses %s before starting the backend or acquiring the desktop lease",
+    async (route) => {
+      const backend = new FakeComputerBackend();
+      const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+      const input = vi.fn(async () => "typed");
+      const actions = foregroundRestoreActions(manager);
+      try {
+        const call =
+          route === "activate"
+            ? manager.activateWindow("refused-thread", "fake-calculator")
+            : route === "activate-and-restore"
+              ? manager.foregroundWithRestore("refused-thread", "fake-calculator")
+              : route === "menu"
+                ? manager.invokeMenu("refused-thread", { windowId: "fake-calculator" }, ["File"])
+                : manager.withForegroundRestore("refused-thread", input);
+        await expect(call).rejects.toMatchObject({
+          code: "foreground_not_requested",
+          effect: "not-dispatched",
+        });
+        // A lease claim itself talks to the native driver. Checking only
+        // raiseWindow misses clearFocusWindow, cursor setup and process startup.
+        expect(backend.calls).toEqual([]);
+        expect(input).not.toHaveBeenCalled();
+        expect(actions).toEqual([]);
+        // Refusing one thread must not reserve the desktop until its turn ends.
+        await expect(manager.click("other-thread", { x: 100, y: 100 })).resolves.toMatchObject({
+          action: "computer_click",
+        });
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
   it("refuses an activate with no task-text authorization, and raises nothing", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });

@@ -1488,6 +1488,39 @@ describe("Cua native boundary", () => {
     expect(await f.backend.provision()).toContain("Allow Screen Recording");
   });
 
+  it("an explicit status refresh consumes a newly granted permission without waiting for the action cache", async () => {
+    const f = fixture();
+    f.denyPermissions();
+    expect(await f.backend.availability()).toMatchObject({ kind: "permission-required" });
+    f.grantPermissions();
+    expect(await f.backend.availability()).toMatchObject({ kind: "permission-required" });
+    expect(await f.backend.availability({ refresh: true })).toMatchObject({ kind: "available" });
+  });
+
+  it("does not reuse an in-flight permission denial for a grant-triggered status refresh", async () => {
+    const f = fixture();
+    f.denyPermissions();
+    await f.backend.availability();
+    const previousChecks = f.calls.filter((call) => call.name === "check_permissions").length;
+    let release!: () => void;
+    f.waitForPermission(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    const old = f.backend.availability({ refresh: true });
+    await vi.waitFor(() =>
+      expect(f.calls.filter((call) => call.name === "check_permissions")).toHaveLength(
+        previousChecks + 1,
+      ),
+    );
+    const updated = f.backend.availability({ refresh: true });
+    f.grantPermissions();
+    release();
+    expect(await old).toMatchObject({ kind: "permission-required" });
+    expect(await updated).toMatchObject({ kind: "available" });
+  });
+
   it("refreshes after a pre-setup check settles and reports granted permissions accurately", async () => {
     const f = fixture();
     f.denyPermissions();
@@ -2156,6 +2189,23 @@ describe("Cua native boundary", () => {
     await expect(f.backend.launchApp("/Applications/Calculator.app")).rejects.toMatchObject({
       effect: "not-dispatched",
       code: "unsupported_operation",
+    });
+  });
+
+  it("preserves native launch readiness failures instead of polling a hidden window again", async () => {
+    const f = fixture();
+    f.onTool("launch_app", () => ({
+      structuredContent: {
+        pid: 321,
+        window_status: "no_usable_window",
+        window_reason: "hidden",
+      },
+    }));
+    await expect(f.backend.launchApp("TextEdit")).resolves.toMatchObject({
+      pid: 321,
+      window: null,
+      windowStatus: "no_usable_window",
+      windowReason: "hidden",
     });
   });
 

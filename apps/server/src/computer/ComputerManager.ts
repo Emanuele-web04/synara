@@ -1200,7 +1200,7 @@ export class ComputerManager {
     let availability: ComputerAvailability;
     try {
       availability = this.backendEngaged
-        ? await this.backend.availability()
+        ? await this.backend.availability({ refresh: true })
         : await this.backend.probeAvailability();
     } catch (error) {
       availability = {
@@ -1765,9 +1765,9 @@ export class ComputerManager {
   /**
    * Launching spawns windows on the shared desktop, so it takes the lease too.
    *
-   * Hidden launch requests no visible activation; it does not guarantee a
-   * usable window or a live AX tree. Readiness is checked separately. Only an
-   * explicitly authorized visible launch may request foreground presentation.
+   * A background launch must still create a usable window. Hiding an app is
+   * a separate, explicit option; it is not the default for background work.
+   * Readiness is checked separately from LaunchServices accepting the request.
    */
   async launchApp(
     threadId: string | undefined,
@@ -1781,12 +1781,11 @@ export class ComputerManager {
       assertDesktopOperationActive();
       this.assertDrivenAppAllowed(app);
       this.spaceBroker.assertNativeLaunchAllowed(agentThreadId(threadId));
-      const hidden = options?.hidden ?? true;
       const result = await timedComputerLeg("dispatch", () =>
-        this.backend.launchApp(app, args, hidden ? { hidden: true } : options),
+        this.backend.launchApp(app, args, options),
       );
       this.emitAction(threadId, "computer_launch_app");
-      if (!result.window && waitForWindowMs > 0) {
+      if (!result.window && result.windowStatus !== "no_usable_window" && waitForWindowMs > 0) {
         const readiness = await waitForWindow(
           () => this.readWindows(),
           app,
@@ -2312,30 +2311,34 @@ export class ComputerManager {
     windowId: string,
     authorization?: ComputerForegroundAuthorization,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
-      markComputerCall("computer_activate_window");
-      const raise = this.backend.raiseWindow?.bind(this.backend);
-      if (!raise || !this.backendCapabilities.raise) {
-        throw activationUnsupportedError();
-      }
-      this.assertForegroundAllowed(threadId, authorization);
-      const target = await this.resolveWindowTarget(threadId, windowId);
-      if (target.pid !== undefined) await this.assertSpaceAppMutationAllowed(threadId, target.pid);
-      await timedComputerLeg("dispatch", async () => {
-        await raise(windowId);
-        // Aiming after the raise, never before: a raise that refuses must not leave
-        // the keyboard pointed at a window this call just declined to move.
-        assertDesktopOperationActive();
-        await this.backend.focusWindow?.(windowId);
-      });
-      return this.actionResult(
-        threadId,
-        "computer_activate_window",
-        undefined,
-        undefined,
-        windowId,
-      );
-    });
+    return this.withDesktopControl(
+      threadId,
+      async () => {
+        markComputerCall("computer_activate_window");
+        const raise = this.backend.raiseWindow?.bind(this.backend);
+        if (!raise || !this.backendCapabilities.raise) {
+          throw activationUnsupportedError();
+        }
+        const target = await this.resolveWindowTarget(threadId, windowId);
+        if (target.pid !== undefined)
+          await this.assertSpaceAppMutationAllowed(threadId, target.pid);
+        await timedComputerLeg("dispatch", async () => {
+          await raise(windowId);
+          // Aiming after the raise, never before: a raise that refuses must not leave
+          // the keyboard pointed at a window this call just declined to move.
+          assertDesktopOperationActive();
+          await this.backend.focusWindow?.(windowId);
+        });
+        return this.actionResult(
+          threadId,
+          "computer_activate_window",
+          undefined,
+          undefined,
+          windowId,
+        );
+      },
+      () => this.assertForegroundAllowed(threadId, authorization),
+    );
   }
 
   /**
@@ -2361,105 +2364,106 @@ export class ComputerManager {
     authorization?: ComputerForegroundAuthorization,
   ): Promise<ComputerActionResult & { readonly note?: string }> {
     currentComputerCall()?.timing?.count("foreground_excursion");
-    return this.withDesktopControl(threadId, async () => {
-      markComputerCall("computer_activate_window");
-      const raise = this.backend.raiseWindow?.bind(this.backend);
-      if (!raise || !this.backendCapabilities.raise) {
-        throw activationUnsupportedError();
-      }
-      // Inside the queued action, so the interaction stamp is read at dispatch
-      // time; before the target resolution and before any raise, so a refused
-      // excursion moves nothing and aims nothing.
-      this.assertForegroundAllowed(threadId, authorization);
-      const windows = await timedComputerLeg("resolve", () => this.readWindows());
-      const target = windows.find((candidate) => candidate.id === windowId);
-      if (!target) {
-        throw windowNotFoundError(windowId);
-      }
-      const previousId =
-        windows.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
-      this.assertDrivenAppAllowed(target.appName ?? windowId);
-      await this.assertWindowInputAllowedWindow(threadId, target);
-      if (target.pid !== undefined) await this.assertSpaceAppMutationAllowed(threadId, target.pid);
-      // The masked-activation shield arms after admission and before the
-      // raise: an opt-in that cannot shield refuses here rather than
-      // degrading to an unmasked excursion.
-      const shieldId = await this.engageActivationShield(threadId, target);
-      try {
-        await timedComputerLeg("dispatch", async () => {
-          await raise(windowId);
-          // Aiming after the raise, never before: a raise that refuses must not leave
-          // the keyboard pointed at a window this call just declined to move.
-          assertDesktopOperationActive();
-          await this.backend.focusWindow?.(windowId);
-        });
-        if (input) {
-          try {
-            assertDesktopOperationActive();
-            await input();
-          } catch (error) {
-            // Input that failed after the raise must not leave the desktop
-            // rearranged: restore best-effort, then report the input failure.
-            if (previousId !== null && previousId !== windowId) {
-              await raise(previousId).catch(() => undefined);
-              await this.backend.focusWindow?.(previousId)?.catch(() => undefined);
-            }
-            throw error;
-          }
+    return this.withDesktopControl(
+      threadId,
+      async () => {
+        markComputerCall("computer_activate_window");
+        const raise = this.backend.raiseWindow?.bind(this.backend);
+        if (!raise || !this.backendCapabilities.raise) {
+          throw activationUnsupportedError();
         }
-        let restore: ForegroundRestoreInfo;
-        let note: string | undefined;
-        if (previousId === null) {
-          restore = {
-            restoredWindowId: null,
-            restoreStatus: "frontmost-unobservable",
-          };
-          note = "No frontmost window was observable before activation, so nothing was restored.";
-        } else if (previousId === windowId) {
-          restore = {
-            restoredWindowId: null,
-            restoreStatus: "already-frontmost",
-          };
-        } else {
-          try {
-            assertDesktopOperationActive();
-            await raise(previousId);
-            await this.backend.focusWindow?.(previousId);
-            restore = {
-              restoredWindowId: previousId,
-              restoreStatus: "restored",
-            };
-          } catch {
-            restore = {
-              restoredWindowId: previousId,
-              restoreStatus: "restore-missed",
-            };
-            note =
-              `Activated window ${JSON.stringify(windowId)} but could not restore the previously ` +
-              `frontmost window ${JSON.stringify(previousId)} to the foreground; the desktop was ` +
-              `left with ${JSON.stringify(windowId)} raised.`;
-          }
+        const windows = await timedComputerLeg("resolve", () => this.readWindows());
+        const target = windows.find((candidate) => candidate.id === windowId);
+        if (!target) {
+          throw windowNotFoundError(windowId);
         }
-        // A fresh listing so the next read sees the desktop as it was left. Best
-        // effort: the activation already succeeded, and a stale listing must not
-        // fail it.
+        const previousId =
+          windows.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
+        this.assertDrivenAppAllowed(target.appName ?? windowId);
+        await this.assertWindowInputAllowedWindow(threadId, target);
+        if (target.pid !== undefined)
+          await this.assertSpaceAppMutationAllowed(threadId, target.pid);
+        // The masked-activation shield arms after admission and before the
+        // raise: an opt-in that cannot shield refuses here rather than
+        // degrading to an unmasked excursion.
+        const shieldId = await this.engageActivationShield(threadId, target);
         try {
-          await this.readWindows();
-        } catch {
-          // Keep the successful result.
+          await timedComputerLeg("dispatch", async () => {
+            await raise(windowId);
+            // Aiming after the raise, never before: a raise that refuses must not leave
+            // the keyboard pointed at a window this call just declined to move.
+            assertDesktopOperationActive();
+            await this.backend.focusWindow?.(windowId);
+          });
+          if (input) {
+            try {
+              assertDesktopOperationActive();
+              await input();
+            } catch (error) {
+              // Input that failed after the raise must not leave the desktop
+              // rearranged: restore best-effort, then report the input failure.
+              if (previousId !== null && previousId !== windowId) {
+                await raise(previousId).catch(() => undefined);
+                await this.backend.focusWindow?.(previousId)?.catch(() => undefined);
+              }
+              throw error;
+            }
+          }
+          let restore: ForegroundRestoreInfo;
+          let note: string | undefined;
+          if (previousId === null) {
+            restore = {
+              restoredWindowId: null,
+              restoreStatus: "frontmost-unobservable",
+            };
+            note = "No frontmost window was observable before activation, so nothing was restored.";
+          } else if (previousId === windowId) {
+            restore = {
+              restoredWindowId: null,
+              restoreStatus: "already-frontmost",
+            };
+          } else {
+            try {
+              assertDesktopOperationActive();
+              await raise(previousId);
+              await this.backend.focusWindow?.(previousId);
+              restore = {
+                restoredWindowId: previousId,
+                restoreStatus: "restored",
+              };
+            } catch {
+              restore = {
+                restoredWindowId: previousId,
+                restoreStatus: "restore-missed",
+              };
+              note =
+                `Activated window ${JSON.stringify(windowId)} but could not restore the previously ` +
+                `frontmost window ${JSON.stringify(previousId)} to the foreground; the desktop was ` +
+                `left with ${JSON.stringify(windowId)} raised.`;
+            }
+          }
+          // A fresh listing so the next read sees the desktop as it was left. Best
+          // effort: the activation already succeeded, and a stale listing must not
+          // fail it.
+          try {
+            await this.readWindows();
+          } catch {
+            // Keep the successful result.
+          }
+          const merged = computerBackendActionResult(this.computerId, "computer_activate_window", {
+            windowId,
+          });
+          this.emitForegroundRestoreAction(threadId, merged, restore, note, shieldId !== undefined);
+          return note !== undefined ? { ...merged, note } : merged;
+        } finally {
+          // The shield is the last piece of the excursion to come down: the
+          // restore has already landed, so dropping the mask reveals the
+          // desktop the way it was left rather than mid-raise.
+          if (shieldId !== undefined) await this.releaseActivationShield(shieldId);
         }
-        const merged = computerBackendActionResult(this.computerId, "computer_activate_window", {
-          windowId,
-        });
-        this.emitForegroundRestoreAction(threadId, merged, restore, note, shieldId !== undefined);
-        return note !== undefined ? { ...merged, note } : merged;
-      } finally {
-        // The shield is the last piece of the excursion to come down: the
-        // restore has already landed, so dropping the mask reveals the
-        // desktop the way it was left rather than mid-raise.
-        if (shieldId !== undefined) await this.releaseActivationShield(shieldId);
-      }
-    });
+      },
+      () => this.assertForegroundAllowed(threadId, authorization),
+    );
   }
 
   /**
@@ -2483,58 +2487,60 @@ export class ComputerManager {
     authorization?: ComputerForegroundAuthorization,
   ): Promise<T> {
     currentComputerCall()?.timing?.count("foreground_excursion");
-    return this.withDesktopControl(threadId, async () => {
-      // The same never-raise gate the activate path takes: a foreground key or
-      // click is an excursion from the user's point of view, and it refuses
-      // before the wrapped action can raise anything.
-      this.assertForegroundAllowed(threadId, authorization);
-      this.spaceBroker.assertForegroundAllowed(agentThreadId(threadId));
-      const before = await timedComputerLeg("resolve", () => this.readWindows());
-      const previousId =
-        before.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
-      let outcome:
-        | { readonly ok: true; readonly value: T }
-        | { readonly ok: false; readonly error: unknown };
-      try {
-        outcome = { ok: true, value: await action() };
-      } catch (error) {
-        outcome = { ok: false, error };
-      }
-      if (previousId !== null) {
-        const raise = this.backend.raiseWindow?.bind(this.backend);
-        if (raise && this.backendCapabilities.raise) {
-          let frontmost: string | null | undefined;
-          try {
-            const after = await timedComputerLeg("resolve", () => this.readWindows());
-            frontmost =
-              after.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
-          } catch {
-            frontmost = undefined;
-          }
-          if (frontmost === undefined) {
-            // The post-call read failed, so whether the excursion left the
-            // target raised is unknown — the restore cannot run blind, and
-            // a possibly stolen frontmost must not pass without a trace.
-            console.warn("[computer] foreground call left focus unverified", {
-              previousWindowId: previousId,
-            });
-          } else if (frontmost !== null && frontmost !== previousId) {
+    return this.withDesktopControl(
+      threadId,
+      async () => {
+        const before = await timedComputerLeg("resolve", () => this.readWindows());
+        const previousId =
+          before.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
+        let outcome:
+          | { readonly ok: true; readonly value: T }
+          | { readonly ok: false; readonly error: unknown };
+        try {
+          outcome = { ok: true, value: await action() };
+        } catch (error) {
+          outcome = { ok: false, error };
+        }
+        if (previousId !== null) {
+          const raise = this.backend.raiseWindow?.bind(this.backend);
+          if (raise && this.backendCapabilities.raise) {
+            let frontmost: string | null | undefined;
             try {
-              assertDesktopOperationActive();
-              await raise(previousId);
-              await this.backend.focusWindow?.(previousId);
-            } catch (error) {
-              console.warn("[computer] foreground call left focus unrestored", {
-                restoredWindowId: previousId,
-                error: error instanceof Error ? error.message : String(error),
+              const after = await timedComputerLeg("resolve", () => this.readWindows());
+              frontmost =
+                after.find((candidate) => candidate.visible && !candidate.minimized)?.id ?? null;
+            } catch {
+              frontmost = undefined;
+            }
+            if (frontmost === undefined) {
+              // The post-call read failed, so whether the excursion left the
+              // target raised is unknown — the restore cannot run blind, and
+              // a possibly stolen frontmost must not pass without a trace.
+              console.warn("[computer] foreground call left focus unverified", {
+                previousWindowId: previousId,
               });
+            } else if (frontmost !== null && frontmost !== previousId) {
+              try {
+                assertDesktopOperationActive();
+                await raise(previousId);
+                await this.backend.focusWindow?.(previousId);
+              } catch (error) {
+                console.warn("[computer] foreground call left focus unrestored", {
+                  restoredWindowId: previousId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
             }
           }
         }
-      }
-      if (!outcome.ok) throw outcome.error;
-      return outcome.value;
-    });
+        if (!outcome.ok) throw outcome.error;
+        return outcome.value;
+      },
+      () => {
+        this.assertForegroundAllowed(threadId, authorization);
+        this.spaceBroker.assertForegroundAllowed(agentThreadId(threadId));
+      },
+    );
   }
 
   /**
@@ -3690,6 +3696,7 @@ export class ComputerManager {
   private withDesktopControl<A>(
     threadId: string | undefined,
     action: () => Promise<A>,
+    beforeClaim?: () => void,
   ): Promise<A> {
     assertDesktopOperationAdmission();
     const owner = agentThreadId(threadId);
@@ -3712,6 +3719,11 @@ export class ComputerManager {
       // lease, clear focus, or announce itself — all of which claimDesktopControl
       // would otherwise do ahead of a refusal that sends nothing.
       this.assertInputNotPaused(owner);
+      // Admission belongs before the lease claim: even clearFocusWindow and
+      // cursor setup may cold-start a native process. A refused foreground
+      // call must not start it, take the lease, or publish a driving session.
+      // Run inside the queue so recent human input is checked at dispatch.
+      beforeClaim?.();
       await this.claimDesktopControl(threadId);
       assertDesktopOperationActive();
       try {

@@ -552,7 +552,8 @@ export class DesktopAppSnapManager {
   // Read-side freshness only: a grant flip surfaces at the next expiry, and
   // request/setup paths always bypass it. Five seconds keeps a TCC answer
   // honest for display while skipping a helper spawn on every poll.
-  #permissionCheckCache: { at: number; kindsKey: string } | null = null;
+  readonly #permissionCheckCache = new Map<DesktopAppSnapPermissionKind, number>();
+  readonly #permissionChecks = new Map<string, Promise<boolean>>();
   // An explicit setup failure survives passive grant/health refreshes until
   // another explicit attempt or app restart; it must not become endless waiting.
   #permissionSetupFailure: {
@@ -588,6 +589,7 @@ export class DesktopAppSnapManager {
   // leaves this queue empty, so its close never spawns a follow-on coach.
   #guidePaneQueue: DesktopAppSnapSettingsPane[] = [];
   #guideSessionKinds: readonly DesktopAppSnapPermissionKind[] = [];
+  #guideSessionGeneration = 0;
   #lastEmittedStateJson: string | null = null;
   #guideSessionOpensSettings = false;
   // Whether this session opened System Settings at least once. Only then may
@@ -632,32 +634,11 @@ export class DesktopAppSnapManager {
 
   async refreshState(
     permissions?: readonly DesktopAppSnapPermissionKind[],
+    options: { readonly force?: boolean } = {},
   ): Promise<DesktopAppSnapState> {
     if (this.#platform !== "macos" || this.#disposed) return this.getState();
-    const kindsKey = JSON.stringify(permissions ?? null);
-    if (
-      this.#permissionCheckCache &&
-      this.#permissionCheckCache.kindsKey === kindsKey &&
-      Date.now() - this.#permissionCheckCache.at < 5_000
-    ) {
+    if (!(await this.#runPermissionCommand("--check-permissions", permissions, !options.force))) {
       return this.getState();
-    }
-    if (!(await this.#runPermissionCommand("--check-permissions", permissions))) {
-      return this.getState();
-    }
-    // Cache only an all-granted answer. A missing report must always reach the
-    // helper again — a transient TCC negative could otherwise be served from
-    // cache for five seconds while callers re-probe for the real state.
-    const effectiveKinds: readonly DesktopAppSnapPermissionKind[] = permissions ?? [
-      "accessibility",
-      "screenRecording",
-    ];
-    if (
-      effectiveKinds.every(
-        (kind) => this.#panePermission(APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind]) === "granted",
-      )
-    ) {
-      this.#permissionCheckCache = { at: Date.now(), kindsKey };
     }
     await this.#reconcileWatchProcess();
     return this.getState();
@@ -745,7 +726,7 @@ export class DesktopAppSnapManager {
   ): Promise<DesktopAppSnapState> {
     if (this.#platform !== "macos" || this.#disposed) return this.getState();
     this.#permissionSetupFailure = null;
-    this.#permissionCheckCache = null;
+    this.#permissionCheckCache.clear();
     if (!(await this.#runPermissionCommand("--request-permissions", permissions))) {
       return this.getState();
     }
@@ -773,13 +754,22 @@ export class DesktopAppSnapManager {
     if (this.#platform !== "macos" || this.#disposed) return this.getState();
     if (permissions.length === 0) return this.getState();
     this.hidePermissionGuide();
+    const generation = this.#guideSessionGeneration;
     this.#permissionSetupFailure = null;
-    this.#permissionCheckCache = null;
+    this.#permissionCheckCache.clear();
     // Explicit registration preflight plus a grant check, with no TCC mutation
     // or permission prompt. Unresolvable copies never start a polling coach.
-    if (!(await this.#runPermissionCommand("--prepare-permission-setup", permissions))) {
+    if (
+      !(await this.#runPermissionCommand(
+        "--prepare-permission-setup",
+        permissions,
+        false,
+        generation,
+      ))
+    ) {
       return this.getState();
     }
+    if (this.#disposed || generation !== this.#guideSessionGeneration) return this.getState();
     this.#guidePaneQueue = [...new Set(permissions)]
       .sort(
         (left, right) =>
@@ -870,6 +860,7 @@ export class DesktopAppSnapManager {
    * spawn failure) leaves Settings alone.
    */
   #finishGuideSession(success: boolean): void {
+    this.#guideSessionGeneration += 1;
     const shouldCloseSettings = success && this.#guideSessionOpenedSettings;
     this.#guidePaneQueue = [];
     this.#guideSessionKinds = [];
@@ -952,8 +943,10 @@ export class DesktopAppSnapManager {
         // last coach was up never shows a stale guide of its own. A failed
         // recheck ends the session rather than advancing on stale fields.
         const sessionKinds = this.#guideSessionKinds;
+        const generation = this.#guideSessionGeneration;
         void this.#runPermissionCommand("--check-permissions", sessionKinds)
           .then((ok) => {
+            if (generation !== this.#guideSessionGeneration || this.#disposed) return;
             if (ok) {
               this.#advancePermissionGuide();
               return;
@@ -961,7 +954,7 @@ export class DesktopAppSnapManager {
             this.#finishGuideSession(false);
           })
           .catch(() => {
-            this.#finishGuideSession(false);
+            if (generation === this.#guideSessionGeneration) this.#finishGuideSession(false);
           });
       });
     } catch {
@@ -1065,8 +1058,8 @@ export class DesktopAppSnapManager {
           : [APP_SNAP_GUIDE_PANE_PERMISSION_KINDS[pane]];
       watch.pending = true;
       void this.#runPermissionCommand("--check-permissions", kinds)
-        .then(() => {
-          if (this.#guideProcess !== child || this.#activeGuidePane !== pane) return;
+        .then((ok) => {
+          if (!ok || this.#guideProcess !== child || this.#activeGuidePane !== pane) return;
           if (this.#panePermission(pane) !== "granted") return;
           this.#onGuidePaneGranted(child);
         })
@@ -1102,8 +1095,10 @@ export class DesktopAppSnapManager {
     this.#stopGuideProcess();
     if (this.#guidePaneQueue.length === 0) return;
     const sessionKinds = this.#guideSessionKinds;
+    const generation = this.#guideSessionGeneration;
     void this.#runPermissionCommand("--check-permissions", sessionKinds)
       .then((ok) => {
+        if (generation !== this.#guideSessionGeneration || this.#disposed) return;
         if (ok) {
           this.#advancePermissionGuide();
           return;
@@ -1111,7 +1106,7 @@ export class DesktopAppSnapManager {
         this.#finishGuideSession(false);
       })
       .catch(() => {
-        this.#finishGuideSession(false);
+        if (generation === this.#guideSessionGeneration) this.#finishGuideSession(false);
       });
   }
 
@@ -1135,7 +1130,7 @@ export class DesktopAppSnapManager {
     )
       return;
     this.#permissionSetupFailure = { code, message: message.message };
-    this.#permissionCheckCache = null;
+    this.#permissionCheckCache.clear();
     this.#finishGuideSession(false);
     this.#stopGuideProcess();
     this.#lastGuideState = "closed";
@@ -1782,18 +1777,50 @@ export class DesktopAppSnapManager {
   async #runPermissionCommand(
     command: AppSnapPermissionCommand,
     permissions?: readonly DesktopAppSnapPermissionKind[],
+    allowCached = false,
+    setupGeneration?: number,
   ): Promise<boolean> {
-    const run = this.#permissionCommandQueue.then(() =>
-      this.#executePermissionCommand(command, permissions),
-    );
+    const kinds = permissions ?? APP_SNAP_LEGACY_PERMISSION_KINDS;
+    const key = `${allowCached ? "cached" : "fresh"}:${[...new Set(kinds)].toSorted().join(",")}`;
+    // The guide, settings, and server may ask simultaneously. Share an actual
+    // in-flight probe, but never serve a cached grant to the guide's fresh poll.
+    if (command === "--check-permissions") {
+      const pending = this.#permissionChecks.get(key);
+      if (pending) return pending;
+    }
+    const run = this.#permissionCommandQueue.then(() => {
+      if (setupGeneration !== undefined && setupGeneration !== this.#guideSessionGeneration)
+        return false;
+      if (
+        allowCached &&
+        kinds.every((kind) => {
+          const at = this.#permissionCheckCache.get(kind);
+          return (
+            at !== undefined &&
+            Date.now() - at < 5_000 &&
+            this.#panePermission(APP_SNAP_PERMISSION_KIND_GUIDE_PANES[kind]) === "granted"
+          );
+        })
+      )
+        return true;
+      return this.#executePermissionCommand(command, permissions, setupGeneration);
+    });
     this.#permissionCommandQueue = run.then(
       () => undefined,
       () => undefined,
     );
-    return await run;
+    if (command === "--check-permissions") this.#permissionChecks.set(key, run);
+    try {
+      return await run;
+    } finally {
+      if (this.#permissionChecks.get(key) === run) this.#permissionChecks.delete(key);
+    }
   }
 
   #applyPermissionReport(message: Extract<AppSnapHelperMessage, { type: "permissions" }>): void {
+    for (const kind of APP_SNAP_PERMISSION_SETUP_ORDER) {
+      if (message[kind] === "denied") this.#permissionCheckCache.delete(kind);
+    }
     // Fields absent from the payload were not part of this request; leaving
     // them untouched keeps an accessibility-aware check from erasing the
     // AppSnap set and vice versa.
@@ -1809,18 +1836,36 @@ export class DesktopAppSnapManager {
     this.#emitState();
   }
 
+  #permissionCheckFailed(kinds: readonly DesktopAppSnapPermissionKind[], message: string): void {
+    for (const kind of kinds) {
+      this.#permissionCheckCache.delete(kind);
+      if (kind === "accessibility") this.#accessibilityPermission = "unknown";
+      else if (kind === "inputMonitoring") this.#inputMonitoringPermission = "unknown";
+      else this.#screenRecordingPermission = "unknown";
+    }
+    if (kinds.includes("inputMonitoring") || kinds.includes("screenRecording")) {
+      this.#stopWatchProcess();
+      this.#releaseShortcutReservation();
+    }
+    this.#setState("error", message);
+  }
+
   async #executePermissionCommand(
     command: AppSnapPermissionCommand,
     permissions?: readonly DesktopAppSnapPermissionKind[],
+    setupGeneration?: number,
   ): Promise<boolean> {
     if (this.#disposed || this.#platform !== "macos") return false;
+    const kinds = permissions ?? APP_SNAP_LEGACY_PERMISSION_KINDS;
     if (!FS.existsSync(this.#options.helperPath)) {
-      this.#setState("error", "The AppSnap native helper is missing from this desktop build.");
+      this.#permissionCheckFailed(
+        kinds,
+        "The AppSnap native helper is missing from this desktop build.",
+      );
       return false;
     }
     // The helper's legacy default is the AppSnap pair, so a legacy request
     // sends no selectors and keeps working with helpers that predate the flag.
-    const kinds = permissions ?? APP_SNAP_LEGACY_PERMISSION_KINDS;
     const permissionArguments = isLegacyPermissionSet(kinds)
       ? []
       : [...new Set(kinds)].flatMap((kind) => ["--permission", kind]);
@@ -1837,57 +1882,74 @@ export class DesktopAppSnapManager {
               ? []
               : ["--app-path", this.#options.appBundlePath]),
           ],
-          {
-            stdio: ["ignore", "pipe", "pipe"],
-          },
+          { stdio: ["ignore", "pipe", "pipe"] },
         );
       } catch (error) {
-        this.#setState(
-          "error",
+        this.#permissionCheckFailed(
+          kinds,
           `Could not inspect AppSnap permissions: ${error instanceof Error ? error.message : String(error)}`,
         );
         resolve(false);
         return;
       }
       this.#permissionProcess = child;
-      let receivedPermissions = false;
-      let reportedError: string | null = null;
-      let spawnFailed = false;
-      const timeout = setTimeout(() => {
-        if (this.#permissionProcess === child) this.#permissionProcess = null;
-        child.kill();
-        resolve(false);
-      }, PERMISSION_COMMAND_TIMEOUT_MS);
-      this.#wireHelperOutput(child, (message) => {
-        if (message.type === "permissions") {
-          receivedPermissions = true;
-          this.#applyPermissionReport(message);
-        } else if (message.type === "error") {
-          reportedError = message.message;
-          this.#recordPermissionSetupFailure(message);
-        }
-      });
-      child.once("error", (error) => {
+      let settled = false;
+      const current = () =>
+        setupGeneration === undefined || setupGeneration === this.#guideSessionGeneration;
+      let report: Extract<AppSnapHelperMessage, { type: "permissions" }> | undefined;
+      let reportedError: Extract<AppSnapHelperMessage, { type: "error" }> | undefined;
+      const finish = (ok: boolean, message?: string) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
-        spawnFailed = true;
+        outputLines.close();
         if (this.#permissionProcess === child) this.#permissionProcess = null;
-        this.#setState("error", `Could not inspect AppSnap permissions: ${error.message}`);
-        resolve(false);
-      });
-      child.once("close", () => {
-        clearTimeout(timeout);
-        if (this.#permissionProcess === child) this.#permissionProcess = null;
-        if (this.#disposed) {
+        if (this.#disposed || !current()) {
           resolve(false);
           return;
         }
-        if (!receivedPermissions && !spawnFailed) {
-          this.#setState(
-            "error",
-            reportedError ?? "The AppSnap helper did not report its permission state.",
+        if (reportedError) this.#recordPermissionSetupFailure(reportedError);
+        if (ok && report) {
+          // Publish only a complete successful report. A partial result or late
+          // stdout after timeout must never preserve an old green badge.
+          const now = Date.now();
+          for (const kind of kinds) {
+            if (report[kind] === "granted") this.#permissionCheckCache.set(kind, now);
+          }
+          this.#applyPermissionReport(report);
+        } else {
+          this.#permissionCheckFailed(
+            kinds,
+            message ?? "The AppSnap helper did not report its permission state.",
           );
         }
-        resolve(receivedPermissions && reportedError === null && !spawnFailed);
+        resolve(ok);
+      };
+      const timeout = setTimeout(() => {
+        finish(false, "Checking macOS permissions timed out. Try Set up again.");
+        child.kill();
+      }, PERMISSION_COMMAND_TIMEOUT_MS);
+      const outputLines = this.#wireHelperOutput(child, (message) => {
+        if (settled || !current()) return;
+        if (message.type === "permissions") {
+          report = { ...report, ...message };
+        } else if (message.type === "error") {
+          reportedError = message;
+        }
+      });
+      child.once("error", (error) => {
+        finish(false, `Could not inspect AppSnap permissions: ${error.message}`);
+      });
+      child.once("close", (code: number | null) => {
+        const completedReport = report;
+        const complete =
+          completedReport !== undefined &&
+          kinds.every((kind) => completedReport[kind] !== undefined);
+        finish(
+          code === 0 && complete && reportedError === undefined,
+          reportedError?.message ??
+            (complete ? "The AppSnap permission check did not finish successfully." : undefined),
+        );
       });
     });
   }

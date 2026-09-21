@@ -566,3 +566,37 @@ presses refuse before dispatch. No synthetic activation-belief protocol ships.
 
 See [the report follow-up](../../../../docs/computer-use-cua/live-report-followup-2026-09-20.md)
 for coverage and outstanding live Chromium acceptance criteria.
+
+### Revision 36: usable background windows and input
+
+Normal macOS launches now request `activates=false` without hiding the app.
+Plain launches reuse existing processes without a reopen event; restoring a
+hidden app reuses the existing verified `AXHidden` implementation. Launch no
+longer activates a saved foreground application or starts a delayed restore
+watchdog. Window readiness shares the bounded launch budget, and unavailable
+windows keep their concrete reason through the server response.
+
+An exact background key can target an app's positively identified keyboard
+window even when sibling windows exist. The native path verifies
+`AXFocusedWindow` and the addressed field's ancestry/focus immediately before
+each key-down. An inactive app may omit its app-level focused element; that
+absence does not override a positive exact-window proof. A contradictory
+window or field still refuses. This does not make arbitrary sibling windows
+valid recipients of process-scoped keys or change generic typing admission.
+Unmodified Return uses the application-scoped Accessibility keyboard API,
+selected before dispatch. Key-up is paired on success, failure and cancellation;
+an unconfirmed release fences native cleanup. There is no fallback or replay
+through another event queue after an AX attempt.
+
+Wheel input uses one public PID event submission, without activating the app.
+Signed single-axis scrolls can also use the existing exact AX scroll route.
+Neither an uncertain AX action nor a posted event is replayed through another
+transport. The cursor panel cannot become the key or main window, and reactive
+focus guards retire their saved destination after human input instead of
+restoring it later.
+
+The matching host changes reuse AppSnap's permission checks and grant events.
+Fresh confirmation bypasses cached results, partial/failed checks cannot keep
+stale granted badges, and dismissed setup sessions cannot reopen a guide.
+Foreground authorization is checked before claiming desktop control or
+starting a driver. See the report follow-up for live evidence and limits.

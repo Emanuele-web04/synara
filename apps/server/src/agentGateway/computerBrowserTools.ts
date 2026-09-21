@@ -360,6 +360,27 @@ function augmentBrowserResult(
         },
       };
     }
+    if (
+      name === "computer_browser_state" &&
+      code === "browser_wrong_target_refused" &&
+      args.pid !== undefined &&
+      args.window_id === undefined
+    ) {
+      const message =
+        "A pid-only bind is for a live driver-owned headless browser. An existing desktop browser " +
+        "needs a native-window bind with computer_browser_state({pid,window_id}) and a verified CDP endpoint. " +
+        "Only a successful bind returns target_id for computer_browser_navigate and other browser actions. " +
+        "If that bind is unavailable, use the exact desktop window through computer_get_state and native " +
+        "Computer actions; do not send pid/window_id to browser actions or silently replace the user's profile.";
+      return {
+        ...result,
+        content: [{ type: "text", text: `refused (${code}): ${message}` }],
+        structuredContent: {
+          ...structuredRecord,
+          refusal: { ...refusal, message },
+        },
+      };
+    }
     const tabId = typeof args.tab_id === "string" ? args.tab_id : undefined;
     const targetId = typeof args.target_id === "string" ? args.target_id : undefined;
     const swapped =
@@ -567,6 +588,22 @@ export function makeAgentGatewayComputerBrowserTools(
       };
       return Effect.tryPromise({
         try: async (abortSignal) => {
+          if (name !== "computer_browser_state" && name !== "computer_browser_prepare") {
+            const hasTarget = typeof args.target_id === "string" && args.target_id.trim() !== "";
+            if (!hasTarget || args.pid !== undefined || args.window_id !== undefined) {
+              const refusal = {
+                code: "browser_target_required",
+                message:
+                  "Browser actions require the target_id returned by a successful computer_browser_state " +
+                  "bind; pid and native window_id are not browser target capabilities. Bind once using " +
+                  "computer_browser_state, then use its target_id and tab_id. If the bind was refused, " +
+                  "these actions cannot control that browser: use the exact desktop window and native " +
+                  "Computer actions, or report the limitation. No browser was launched or changed.",
+              };
+              audit({ effect: "refused", code: refusal.code });
+              return browserRefusalResult(refusal);
+            }
+          }
           const resolution = resolveOmittedTabId(context.callerThreadId, args);
           if (resolution.kind === "refused") {
             if (computerBrowserToolRequiresApproval(name, args)) {

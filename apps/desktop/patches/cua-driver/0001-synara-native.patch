@@ -373,10 +373,9 @@ diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs b/
              "browser_pointer",
              "browser_type",
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
-index 2625ee2ff..dded0587b 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/authorization.rs
-@@ -282,6 +282,7 @@ const DESKTOP_INPUT_OPERATIONS: &[&str] = &[
+@@ -282,6 +282,7 @@
      "press_key",
      "hotkey",
      "set_value",
@@ -384,7 +383,15 @@ index 2625ee2ff..dded0587b 100644
      "bring_to_front",
      "set_window_frame",
  ];
-@@ -869,6 +870,8 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
+@@ -862,6 +863,7 @@
+     let class = match tool {
+         // Public driver/OS metadata with no user-content payload.
+         "get_screen_size"
++        | "list_spaces"
+         | "get_cursor_position"
+         | "get_config"
+         | "get_session"
+@@ -869,6 +871,8 @@
          | "get_session_state"
          | "get_agent_cursor_state"
          | "get_recording_state"
@@ -393,7 +400,7 @@ index 2625ee2ff..dded0587b 100644
          | "check_for_update"
          | "health_report"
          | "probe" => RiskClass::R0,
-@@ -889,14 +892,18 @@ pub fn advertised_risk_for(tool: &str) -> RiskAssessment {
+@@ -889,14 +893,18 @@
          | "press_key"
          | "hotkey"
          | "set_value"
@@ -412,7 +419,7 @@ index 2625ee2ff..dded0587b 100644
          | "set_agent_cursor_theme" => RiskClass::R1,
 
          "clipboard_write" => RiskClass::R1,
-@@ -1162,6 +1169,43 @@ pub fn authorize_tool_call_with_context(
+@@ -1162,6 +1170,43 @@
                  )))
              }
          }
@@ -456,7 +463,7 @@ index 2625ee2ff..dded0587b 100644
      }
      Ok(risk)
  }
-@@ -1187,10 +1231,13 @@ fn enforce_hard_invariants(
+@@ -1187,10 +1232,13 @@
              | "press_key"
              | "hotkey"
              | "set_value"
@@ -470,7 +477,7 @@ index 2625ee2ff..dded0587b 100644
              | "verify_state"
              | "page"
              | "browser_prepare"
-@@ -1519,6 +1566,105 @@ mod tests {
+@@ -1519,6 +1567,105 @@
          assert!(!risk.operation_sensitive);
      }
 
@@ -577,10 +584,9 @@ index 2625ee2ff..dded0587b 100644
      fn history_reads_are_distinct_explicit_history_capabilities() {
          for (tool, capability) in [
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs
-index cfd35d264..5e16b8319 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/background_input.rs
-@@ -57,8 +57,9 @@ pub enum ElementAncestry {
+@@ -57,8 +57,9 @@
  pub struct BackgroundTargetFacts {
      pub window_server: WindowServerOwnership,
      /// The requested CGWindowID is claimed by one of the application's fresh
@@ -592,7 +598,35 @@ index cfd35d264..5e16b8319 100644
      pub ax_window_present: bool,
      /// `AXMinimized` on the exact target window. `None` means the attribute
      /// could not be read — an unproven fact, which fails closed for pointer
-@@ -110,6 +111,7 @@ pub mod refusal_codes {
+@@ -72,6 +73,8 @@
+     /// off-Space sibling that AX cannot see still counts; proven-minimized
+     /// siblings are excluded because they cannot be the key window).
+     pub competing_keyboard_destinations: usize,
++    /// Both AXFocusedWindow and the focused element freshly resolve to this target.
++    pub keyboard_focus_proven: bool,
+     /// Ancestry proof for an explicitly addressed element, when one exists.
+     pub element: ElementAncestry,
+ }
+@@ -90,13 +93,17 @@
+     InsertText,
+     /// Process-scoped key/hotkey without an action-specific verifier.
+     GenericKey,
++    /// PID key dispatch with exact app keyboard focus proved before every down.
++    FocusedWindowKey,
+ }
+
+ impl BackgroundAction {
+     fn is_pid_keyboard(self) -> bool {
+         matches!(
+             self,
+-            BackgroundAction::InsertText | BackgroundAction::GenericKey
++            BackgroundAction::InsertText
++                | BackgroundAction::GenericKey
++                | BackgroundAction::FocusedWindowKey
+         )
+     }
+ }
+@@ -110,6 +117,7 @@
      pub const MINIMIZED_OR_HIDDEN: &str = "minimized_or_hidden_window";
      pub const SAME_PID_KEYBOARD_AMBIGUITY: &str = "same_pid_keyboard_ambiguity";
      pub const ELEMENT_OUTSIDE_TARGET_WINDOW: &str = "element_outside_target_window";
@@ -600,7 +634,7 @@ index cfd35d264..5e16b8319 100644
  }
 
  /// A typed refusal: no actuator ran and none may run for this decision.
-@@ -172,7 +174,8 @@ fn refuse(
+@@ -172,14 +180,15 @@
  /// The rules encode the v1 state-policy matrix:
  /// - a stale or foreign CGWindowID refuses every mutation;
  /// - a target absent from fresh `AXWindows` (off-Space or AX-unresolved) is
@@ -610,7 +644,17 @@ index cfd35d264..5e16b8319 100644
  /// - an addressed element must prove ancestry to the requested window for
  ///   every route, including semantic AX;
  /// - semantic AX actions remain available for minimized/hidden targets;
-@@ -226,14 +229,16 @@ pub fn decide_background_input(
+ /// - the routed pointer requires a visible (possibly occluded) target; and
+-/// - process-scoped keyboard additionally requires that the target is the
+-///   only eligible same-pid keyboard destination, because the transport
+-///   addresses a process, not a window.
++/// - generic process-scoped keyboard requires a single eligible destination;
++/// - the focused-window key route permits siblings only with positive app
++///   focus proof, which its dispatcher must recheck before every key-down.
+ pub fn decide_background_input(
+     target: ExactWindowTarget,
+     facts: &BackgroundTargetFacts,
+@@ -226,14 +235,16 @@
          }
      }
 
@@ -631,7 +675,106 @@ index cfd35d264..5e16b8319 100644
                  target.window_id
              ),
              Some("foreground"),
-@@ -468,8 +473,9 @@ mod tests {
+@@ -271,7 +282,9 @@
+                 },
+             }
+         }
+-        BackgroundAction::InsertText | BackgroundAction::GenericKey => {
++        BackgroundAction::InsertText
++        | BackgroundAction::GenericKey
++        | BackgroundAction::FocusedWindowKey => {
+             if visibility_disproven {
+                 return refuse(
+                     refusal_codes::MINIMIZED_OR_HIDDEN,
+@@ -286,7 +299,16 @@
+                 );
+             }
+             debug_assert!(action.is_pid_keyboard());
+-            if facts.competing_keyboard_destinations > 0 {
++            if action == BackgroundAction::FocusedWindowKey && !facts.keyboard_focus_proven {
++                return refuse(
++                    refusal_codes::SAME_PID_KEYBOARD_AMBIGUITY,
++                    format!("The application keyboard focus is not proven to belong to window {}; focus the exact control and inspect its state before sending a key", target.window_id),
++                    Some("get_window_state"),
++                );
++            }
++            if facts.competing_keyboard_destinations > 0
++                && action != BackgroundAction::FocusedWindowKey
++            {
+                 return refuse(
+                     refusal_codes::SAME_PID_KEYBOARD_AMBIGUITY,
+                     format!(
+@@ -351,6 +373,7 @@
+             route_entry("accessibility", BackgroundAction::AxSemantic),
+             route_entry("window_pointer", BackgroundAction::WindowPointer),
+             route_entry("pid_keyboard", BackgroundAction::GenericKey),
++            route_entry("focused_window_keyboard", BackgroundAction::FocusedWindowKey),
+         ],
+         "observation": {
+             "one_shot_capture": match one_shot_capture_available {
+@@ -379,15 +402,17 @@
+             target_minimized: Some(false),
+             app_hidden: Some(false),
+             competing_keyboard_destinations: 0,
++            keyboard_focus_proven: false,
+             element: ElementAncestry::NotAddressed,
+         }
+     }
+
+-    const ALL_ACTIONS: [BackgroundAction; 4] = [
++    const ALL_ACTIONS: [BackgroundAction; 5] = [
+         BackgroundAction::AxSemantic,
+         BackgroundAction::WindowPointer,
+         BackgroundAction::InsertText,
+         BackgroundAction::GenericKey,
++        BackgroundAction::FocusedWindowKey,
+     ];
+
+     fn code_of(decision: BackgroundInputDecision) -> &'static str {
+@@ -427,6 +452,42 @@
+         }
+     }
+
++    #[test]
++    fn focused_window_keys_require_positive_proof_even_with_siblings() {
++        let mut facts = matched_facts();
++        facts.competing_keyboard_destinations = 2;
++        assert_eq!(
++            code_of(decide_background_input(
++                TARGET,
++                &facts,
++                BackgroundAction::FocusedWindowKey
++            )),
++            refusal_codes::SAME_PID_KEYBOARD_AMBIGUITY
++        );
++        facts.keyboard_focus_proven = true;
++        assert!(
++            decide_background_input(TARGET, &facts, BackgroundAction::FocusedWindowKey)
++                .is_execute()
++        );
++        assert_eq!(
++            code_of(decide_background_input(
++                TARGET,
++                &facts,
++                BackgroundAction::GenericKey
++            )),
++            refusal_codes::SAME_PID_KEYBOARD_AMBIGUITY
++        );
++        facts.app_hidden = Some(true);
++        assert_eq!(
++            code_of(decide_background_input(
++                TARGET,
++                &facts,
++                BackgroundAction::FocusedWindowKey
++            )),
++            refusal_codes::MINIMIZED_OR_HIDDEN
++        );
++    }
++
+     /// A sibling window's state can never satisfy the requested target's
+     /// verification plan, and unresolvable evidence is not proof.
+     #[test]
+@@ -468,8 +529,9 @@
          }
      }
 
@@ -643,10 +786,18 @@ index cfd35d264..5e16b8319 100644
      #[test]
      fn ax_unresolved_target_is_observation_only() {
          let facts = BackgroundTargetFacts {
-@@ -485,6 +491,27 @@ mod tests {
-         }
-     }
-
+@@ -477,6 +539,27 @@
+             ..matched_facts()
+         };
+         for action in ALL_ACTIONS {
++            assert_eq!(
++                code_of(decide_background_input(TARGET, &facts, action)),
++                refusal_codes::OFF_SPACE_OR_AX_UNRESOLVED,
++                "{action:?}"
++            );
++        }
++    }
++
 +    #[test]
 +    fn retained_exact_element_unlocks_only_off_space_semantic_ax() {
 +        let facts = BackgroundTargetFacts {
@@ -660,17 +811,17 @@ index cfd35d264..5e16b8319 100644
 +            BackgroundAction::InsertText,
 +            BackgroundAction::GenericKey,
 +        ] {
-+            assert_eq!(
-+                code_of(decide_background_input(TARGET, &facts, action)),
-+                refusal_codes::OFF_SPACE_OR_AX_UNRESOLVED,
-+                "{action:?}"
-+            );
-+        }
-+    }
-+
-     /// Minimized/hidden targets retain exact semantic AX actions; raw keys and
-     /// the routed pointer refuse rather than restoring the window.
-     #[test]
+             assert_eq!(
+                 code_of(decide_background_input(TARGET, &facts, action)),
+                 refusal_codes::OFF_SPACE_OR_AX_UNRESOLVED,
+@@ -606,6 +689,7 @@
+             target_minimized: Some(true),
+             app_hidden: Some(true),
+             competing_keyboard_destinations: 3,
++            keyboard_focus_proven: false,
+             element: ElementAncestry::OutsideTargetWindow,
+         };
+         assert_eq!(
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
 index 5f4d1a076..2a1004054 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
@@ -4966,10 +5117,9 @@ index 4fa445fb1..56c09ad44 100644
                  "mouse_button_up",
                  "mouse_drag",
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
-index d93bf6d20..92a1f2c3d 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
-@@ -257,7 +257,7 @@ fn advertised_runtime_input_schema(tool_name: &str, schema: &Value) -> Value {
+@@ -257,7 +257,7 @@
  ///   `session.capture_scope.escalate` compatibility tokens
  /// - `agent_cursor.move`, `agent_cursor.set_enabled`,
  ///   `agent_cursor.set_motion`, `agent_cursor.set_theme`,
@@ -4978,7 +5128,7 @@ index d93bf6d20..92a1f2c3d 100644
  /// - `recording.start`, `recording.stop`, `recording.state`,
  ///   `recording.replay`, `recording.install_dependency`
  /// - `page.action`
-@@ -321,6 +321,13 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
+@@ -321,6 +321,13 @@
              "input.keyboard.type",
              "accessibility.element_tokens",
          ],
@@ -4992,7 +5142,7 @@ index d93bf6d20..92a1f2c3d 100644
 
          // ── screen / capture ─────────────────────────────────────────
          // Note: the regular `screenshot` tool was removed from the
-@@ -334,6 +341,10 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
+@@ -334,6 +341,10 @@
          ],
          // ── accessibility / window state ─────────────────────────────
          "get_accessibility_tree" => &["accessibility.tree", "accessibility.tree.structured"],
@@ -5003,8 +5153,11 @@ index d93bf6d20..92a1f2c3d 100644
          "get_window_state" => &[
              "accessibility.window_state",
              "accessibility.tree",
-@@ -356,6 +367,8 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
+@@ -354,8 +365,11 @@
+         "list_apps" => &["app.list"],
+         "kill_app" => &["app.kill"],
          "list_windows" => &["window.list"],
++        "list_spaces" => &["space.list"],
          "bring_to_front" => &["window.activate"],
          "set_window_frame" => &["window.frame.set"],
 +        "set_window_minimized" => &["window.visibility.set"],
@@ -5012,7 +5165,7 @@ index d93bf6d20..92a1f2c3d 100644
          "debug_window_info" => &["window.debug_info"],
 
          // ── permissions / config ─────────────────────────────────────
-@@ -375,6 +388,7 @@ pub fn default_capabilities_for(tool_name: &str) -> Vec<String> {
+@@ -375,6 +389,7 @@
          // ── agent cursor ─────────────────────────────────────────────
          "set_agent_cursor_enabled" => &["agent_cursor.set_enabled"],
          "set_agent_cursor_motion" => &["agent_cursor.set_motion"],
@@ -5020,7 +5173,7 @@ index d93bf6d20..92a1f2c3d 100644
          "set_agent_cursor_theme" => &["agent_cursor.set_theme"],
          "get_agent_cursor_state" => &["agent_cursor.state"],
 
-@@ -619,6 +633,18 @@ impl TrustedInvocationEvidence {
+@@ -619,6 +634,18 @@
  }
 
  /// Thread-safe collection of all registered tools.
@@ -5039,7 +5192,7 @@ index d93bf6d20..92a1f2c3d 100644
  pub struct ToolRegistry {
      tools: HashMap<String, Box<dyn Tool>>,
      /// Ordered list of tool names for `tools/list`.
-@@ -871,6 +897,7 @@ impl ToolRegistry {
+@@ -871,6 +898,7 @@
          let list: Vec<Value> = self
              .order
              .iter()
@@ -5047,7 +5200,7 @@ index d93bf6d20..92a1f2c3d 100644
              .filter(|name| crate::policy::is_tool_listable(name))
              .filter_map(|name| self.tools.get(name))
              .map(|tool| tool.def().to_list_entry())
-@@ -2567,6 +2594,7 @@ fn is_physical_desktop_action(tool: &str) -> bool {
+@@ -2567,6 +2595,7 @@
              | "press_key"
              | "hotkey"
              | "set_value"
@@ -5055,7 +5208,7 @@ index d93bf6d20..92a1f2c3d 100644
              | "bring_to_front"
              | "set_window_frame"
      )
-@@ -4918,6 +4946,11 @@ fn synthesize_action_label(tool_name: &str, args: &Value) -> String {
+@@ -4918,6 +4947,11 @@
          ),
          "drag" => "drag".into(),
          "set_value" => arg("value").unwrap_or_default(),
@@ -5067,7 +5220,7 @@ index d93bf6d20..92a1f2c3d 100644
          "launch_app" => arg("bundle_id").or_else(|| arg("name")).unwrap_or_default(),
          _ => String::new(),
      };
-@@ -5059,6 +5092,7 @@ mod capability_tests {
+@@ -5059,6 +5093,7 @@
          "press_key",
          "hotkey",
          "set_value",
@@ -5075,7 +5228,7 @@ index d93bf6d20..92a1f2c3d 100644
          // screen
          "zoom",
          "get_screen_size",
-@@ -5067,6 +5101,7 @@ mod capability_tests {
+@@ -5067,11 +5102,13 @@
          // accessibility
          "get_accessibility_tree",
          "get_window_state",
@@ -5083,7 +5236,13 @@ index d93bf6d20..92a1f2c3d 100644
          // app / window
          "launch_app",
          "list_apps",
-@@ -5089,6 +5124,7 @@ mod capability_tests {
+         "kill_app",
+         "list_windows",
++        "list_spaces",
+         "bring_to_front",
+         "set_window_frame",
+         "debug_window_info",
+@@ -5089,6 +5126,7 @@
          // agent cursor
          "set_agent_cursor_enabled",
          "set_agent_cursor_motion",
@@ -5091,7 +5250,7 @@ index d93bf6d20..92a1f2c3d 100644
          "set_agent_cursor_theme",
          "get_agent_cursor_state",
          // recording / replay
-@@ -5146,6 +5182,10 @@ mod capability_tests {
+@@ -5146,6 +5184,10 @@
          "accessibility.tree.structured",
          "accessibility.tree.bounded",
          "accessibility.window_state",
@@ -5102,7 +5261,7 @@ index d93bf6d20..92a1f2c3d 100644
          // Surface 6 — claimed by tools that accept the opaque
          // `element_token` arg + get_window_state which emits them.
          "accessibility.element_tokens",
-@@ -5176,6 +5216,7 @@ mod capability_tests {
+@@ -5176,6 +5218,7 @@
          "agent_cursor.move",
          "agent_cursor.set_enabled",
          "agent_cursor.set_motion",
@@ -5110,7 +5269,7 @@ index d93bf6d20..92a1f2c3d 100644
          "agent_cursor.set_theme",
          "agent_cursor.state",
          // recording
-@@ -5367,6 +5408,45 @@ mod capability_tests {
+@@ -5367,6 +5410,45 @@
          }
      }
 
@@ -5156,7 +5315,7 @@ index d93bf6d20..92a1f2c3d 100644
      /// Surface 6: every tool that accepts the opaque `element_token`
      /// arg must claim the `accessibility.element_tokens` capability so
      /// Hermes/Codex/Claude Code consumers can branch on the capability
-@@ -5384,6 +5464,7 @@ mod capability_tests {
+@@ -5384,6 +5466,7 @@
              "type_text_chars",
              "press_key",
              "set_value",
@@ -5628,7 +5787,7 @@ diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driv
 +        .expect("daemon metadata is serializable");
 +    #[cfg(target_os = "macos")]
 +    {
-+        metadata["synara_native_revision"] = serde_json::json!(35);
++        metadata["synara_native_revision"] = serde_json::json!(36);
 +    }
 +    DaemonResponse::ok(metadata)
 +}
@@ -9419,10 +9578,23 @@ index 790254fb4..0da43ecc5 100644
              .iter()
              .any(|window| window.xid == window_id && window.pid == Some(pid))
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
-index 78981e9cc..e1c38094e 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/apps/mod.rs
-@@ -80,6 +80,21 @@ fn list_running_apps_native() -> Vec<AppInfo> {
+@@ -4,12 +4,7 @@
+
+ use anyhow::Context;
+ use serde::{Deserialize, Serialize};
+-use std::{
+-    ffi::c_void,
+-    process::Command,
+-    sync::mpsc::{self, SyncSender},
+-    time::Duration,
+-};
++use std::process::Command;
+
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct AppInfo {
+@@ -80,6 +75,89 @@
      apps
  }
 
@@ -9441,17 +9613,85 @@ index 78981e9cc..e1c38094e 100644
 +    }
 +}
 +
++/// Change only the target application's hidden state, through the same
++/// verified AXHidden path used by explicit visibility requests. Unlike
++/// NSRunningApplication.unhide(), this works for launch-hidden apps without
++/// reopening or activating them.
++pub(crate) fn set_app_hidden(pid: i32, hidden: bool) -> Result<Option<bool>, String> {
++    use crate::ax::bindings::{
++        copy_bool_attr, is_attribute_settable, kAXErrorSuccess, set_bool_attr,
++        AXUIElementCreateApplication, AXUIElementSetMessagingTimeout,
++    };
++    use core_foundation::base::{CFRelease, CFTypeRef};
++    use objc2_app_kit::NSRunningApplication;
++
++    unsafe {
++        let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
++            return Err(format!("pid {pid} is not a running application"));
++        };
++        // AXHidden on the application element is the cross-process hide/unhide
++        // path: NSRunningApplication.hide()/unhide() can refuse requests aimed
++        // at launch-hidden apps, while the AX attribute drives the same app
++        // hidden state the Dock's Cmd+H uses.
++        let app_element = AXUIElementCreateApplication(pid);
++        if app_element.is_null() {
++            return Err(format!(
++                "could not create an accessibility element for pid {pid}"
++            ));
++        }
++        AXUIElementSetMessagingTimeout(app_element, 2.0);
++        let result = if !is_attribute_settable(app_element, "AXHidden") {
++            Err(format!(
++                "pid {pid} does not expose a settable AXHidden attribute"
++            ))
++        } else {
++            match crate::input::cancellation::gate()
++                .post(|| set_bool_attr(app_element, "AXHidden", hidden))
++            {
++                Err(error) => Err(error.to_string()),
++                Ok(error) if error != kAXErrorSuccess => {
++                    Err(format!("AXHidden write was rejected with AXError {error}"))
++                }
++                Ok(_) => {
++                    let mut observed = None;
++                    for _ in 0..30 {
++                        if crate::input::cancellation::gate().ensure_active().is_err() {
++                            break;
++                        }
++                        std::thread::sleep(std::time::Duration::from_millis(50));
++                        if crate::input::cancellation::gate().ensure_active().is_err() {
++                            break;
++                        }
++                        let state = copy_bool_attr(app_element, "AXHidden")
++                            .unwrap_or_else(|| app.isHidden());
++                        observed = Some(state);
++                        if state == hidden {
++                            break;
++                        }
++                    }
++                    // A cancelled readback does not turn an already submitted
++                    // write into a refusal or trigger another visibility write.
++                    Ok(observed)
++                }
++            }
++        };
++        CFRelease(app_element as CFTypeRef);
++        result
++    }
++}
++
++
  /// Launch an app by bundle ID via NSWorkspace, background only (no focus
  /// steal). Returns the pid on success.
  ///
-@@ -94,12 +109,18 @@ fn list_running_apps_native() -> Vec<AppInfo> {
+@@ -94,13 +172,20 @@
  ///     without needing a separate `list_running_apps` lookup, so we
  ///     can't race a same-bundle-id helper that happens to be running.
  pub fn launch_app(bundle_id: &str) -> anyhow::Result<i32> {
 +    launch_app_with_options(bundle_id, false)
 +}
 +
-+/// `launch_app` with an explicit `hidden` flag for the hidden-workspace launch path.
++/// `launch_app` with explicit application hiding, separate from background launch.
 +pub fn launch_app_with_options(bundle_id: &str, hidden: bool) -> anyhow::Result<i32> {
      // Pass the bundle id straight through — `nsworkspace::resolve_application_url`
      // calls `URLForApplicationWithBundleIdentifier` and uses the resulting
@@ -9459,11 +9699,14 @@ index 78981e9cc..e1c38094e 100644
      // alias/cryptex metadata Safari (and other Cryptex-installed apps)
      // need to relaunch from `/System/Cryptexes/App/...`.
      let cfg = nsworkspace::OpenConfig {
+-        apple_event_bundle_id: Some(bundle_id.to_owned()),
 +        hidden,
-         apple_event_bundle_id: Some(bundle_id.to_owned()),
++        bundle_id: Some(bundle_id.to_owned()),
++        send_open_application_event: true,
          ..Default::default()
      };
-@@ -116,10 +137,16 @@ pub fn launch_app(bundle_id: &str) -> anyhow::Result<i32> {
+     let running = nsworkspace::open_application(bundle_id, &cfg)
+@@ -116,11 +201,18 @@
  /// roots for `<Name>.app`, then fall back to a LaunchServices lookup
  /// in case the caller passed a bundle identifier in the `name` slot.
  pub fn launch_app_by_name(name: &str) -> anyhow::Result<i32> {
@@ -9476,11 +9719,14 @@ index 78981e9cc..e1c38094e 100644
          .ok_or_else(|| anyhow::anyhow!("Could not locate app with name '{name}'"))?;
      let (app_ref, bid) = located.app_ref_and_bundle_id();
      let cfg = nsworkspace::OpenConfig {
+-        apple_event_bundle_id: bid,
 +        hidden,
-         apple_event_bundle_id: bid,
++        bundle_id: bid,
++        send_open_application_event: true,
          ..Default::default()
      };
-@@ -129,18 +156,66 @@ pub fn launch_app_by_name(name: &str) -> anyhow::Result<i32> {
+     let running = nsworkspace::open_application(&app_ref, &cfg)
+@@ -129,27 +221,68 @@
      Ok(pid)
  }
 
@@ -9509,7 +9755,7 @@ index 78981e9cc..e1c38094e 100644
 +    env: &std::collections::HashMap<String, String>,
 +    creates_new_instance: bool,
 +    hidden: bool,
-+    apple_event_bundle_id: Option<String>,
++    bundle_id: Option<String>,
 +    app_already_running: bool,
 +) -> nsworkspace::OpenConfig {
 +    nsworkspace::OpenConfig {
@@ -9521,7 +9767,8 @@ index 78981e9cc..e1c38094e 100644
 +            app_already_running,
 +        ),
 +        hidden,
-+        apple_event_bundle_id,
++        bundle_id,
++        send_open_application_event: true,
 +    }
 +}
 +
@@ -9546,9 +9793,18 @@ index 78981e9cc..e1c38094e 100644
      creates_new_instance: bool,
 +    hidden: bool,
  ) -> anyhow::Result<i32> {
-     if additional_args.is_empty()
-         && env.is_empty()
-@@ -158,16 +233,20 @@ pub fn launch_with_urls_by_bundle(
+-    if additional_args.is_empty()
+-        && env.is_empty()
+-        && !creates_new_instance
+-        && finder_folder_handoff(bundle_id, urls)
+-    {
+-        return open_finder_folders(urls);
+-    }
+-
+     // Pass the bundle id directly — see `launch_app` rationale above
+     // (Cryptex-installed apps).
+     //
+@@ -158,16 +291,17 @@
      // the target and attaching `oapp` on top causes
      // openURLs:withApplicationAtURL: to bail with "application not
      // found" for Cryptex-installed apps (Safari). Verified empirically.
@@ -9557,24 +9813,25 @@ index 78981e9cc..e1c38094e 100644
 -        environment: env.clone(),
 +    let app_already_running =
 +        looks_like_bundle_id(bundle_id) && nsworkspace::bundle_is_running(bundle_id);
-+    let cfg = launch_config_for(
++    let mut cfg = launch_config_for(
 +        additional_args,
 +        env,
          creates_new_instance,
 -        apple_event_bundle_id: if urls.is_empty() {
-+        hidden,
-+        if urls.is_empty() {
-             Some(bundle_id.to_owned())
-         } else {
-             None
-         },
+-            Some(bundle_id.to_owned())
+-        } else {
+-            None
+-        },
 -    };
++        hidden,
++        Some(bundle_id.to_owned()),
 +        app_already_running,
 +    );
++    cfg.send_open_application_event = urls.is_empty();
      let running = if urls.is_empty() {
          nsworkspace::open_application(bundle_id, &cfg)
      } else {
-@@ -187,6 +266,7 @@ pub fn launch_with_urls_by_name(
+@@ -187,27 +321,23 @@
      additional_args: &[String],
      env: &std::collections::HashMap<String, String>,
      creates_new_instance: bool,
@@ -9582,35 +9839,147 @@ index 78981e9cc..e1c38094e 100644
  ) -> anyhow::Result<i32> {
      let located = locate_by_name(name)
          .ok_or_else(|| anyhow::anyhow!("Could not locate app with name '{name}'"))?;
-@@ -202,12 +282,15 @@ pub fn launch_with_urls_by_name(
-     }
+     let (app_ref, bid) = located.app_ref_and_bundle_id();
+-    if additional_args.is_empty()
+-        && env.is_empty()
+-        && !creates_new_instance
+-        && bid
+-            .as_deref()
+-            .is_some_and(|bundle_id| finder_folder_handoff(bundle_id, urls))
+-    {
+-        return open_finder_folders(urls);
+-    }
      // See `launch_with_urls_by_bundle` — skip `oapp` AppleEvent on
      // the URL-handoff path.
 -    let cfg = nsworkspace::OpenConfig {
 -        arguments: additional_args.to_vec(),
 -        environment: env.clone(),
 +    let app_already_running = bid.as_deref().is_some_and(nsworkspace::bundle_is_running);
-+    let cfg = launch_config_for(
++    let mut cfg = launch_config_for(
 +        additional_args,
 +        env,
          creates_new_instance,
 -        apple_event_bundle_id: if urls.is_empty() { bid } else { None },
 -    };
 +        hidden,
-+        if urls.is_empty() { bid } else { None },
++        bid,
 +        app_already_running,
 +    );
++    cfg.send_open_application_event = urls.is_empty();
      let running = if urls.is_empty() {
          nsworkspace::open_application(&app_ref, &cfg)
      } else {
-@@ -716,7 +799,63 @@ pub fn format_app_list(apps: &[AppInfo]) -> String {
+@@ -216,80 +346,6 @@
+     .with_context(|| format!("Failed to launch '{name}'"))?;
+     let pid: i32 = unsafe { running.processIdentifier() };
+     Ok(pid)
+-}
+-
+-pub(crate) fn finder_folder_handoff(bundle_id: &str, urls: &[String]) -> bool {
+-    bundle_id == "com.apple.finder"
+-        && !urls.is_empty()
+-        && urls.iter().all(|url| std::path::Path::new(url).is_dir())
+-}
+-
+-fn open_finder_folders(urls: &[String]) -> anyhow::Result<i32> {
+-    const MAIN_QUEUE_TIMEOUT: Duration = Duration::from_secs(5);
+-
+-    if objc2_foundation::MainThreadMarker::new().is_some() {
+-        select_finder_folders(urls)?;
+-    } else {
+-        let (tx, rx) = mpsc::sync_channel(1);
+-        let request = Box::new(FinderFolderRequest {
+-            folders: urls.to_vec(),
+-            tx,
+-        });
+-        unsafe {
+-            let main_queue = &raw const _dispatch_main_q as *const c_void;
+-            dispatch_async_f(
+-                main_queue,
+-                Box::into_raw(request) as *mut c_void,
+-                open_finder_folders_on_main,
+-            );
+-        }
+-        rx.recv_timeout(MAIN_QUEUE_TIMEOUT)
+-            .context("Timed out waiting for Finder folder handoff on the AppKit main queue")?
+-            .map_err(anyhow::Error::msg)?;
+-    }
+-
+-    list_running_apps()
+-        .into_iter()
+-        .find(|app| app.bundle_id.as_deref() == Some("com.apple.finder") && app.pid > 0)
+-        .map(|app| app.pid)
+-        .ok_or_else(|| {
+-            anyhow::anyhow!("Finder accepted the folder open request but is not running")
+-        })
+-}
+-
+-fn select_finder_folders(urls: &[String]) -> anyhow::Result<()> {
+-    use objc2_app_kit::NSWorkspace;
+-    use objc2_foundation::NSString;
+-
+-    let workspace = unsafe { NSWorkspace::sharedWorkspace() };
+-    for folder in urls {
+-        let folder = NSString::from_str(folder);
+-        if !unsafe { workspace.selectFile_inFileViewerRootedAtPath(None, &folder) } {
+-            anyhow::bail!("Finder refused to open folder: {folder}");
+-        }
+-    }
+-    Ok(())
+-}
+-
+-struct FinderFolderRequest {
+-    folders: Vec<String>,
+-    tx: SyncSender<Result<(), String>>,
+-}
+-
+-#[link(name = "System", kind = "framework")]
+-extern "C" {
+-    static _dispatch_main_q: u8;
+-    fn dispatch_async_f(
+-        queue: *const c_void,
+-        context: *mut c_void,
+-        work: unsafe extern "C" fn(*mut c_void),
+-    );
+-}
+-
+-unsafe extern "C" fn open_finder_folders_on_main(context: *mut c_void) {
+-    let request = unsafe { Box::from_raw(context.cast::<FinderFolderRequest>()) };
+-    let result = select_finder_folders(&request.folders).map_err(|error| error.to_string());
+-    let _ = request.tx.send(result);
+ }
+
+ // ── Bundle resolution ────────────────────────────────────────────────────────
+@@ -638,8 +694,8 @@
+ /// Re-activate the app with `pid` via
+ /// `NSRunningApplication.runningApplicationWithProcessIdentifier(pid)?.activateWithOptions([])`.
+ /// Returns `true` if the app was found and activate was attempted.
+-/// Used as the belt-and-braces step in `LaunchAppTool` when the target
+-/// has self-activated despite the focus-steal observer.
++/// Only for actions whose foreground activation has been explicitly admitted.
++/// Background launch and input must not use it to restore a saved foreground app.
+ pub fn activate_pid(pid: i32) -> bool {
+     use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+     unsafe {
+@@ -716,18 +772,59 @@
 
  #[cfg(test)]
  mod tests {
 -    use super::{finder_folder_handoff, unix_secs_to_rfc3339};
+-
+-    #[test]
+-    fn finder_folder_handoff_is_narrowly_selected() {
+-        let folder = std::env::temp_dir().to_string_lossy().into_owned();
+-
+-        assert!(finder_folder_handoff("com.apple.finder", &[folder.clone()]));
+-        assert!(!finder_folder_handoff("com.apple.TextEdit", &[folder]));
+-        assert!(!finder_folder_handoff(
+-            "com.apple.finder",
+-            &["https://example.com".to_owned()]
+-        ));
 +    use super::{
-+        effective_creates_new_instance, finder_folder_handoff, launch_config_for,
-+        looks_like_bundle_id, unix_secs_to_rfc3339,
++        effective_creates_new_instance, launch_config_for, looks_like_bundle_id,
++        unix_secs_to_rfc3339,
 +    };
 +    use std::collections::HashMap;
 +
@@ -9643,10 +10012,7 @@ index 78981e9cc..e1c38094e 100644
 +        assert_eq!(running.arguments, args);
 +        assert!(running.creates_new_instance);
 +        assert!(running.hidden);
-+        assert_eq!(
-+            running.apple_event_bundle_id.as_deref(),
-+            Some("com.google.Chrome")
-+        );
++        assert_eq!(running.bundle_id.as_deref(), Some("com.google.Chrome"));
 +
 +        let cold = launch_config_for(&args, &env, false, false, None, false);
 +        assert_eq!(cold.arguments, args);
@@ -9664,36 +10030,216 @@ index 78981e9cc..e1c38094e 100644
 +        assert!(!looks_like_bundle_id("/Applications/Google Chrome.app"));
 +        assert!(!looks_like_bundle_id("https://example.com/app"));
 +        assert!(!looks_like_bundle_id("Google Chrome"));
-+    }
+     }
 
      #[test]
-     fn finder_folder_handoff_is_narrowly_selected() {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs b/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
-index 7893a0132..65ce34a3d 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/apps/nsworkspace.rs
-@@ -63,6 +63,9 @@ pub struct OpenConfig {
+@@ -19,7 +19,7 @@
+ //!     state-restored apps (see comments in Swift `AppLauncher.swift`).
+ //!
+ //! The Cocoa completion handler is bridged to a synchronous return value via
+-//! `tokio::sync::oneshot` + a 30s timeout. A wedged launch surfaces as an
++//! a bounded completion channel + a 5s timeout. A wedged launch surfaces as an
+ //! error instead of hanging the caller's worker thread.
+ //!
+ //! The `oapp` AppleEvent descriptor uses the
+@@ -63,16 +63,21 @@
      pub environment: std::collections::HashMap<String, String>,
      /// Force a fresh application instance even if one is already running.
      pub creates_new_instance: bool,
-+    /// Launch with the application hidden (`open -j` / `hides = true`): the
-+    /// app's windows exist but render nothing — the hidden-workspace launch.
+-    /// Attach a synthetic `aevt/oapp` AppleEvent addressed to this bundle id.
+-    /// Set this whenever the bundle id is known — see Swift `AppLauncher`
+-    /// comment for the reasoning (cold-launch window-creation reliability).
+-    pub apple_event_bundle_id: Option<String>,
++    /// Explicit application hiding (`open -j` / `hides = true`). This can
++    /// prevent window creation and is independent from nonactivating launch.
 +    pub hidden: bool,
-     /// Attach a synthetic `aevt/oapp` AppleEvent addressed to this bundle id.
-     /// Set this whenever the bundle id is known — see Swift `AppLauncher`
-     /// comment for the reasoning (cold-launch window-creation reliability).
-@@ -196,6 +199,7 @@ fn build_configuration(cfg: &OpenConfig) -> Retained<NSWorkspaceOpenConfiguratio
++    /// Application identity used to reconcile an accepted launch even when
++    /// LaunchServices does not deliver its completion callback.
++    pub bundle_id: Option<String>,
++    /// Attach a synthetic `aevt/oapp` only for a plain application launch.
++    /// URL opens deliver their own event and must not override it.
++    pub send_open_application_event: bool,
+ }
+
+ /// One-shot timeout for the LaunchServices completion handler. A wedged
+ /// `open(...)` call returns `Err(LaunchError::Timeout)` instead of hanging
+ /// the calling thread forever.
+-const COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
++const COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
+ const COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+ /// Errors returned by the NSWorkspace launch helpers.
+@@ -89,6 +94,8 @@
+     Timeout,
+     #[error("invalid url: {0}")]
+     BadUrl(String),
++    #[error("native launch was cancelled before dispatch")]
++    Cancelled,
+ }
+
+ /// Launch the application bundle at `app_url`, no URL handoff.
+@@ -99,7 +106,7 @@
+ /// ```
+ /// — the URL points to a `.app` bundle, NSWorkspace launches it,
+ /// `activates = false` keeps the prior frontmost app on top, and the
+-/// `oapp` AppleEvent attached to `cfg.appleEvent` triggers window creation
++/// `oapp` AppleEvent attached to the configuration triggers window creation
+ /// on cold launch.
+ /// `app_url` may be either:
+ ///   * a bundle id (`com.apple.Safari`) — resolved via
+@@ -114,10 +121,16 @@
+     app_url: &str,
+     cfg: &OpenConfig,
+ ) -> Result<Retained<NSRunningApplication>, LaunchError> {
++    // Reopening an existing browser can create another window or activate it
++    // even when LaunchServices itself was told not to activate. A plain launch
++    // already has its intended effect when the process is running.
++    if let Some(running) = reuse_running_application(cfg) {
++        return Ok(running);
++    }
+     let ws = unsafe { NSWorkspace::sharedWorkspace() };
+     let url = resolve_application_url(&ws, app_url)?;
+     let config = build_configuration(cfg);
+-    let reconciliation = Reconciliation::new(cfg);
++    let reconciliation = Reconciliation::new(cfg, false);
+
+     let (tx, rx) = std::sync::mpsc::sync_channel::<CompletionResult>(1);
+     // NSWorkspace may invoke its completion on another thread; retain atomic
+@@ -130,9 +143,9 @@
+     tracing::debug!(target: "platform_macos::apps::nsworkspace",
+         ?app_url, "calling openApplicationAtURL");
+
+-    unsafe {
++    dispatch_launch(crate::input::cancellation::gate(), || unsafe {
+         ws.openApplicationAtURL_configuration_completionHandler(&url, &config, Some(&block));
+-    }
++    })?;
+
+     wait_for_completion(rx, reconciliation)
+ }
+@@ -153,7 +166,7 @@
+     let ws = unsafe { NSWorkspace::sharedWorkspace() };
+     let url = resolve_application_url(&ws, app_url)?;
+     let config = build_configuration(cfg);
+-    let reconciliation = Reconciliation::new(cfg);
++    let reconciliation = Reconciliation::new(cfg, true);
+
+     let ns_urls: Vec<Retained<NSURL>> = urls
+         .iter()
+@@ -172,16 +185,25 @@
+     tracing::debug!(target: "platform_macos::apps::nsworkspace",
+         ?app_url, urls_len = urls.len(), "calling openURLs:withApplicationAtURL");
+
+-    unsafe {
++    dispatch_launch(crate::input::cancellation::gate(), || unsafe {
+         ws.openURLs_withApplicationAtURL_configuration_completionHandler(
+             &ns_array,
+             &url,
+             &config,
+             Some(&block),
+         );
+-    }
++    })?;
+
+     wait_for_completion(rx, reconciliation)
++}
++
++/// Resolution and configuration may block. Serialize only the actual OS
++/// dispatch with Stop, so a cancelled preflight cannot launch afterwards.
++fn dispatch_launch(
++    gate: &crate::input::cancellation::InputGate,
++    dispatch: impl FnOnce(),
++) -> Result<(), LaunchError> {
++    gate.post(dispatch).map_err(|_| LaunchError::Cancelled)
+ }
+
+ // ── Internal helpers ─────────────────────────────────────────────────────────
+@@ -194,8 +216,11 @@
+     let config = unsafe { NSWorkspaceOpenConfiguration::configuration() };
+     unsafe {
          config.setActivates(false);
++        config.setHidesOthers(false);
++        config.setPromptsUserIfNeeded(false);
          config.setAddsToRecentItems(false);
          config.setCreatesNewApplicationInstance(cfg.creates_new_instance);
 +        config.setHides(cfg.hidden);
 
          if !cfg.arguments.is_empty() {
              let strs: Vec<Retained<NSString>> = cfg
-@@ -324,6 +328,15 @@ impl Reconciliation {
-     }
+@@ -228,8 +253,8 @@
+             config.setEnvironment(&dict);
+         }
+
+-        if let Some(bid) = &cfg.apple_event_bundle_id {
+-            if !bid.is_empty() {
++        if let Some(bid) = &cfg.bundle_id {
++            if cfg.send_open_application_event && !bid.is_empty() {
+                 let event = apple_event::open_application_event(bid);
+                 config.setAppleEvent(Some(&event));
+             }
+@@ -305,8 +330,8 @@
  }
 
+ impl Reconciliation {
+-    fn new(cfg: &OpenConfig) -> Self {
+-        let bundle_id = cfg.apple_event_bundle_id.clone();
++    fn new(cfg: &OpenConfig, require_new_registration: bool) -> Self {
++        let bundle_id = cfg.bundle_id.clone();
+         let pids_before_request = bundle_id
+             .as_deref()
+             .map(running_pids_for_bundle)
+@@ -314,7 +339,9 @@
+         Self {
+             bundle_id,
+             pids_before_request,
+-            require_new_pid: cfg.creates_new_instance,
++            // A process that predated a URL handoff does not prove the URLs
++            // were accepted. Reconcile only a newly registered process there.
++            require_new_pid: cfg.creates_new_instance || require_new_registration,
+         }
+     }
+
+@@ -322,6 +349,47 @@
+         let bundle_id = self.bundle_id.as_deref()?;
+         running_application_for_bundle(bundle_id, &self.pids_before_request, self.require_new_pid)
+     }
++}
++
++fn can_reuse_running_application(cfg: &OpenConfig) -> bool {
++    !cfg.creates_new_instance && cfg.arguments.is_empty() && cfg.environment.is_empty()
++}
++
++/// Reuse the process without an open/reopen AppleEvent. Changing its hidden
++/// state is an explicit launch option; AXHidden never requests activation.
++fn reuse_running_application(cfg: &OpenConfig) -> Option<Retained<NSRunningApplication>> {
++    if !can_reuse_running_application(cfg) {
++        return None;
++    }
++    let bundle_id = cfg.bundle_id.as_deref()?;
++    let app = running_application_for_bundle(bundle_id, &HashSet::new(), false)?;
++    unsafe {
++        if app.isHidden() != cfg.hidden {
++            let observed = super::set_app_hidden(app.processIdentifier(), cfg.hidden);
++            if !matches!(observed, Ok(Some(hidden)) if hidden == cfg.hidden) {
++                // The process still exists even if the visibility request failed.
++                // Return its identity so the launch result reports actual hidden
++                // state and no_usable_window instead of claiming launch failure.
++                // Never retry the mutation or reopen the app as recovery.
++                tracing::warn!(
++                    target: "platform_macos::apps::nsworkspace",
++                    pid = app.processIdentifier(),
++                    requested_hidden = cfg.hidden,
++                    "running application's visibility change was not confirmed"
++                );
++            }
++        }
++    }
++    Some(app)
++}
++
 +/// Whether any live process is running under `bundle_id`.
 +///
 +/// Callers use this to decide whether `arguments` can be delivered at all:
@@ -9701,11 +10247,78 @@ index 7893a0132..65ce34a3d 100644
 +/// already-running instance (see `apps::effective_creates_new_instance`).
 +pub(crate) fn bundle_is_running(bundle_id: &str) -> bool {
 +    !running_pids_for_bundle(bundle_id).is_empty()
-+}
-+
+ }
+
  fn running_pids_for_bundle(bundle_id: &str) -> HashSet<i32> {
-     let bundle_id = NSString::from_str(bundle_id);
-     let running =
+@@ -360,7 +428,8 @@
+     current_pids
+         .iter()
+         .copied()
+-        .find(|pid| !require_new_pid || !pids_before_request.contains(pid))
++        .filter(|pid| !require_new_pid || !pids_before_request.contains(pid))
++        .min()
+ }
+
+ /// Build the `(NSRunningApplication?, NSError?) -> Void` completion block.
+@@ -402,7 +471,7 @@
+ /// LaunchServices can accept an `openApplication...` request and register an
+ /// `NSRunningApplication` without delivering the callback to a background
+ /// daemon. Treating the callback as the sole success signal turns that state
+-/// into a false 30-second timeout. Poll the authoritative running-app state
++/// into a false timeout. Poll the authoritative running-app state
+ /// while retaining the callback as the preferred source of Cocoa errors.
+ fn wait_for_completion(
+     rx: std::sync::mpsc::Receiver<CompletionResult>,
+@@ -460,10 +529,48 @@
+
+ #[cfg(test)]
+ mod tests {
+-    use super::{reconciliation_pid, wait_for_launch_signal, LaunchError};
++    use super::{
++        can_reuse_running_application, dispatch_launch, reconciliation_pid, wait_for_launch_signal, LaunchError,
++        OpenConfig,
++    };
+     use std::collections::HashSet;
+     use std::sync::mpsc;
+     use std::time::Duration;
++
++    #[test]
++    fn stop_during_resolution_prevents_launch_dispatch() {
++        let gate = crate::input::cancellation::InputGate::default();
++        let mut dispatched = false;
++        gate.cancel_and_wait(Duration::ZERO);
++        let result = dispatch_launch(&gate, || dispatched = true);
++        assert!(matches!(result, Err(LaunchError::Cancelled)));
++        assert!(!dispatched);
++    }
++
++    #[test]
++    fn only_plain_launches_reuse_an_existing_app_without_reopening() {
++        assert!(can_reuse_running_application(&OpenConfig::default()));
++        assert!(can_reuse_running_application(&OpenConfig {
++            hidden: true,
++            ..Default::default()
++        }));
++        assert!(!can_reuse_running_application(&OpenConfig {
++            creates_new_instance: true,
++            ..Default::default()
++        }));
++        assert!(!can_reuse_running_application(&OpenConfig {
++            arguments: vec!["--incognito".to_owned()],
++            ..Default::default()
++        }));
++        assert!(!can_reuse_running_application(&OpenConfig {
++            environment: [(
++                "WEBKIT_INSPECTOR_SERVER".to_owned(),
++                "127.0.0.1:9999".to_owned()
++            )]
++            .into(),
++            ..Default::default()
++        }));
++    }
+
+     #[test]
+     fn missing_callback_reconciles_registered_process() {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 index 02ba09c01..61d90c410 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
@@ -11200,9 +11813,14 @@ index 603f2ae4e..5b4afe0a0 100644
      fn firefox_classifier_uses_product_tokens() {
          assert!(is_firefox("Firefox", "org.mozilla.firefox"));
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
-index 5d74dddf5..152ba5bcb 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
+@@ -1,4 +1,4 @@
+-//! macOS agent-cursor overlay — transparent click-through NSWindow.
++//! macOS agent-cursor overlay — transparent, nonactivating click-through NSPanel.
+ //!
+ //! ## Architecture
+ //!
 @@ -32,7 +32,7 @@
  use std::collections::HashMap;
  use std::ffi::c_void;
@@ -11212,7 +11830,7 @@ index 5d74dddf5..152ba5bcb 100644
  use std::time::{Duration, Instant};
 
  use cursor_overlay::{
-@@ -242,6 +242,11 @@ pub fn send_command_default(cmd: OverlayCommand) {
+@@ -242,6 +242,11 @@
      send_command("default".to_owned(), cmd);
  }
 
@@ -11224,7 +11842,7 @@ index 5d74dddf5..152ba5bcb 100644
  /// Truthful render acknowledgement for lifecycle inspection. This never falls
  /// back to the seeded default cursor: an absent, off-screen, disabled, or
  /// idle-faded session cursor is not reported as visible.
-@@ -398,6 +403,24 @@ pub async fn animate_cursor_to(key: CursorKey, x: f64, y: f64) {
+@@ -398,6 +403,24 @@
      if key.is_empty() {
          return;
      }
@@ -11249,7 +11867,7 @@ index 5d74dddf5..152ba5bcb 100644
      // Seed a sentinel cursor on-screen so the MoveTo below glides instead of
      // being short-circuited. After this the cursor's pos.0 > -50.0, so the
      // should-animate check passes on the first action just like later ones.
-@@ -503,6 +526,7 @@ struct RenderState {
+@@ -503,6 +526,7 @@
      focus_rect: Option<[f64; 4]>,
      /// Fade progress for the focus rect: 0.0 = fully visible, 1.0 = gone.
      focus_rect_t: f64,
@@ -11257,7 +11875,7 @@ index 5d74dddf5..152ba5bcb 100644
  }
 
  impl RenderState {
-@@ -511,6 +535,7 @@ impl RenderState {
+@@ -511,6 +535,7 @@
              core: RenderStateCore::new(cfg),
              focus_rect: None,
              focus_rect_t: 1.0,
@@ -11265,7 +11883,7 @@ index 5d74dddf5..152ba5bcb 100644
          }
      }
 
-@@ -519,6 +544,11 @@ impl RenderState {
+@@ -519,6 +544,11 @@
      /// [`RenderStateCore::tick_swift_constants`].  Returns true if an
      /// arrival signal should be fired (the path just ended).
      fn tick(&mut self, dt: f64) -> bool {
@@ -11277,7 +11895,7 @@ index 5d74dddf5..152ba5bcb 100644
          let fire_arrival = self.core.tick_swift_constants(dt);
 
          // Advance focus-rect fade (fades out over ~600ms).  macOS-only —
-@@ -535,6 +565,17 @@ impl RenderState {
+@@ -535,6 +565,17 @@
      }
 
      fn apply_command(&mut self, cmd: OverlayCommand) {
@@ -11295,7 +11913,7 @@ index 5d74dddf5..152ba5bcb 100644
          // macOS uses the sentinel-snap variants of MoveTo / ClickPulse:
          //   - MoveTo only snaps `self.pos` if the cursor is still at the
          //     off-screen sentinel `(-200, -200)` (otherwise the path starts
-@@ -543,6 +584,9 @@ impl RenderState {
+@@ -543,6 +584,9 @@
          //     the sentinel (otherwise the animation already landed it there).
          match cmd {
              OverlayCommand::ShowFocusRect(rect) => {
@@ -11305,7 +11923,7 @@ index 5d74dddf5..152ba5bcb 100644
                  self.focus_rect = rect;
                  self.focus_rect_t = 0.0; // reset fade to fully visible
              }
-@@ -556,7 +600,28 @@ impl RenderState {
+@@ -556,7 +600,28 @@
      /// tick can change pixels. A brand-new sentinel cursor is deliberately
      /// quiescent, so `serve` with no agent activity can block on the command
      /// channel instead of compositing an empty fullscreen pixmap at 60fps.
@@ -11334,7 +11952,43 @@ index 5d74dddf5..152ba5bcb 100644
          self.core.path.is_some()
              || self.core.spring.is_some()
              || self.core.click_t.is_some()
-@@ -597,6 +662,7 @@ unsafe fn run_appkit(_cfg: CursorConfig, rx: std::sync::mpsc::Receiver<OverlayMs
+@@ -575,6 +640,35 @@
+
+ // ── AppKit / CGImage plumbing ─────────────────────────────────────────────
+
++/// A cursor can be drawn over a target, but must never become an input or
++/// activation destination itself. NonactivatingPanel prevents activation on
++/// ordering; the overrides also reject any accidental key/main-window request.
++fn overlay_panel_class() -> &'static objc2::runtime::AnyClass {
++    use objc2::declare::ClassBuilder;
++    use objc2::runtime::{AnyObject, Bool, Sel};
++
++    extern "C" fn cannot_become_input_window(_this: *mut AnyObject, _cmd: Sel) -> Bool {
++        Bool::NO
++    }
++
++    static CLASS: OnceLock<&'static objc2::runtime::AnyClass> = OnceLock::new();
++    CLASS.get_or_init(|| {
++        let mut builder = ClassBuilder::new("SynaraCuaCursorPanel", objc2::class!(NSPanel))
++            .expect("SynaraCuaCursorPanel already registered");
++        unsafe {
++            builder.add_method(
++                objc2::sel!(canBecomeKeyWindow),
++                cannot_become_input_window as extern "C" fn(_, _) -> Bool,
++            );
++            builder.add_method(
++                objc2::sel!(canBecomeMainWindow),
++                cannot_become_input_window as extern "C" fn(_, _) -> Bool,
++            );
++        }
++        builder.register()
++    })
++}
++
+ unsafe fn run_appkit(_cfg: CursorConfig, rx: std::sync::mpsc::Receiver<OverlayMsg>) {
+     use objc2::runtime::AnyObject;
+     use objc2::{class, msg_send};
+@@ -597,6 +691,7 @@
      if main_screen.is_null() {
          // Headless environment (CI without display) — skip overlay entirely.
          // The MCP server continues on the background thread.
@@ -11342,7 +11996,26 @@ index 5d74dddf5..152ba5bcb 100644
          return;
      }
      let screen_frame: NSRect = msg_send![main_screen, frame];
-@@ -631,6 +697,7 @@ unsafe fn run_appkit(_cfg: CursorConfig, rx: std::sync::mpsc::Receiver<OverlayMs
+@@ -617,20 +712,22 @@
+         }
+     }
+
+-    // ---- NSWindow: single alloc + initWithContentRect:... ----
++    // ---- Nonactivating NSPanel: cursor ordering must never activate it ----
+     let win: *mut AnyObject = {
+-        let allocated: *mut AnyObject = msg_send![class!(NSWindow), alloc];
+-        // NSWindowStyleMaskBorderless = 0
++        let allocated: *mut AnyObject = msg_send![overlay_panel_class(), alloc];
++        // NSWindowStyleMaskNonactivatingPanel = 1 << 7; borderless = 0.
++        // The mask is defined only for NSPanel, not an ordinary NSWindow.
+         // NSBackingStoreBuffered = 2
+         let w: *mut AnyObject = msg_send![allocated,
+             initWithContentRect: screen_frame
+-            styleMask: 0u64
++            styleMask: (1u64 << 7)
+             backing: 2u64
+             defer: false
+         ];
          w
      };
      if win.is_null() {
@@ -11350,7 +12023,16 @@ index 5d74dddf5..152ba5bcb 100644
          return;
      }
 
-@@ -707,11 +774,13 @@ fn render_loop(
+@@ -639,6 +736,8 @@
+     let _: () = msg_send![win, setBackgroundColor: clear];
+     let _: () = msg_send![win, setHasShadow: false];
+     let _: () = msg_send![win, setIgnoresMouseEvents: true];
++    let _: () = msg_send![win, setBecomesKeyOnlyIfNeeded: true];
++    let _: () = msg_send![win, setFloatingPanel: false];
+     // NSWindowSharingReadOnly = 1. AppKit documents this as the default, but
+     // set it explicitly for the transparent agent overlay so ScreenCaptureKit
+     // includes browser-session cursors in Cua Driver recordings. Tahoe can
+@@ -707,11 +806,13 @@
      _win_w: f64,
      _win_h: f64,
  ) {
@@ -11364,7 +12046,7 @@ index 5d74dddf5..152ba5bcb 100644
      // Repin bookkeeping: track last pinned wid and a frame counter for
      // the periodic defensive-repin (every ~60 active frames ≈ 1 s).
      let mut last_pinned: Option<u64> = None;
-@@ -721,20 +790,31 @@ fn render_loop(
+@@ -721,20 +822,31 @@
          // When no cursor animation/fade is active, block until the MCP side
          // sends a command. This is the idle-server fast path: no fullscreen
          // pixmap allocation, no CGImage conversion, no 60fps wakeup.
@@ -11410,7 +12092,7 @@ index 5d74dddf5..152ba5bcb 100644
 
          let woke_from_idle = first_msg.is_some();
          let now = Instant::now();
-@@ -743,6 +823,8 @@ fn render_loop(
+@@ -743,6 +855,8 @@
              // Do not charge that time to the first animation tick after a command;
              // let the wake-up frame render the newly-applied state at t=0.
              0.0
@@ -11419,7 +12101,7 @@ index 5d74dddf5..152ba5bcb 100644
          } else {
              now.duration_since(last_tick).as_secs_f64().min(0.05)
          };
-@@ -762,6 +844,7 @@ fn render_loop(
+@@ -762,6 +876,7 @@
              hover_changed,
              next_frame_tick_needed,
              next_hover_poll_needed,
@@ -11427,7 +12109,7 @@ index 5d74dddf5..152ba5bcb 100644
          ) = {
              let mut guard = RENDER.lock().unwrap();
              match guard.as_mut() {
-@@ -787,8 +870,17 @@ fn render_loop(
+@@ -787,8 +902,17 @@
                      // latter lets a just-created path/click/focus rect start on
                      // this frame without waiting for the next 16ms tick.
                      let mut arrived: Vec<CursorKey> = Vec::new();
@@ -11446,7 +12128,7 @@ index 5d74dddf5..152ba5bcb 100644
                              if rs.tick(dt) {
                                  arrived.push(k.clone());
                              }
-@@ -835,6 +927,10 @@ fn render_loop(
+@@ -835,6 +959,10 @@
                          hover_changed,
                          next_frame_tick_needed,
                          next_hover_poll_needed,
@@ -11457,7 +12139,7 @@ index 5d74dddf5..152ba5bcb 100644
                      )
                  }
                  None => break,
-@@ -872,7 +968,12 @@ fn render_loop(
+@@ -872,7 +1000,12 @@
          // Render only when a command arrived or the previous/next tick can
          // change pixels. A final frame is emitted as animations/fades finish so
          // the layer is left in the completed/cleared state before blocking.
@@ -11471,7 +12153,7 @@ index 5d74dddf5..152ba5bcb 100644
              let pixmap = {
                  let guard = RENDER.lock().unwrap();
                  if let Some(map) = guard.as_ref() {
-@@ -908,11 +1009,12 @@ fn render_loop(
+@@ -908,11 +1041,12 @@
              };
 
              // Convert to CGImage and update layer on the main queue.
@@ -11485,7 +12167,7 @@ index 5d74dddf5..152ba5bcb 100644
          if frame_tick_needed {
              // Sleep remainder of frame budget.
              let elapsed = Instant::now().duration_since(last_tick);
-@@ -943,17 +1045,45 @@ fn cursor_is_externally_visible(state: &RenderState) -> bool {
+@@ -943,17 +1077,45 @@
          && state.core.idle_alpha >= 0.004
  }
 
@@ -11540,7 +12222,7 @@ index 5d74dddf5..152ba5bcb 100644
 
      // GCD symbols from libdispatch (part of the macOS system library stubs).
      // `dispatch_get_main_queue()` is an inline C function; the underlying
-@@ -972,7 +1102,14 @@ fn dispatch_set_layer_contents(layer_ptr: usize, pixmap: tiny_skia::Pixmap) {
+@@ -972,7 +1134,14 @@
      }
 
      unsafe extern "C" fn set_contents_cb(ctx: *mut c_void) {
@@ -11556,7 +12238,7 @@ index 5d74dddf5..152ba5bcb 100644
          let layer = layer_ptr as *mut objc2::runtime::AnyObject;
          // setContents: expects an `id` (type '@'), not a raw void pointer.
          // CGImageRef is toll-free bridged to NSObject, so we cast it to *mut AnyObject.
-@@ -1137,14 +1274,13 @@ impl ZOrderEnforcer for MacZOrderEnforcer {
+@@ -1137,14 +1306,13 @@
 
  /// Create a `CGImage` from a `tiny_skia::Pixmap` (premultiplied RGBA).
  /// Returns a `+1` retained pointer that the caller must release.
@@ -11572,7 +12254,7 @@ index 5d74dddf5..152ba5bcb 100644
      let bytes_per_row = w * 4;
 
      // tiny-skia produces premultiplied RGBA with bytes in memory order [R, G, B, A].
-@@ -1190,21 +1326,26 @@ fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
+@@ -1190,21 +1358,26 @@
              ) -> *mut c_void;
          }
 
@@ -11599,8 +12281,9 @@ index 5d74dddf5..152ba5bcb 100644
              ptr as *const c_void,
              len,
 -            Some(release_pixel_data), // frees copied_box when provider is released
+-        );
 +            Some(release_pixel_data),
-         );
++        );
 +        if provider.is_null() {
 +            drop(Box::from_raw(pixels_box));
 +            CGColorSpaceRelease(cs);
@@ -11609,7 +12292,7 @@ index 5d74dddf5..152ba5bcb 100644
          let img = CGImageCreate(
              w,
              h,
-@@ -1221,7 +1362,7 @@ fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
+@@ -1221,7 +1394,7 @@
 
          CGColorSpaceRelease(cs);
          CGDataProviderRelease(provider);
@@ -11618,7 +12301,7 @@ index 5d74dddf5..152ba5bcb 100644
 
          if img.is_null() {
              None
-@@ -1241,6 +1382,33 @@ fn pixmap_to_cgimage(pixmap: &tiny_skia::Pixmap) -> Option<usize> {
+@@ -1241,6 +1414,33 @@
  #[cfg(test)]
  mod tests {
      use super::*;
@@ -11652,11 +12335,10 @@ index 5d74dddf5..152ba5bcb 100644
      use std::collections::HashMap;
 
      #[test]
-@@ -1507,6 +1675,45 @@ mod tests {
-         );
+@@ -1508,6 +1708,45 @@
      }
 
-+    #[test]
+     #[test]
 +    fn persistent_compact_cursor_parks_without_timers_or_repaints() {
 +        let mut map = empty_map();
 +        map.template.compact = true;
@@ -11695,9 +12377,10 @@ index 5d74dddf5..152ba5bcb 100644
 +        assert!(!map.cursors.contains_key("removed"));
 +    }
 +
-     #[test]
++    #[test]
      fn sentinel_default_cursor_does_not_require_frame_ticks() {
          // Regression for idle CPU: a freshly-started serve daemon seeds only the
+         // off-screen default cursor. With no commands in flight, the render loop
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/state.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/state.rs
 index 5a7d655b9..77a6f6764 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/state.rs
@@ -12893,32 +13576,19 @@ new file mode 100644
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
-index 2b9baf8e5..65eef4224 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
-@@ -30,267 +30,227 @@ pub fn is_screen_sharing_pid(pid: i32) -> bool {
+@@ -30,267 +30,379 @@
          .is_some_and(is_screen_sharing_bundle_id)
  }
 
 -/// Press and release a single key, delivered to `pid` without stealing focus.
--pub fn press_key(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
--    // Handle "+" / "plus" → Shift+= (US keyboard layout).
--    if key == "+" || key.to_lowercase() == "plus" {
--        let flags = modifier_flags(&["shift"]);
--        let eq_code = key_name_to_code("=")?;
--        post_key(pid, eq_code, true, modifier_flags(modifiers) | flags)?;
--        std::thread::sleep(std::time::Duration::from_millis(8));
--        post_key(pid, eq_code, false, modifier_flags(modifiers) | flags)?;
--        return Ok(());
--    }
 +#[derive(Clone, Copy)]
 +enum KeyboardRoute {
 +    Pid { pid: i32, authenticated: bool },
 +    Hid,
 +}
-
--    let key_code = key_name_to_code(key)?;
--    let flags = modifier_flags(modifiers);
++
 +impl KeyboardRoute {
 +    // Only used inside an admitted down or its already-owned release.
 +    fn post(self, event: &CGEvent) {
@@ -12939,21 +13609,14 @@ index 2b9baf8e5..65eef4224 100644
 +        }
 +    }
 +}
-
--    post_key(pid, key_code, true, flags)?;
--    std::thread::sleep(std::time::Duration::from_millis(8));
--    post_key(pid, key_code, false, flags)?;
--    Ok(())
++
 +struct PreparedKey {
 +    down: CGEvent,
 +    up: CGEvent,
 +    route: KeyboardRoute,
- }
-
--/// Type a string character-by-character to `pid`.
--pub fn type_text(pid: i32, text: &str) -> anyhow::Result<()> {
--    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
--        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
++    required_focus_window: Option<(u32, Option<usize>)>,
++}
++
 +impl PreparedKey {
 +    fn new(
 +        source: &CGEventSource,
@@ -12968,67 +13631,40 @@ index 2b9baf8e5..65eef4224 100644
 +            .map_err(|_| anyhow::anyhow!("CGEvent keyboard up creation failed"))?;
 +        down.set_flags(down_flags);
 +        up.set_flags(up_flags);
-+        Ok(Self { down, up, route })
++        Ok(Self {
++            down,
++            up,
++            route,
++            required_focus_window: None,
++        })
 +    }
-
--    for ch in text.chars() {
--        let ch_str = ch.to_string();
--        let down = CGEvent::new_keyboard_event(source.clone(), 0, true)
--            .map_err(|_| anyhow::anyhow!("CGEvent keyboard down failed"))?;
--        down.set_string(&ch_str);
--        // Always zero flags: Chrome inspects the flags field to infer modifier
--        // state; without this, uppercase chars (e.g. 'E') are seen as Shift+e
--        // and the modifier leaks into the next character (Swift fix: event.flags = []).
--        down.set_flags(CGEventFlags::CGEventFlagNull);
--        post_keyboard_event(pid, &down);
--        std::thread::sleep(std::time::Duration::from_millis(8));
--
--        let up = CGEvent::new_keyboard_event(source.clone(), 0, false)
--            .map_err(|_| anyhow::anyhow!("CGEvent keyboard up failed"))?;
--        up.set_string(&ch_str);
--        up.set_flags(CGEventFlags::CGEventFlagNull);
--        post_keyboard_event(pid, &up);
--        std::thread::sleep(std::time::Duration::from_millis(8));
++
 +    fn bare(code: u16) -> anyhow::Result<Self> {
 +        Ok(Self {
 +            down: create_bare_keyboard_event(code, true)?,
 +            up: create_bare_keyboard_event(code, false)?,
 +            route: KeyboardRoute::Hid,
++            required_focus_window: None,
 +        })
-     }
--    Ok(())
--}
-
--/// Type a string character-by-character with an extra `inter_char_delay_ms`
--/// pause after each character (on top of the internal 8 ms down/up gap).
--pub fn type_text_with_delay(pid: i32, text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
--    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
--        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
++    }
++
 +    fn hold(self) -> anyhow::Result<super::cancellation::HeldInput<'static, impl FnOnce()>> {
-+        let Self { down, up, route } = self;
++        let Self {
++            down,
++            up,
++            route,
++            required_focus_window,
++        } = self;
++        if let (Some((window_id, element)), KeyboardRoute::Pid { pid, .. }) =
++            (required_focus_window, route)
++        {
++            if !crate::ax::exact_target::keyboard_focus_matches_target(pid, window_id, element) {
++                anyhow::bail!("same_pid_keyboard_ambiguity: application keyboard focus changed before key dispatch");
++            }
++        }
 +        super::cancellation::gate().press(|| route.post(&down), move || route.post(&up))
 +    }
-
--    for ch in text.chars() {
--        let ch_str = ch.to_string();
--        let down = CGEvent::new_keyboard_event(source.clone(), 0, true)
--            .map_err(|_| anyhow::anyhow!("CGEvent keyboard down failed"))?;
--        down.set_string(&ch_str);
--        down.set_flags(CGEventFlags::CGEventFlagNull);
--        post_keyboard_event(pid, &down);
--        std::thread::sleep(std::time::Duration::from_millis(8));
--
--        let up = CGEvent::new_keyboard_event(source.clone(), 0, false)
--            .map_err(|_| anyhow::anyhow!("CGEvent keyboard up failed"))?;
--        up.set_string(&ch_str);
--        up.set_flags(CGEventFlags::CGEventFlagNull);
--        post_keyboard_event(pid, &up);
--
--        // Additional inter-character delay on top of the 8 ms internal gap.
--        if inter_char_delay_ms > 0 {
--            std::thread::sleep(std::time::Duration::from_millis(inter_char_delay_ms));
--        } else {
--            std::thread::sleep(std::time::Duration::from_millis(8));
++
 +    fn pulse(self) -> anyhow::Result<()> {
 +        let held = self.hold()?;
 +        key_pause(8)?;
@@ -13044,10 +13680,9 @@ index 2b9baf8e5..65eef4224 100644
 +        while let Some(key) = self.0.pop() {
 +            drop(key);
 +            key_pause(8)?;
-         }
++        }
 +        Ok(())
-     }
--    Ok(())
++    }
 +}
 +impl<T> Drop for HeldKeys<T> {
 +    fn drop(&mut self) {
@@ -13091,11 +13726,221 @@ index 2b9baf8e5..65eef4224 100644
 +}
 +
 +/// Pair each admitted key down with an already-prepared release.
-+pub fn press_key(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
-+    press_key_routed(pid, key, modifiers, true)
- }
-
+ pub fn press_key(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
+-    // Handle "+" / "plus" → Shift+= (US keyboard layout).
+-    if key == "+" || key.to_lowercase() == "plus" {
+-        let flags = modifier_flags(&["shift"]);
+-        let eq_code = key_name_to_code("=")?;
+-        post_key(pid, eq_code, true, modifier_flags(modifiers) | flags)?;
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-        post_key(pid, eq_code, false, modifier_flags(modifiers) | flags)?;
+-        return Ok(());
+-    }
+-
+-    let key_code = key_name_to_code(key)?;
+-    let flags = modifier_flags(modifiers);
+-
+-    post_key(pid, key_code, true, flags)?;
+-    std::thread::sleep(std::time::Duration::from_millis(8));
+-    post_key(pid, key_code, false, flags)?;
+-    Ok(())
+-}
+-
+-/// Type a string character-by-character to `pid`.
+-pub fn type_text(pid: i32, text: &str) -> anyhow::Result<()> {
+-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+-        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+-
+-    for ch in text.chars() {
+-        let ch_str = ch.to_string();
+-        let down = CGEvent::new_keyboard_event(source.clone(), 0, true)
+-            .map_err(|_| anyhow::anyhow!("CGEvent keyboard down failed"))?;
+-        down.set_string(&ch_str);
+-        // Always zero flags: Chrome inspects the flags field to infer modifier
+-        // state; without this, uppercase chars (e.g. 'E') are seen as Shift+e
+-        // and the modifier leaks into the next character (Swift fix: event.flags = []).
+-        down.set_flags(CGEventFlags::CGEventFlagNull);
+-        post_keyboard_event(pid, &down);
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-
+-        let up = CGEvent::new_keyboard_event(source.clone(), 0, false)
+-            .map_err(|_| anyhow::anyhow!("CGEvent keyboard up failed"))?;
+-        up.set_string(&ch_str);
+-        up.set_flags(CGEventFlags::CGEventFlagNull);
+-        post_keyboard_event(pid, &up);
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-    }
+-    Ok(())
+-}
+-
+-/// Type a string character-by-character with an extra `inter_char_delay_ms`
+-/// pause after each character (on top of the internal 8 ms down/up gap).
+-pub fn type_text_with_delay(pid: i32, text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
+-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+-        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+-
+-    for ch in text.chars() {
+-        let ch_str = ch.to_string();
+-        let down = CGEvent::new_keyboard_event(source.clone(), 0, true)
+-            .map_err(|_| anyhow::anyhow!("CGEvent keyboard down failed"))?;
+-        down.set_string(&ch_str);
+-        down.set_flags(CGEventFlags::CGEventFlagNull);
+-        post_keyboard_event(pid, &down);
+-        std::thread::sleep(std::time::Duration::from_millis(8));
+-
+-        let up = CGEvent::new_keyboard_event(source.clone(), 0, false)
+-            .map_err(|_| anyhow::anyhow!("CGEvent keyboard up failed"))?;
+-        up.set_string(&ch_str);
+-        up.set_flags(CGEventFlags::CGEventFlagNull);
+-        post_keyboard_event(pid, &up);
+-
+-        // Additional inter-character delay on top of the 8 ms internal gap.
+-        if inter_char_delay_ms > 0 {
+-            std::thread::sleep(std::time::Duration::from_millis(inter_char_delay_ms));
+-        } else {
+-            std::thread::sleep(std::time::Duration::from_millis(8));
+-        }
+-    }
+-    Ok(())
+-}
+-
 -/// Send a key combination (hotkey) to `pid`.
++    press_key_routed(pid, key, modifiers, true)
++}
++
++/// Dispatch only while the application still names this exact window as its
++/// keyboard destination. Matching releases remain unconditional if focus moves.
++pub fn press_key_in_window(
++    pid: i32,
++    window_id: u32,
++    element: Option<usize>,
++    key: &str,
++    modifiers: &[&str],
++) -> anyhow::Result<()> {
++    let (code, flags) = if key == "+" || key.eq_ignore_ascii_case("plus") {
++        (
++            key_name_to_code("=")?,
++            modifier_flags(modifiers) | modifier_flags(&["shift"]),
++        )
++    } else {
++        (key_name_to_code(key)?, modifier_flags(modifiers))
++    };
++    if uses_ax_return(code, modifiers) {
++        return press_ax_return_in_window(pid, window_id, element);
++    }
++    let mut pair = PreparedKey::new(
++        &source()?,
++        code,
++        flags,
++        flags,
++        KeyboardRoute::Pid {
++            pid,
++            authenticated: true,
++        },
++    )?;
++    pair.required_focus_window = Some((window_id, element));
++    pair.pulse()
++}
++
++fn uses_ax_return(key_code: u16, modifiers: &[&str]) -> bool {
++    key_code == 36 && modifiers.is_empty()
++}
++
++fn press_ax_return_in_window(
++    pid: i32,
++    window_id: u32,
++    element: Option<usize>,
++) -> anyhow::Result<()> {
++    use crate::ax::bindings::{AXUIElementCreateApplication, AXUIElementSetMessagingTimeout};
++    use core_foundation::base::{CFRelease, CFTypeRef};
++
++    let application = unsafe {
++        let raw = AXUIElementCreateApplication(pid);
++        if raw.is_null() {
++            anyhow::bail!("Could not create AX keyboard target");
++        }
++        AXUIElementSetMessagingTimeout(raw, 0.15);
++        let retained = crate::ax::cache::RetainedElement::retain(raw as usize);
++        CFRelease(raw as CFTypeRef);
++        retained
++    };
++    if !crate::ax::exact_target::keyboard_focus_matches_target(pid, window_id, element) {
++        anyhow::bail!(
++            "same_pid_keyboard_ambiguity: application keyboard focus changed before key dispatch"
++        );
++    }
++    // The documented application-scoped AX route reaches inactive Chromium
++    // without activation. Select it before dispatch; an uncertain AX result
++    // must never be replayed through a CGEvent queue.
++    pulse_ax_return_with(
++        super::cancellation::gate(),
++        |down| unsafe {
++            AXUIElementPostKeyboardEvent(
++                application.as_ptr() as crate::ax::bindings::AXUIElementRef,
++                13,
++                36,
++                u8::from(down),
++            )
++        },
++        || key_pause(8),
++    )
++}
++
++fn pulse_ax_return_with(
++    gate: &super::cancellation::InputGate,
++    post: impl Fn(bool) -> i32,
++    pause: impl FnOnce() -> anyhow::Result<()>,
++) -> anyhow::Result<()> {
++    let down_error = std::cell::Cell::new(0);
++    // Declared first so an unwind drops HeldInput, unlocks its mutex, and only
++    // then records a release failure while the action's outer lease is alive.
++    let release = AxReturnRelease {
++        gate,
++        error: std::cell::Cell::new(0),
++    };
++    let held = gate.press(
++        || down_error.set(post(true)),
++        || {
++            release.error.set(-25204);
++            release.error.set(post(false));
++        },
++    )?;
++    let paused = if down_error.get() == 0 {
++        pause()
++    } else {
++        Ok(())
++    };
++    drop(held);
++    // HeldInput invokes release under its mutex. Mark uncertainty only after
++    // drop has unlocked it, while this action's outer lease still exists.
++    if release.error.get() != 0 {
++        anyhow::bail!(
++            "native_keyboard_release_unconfirmed: AX Return key-up failed with {}; do not replay",
++            release.error.get()
++        );
++    }
++    if down_error.get() != 0 {
++        anyhow::bail!(
++            "AX Return key-down failed with {}; effect unknown, do not replay",
++            down_error.get()
++        );
++    }
++    paused
++}
++
++struct AxReturnRelease<'a> {
++    gate: &'a super::cancellation::InputGate,
++    error: std::cell::Cell<i32>,
++}
++
++impl Drop for AxReturnRelease<'_> {
++    fn drop(&mut self) {
++        if self.error.get() != 0 {
++            self.gate.mark_unconfirmed_release();
++        }
++    }
++}
++
  pub fn hotkey(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
      press_key(pid, key, modifiers)
  }
@@ -13112,22 +13957,44 @@ index 2b9baf8e5..65eef4224 100644
 -    post_key_no_auth(pid, key_code, true, flags)?;
 -    std::thread::sleep(std::time::Duration::from_millis(8));
 -    post_key_no_auth(pid, key_code, false, flags)?;
--    Ok(())
 +    press_key_routed(pid, key, modifiers, false)
++}
++
++pub fn press_key_no_auth(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
++    press_key_routed(pid, key, modifiers, false)
++}
++
++fn type_unicode(text: &str, inter_char_delay_ms: u64, route: KeyboardRoute) -> anyhow::Result<()> {
++    let source = source()?;
++    for ch in text.chars() {
++        super::cancellation::gate().ensure_active()?;
++        let pair = PreparedKey::new(
++            &source,
++            0,
++            CGEventFlags::CGEventFlagNull,
++            CGEventFlags::CGEventFlagNull,
++            route,
++        )?;
++        let value = ch.to_string();
++        pair.down.set_string(&value);
++        pair.up.set_string(&value);
++        pair.pulse()?;
++        key_pause(inter_char_delay_ms)?;
++    }
+     Ok(())
  }
 
 -/// Press and release a single key to `pid` WITHOUT the auth-message envelope.
 -/// Works for single keys as well as combinations (same as hotkey_no_auth for single key).
- pub fn press_key_no_auth(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
+-pub fn press_key_no_auth(pid: i32, key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
 -    let key_code = key_name_to_code(key)?;
 -    let flags = modifier_flags(modifiers);
 -    post_key_no_auth(pid, key_code, true, flags)?;
 -    std::thread::sleep(std::time::Duration::from_millis(8));
 -    post_key_no_auth(pid, key_code, false, flags)?;
 -    Ok(())
-+    press_key_routed(pid, key, modifiers, false)
- }
-
+-}
+-
 -/// Press and release one key on the global HID queue.
 -///
 -/// This is reserved for an explicitly approved, bounded foreground assist.
@@ -13147,24 +14014,49 @@ index 2b9baf8e5..65eef4224 100644
 -    // macOS. Model a physical chord instead: modifier downs in caller order,
 -    // base down/up, then modifier ups in reverse order. This also matches the
 -    // Windows SendInput and Linux XTest implementations.
--    for modifier in modifiers {
++pub fn type_text(pid: i32, text: &str) -> anyhow::Result<()> {
++    type_text_with_delay(pid, text, 0)
++}
++
++pub fn type_text_with_delay(pid: i32, text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
++    type_unicode(
++        text,
++        if inter_char_delay_ms == 0 {
++            8
++        } else {
++            inter_char_delay_ms
++        },
++        KeyboardRoute::Pid {
++            pid,
++            authenticated: true,
++        },
++    )
++}
++
++fn with_modifier_keys<T>(
++    modifiers: &[&str],
++    route: KeyboardRoute,
++    gesture: impl FnOnce(CGEventFlags) -> anyhow::Result<T>,
++) -> anyhow::Result<T> {
++    let source = source()?;
++    let mut flags = CGEventFlags::CGEventFlagNull;
++    let mut codes = Vec::new();
++    let mut held = HeldKeys(Vec::new());
+     for modifier in modifiers {
 -        let Some((modifier_code, modifier_flag)) = modifier_key_code_and_flag(modifier) else {
--            continue;
--        };
++        let Some((code, flag)) = modifier_key_code_and_flag(modifier) else {
+             continue;
+         };
 -        if pressed_modifiers
 -            .iter()
 -            .any(|(pressed_code, _)| *pressed_code == modifier_code)
 -        {
--            continue;
--        }
++        if codes.contains(&code) {
+             continue;
+         }
 -        active_flags |= modifier_flag;
 -        if let Err(error) = post_global_key(
-+fn type_unicode(text: &str, inter_char_delay_ms: u64, route: KeyboardRoute) -> anyhow::Result<()> {
-+    let source = source()?;
-+    for ch in text.chars() {
-+        super::cancellation::gate().ensure_active()?;
-+        let pair = PreparedKey::new(
-             &source,
+-            &source,
 -            modifier_code,
 -            true,
 -            active_flags,
@@ -13180,20 +14072,8 @@ index 2b9baf8e5..65eef4224 100644
 -        }
 -        pressed_modifiers.push((modifier_code, modifier_flag));
 -        std::thread::sleep(std::time::Duration::from_millis(8));
-+            0,
-+            CGEventFlags::CGEventFlagNull,
-+            CGEventFlags::CGEventFlagNull,
-+            route,
-+        )?;
-+        let value = ch.to_string();
-+        pair.down.set_string(&value);
-+        pair.up.set_string(&value);
-+        pair.pulse()?;
-+        key_pause(inter_char_delay_ms)?;
-     }
-+    Ok(())
-+}
-
+-    }
+-
 -    let result = (|| {
 -        post_global_key(
 -            &source,
@@ -13218,9 +14098,18 @@ index 2b9baf8e5..65eef4224 100644
 -        active_flags,
 -        CGEventTapLocation::HID,
 -    );
--    result
-+pub fn type_text(pid: i32, text: &str) -> anyhow::Result<()> {
-+    type_text_with_delay(pid, text, 0)
++        let previous = flags;
++        flags |= flag;
++        held.0
++            .push(PreparedKey::new(&source, code, flags, previous, route)?.hold()?);
++        codes.push(code);
++        key_pause(8)?;
++    }
++    // A modifier-free gesture must still obey cancellation admission.
++    super::cancellation::gate().ensure_active()?;
++    let result = gesture(flags);
++    held.release()?;
+     result
  }
 
 -/// Hold physical modifier keys on the global HID queue around one pointer
@@ -13229,25 +14118,15 @@ index 2b9baf8e5..65eef4224 100644
 -/// This is only safe inside an exact-window foreground activation guard. The
 -/// caller receives the live modifier flags so every mouse event in the gesture
 -/// carries the same state as the physical key transitions.
--pub(super) fn with_global_modifier_keys<T>(
-+pub fn type_text_with_delay(pid: i32, text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
-+    type_unicode(
-+        text,
-+        if inter_char_delay_ms == 0 {
-+            8
-+        } else {
-+            inter_char_delay_ms
-+        },
-+        KeyboardRoute::Pid {
-+            pid,
-+            authenticated: true,
-+        },
-+    )
++pub fn press_key_global(key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
++    let code = key_name_to_code(key)?;
++    with_global_modifier_keys(modifiers, |flags| {
++        PreparedKey::new(&source()?, code, flags, flags, KeyboardRoute::Hid)?.pulse()
++    })
 +}
 +
-+fn with_modifier_keys<T>(
+ pub(super) fn with_global_modifier_keys<T>(
      modifiers: &[&str],
-+    route: KeyboardRoute,
      gesture: impl FnOnce(CGEventFlags) -> anyhow::Result<T>,
  ) -> anyhow::Result<T> {
 -    use core_graphics::event::CGEventTapLocation;
@@ -13257,22 +14136,16 @@ index 2b9baf8e5..65eef4224 100644
 -    let mut active_flags = CGEventFlags::CGEventFlagNull;
 -    let mut pressed = Vec::new();
 -
-+    let source = source()?;
-+    let mut flags = CGEventFlags::CGEventFlagNull;
-+    let mut codes = Vec::new();
-+    let mut held = HeldKeys(Vec::new());
-     for modifier in modifiers {
+-    for modifier in modifiers {
 -        let Some((key_code, flag)) = modifier_key_code_and_flag(modifier) else {
-+        let Some((code, flag)) = modifier_key_code_and_flag(modifier) else {
-             continue;
-         };
+-            continue;
+-        };
 -        if pressed
 -            .iter()
 -            .any(|(pressed_code, _)| *pressed_code == key_code)
 -        {
-+        if codes.contains(&code) {
-             continue;
-         }
+-            continue;
+-        }
 -        active_flags |= flag;
 -        if let Err(error) = post_global_key(
 -            &source,
@@ -13286,23 +14159,13 @@ index 2b9baf8e5..65eef4224 100644
 -        }
 -        pressed.push((key_code, flag));
 -        std::thread::sleep(std::time::Duration::from_millis(8));
-+        let previous = flags;
-+        flags |= flag;
-+        held.0
-+            .push(PreparedKey::new(&source, code, flags, previous, route)?.hold()?);
-+        codes.push(code);
-+        key_pause(8)?;
-     }
+-    }
 -
 -    let result = gesture(active_flags);
 -    release_global_modifiers(&source, &pressed, active_flags, CGEventTapLocation::HID);
-+    // A modifier-free gesture must still obey cancellation admission.
-+    super::cancellation::gate().ensure_active()?;
-+    let result = gesture(flags);
-+    held.release()?;
-     result
- }
-
+-    result
+-}
+-
 -fn post_global_key(
 -    source: &CGEventSource,
 -    key_code: u16,
@@ -13315,13 +14178,8 @@ index 2b9baf8e5..65eef4224 100644
 -    event.set_flags(flags);
 -    event.post(tap);
 -    Ok(())
-+pub fn press_key_global(key: &str, modifiers: &[&str]) -> anyhow::Result<()> {
-+    let code = key_name_to_code(key)?;
-+    with_global_modifier_keys(modifiers, |flags| {
-+        PreparedKey::new(&source()?, code, flags, flags, KeyboardRoute::Hid)?.pulse()
-+    })
- }
-
+-}
+-
 -fn release_global_modifiers(
 -    source: &CGEventSource,
 -    pressed: &[(u16, CGEventFlags)],
@@ -13336,15 +14194,11 @@ index 2b9baf8e5..65eef4224 100644
 -        }
 -        std::thread::sleep(std::time::Duration::from_millis(8));
 -    }
-+pub(super) fn with_global_modifier_keys<T>(
-+    modifiers: &[&str],
-+    gesture: impl FnOnce(CGEventFlags) -> anyhow::Result<T>,
-+) -> anyhow::Result<T> {
 +    with_modifier_keys(modifiers, KeyboardRoute::Hid, gesture)
  }
 
  fn modifier_key_code_and_flag(modifier: &str) -> Option<(u16, CGEventFlags)> {
-@@ -312,136 +272,76 @@ fn modifier_key_code_and_flag(modifier: &str) -> Option<(u16, CGEventFlags)> {
+@@ -312,136 +424,76 @@
  /// the flagged mouse events with real modifier down/up transitions gives the
  /// target the same ordered state it receives for a keyboard chord without
  /// putting those transitions on the global HID queue.
@@ -13390,6 +14244,11 @@ index 2b9baf8e5..65eef4224 100644
 -        let _ = post_key(pid, key_code, false, active_flags);
 -        std::thread::sleep(std::time::Duration::from_millis(8));
 -    }
+-}
+-
+-/// Type Unicode text into the frontmost application through the global HID
+-/// queue. This is the desktop-scope counterpart to PID-routed `type_text` and
+-/// mirrors computer-server's frontmost pynput typing behavior.
 +    with_modifier_keys(
 +        modifiers,
 +        KeyboardRoute::Pid {
@@ -13398,16 +14257,11 @@ index 2b9baf8e5..65eef4224 100644
 +        },
 +        |_| gesture(),
 +    )
- }
-
--/// Type Unicode text into the frontmost application through the global HID
--/// queue. This is the desktop-scope counterpart to PID-routed `type_text` and
--/// mirrors computer-server's frontmost pynput typing behavior.
++}
++
  pub fn type_text_global(text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
 -    use core_graphics::event::CGEventTapLocation;
-+    type_unicode(text, inter_char_delay_ms.max(8), KeyboardRoute::Hid)
-+}
-
+-
 -    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
 -        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
 -    for ch in text.chars() {
@@ -13424,6 +14278,21 @@ index 2b9baf8e5..65eef4224 100644
 -        up.set_flags(CGEventFlags::CGEventFlagNull);
 -        up.post(CGEventTapLocation::HID);
 -        std::thread::sleep(std::time::Duration::from_millis(inter_char_delay_ms.max(8)));
+-    }
+-    Ok(())
+-}
+-
+-/// Type ASCII text through the global HID queue as physical US-keyboard
+-/// transitions.
+-///
+-/// This is reserved for a caller that has guarded the exact target with
+-/// `with_foreground_hid_activation`. Remote-input clients such as Screen
+-/// Sharing forward virtual keycodes and modifier transitions, not the Unicode
+-/// payload carried by keycode 0, so the ordinary text synthesis path cannot be
+-/// used for them.
++    type_unicode(text, inter_char_delay_ms.max(8), KeyboardRoute::Hid)
++}
++
 +fn press_bare_chord(code: u16, modifiers: &[u16]) -> anyhow::Result<()> {
 +    let pairs = bare_chord_transitions(code, modifiers)
 +        .into_iter()
@@ -13434,19 +14303,10 @@ index 2b9baf8e5..65eef4224 100644
 +    for pair in pairs {
 +        held.0.push(pair.hold()?);
 +        key_pause(8)?;
-     }
--    Ok(())
++    }
 +    held.release()
- }
-
--/// Type ASCII text through the global HID queue as physical US-keyboard
--/// transitions.
--///
--/// This is reserved for a caller that has guarded the exact target with
--/// `with_foreground_hid_activation`. Remote-input clients such as Screen
--/// Sharing forward virtual keycodes and modifier transitions, not the Unicode
--/// payload carried by keycode 0, so the ordinary text synthesis path cannot be
--/// used for them.
++}
++
  pub fn type_text_physical_global(text: &str, inter_char_delay_ms: u64) -> anyhow::Result<()> {
 -    use core_graphics::event::CGEventTapLocation;
 -
@@ -13504,12 +14364,8 @@ index 2b9baf8e5..65eef4224 100644
 -        };
 -        if !modifier_codes.contains(&modifier_code) {
 -            modifier_codes.push(modifier_code);
-+        if let Some((code, _)) = modifier_key_code_and_flag(modifier) {
-+            if !codes.contains(&code) {
-+                codes.push(code);
-+            }
-         }
-     }
+-        }
+-    }
 -
 -    let events = bare_chord_transitions(key_code, &modifier_codes)
 -        .into_iter()
@@ -13520,11 +14376,34 @@ index 2b9baf8e5..65eef4224 100644
 -        std::thread::sleep(std::time::Duration::from_millis(8));
 -    }
 -    Ok(())
++        if let Some((code, _)) = modifier_key_code_and_flag(modifier) {
++            if !codes.contains(&code) {
++                codes.push(code);
++            }
++        }
++    }
 +    press_bare_chord(code, &codes)
  }
 
  fn bare_chord_transitions(key_code: u16, modifier_codes: &[u16]) -> Vec<(u16, bool)> {
-@@ -598,38 +498,6 @@ pub(super) fn post_keyboard_event(pid: i32, event: &CGEvent) {
+@@ -470,6 +522,16 @@
+         key_code: u16,
+         key_down: bool,
+     ) -> core_graphics::sys::CGEventRef;
++}
++
++#[link(name = "ApplicationServices", kind = "framework")]
++extern "C" {
++    fn AXUIElementPostKeyboardEvent(
++        application: crate::ax::bindings::AXUIElementRef,
++        key_char: u16,
++        virtual_key: u16,
++        key_down: u8,
++    ) -> i32;
+ }
+
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -598,38 +660,6 @@
      }
  }
 
@@ -13563,7 +14442,7 @@ index 2b9baf8e5..65eef4224 100644
  fn modifier_flags(modifiers: &[&str]) -> CGEventFlags {
      let mut flags = CGEventFlags::CGEventFlagNull;
      for m in modifiers {
-@@ -654,15 +522,15 @@ pub(super) fn key_name_to_code(key: &str) -> anyhow::Result<u16> {
+@@ -654,15 +684,15 @@
          "escape" | "esc" => 53,
          "command" | "cmd" => 55,
          "shift" => 56,
@@ -13582,7 +14461,7 @@ index 2b9baf8e5..65eef4224 100644
          "left" | "left_arrow" => 123,
          "right" | "right_arrow" => 124,
          "down" | "down_arrow" => 125,
-@@ -679,6 +547,42 @@ pub(super) fn key_name_to_code(key: &str) -> anyhow::Result<u16> {
+@@ -679,6 +709,42 @@
          "f10" => 109,
          "f11" => 103,
          "f12" => 111,
@@ -13625,10 +14504,76 @@ index 2b9baf8e5..65eef4224 100644
          "a" => 0,
          "s" => 1,
          "d" => 2,
-@@ -882,4 +786,35 @@ mod tests {
+@@ -737,6 +803,64 @@
+     use core_graphics::event::CGEventType;
+
+     #[test]
++    fn ax_return_route_preserves_modified_key_semantics() {
++        assert!(uses_ax_return(36, &[]));
++        assert!(!uses_ax_return(36, &["shift"]));
++        assert!(!uses_ax_return(36, &["cmd"]));
++        assert!(!uses_ax_return(48, &[]));
++    }
++
++    #[test]
++    fn ax_return_releases_after_down_error_or_cancellation() {
++        for (down_error, cancel) in [(-25204, false), (0, true)] {
++            let gate = super::super::cancellation::InputGate::default();
++            let events = std::cell::RefCell::new(Vec::new());
++            let result = pulse_ax_return_with(
++                &gate,
++                |down| {
++                    events.borrow_mut().push(down);
++                    if down {
++                        down_error
++                    } else {
++                        0
++                    }
++                },
++                || {
++                    if cancel {
++                        anyhow::bail!("native_input_cancelled")
++                    } else {
++                        Ok(())
++                    }
++                },
++            );
++            assert!(result.is_err());
++            assert_eq!(*events.borrow(), [true, false]);
++            assert!(!gate.has_unconfirmed_releases());
++        }
++    }
++
++    #[test]
++    fn ax_return_failed_release_blocks_cleanup_even_during_unwind() {
++        for panic_during_pause in [false, true] {
++            let gate = super::super::cancellation::InputGate::default();
++            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                pulse_ax_return_with(
++                    &gate,
++                    |down| if down { 0 } else { -25204 },
++                    || {
++                        if panic_during_pause {
++                            panic!("test action unwind");
++                        }
++                        Ok(())
++                    },
++                )
++            }));
++            assert!(gate.has_unconfirmed_releases());
++            assert!(gate.post(|| ()).is_err());
++        }
++    }
++
++    #[test]
+     fn physical_text_uses_flags_changed_for_balanced_shift_transitions() {
+         assert_eq!(
+             physical_text_events('a').unwrap(),
+@@ -882,4 +1006,35 @@
          assert!(!is_screen_sharing_bundle_id("com.apple.screensharing"));
          assert!(!is_screen_sharing_bundle_id("com.microsoft.rdc.macos"));
      }
+-}
 +
 +    #[test]
 +    fn extended_keymap_names_resolve_to_macos_virtual_keycodes() {
@@ -13660,7 +14605,7 @@ index 2b9baf8e5..65eef4224 100644
 +            assert_eq!(key_name_to_code(name).unwrap(), code, "{name}");
 +        }
 +    }
- }
++}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
 index 7411233b9..42e5a800c 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
@@ -14439,9 +15384,12 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs b/lib
  ) -> anyhow::Result<()> {
      use core_graphics::event::ScrollEventUnit;
 
-@@ -1255,20 +1380,35 @@
+@@ -1253,22 +1378,37 @@
+                 .unwrap_or_default()
+                 .subsec_nanos() as i64,
          ),
-         MousePostMode::Both,
+-        MousePostMode::Both,
++        MousePostMode::PublicOnly,
      );
 -    std::thread::sleep(std::time::Duration::from_millis(12));
 +    super::cancellation::gate().pause(std::time::Duration::from_millis(12))?;
@@ -14483,21 +15431,26 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs b/lib
 
          let event_ptr = event.as_ptr() as *mut std::ffi::c_void;
 
-@@ -1294,10 +1434,9 @@
+@@ -1292,12 +1432,12 @@
+         // f40 = target pid (Chromium synthetic-event filter).
+         crate::input::skylight::set_integer_field(event_ptr, 40, pid as i64);
 
-         // Belt+suspenders post: SkyLight reaches backgrounded Chromium/Catalyst;
-         // the public path lands on AppKit/WKWebView. Mouse-class → no auth envelope.
+-        // Belt+suspenders post: SkyLight reaches backgrounded Chromium/Catalyst;
+-        // the public path lands on AppKit/WKWebView. Mouse-class → no auth envelope.
 -        crate::input::skylight::post_to_pid(pid as libc::pid_t, event_ptr, false);
 -        event.post_to_pid(pid as libc::pid_t);
 -
 -        std::thread::sleep(std::time::Duration::from_millis(30));
-+        super::cancellation::gate().post(|| post_mouse_once(pid, &event))?;
++        // The public per-PID queue preserves window routing without SkyLight's
++        // global activity tickle. Submit exactly once; queue availability is not
++        // evidence that a second transport is safe to replay.
++        super::cancellation::gate().post(|| event.post_to_pid(pid))?;
 +
 +        super::cancellation::gate().pause(std::time::Duration::from_millis(30))?;
      }
      Ok(())
  }
-@@ -1312,7 +1451,7 @@
+@@ -1312,7 +1452,7 @@
      fn CGEventSetLocation(event: *mut std::ffi::c_void, x: f64, y: f64);
  }
 
@@ -14506,7 +15459,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mouse.rs b/lib
      let mut flags = CGEventFlags::CGEventFlagNull;
      for m in modifiers {
          match m.to_lowercase().as_str() {
-@@ -1325,3 +1464,7 @@
+@@ -1325,3 +1465,7 @@
      }
      flags
  }
@@ -15795,20 +16748,23 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
          let from_zoom = args.bool_or("from_zoom", false);
          let debug_image_out = args.opt_str("debug_image_out");
          let modifiers: Vec<String> = args.str_array("modifier");
-@@ -447,6 +440,12 @@
+@@ -447,6 +440,15 @@
              } else {
                  None
              };
 +
-+            if !delivery_mode.is_foreground() && button_str == "left" && action == "press"
-+                && unsafe { copy_string_attr(element_ptr as AXUIElementRef, "AXRole") }.as_deref() == Some("AXPopUpButton")
++            if !delivery_mode.is_foreground()
++                && button_str == "left"
++                && action == "press"
++                && unsafe { copy_string_attr(element_ptr as AXUIElementRef, "AXRole") }.as_deref()
++                    == Some("AXPopUpButton")
 +            {
 +                return background_popup_refusal();
 +            }
 
              // Surface 5: button=right on the AX path → AXShowMenu (the same surface
              // the dedicated `right_click` tool dispatches). Threads through the
-@@ -538,11 +537,9 @@
+@@ -538,11 +540,9 @@
                  self.state.cursor_registry.note_press(&cursor_key, cx, cy);
              }
 
@@ -15823,7 +16779,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
              let selection_candidate = if effective_action == "press" {
                  let selection_guard = element_guard.clone();
                  tokio::task::spawn_blocking(move || {
-@@ -700,15 +697,9 @@
+@@ -700,15 +700,9 @@
                          tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                      }
                      msg.push_str(&changes.result_suffix());
@@ -15842,7 +16798,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                      let mut structured = serde_json::json!({
                          "path": if selection_via_pixel {
                              if fronted { "cgevent_fg" } else { "cgevent" }
-@@ -717,11 +708,15 @@
+@@ -717,11 +711,15 @@
                          } else {
                              "ax"
                          },
@@ -15860,7 +16816,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                          } else {
                              "unverifiable"
                          },
-@@ -732,18 +727,12 @@
+@@ -732,18 +730,12 @@
                          ]);
                      }
                      if suspected_noop {
@@ -15882,7 +16838,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
              }
          } else if let (Some(mut cx), Some(mut cy)) = (x, y) {
              // ── Pixel path ─────────────────────────────────────────────────
-@@ -805,7 +794,12 @@
+@@ -805,7 +797,12 @@
                          ))
                      }
                  }
@@ -15896,7 +16852,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                  // Coordinates are in the downscaled image space; scale back to native pixels.
                  cx *= ratio;
                  cy *= ratio;
-@@ -822,7 +816,7 @@
+@@ -822,7 +819,7 @@
              // win_local_x/y: window-local logical-pixel coords needed for
              // CGEventSetWindowLocation in the Chromium recipe.
              let (screen_x, screen_y, win_local_x, win_local_y) = if let Some(wid) = window_id {
@@ -15905,7 +16861,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                      Ok(frame) => {
                          let (sx, sy, lx, ly) = frame.to_screen(cx, cy);
                          // A window-local point outside the live frame would
-@@ -886,6 +880,7 @@
+@@ -886,6 +883,7 @@
              // targeting (PX) orthogonal to delivery (AX) and avoids making a
              // Chromium/AppKit window key merely to satisfy first-mouse rules.
              if !delivery_mode.is_foreground()
@@ -15913,7 +16869,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                  && window_id.is_some()
                  && button_str == "left"
                  && count == 1
-@@ -893,32 +888,81 @@
+@@ -893,32 +891,81 @@
              {
                  let focus_only = action == "focus";
                  let hit_test_wid = window_id.expect("guarded by window_id.is_some() above");
@@ -16018,7 +16974,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                          let label = if focus_only { "focused" } else { "pressed" };
                          return ToolResult::text(format!(
                              "✅ PX hit-test {label} the background element via AX."
-@@ -926,7 +970,13 @@
+@@ -926,7 +973,13 @@
                          .with_structured(serde_json::json!({
                              "path": "ax",
                              "verified": false,
@@ -16033,7 +16989,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                          }));
                      }
                      Ok(Ok(false)) if focus_only => {
-@@ -937,13 +987,9 @@
+@@ -937,13 +990,9 @@
                              "code": "background_unavailable"
                          }));
                      }
@@ -16050,7 +17006,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                  }
              }
 
-@@ -981,56 +1027,14 @@
+@@ -981,56 +1030,14 @@
                  PixelActivationPolicy::SuppressTarget => {
                      WindowChangeDetector::snapshot(prior_front)
                  }
@@ -16109,7 +17065,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
              // Surface 5: route to the right/middle CGEvent primitives when
              // button != left. Left-button path stays on the existing Chromium-
              // routed `click_at_xy_with_window_local` for back-compat.
-@@ -1045,6 +1049,12 @@
+@@ -1045,6 +1052,12 @@
                  "click.pixel",
                  || async move {
                      tokio::task::spawn_blocking(move || {
@@ -16122,7 +17078,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                          let has_modifiers = !mods_owned.is_empty();
                          let do_click = move || -> anyhow::Result<()> {
                              let m: Vec<&str> = mods_owned.iter().map(String::as_str).collect();
-@@ -1081,11 +1091,25 @@
+@@ -1081,11 +1094,25 @@
                                      // and Chromium-specific fields (f40, f51, f58, f91, f92) onto events
                                      // for better backgrounded-target delivery.
                                      if let Some(wid) = window_id {
@@ -16150,7 +17106,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                                          );
                                      }
                                      crate::input::mouse::click_at_xy(pid, screen_x, screen_y, count, &m)
-@@ -1095,7 +1119,7 @@
+@@ -1095,7 +1122,7 @@
                          // Foreground rung: brief front → click → restore.
                          // Returns whether the window was ACTUALLY fronted, so the
                          // reported `path` honestly reflects the rung that ran.
@@ -16159,7 +17115,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
                              (true, Some(wid), true) => {
                                  crate::input::skylight::with_foreground_hid_activation(
                                      pid as libc::pid_t,
-@@ -1112,36 +1136,23 @@
+@@ -1112,36 +1139,23 @@
                                  )
                              }
                              _ => do_click().map(|_| false),
@@ -16206,7 +17162,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
              let changes = super::finish_window_observation(snapshot, &args).await;
 
              let button_label = match button_str.as_str() {
-@@ -1149,31 +1160,55 @@
+@@ -1149,31 +1163,55 @@
                  "middle" => "middle-click",
                  _ => "click",
              };
@@ -16279,7 +17235,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
          } else {
              ToolResult::error(
                  "Provide either (element_index + window_id) or (x + y). pid is always required.",
-@@ -1182,16 +1217,32 @@
+@@ -1182,16 +1220,32 @@
      }
  }
 
@@ -16317,7 +17273,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
  fn perform_ax_click(
      element_ptr: usize,
      idx: usize,
-@@ -1210,7 +1261,8 @@
+@@ -1210,7 +1264,8 @@
      // enable menu items that were disabled in the cached snapshot, while a
      // background transition can disable them after that snapshot. macOS may
      // otherwise return success for a disabled action that did nothing.
@@ -16327,7 +17283,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
 
      // Capture advertised actions BEFORE dispatching so we can detect silent no-ops
      // (AX returns success even when the element doesn't advertise the action).
-@@ -1225,19 +1277,35 @@
+@@ -1225,19 +1280,35 @@
      // or forcing the caller onto a less stable pixel coordinate.
      if ax_action == "AXPress" && !advertised.iter().any(|action| action == ax_action) {
          if modifiers.is_empty() {
@@ -16376,7 +17332,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
              }
          }
 
-@@ -1247,7 +1315,10 @@
+@@ -1247,7 +1318,10 @@
          ) {
              let selected_role = selection.role().to_owned();
              let Some((before, _)) = selection.observe() else {
@@ -16388,7 +17344,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
              };
              let modifier_refs: Vec<&str> = modifiers.iter().map(String::as_str).collect();
              if foreground && !modifier_refs.is_empty() {
-@@ -1324,41 +1395,21 @@
+@@ -1324,41 +1398,21 @@
              if modifiers.is_empty() {
                  anyhow::bail!(
                      "coordinate click did not produce a stable AXSelected transition; \
@@ -16435,7 +17391,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
 
      let mut summary = format!("✅ Performed {ax_action} on [{idx}] {role} \"{title}\".");
 
-@@ -1412,7 +1463,7 @@
+@@ -1412,7 +1466,7 @@
          };
          summary.push_str(&format!(
              "\n⚠️ Element does not advertise {ax_action} (actions: {adv_list}). \
@@ -16444,7 +17400,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
          ));
      }
 
-@@ -1446,7 +1497,48 @@
+@@ -1446,7 +1500,48 @@
 
  #[cfg(test)]
  mod selection_fallback_tests {
@@ -16494,7 +17450,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
 
      #[test]
      fn plain_click_requires_selected_readback() {
-@@ -1560,10 +1652,10 @@
+@@ -1560,10 +1655,10 @@
      /// without raising it. Other background buttons retain strict suppression,
      /// and the explicit foreground rung owns its separate activation.
      #[test]
@@ -16507,7 +17463,7 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/click.rs b/lib
          );
          assert_eq!(
              pixel_activation_policy("left", false, false),
-@@ -1582,42 +1674,4 @@
+@@ -1582,42 +1677,4 @@
              PixelActivationPolicy::ForegroundAssist
          );
      }
@@ -16804,13 +17760,13 @@ index f5eb9d039..94e61799a 100644
          if let Some(wid) = window_id {
              crate::cursor::overlay::send_command(
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
-index 90786072c..7ef64f0a7 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/get_window_state.rs
-@@ -8,6 +8,16 @@ use std::sync::Arc;
+@@ -7,6 +7,16 @@
+ use std::sync::Arc;
 
  use super::ToolState;
-
++
 +fn screenshot_frame_freshness(on_current_space: Option<bool>) -> Option<&'static str> {
 +    on_current_space.map(|on_current_space| {
 +        if on_current_space {
@@ -16820,11 +17776,10 @@ index 90786072c..7ef64f0a7 100644
 +        }
 +    })
 +}
-+
+
  pub struct GetWindowStateTool {
      state: Arc<ToolState>,
- }
-@@ -68,7 +78,13 @@ fn def() -> &'static ToolDef {
+@@ -68,7 +78,13 @@
              requested window — act by pixel there. This tool never returns another \
              surface's elements under your window_id. Before exposing a screenshot, \
              its raw dimensions are validated as a coherent 1x/2x representation of \
@@ -16839,7 +17794,7 @@ index 90786072c..7ef64f0a7 100644
              `px_capture_unavailable` omits an unprovable screenshot/pixel frame \
              instead of guessing a transform; the truthful AX payload remains available.\n\n\
              Optional `query` projects both tree_markdown and structured `elements` to \
-@@ -162,6 +178,7 @@ fn chromium_browser_window(pid: i32) -> bool {
+@@ -162,6 +178,7 @@
                      | "thorium"
                      | "iridium"
                      | "yandex"
@@ -16847,7 +17802,19 @@ index 90786072c..7ef64f0a7 100644
              )
          })
  }
-@@ -678,13 +695,28 @@ impl Tool for GetWindowStateTool {
+@@ -633,7 +650,10 @@
+         {
+             let capture_available = screenshot_dims.is_some();
+             let report = tokio::task::spawn_blocking(move || {
+-                let facts = crate::ax::exact_target::gather_background_facts(pid, window_id, None);
++                let mut facts =
++                    crate::ax::exact_target::gather_background_facts(pid, window_id, None);
++                facts.keyboard_focus_proven =
++                    crate::ax::exact_target::keyboard_focus_matches_window(pid, window_id);
+                 cua_driver_core::background_input::background_input_capability_report(
+                     cua_driver_core::background_input::ExactWindowTarget { pid, window_id },
+                     &facts,
+@@ -678,12 +698,27 @@
          // names the surface even on the capture-only path, where no AX tree is
          // present to identify it. Omitted per-field when WindowServer reports an
          // empty string.
@@ -16860,7 +17827,7 @@ index 90786072c..7ef64f0a7 100644
              }
              if !info.title.is_empty() {
                  structured["window_title"] = serde_json::json!(info.title);
-             }
++            }
 +            structured["window_is_on_screen"] = serde_json::json!(info.is_on_screen);
 +            if let Some(on_current_space) = info.on_current_space {
 +                structured["window_on_current_space"] = serde_json::json!(on_current_space);
@@ -16873,11 +17840,10 @@ index 90786072c..7ef64f0a7 100644
 +            }
 +            if let Some(space_ids) = info.space_ids {
 +                structured["window_space_ids"] = serde_json::json!(space_ids);
-+            }
+             }
          }
          cua_driver_core::window_inspection::mark_browser_chrome_capture_coverage(
-             &mut structured,
-@@ -1095,6 +1127,19 @@ mod tests {
+@@ -1095,6 +1130,19 @@
      use cua_driver_core::element_query::project_elements_for_query;
      use serde_json::json;
 
@@ -17094,45 +18060,71 @@ index ff2f7d450..953790911 100644
 +    }
  }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
-index 6085da994..8eef0e77c 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
-@@ -15,6 +15,10 @@ fn def() -> &'static ToolDef {
+@@ -14,31 +14,23 @@
+     DEF.get_or_init(|| ToolDef {
          name: "launch_app".into(),
          description:
-             "Launch a macOS app in the background — the target does NOT come to the foreground.\n\n\
-+             The launch always requests `activates=false`: nothing we start may change focus. \
-+             This tool never hides, moves, or conceals windows of its own accord; a visible \
-+             launch (hidden:false or omitted) creates the app's normal window and Dock entry, \
-+             so treat it as an explicitly requested visible action only.\n\n\
-              Provide either `bundle_id` (preferred — unambiguous, e.g. `com.apple.calculator`) \
-              or `name` (e.g. \"Calculator\"). If both are given, bundle_id wins.\n\n\
-              Optional `urls` are handed to the app as open targets — for Finder, pass a folder \
-@@ -30,7 +34,11 @@ fn def() -> &'static ToolDef {
-              window so each session acts on its own isolated window instead of clobbering one \
-              shared instance. Without it, single-instance apps (Calculator, many utilities) hand \
-              every caller the same window, so two sessions fight over it.\n\n\
+-            "Launch a macOS app in the background — the target does NOT come to the foreground.\n\n\
+-             Provide either `bundle_id` (preferred — unambiguous, e.g. `com.apple.calculator`) \
+-             or `name` (e.g. \"Calculator\"). If both are given, bundle_id wins.\n\n\
+-             Optional `urls` are handed to the app as open targets — for Finder, pass a folder \
+-             path to open a backgrounded Finder window there.\n\n\
+-             Browser DevTools setup belongs to `browser_prepare`, which can prove that a \
+-             separate isolated profile is driver-owned before enabling CDP.\n\n\
+-             Optional `webkit_inspector_port`: opens a WebKit inspector server on the specified \
+-             port (sets WEBKIT_INSPECTOR_SERVER=127.0.0.1:N + TAURI_WEBVIEW_AUTOMATION=1). \
+-             Use this for Tauri/WebKit-based apps.\n\n\
+-             Optional `creates_new_application_instance`: when true, forces a new app instance \
+-             even if one is already running (passes -n to open). Reach for this when another \
+-             agent or session may drive the SAME app concurrently — it returns a fresh pid + \
+-             window so each session acts on its own isolated window instead of clobbering one \
+-             shared instance. Without it, single-instance apps (Calculator, many utilities) hand \
+-             every caller the same window, so two sessions fight over it.\n\n\
 -             Optional `additional_arguments`: extra argv strings appended after --args.\n\n\
-+             Optional `additional_arguments`: extra argv strings appended after --args. LaunchServices \n\
-+             only delivers arguments to a new application instance, so when the target app is already \n\
-+             running the launch is forced into a new instance and the arguments are delivered there; \n\
-+             Chromium-family browsers hand them off to the running process and create the requested \n\
-+             window (e.g. `--incognito` opens a new incognito window in the already-running browser).\n\n\
-              Returns the launched app's pid, bundle_id, name, and a `windows` array \
-              (same shape as `list_windows`) so callers can skip an extra round-trip before \
-              `get_window_state(pid, window_id)`. `launch_state` distinguishes whether the \
-@@ -64,6 +72,10 @@ fn def() -> &'static ToolDef {
-                     "type": "boolean",
-                     "description": "When true, force a new app instance even if already running (open -n). Use for concurrent multi-agent/multi-session work so each session gets an isolated instance + window instead of sharing one — on single-instance apps (e.g. Calculator) every caller otherwise gets the same window and the sessions clobber each other."
+-             Returns the launched app's pid, bundle_id, name, and a `windows` array \
+-             (same shape as `list_windows`) so callers can skip an extra round-trip before \
+-             `get_window_state(pid, window_id)`. `launch_state` distinguishes whether the \
+-             request was sent, the process is running, and a window is ready. When the \
+-             focus-steal belt-and-braces \
+-             demotion check ran (target pid ≠ prior frontmost), the response also includes \
+-             `self_activation_suppressed: bool` — true if focus stayed with the prior \
+-             frontmost, false if the launched app held focus despite the re-demote attempt."
++            "Launch or reuse a macOS app without requesting foreground activation.\n\n\
++             Provide `bundle_id` (preferred) or `name`. A plain request reuses a running \
++             application and its windows without delivering another reopen event.\n\n\
++             `hidden` means the application's real hidden state, not background operation. \
++             Leave it false or omitted for usable background windows. Explicit hidden:true \
++             may leave no usable window; unhide through a later non-hidden launch.\n\n\
++             Optional `urls` are handed to the app as open targets. `additional_arguments` \
++             apply to a new process; an argument-bearing request to a running app may start \
++             another instance. Use `creates_new_application_instance` only when a separate \
++             instance is needed. Browser DevTools setup belongs to `browser_prepare`.\n\n\
++             Optional `webkit_inspector_port` sets WEBKIT_INSPECTOR_SERVER and \
++             TAURI_WEBVIEW_AUTOMATION for an explicitly requested WebKit inspector.\n\n\
++             Returns the actual pid, app identity and windows. `launch_state.window_ready` \
++             requires a visible window on the active Space, not merely a running process. \
++             If no usable window appears, inspect the reason; never kill or relaunch the \
++             app automatically. The driver never restores a previous app's focus or \
++             schedules activation after this request returns."
+             .into(),
+         input_schema: serde_json::json!({
+             "type": "object",
+@@ -62,7 +54,11 @@
                  },
+                 "creates_new_application_instance": {
+                     "type": "boolean",
+-                    "description": "When true, force a new app instance even if already running (open -n). Use for concurrent multi-agent/multi-session work so each session gets an isolated instance + window instead of sharing one — on single-instance apps (e.g. Calculator) every caller otherwise gets the same window and the sessions clobber each other."
++                    "description": "When true, explicitly request a new app instance instead of reusing a running one. Single-instance apps may still hand off to their existing process."
++                },
 +                "hidden": {
 +                    "type": "boolean",
-+                    "description": "Launch the application hidden (open -j): its windows are created but never render on screen, and nothing activates or switches Spaces. A hidden app's windows remain addressable for background semantic actions (set_value, element click, semantic type_text) — the hidden-workspace launch. Unhide later with set_app_visibility. A visible launch (hidden:false or omitted) creates the app's normal window and Dock entry; use it only when the user explicitly asked to see the app."
-+                },
++                    "description": "Explicit application hiding, equivalent to Cmd+H. This can prevent usable windows. Background operation uses activates=false with hidden:false or omitted; it does not require hiding the app."
+                 },
                  "additional_arguments": {
                      "type": "array",
-                     "items": { "type": "string" },
-@@ -103,6 +115,7 @@ impl Tool for LaunchAppTool {
+@@ -103,6 +99,7 @@
          }
          let webkit_inspector_port = args.opt_u64("webkit_inspector_port").map(|v| v as u16);
          let creates_new_instance = args.bool_or("creates_new_application_instance", false);
@@ -17140,7 +18132,71 @@ index 6085da994..8eef0e77c 100644
          let additional_arguments: Vec<String> = args.str_array("additional_arguments");
          if additional_arguments
              .iter()
-@@ -233,7 +246,7 @@ impl Tool for LaunchAppTool {
+@@ -174,66 +171,20 @@
+             s
+         };
+
+-        // ── Layer-3 focus-steal suppression (3-phase wrap) ───────────────
+-        //
+-        // Captures the prior frontmost pid, arms a wildcard suppression
+-        // BEFORE the launch (covers self-activations the target fires
+-        // synchronously during `open()`), then upgrades to a targeted
+-        // suppression keyed to the actual launched pid. Briefly holds
+-        // BOTH leases so a self-activation arriving in the wildcard→
+-        // targeted gap is still caught — that race is what hoang17's
+-        // Swift PR #1521 explicitly fixes; we do not regress it here.
+-        //
+-        // After 500ms (enough for `applicationDidFinishLaunching` +
+-        // any reflex `NSApp.activate(...)` to fire and get suppressed)
+-        // both leases are dropped. The belt-and-braces step at the end
+-        // re-activates the prior frontmost if the target is still
+-        // frontmost — handles the intra-`open()` synchronous activation
+-        // that fired before we could arm with the real pid.
++        // LaunchServices is asked not to activate. Never compensate by activating
++        // a saved prior app: that would overwrite a user's later choice, including
++        // after this RPC has already returned.
+         let prior_frontmost = crate::apps::frontmost_pid();
+-        let finder_folder_handoff = response_bundle_id.as_deref().is_some_and(|bundle_id| {
+-            additional_arguments.is_empty()
+-                && env.is_empty()
+-                && !creates_new_instance
+-                && crate::apps::finder_folder_handoff(bundle_id, &urls)
+-        });
+-
+-        // Finder's synchronous folder-open selector must be allowed to activate
+-        // long enough to perform the request. Use the ordinary targeted
+-        // post-launch guard to restore the prior foreground app immediately.
+-        let wildcard_lease = prior_frontmost
+-            .filter(|_| !finder_folder_handoff)
+-            .map(|prior| {
+-                crate::focus_steal::FocusStealPreventer::begin_suppression(
+-                    None,
+-                    prior,
+-                    "LaunchAppTool.pre",
+-                )
+-            });
+-
+-        // Predicate captured BEFORE moving inputs into spawn_blocking.
+-        // Same condition that selects the `openURLs:withApplicationAtURL:`
+-        // chain over the simpler `openApplicationAtURL:` path. Used after
+-        // the spawn returns to size the suppression window — the slow
+-        // path triggers a SECOND activation when the file-open delivers,
+-        // which lands AFTER the bundle-only-launch activation window.
+-        let slow_launch_path = !urls.is_empty()
+-            || !additional_arguments.is_empty()
+-            || !env.is_empty()
+-            || creates_new_instance;
+-
+-        // Move the launch closure inputs into spawn_blocking. The
+-        // blocking task returns (pid, app_info, windows). Suppression
+-        // upgrade happens AFTER the blocking call returns (back on the
+-        // async runtime), then we sleep holding the targeted lease.
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+         let launch_result = tokio::task::spawn_blocking(move || {
++            crate::input::cancellation::gate().ensure_active()?;
+             let pid = if let Some(ref bid) = bundle_id {
+                 if urls.is_empty()
+                     && additional_arguments.is_empty()
                      && env.is_empty()
                      && !creates_new_instance
                  {
@@ -17149,7 +18205,7 @@ index 6085da994..8eef0e77c 100644
                  } else {
                      crate::apps::launch_with_urls_by_bundle(
                          bid,
-@@ -241,6 +254,7 @@ impl Tool for LaunchAppTool {
+@@ -241,6 +192,7 @@
                          &additional_arguments,
                          &env,
                          creates_new_instance,
@@ -17157,7 +18213,7 @@ index 6085da994..8eef0e77c 100644
                      )?
                  }
              } else {
-@@ -250,7 +264,7 @@ impl Tool for LaunchAppTool {
+@@ -250,7 +202,7 @@
                      && env.is_empty()
                      && !creates_new_instance
                  {
@@ -17166,7 +18222,7 @@ index 6085da994..8eef0e77c 100644
                  } else {
                      crate::apps::launch_with_urls_by_name(
                          n,
-@@ -258,6 +272,7 @@ impl Tool for LaunchAppTool {
+@@ -258,13 +210,14 @@
                          &additional_arguments,
                          &env,
                          creates_new_instance,
@@ -17174,42 +18230,424 @@ index 6085da994..8eef0e77c 100644
                      )?
                  }
              };
-@@ -452,8 +467,16 @@ impl Tool for LaunchAppTool {
+
+-            // Retry loop: LaunchServices returns before WindowServer has
+-            // registered the new windows. Poll up to 5x100ms.
+-            let windows = resolve_windows_for_pid(pid);
++            // Use the remainder of the launch budget for WindowServer readiness.
++            // Explicitly hidden apps cannot become ready through more polling.
++            let windows = resolve_windows_for_pid(pid, hidden, deadline);
+
+             let app_info: Option<crate::apps::AppInfo> = {
+                 let apps = crate::apps::list_running_apps();
+@@ -274,175 +227,6 @@
+             Ok::<_, anyhow::Error>((pid, app_info, windows))
+         })
+         .await;
+-
+-        // Upgrade to targeted suppression now that we know the real pid.
+-        // Keep the wildcard lease alive until immediately AFTER we've
+-        // armed the targeted one — that's the PR #1521 overlap window.
+-        //
+-        // `self_activation_suppressed` is the outcome of the belt-and-
+-        // braces demotion check: `None` when the check didn't run
+-        // (no prior frontmost / launch failed / pid == prior), `Some(true)`
+-        // when the target was NOT frontmost after the suppression window
+-        // (or we successfully re-demoted it), `Some(false)` when the
+-        // re-demote failed and the target is still stealing focus.
+-        // Surfaced in the structured response so callers can observe
+-        // whether focus-steal prevention actually held.
+-        let mut self_activation_suppressed: Option<bool> = None;
+-        if let Ok(Ok((pid, _, _))) = &launch_result {
+-            if let Some(prior) = prior_frontmost {
+-                if *pid != prior {
+-                    let targeted_lease = crate::focus_steal::FocusStealPreventer::begin_suppression(
+-                        Some(*pid),
+-                        prior,
+-                        "LaunchAppTool.post",
+-                    );
+-                    // Now safe to drop the wildcard — targeted is armed.
+-                    drop(wildcard_lease);
+-                    // Hold the targeted lease long enough to cover the
+-                    // ENTIRE post-launch activation window.
+-                    //
+-                    // - Fast path (bundle-only launch, no urls/args/env):
+-                    //   500ms covers `applicationDidFinishLaunching` plus
+-                    //   any reflex `NSApp.activate(...)`. Matches Swift
+-                    //   LaunchAppTool.swift exactly.
+-                    //
+-                    // - Slow path (urls / additional_arguments / env /
+-                    //   creates_new_instance): 2500ms. The slow-path
+-                    //   `openURLs:withApplicationAtURL:` chain triggers a
+-                    //   second activation when the file-open delivers to
+-                    //   the just-launched app — Electron apps (VSCode,
+-                    //   Cursor, Slack) re-`app.focus()` from inside their
+-                    //   `open-file` JS handler, AFTER our 500ms window
+-                    //   would have already closed. Empirically VSCode's
+-                    //   late activation can land anywhere from ~700ms to
+-                    //   ~2000ms after the openURLs return. The observer-
+-                    //   based lease catches any activation that lands
+-                    //   WHILE held, so widening the window converts the
+-                    //   late activation from a contract violation into
+-                    //   another auto-demote.
+-                    let window_ms: u64 = if slow_launch_path { 2500 } else { 500 };
+-                    tokio::time::sleep(std::time::Duration::from_millis(window_ms)).await;
+-                    drop(targeted_lease);
+-
+-                    // Belt-and-braces LOOP: if the target ever pops back
+-                    // to the foreground after the lease drops (rare —
+-                    // observer already covered the suppression window —
+-                    // but happens when the activation fires literally on
+-                    // the same tokio tick the lease dropped), demote it.
+-                    // Loop 5x200ms = 1s of post-window coverage. Each
+-                    // iteration is cheap (one frontmost_pid + maybe one
+-                    // activate_pid call) so this stays well under the
+-                    // RPC budget even when the demote keeps working.
+-                    let mut demotion_succeeded = true;
+-                    for _ in 0..5 {
+-                        let frontmost_now = crate::apps::frontmost_pid();
+-                        if frontmost_now != Some(*pid) {
+-                            // Not frontmost — nothing to do this tick.
+-                            continue;
+-                        }
+-                        let activated = crate::apps::activate_pid(prior);
+-                        let still_frontmost = crate::apps::frontmost_pid() == Some(*pid);
+-                        if still_frontmost {
+-                            tracing::warn!(
+-                                target: "platform_macos::tools::launch_app",
+-                                launched_pid = *pid,
+-                                prior_pid = prior,
+-                                activate_pid_returned = activated,
+-                                "belt-and-braces demotion iteration failed: \
+-                                 launched app remained frontmost after \
+-                                 re-activating prior — will retry"
+-                            );
+-                            demotion_succeeded = false;
+-                        } else {
+-                            demotion_succeeded = true;
+-                        }
+-                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+-                    }
+-                    // Final in-call state determines the structured response.
+-                    let final_frontmost = crate::apps::frontmost_pid();
+-                    self_activation_suppressed =
+-                        Some(final_frontmost != Some(*pid) && demotion_succeeded);
+-
+-                    // Detached late-activation watchdog (slow path only).
+-                    //
+-                    // Why: Electron apps with no workspace open (cold-
+-                    // launched VSCode / Cursor / Slack with a file URL)
+-                    // re-activate AGAIN when their Welcome window
+-                    // finishes loading — empirically 4-8 seconds after
+-                    // the `openURLs:withApplicationAtURL:` call returns.
+-                    // That's well past the in-call suppression window
+-                    // and any reasonable extension of it that an agent
+-                    // workflow would tolerate as caller latency.
+-                    //
+-                    // Solution: hold a fresh observer-backed lease in
+-                    // the background for ~8s, demoting if the launched
+-                    // pid pops back. The caller doesn't wait — the tool
+-                    // already returned its honest `self_activation_
+-                    // suppressed` for the in-call window. The detached
+-                    // task just keeps the no-foreground-steal contract
+-                    // honored past the RPC boundary.
+-                    //
+-                    // Note on process lifecycle: this watchdog only runs
+-                    // when the tokio runtime stays alive — i.e. in the
+-                    // long-running `cua-driver mcp` / `cua-driver serve`
+-                    // daemon modes. The one-shot `cua-driver call` mode
+-                    // exits as soon as the tool returns, taking the
+-                    // detached task with it. Acceptable because the
+-                    // contract is "no foreground steal during a session
+-                    // the agent is driving" — `cua-driver call` doesn't
+-                    // have a session that outlives the call.
+-                    //
+-                    // Tradeoffs:
+-                    // - Caller latency unchanged (~2.5s for slow path).
+-                    // - Total observer coverage: ~10.5s post-launch.
+-                    // - CPU: the observer fires per activation event,
+-                    //   not per poll; the 250ms tick is just for the
+-                    //   manual belt-and-braces demote. Cheap.
+-                    // - If a legitimate user click activates Code while
+-                    //   the watchdog is alive, we'll demote them. Worst
+-                    //   case ~10s of "I clicked Code and it didn't come
+-                    //   forward" — acceptable trade for an automation
+-                    //   scenario where the agent just launched it.
+-                    if slow_launch_path {
+-                        let launched_pid = *pid;
+-                        let prior_pid = prior;
+-                        tokio::spawn(async move {
+-                            let _lease = crate::focus_steal::FocusStealPreventer::begin_suppression(
+-                                Some(launched_pid),
+-                                prior_pid,
+-                                "LaunchAppTool.watchdog",
+-                            );
+-                            let mut late_activations = 0u32;
+-                            for _ in 0..32 {
+-                                // 32 × 250ms = 8s
+-                                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+-                                if crate::apps::frontmost_pid() == Some(launched_pid) {
+-                                    late_activations += 1;
+-                                    let _ = crate::apps::activate_pid(prior_pid);
+-                                }
+-                            }
+-                            if late_activations > 0 {
+-                                tracing::warn!(
+-                                    target: "platform_macos::tools::launch_app",
+-                                    launched_pid,
+-                                    prior_pid,
+-                                    late_activations,
+-                                    "watchdog demoted post-RPC late activations \
+-                                     — slow-path window may need tuning"
+-                                );
+-                            }
+-                        });
+-                    }
+-                } else {
+-                    // pid == prior frontmost (re-launch of an already-
+-                    // frontmost app). Just drop the wildcard.
+-                    drop(wildcard_lease);
+-                }
+-            }
+-        } else {
+-            // Launch failed; just drop the lease.
+-            drop(wildcard_lease);
+-        }
+
+         match launch_result {
+             Ok(Ok((pid, app_info, windows))) => {
+@@ -452,8 +236,20 @@
                      response_requested_name.as_deref(),
                  );
 
 -                let mut summary =
 -                    format!("Launched {app_name} (pid {pid}) in background.{port_summary}");
++                let actual_hidden = crate::apps::app_is_hidden(pid);
++                let visibility_change_confirmed = actual_hidden == hidden;
++                let window_reason = launch_window_reason(&windows, actual_hidden)
++                    .or((!visibility_change_confirmed).then_some("input_unavailable"));
++                let window_ready = window_reason.is_none();
 +                let mut summary = format!(
-+                    "Launched {app_name} (pid {pid}) {}",
-+                    if hidden {
-+                        "hidden (its windows are created but never rendered; it did not activate or switch Spaces)"
-+                    } else {
-+                        "with its normal window(s), as an explicitly requested visible launch: \
-+                         a visible app launch creates the app's window and Dock entry"
-+                    }
++                    "{app_name} is running (pid {pid}); foreground activation was not requested."
 +                );
++                if let Some(reason) = window_reason {
++                    summary.push_str(&format!(
++                        " No usable window is available ({reason}). Do not kill or relaunch the app automatically."
++                    ));
++                }
 +                summary.push_str(&port_summary);
 
                  if !windows.is_empty() {
                      summary.push_str("\n\nWindows:");
-@@ -480,6 +503,7 @@ impl Tool for LaunchAppTool {
+@@ -480,15 +276,19 @@
                      "bundle_id": bid,
                      "name": app_name,
                      "windows": windows_json,
-+                    "hidden": hidden,
-                     "launch_state": launch_state(true, true, !windows.is_empty()),
+-                    "launch_state": launch_state(true, true, !windows.is_empty()),
++                    "hidden": actual_hidden,
++                    "visibility_change_confirmed": visibility_change_confirmed,
++                    "launch_state": launch_state(true, true, window_ready),
++                    "window_status": if window_ready { "ready" } else { "no_usable_window" },
                  });
-                 // Only emit `self_activation_suppressed` when the
+-                // Only emit `self_activation_suppressed` when the
+-                // belt-and-braces demotion check actually ran. `None`
+-                // means the launch didn't enter the focus-steal path
+-                // (no prior frontmost, or pid == prior) — surfacing
+-                // a stale `false` would be misleading.
+-                if let Some(suppressed) = self_activation_suppressed {
+-                    structured["self_activation_suppressed"] = serde_json::Value::Bool(suppressed);
++                if let Some(reason) = window_reason {
++                    structured["window_reason"] = Value::String(reason.to_owned());
++                }
++                if let Some(prior) = prior_frontmost {
++                    // Observed outcome, not a promise that the launched app cannot
++                    // activate itself later. Never perform a focus correction.
++                    structured["focus_changed_during_launch"] =
++                        Value::Bool(crate::apps::frontmost_pid() != Some(prior));
+                 }
+                 ToolResult::text(summary).with_structured(structured)
+             }
+@@ -517,23 +317,60 @@
+
+ // ── Blocking helpers ──────────────────────────────────────────────────────────
+
+-/// Poll for the pid's layer-0 windows, retrying up to 5x100ms to absorb
+-/// LaunchServices → WindowServer latency (mirrors the Swift reference).
+-fn resolve_windows_for_pid(pid: i32) -> Vec<crate::windows::WindowInfo> {
+-    for attempt in 0..5 {
+-        let found: Vec<_> = crate::windows::all_windows()
++/// Read only; never switch Spaces, raise a window, or reopen the app to make
++/// readiness pass. Window creation shares the five-second launch budget.
++fn resolve_windows_for_pid(
++    pid: i32,
++    requested_hidden: bool,
++    deadline: std::time::Instant,
++) -> Vec<crate::windows::WindowInfo> {
++    loop {
++        let windows: Vec<_> = crate::windows::all_windows()
+             .into_iter()
+-            .filter(|w| w.pid == pid && w.layer == 0)
+-            .filter(|w| w.bounds.width > 1.0 && w.bounds.height > 1.0)
++            .filter(|window| window.pid == pid && window.layer == 0)
++            .filter(|window| window.bounds.width > 1.0 && window.bounds.height > 1.0)
+             .collect();
+-        if !found.is_empty() {
+-            return found;
+-        }
+-        if attempt < 4 {
+-            std::thread::sleep(std::time::Duration::from_millis(100));
+-        }
+-    }
+-    vec![]
++        if requested_hidden
++            || launch_window_reason(&windows, crate::apps::app_is_hidden(pid)).is_none()
++            || (!windows.is_empty()
++                && windows
++                    .iter()
++                    .all(|window| window.on_current_space == Some(false)))
++            || std::time::Instant::now() >= deadline
++            || crate::input::cancellation::gate().ensure_active().is_err()
++        {
++            return windows;
++        }
++        std::thread::sleep(
++            std::time::Duration::from_millis(100)
++                .min(deadline.saturating_duration_since(std::time::Instant::now())),
++        );
++    }
++}
++
++fn launch_window_reason(
++    windows: &[crate::windows::WindowInfo],
++    hidden: bool,
++) -> Option<&'static str> {
++    if hidden {
++        return Some("hidden");
++    }
++    if windows
++        .iter()
++        .any(|window| window.is_on_screen && window.on_current_space != Some(false))
++    {
++        return None;
++    }
++    if windows.is_empty() {
++        Some("no_window")
++    } else if windows
++        .iter()
++        .all(|window| window.on_current_space == Some(false))
++    {
++        Some("off_space")
++    } else {
++        Some("input_unavailable")
++    }
+ }
+
+ fn structured_launch_error(code: &str, message: String, details: serde_json::Value) -> ToolResult {
+@@ -614,6 +451,7 @@
+             LaunchError::NoApp => ("LAUNCH_RESULT_MISSING", true),
+             LaunchError::Timeout => ("LAUNCH_CALLBACK_TIMEOUT", true),
+             LaunchError::BadUrl(_) => ("APP_URL_INVALID", false),
++            LaunchError::Cancelled => ("LAUNCH_CANCELLED", false),
+         }
+     } else {
+         ("LAUNCH_FAILED", false)
+@@ -718,13 +556,68 @@
+ #[cfg(test)]
+ mod tests {
+     use super::{
+-        contains_remote_debugging_flag, is_cua_driver_bundle_id, local_file_target,
+-        normalize_launch_url, preflight_file_urls, response_identity, structured_launch_failure,
+-        LaunchAppTool,
++        contains_remote_debugging_flag, is_cua_driver_bundle_id, launch_window_reason,
++        local_file_target, normalize_launch_url, preflight_file_urls, response_identity,
++        structured_launch_failure, LaunchAppTool,
+     };
+     use cua_driver_core::tool::Tool;
+     use serde_json::json;
+     use std::path::PathBuf;
++
++    fn launch_window(
++        is_on_screen: bool,
++        on_current_space: Option<bool>,
++    ) -> crate::windows::WindowInfo {
++        crate::windows::WindowInfo {
++            window_id: 7,
++            pid: 42,
++            app_name: "Fixture".to_owned(),
++            title: "Window".to_owned(),
++            bounds: crate::windows::WindowBounds {
++                x: 0.0,
++                y: 0.0,
++                width: 400.0,
++                height: 300.0,
++            },
++            layer: 0,
++            z_index: 0,
++            is_on_screen,
++            current_space_id: Some(1),
++            on_current_space,
++            space_ids: Some(vec![if on_current_space == Some(false) {
++                2
++            } else {
++                1
++            }]),
++        }
++    }
++
++    #[test]
++    fn hidden_and_off_space_windows_are_not_launch_readiness() {
++        assert_eq!(launch_window_reason(&[], false), Some("no_window"));
++        assert_eq!(
++            launch_window_reason(&[launch_window(true, Some(true))], true),
++            Some("hidden")
++        );
++        assert_eq!(
++            launch_window_reason(&[launch_window(false, Some(false))], false),
++            Some("off_space")
++        );
++        assert_eq!(
++            launch_window_reason(&[launch_window(false, Some(true))], false),
++            Some("input_unavailable")
++        );
++        assert_eq!(
++            launch_window_reason(
++                &[
++                    launch_window(false, Some(false)),
++                    launch_window(true, Some(true)),
++                ],
++                false
++            ),
++            None
++        );
++    }
+
+     #[test]
+     fn local_file_target_treats_plain_paths_as_files() {
+@@ -813,6 +706,15 @@
+         assert_eq!(structured["launch_state"]["requested"], true);
+         assert_eq!(structured["launch_state"]["process_running"], false);
+         assert_eq!(structured["launch_state"]["window_ready"], false);
++    }
++
++    #[test]
++    fn cancellation_before_dispatch_does_not_claim_a_launch_request() {
++        let error = anyhow::Error::new(crate::apps::nsworkspace::LaunchError::Cancelled);
++        let result = structured_launch_failure(&error);
++        let structured = result.structured_content.expect("structured error");
++        assert_eq!(structured["error"], "LAUNCH_CANCELLED");
++        assert_eq!(structured["launch_state"]["requested"], false);
+     }
+
+     #[test]
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
-index 5b2ce9ed5..1661cbabe 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
-@@ -12,17 +12,23 @@ mod kill_app;
+@@ -11,18 +11,24 @@
+ mod kill_app;
  mod launch_app;
  mod list_apps;
- mod list_windows;
 +mod list_spaces;
+ mod list_windows;
  mod press_key;
  mod right_click;
  mod scroll;
@@ -17229,7 +18667,7 @@ index 5b2ce9ed5..1661cbabe 100644
  mod check_permissions;
  mod cursor_tools;
  mod get_accessibility_tree;
-@@ -235,7 +241,7 @@ pub(crate) fn background_refusal_result(
+@@ -235,7 +241,7 @@
  /// target-bound verification.
  pub(crate) struct BackgroundMutationLease {
      pid: i32,
@@ -17238,10 +18676,28 @@ index 5b2ce9ed5..1661cbabe 100644
  }
 
  impl BackgroundMutationLease {
-@@ -305,6 +311,16 @@ pub(crate) async fn acquire_background_mutation(pid: i32) -> BackgroundMutationL
-     }
- }
-
+@@ -265,7 +271,13 @@
+         element_ptr.map(|ptr| unsafe { crate::ax::cache::RetainedElement::retain(ptr) });
+     let facts = match tokio::task::spawn_blocking(move || {
+         let element_ptr = element_guard.as_ref().map(|guard| guard.as_ptr());
+-        crate::ax::exact_target::gather_background_facts(pid, window_id, element_ptr)
++        let mut facts =
++            crate::ax::exact_target::gather_background_facts(pid, window_id, element_ptr);
++        if action == cua_driver_core::background_input::BackgroundAction::FocusedWindowKey {
++            facts.keyboard_focus_proven =
++                crate::ax::exact_target::keyboard_focus_matches_target(pid, window_id, element_ptr);
++        }
++        facts
+     })
+     .await
+     {
+@@ -302,6 +314,16 @@
+     BackgroundMutationLease {
+         pid,
+         _guard: crate::background_mutation::acquire(pid).await,
++    }
++}
++
 +pub(crate) async fn acquire_background_window_mutation(
 +    pid: i32,
 +    window_id: u32,
@@ -17249,13 +18705,10 @@ index 5b2ce9ed5..1661cbabe 100644
 +    BackgroundMutationLease {
 +        pid,
 +        _guard: crate::background_mutation::acquire_window(pid, window_id).await,
-+    }
-+}
-+
- /// Finish the post-action observation window. Embedded interactive clients
- /// that already observe the target continuously may opt out through the
- /// private registry argument to avoid adding a one-second acknowledgement
-@@ -320,15 +336,96 @@ pub(crate) async fn finish_window_observation(
+     }
+ }
+
+@@ -320,14 +342,95 @@
      {
          drop(snapshot);
          crate::window_change_detector::Changes::no_change()
@@ -17282,8 +18735,8 @@ index 5b2ce9ed5..1661cbabe 100644
      } else {
          snapshot.detect_async().await
      }
- }
-
++}
++
 +fn action_observation_timeout(
 +    args: &serde_json::Value,
 +    foreground_ms: Option<u64>,
@@ -17299,12 +18752,12 @@ index 5b2ce9ed5..1661cbabe 100644
 +        background_ms
 +    };
 +    host_ms.map(|ms| std::time::Duration::from_millis(ms.clamp(100, 1000)))
-+}
-+
+ }
+
  #[cfg(test)]
  mod interactive_observation_tests {
      use super::*;
-
++
 +    #[test]
 +    fn foreground_observation_is_bounded_and_never_shortens_background_suppression() {
 +        use serde_json::json;
@@ -17348,11 +18801,10 @@ index 5b2ce9ed5..1661cbabe 100644
 +            None,
 +        );
 +    }
-+
+
      #[tokio::test]
      async fn embedded_interactive_input_can_finish_without_polling() {
-         let snapshot = crate::window_change_detector::WindowChangeDetector::snapshot(None);
-@@ -912,6 +1009,7 @@ pub fn register_all(
+@@ -912,6 +1015,7 @@
 
      registry.register(Box::new(list_apps::ListAppsTool));
      registry.register(Box::new(list_windows::ListWindowsTool));
@@ -17360,7 +18812,7 @@ index 5b2ce9ed5..1661cbabe 100644
      registry.register(Box::new(get_window_state::GetWindowStateTool::new(
          state.clone(),
      )));
-@@ -931,6 +1029,8 @@ pub fn register_all(
+@@ -931,6 +1035,8 @@
          &pid_window_candidates,
      ));
      registry.register(Box::new(set_window_frame::SetWindowFrameTool));
@@ -17369,7 +18821,7 @@ index 5b2ce9ed5..1661cbabe 100644
      registry.register(Box::new(invoke_menu::InvokeMenuTool));
      registry.register(pid_window_guarded(
          click::ClickTool::new(state.clone()),
-@@ -964,6 +1064,13 @@ pub fn register_all(
+@@ -964,6 +1070,13 @@
          set_value::SetValueTool::new(state.clone()),
          &pid_window_candidates,
      ));
@@ -17383,7 +18835,7 @@ index 5b2ce9ed5..1661cbabe 100644
      registry.register(pid_window_guarded(
          scroll::ScrollTool::new(state.clone()),
          &pid_window_candidates,
-@@ -981,6 +1088,10 @@ pub fn register_all(
+@@ -981,6 +1094,10 @@
      // register the MCP server under the `cua-computer-use` name, which is what
      // triggers Claude Code's computer-use beta-tool injection (see cli.rs).
      let _ = compat;
@@ -17394,18 +18846,18 @@ index 5b2ce9ed5..1661cbabe 100644
      registry.register(Box::new(get_screen_size::GetScreenSizeTool));
      registry.register(Box::new(get_desktop_state::GetDesktopStateTool));
      registry.register(Box::new(get_cursor_position::GetCursorPositionTool));
-@@ -991,6 +1102,11 @@ pub fn register_all(
-     registry.register(Box::new(cursor_tools::SetAgentCursorMotionTool::new(
+@@ -989,6 +1106,11 @@
          state.clone(),
      )));
+     registry.register(Box::new(cursor_tools::SetAgentCursorMotionTool::new(
++        state.clone(),
++    )));
 +    // Internal/control cursor-style surface: callable by the embedding host
 +    // over the daemon socket, never listed in the model-facing tools/list.
 +    registry.register(Box::new(cursor_tools::SetAgentCursorStyleTool::new(
-+        state.clone(),
-+    )));
-     registry.register(Box::new(cursor_tools::SetAgentCursorThemeTool::new(
          state.clone(),
      )));
+     registry.register(Box::new(cursor_tools::SetAgentCursorThemeTool::new(
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs
@@ -17439,11 +18891,10 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs b
              Modifiers array: cmd, shift, option/alt, ctrl, fn.".into(),
          input_schema: serde_json::json!({
              "type": "object",
-@@ -323,6 +337,47 @@
-         }
+@@ -324,11 +338,71 @@
 
          let pre_focus_ptr: Option<usize> = pre_focus_guard.as_ref().map(|g| g.as_ptr());
-+
+
 +        // Enter can use an advertised semantic confirmation on the exact
 +        // focused element. Unlike PID-scoped keys this is safe with sibling
 +        // windows. Never guess a default button, synthesize a DOM submission,
@@ -17458,22 +18909,41 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs b
 +                        CFRelease(raw as _);
 +                        Some(retained)
 +                    })?;
-+                    let actions = unsafe { crate::ax::bindings::copy_action_names(element.as_ptr() as AXUIElementRef) };
-+                    actions.iter().any(|action| action == "AXConfirm").then_some(element)
-+                }).await;
++                    let actions = unsafe {
++                        crate::ax::bindings::copy_action_names(element.as_ptr() as AXUIElementRef)
++                    };
++                    actions
++                        .iter()
++                        .any(|action| action == "AXConfirm")
++                        .then_some(element)
++                })
++                .await;
 +                if let Ok(Some(element)) = candidate {
 +                    let _lease = match super::gate_background_window_action(
-+                        pid, wid, Some(element.as_ptr()),
++                        pid,
++                        wid,
++                        Some(element.as_ptr()),
 +                        cua_driver_core::background_input::BackgroundAction::AxSemantic,
-+                    ).await {
++                    )
++                    .await
++                    {
 +                        Ok(lease) => lease,
 +                        Err(refusal) => return refusal,
 +                    };
-+                    let result = focus_guard::with_focus_suppressed_now(Some(pid), "press_key.confirm", || async move {
-+                        tokio::task::spawn_blocking(move || {
-+                            crate::input::ax_actions::perform_ax_action(element.as_ptr(), "AXConfirm")
-+                        }).await
-+                    }).await;
++                    let result = focus_guard::with_focus_suppressed_now(
++                        Some(pid),
++                        "press_key.confirm",
++                        || async move {
++                            tokio::task::spawn_blocking(move || {
++                                crate::input::ax_actions::perform_ax_action(
++                                    element.as_ptr(),
++                                    "AXConfirm",
++                                )
++                            })
++                            .await
++                        },
++                    )
++                    .await;
 +                    return match result {
 +                        Ok(Ok(())) => ToolResult::text("Submitted AXConfirm to the exact focused control; inspect the returned state to verify submission.")
 +                            .with_structured(serde_json::json!({"path":"ax", "effect":"unverifiable", "verified":false,
@@ -17484,9 +18954,54 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/press_key.rs b
 +                }
 +            }
 +        }
-
++
          // ── Exact-target background gate (macOS background input v1) ──
          // A window-addressed background key is process-scoped transport: it
+-        // must prove exact delivery to the requested window (fresh AXWindows
+-        // membership, not minimized/hidden, no competing same-pid keyboard
+-        // destination, proven element ancestry) BEFORE anything is sent —
++        // must prove exact delivery to the requested window (fresh AXWindows,
++        // visible target, matching AXFocusedWindow AND focused element) before
++        // dispatch. Siblings are allowed only with that positive proof —
+         // including the px focus click. delivery_mode:"foreground" stays the
+         // caller's explicit last resort and is not gated here.
+         let _mutation_lease = if !fg {
+@@ -337,7 +411,7 @@
+                     pid,
+                     wid,
+                     pre_focus_ptr,
+-                    cua_driver_core::background_input::BackgroundAction::GenericKey,
++                    cua_driver_core::background_input::BackgroundAction::FocusedWindowKey,
+                 )
+                 .await
+                 {
+@@ -400,7 +474,7 @@
+             || async move {
+                 // Pre-focus the element under suppression so its
+                 // side-effects are captured by the snapshot + lease.
+-                if let Some(guard) = pre_focus_guard.clone() {
++                if let Some(guard) = pre_focus_guard.clone().filter(|_| fg) {
+                     let _ = tokio::task::spawn_blocking(move || {
+                         crate::input::ax_actions::focus_element(guard.as_ptr())
+                     })
+@@ -442,8 +516,15 @@
+                         });
+                     }
+                     // background (default): auth-envelope post, no raise.
+-                    dispatch_with_ax_oracle(pid, window_id, pre_focus_ptr, || {
+-                        crate::input::keyboard::press_key(pid, &key, &m)
++                    dispatch_with_ax_oracle(pid, window_id, pre_focus_ptr, || match window_id {
++                        Some(wid) if !fg => crate::input::keyboard::press_key_in_window(
++                            pid,
++                            wid,
++                            pre_focus_ptr,
++                            &key,
++                            &m,
++                        ),
++                        _ => crate::input::keyboard::press_key(pid, &key, &m),
+                     })
+                 })
+                 .await
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs
 index 19d54df23..37008fb2f 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/px_frame.rs
@@ -17604,13 +19119,25 @@ index 19d54df23..37008fb2f 100644
          WindowPxFrame {
              bounds: WindowBounds {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
-index 64b98e157..1997f80ca 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/scroll.rs
-@@ -52,6 +52,19 @@ impl ScrollTool {
-     }
- }
+@@ -11,8 +11,8 @@
 
+ use crate::apps;
+ use crate::ax::bindings::{
+-    copy_children, copy_element_attr, copy_string_attr, element_screen_center, kAXErrorSuccess,
+-    perform_action, AXUIElementRef,
++    copy_action_names, copy_children, copy_element_attr, copy_string_attr, element_screen_center,
++    AXUIElementRef,
+ };
+ use crate::focus_guard;
+ use crate::window_change_detector::WindowChangeDetector;
+@@ -50,6 +50,19 @@
+     pub fn new(state: Arc<ToolState>) -> Self {
+         Self { state }
+     }
++}
++
 +fn wheel_failure_result(code: &'static str, foreground: bool) -> ToolResult {
 +    ToolResult::error(
 +        "Wheel dispatch failed; its effect is unknown. Observe fresh state; do not replay.",
@@ -17622,12 +19149,10 @@ index 64b98e157..1997f80ca 100644
 +            "restore_status": if foreground { "unobservable" } else { "not-needed" },
 +            "error_code": code }
 +    }))
-+}
-+
- static DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
+ }
 
- fn def() -> &'static ToolDef {
-@@ -79,6 +92,8 @@ fn def() -> &'static ToolDef {
+ static DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
+@@ -79,6 +92,8 @@
              // schema — keeps the contract consistent across platforms.
              "required": ["direction"],
              "properties": {
@@ -17636,10 +19161,11 @@ index 64b98e157..1997f80ca 100644
                  "session": { "type": "string", "description": "For multi-call work, prefer a short public session label and repeat it on every call that accepts it. Omit it to use the authenticated transport's implicit lifecycle session." },
                  "pid": { "type": "integer" },
                  "direction": {
-@@ -97,6 +112,23 @@ fn def() -> &'static ToolDef {
+@@ -96,6 +111,23 @@
+                     "minimum": 1,
                      "maximum": 50,
                      "description": "Pixel-wheel path: number of wheel notches. Keystroke path: number of keystroke repetitions. Default: 3."
-                 },
++                },
 +                "delta_x": {
 +                    "type": "integer",
 +                    "minimum": -50,
@@ -17656,11 +19182,23 @@ index 64b98e157..1997f80ca 100644
 +                    "type": "array",
 +                    "items": {"type": "string"},
 +                    "description": "Modifier keys held during the wheel gesture: cmd, shift, option/alt, ctrl."
-+                },
+                 },
                  "window_id": { "type": "integer" },
                  "element_index": cua_driver_core::tool_schema::element_index_schema(),
-                 "element_token": cua_driver_core::tool_schema::element_token_schema(),
-@@ -186,6 +218,15 @@ impl Tool for ScrollTool {
+@@ -173,19 +205,21 @@
+         // background CGEvents). Only the pixel-wheel path honors it; the
+         // keystroke path is background-by-design and untouched.
+         let delivery_mode = super::DeliveryMode::parse(args.opt_str("delivery_mode").as_deref());
+-        if !delivery_mode.is_foreground() && crate::browser::ElectronJs::is_electron(pid) {
+-            return ToolResult::error(
+-                "Background scroll is unavailable for Electron/Chromium windows on macOS."
+-                    .to_owned(),
+-            )
+-            .with_structured(serde_json::json!({ "code": "background_unavailable" }));
+-        }
+         let direction = match args.require_str("direction") {
+             Ok(v) => v,
+             Err(e) => return e,
          };
          let by = args.str_or("by", "line");
          let amount = args.u64_or("amount", 3) as usize;
@@ -17676,16 +19214,82 @@ index 64b98e157..1997f80ca 100644
          // Surface 6: element_token / element_index precedence.
          let element_token_arg = args.opt_str("element_token");
          let window_id_arg = args.opt_u64("window_id");
-@@ -213,7 +254,7 @@ impl Tool for ScrollTool {
+@@ -213,7 +247,14 @@
          // AppKit exposes vertical scroll-bar buttons beneath the text area's
          // AXScrollArea parent. Pressing those controls is a true
          // background-safe scroll: no activation, z-order change, or cursor move.
 -        if matches!(direction.as_str(), "up" | "down") {
-+        if matches!(direction.as_str(), "up" | "down") && !has_axis_deltas {
++        let semantic_axis = semantic_scroll_axis(
++            &direction,
++            amount,
++            delta_x_arg,
++            delta_y_arg,
++            !modifiers_arg.is_empty(),
++        );
++        if let Some((semantic_direction, semantic_amount)) = semantic_axis {
              if let (Some(element_guard), Some(wid)) = (pre_focus_guard.clone(), window_id) {
                  if !delivery_mode.is_foreground() {
                      if let Some(lease) = _mutation_lease.as_ref() {
-@@ -324,12 +365,37 @@ impl Tool for ScrollTool {
+@@ -241,7 +282,7 @@
+                         }
+                     }
+                 }
+-                let direction_for_ax = direction.clone();
++                let direction_for_ax = semantic_direction.to_owned();
+                 let by_for_ax = by.clone();
+                 let foreground = delivery_mode.is_foreground();
+                 let ax_result =
+@@ -257,8 +298,8 @@
+                                             element_guard.as_ptr() as AXUIElementRef,
+                                             &direction_for_ax,
+                                             &by_for_ax,
+-                                            amount,
+-                                        )
++                                            semantic_amount,
++                                        )?
+                                     };
+                                     std::thread::sleep(std::time::Duration::from_millis(100));
+                                     Ok(())
+@@ -272,8 +313,8 @@
+                                         element_guard.as_ptr() as AXUIElementRef,
+                                         &direction_for_ax,
+                                         &by_for_ax,
+-                                        amount,
+-                                    )
++                                        semantic_amount,
++                                    )?
+                                 },
+                                 false,
+                             ))
+@@ -283,7 +324,7 @@
+                 match ax_result {
+                     Ok(Ok((true, fronted))) => {
+                         return ToolResult::text(format!(
+-                        "✅ Scrolled native macOS control {direction} by {by} × {amount} through AX."
++                        "Submitted native macOS scroll {semantic_direction} by {by} × {semantic_amount} through AX; inspect the returned state to verify movement."
+                     ))
+                     .with_structured(serde_json::json!({
+                         "path": if fronted { "ax_fg" } else { "ax" },
+@@ -293,10 +334,16 @@
+                     }
+                     Ok(Ok((false, _))) => {}
+                     Ok(Err(error)) => {
+-                        return ToolResult::error(format!("Native AX scroll failed: {error}"));
++                        return crate::input::ax_actions::action_failure_result(
++                            error,
++                            "Native AX scroll failed",
++                        );
+                     }
+                     Err(error) => {
+-                        return ToolResult::error(format!("Native AX scroll task failed: {error}"));
++                        return crate::input::ax_actions::action_failure_result(
++                            error.into(),
++                            "Native AX scroll task failed",
++                        );
+                     }
+                 }
+             }
+@@ -324,12 +371,37 @@
          } else {
              WHEEL_STEP_LINE_PX
          };
@@ -17729,7 +19333,7 @@ index 64b98e157..1997f80ca 100644
          };
 
          // Resolve a screen-space wheel target, if a target was supplied.
-@@ -420,7 +486,12 @@ impl Tool for ScrollTool {
+@@ -420,7 +492,12 @@
              // click pixel path — undo any session downscale, then translate
              // through the shared window frame (which refuses a window with no
              // live frame rather than scrolling at screen-absolute coords).
@@ -17743,7 +19347,7 @@ index 64b98e157..1997f80ca 100644
                  cx *= ratio;
                  cy *= ratio;
              }
-@@ -431,7 +502,7 @@ impl Tool for ScrollTool {
+@@ -431,7 +508,7 @@
                      "window_id is required when scrolling by window-local x,y pixels.".to_string(),
                  );
              };
@@ -17752,7 +19356,7 @@ index 64b98e157..1997f80ca 100644
                  Ok(frame) => {
                      let (sx, sy, lx, ly) = frame.to_screen(cx, cy);
                      Some(WheelTarget {
-@@ -521,7 +592,6 @@ impl Tool for ScrollTool {
+@@ -521,7 +598,6 @@
                  win_local,
                  wid,
              } = target;
@@ -17760,7 +19364,7 @@ index 64b98e157..1997f80ca 100644
              let fg = delivery_mode.is_foreground() && wid.is_some();
              let result = focus_guard::with_focus_suppressed(
                  Some(pid),
-@@ -538,7 +608,9 @@ impl Tool for ScrollTool {
+@@ -538,7 +614,9 @@
                                  wid,
                                  delta_y,
                                  delta_x,
@@ -17771,7 +19375,7 @@ index 64b98e157..1997f80ca 100644
                              )
                          };
                          // Foreground rung: brief front → wheel → restore prior frontmost.
-@@ -566,20 +638,40 @@ impl Tool for ScrollTool {
+@@ -566,18 +644,38 @@
                  ""
              };
              return match result {
@@ -17809,8 +19413,8 @@ index 64b98e157..1997f80ca 100644
 +                Ok(Err(_)) => wheel_failure_result("pixel_dispatch_failed", fg),
 +                Err(_) => wheel_failure_result("action_task_failed", fg),
              };
-         }
-
++        }
++
 +        if has_axis_deltas || scroll_flags != core_graphics::event::CGEventFlags::CGEventFlagNull {
 +            return ToolResult::error(
 +                "scroll: delta_x/delta_y/modifiers require an element or window-local x,y \
@@ -17818,11 +19422,230 @@ index 64b98e157..1997f80ca 100644
 +                    .to_string(),
 +            )
 +            .with_structured(serde_json::json!({ "code": "invalid_arguments" }));
-+        }
-+
+         }
+
          let key = match (by.as_str(), direction.as_str()) {
-             ("page", "down") | (_, "down") if by == "page" => "pagedown",
-             ("page", "up") | (_, "up") if by == "page" => "pageup",
+@@ -673,27 +771,138 @@
+     }
+ }
+
++fn semantic_scroll_axis<'a>(
++    direction: &'a str,
++    amount: usize,
++    dx: Option<i64>,
++    dy: Option<i64>,
++    has_modifiers: bool,
++) -> Option<(&'a str, usize)> {
++    if has_modifiers {
++        return None;
++    }
++    if dx.is_none() && dy.is_none() {
++        return Some((direction, amount));
++    }
++    match (
++        dx.unwrap_or(0).clamp(-50, 50),
++        dy.unwrap_or(0).clamp(-50, 50),
++    ) {
++        (0, y) if y != 0 => Some((if y < 0 { "down" } else { "up" }, y.unsigned_abs() as usize)),
++        (x, 0) if x != 0 => Some((
++            if x < 0 { "right" } else { "left" },
++            x.unsigned_abs() as usize,
++        )),
++        _ => None,
++    }
++}
++
++/// Read capabilities first; one submitted AX action never falls back to wheels.
++/// Ancestor ascent stops at the nearest scrollbar, preserving nested targets.
++unsafe fn scroll_advertised_action(
++    element: AXUIElementRef,
++    direction: &str,
++    by: &str,
++    amount: usize,
++) -> anyhow::Result<bool> {
++    let (attribute, action, page_action) = match direction {
++        "down" => ("AXVerticalScrollBar", "AXIncrement", "AXScrollDownByPage"),
++        "up" => ("AXVerticalScrollBar", "AXDecrement", "AXScrollUpByPage"),
++        "right" => (
++            "AXHorizontalScrollBar",
++            "AXIncrement",
++            "AXScrollRightByPage",
++        ),
++        "left" => ("AXHorizontalScrollBar", "AXDecrement", "AXScrollLeftByPage"),
++        _ => return Ok(false),
++    };
++    let window_id = crate::ax::exact_target::element_window_id(element);
++    if window_id.is_none() {
++        return Ok(false);
++    }
++    let mut current = crate::ax::cache::RetainedElement::retain(element as usize);
++    for _ in 0..12 {
++        let ptr = current.as_ptr() as AXUIElementRef;
++        let role = copy_string_attr(ptr, "AXRole");
++        if matches!(role.as_deref(), Some("AXWindow" | "AXApplication")) {
++            break;
++        }
++        let candidate = if by == "page"
++            && copy_action_names(ptr)
++                .iter()
++                .any(|name| name == page_action)
++        {
++            Some((current.clone(), page_action))
++        } else if by != "page" {
++            if let Some(bar) = copy_element_attr(ptr, attribute) {
++                let retained = crate::ax::cache::RetainedElement::retain(bar as usize);
++                CFRelease(bar as CFTypeRef);
++                if copy_action_names(retained.as_ptr() as AXUIElementRef)
++                    .iter()
++                    .any(|name| name == action)
++                {
++                    Some((retained, action))
++                } else {
++                    None
++                }
++            } else {
++                None
++            }
++        } else {
++            None
++        };
++        if let Some((target, action)) = candidate {
++            if crate::ax::exact_target::element_window_id(target.as_ptr() as AXUIElementRef)
++                != window_id
++            {
++                return Ok(false);
++            }
++            for _ in 0..amount.max(1) {
++                crate::input::ax_actions::perform_ax_action(target.as_ptr(), action)?;
++                crate::input::cancellation::gate().pause(std::time::Duration::from_millis(30))?;
++            }
++            return Ok(true);
++        }
++        // A nested scroll area without a semantic actuator must use a wheel
++        // at its own point; never replace it with an outer area's scrollbar.
++        if role.as_deref() == Some("AXScrollArea") {
++            return Ok(false);
++        }
++        let Some(parent) = copy_element_attr(ptr, "AXParent") else {
++            break;
++        };
++        current = crate::ax::cache::RetainedElement::retain(parent as usize);
++        CFRelease(parent as CFTypeRef);
++    }
++    Ok(false)
++}
++
+ unsafe fn scroll_native_text_area(
+     element: AXUIElementRef,
+     direction: &str,
+     by: &str,
+     amount: usize,
+-) -> bool {
+-    if copy_string_attr(element, "AXRole").as_deref() != Some("AXTextArea") {
+-        return false;
++) -> anyhow::Result<bool> {
++    if scroll_advertised_action(element, direction, by, amount)? {
++        return Ok(true);
++    }
++    if !matches!(direction, "up" | "down")
++        || copy_string_attr(element, "AXRole").as_deref() != Some("AXTextArea")
++    {
++        return Ok(false);
+     }
+     let Some(scroll_area) = copy_element_attr(element, "AXParent") else {
+-        return false;
++        return Ok(false);
+     };
+     if copy_string_attr(scroll_area, "AXRole").as_deref() != Some("AXScrollArea") {
+         CFRelease(scroll_area as CFTypeRef);
+-        return false;
++        return Ok(false);
+     }
+     let mut buttons = Vec::new();
+     collect_ax_buttons(scroll_area, 0, &mut buttons);
+     CFRelease(scroll_area as CFTypeRef);
+     if buttons.is_empty() {
+-        return false;
++        return Ok(false);
+     }
+
+     let reverse = direction == "up";
+@@ -705,18 +914,35 @@
+     let index = base + usize::from(reverse);
+     let mut delivered = false;
+     if let Some(target) = buttons.get(index).copied() {
+-        for _ in 0..amount.max(1) {
+-            if perform_action(target, "AXPress") != kAXErrorSuccess {
+-                break;
+-            }
+-            delivered = true;
+-            std::thread::sleep(std::time::Duration::from_millis(30));
++        if copy_action_names(target)
++            .iter()
++            .any(|action| action == "AXPress")
++        {
++            for _ in 0..amount.max(1) {
++                let result =
++                    crate::input::ax_actions::perform_ax_action(target as usize, "AXPress");
++                if let Err(error) = result {
++                    for button in buttons {
++                        CFRelease(button as CFTypeRef);
++                    }
++                    return Err(error);
++                }
++                delivered = true;
++                if let Err(error) =
++                    crate::input::cancellation::gate().pause(std::time::Duration::from_millis(30))
++                {
++                    for button in buttons {
++                        CFRelease(button as CFTypeRef);
++                    }
++                    return Err(error);
++                }
++            }
+         }
+     }
+     for button in buttons {
+         CFRelease(button as CFTypeRef);
+     }
+-    delivered
++    Ok(delivered)
+ }
+
+ unsafe fn collect_ax_buttons(
+@@ -749,6 +975,24 @@
+     use std::sync::atomic::{AtomicBool, Ordering};
+
+     #[test]
++    fn signed_axes_keep_semantic_scroll_available_without_changing_direction() {
++        assert_eq!(
++            semantic_scroll_axis("up", 3, Some(0), Some(-4), false),
++            Some(("down", 4))
++        );
++        assert_eq!(
++            semantic_scroll_axis("up", 3, None, Some(2), false),
++            Some(("up", 2))
++        );
++        assert_eq!(
++            semantic_scroll_axis("up", 3, Some(-2), Some(0), false),
++            Some(("right", 2))
++        );
++        assert_eq!(semantic_scroll_axis("up", 3, Some(1), Some(2), false), None);
++        assert_eq!(semantic_scroll_axis("up", 3, None, Some(2), true), None);
++    }
++
++    #[test]
+     fn exact_target_refusal_prevents_ax_reveal() {
+         let action_ran = AtomicBool::new(false);
+         let target = ExactWindowTarget {
+@@ -761,6 +1005,7 @@
+             target_minimized: Some(false),
+             app_hidden: Some(false),
+             competing_keyboard_destinations: 0,
++            keyboard_focus_proven: false,
+             element: ElementAncestry::OutsideTargetWindow,
+         };
+         let refusal = match decide_background_input(target, &facts, BackgroundAction::AxSemantic) {
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/select_text.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/select_text.rs
 new file mode 100644
 index 000000000..a8766a50a
@@ -18203,10 +20026,9 @@ index 000000000..a8766a50a
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs
 new file mode 100644
-index 000000000..afed308b6
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_app_visibility.rs
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,138 @@
 +//! Hide or unhide a running application without activating it.
 +//!
 +//! This is the workspace-lifecycle half of hidden workspaces: an app hidden
@@ -18266,56 +20088,10 @@ index 000000000..afed308b6
 +}
 +
 +fn mutate_and_verify(pid: i32, hidden: bool) -> Result<VisibilityOutcome, String> {
-+    use crate::ax::bindings::{
-+        copy_bool_attr, is_attribute_settable, kAXErrorSuccess, set_bool_attr,
-+        AXUIElementCreateApplication, AXUIElementSetMessagingTimeout,
-+    };
-+    use core_foundation::base::{CFRelease, CFTypeRef};
-+    use objc2_app_kit::NSRunningApplication;
-+
-+    unsafe {
-+        let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) else {
-+            return Err(format!("pid {pid} is not a running application"));
-+        };
-+        // AXHidden on the application element is the cross-process hide/unhide
-+        // path: NSRunningApplication.hide()/unhide() can refuse requests aimed
-+        // at launch-hidden apps, while the AX attribute drives the same app
-+        // hidden state the Dock's Cmd+H uses.
-+        let app_element = AXUIElementCreateApplication(pid);
-+        if app_element.is_null() {
-+            return Err(format!(
-+                "could not create an accessibility element for pid {pid}"
-+            ));
-+        }
-+        AXUIElementSetMessagingTimeout(app_element, 2.0);
-+        let result = if !is_attribute_settable(app_element, "AXHidden") {
-+            Err(format!(
-+                "pid {pid} does not expose a settable AXHidden attribute"
-+            ))
-+        } else {
-+            let error = set_bool_attr(app_element, "AXHidden", hidden);
-+            if error != kAXErrorSuccess {
-+                Err(format!("AXHidden write was rejected with AXError {error}"))
-+            } else {
-+                let mut observed = None;
-+                for _ in 0..30 {
-+                    std::thread::sleep(std::time::Duration::from_millis(50));
-+                    let state =
-+                        copy_bool_attr(app_element, "AXHidden").unwrap_or_else(|| app.isHidden());
-+                    observed = Some(state);
-+                    if state == hidden {
-+                        break;
-+                    }
-+                }
-+                Ok(VisibilityOutcome {
-+                    requested_hidden: hidden,
-+                    observed,
-+                })
-+            }
-+        };
-+        CFRelease(app_element as CFTypeRef);
-+        result
-+    }
++    crate::apps::set_app_hidden(pid, hidden).map(|observed| VisibilityOutcome {
++        requested_hidden: hidden,
++        observed,
++    })
 +}
 +
 +fn action_record(outcome: &VisibilityOutcome) -> ActionExecutionRecord {
@@ -21502,7 +23278,31 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/window_change_detect
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs b/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs
 --- a/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs
-@@ -515,10 +515,35 @@
+@@ -351,6 +351,23 @@
+             .collect()
+     }
+
++    /// Human activity permanently retires the old restore destination. Merely
++    /// skipping one notification lets a later activation resurrect stale focus.
++    fn abandon(&self) {
++        self.entries.lock().unwrap().clear();
++        let _ = self.janitor_active.send(false);
++    }
++
++    fn abandon_unrelated(&self, activated_pid: i32) {
++        let mut entries = self.entries.lock().unwrap();
++        entries.retain(|_, entry| {
++            entry.restore_to == activated_pid || entry.target_pid == Some(activated_pid)
++        });
++        if entries.is_empty() {
++            let _ = self.janitor_active.send(false);
++        }
++    }
++
+     /// Number of entries (for tests).
+     fn len(&self) -> usize {
+         self.entries.lock().unwrap().len()
+@@ -515,10 +532,43 @@
          pid as i32
      };
 
@@ -21516,8 +23316,16 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs b/lib
 +    if !restore_allowed_after_input(idle)
 +        || crate::input::cancellation::gate().ensure_active().is_err()
 +    {
++        dispatcher.abandon();
 +        return;
 +    }
++    // NSWorkspace notifications can queue behind a newer human switch. Never
++    // restore on the strength of an event that no longer describes the desktop.
++    if crate::apps::frontmost_pid() != Some(activated_pid) {
++        dispatcher.abandon();
++        return;
++    }
++    dispatcher.abandon_unrelated(activated_pid);
      let restore_pids = dispatcher.snapshot_matches(activated_pid);
      for pid in restore_pids {
          restore_focus(pid);
@@ -21538,3 +23346,148 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/focus_steal.rs b/lib
  }
 
  /// Re-activate `pid` if it's still running. Safe to call from any
+@@ -541,6 +591,20 @@
+ mod tests {
+     use super::*;
+     use std::sync::Arc;
++
++    #[test]
++    fn user_activity_retires_the_previous_restore_destination() {
++        let d = Arc::new(Dispatcher::new());
++        let _lease = d.add(Some(42), 7, "test.user-switch");
++        d.abandon();
++        assert!(d.snapshot_matches(42).is_empty());
++        let _next = d.add(Some(42), 7, "test.other-app");
++        d.abandon_unrelated(99);
++        assert!(d.snapshot_matches(42).is_empty());
++        let _current = d.add(Some(42), 99, "test.new-destination");
++        d.abandon_unrelated(42);
++        assert_eq!(d.snapshot_matches(42), vec![99]);
++    }
+
+     /// Dispatcher::add returns a handle, the entry is reachable by
+     /// match, and remove() drops it.
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+@@ -7,7 +7,7 @@
+ //! top-level keyboard destinations, and addressed-element ancestry. All reads are
+ //! bounded and fail closed — an unreadable fact never unlocks a route.
+
+-use core_foundation::base::{CFRelease, CFTypeRef};
++use core_foundation::base::{CFEqual, CFRelease, CFTypeRef};
+ use cua_driver_core::background_input::{
+     BackgroundTargetFacts, ElementAncestry, WindowServerOwnership,
+ };
+@@ -86,6 +86,75 @@
+     } else {
+         CFRelease(element as CFTypeRef);
+         None
++    }
++}
++
++/// Read-only proof of the application's keyboard destination. The application's
++/// focused window must identify this exact window, even while inactive. No
++/// activation or focus write is performed.
++pub fn keyboard_focus_matches_window(pid: i32, window_id: u32) -> bool {
++    keyboard_focus_matches_target(pid, window_id, None)
++}
++
++fn keyboard_focus_facts_match(
++    focused_window_matches: bool,
++    app_focused_element_matches: Option<bool>,
++    addressed_element_focus_matches: Option<bool>,
++) -> bool {
++    focused_window_matches
++        && match app_focused_element_matches {
++            Some(matches) => matches,
++            None => addressed_element_focus_matches.unwrap_or(true),
++        }
++}
++
++/// An explicitly addressed field must itself remain the keyboard recipient.
++pub fn keyboard_focus_matches_target(
++    pid: i32,
++    window_id: u32,
++    expected_element: Option<usize>,
++) -> bool {
++    unsafe {
++        let app = AXUIElementCreateApplication(pid);
++        if app.is_null() {
++            return false;
++        }
++        super::bindings::AXUIElementSetMessagingTimeout(app, 0.15);
++        let window = copy_element_attr(app, "AXFocusedWindow");
++        let focused = copy_element_attr(app, "AXFocusedUIElement");
++        let focused_window_matches =
++            window.is_some_and(|window| ax_get_window_id(window) == Some(window_id));
++        let app_focused_element_matches = focused.map(|element| {
++            element_window_id(element) == Some(window_id)
++                && expected_element.is_none_or(|expected| {
++                    CFEqual(element as CFTypeRef, expected as CFTypeRef) != 0
++                })
++        });
++        // Chromium retains AXFocusedWindow while inactive but can omit the
++        // app-level AXFocusedUIElement. The exact addressed field can prove its
++        // own focus in that window; AXFocused alone is insufficient because a
++        // background sibling's DOM field may also report it.
++        let addressed_element_focus_matches = if focused.is_none() {
++            expected_element.map(|element| {
++                element_window_id(element as AXUIElementRef) == Some(window_id)
++                    && copy_bool_attr(element as AXUIElementRef, "AXFocused") == Some(true)
++            })
++        } else {
++            None
++        };
++        let matches = keyboard_focus_facts_match(
++            focused_window_matches,
++            app_focused_element_matches,
++            addressed_element_focus_matches,
++        );
++        if let Some(window) = window {
++            CFRelease(window as CFTypeRef);
++        }
++        if let Some(element) = focused {
++            CFRelease(element as CFTypeRef);
++        }
++        CFRelease(app as CFTypeRef);
++        matches
+     }
+ }
+
+@@ -201,13 +270,34 @@
+         target_minimized: target.and_then(|record| record.minimized),
+         app_hidden,
+         competing_keyboard_destinations,
++        // Only focused-key admission and the explicit capability query need
++        // AX focus reads. Pointer and semantic mutations pay no extra round trip.
++        keyboard_focus_proven: false,
+         element: element.unwrap_or(ElementAncestry::NotAddressed),
+     }
+ }
+
+ #[cfg(test)]
+ mod tests {
+-    use super::{count_competing_keyboard_destinations, AxWindowRecord};
++    use super::{
++        count_competing_keyboard_destinations, keyboard_focus_facts_match, AxWindowRecord,
++    };
++
++    #[test]
++    fn inactive_app_focus_requires_exact_window_and_addressed_field() {
++        // An inactive Chromium app can omit the app-level focused element.
++        assert!(keyboard_focus_facts_match(true, None, Some(true)));
++        assert!(!keyboard_focus_facts_match(true, None, Some(false)));
++        // A window-only key is bound by the application's exact focused window.
++        assert!(keyboard_focus_facts_match(true, None, None));
++        // A sibling's focused field never overrides the app's focused window.
++        assert!(!keyboard_focus_facts_match(false, None, Some(true)));
++        assert!(!keyboard_focus_facts_match(false, Some(true), Some(true)));
++        // Contradictory app-level focus always refuses, even if a field claims focus.
++        assert!(!keyboard_focus_facts_match(true, Some(false), Some(true)));
++        assert!(keyboard_focus_facts_match(true, Some(true), None));
++        assert!(!keyboard_focus_facts_match(false, None, None));
++    }
+
+     fn ax_window(window_id: u32, minimized: Option<bool>) -> AxWindowRecord {
+         AxWindowRecord {

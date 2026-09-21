@@ -67,7 +67,7 @@ async function fixture(
     deathFlag?: string;
     ownPids?: () => ReadonlySet<number>;
     cursorStyle?: () => { fill?: string; rim?: string; shadow?: string } | null | undefined;
-    checkPermissions?: () => Promise<{
+    checkPermissions?: (options?: { readonly force: boolean }) => Promise<{
       accessibility: boolean;
       screenRecording: boolean;
       inputMonitoring?: boolean;
@@ -384,6 +384,21 @@ describe("Cua macOS host retirement", () => {
       },
     });
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("requires an uncached confirming read before accepting a changed permission snapshot", async () => {
+    let granted = false;
+    const checks: boolean[] = [];
+    const f = await fixture(capability, {
+      checkPermissions: async (options) => {
+        checks.push(options?.force === true);
+        return { accessibility: granted, screenRecording: granted };
+      },
+    });
+    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    granted = true;
+    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    expect(checks).toEqual([false, false, true]);
   });
 
   it("retires a cached native process once when grants change, then requires fresh observation", async () => {
@@ -1486,6 +1501,22 @@ describe("driver warm-up on first touch", () => {
     expect(events.filter((event) => event.event === "start")).toHaveLength(1);
     expect(events.filter((event) => event.event === "motion-100-0")).toHaveLength(1);
     expect(events.filter((event) => event.event === "key")).toHaveLength(1);
+  });
+
+  it("does not prewarm a macOS driver before the first real permission grants", async () => {
+    setFlag("1");
+    let granted = false;
+    const f = await fixture(capability, {
+      checkPermissions: async () => ({ accessibility: granted, screenRecording: granted }),
+    });
+    await cuaRequest(f.endpoint, { method: "probe" });
+    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
+    granted = true;
+    await cuaRequest(f.endpoint, { method: "call", name: "check_permissions" });
+    expect(
+      (await waitForEvent(f, "start")).filter((event) => event.event === "start"),
+    ).toHaveLength(1);
   });
 
   it("warms on a permission check too, and only once per host lifetime", async () => {

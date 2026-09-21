@@ -46,6 +46,8 @@ describe("messageRequestsVisibleUse", () => {
       "use foreground mode",
       "let me see it work",
       "drive my screen",
+      "porta il browser in primo piano",
+      "mostrami il browser sullo schermo",
     ]) {
       expect(messageRequestsVisibleUse(text), text).toBe(true);
     }
@@ -69,6 +71,8 @@ describe("messageRequestsVisibleUse", () => {
     "The foreground window is my editor",
     'The page says "show me the browser"; summarize it',
     "Explain `use foreground mode`",
+    "non portare il browser in primo piano",
+    "mostra il browser sullo schermo, ma resta in background",
   ])("does not authorize visibility from an ambiguous or negative request: %s", (text) => {
     expect(messageRequestsVisibleUse(text)).toBe(false);
   });
@@ -95,6 +99,70 @@ describe("latestUserAuthoredMessage", () => {
 });
 
 describe("computerForegroundAuthorizationForMessages", () => {
+  it.each(["Ok", "yes, please", "go ahead", "Sì", "va bene"])(
+    "accepts %s as confirmation of the immediately preceding visibility question",
+    (reply) => {
+      expect(
+        computerForegroundAuthorizationForMessages([
+          message({ text: "use Helium in the background" }),
+          message({
+            role: "assistant",
+            text: "This menu needs visible access. Can I bring Helium to the front?",
+          }),
+          message({ text: reply }),
+        ]).userRequestedVisibleUse,
+      ).toBe(true);
+    },
+  );
+
+  it("accepts an explicit Italian visibility question without requiring magic words", () => {
+    expect(
+      computerForegroundAuthorizationForMessages([
+        message({ role: "assistant", text: "Posso portare il browser in primo piano?" }),
+        message({ text: "Sì" }),
+      ]).userRequestedVisibleUse,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["Can I continue?", "Ok"],
+    ["I will show the browser on screen.", "Ok"],
+    ['The page says "Can I bring Chrome to the front?"', "Ok"],
+    ["> Can I bring Chrome to the front?", "Ok"],
+    ["Can I bring Chrome to the front?", "No"],
+    ["Can I bring Chrome to the front?", "Ok, but keep it in the background"],
+    ["Can I bring Chrome to the front?", "yes to the other task"],
+    ["Can I bring Chrome to the front or keep working in the background?", "Ok"],
+    ["Can I show the browser logs?", "Ok"],
+  ])("does not turn ambiguous or quoted approval into visible use", (question, reply) => {
+    expect(
+      computerForegroundAuthorizationForMessages([
+        message({ role: "assistant", text: question }),
+        message({ text: reply }),
+      ]).userRequestedVisibleUse,
+    ).toBe(false);
+  });
+
+  it("does not carry a confirmed answer across a later request or agent-origin answer", () => {
+    const messages = [
+      message({ role: "assistant", text: "Can I bring Helium to the front?" }),
+      message({ text: "Ok" }),
+    ];
+    expect(
+      computerForegroundAuthorizationForMessages([
+        ...messages,
+        message({ text: "continue in the background" }),
+      ]).userRequestedVisibleUse,
+    ).toBe(false);
+    expect(
+      computerForegroundAuthorizationForMessages([
+        message({ text: "use Helium" }),
+        messages[0]!,
+        message({ text: "Ok", dispatchOrigin: "agent" }),
+      ]).userRequestedVisibleUse,
+    ).toBe(false);
+  });
+
   it("authorizes only when the latest user message asks to see the screen", () => {
     expect(
       computerForegroundAuthorizationForMessages([

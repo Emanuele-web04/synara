@@ -391,58 +391,38 @@ describe("computer_launch_app hidden", () => {
     expect(backend.callsFor("raiseWindow")).toEqual([]);
   });
 
-  it("refuses a visible launch without the user's task-text authorization", async () => {
-    const approval = vi.fn(async () => true);
-    const backend = new FakeComputerBackend();
-    const { call } = await setup(backend, approval, async () => ({
-      userRequestedVisibleUse: false,
-    }));
-    const refused = await call("computer_launch_app", {
-      app: "TextEdit",
-      hidden: false,
-      wait_for_window: false,
-    });
-    expect(refused.isError).toBe(true);
-    expect(JSON.stringify(resultJson(refused))).toContain("foreground_not_requested");
-    expect(backend.callsFor("launchApp")).toEqual([]);
-    // The off-screen path still works: only the visible opt-out is gated.
-    const offScreen = await call("computer_launch_app", {
-      app: "TextEdit",
-      wait_for_window: false,
-    });
-    expect(offScreen.isError).not.toBe(true);
-    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["TextEdit", [], { hidden: true }]);
-  });
-
-  it("defaults an ordinary launch off-screen", async () => {
-    const approval = vi.fn(async () => true);
-    const backend = new FakeComputerBackend();
-    const { call } = await setup(backend, approval);
-    const result = await call("computer_launch_app", {
-      app: "TextEdit",
-      wait_for_window: false,
-    });
-    expect(result.isError).not.toBe(true);
-    // No `hidden` in the call still resolves off-screen at the manager seam;
-    // only the doctrine text moved out of the gateway.
-    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["TextEdit", [], { hidden: true }]);
-    const launched = (await backend.listWindows()).find((window) => window.appName === "TextEdit");
-    expect(launched).toMatchObject({ focused: false, visible: false });
-  });
-
-  it("lets hidden:false opt a launch back into the visible workspace", async () => {
-    const approval = vi.fn(async () => true);
-    const backend = new FakeComputerBackend();
-    const { call } = await setup(backend, approval);
-    const result = await call("computer_launch_app", {
-      app: "TextEdit",
-      hidden: false,
-      wait_for_window: false,
-    });
-    expect(result.isError).not.toBe(true);
-    expect(backend.callsFor("launchApp").at(-1)?.args).toEqual(["TextEdit", [], { hidden: false }]);
-    const launched = (await backend.listWindows()).find((window) => window.appName === "TextEdit");
-    expect(launched).toMatchObject({ focused: true, visible: true });
+  it("creates an available background window without foreground authorization", async () => {
+    const backend = new FakeComputerBackend({ agentDialect: "macos" });
+    const { call } = await setup(
+      backend,
+      vi.fn(async () => true),
+      async () => ({
+        userRequestedVisibleUse: false,
+      }),
+    );
+    const before = await backend.listWindows();
+    for (const options of [{}, { hidden: false }]) {
+      const result = await call("computer_launch_app", {
+        app: "TextEdit",
+        wait_for_window: false,
+        ...options,
+      });
+      expect(result.isError).not.toBe(true);
+    }
+    expect(backend.callsFor("launchApp").map((call) => call.args)).toEqual([
+      ["TextEdit", []],
+      ["TextEdit", [], { hidden: false }],
+    ]);
+    const after = await backend.listWindows();
+    expect(after.filter((window) => window.appName === "TextEdit")).toEqual([
+      expect.objectContaining({ focused: false, visible: true }),
+      expect.objectContaining({ focused: false, visible: true }),
+    ]);
+    for (const existing of before) {
+      expect(after.find((window) => window.id === existing.id)?.visible).toBe(existing.visible);
+    }
+    expect(backend.callsFor("raiseWindow")).toEqual([]);
+    expect(backend.callsFor("focusWindow")).toEqual([]);
   });
 });
 

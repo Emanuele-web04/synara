@@ -34,6 +34,7 @@ import {
 import type { McpToolCallResult } from "./protocol.ts";
 import { GatewayToolError, type ToolContext } from "./toolRuntime.ts";
 import { PROVIDER_KINDS } from "./toolInput.ts";
+import { makeAgentGatewayComputerBrowserTools } from "./computerBrowserTools.ts";
 
 const THREAD = "thread-computer";
 
@@ -91,12 +92,20 @@ async function setup(
   // A zero settle delay: these tests assert on what the post-action capture
   // does, not on how long the desktop is given to repaint.
   const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+  const browserTools = manager.supportsBrowser
+    ? makeAgentGatewayComputerBrowserTools({
+        manager,
+        ...(authorizeAction ? { authorizeAction } : {}),
+        resolveForegroundAuthorization,
+      })
+    : [];
   const tools = makeAgentGatewayComputerTools({
     manager,
     ...(authorizeAction ? { authorizeAction } : {}),
     resolveForegroundAuthorization,
+    relatedTools: browserTools,
   });
-  const byName = new Map(tools.map((tool) => [tool.definition.name, tool]));
+  const byName = new Map([...tools, ...browserTools].map((tool) => [tool.definition.name, tool]));
   const call = async (
     name: string,
     args: Record<string, unknown>,
@@ -213,8 +222,8 @@ describe("agent gateway computer tools", () => {
     const { byName, manager } = await setup();
     try {
       const hidden = schemaPropertyDescription(byName, "computer_launch_app", "hidden");
-      expect(hidden).toContain("Launch posture");
-      expect(hidden).toContain("foreground_not_requested");
+      expect(hidden).toContain("Explicitly hide");
+      expect(hidden).toContain("never authorizes foreground input");
       expect(hidden).not.toContain("Defaults to true");
       expect(hidden).not.toContain("agent launches stay invisible");
       expect(hidden).not.toContain("invisible workspace");
@@ -377,7 +386,7 @@ describe("agent gateway computer tools", () => {
       }),
     );
     const notes = computerToolInstructions();
-    expect(notes).toContain("the user's own latest message asked to watch");
+    expect(notes).toContain("the user's visible-use request or direct confirmation");
     expect(notes).not.toContain("without bringing it to the front");
     expect(windowIdDescription(byName, "computer_click")).toContain(
       "Exact window for label or x/y targeting",
@@ -2361,6 +2370,45 @@ describe("agent gateway computer tools", () => {
     expect(description).toContain("computer_get_state");
   });
 
+  it.each([
+    [{ delta_y: 80 }, [0, 100]],
+    [{ delta_x: -40 }, [-50, 0]],
+  ])(
+    "defaults the omitted scroll axis to zero in direct and batch calls",
+    async (axes, expected) => {
+      const { backend, call, see, byName, manager } = await setup();
+      try {
+        await see();
+        const schema = byName.get("computer_scroll")!.definition.inputSchema;
+        expect(schema.required ?? []).not.toContain("delta_x");
+        expect(schema.required ?? []).not.toContain("delta_y");
+        const result = await call("computer_scroll", { ...axes, include_screenshot: false });
+        expect(result.isError).not.toBe(true);
+        expect(backend.callsFor("scroll").at(-1)?.args.slice(1)).toEqual(expected);
+        const batch = await call("computer_run", { steps: [{ type: "scroll", ...axes }] });
+        expect(resultJson(batch)).toMatchObject({ completed: 1, stopped: false });
+        expect(backend.callsFor("scroll").at(-1)?.args.slice(1)).toEqual(expected);
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("refuses an empty or zero scroll before dispatch", async () => {
+    const { backend, call, see, manager } = await setup();
+    try {
+      await see();
+      for (const axes of [{}, { delta_x: 0, delta_y: 0 }]) {
+        const result = await call("computer_scroll", axes);
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result)).toContain("nonzero");
+      }
+      expect(backend.callsFor("scroll")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("still resolves a scroll target when one is actually given", async () => {
     const { backend, call, see } = await setup();
     await see();
@@ -3619,49 +3667,29 @@ describe("computer never-raise gate", () => {
     }
   });
 
-  it("refuses a visible launch without authorization, and keeps the off-screen path ungated", async () => {
-    const backend = new FakeComputerBackend();
-    const approval = vi.fn(async () => true);
-    const { call, manager } = await setup(backend, approval, refusing);
+  it("launches macOS apps in the background without hiding or raising them", async () => {
+    const backend = new FakeComputerBackend({ agentDialect: "macos" });
+    const { call, manager } = await setup(
+      backend,
+      vi.fn(async () => true),
+      refusing,
+    );
     try {
-      const refused = await call("computer_launch_app", {
+      const result = await call("computer_launch_app", {
         app: "TextEdit",
         hidden: false,
         wait_for_window: false,
       });
-      expect(refused.isError).toBe(true);
-      expect(JSON.stringify(resultJson(refused))).toContain("foreground_not_requested");
-      expect(backend.callsFor("launchApp")).toEqual([]);
-
-      const offScreen = await call("computer_launch_app", {
-        app: "TextEdit",
-        wait_for_window: false,
+      expect(result.isError).not.toBe(true);
+      const batched = await call("computer_run", {
+        steps: [{ type: "launch_app", app: "TextEdit", wait_for_window: false }],
       });
-      expect(offScreen.isError).not.toBe(true);
-      expect(backend.callsFor("launchApp").at(-1)?.args).toEqual([
-        "TextEdit",
-        [],
-        { hidden: true },
+      expect(resultJson(batched)).toMatchObject({ steps: [{ ok: true }] });
+      expect(backend.callsFor("launchApp").map((call) => call.args)).toEqual([
+        ["TextEdit", [], { hidden: false }],
+        ["TextEdit", []],
       ]);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("refuses a run's visible launch step without authorization", async () => {
-    const backend = new FakeComputerBackend();
-    const approval = vi.fn(async () => true);
-    const { call, manager } = await setup(backend, approval, refusing);
-    try {
-      const result = await call("computer_run", {
-        steps: [{ type: "launch_app", app: "TextEdit", hidden: false, wait_for_window: false }],
-      });
-      const payload = resultJson(result) as { steps: { ok: boolean; error?: { code?: string } }[] };
-      expect(payload.steps[0]).toMatchObject({
-        ok: false,
-        error: { code: "foreground_not_requested" },
-      });
-      expect(backend.callsFor("launchApp")).toEqual([]);
+      expect(backend.callsFor("raiseWindow")).toEqual([]);
     } finally {
       await manager.dispose();
     }
@@ -5473,6 +5501,41 @@ describe("computer_run flow control", () => {
 });
 
 describe("computer_help", () => {
+  it("looks up the registered browser catalog and the returned prepare tool is callable", async () => {
+    const backend = new FakeComputerBackend({ browser: true });
+    const { call, byName, manager } = await setup(backend, async () => true);
+    try {
+      const help = resultJson(await call("computer_help", { tool: "computer_browser_prepare" }));
+      expect(help).toMatchObject({
+        definition: byName.get("computer_browser_prepare")!.definition,
+        advertised: true,
+      });
+      const index = resultJson(await call("computer_help", { topic: "tools" })) as { text: string };
+      expect(index.text).toContain("computer_browser_prepare");
+      expect(index.text).toContain("computer_browser_navigate");
+      const prepared = await call("computer_browser_prepare", {
+        allow_launch: true,
+        profile: { mode: "isolated_new" },
+      });
+      expect(prepared.isError).not.toBe(true);
+      expect(backend.callsFor("browser.browser_prepare")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not invent browser entries for a desktop-only backend", async () => {
+    const { call, manager } = await setup();
+    try {
+      const help = await call("computer_help", { tool: "computer_browser_prepare" });
+      expect(help.isError).toBe(true);
+      const index = resultJson(await call("computer_help", { topic: "tools" })) as { text: string };
+      expect(index.text).not.toContain("computer_browser_prepare");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("indexes the chapters when called bare", async () => {
     const { call, manager } = await setup();
     try {

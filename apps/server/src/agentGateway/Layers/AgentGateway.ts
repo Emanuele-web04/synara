@@ -1163,6 +1163,18 @@ export const makeAgentGateway = Effect.gen(function* () {
     return Option.isNone(detail) ? [] : computerSpaceDesignationForMessages(detail.value.messages);
   };
 
+  // Construct the browser family once so help reads the same conditional
+  // catalog the gateway exposes; a desktop-only backend has no browser entries.
+  const computerBrowserTools =
+    computerService?.supported === true && computerService.manager.supportsBrowser
+      ? makeAgentGatewayComputerBrowserTools({
+          manager: computerService.manager,
+          authorizeAction: authorizeComputerAction,
+          resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
+          resolveWorkspaceRoot,
+        })
+      : [];
+
   const tools: ReadonlyArray<ToolEntry> = [
     ...readTools,
     ...diagnosticTools,
@@ -1186,20 +1198,10 @@ export const makeAgentGateway = Effect.gen(function* () {
           authorizeAction: authorizeComputerAction,
           resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
           resolveSpaceDesignation: resolveComputerSpaceDesignation,
+          relatedTools: computerBrowserTools,
         })
       : []),
-    // The driver-backed CDP browser family. Advertised only when the backend
-    // actually has a browser route — an absent `browser` member is how a
-    // desktop-only backend says so, and advertising unusable tools is worse
-    // than omitting them.
-    ...(computerService?.supported === true && computerService.manager.supportsBrowser
-      ? makeAgentGatewayComputerBrowserTools({
-          manager: computerService.manager,
-          authorizeAction: authorizeComputerAction,
-          resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
-          resolveWorkspaceRoot,
-        })
-      : []),
+    ...computerBrowserTools,
   ];
 
   // The computer family by name, read off the unfiltered catalog above: a

@@ -7,17 +7,17 @@ import type { OrchestrationMessage } from "@synara/contracts";
  * task that said "use Helium" was never asked to *show* Helium, yet the run
  * raised it, then ran twenty-one foreground excursions through it while the
  * user was typing. Raising is therefore opt-in per task, and the opt-in is the
- * user's own words — not the model's judgment, not the approval mode, not
- * `full-access`.
+ * user's own request or direct confirmation — not the model's judgment, not
+ * the approval mode, not `full-access`.
  *
  * The answer is computed from the thread's latest user-authored message:
  * the same opening line the consent model already treats as the task, read
  * fresh on every foreground call so a user reply that authorizes visibility
- * ("yes, show me the browser") takes effect immediately, and a reply that does not
- * ("stop") revokes it just as fast.
+ * ("yes, show me the browser", or "yes" to a direct permission question)
+ * takes effect immediately, and "stop" revokes it just as fast.
  */
 export interface ComputerForegroundAuthorization {
-  /** The user's own latest task text explicitly asked to see the screen. */
+  /** The user explicitly requested or confirmed visible use for the current task. */
   readonly userRequestedVisibleUse: boolean;
 }
 
@@ -62,6 +62,8 @@ const VISIBLE_USE_PATTERNS: readonly RegExp[] = [
   /\buse (?:the )?foreground(?: mode)?(?=\s*(?:[.!?,;:]|$))/i,
   /\btake over (?:my|the) (?:screen|desktop|computer)\b/i,
   /\bdrive (?:my|the) (?:screen|desktop|computer)\b/i,
+  /\b(?:mostra(?:mi|re)?|porta(?:re)?|metti|mettere)\b[^.!?\n]{0,60}\b(?:sullo schermo|in primo piano)\b/i,
+  /\bvoglio vedere (?:la finestra|il browser|lo schermo|il desktop)\b/i,
 ];
 
 // Explicit background/negative instructions take precedence, even when the
@@ -70,17 +72,43 @@ const BACKGROUND_USE_PATTERNS: readonly RegExp[] = [
   /\b(?:do not|don['’]t|never|not|avoid|without|stop)\b[^.!?\n]{0,100}\b(?:show|watch|visible|foreground|front|focus|raise|screen|desktop)\b/i,
   /\b(?:keep|stay|remain|work|run|use)\b[^.!?\n]{0,60}\b(?:background|hidden|invisible)\b/i,
   /\bbackground[- ]only\b/i,
+  /\b(?:non|senza|evita|smetti di)\b[^.!?\n]{0,100}\b(?:mostrare|mostrarmi|primo piano|schermo|focus)\b/i,
+  /\b(?:lavora|resta|rimani|mantieni)\b[^.!?\n]{0,60}\b(?:background|nascost[ao])\b/i,
 ];
+
+function unquotedRequest(text: string): string {
+  return text.replace(/```[\s\S]*?```|`[^`]*`|"[^"\n]*"|“[^”\n]*”/g, "").replace(/^\s*>.*$/gm, "");
+}
 
 /** Whether one message text explicitly asks to see the desktop. Pure. */
 export function messageRequestsVisibleUse(text: string): boolean {
-  const request = text
-    .replace(/```[\s\S]*?```|`[^`]*`|"[^"\n]*"|“[^”\n]*”/g, "")
-    .replace(/^\s*>.*$/gm, "");
+  const request = unquotedRequest(text);
   return (
     !BACKGROUND_USE_PATTERNS.some((pattern) => pattern.test(request)) &&
     VISIBLE_USE_PATTERNS.some((pattern) => pattern.test(request))
   );
+}
+
+/** A short affirmative answers one direct visibility question, never quoted page text. */
+function confirmsVisibleUse(
+  reply: OrchestrationMessage,
+  preceding: OrchestrationMessage | undefined,
+): boolean {
+  if (preceding?.role !== "assistant" || preceding.streaming) return false;
+  if (
+    !/^(?:yes|yeah|yep|ok(?:ay)?|sure|go ahead|s[iì]|va bene|certo|procedi|vai)(?:[, ]+(?:please|go ahead|per favore|fallo))?[.!]*$/iu.test(
+      reply.text.trim(),
+    )
+  ) {
+    return false;
+  }
+  const question = unquotedRequest(preceding.text).trim();
+  // Take only the final, standalone permission question. General task
+  // approval ("continue?") and statements about visible use do not qualify.
+  const permissionQuestion = question.match(
+    /(?:^|[.!?]\s+)((?:can i|may i|shall i|do you want me to|would you like me to|is it (?:ok(?:ay)?|alright) (?:if i|to)|posso|vuoi che)\b[^?]*\?)$/iu,
+  )?.[1];
+  return permissionQuestion !== undefined && messageRequestsVisibleUse(permissionQuestion);
 }
 
 /**
@@ -110,7 +138,11 @@ export function computerForegroundAuthorizationForMessages(
   messages: readonly OrchestrationMessage[],
 ): ComputerForegroundAuthorization {
   const latest = latestUserAuthoredMessage(messages);
+  const latestIndex = latest === undefined ? -1 : messages.lastIndexOf(latest);
   return {
-    userRequestedVisibleUse: latest !== undefined && messageRequestsVisibleUse(latest.text),
+    userRequestedVisibleUse:
+      latest !== undefined &&
+      (messageRequestsVisibleUse(latest.text) ||
+        confirmsVisibleUse(latest, messages[latestIndex - 1])),
   };
 }

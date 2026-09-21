@@ -429,7 +429,7 @@ export class CuaDriverHost {
       bundleId: string;
       capability: string;
       setup: () => Promise<void>;
-      checkPermissions?: () => Promise<HostPermissions>;
+      checkPermissions?: (options?: { readonly force: boolean }) => Promise<HostPermissions>;
       releaseHeldInput?: () => Promise<void>;
       /** Bound on each post-handshake startup call; defaults to 5s. */
       startupTimeoutMs?: number;
@@ -782,12 +782,13 @@ export class CuaDriverHost {
           this.monitoredTasks.delete(this.monitoredTasks.keys().next().value!);
       }
     }
-    // A probe or a permission check is the host's first touch: both answer
-    // without the driver, which is exactly what makes them the cheap moment
-    // to warm its spawn plus handshake in the background.
+    // Hosts without a permission bridge can warm on first touch. On macOS,
+    // wait for the first granted snapshot below so the daemon cannot cache a
+    // denied TCC result before setup completes.
     if (
-      request.method === "probe" ||
-      (request.method === "call" && request.name === "check_permissions")
+      !this.options.checkPermissions &&
+      (request.method === "probe" ||
+        (request.method === "call" && request.name === "check_permissions"))
     )
       this.warm();
     if (request.method === "probe") {
@@ -941,7 +942,7 @@ export class CuaDriverHost {
           // desktop: every action runs check_permissions first, so a flapping
           // helper re-arms the gate after each observation clears it. Only a
           // confirmed second read counts as a real change.
-          const confirmed = await this.checkPermissions(connection, check);
+          const confirmed = await this.checkPermissions(connection, check, true);
           if (!confirmed || cancelled())
             return {
               ok: false,
@@ -964,6 +965,12 @@ export class CuaDriverHost {
           if (this.generation) await this.retire(this.generation);
         }
         this.permissions = permissions;
+        if (
+          permissions.accessibility &&
+          permissions.screenRecording &&
+          permissions.inputMonitoring !== false
+        )
+          this.warm();
         const monitor = this.inputMonitorRequested ? this.options.inputMonitorState?.() : undefined;
         return {
           ok: true,
@@ -1137,7 +1144,8 @@ export class CuaDriverHost {
 
   private checkPermissions(
     connection: Socket,
-    check: () => Promise<HostPermissions>,
+    check: (options?: { readonly force: boolean }) => Promise<HostPermissions>,
+    force = false,
   ): Promise<HostPermissions | undefined> {
     // Stop and disconnected status readers must release native admission even
     // while a different feature owns a macOS prompt in the shared helper queue.
@@ -1154,7 +1162,7 @@ export class CuaDriverHost {
       this.pendingPermissionChecks.add(cancel);
       connection.once("close", cancel);
       void Promise.resolve()
-        .then(check)
+        .then(() => check({ force }))
         .then(
           (permissions) => {
             cleanup();
@@ -1616,9 +1624,9 @@ export class CuaDriverHost {
 
   /**
    * `SYNARA_CUA_WARM_ON_FIRST_TOUCH=1` asks the host to run the spawn plus
-   * validated handshake as soon as the first computer request arrives — a
-   * liveness probe or a permission check, both of which answer without the
-   * driver — so the first input does not pay the cold-start cost. Warming
+   * validated handshake on first touch, after known grants on a host with a
+   * permission bridge. The initial check answers without the driver, so its
+   * cold start can overlap subsequent work without caching pre-grant TCC. Warming
    * stops there on purpose: it opens no session, moves no focus, captures no
    * pixels, and fires at most once per host lifetime so a retired driver is
    * never re-warmed by polling alone.

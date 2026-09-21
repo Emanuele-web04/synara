@@ -402,8 +402,9 @@ export interface ComputerBackend {
    * Availability as established, not as guessed: this may connect, install, and
    * load whatever the backend needs, so it belongs on paths that are about to
    * use the desktop. See `probeAvailability` for the passive counterpart.
+   * `refresh` bypasses an established snapshot for explicit status/grant updates.
    */
-  availability(): Promise<ComputerAvailability>;
+  availability(options?: { readonly refresh?: boolean }): Promise<ComputerAvailability>;
 
   /**
    * Install or compile whatever this backend needs, on explicit request.

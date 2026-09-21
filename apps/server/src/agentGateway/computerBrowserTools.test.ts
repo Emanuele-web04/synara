@@ -757,6 +757,61 @@ describe("computer_browser_* gateway tools", () => {
 describe("browser id ergonomics", () => {
   const oneTab = [{ tab_id: "tab-1", active: true, title: "about:blank", url: "about:blank" }];
 
+  it.each([
+    { pid: 42, window_id: 99 },
+    { target_id: "", tab_id: "tab-1" },
+    { target_id: "bt-1", tab_id: "tab-1", pid: 42, window_id: 99 },
+  ])(
+    "refuses native window identities on browser actions before approval or dispatch",
+    async (scope) => {
+      const authorizeAction = vi.fn(async () => true);
+      const { backend, call, manager } = await setup({ authorizeAction });
+      const audit = vi.spyOn(manager, "recordComputerAudit");
+      const result = await call("computer_browser_navigate", {
+        ...scope,
+        url: "https://example.com/",
+      });
+      expect(result.structuredContent).toMatchObject({
+        status: "refused",
+        refusal: { code: "browser_target_required" },
+      });
+      expect(textOf(result)).toContain("If the bind was refused");
+      expect(textOf(result)).not.toContain("computer_browser_prepare");
+      expect(authorizeAction).not.toHaveBeenCalled();
+      expect(backend.callsFor("browser.browser_navigate")).toHaveLength(0);
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({ effect: "refused", code: "browser_target_required" }),
+      );
+    },
+  );
+
+  it("explains a pid-only bind refusal without suggesting an invalid navigation scope", async () => {
+    const backend = new FakeComputerBackend({
+      browser: () => ({
+        structuredContent: {
+          status: "refused",
+          refusal: {
+            code: "browser_wrong_target_refused",
+            detail: { headless_driver_owned: false },
+          },
+        },
+      }),
+    });
+    const { call } = await setup({ backend });
+    const result = await call("computer_browser_state", { pid: 42 });
+    expect(result.structuredContent).toMatchObject({
+      status: "refused",
+      refusal: {
+        code: "browser_wrong_target_refused",
+        detail: { headless_driver_owned: false },
+      },
+    });
+    expect(textOf(result)).toContain("computer_browser_state({pid,window_id})");
+    expect(textOf(result)).toContain("Only a successful bind returns target_id");
+    expect(textOf(result)).toContain("do not send pid/window_id to browser actions");
+    expect(textOf(result)).not.toContain("computer_browser_prepare");
+  });
+
   it("labels target_id and tab_id in the bind result instead of leaving the model to guess", async () => {
     const backend = new FakeComputerBackend({
       browser: (call) =>

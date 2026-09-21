@@ -401,16 +401,11 @@ export class FakeComputerBackend implements ComputerBackend {
       bounds: { x: 120, y: 80, width: 900, height: 700 },
       // A hidden launch renders nothing and takes no focus: frontmost is
       // unchanged, which the fake models by leaving every existing flag alone.
-      focused: !hidden,
+      focused: false,
       minimized: false,
       visible: !hidden,
     };
-    this.currentWindows = [
-      ...(hidden
-        ? this.currentWindows
-        : this.currentWindows.map((item) => ({ ...item, focused: false }))),
-      window,
-    ];
+    this.currentWindows = [...this.currentWindows, window];
     this.currentRoot = defaultRoot(this.currentScreenSize, this.currentWindows);
     this.emit({ type: "windows-changed", windows: this.currentWindows });
     return { computerId: this.computerId, app, window } as ComputerLaunchAppResult;

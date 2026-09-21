@@ -1,5 +1,9 @@
 # Follow-up to the September 20 native Computer live report
 
+The [revision 36 follow-up](#september-21-round-2-report-revision-36) below
+supersedes the earlier launch and multi-window keyboard limitations described
+in this historical record.
+
 The reported build was PR #1090 at `365fe29fe`, native revision 33. Before
 these changes, `git rebase --rebase-merges origin/main` completed against
 `e7cd1528`. Main was already an ancestor; both the PR head and its tree were
@@ -180,3 +184,133 @@ Do not describe this as live acceptance of every report criterion.
   contracts 256; shared 836; scripts 231; web 5,179; desktop 1,163;
   server/CLI 6,813. This replaces the earlier intermediate Node-26 run; it
   does not substitute for the live Helium acceptance tests above.
+
+## September 21 round-2 report: revision 36
+
+Baseline: `cf4e5f81`, native revision 35. The second report confirms that the
+permanent key-window lock is fixed, but documents remaining focus excursions,
+hidden launches, stale permission status, dropped scrolling and blocked Return.
+
+### Launch, focus and cancellation
+
+- A normal macOS launch now requests no activation and leaves the app unhidden.
+  `hidden:true` is an explicit visibility choice, not a synonym for background
+  delivery. It no longer takes a foreground permission check just to create a
+  usable window.
+- A plain launch reuses a running PID and its windows without sending another
+  reopen event. A hidden instance uses the existing verified `AXHidden` helper,
+  shared with explicit visibility controls. Failed visibility writes preserve
+  the known running process and report actual readiness; they never kill or
+  relaunch it.
+- Launch no longer arms a restore lease, demotes a window repeatedly, opens
+  Finder through an activating selection API, or starts an eight-second
+  restore watchdog. Reactive AX guards retire their saved destination after
+  human input, cancellation or a newer foreground change. The cursor panel
+  explicitly rejects becoming the key or main window.
+- Both LaunchServices entry points and the shared `AXHidden` write recheck
+  native admission at dispatch. A submitted visibility write retains uncertain
+  delivery if Stop interrupts its readback; it is never replayed.
+- Refused foreground calls are checked inside the action queue before claiming
+  the desktop lease, warming a driver or preparing the cursor. A direct
+  affirmative answer to a visibility question is accepted; quoted content and
+  general task confirmations cannot authorize foreground use.
+- Native launch and window readiness share a five-second polling budget.
+  Missing, hidden or off-Space windows preserve `no_usable_window` and the
+  concrete reason through the server, without another futile readiness loop.
+  Synchronous macOS calls are not preemptible; this is not a hard wall-clock
+  guarantee for every OS failure.
+
+### Permissions, scrolling and tool discovery
+
+Computer continues to use AppSnap's permission helper and setup guide. An
+AppSnap grant event invalidates an already-requested Computer status while
+System Settings owns focus. Explicit refresh and confirmation checks bypass
+stale snapshots; concurrent/subset checks share work. Only complete successful
+reports update grants, failures clear stale green status to unknown, and setup
+generations prevent dismissed guides from reopening. Driver warm-up waits for
+known grants instead of caching the pre-grant state. An unused Computer feature
+remains inactive.
+
+Chromium wheel input now uses one public PID submission. Signed, unmodified
+single-axis requests can also use the existing exact AX scroll route; an
+attempted semantic mutation never falls through to a second actuator. Page
+scrolls do not silently degrade into line increments. The gateway accepts a
+vertical-only or horizontal-only delta and rejects a zero gesture before
+dispatch. Existing post-scroll evidence and no-replay behavior remain intact.
+
+`computer_help` reads the actual registered browser catalog, including
+`computer_browser_prepare`. `list_spaces` has an explicit read-only risk
+classification. Browser actions explain and require a bound CDP `target_id`
+before dispatch, rather than accepting incompatible native PID/window fields.
+They do not silently replace the user's browser or profile.
+
+### Background Return
+
+Exact keyboard admission now accepts a multi-window app when its
+`AXFocusedWindow` positively matches the requested window. An explicitly
+addressed field must also retain matching ancestry and focus. Inactive Chromium
+may omit the application-level focused element; the exact window/field proof
+handles that absence without accepting a contradictory sibling. Fresh browsers
+with no known keyboard window still refuse instead of guessing a recipient.
+
+Unmodified Return uses `AXUIElementPostKeyboardEvent` on the target application's
+AX object. The native guard checks the recipient immediately before dispatch.
+Matching key-up runs on success, cancellation, failure and unwind; failed release
+blocks a false cleanup acknowledgement. This route is selected before dispatch,
+not replayed after another attempted actuator. Other keys retain their existing
+transport. The unsuccessful private/public CGEvent and NSEvent Return experiments
+are excluded from the implementation.
+
+### Measured native evidence
+
+- The production driver delivered exactly **one Return key-down/up, one DOM
+  Enter and one form submission** to window A in **1.165 s**; window B remained
+  unchanged. None of the **224** focus samples showed target or driver
+  activation. The first 185 retained the sentinel exactly; a subsequent human
+  focus change stopped further input. The unchanged sibling-refusal guard
+  passed in the preceding controlled run. Setup explicitly activated owned
+  fixtures before background measurement; cold, never-activated windows and
+  real browser omniboxes are outside this acceptance result.
+- Owned two-window Electron fixture: nested scroll and document scroll both
+  moved **360 px**, the sibling remained unchanged, and all **258** controlled
+  focus samples retained the sentinel's exact PID/key-window identity.
+- Owned AppKit launch fixture: cold launch **1.089 s**, same-instance reuse
+  **0.790 s**, unhide **0.821 s**, and URL handoff **0.689 s**. All five checks
+  passed, including PID/window reuse and no reopen event. **684** passive focus
+  samples included 8.5 seconds after the final call: no target or driver
+  activation. The test never activated a sentinel or a user's application.
+- The nonactivating cursor panel's native properties pass. A separate baseline
+  versus revised-panel startup observation saw no theft in either variant;
+  that experiment does not establish the cause of the report's startup event.
+
+These are owned fixtures and a locally built arm64 driver. They do not qualify
+Helium's omnibox/popups, every third-party app's self-activation behavior,
+physical typing across 50 actions, packaged signing/TCC transitions, Linux GUI
+behavior, all provider accounts or battery/token improvements. No new TCC grant,
+reset or permission-database mutation was performed. Native revision 36 must
+be provisioned and the app restarted; updating TypeScript alone cannot replace
+an already running revision-35 driver.
+
+### Revision 36 checks
+
+- Workspace formatting, lint (zero errors), all seven package typechecks and
+  the Windows runtime-boundary check pass.
+- The broad Node 24 test run completed with 14,520 passing tests and 30 skipped.
+  Its one failure was the Electron help text exceeding the existing 700-character
+  budget by three characters. The text was shortened without raising the budget;
+  all nine guidance tests then passed. The other suites were not rerun.
+- The native arm64 driver compiles against the pinned Rust 1.97.1 toolchain.
+  145 focused native tests cover authorization, exact keyboard admission,
+  launch/reuse/cancellation, scroll, cursor and focus retirement. All 12 existing
+  authenticated control-plane cancellation/retirement smoke cases pass.
+- The native patch applies to the pinned source and reproduces the compiled
+  source files exactly. The Linux follow-on patch applies after it, and both
+  manifest SHA-256 values match. This verifies patch integrity, not Linux GUI
+  qualification.
+- Reusable owned-fixture runners are
+  `scripts/computer-use-fixtures/verify-background-launch.mjs` and
+  `scripts/computer-use-fixtures/background-input-regression.mjs`. The latter
+  supports `--enter-only` and an explicit `--owned-sentinel` setup for a controlled
+  focus measurement. Default observation does not activate a sentinel; a fresh
+  browser with no proven keyboard window refuses input. These checks are manual
+  native fixtures, not part of the normal unit test suite.

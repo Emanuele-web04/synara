@@ -11,7 +11,7 @@
 // `computer.open-pane-requested` arms the owning thread's preview session.
 // The in-chat popover is the only Computer surface.
 
-import { useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
 import { computerActionStatusLabel } from "~/components/ComputerPanel.logic";
@@ -19,15 +19,46 @@ import {
   changedThreadComputerStates,
   removedThreadComputerStateIds,
 } from "~/components/chat/ComputerPreviewPopover.logic";
-import { ThreadId } from "@synara/contracts";
+import { type DesktopBridge, ThreadId } from "@synara/contracts";
+import { readLocalComputerPermissionBridge } from "~/lib/computerProvisioning";
 import { serverQueryKeys } from "~/lib/serverReactQuery";
 import { ensureNativeApi } from "~/nativeApi";
 import { useComputerPreviewStore } from "../computerPreviewStore";
 import { useComputerStateStore } from "../computerStateStore";
 
+/** A native grant can land while System Settings owns focus and query polling is paused. */
+export function subscribeComputerPermissionStatus(
+  queryClient: QueryClient,
+  bridge: Pick<DesktopBridge["appSnap"], "onState"> | null = readLocalComputerPermissionBridge(),
+): () => void {
+  if (!bridge) return () => undefined;
+  let previous: string | undefined;
+  return bridge.onState((state) => {
+    // AppSnap-only snapshots do not establish Accessibility and must not turn
+    // an unused Computer feature on. Only refresh an already requested status.
+    if (
+      !state.supported ||
+      state.platform !== "macos" ||
+      state.accessibilityPermission === undefined
+    )
+      return;
+    const grants = [
+      state.accessibilityPermission,
+      state.inputMonitoringPermission,
+      state.screenRecordingPermission,
+    ].join(",");
+    if (grants === previous) return;
+    previous = grants;
+    if (queryClient.getQueryState(serverQueryKeys.computerStatus())) {
+      void queryClient.invalidateQueries({ queryKey: serverQueryKeys.computerStatus() });
+    }
+  });
+}
+
 /** Mounted once by EventRouter, including while settings or split view is open. */
 export function useComputerEventBridge(): void {
   const queryClient = useQueryClient();
+  useEffect(() => subscribeComputerPermissionStatus(queryClient), [queryClient]);
   useEffect(() => {
     const api = ensureNativeApi();
     if (!api.computer) {

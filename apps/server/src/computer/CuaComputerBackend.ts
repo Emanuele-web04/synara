@@ -682,9 +682,12 @@ export class CuaComputerBackend implements ComputerBackend {
       };
     }
   }
-  async availability(): Promise<ComputerAvailability> {
+  async availability(options?: { readonly refresh?: boolean }): Promise<ComputerAvailability> {
     try {
-      await this.refresh();
+      // A grant notification can arrive while an earlier snapshot is still
+      // settling. Explicit status refreshes must read again after that snapshot.
+      if (options?.refresh) await this.snapshot?.catch(() => undefined);
+      await this.refresh(options?.refresh === true);
     } catch {
       // refresh records the failed native prerequisite in both availability
       // and health. Status must carry that diagnosis instead of failing RPC.
@@ -2158,11 +2161,22 @@ export class CuaComputerBackend implements ComputerBackend {
       true,
     );
     const pid = number(result.structuredContent?.pid);
+    const nativeReason = result.structuredContent?.window_reason;
+    const windowReason =
+      nativeReason === "hidden" ||
+      nativeReason === "off_space" ||
+      nativeReason === "no_window" ||
+      nativeReason === "input_unavailable"
+        ? nativeReason
+        : undefined;
+    const unavailable =
+      result.structuredContent?.window_status === "no_usable_window" && windowReason !== undefined;
     return {
       computerId: this.computerId,
       app,
       window: null,
-      windowStatus: "not_checked",
+      windowStatus: unavailable ? "no_usable_window" : "not_checked",
+      ...(unavailable ? { windowReason } : {}),
       ...(Number.isSafeInteger(pid) && pid > 0 && pid <= 0x7fffffff ? { pid } : {}),
     };
   }
