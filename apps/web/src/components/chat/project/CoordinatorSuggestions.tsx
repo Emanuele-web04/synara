@@ -1,6 +1,14 @@
-import { COORDINATOR_SUGGESTION_CHIPS } from "./coordinatorSuggestions.logic";
+import type { GroupSettingsSection } from "../group/groupSettingsDialog.logic";
+import {
+  COORDINATOR_SUGGESTION_CHIPS,
+  coordinatorSuggestionSection,
+} from "./coordinatorSuggestions.logic";
 
-export function CoordinatorSuggestions({ onOpenSettings }: { onOpenSettings: () => void }) {
+export function CoordinatorSuggestions({
+  onOpenSettings,
+}: {
+  onOpenSettings: (section: GroupSettingsSection) => void;
+}) {
   return (
     <div className="flex flex-col gap-2 px-4 pb-28">
       <div className="text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
@@ -12,7 +20,7 @@ export function CoordinatorSuggestions({ onOpenSettings }: { onOpenSettings: () 
             key={label}
             type="button"
             className="rounded-full border border-[color:var(--color-border-light)] px-3 py-1 text-[length:var(--app-font-size-ui,12px)] text-foreground hover:bg-foreground/5"
-            onClick={onOpenSettings}
+            onClick={() => onOpenSettings(coordinatorSuggestionSection(label))}
           >
             {label}
           </button>

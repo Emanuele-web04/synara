@@ -294,6 +294,7 @@ import {
   EnvironmentPanel,
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
+import type { GroupSettingsSection } from "./chat/group/groupSettingsDialog.logic";
 import { CoordinatorSuggestions } from "./chat/project/CoordinatorSuggestions";
 import { shouldShowCoordinatorSuggestions } from "./chat/project/coordinatorSuggestions.logic";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
@@ -1640,6 +1641,9 @@ export default function ChatView({
     activeThread && coordinatorThreadIds.has(activeThread.id),
   );
   const [coordinatorSettingsOpen, setCoordinatorSettingsOpen] = useState(false);
+  const [coordinatorSettingsSection, setCoordinatorSettingsSection] = useState<
+    GroupSettingsSection | undefined
+  >(undefined);
   const showCoordinatorSuggestions = shouldShowCoordinatorSuggestions({
     isCoordinatorThread: isCoordinatorConversation,
     messages: activeThread?.messages ?? EMPTY_MESSAGES,
@@ -5875,7 +5879,10 @@ export default function ChatView({
                   />
                   {showCoordinatorSuggestions ? (
                     <CoordinatorSuggestions
-                      onOpenSettings={() => setCoordinatorSettingsOpen(true)}
+                      onOpenSettings={(section) => {
+                        setCoordinatorSettingsSection(section);
+                        setCoordinatorSettingsOpen(true);
+                      }}
                     />
                   ) : null}
                 </div>
@@ -5991,6 +5998,7 @@ export default function ChatView({
               onOpenThread={(threadId) => onNavigateToThread(threadId)}
               onClose={() => setProjectFromAuxiliary(false)}
               settingsDialogOpen={coordinatorSettingsOpen}
+              settingsInitialSection={coordinatorSettingsSection}
               onSettingsDialogOpenChange={setCoordinatorSettingsOpen}
             />
           ) : null}

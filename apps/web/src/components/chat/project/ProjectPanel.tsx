@@ -22,11 +22,9 @@ import {
   EnvironmentRow,
   EnvironmentSectionDivider,
 } from "../environment/EnvironmentRow";
-import { ProjectAgentDialog } from "./ProjectAgentDialog";
+import { GroupSettingsDialog } from "../group/GroupSettingsDialog";
+import type { GroupSettingsSection } from "../group/groupSettingsDialog.logic";
 import { defaultProjectAgentName } from "./projectAgentDialog.logic";
-import { toDisplayName } from "~/components/profile/profileFormatting";
-import { useProfileName } from "~/components/profile/useProfileName";
-import { useWorkspacePathsStore } from "~/workspacePathsStore";
 import {
   mergeProjectFocusRows,
   partitionProjectFocusRows,
@@ -49,6 +47,7 @@ export interface ProjectPanelProps {
   onOpenThread: (threadId: ThreadId) => void;
   onClose: () => void;
   settingsDialogOpen?: boolean;
+  settingsInitialSection?: GroupSettingsSection | undefined;
   onSettingsDialogOpenChange?: (open: boolean) => void;
 }
 
@@ -66,6 +65,7 @@ export function ProjectPanel({
   onOpenCoordinator,
   onOpenThread,
   settingsDialogOpen,
+  settingsInitialSection,
   onSettingsDialogOpenChange,
 }: ProjectPanelProps) {
   const [internalDialogOpen, setInternalDialogOpen] = useState(false);
@@ -74,15 +74,6 @@ export function ProjectPanel({
     setInternalDialogOpen(open);
     onSettingsDialogOpenChange?.(open);
   };
-  const homeDir = useWorkspacePathsStore((store) => store.homeDir);
-  const { name: userDisplayName } = useProfileName(
-    toDisplayName(
-      (homeDir ?? "")
-        .replace(/[\\/]+$/, "")
-        .split(/[\\/]/)
-        .pop() ?? "there",
-    ),
-  );
   const agent = useProjectAgent({
     projectId,
     enabled: open && projectId !== null,
@@ -265,41 +256,24 @@ export function ProjectPanel({
           <div className="min-h-0 overflow-y-auto">{content}</div>
         </div>
       </div>
-      <ProjectAgentDialog
-        open={agentDialogOpen}
-        mode={configured ? "edit" : "setup"}
-        projectId={projectId}
-        projectName={projectName}
-        agentName={coordinatorName}
-        workspacePath={workspacePath}
-        projectCwd={workspacePath}
-        defaultModelSelection={defaultModelSelection}
-        currentModelSelection={agent.overview?.config?.coordinatorModelSelection ?? null}
-        expectedRevision={agent.overview?.config?.revision}
-        busy={agent.busy}
-        error={agent.error}
-        onOpenChange={setAgentDialogOpen}
-        onSave={async ({
-          coordinatorName: nextName,
-          modelSelection,
-          expectedRevision,
-          requestId,
-        }) => {
-          const saved = await agent.configure({
-            modelSelection,
-            coordinatorName: nextName,
-            userDisplayName,
-            requestId,
-            ...(agent.overview?.config?.workerRouting
-              ? { workerRouting: agent.overview.config.workerRouting }
-              : {}),
-            ...(agent.overview?.config?.limits ? { limits: agent.overview.config.limits } : {}),
-            ...(importedInstructions?.trim() ? { importedInstructions } : {}),
-            ...(expectedRevision !== undefined ? { expectedRevision } : {}),
-          });
-          if (saved) setAgentDialogOpen(false);
-        }}
-      />
+      {projectId !== null ? (
+        <GroupSettingsDialog
+          open={agentDialogOpen}
+          mode={configured ? "edit" : "onboarding"}
+          projectId={projectId}
+          projectName={projectName}
+          workspacePath={workspacePath}
+          defaultModelSelection={defaultModelSelection}
+          initialSection={settingsInitialSection}
+          importedInstructions={importedInstructions}
+          onOpenChange={setAgentDialogOpen}
+          onSaved={(overview) => {
+            if (configured) return;
+            const coordinatorThreadId = overview.config?.coordinatorThreadId;
+            if (coordinatorThreadId) onOpenCoordinator(coordinatorThreadId);
+          }}
+        />
+      ) : null}
     </>
   );
 }

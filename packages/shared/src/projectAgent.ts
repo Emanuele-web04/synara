@@ -58,6 +58,7 @@ export function isGeneratedDocumentPath(logicalPath: string): boolean {
 export const MEMORY_DOCUMENT_PREFIX = "memory/";
 export const MEMORY_AUTO_DOCUMENT_PATH = "memory/MEMORY.md";
 export const MEMORY_THREAD_DOCUMENT_PREFIX = "memory/threads/";
+export const MEMORY_NOTES_DOCUMENT_PREFIX = "memory/notes/";
 
 export function isMemoryDocumentPath(logicalPath: string): boolean {
   return logicalPath.startsWith(MEMORY_DOCUMENT_PREFIX);
@@ -80,6 +81,15 @@ export function memoryThreadIdFromDocumentPath(logicalPath: string): string | nu
   return logicalPath.slice(MEMORY_THREAD_DOCUMENT_PREFIX.length, -3);
 }
 
+// User-owned quick notes live under memory/notes/ and are not thread-scoped.
+export function isMemoryNoteDocumentPath(logicalPath: string): boolean {
+  return (
+    logicalPath.startsWith(MEMORY_NOTES_DOCUMENT_PREFIX) &&
+    logicalPath.endsWith(".md") &&
+    !logicalPath.slice(MEMORY_NOTES_DOCUMENT_PREFIX.length, -3).includes("/")
+  );
+}
+
 export function canWriteMemoryDocument(input: {
   readonly logicalPath: string;
   readonly principalKind: string;
@@ -87,6 +97,9 @@ export function canWriteMemoryDocument(input: {
 }): boolean {
   if (input.logicalPath === MEMORY_AUTO_DOCUMENT_PATH) {
     return input.principalKind === "user" || input.principalKind === "coordinator";
+  }
+  if (isMemoryNoteDocumentPath(input.logicalPath)) {
+    return input.principalKind === "user";
   }
   const threadId = memoryThreadIdFromDocumentPath(input.logicalPath);
   if (threadId === null) return false;

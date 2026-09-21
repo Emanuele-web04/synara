@@ -20,7 +20,7 @@ interface PendingProjectInstructionsSave {
   readonly lastCommitted: string;
 }
 
-function useProjectInstructionsAutosave({
+export function useProjectInstructionsAutosave({
   projectId,
   instructions,
   onChange,
