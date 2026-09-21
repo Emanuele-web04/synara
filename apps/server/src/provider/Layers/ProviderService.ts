@@ -56,6 +56,7 @@ import {
   Stream,
 } from "effect";
 import { nonEmptyTrimmed } from "@synara/shared/text";
+import { ComputerService } from "../../computer/Services/ComputerService.ts";
 
 import {
   type ProviderAdapterError,
@@ -266,6 +267,7 @@ function toRuntimePayloadFromSession(
   extra?: {
     readonly modelSelection?: unknown;
     readonly providerOptions?: unknown;
+    readonly enableComputerControl?: boolean;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
     readonly lifecycleGeneration?: string;
@@ -281,6 +283,9 @@ function toRuntimePayloadFromSession(
     lastError: nonEmptyTrimmed(session.lastError) ?? null,
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(extra?.providerOptions !== undefined ? { providerOptions: extra.providerOptions } : {}),
+    ...(extra?.enableComputerControl !== undefined
+      ? { enableComputerControl: extra.enableComputerControl }
+      : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
@@ -303,6 +308,12 @@ function readPersistedProviderOptions(
 ): ProviderStartOptions | undefined {
   const raw = runtimePayloadRecord(runtimePayload).providerOptions;
   return Option.getOrUndefined(Schema.decodeUnknownOption(ProviderStartOptions)(raw));
+}
+
+function readPersistedComputerControl(
+  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
+): boolean {
+  return runtimePayloadRecord(runtimePayload).enableComputerControl === true;
 }
 
 function readPersistedCwd(
@@ -338,6 +349,10 @@ function hasResumeCursor(value: unknown): boolean {
  * or item-level events). Terminal events are the only stale-generation events
  * that may still be processed: they are the sole signal that can settle a
  * thread whose runtime died after its lifecycle generation was rotated away.
+ *
+ * Keep this predicate strictly about lifecycle: it also drives
+ * `runtimeStatusForEvent` and resume-cursor decisions, so interaction
+ * resolutions must never be folded in here (see `isStaleSettlingRuntimeEvent`).
  */
 function isTerminalRuntimeEvent(event: ProviderRuntimeEvent): boolean {
   return (
@@ -346,6 +361,25 @@ function isTerminalRuntimeEvent(event: ProviderRuntimeEvent): boolean {
     event.type === "session.exited" ||
     event.type === "runtime.error"
   );
+}
+
+/**
+ * True for events that settle a durable pending interaction (an approval or an
+ * AskUserQuestion user-input request). These are not lifecycle events, but
+ * like terminal events they are the only signal that can cleanly close a row
+ * the projection would otherwise leave `pending` forever.
+ */
+function isInteractionResolutionRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  return event.type === "user-input.resolved" || event.type === "request.resolved";
+}
+
+/**
+ * Events allowed through the stale-generation gate. Terminal events settle the
+ * turn/session; interaction resolutions settle the pending approval/user-input
+ * rows that a dying runtime cancels during teardown.
+ */
+function isStaleSettlingRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  return isTerminalRuntimeEvent(event) || isInteractionResolutionRuntimeEvent(event);
 }
 
 function runtimeStatusForEvent(
@@ -802,6 +836,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         readonly lifecycleGeneration?: string;
         readonly modelSelection?: unknown;
         readonly providerOptions?: unknown;
+        readonly enableComputerControl?: boolean;
         readonly lastRuntimeEvent?: string;
         readonly lastRuntimeEventAt?: string;
         readonly runtimePayload?: Record<string, unknown>;
@@ -1024,6 +1059,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           if (getDispatchState(input.threadId).latestGeneration !== input.generation) {
             return;
           }
+          const existingBinding = yield* directory.getBinding(input.threadId);
+          const enableComputerControl =
+            Option.isSome(existingBinding) &&
+            readPersistedComputerControl(existingBinding.value.runtimePayload);
           const completedBeforePersistence = consumeRecentlyCompletedTurn(
             input.threadId,
             input.turnId,
@@ -1037,7 +1076,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // the delayed result must not overwrite any of its metadata. With
             // no row, preserve the live-fallback behavior by creating an
             // explicitly stopped binding from the settled dispatch result.
-            if (Option.isSome(yield* directory.getBinding(input.threadId))) {
+            if (Option.isSome(existingBinding)) {
               markPersistenceSucceeded(false);
               return;
             }
@@ -1046,8 +1085,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               provider: input.provider,
               status: "stopped",
               ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-              ...(input.modelSelection !== undefined
-                ? { runtimePayload: { modelSelection: input.modelSelection } }
+              ...(input.modelSelection !== undefined || enableComputerControl
+                ? {
+                    runtimePayload: {
+                      ...(input.modelSelection !== undefined
+                        ? { modelSelection: input.modelSelection }
+                        : {}),
+                      ...(enableComputerControl ? { enableComputerControl: true } : {}),
+                    },
+                  }
                 : {}),
             });
             markPersistenceSucceeded(false);
@@ -1067,6 +1113,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ...(input.modelSelection !== undefined
                 ? { modelSelection: input.modelSelection }
                 : {}),
+              ...(enableComputerControl ? { enableComputerControl: true } : {}),
               activeTurnId: input.turnId,
               lastRuntimeEvent: input.lastRuntimeEvent,
               lastRuntimeEventAt: new Date().toISOString(),
@@ -1271,6 +1318,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               status: preserveShutdownStop ? "stopped" : eventStatus,
               ...(resumeCursor !== undefined ? { resumeCursor } : {}),
               runtimePayload: {
+                // A runtime that exited takes its computer-control grant with
+                // it: the payload merges over the previous row, so the flag has
+                // to be written false here or a later flag-less start would
+                // re-lease control from a session that no longer exists. Every
+                // user-driven turn carries the flag and reasserts it.
+                ...(event.type === "session.exited" ? { enableComputerControl: false } : {}),
                 activeTurnId: preserveShutdownStop ? null : activeTurnId,
                 lastRuntimeEvent: preserveShutdownStop ? "provider.stopAll" : event.type,
                 lastRuntimeEventAt: preserveShutdownStop ? shutdownStartedAt : event.createdAt,
@@ -1347,23 +1400,39 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ) {
             const currentGeneration = lifecycle.currentGeneration(event.threadId);
             // A stale-generation event is normally noise from a superseded
-            // session, but terminal events are the exception: they are the
-            // only signal that can settle a turn whose runtime died after its
-            // generation was rotated or retired (a stop, a recovery, or an
-            // idle retire). Dropping them strands the thread "working" with a
-            // dead runtime until the reconciler or an app restart intervenes,
-            // and silently discards the very error that explains the death.
+            // session, but settling events are the exception: they are the
+            // only signal that can close out state whose runtime died after
+            // its generation was rotated or retired (a stop, a recovery, or an
+            // idle retire).
             //
-            // A stale terminal event is safe to let through when either:
+            // Terminal events settle the turn/session. Dropping them strands
+            // the thread "working" with a dead runtime until the reconciler or
+            // an app restart intervenes, and silently discards the very error
+            // that explains the death.
+            //
+            // Interaction resolutions (`user-input.resolved`,
+            // `request.resolved`) settle a durable pending approval/user-input
+            // row. A runtime that is torn down mid-turn (a Stop) cancels its
+            // outstanding requests during teardown, and the generation has
+            // already rotated by then — so this event is the only chance to
+            // close the row. Dropping it left `projection_pending_interactions`
+            // 'pending' forever: the sidebar showed "Awaiting Input" on an idle
+            // thread and every answer failed with no session bound. This is
+            // safe because the projection's resolved branch only applies a
+            // resolution when the existing row's lifecycleGeneration matches
+            // the event's, so a stale resolution can never clobber a newer
+            // generation's row.
+            //
+            // A stale settling event is let through when either:
             //  - no current generation exists (nothing newer can be corrupted
             //    by settling the old session's state), or
             //  - the event still names the turn the binding considers active
             //    (a newer epoch has not started a different turn, so settling
             //    this turn cannot clobber newer state).
-            const staleTerminalIsSettling =
-              isTerminalRuntimeEvent(event) &&
+            const staleEventIsSettling =
+              isStaleSettlingRuntimeEvent(event) &&
               (currentGeneration === undefined || event.turnId !== undefined);
-            if (!staleTerminalIsSettling) {
+            if (!staleEventIsSettling) {
               // Warn, not debug: a persistent mismatch silently discards every
               // runtime event for the thread — the provider runs, the UI shows
               // nothing, and the runtime reconciler later settles the turn as
@@ -1377,7 +1446,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               });
             }
             if (currentGeneration !== undefined) {
-              // A newer generation exists: only accept the stale terminal event
+              // A newer generation exists: only accept the stale settling event
               // when it still names the turn the binding has active. If the
               // binding already moved on (or is gone), keep dropping it.
               return directory.getBinding(event.threadId).pipe(
@@ -1408,8 +1477,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 }),
               );
             }
-            // No current generation and the event is terminal: fall through so
-            // the stale session's exit/error settles the binding and projection.
+            // No current generation and the event settles state: fall through
+            // so the stale session's exit/error/resolution settles the binding
+            // and projection.
           }
           return journalAndPublish(canonicalEvent);
         }),
@@ -1418,6 +1488,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const recoverSessionForThread = (input: {
       readonly binding: ProviderRuntimeBinding;
       readonly operation: string;
+      /**
+       * The computer-control decision the request driving this recovery made,
+       * when it made one. It wins over the persisted flag: a turn that says
+       * `false` must not be re-leased computer control because an earlier turn
+       * had it, and the binding is rewritten to what was actually leased.
+       */
+      readonly enableComputerControl?: boolean | undefined;
     }) =>
       Effect.gen(function* () {
         const threadId = input.binding.threadId;
@@ -1531,6 +1608,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const persistedCwd = readPersistedCwd(binding.runtimePayload);
             const persistedModelSelection = readPersistedModelSelection(binding.runtimePayload);
             const persistedProviderOptions = readPersistedProviderOptions(binding.runtimePayload);
+            const effectiveComputerControl =
+              input.enableComputerControl ?? readPersistedComputerControl(binding.runtimePayload);
             yield* validateAutoRuntimeMode(
               input.operation,
               binding.provider,
@@ -1545,6 +1624,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ...(persistedCwd ? { cwd: persistedCwd } : {}),
               ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
               ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
+              enableComputerControl: effectiveComputerControl,
               ...(hasPersistedResumeCursor ? { resumeCursor: binding.resumeCursor } : {}),
               runtimeMode: binding.runtimeMode ?? "full-access",
             };
@@ -1560,8 +1640,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
             yield* withBindingWriteLock(
               threadId,
+              // Written as a boolean either way: the payload merges over the
+              // previous row, so only an explicit false revokes a flag an
+              // earlier session had.
               upsertSessionBinding(resumed, threadId, {
                 lifecycleGeneration: lease.generation,
+                enableComputerControl: effectiveComputerControl,
               }).pipe(
                 Effect.andThen(
                   requiresCredentialRotation
@@ -1570,6 +1654,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                         provider: binding.provider,
                         runtimePayload: {
                           [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
+                          enableComputerControl: effectiveComputerControl,
                         },
                       })
                     : Effect.void,
@@ -1673,6 +1758,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       readonly threadId: ThreadId;
       readonly operation: string;
       readonly allowRecovery: boolean;
+      /** Carried into a recovery, where it overrides the persisted flag. */
+      readonly enableComputerControl?: boolean | undefined;
     }) =>
       Effect.gen(function* () {
         const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
@@ -1737,7 +1824,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }
 
         return {
-          adapter: yield* recoverSessionForThread({ binding, operation: input.operation }),
+          adapter: yield* recoverSessionForThread({
+            binding,
+            operation: input.operation,
+            enableComputerControl: input.enableComputerControl,
+          }),
           isActive: true,
           lifecycleGeneration: lifecycle.currentGeneration(input.threadId),
         } as const;
@@ -1823,12 +1914,18 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 (persistedBinding?.provider === input.provider
                   ? readPersistedProviderOptions(persistedBinding.runtimePayload)
                   : undefined);
+              const effectiveComputerControl =
+                input.enableComputerControl ??
+                (persistedBinding?.provider === input.provider
+                  ? readPersistedComputerControl(persistedBinding.runtimePayload)
+                  : false);
               let replacementStarted = false;
               const startupLifecycle = new ProviderStartupLifecycle();
               const startAndPersistReplacement = Effect.gen(function* () {
                 yield* ensureProviderEnabled(input.provider, "ProviderService.startSession");
                 const resolvedAdapterStartInput = {
                   ...adapterStartInput,
+                  enableComputerControl: effectiveComputerControl,
                   lifecycleGeneration: lease.generation,
                   ...(effectiveProviderOptions !== undefined
                     ? { providerOptions: effectiveProviderOptions }
@@ -1919,6 +2016,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   upsertSessionBinding(session, threadId, {
                     modelSelection: input.modelSelection,
                     providerOptions: effectiveProviderOptions,
+                    enableComputerControl: effectiveComputerControl,
                     lifecycleGeneration: lease.generation,
                     runtimePayload: {
                       [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
@@ -1966,6 +2064,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const previousProviderOptions = readPersistedProviderOptions(
                 persistedBinding.runtimePayload,
               );
+              const previousComputerControl = readPersistedComputerControl(
+                persistedBinding.runtimePayload,
+              );
               const previousCwd = readPersistedCwd(persistedBinding.runtimePayload);
               yield* previousAdapter.stopSession(threadId);
 
@@ -1992,6 +2093,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                           ...(previousProviderOptions !== undefined
                             ? { providerOptions: previousProviderOptions }
                             : {}),
+                          enableComputerControl: previousComputerControl,
                           ...(persistedBinding.resumeCursor !== undefined
                             ? { resumeCursor: persistedBinding.resumeCursor }
                             : {}),
@@ -2008,6 +2110,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                             lifecycleGeneration: previousGeneration,
                             modelSelection: previousModelSelection,
                             providerOptions: previousProviderOptions,
+                            enableComputerControl: previousComputerControl,
                           }),
                         );
                         // The restored runtime stamps its events with the exact
@@ -2154,6 +2257,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ...(effectiveProviderOptions !== undefined
                   ? { providerOptions: effectiveProviderOptions }
                   : {}),
+                // The fork writes the thread's first binding row, so the flag
+                // must land here or resumeSession re-leases without it.
+                ...(input.enableComputerControl ? { enableComputerControl: true } : {}),
                 lastRuntimeEvent: "provider.thread.forked",
                 lastRuntimeEventAt: new Date().toISOString(),
               });
@@ -2176,6 +2282,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   ...(effectiveProviderOptions !== undefined
                     ? { providerOptions: effectiveProviderOptions }
                     : {}),
+                  ...(input.enableComputerControl ? { enableComputerControl: true } : {}),
                   lastRuntimeEvent: "provider.thread.forked",
                   lastRuntimeEventAt: new Date().toISOString(),
                 },
@@ -2363,6 +2470,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               threadId: input.threadId,
               operation: "ProviderService.sendTurn",
               allowRecovery: true,
+              enableComputerControl: input.enableComputerControl,
             });
             const turn = yield* routed.adapter.sendTurn(input);
             const persistenceInput: StartedTurnPersistenceInput = {
@@ -2754,6 +2862,28 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const respondToInteraction = (response: InteractionResponse) => {
       const { input } = response;
+      if (response.kind === "approval" && input.requestId.startsWith("computer:")) {
+        return Effect.gen(function* () {
+          // Resolved per response rather than at construction: the computer
+          // service is optional in this graph, and a server without one has
+          // no approval this id could belong to.
+          const computerService = Option.getOrUndefined(
+            yield* Effect.serviceOption(ComputerService),
+          );
+          if (
+            !computerService?.approvalGate.respond(
+              input.threadId,
+              input.requestId,
+              response.input.decision,
+            )
+          ) {
+            return yield* toValidationError(
+              "ProviderService.respondToRequest",
+              "This computer approval expired or belongs to another conversation.",
+            );
+          }
+        });
+      }
       const operation =
         response.kind === "approval"
           ? "ProviderService.respondToRequest"

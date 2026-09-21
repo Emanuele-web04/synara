@@ -8,6 +8,7 @@ import {
   CodexAppServerTransportError,
   CodexJsonlFramer,
   CodexJsonlWriter,
+  isFatalCodexLineError,
 } from "./codexAppServerTransport.ts";
 
 function buildCompleteJsonlFrame(frameBytes: number): Buffer {
@@ -44,10 +45,25 @@ describe("Codex app-server transport", () => {
     expect(() => unterminated.finish()).toThrowError(
       expect.objectContaining({ reason: "unterminated-frame" }),
     );
+  });
 
-    expect(() => new CodexJsonlFramer(64).push(Buffer.from([0xff, 0x0a]))).toThrowError(
-      expect.objectContaining({ reason: "invalid-utf8" }),
+  it("drops an undecodable line and still delivers the responses beside it", () => {
+    // The app-server writes non-JSON diagnostics to the same stream, so one
+    // undecodable line must not cost the session — nor the responses that
+    // arrived in the same read, which turns are waiting on.
+    const framer = new CodexJsonlFramer(64);
+
+    const { frames, errors } = framer.pushRecords(
+      Buffer.concat([
+        Buffer.from('{"id":1}\n'),
+        Buffer.from([0xff, 0x0a]),
+        Buffer.from('{"id":2}\n'),
+      ]),
     );
+
+    expect(frames).toEqual(['{"id":1}', '{"id":2}']);
+    expect(errors.map(isFatalCodexLineError)).toEqual([false]);
+    expect(framer.push(Buffer.from([0xff, 0x0a]))).toEqual([]);
   });
 
   it("accepts the frame limit, rejects larger frames, and releases retained input", () => {
@@ -142,5 +158,16 @@ describe("Codex app-server transport", () => {
     await expect(writer.write({ payload: "x".repeat(32) })).rejects.toBeInstanceOf(
       CodexAppServerTransportError,
     );
+  });
+
+  it("uses the Codex-specific message in the error stack header", () => {
+    const error = new CodexAppServerTransportError({
+      reason: "frame-too-large",
+      maxBytes: 16,
+      observedBytes: 17,
+    });
+
+    expect(error.message).toBe("Codex app-server JSONL frame exceeded its byte limit (17/16).");
+    expect(error.stack?.split("\n", 1)[0]).toContain(error.message);
   });
 });

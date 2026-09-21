@@ -70,6 +70,7 @@ import {
   startAgentGatewaySessionLeaseExitWatcher,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
+  captureAgentGatewayCapabilityInput,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -1788,6 +1789,7 @@ export function makeDevinAdapter(
             agentGatewayCredentials,
             input.threadId,
             PROVIDER,
+            captureAgentGatewayCapabilityInput(input),
           );
 
           yield* Effect.addFinalizer(() =>
