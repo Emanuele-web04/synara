@@ -91,10 +91,15 @@ xcrun swiftc \
   "$SOURCE_DIR/Sources/Cancellation.swift" \
   "$SOURCE_DIR/Sources/Windows.swift" \
   "$SOURCE_DIR/Sources/CaptureCanvas.swift" \
+  "$SOURCE_DIR/Sources/GeometrySnapshotCache.swift" \
   "$SOURCE_DIR/Sources/Capture.swift" \
   "$SOURCE_DIR/Sources/Accessibility.swift" \
+  "$SOURCE_DIR/Sources/WindowIdentityMatcher.swift" \
   "$SOURCE_DIR/Sources/SkyLight.swift" \
   "$SOURCE_DIR/Sources/InputDeliveryHistory.swift" \
+  "$SOURCE_DIR/Sources/InputDeliveryState.swift" \
+  "$SOURCE_DIR/Sources/InputReleaseEvent.swift" \
+  "$SOURCE_DIR/Sources/KeyMap.swift" \
   "$SOURCE_DIR/Sources/Input.swift" \
   "$SOURCE_DIR/Sources/Cursor.swift" \
   "$SOURCE_DIR/Sources/main.swift" \

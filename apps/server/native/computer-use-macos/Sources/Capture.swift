@@ -403,10 +403,8 @@ enum Capture {
 
   private static let captureDeadlineSeconds: Double = 3
   private static let contentTTLNanoseconds: UInt64 = 10_000_000_000
-  private static let contentLock = NSLock()
-  private static var cachedContent: SCShareableContent?
-  private static var cachedContentAt: UInt64 = 0
-  private static var cachedDesktopSignature: String?
+  private static let contentCache = GeometrySnapshotCache<SCShareableContent>(
+    ttl: contentTTLNanoseconds)
   /// At most one outstanding `SCShareableContent` request, ever — but everyone
   /// else **waits on it** rather than giving up.
   ///
@@ -422,7 +420,7 @@ enum Capture {
   ///
   /// A request that never returns (FB12114396) still leaks nothing: the flag is
   /// cleared only by the completion handler, waiters past the shared deadline
-  /// fall through to the warm copy at once, and no second request is ever
+  /// fall through to the capture fallback at once, and no second request is ever
   /// started behind it.
   private static let contentCondition = NSCondition()
   private static var contentRequestInFlight = false
@@ -433,9 +431,7 @@ enum Capture {
   private static var contentGeneration: UInt64 = 0
 
   private static func invalidateShareableContent() {
-    contentLock.lock()
-    cachedContent = nil
-    contentLock.unlock()
+    contentCache.invalidate()
   }
 
   /// Cheap WindowServer metadata invalidates cached SCK geometry after moves,
@@ -456,20 +452,12 @@ enum Capture {
     return entries.joined(separator: "|") + String(describing: Geometry.displayFrames())
   }
 
-  /// The cached content, and whether it is inside its TTL.
-  private static func cachedShareableContent() -> (content: SCShareableContent?, fresh: Bool) {
-    let now = DispatchTime.now().uptimeNanoseconds
-    let signature = desktopSignature()
-    contentLock.lock()
-    defer { contentLock.unlock() }
-    let fresh = signature != nil && signature == cachedDesktopSignature
-      && cachedContent != nil && now &- cachedContentAt <= contentTTLNanoseconds
-    return (cachedContent, fresh)
+  private static func cachedShareableContent() -> SCShareableContent? {
+    contentCache.read(signature: desktopSignature(), now: DispatchTime.now().uptimeNanoseconds)
   }
 
   private static func shareableContent() -> SCShareableContent? {
-    let warmed = cachedShareableContent()
-    if warmed.fresh { return warmed.content }
+    if let warmed = cachedShareableContent() { return warmed }
 
     contentCondition.lock()
     if contentRequestInFlight {
@@ -479,24 +467,19 @@ enum Capture {
         _ = contentCondition.wait(until: deadline)
       }
       contentCondition.unlock()
-      // Whatever the winner managed to store, or the warm copy if it stored
-      // nothing (failed, or still hung past the shared deadline).
-      return cachedShareableContent().content ?? warmed.content
+      // Failure or timeout cannot resurrect geometry invalidated by a move.
+      return cachedShareableContent()
     }
     contentRequestInFlight = true
     contentRequestDeadline = Date().addingTimeInterval(captureDeadlineSeconds)
     contentCondition.unlock()
 
-    let signature = desktopSignature()
+    let ticket = contentCache.ticket(signature: desktopSignature())
     let done = DispatchSemaphore(value: 0)
     SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) {
       content, error in
-      if let content {
-        contentLock.lock()
-        cachedContent = content
-        cachedContentAt = DispatchTime.now().uptimeNanoseconds
-        cachedDesktopSignature = signature
-        contentLock.unlock()
+      if let content, let ticket {
+        contentCache.store(content, ticket: ticket, now: DispatchTime.now().uptimeNanoseconds)
       } else if let error {
         logDiagnostic("SCShareableContent failed: \(error.localizedDescription)")
       }
@@ -509,7 +492,7 @@ enum Capture {
       // released by the shared deadline instead.
       logDiagnostic("SCShareableContent exceeded its \(captureDeadlineSeconds)s deadline")
     }
-    return cachedShareableContent().content ?? warmed.content
+    return cachedShareableContent()
   }
 
   /// Wake everyone waiting on the in-flight request. Called from the completion

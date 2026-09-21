@@ -2,7 +2,18 @@
 
 Run these commands from the repository root on macOS with the Xcode Command Line Tools installed. Test executables and the helper are built into a temporary directory.
 
-The Computer Helper Matrix workflow compiles and probes the helper, then runs the geometry, delivery-history, and cancellation tests below for PRs that change the helper. Fork PRs need a maintainer to approve the workflow. These tests send no desktop input. Live input and installed-build permission tests remain separate.
+The Computer Helper Matrix workflow compiles and probes the helper and runs the no-input native tests for PRs that change the helper. Fork PRs need a maintainer to approve the workflow. Live input and installed-build permission tests remain separate.
+
+## No-input correctness regressions
+
+The workflow's “Test native geometry, identity, keys and shutdown without desktop input” step contains standalone compile/run commands for these additional executables:
+
+- `InputDeliveryStateTests`: blocks a post while another thread starts shutdown; checks that the saved ordinary-key and modifier releases finish exactly once, in reverse order, and later posts are refused. Also covers cancellation/recovery, nested-scope release ordering, and drag release geometry.
+- `WindowIdentityMatcherTests`: rejects known sibling IDs despite matching title/frame, preserves fallback for missing/null IDs, and rejects tied or disjoint fallback candidates.
+- `GeometrySnapshotCacheTests`: invalidates moved-window metadata, refuses stale reads after failed/timed-out refreshes, rejects callbacks from invalidated generations, and covers TTL and recovery.
+- `KeyMapTests`: checks shifted punctuation and uppercase chords, modifier aliases/deduplication, named keys, and copied release-event flags.
+
+Each compiles the same production components used by the helper. Events are constructed as values but never posted; the shutdown test injects an in-memory recorder. These tests need no desktop permissions. They do not simulate real SIGTERM delivery to AppKit or establish that WindowServer accepted an event.
 
 ## Capture geometry
 

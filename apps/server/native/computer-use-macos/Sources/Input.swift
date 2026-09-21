@@ -62,11 +62,6 @@ enum DeliveryMode: String {
   }
 }
 
-/// Synthetic activation belongs only to the agent's target, never the user's app.
-struct PendingFocusRestore {
-  let targetPID: pid_t
-}
-
 /// How well an action's effect could actually be observed.
 ///
 /// Three states, not two: "we watched it land", "we watched and it did not
@@ -126,21 +121,12 @@ final class InputController {
     return keyboardTarget
   }
 
-  /// What is logically held down right now, for the unwind path. Guarded by a
-  /// lock because unwind runs from the signal source on the main queue while a
-  /// gesture may still be mid-flight on the input queue.
-  private struct HeldButton {
-    let button: CGMouseButton
-    let point: CGPoint
-    let target: DesktopWindow?
-    let group: Int64
+  private enum HeldInput: Hashable {
+    case key(CGKeyCode)
+    case button(Int64)
+    case focus
   }
-  private let heldLock = NSLock()
-  private var heldButton: HeldButton?
-  private var heldModifiers: [(code: CGKeyCode, flags: CGEventFlags)] = []
-  private var heldModifierTarget: DesktopWindow?
-  /// The focus record pair a background gesture has posted and not yet undone.
-  private var pendingFocusRestore: PendingFocusRestore?
+  private let delivery = InputDeliveryState<HeldInput>()
 
   init(cursor: AgentCursor) {
     self.cursor = cursor
@@ -250,11 +236,11 @@ final class InputController {
           let clickState = fixedClickState ?? (index + 1)
           try self.postMouse(
             types.down, at: point, button: button, target: target, group: group,
-            clickState: clickState, held: true, modifierFlags: modifierFlags)
+            clickState: clickState, modifierFlags: modifierFlags)
           usleep(1_000)
           try self.postMouse(
             types.up, at: point, button: button, target: target, group: group,
-            clickState: clickState, held: false, modifierFlags: modifierFlags)
+            clickState: clickState, modifierFlags: modifierFlags)
           // Under the system double-click interval, clear of coalescing into pair
           // N.
           if index + 1 < count { usleep(80_000) }
@@ -301,8 +287,7 @@ final class InputController {
     defer { releaseHeldButton() }
     try prime(at: from, target: target, group: group)
     try postMouse(
-      .leftMouseDown, at: from, button: .left, target: target, group: group, clickState: 1,
-      held: true)
+      .leftMouseDown, at: from, button: .left, target: target, group: group, clickState: 1)
     // At least a few intermediate dragged events, or a drag silently degrades to
     // a click in many toolkits (reference §4.4).
     let steps = max(3, min(60, duration / 12))
@@ -315,14 +300,13 @@ final class InputController {
       cursor.move(to: point)
       try postMouse(
         .leftMouseDragged, at: point, button: .left, target: target, group: group,
-        clickState: 1, held: true,
+        clickState: 1,
         delta: CGPoint(x: point.x - previous.x, y: point.y - previous.y))
       previous = point
       usleep(useconds_t(max(1, min(duration / steps, Self.maximumDragDurationMs)) * 1000))
     }
     try postMouse(
-      .leftMouseUp, at: to, button: .left, target: target, group: group, clickState: 1,
-      held: false, delta: CGPoint(x: to.x - previous.x, y: to.y - previous.y))
+      .leftMouseUp, at: to, button: .left, target: target, group: group, clickState: 1, delta: CGPoint(x: to.x - previous.x, y: to.y - previous.y))
     cursor.move(to: to)
     // A drag has no equivalent of the click's focus probe: what a drop did to
     // the target is application-specific and nothing generic can read it back.
@@ -560,12 +544,9 @@ final class InputController {
     }
     let shift = KeyMap.shiftModifier
     try postForegroundKey(shift.code, down: true, flags: [.maskShift], units: nil)
-    recordHeldModifiers([shift], target: currentKeyboardTarget())
-    // Runs on a throw as well as on the ordinary path, so the only window in
-    // which Shift is held without being releasable is the one `unwind()` covers.
+    // The delivery ledger already owns Shift before another thread can unwind.
     defer {
-      try? postForegroundKey(shift.code, down: false, flags: [], units: nil)
-      clearHeldModifiers()
+      delivery.releaseFrom(.key(shift.code))
     }
     try body()
   }
@@ -575,8 +556,8 @@ final class InputController {
   ///
   /// Same shape and the same bookkeeping as `postChord`, deliberately: each
   /// modifier goes down as a real key transition posted to the *target pid*
-  /// through `deliver`, accumulating flags as it goes; every press is recorded through
-  /// `recordHeldModifiers` while it is down, so a throw between the down and the
+  /// through `deliver`, accumulating flags as it goes; the delivery ledger
+  /// records each press, so a throw between the down and the
   /// up, or a SIGTERM mid-gesture, runs `unwind()` with something to release
   /// instead of latching Command on the human's desktop; and the releases go out
   /// in reverse carrying the flags that remain.
@@ -593,22 +574,14 @@ final class InputController {
     }
     var flags = CGEventFlags()
     var pressed: [(code: CGKeyCode, flags: CGEventFlags)] = []
-    // Runs on a throw as well as on the ordinary path, so the only window in
-    // which a modifier is held without being releasable is the one `unwind()`
-    // covers.
+    // The release handlers remain valid after cancellation or a target change.
     defer {
-      for modifier in pressed.reversed() {
-        flags.remove(modifier.flags)
-        try? postKey(modifier.code, down: false, flags: flags, to: target)
-        usleep(8_000)
-      }
-      clearHeldModifiers()
+      if let first = pressed.first { delivery.releaseFrom(.key(first.code)) }
     }
     for modifier in modifiers {
       flags.insert(modifier.flags)
       try postKey(modifier.code, down: true, flags: flags, to: target)
       pressed.append(modifier)
-      recordHeldModifiers(pressed, target: target)
       usleep(8_000)
     }
     try body()
@@ -619,26 +592,6 @@ final class InputController {
     -> CGEventFlags
   {
     modifiers.reduce(CGEventFlags()) { $0.union($1.flags) }
-  }
-
-  /// Note that `modifiers` are logically down, so `unwind()` can release them on
-  /// whichever stream took the press.
-  private func recordHeldModifiers(
-    _ modifiers: [(code: CGKeyCode, flags: CGEventFlags)], target: DesktopWindow?
-  ) {
-    heldLock.lock()
-    heldModifiers = modifiers
-    heldModifierTarget = target
-    heldLock.unlock()
-  }
-
-  /// Forget the held modifiers. Only ever called once their release has been
-  /// posted — clearing without releasing is how a latched modifier escapes.
-  private func clearHeldModifiers() {
-    heldLock.lock()
-    heldModifiers = []
-    heldModifierTarget = nil
-    heldLock.unlock()
   }
 
   private func assertKeyboardWindow(_ target: DesktopWindow?) throws {
@@ -668,10 +621,8 @@ final class InputController {
 
   func pressKey(_ key: String, modifiers: [String], mode: DeliveryMode) throws -> KeyOutcome {
     try requireInputPermission()
-    guard let code = KeyMap.code(for: key) else {
-      throw RPCError(.invalidParams, "unknown key '\(key)'")
-    }
-    return try postChord(code, modifiers: try KeyMap.modifierCodes(for: modifiers), mode: mode)
+    let chord = try KeyMap.chord(for: key, modifiers: modifiers)
+    return try postChord(chord.code, modifiers: chord.modifiers, mode: mode)
   }
 
   func hotkey(_ keys: [String], mode: DeliveryMode) throws -> KeyOutcome {
@@ -705,96 +656,24 @@ final class InputController {
       throw RPCError(
         .invalidParams, "hotkey takes exactly one non-modifier key, got \(mainKeys.count)")
     }
-    guard let code = KeyMap.code(for: mainKey) else {
-      throw RPCError(.invalidParams, "unknown key '\(mainKey)'")
-    }
-    return try postChord(code, modifiers: try KeyMap.modifierCodes(for: modifiers), mode: mode)
+    let chord = try KeyMap.chord(for: mainKey, modifiers: modifiers)
+    return try postChord(chord.code, modifiers: chord.modifiers, mode: mode)
   }
 
   // MARK: - Unwind
 
-  /// Release anything logically held, on the way out. Safe to call from a signal
-  /// source, and idempotent.
-  func unwind() {
-    releaseHeldButton()
+  /// Stop posting before releasing held state. The ledger holds its lock until
+  /// the saved releases finish; queued senders cannot post after cleanup.
+  func unwind() { delivery.stop() }
 
-    heldLock.lock()
-    let modifiers = heldModifiers
-    let modifierTarget = heldModifierTarget
-    heldModifiers = []
-    heldLock.unlock()
+  /// Always called at the end of an input RPC, even if event construction or
+  /// validation threw between a down and its ordinary up.
+  func finishOperation() { delivery.releaseAll() }
 
-    // All rungs use PID-addressed events. Release against the saved owner even
-    // if its window has since closed or the keyboard aim has been cleared.
-    var flags = modifiers.reduce(CGEventFlags()) { $0.union($1.flags) }
-    for modifier in modifiers.reversed() {
-      flags.remove(modifier.flags)
-      if let event = CGEvent(keyboardEventSource: source, virtualKey: modifier.code, keyDown: false)
-      {
-        event.flags = flags
-        try? deliver(event, to: modifierTarget, localPoint: nil)
-      }
-    }
-
-    restorePendingFocus()
-  }
-
-  /// Posts the matching up for whatever button is logically down, if any.
-  /// Idempotent: the bookkeeping is cleared under the lock before the event is
-  /// built, so a gesture's `defer` and a concurrent `unwind()` cannot both post.
   private func releaseHeldButton() {
-    heldLock.lock()
-    let button = heldButton
-    heldButton = nil
-    heldLock.unlock()
-
-    guard let button else { return }
-    let types = Self.eventTypes(for: button.button)
-    // Built the same way every other event of the gesture was. The direct
-    // `CGEvent` construction this used to take skips the NSEvent window
-    // association, which is exactly the part a Chromium view requires — so the
-    // one event that must land, the up that ends a phantom drag, was the one
-    // most likely to be ignored.
-    guard
-      let event = Self.mouseEvent(
-        type: types.up, at: button.point, button: button.button, target: button.target,
-        clickState: 1, source: source)
-    else { return }
-    stamp(event, button: button.button, group: button.group, clickState: 1, delta: nil)
-    try? deliver(event, to: button.target, localPoint: localPoint(button.point, in: button.target))
-  }
-
-  /// Unwind target-only synthetic activation when input is interrupted.
-  private func restorePendingFocus() {
-    guard let pending = takePendingFocusRestore() else { return }
-    performFocusRestore(pending)
-  }
-
-  /// Claim the outstanding focus debt, atomically.
-  ///
-  /// `Focus.end()` on the input lane and `unwind()` from the signal source both
-  /// pay this debt, and both used to read it and clear it as two steps — so a
-  /// SIGTERM landing between them had them both post the inverse record pair,
-  /// deactivating the human's application a second time on the way out. Exactly
-  /// one caller can win this.
-  fileprivate func takePendingFocusRestore() -> PendingFocusRestore? {
-    heldLock.lock()
-    defer { heldLock.unlock() }
-    let pending = pendingFocusRestore
-    pendingFocusRestore = nil
-    return pending
-  }
-
-  /// Shared by normal completion and cancellation; neither activates an app.
-  fileprivate func performFocusRestore(_ pending: PendingFocusRestore) {
-    _ = SkyLight.restoreActivation(from: pending.targetPID)
-  }
-
-  /// Records, or clears, the focus pair a gesture still owes the human.
-  fileprivate func setPendingFocusRestore(_ pending: PendingFocusRestore?) {
-    heldLock.lock()
-    pendingFocusRestore = pending
-    heldLock.unlock()
+    for button in [CGMouseButton.left, .right, .center] {
+      delivery.release(.button(Int64(button.rawValue)))
+    }
   }
 
   // MARK: - Focus prelude and postlude
@@ -822,7 +701,10 @@ final class InputController {
       if !Accessibility.keyboardWindowMatches(target) {
         if isActive { throw RPCError(.notDelivered, "Refusing to change the user's active window") }
         try Windows.requireInputSpace(target.windowNumber, ownerPID: target.ownerPID)
-        SkyLight.makeKeyWindow(pid: target.ownerPID, windowID: target.windowNumber)
+        try controller.delivery.send {
+          try InputCancellation.check()
+          SkyLight.makeKeyWindow(pid: target.ownerPID, windowID: target.windowNumber)
+        }
         usleep(20_000)
       }
       if isActive {
@@ -830,10 +712,15 @@ final class InputController {
           targetBelievesItIsActive: true)
       }
       try Windows.requireInputSpace(target.windowNumber, ownerPID: target.ownerPID)
-      let outcome = SkyLight.activateWithoutRaise(
-        pid: target.ownerPID, windowID: target.windowNumber)
+      var outcome = SkyLight.FocusOutcome(activated: false, needsRestore: false)
+      try controller.delivery.acquire(.focus) {
+        try InputCancellation.check()
+        outcome = SkyLight.activateWithoutRaise(
+          pid: target.ownerPID, windowID: target.windowNumber)
+        guard outcome.needsRestore else { return nil }
+        return { _ = SkyLight.restoreActivation(from: target.ownerPID) }
+      }
       if outcome.needsRestore {
-        controller.setPendingFocusRestore(PendingFocusRestore(targetPID: target.ownerPID))
         usleep(50_000)
         cursor.repin()
       }
@@ -845,12 +732,10 @@ final class InputController {
     }
 
     func end() {
-      guard needsRestore else { return }
-      usleep(50_000)
-      if let pending = controller.takePendingFocusRestore() {
-        controller.performFocusRestore(pending)
-      }
-      cursor.repin()
+      if needsRestore { usleep(50_000) }
+      // Any residual keys/buttons must come up before synthetic focus is undone.
+      controller.delivery.releaseAll()
+      if needsRestore { cursor.repin() }
     }
   }
 
@@ -1119,7 +1004,6 @@ final class InputController {
     target: DesktopWindow?,
     group: Int64,
     clickState: Int,
-    held: Bool,
     delta: CGPoint? = nil,
     modifierFlags: CGEventFlags = []
   ) throws {
@@ -1131,9 +1015,6 @@ final class InputController {
     stamp(
       event, button: button, group: group, clickState: clickState, delta: delta,
       modifierFlags: modifierFlags)
-    heldLock.lock()
-    heldButton = held ? HeldButton(button: button, point: point, target: target, group: group) : nil
-    heldLock.unlock()
     try deliver(event, to: target, localPoint: localPoint(point, in: target))
   }
 
@@ -1234,12 +1115,12 @@ final class InputController {
       var flags = CGEventFlags()
       var pressed: [(code: CGKeyCode, flags: CGEventFlags)] = []
       defer {
+        self.delivery.release(.key(code))
         for modifier in pressed.reversed() {
           flags.remove(modifier.flags)
           try? post(modifier.code, false, flags)
           usleep(8_000)
         }
-        self.clearHeldModifiers()
         // The closing sample: the chord is complete, the modifiers are up, and
         // the caller's focus arrangement is still in place (every rung restores
         // it after `body` returns). Nothing but the keystrokes has happened
@@ -1250,7 +1131,6 @@ final class InputController {
         flags.insert(modifier.flags)
         try post(modifier.code, true, flags)
         pressed.append(modifier)
-        self.recordHeldModifiers(pressed, target: target)
         usleep(8_000)
       }
       try post(code, true, flags)
@@ -1346,11 +1226,20 @@ final class InputController {
   /// is refused instead, so the backend reports an unresolved target rather than
   /// hijacking the pointer.
   private func deliver(_ event: CGEvent, to target: DesktopWindow?, localPoint: CGPoint?) throws {
-    let releasing = [.keyUp, .leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type)
-    if !releasing { try InputCancellation.check() }
+    // Release the saved event to its saved owner, even if the target closed,
+    // changed Spaces, or keyboard aim was cleared. A second release is a no-op.
+    if event.type == .keyUp {
+      delivery.release(.key(CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))))
+      return
+    }
+    if [.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(event.type) {
+      delivery.release(.button(event.getIntegerValueField(.mouseEventButtonNumber)))
+      return
+    }
+    try InputCancellation.check()
     if event.type == .keyDown { try assertKeyboardWindow(target) }
 
-    if !releasing, let target {
+    if let target {
       try Windows.requireInputSpace(target.windowNumber, ownerPID: target.ownerPID)
       guard let current = Windows.window(withNumber: target.windowNumber),
         current.ownerPID == target.ownerPID else {
@@ -1378,167 +1267,51 @@ final class InputController {
     if let localPoint, let setWindowLocation = SkyLight.setWindowLocation {
       setWindowLocation(event, localPoint)
     }
-    event.postToPid(destination.ownerPID)
+    // Construct the matching up before posting a down. Copying preserves the
+    // NSEvent window association, Unicode payload, click count and target stamp.
+    let releaseType: CGEventType?
+    let held: HeldInput?
+    let dragging: Bool
+    switch event.type {
+    case .keyDown:
+      releaseType = .keyUp
+      held = .key(CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode)))
+      dragging = false
+    case .leftMouseDown, .rightMouseDown, .otherMouseDown,
+      .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+      let button = event.getIntegerValueField(.mouseEventButtonNumber)
+      releaseType = button == 0 ? .leftMouseUp : button == 1 ? .rightMouseUp : .otherMouseUp
+      held = .button(button)
+      dragging = [.leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(event.type)
+    default:
+      releaseType = nil
+      held = nil
+      dragging = false
+    }
+    let post = {
+      try InputCancellation.check()
+      event.postToPid(destination.ownerPID)
+    }
+    guard let held, let releaseType else {
+      try delivery.send(post)
+      return
+    }
+    guard let up = InputReleaseEvent.make(from: event, type: releaseType) else {
+      throw RPCError(.internalError, "could not build the matching input release")
+    }
+    let release = { up.postToPid(destination.ownerPID) }
+    if dragging {
+      try delivery.update(held, release: release, post: post)
+    } else {
+      try delivery.acquire(held) {
+        try post()
+        return release
+      }
+    }
   }
 
   private func localPoint(_ global: CGPoint, in target: DesktopWindow?) -> CGPoint {
     guard let target else { return global }
     return CGPoint(x: global.x - target.bounds.origin.x, y: global.y - target.bounds.origin.y)
-  }
-}
-
-/// US-ANSI key-name → virtual keycode map, plus modifier handling.
-///
-/// Named keys (enter, tab, arrows, function keys) need real keycodes so
-/// modifiers and shortcuts dispatch; single printable characters map through the
-/// same table where they are ANSI, and fall back to the Unicode-string path in
-/// `typeText` for anything else (layout-independent, no AZERTY/Dvorak handling).
-enum KeyMap {
-  private static let named: [String: CGKeyCode] = [
-    "return": 36, "enter": 36, "tab": 48, "space": 49, "delete": 51, "backspace": 51,
-    "escape": 53, "esc": 53, "forwarddelete": 117,
-    "left": 123, "arrowleft": 123, "right": 124, "arrowright": 124,
-    "down": 125, "arrowdown": 125, "up": 126, "arrowup": 126,
-    "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
-    "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97, "f7": 98, "f8": 100,
-    "f9": 101, "f10": 109, "f11": 103, "f12": 111,
-  ]
-
-  private static let ansi: [Character: CGKeyCode] = [
-    "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
-    "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17,
-    "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "=": 24, "9": 25, "7": 26,
-    "-": 27, "8": 28, "0": 29, "]": 30, "o": 31, "u": 32, "[": 33, "i": 34, "p": 35,
-    "l": 37, "j": 38, "'": 39, "k": 40, ";": 41, "\\": 42, ",": 43, "/": 44, "n": 45,
-    "m": 46, ".": 47, "`": 50,
-  ]
-
-  /// Whitespace as literal characters. A typed line is mostly these, and they
-  /// live here rather than in `ansi` so there is one table to consult whether
-  /// the caller spelled the key ("space") or passed the character itself.
-  private static let whitespace: [Character: CGKeyCode] = [
-    "\n": 36, "\r": 36, "\t": 48, " ": 49,
-  ]
-
-  /// The US-layout characters produced by holding shift over another key.
-  ///
-  /// Shift state cannot be inferred from the character for these the way it can
-  /// for a letter: `!` is already its own lowercase, so the "is it uppercase"
-  /// test says no shift, and the character is in neither `named` nor `ansi`. The
-  /// result was keycode 0 — the `A` key — for every symbol on this row, so an
-  /// email address typed through the foreground route arrived as `robertaexample`.
-  private static let shiftedAnsi: [Character: CGKeyCode] = [
-    "!": 18, "@": 19, "#": 20, "$": 21, "%": 23, "^": 22, "&": 26, "*": 28, "(": 25, ")": 29,
-    "_": 27, "+": 24, "{": 33, "}": 30, "|": 42, ":": 41, "\"": 39, "<": 43, ">": 47, "?": 44,
-    "~": 50,
-  ]
-
-  /// Left-hand modifier keycodes with the flag each one asserts.
-  private static let modifiers: [String: (code: CGKeyCode, flags: CGEventFlags)] = [
-    "cmd": (55, .maskCommand), "command": (55, .maskCommand), "meta": (55, .maskCommand),
-    "super": (55, .maskCommand), "win": (55, .maskCommand),
-    "shift": (56, .maskShift),
-    "alt": (58, .maskAlternate), "option": (58, .maskAlternate), "opt": (58, .maskAlternate),
-    "ctrl": (59, .maskControl), "control": (59, .maskControl),
-    "fn": (63, .maskSecondaryFn),
-  ]
-
-  /// Left shift, for the foreground typing path, which asserts it directly
-  /// rather than going through the caller-supplied modifier list.
-  static let shiftModifier: (code: CGKeyCode, flags: CGEventFlags) = (56, .maskShift)
-
-  static func isModifier(_ key: String) -> Bool {
-    modifiers[key.lowercased()] != nil
-  }
-
-  /// Every named modifier, or an error naming the first one this map does not
-  /// know.
-  ///
-  /// Dropping the unknown ones — which `compactMap` did silently — turned
-  /// `["hyper", "cmd"] + "a"` into plain `cmd+a` and reported it as delivered,
-  /// so the agent believed a chord it never sent had run. A modifier the helper
-  /// cannot express is a bad request, not a smaller chord.
-  static func modifierCodes(for names: [String]) throws -> [(code: CGKeyCode, flags: CGEventFlags)] {
-    try names.map { name in
-      guard let modifier = modifiers[name.lowercased()] else {
-        throw RPCError(.invalidParams, "unknown modifier '\(name)'")
-      }
-      return modifier
-    }
-  }
-
-  /// The names a *pointer* gesture may hold, and only these four.
-  ///
-  /// Deliberately narrower than `modifierCodes`: the wire contract for a gesture
-  /// modifier (`ComputerInputModifier`, packages/contracts/src/computer.ts) is
-  /// exactly `ctrl | alt | shift | meta`, so an alias the chord path accepts —
-  /// `cmd`, `option`, `fn` — is a name no legitimate caller of a pointer method
-  /// sends, and quietly honouring it would let two spellings of one request
-  /// drift apart. The keycodes still come from the one table above, so there is
-  /// no second copy of them to go stale.
-  private static let pointerModifierNames: Set<String> = ["ctrl", "alt", "shift", "meta"]
-
-  /// Every named pointer modifier, or an error naming the first one this map
-  /// does not know.
-  ///
-  /// An unknown name is a bad request rather than a smaller gesture that quietly
-  /// runs — the same rule `modifierCodes` follows for chords, and for the same
-  /// reason: a Command-click silently demoted to a plain click is a *different*
-  /// action on almost every surface, and the agent would be told the one it
-  /// asked for had happened. Duplicates are dropped instead, because
-  /// `["shift", "shift"]` is one key however many times it was named, and
-  /// pressing it twice would leave one down after the release.
-  static func pointerModifiers(for names: [String]) throws -> [(
-    code: CGKeyCode, flags: CGEventFlags
-  )] {
-    var seen: Set<CGKeyCode> = []
-    var strokes: [(code: CGKeyCode, flags: CGEventFlags)] = []
-    for name in names {
-      let lowered = name.lowercased()
-      guard pointerModifierNames.contains(lowered), let modifier = modifiers[lowered] else {
-        throw RPCError(
-          .invalidParams,
-          "'\(name)' is not a pointer modifier this helper knows; "
-            + "use ctrl, alt, shift or meta")
-      }
-      guard seen.insert(modifier.code).inserted else { continue }
-      strokes.append(modifier)
-    }
-    return strokes
-  }
-
-  /// A single character is looked up as itself; only a spelled-out key *name* is
-  /// trimmed and lowercased.
-  ///
-  /// Trimming first is what broke typing: `" "` trimmed to the empty string,
-  /// matched nothing, and every space in a line went out as keycode 0 — the `A`
-  /// key — so `hello world` arrived as `helloaworld`.
-  static func code(for key: String) -> CGKeyCode? {
-    if key.count == 1, let character = key.first {
-      return keystroke(for: character)?.code
-    }
-    let trimmed = key.trimmingCharacters(in: .whitespaces).lowercased()
-    if let named = named[trimmed] { return named }
-    if trimmed.count == 1, let character = trimmed.first { return keystroke(for: character)?.code }
-    return nil
-  }
-
-  /// The physical key and shift state that produces `character` on a US layout,
-  /// or nil for anything the ANSI tables cannot express — an accented or CJK
-  /// character — which the caller sends as a Unicode payload instead.
-  static func keystroke(for character: Character) -> (code: CGKeyCode, shift: Bool)? {
-    if let code = whitespace[character] { return (code, false) }
-    if let code = ansi[character] { return (code, false) }
-    if let code = shiftedAnsi[character] { return (code, true) }
-    // Upper case is the one shift relationship worth deriving rather than
-    // tabulating. Guarded on a single-scalar lowercase, because some scripts
-    // lower one character into two.
-    let lowered = String(character).lowercased()
-    if lowered.count == 1, let single = lowered.first, single != character,
-      let code = ansi[single]
-    {
-      return (code, true)
-    }
-    return nil
   }
 }

@@ -801,38 +801,10 @@ enum Accessibility {
   private static func matchWindow(_ candidates: [AXUIElement], to window: DesktopWindow)
     -> AXUIElement?
   {
-    if candidates.isEmpty { return nil }
-    for candidate in candidates where windowID(of: candidate) == window.windowNumber {
-      return candidate
-    }
-    if !window.title.isEmpty {
-      let titled = candidates.filter {
-        stringAttribute($0, kAXTitleAttribute) == window.title
-      }
-      // Exactly one match is an answer; several is the ambiguity that made this
-      // wrong, so those fall through to the frame overlap below.
-      if titled.count == 1 { return titled[0] }
-    }
-    // Frame overlap, and only a *real* overlap counts. This used to start at
-    // `bestArea = -1`, so the first candidate with a readable frame won even
-    // when it shared no pixel with the window being matched — an app whose AX
-    // window list and CGWindowList disagree then had one AX window answer for
-    // two CGWindows, `describe-ui` emitted the same tree twice under two ids,
-    // and a `set-value` at the phantom id wrote into the other window
-    // (reproduced live). No overlap is no answer.
-    var best: AXUIElement?
-    var bestArea: CGFloat = 0
-    for candidate in candidates {
-      guard let frame = frame(of: candidate) else { continue }
-      let overlap = frame.intersection(window.bounds)
-      guard !overlap.isNull else { continue }
-      let area = overlap.width * overlap.height
-      if area > bestArea {
-        bestArea = area
-        best = candidate
-      }
-    }
-    return best
+    WindowIdentityMatcher.match(
+      candidates, id: window.windowNumber, title: window.title, bounds: window.bounds,
+      identifier: { windowID(of: $0) },
+      candidateTitle: { stringAttribute($0, kAXTitleAttribute) }, frame: { frame(of: $0) })
   }
 
   private static func attributeElements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement]

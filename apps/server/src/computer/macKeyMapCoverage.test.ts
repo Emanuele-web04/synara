@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 import { COMPUTER_NAMED_KEYS } from "@synara/shared/computerKeyNames";
 
 const INPUT_SWIFT = fileURLToPath(
-  new URL("../../native/computer-use-macos/Sources/Input.swift", import.meta.url),
+  new URL("../../native/computer-use-macos/Sources/KeyMap.swift", import.meta.url),
 );
 
 /**
@@ -39,7 +39,7 @@ function macKeyMapNames(): ReadonlySet<string> {
   const source = readFileSync(INPUT_SWIFT, "utf8");
   const opener = "private static let named: [String: CGKeyCode] = [";
   const start = source.indexOf(opener);
-  expect(start, "KeyMap.named not found in Input.swift").toBeGreaterThanOrEqual(0);
+  expect(start, "KeyMap.named not found in KeyMap.swift").toBeGreaterThanOrEqual(0);
   const bodyStart = start + opener.length;
   const end = source.indexOf("]", bodyStart);
   expect(end, "KeyMap.named literal is unterminated").toBeGreaterThan(bodyStart);
