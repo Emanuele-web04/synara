@@ -15,6 +15,7 @@ import {
   WsCompatibilityError,
   WsDeviceRpcGroup,
   WsFeatureRpcGroup,
+  WsProjectAgentLinkRpcGroup,
   WsRpcError,
   PullRequestsUnavailableError,
   type DeviceEvent,
@@ -192,9 +193,9 @@ class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmiss
 // The device group is defined separately in contracts because its engine is
 // macOS-only, but it is served on the same socket: one connection, one
 // admission middleware, one exhaustive handler map.
-const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup).middleware(
-  WsRequestAdmissionMiddleware,
-);
+const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
+  .merge(WsProjectAgentLinkRpcGroup)
+  .middleware(WsRequestAdmissionMiddleware);
 
 const wsRequestAdmissionMiddlewareLayer = Layer.effect(
   WsRequestAdmissionMiddleware,
@@ -2089,6 +2090,16 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             projectAgentService.configure(input, { kind: "user" }),
             "Failed to configure project coordinator",
+          ),
+        [WS_METHODS.projectAgentLinkProject]: (input) =>
+          rpcEffect(
+            projectAgentService.linkProject(input, { kind: "user" }),
+            "Failed to link repository",
+          ),
+        [WS_METHODS.projectAgentUnlinkProject]: (input) =>
+          rpcEffect(
+            projectAgentService.unlinkProject(input, { kind: "user" }),
+            "Failed to unlink repository",
           ),
         [WS_METHODS.projectAgentStartGoal]: (input) =>
           rpcEffect(

@@ -24,6 +24,8 @@ import {
 } from "./automation";
 import {
   ProjectAgentConfigureInput,
+  ProjectAgentLinkProjectInput,
+  ProjectAgentUnlinkProjectInput,
   ProjectAgentExportDocumentsInput,
   ProjectAgentExportDocumentsResult,
   ProjectAgentGetOverviewInput,
@@ -1331,6 +1333,16 @@ export const WsProjectAgentConfigureRpc = Rpc.make(WS_METHODS.projectAgentConfig
   success: ProjectAgentOverview,
   error: WsRpcError,
 });
+export const WsProjectAgentLinkProjectRpc = Rpc.make(WS_METHODS.projectAgentLinkProject, {
+  payload: ProjectAgentLinkProjectInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentUnlinkProjectRpc = Rpc.make(WS_METHODS.projectAgentUnlinkProject, {
+  payload: ProjectAgentUnlinkProjectInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
 export const WsProjectAgentStartGoalRpc = Rpc.make(WS_METHODS.projectAgentStartGoal, {
   payload: ProjectAgentStartGoalInput,
   success: ProjectGoal,
@@ -1584,4 +1596,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectAgentExportDocumentsRpc,
   WsProjectAgentRefreshDigestRpc,
   WsSubscribeProjectAgentEventsRpc,
+);
+
+export const WsProjectAgentLinkRpcGroup = RpcGroup.make(
+  WsProjectAgentLinkProjectRpc,
+  WsProjectAgentUnlinkProjectRpc,
 );

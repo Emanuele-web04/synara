@@ -168,6 +168,10 @@
       "types": "./src/pendingInteractions.ts",
       "import": "./src/pendingInteractions.ts"
     },
+    "./groupSlug": {
+      "types": "./src/groupSlug.ts",
+      "import": "./src/groupSlug.ts"
+    },
     "./projectContainers": {
       "types": "./src/projectContainers.ts",
       "import": "./src/projectContainers.ts"

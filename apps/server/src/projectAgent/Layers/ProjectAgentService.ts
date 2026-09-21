@@ -63,6 +63,7 @@ import { ProjectionSnapshotQuery } from "../../orchestration/Services/Projection
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { ProjectAgentServiceError } from "../Errors.ts";
+import { isAllowedGroupCoordinatorCreateTarget } from "../groupCreateAllowlist.ts";
 import {
   hashDocumentContent,
   readProjectDocumentMirror,
@@ -189,13 +190,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
             return ordinary
               ? Effect.succeed(project)
               : Effect.fail(
-                  fail("Project Coordinator is only available on ordinary projects.", "forbidden"),
+                  fail("Only ordinary repositories can be linked to a group.", "forbidden"),
                 );
           },
         }),
       ),
     );
-  void requireOrdinaryRepoProject;
+
+  const assertAbsoluteLibraryPath = (value: string) => {
+    if (!path.isAbsolute(value) || value.split(/[\\/]/).includes("..")) {
+      return Effect.fail(
+        fail("libraryPath must be an absolute path without '..' segments.", "invalid"),
+      );
+    }
+    return Effect.void;
+  };
 
   const resolveGroupCoordinatorProject = (projectId: ProjectId) =>
     snapshotQuery.getProjectShellById(projectId).pipe(
@@ -837,6 +846,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           });
         }
         const existingConfig = Option.isSome(existing) ? existing.value : null;
+        if (input.libraryPath !== undefined) {
+          yield* assertAbsoluteLibraryPath(input.libraryPath);
+        }
         const config: ProjectAgentConfig = {
           projectId: input.projectId,
           coordinatorThreadId,
@@ -866,6 +878,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
               : {}),
           autoMemoryEnabled: input.autoMemoryEnabled ?? existingConfig?.autoMemoryEnabled ?? false,
           linkedProjectIds: existingConfig?.linkedProjectIds ?? [],
+          ...(input.libraryPath !== undefined
+            ? { libraryPath: input.libraryPath }
+            : existingConfig?.libraryPath
+              ? { libraryPath: existingConfig.libraryPath }
+              : {}),
+          ...(input.libraryRemoteUrl !== undefined
+            ? { libraryRemoteUrl: input.libraryRemoteUrl }
+            : existingConfig?.libraryRemoteUrl
+              ? { libraryRemoteUrl: existingConfig.libraryRemoteUrl }
+              : {}),
+          libraryPushOnChange:
+            input.libraryPushOnChange ?? existingConfig?.libraryPushOnChange ?? false,
         };
         const saved = yield* repository
           .saveConfig(config, Option.isSome(existing) ? existing.value.revision : null)
@@ -961,6 +985,99 @@ export const makeProjectAgentService = Effect.gen(function* () {
         });
         const overview = yield* buildOverview(input.projectId);
         yield* storeReceipt(input.requestId, input.projectId, "configure", overview);
+        return overview;
+      }),
+
+    linkProject: (input, principal) =>
+      Effect.gen(function* () {
+        if (!isUserPrincipal(principal)) {
+          return yield* Effect.fail(fail("Linking a repository is a user action.", "forbidden"));
+        }
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          input.projectId,
+          (json) => JSON.parse(json) as ProjectAgentOverview,
+        );
+        if (existingReceipt) return existingReceipt;
+        yield* resolveGroupCoordinatorProject(input.projectId);
+        if (input.linkedProjectId === input.projectId) {
+          return yield* Effect.fail(fail("A group cannot link to itself.", "invalid"));
+        }
+        const linked = yield* requireOrdinaryRepoProject(input.linkedProjectId);
+        const currentIds = yield* repository
+          .listLinkedProjectIds(input.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to list linked repositories.")));
+        if (!currentIds.includes(input.linkedProjectId)) {
+          yield* repository
+            .linkProject({
+              projectId: input.projectId,
+              linkedProjectId: input.linkedProjectId,
+              createdAt: isoNow(),
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to link repository.")));
+          yield* appendActivity({
+            projectId: input.projectId,
+            kind: "config-updated",
+            actorKind: "user",
+            actorThreadId: null,
+            goalId: null,
+            taskId: null,
+            source: null,
+            summary: `Linked repository ${linked.title}`,
+            createdAt: isoNow(),
+          });
+        }
+        const config = yield* requireConfig(input.projectId);
+        yield* publish({ type: "config-upserted", config });
+        const overview = yield* buildOverview(input.projectId);
+        yield* storeReceipt(input.requestId, input.projectId, "linkProject", overview);
+        return overview;
+      }),
+
+    unlinkProject: (input, principal) =>
+      Effect.gen(function* () {
+        if (!isUserPrincipal(principal)) {
+          return yield* Effect.fail(fail("Unlinking a repository is a user action.", "forbidden"));
+        }
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          input.projectId,
+          (json) => JSON.parse(json) as ProjectAgentOverview,
+        );
+        if (existingReceipt) return existingReceipt;
+        yield* resolveGroupCoordinatorProject(input.projectId);
+        const currentIds = yield* repository
+          .listLinkedProjectIds(input.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to list linked repositories.")));
+        if (currentIds.includes(input.linkedProjectId)) {
+          const linkedShell = yield* snapshotQuery
+            .getProjectShellById(input.linkedProjectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load linked project.")));
+          const title = Option.isSome(linkedShell)
+            ? linkedShell.value.title
+            : String(input.linkedProjectId);
+          yield* repository
+            .unlinkProject({
+              projectId: input.projectId,
+              linkedProjectId: input.linkedProjectId,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to unlink repository.")));
+          yield* appendActivity({
+            projectId: input.projectId,
+            kind: "config-updated",
+            actorKind: "user",
+            actorThreadId: null,
+            goalId: null,
+            taskId: null,
+            source: null,
+            summary: `Unlinked repository ${title}`,
+            createdAt: isoNow(),
+          });
+        }
+        const config = yield* requireConfig(input.projectId);
+        yield* publish({ type: "config-upserted", config });
+        const overview = yield* buildOverview(input.projectId);
+        yield* storeReceipt(input.requestId, input.projectId, "unlinkProject", overview);
         return overview;
       }),
 
@@ -1775,8 +1892,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   head.logicalPath === MEMORY_AUTO_DOCUMENT_PATH ||
                   isMemoryThreadDocumentPath(head.logicalPath),
               )
-              .slice()
-              .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+              .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
           : [];
         const memorySections: string[] = [];
         for (const head of memoryHeads) {
@@ -1797,6 +1913,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
           },
           ...(groupGoal ? [{ label: "Objective", text: groupGoal }] : []),
           ...(memoryEnabled ? [{ label: "Memory", text: memorySections.join("\n\n") }] : []),
+          {
+            label: "Linked repositories",
+            text: yield* Effect.gen(function* () {
+              const linkedIds = Option.isSome(config) ? (config.value.linkedProjectIds ?? []) : [];
+              if (linkedIds.length === 0) return "None linked yet.";
+              const shells = yield* snapshotQuery
+                .getProjectShellsByIds(linkedIds)
+                .pipe(Effect.catch(() => Effect.succeed([])));
+              if (shells.length === 0) return "None linked yet.";
+              return shells.map((shell) => `- ${shell.title} (${shell.workspaceRoot})`).join("\n");
+            }),
+          },
           { label: "Watch", text: PROJECT_BOT_WATCH_RULES },
           {
             label: "Workers",
@@ -2564,6 +2692,34 @@ export const makeProjectAgentService = Effect.gen(function* () {
             return yield* Effect.fail(fail("Cross-project control is blocked.", "forbidden"));
           }
         }
+      }),
+
+    assertCallerMayCreateThreadInProject: (input) =>
+      Effect.gen(function* () {
+        const caller = yield* impl.resolvePrincipalForThread(input.callerThreadId);
+        if (caller.kind !== "coordinator") return;
+        const config = yield* requireConfig(caller.projectId);
+        const linkedProjectIds = config.linkedProjectIds ?? [];
+        if (
+          isAllowedGroupCoordinatorCreateTarget({
+            targetProjectId: input.targetProjectId,
+            groupProjectId: caller.projectId,
+            linkedProjectIds,
+          })
+        ) {
+          return;
+        }
+        const allowedIds = [caller.projectId, ...linkedProjectIds];
+        const shells = yield* snapshotQuery
+          .getProjectShellsByIds(allowedIds)
+          .pipe(Effect.catch(() => Effect.succeed([])));
+        const allowed = shells.map((shell) => `${shell.title} (${shell.id})`).join(", ");
+        return yield* Effect.fail(
+          fail(
+            `The coordinator can only create threads in this group or its linked repositories. Allowed: ${allowed || String(caller.projectId)}.`,
+            "forbidden",
+          ),
+        );
       }),
 
     onProjectDeleted: (projectId) =>

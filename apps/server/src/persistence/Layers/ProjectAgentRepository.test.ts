@@ -79,6 +79,9 @@ layer("ProjectAgentRepository", (it) => {
         icon: "folder",
         autoMemoryEnabled: true,
         linkedProjectIds: [],
+        libraryPath: "/tmp/library",
+        libraryRemoteUrl: "https://example.com/library.git",
+        libraryPushOnChange: true,
       };
       yield* repository.saveConfig(
         {
@@ -95,6 +98,9 @@ layer("ProjectAgentRepository", (it) => {
         assert.equal(loaded.value.icon, "folder");
         assert.equal(loaded.value.autoMemoryEnabled, true);
         assert.deepEqual(loaded.value.linkedProjectIds, []);
+        assert.equal(loaded.value.libraryPath, "/tmp/library");
+        assert.equal(loaded.value.libraryRemoteUrl, "https://example.com/library.git");
+        assert.equal(loaded.value.libraryPushOnChange, true);
       }
     }),
   );

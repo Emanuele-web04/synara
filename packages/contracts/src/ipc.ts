@@ -43,6 +43,8 @@ import type {
 } from "./automation";
 import type {
   ProjectAgentConfigureInput,
+  ProjectAgentLinkProjectInput,
+  ProjectAgentUnlinkProjectInput,
   ProjectAgentExportDocumentsInput,
   ProjectAgentExportDocumentsResult,
   ProjectAgentGetOverviewInput,
@@ -993,6 +995,8 @@ export interface NativeApi {
       input?: ProjectAgentListSummariesInput,
     ) => Promise<ProjectAgentListSummariesResult>;
     configure: (input: ProjectAgentConfigureInput) => Promise<ProjectAgentOverview>;
+    linkProject: (input: ProjectAgentLinkProjectInput) => Promise<ProjectAgentOverview>;
+    unlinkProject: (input: ProjectAgentUnlinkProjectInput) => Promise<ProjectAgentOverview>;
     startGoal: (input: ProjectAgentStartGoalInput) => Promise<ProjectGoal>;
     updateGoal: (input: ProjectAgentUpdateGoalInput) => Promise<ProjectGoal>;
     pauseGoal: (input: ProjectAgentGoalControlInput) => Promise<ProjectGoal>;

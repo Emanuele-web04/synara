@@ -29,7 +29,7 @@ export function makeProjectAgentTools(
     definition: {
       name: "synara_project_get_overview",
       description:
-        "Read the current project's coordinator overview: goal, focus, blockers, and last summary. Does not include document bodies.",
+        "Read the current group's coordinator overview: goal, focus, blockers, last summary, and linked repositories. The coordinator may create threads in this group or any linked repository listed here and in the context packet. Does not include document bodies.",
       inputSchema: {
         type: "object",
         properties: { projectId: { type: "string" } },

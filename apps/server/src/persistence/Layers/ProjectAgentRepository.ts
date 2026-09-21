@@ -56,6 +56,9 @@ const ConfigRow = Schema.Struct({
   goal: Schema.NullOr(Schema.String),
   icon: Schema.NullOr(Schema.String),
   autoMemoryEnabled: Schema.Number,
+  libraryPath: Schema.NullOr(Schema.String),
+  libraryRemoteUrl: Schema.NullOr(Schema.String),
+  libraryPushOnChange: Schema.Number,
 });
 
 const GoalRow = Schema.Struct({
@@ -127,6 +130,11 @@ function toConfig(row: typeof ConfigRow.Type): ProjectAgentConfig {
     ...(row.goal && row.goal.length > 0 ? { goal: row.goal } : {}),
     ...(row.icon && row.icon.trim().length > 0 ? { icon: row.icon.trim() } : {}),
     autoMemoryEnabled: row.autoMemoryEnabled === 1,
+    ...(row.libraryPath && row.libraryPath.length > 0 ? { libraryPath: row.libraryPath } : {}),
+    ...(row.libraryRemoteUrl && row.libraryRemoteUrl.length > 0
+      ? { libraryRemoteUrl: row.libraryRemoteUrl }
+      : {}),
+    libraryPushOnChange: row.libraryPushOnChange === 1,
   };
 }
 
@@ -158,7 +166,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         disabled_at AS "disabledAt",
         goal,
         icon,
-        auto_memory_enabled AS "autoMemoryEnabled"
+        auto_memory_enabled AS "autoMemoryEnabled",
+        library_path AS "libraryPath",
+        library_remote_url AS "libraryRemoteUrl",
+        library_push_on_change AS "libraryPushOnChange"
       FROM project_agent_configs
       WHERE project_id = ${projectId}
     `,
@@ -185,7 +196,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         disabled_at AS "disabledAt",
         goal,
         icon,
-        auto_memory_enabled AS "autoMemoryEnabled"
+        auto_memory_enabled AS "autoMemoryEnabled",
+        library_path AS "libraryPath",
+        library_remote_url AS "libraryRemoteUrl",
+        library_push_on_change AS "libraryPushOnChange"
       FROM project_agent_configs
       WHERE coordinator_thread_id = ${threadId}
     `,
@@ -198,13 +212,15 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         project_id, coordinator_thread_id, coordinator_name,
         coordinator_model_selection_json, coordinator_provider_options_json,
         worker_routing_json, limits_json, capture_enabled, enabled, automation_id,
-        revision, created_at, updated_at, disabled_at, goal, icon, auto_memory_enabled
+        revision, created_at, updated_at, disabled_at, goal, icon, auto_memory_enabled,
+        library_path, library_remote_url, library_push_on_change
       ) VALUES (
         ${row.projectId}, ${row.coordinatorThreadId}, ${row.coordinatorName},
         ${row.coordinatorModelSelection}, ${row.coordinatorProviderOptions},
         ${row.workerRouting}, ${row.limits}, ${row.captureEnabled}, ${row.enabled},
         ${row.automationId}, ${row.revision}, ${row.createdAt}, ${row.updatedAt}, ${row.disabledAt},
-        ${row.goal}, ${row.icon}, ${row.autoMemoryEnabled}
+        ${row.goal}, ${row.icon}, ${row.autoMemoryEnabled},
+        ${row.libraryPath}, ${row.libraryRemoteUrl}, ${row.libraryPushOnChange}
       )
     `,
   });
@@ -228,7 +244,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         disabled_at = ${row.disabledAt},
         goal = ${row.goal},
         icon = ${row.icon},
-        auto_memory_enabled = ${row.autoMemoryEnabled}
+        auto_memory_enabled = ${row.autoMemoryEnabled},
+        library_path = ${row.libraryPath},
+        library_remote_url = ${row.libraryRemoteUrl},
+        library_push_on_change = ${row.libraryPushOnChange}
       WHERE project_id = ${row.projectId} AND revision = ${expectedRevision}
       RETURNING 1 AS changed
     `,
@@ -454,6 +473,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
     goal: config.goal ?? null,
     icon: config.icon ?? null,
     autoMemoryEnabled: config.autoMemoryEnabled ? 1 : 0,
+    libraryPath: config.libraryPath ?? null,
+    libraryRemoteUrl: config.libraryRemoteUrl ?? null,
+    libraryPushOnChange: config.libraryPushOnChange ? 1 : 0,
   });
 
   const revisionMismatch = (operation: string) =>
@@ -496,7 +518,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             disabled_at AS "disabledAt",
             goal,
             icon,
-            auto_memory_enabled AS "autoMemoryEnabled"
+            auto_memory_enabled AS "autoMemoryEnabled",
+            library_path AS "libraryPath",
+            library_remote_url AS "libraryRemoteUrl",
+            library_push_on_change AS "libraryPushOnChange"
           FROM project_agent_configs
         `,
       })({}).pipe(
@@ -535,6 +560,30 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.mapError(
           toPersistenceSqlOrDecodeError("ProjectAgentRepository.listSummaries", "summary"),
         ),
+      ),
+    listLinkedProjectIds: (projectId) =>
+      listLinkedIds({ projectId }).pipe(
+        Effect.map((rows) => rows.map((row) => row.linkedProjectId)),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.listLinkedProjectIds", "linked"),
+        ),
+      ),
+    linkProject: (input) =>
+      sql`
+        INSERT INTO project_agent_linked_projects (project_id, linked_project_id, created_at)
+        VALUES (${input.projectId}, ${input.linkedProjectId}, ${input.createdAt})
+        ON CONFLICT (project_id, linked_project_id) DO NOTHING
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.linkProject")),
+        Effect.asVoid,
+      ),
+    unlinkProject: (input) =>
+      sql`
+        DELETE FROM project_agent_linked_projects
+        WHERE project_id = ${input.projectId} AND linked_project_id = ${input.linkedProjectId}
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.unlinkProject")),
+        Effect.asVoid,
       ),
     getConfigByCoordinatorThread: (threadId) =>
       getConfigByCoordinatorRow({ threadId }).pipe(

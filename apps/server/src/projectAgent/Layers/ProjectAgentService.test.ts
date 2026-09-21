@@ -8,7 +8,7 @@ import {
   type OrchestrationCommand,
 } from "@synara/contracts";
 import { memoryThreadDocumentPath } from "@synara/shared/projectAgent";
-import { Effect, Exit, Layer, Option, Stream } from "effect";
+import { Effect, Layer, Option, Stream } from "effect";
 
 import { ServerConfig } from "../../config.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
@@ -636,5 +636,178 @@ it.effect("scopes memory writes to MEMORY.md and per-thread files", () => {
       ),
     );
     assert.equal(instructions._tag, "Failure");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("links an ordinary repository to a group and is idempotent", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-link-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const first = yield* service.linkProject(
+      {
+        requestId: "req-link-1",
+        projectId: groupId,
+        linkedProjectId: ordinaryId,
+      },
+      { kind: "user" },
+    );
+    assert.deepEqual(first.config?.linkedProjectIds, [ordinaryId]);
+    const second = yield* service.linkProject(
+      {
+        requestId: "req-link-2",
+        projectId: groupId,
+        linkedProjectId: ordinaryId,
+      },
+      { kind: "user" },
+    );
+    assert.deepEqual(second.config?.linkedProjectIds, [ordinaryId]);
+    const overview = yield* service.getOverview({ projectId: groupId }, { kind: "user" });
+    assert.deepEqual(overview.config?.linkedProjectIds, [ordinaryId]);
+    const unlinked = yield* service.unlinkProject(
+      {
+        requestId: "req-unlink-1",
+        projectId: groupId,
+        linkedProjectId: ordinaryId,
+      },
+      { kind: "user" },
+    );
+    assert.deepEqual(unlinked.config?.linkedProjectIds, []);
+    const noop = yield* service.unlinkProject(
+      {
+        requestId: "req-unlink-2",
+        projectId: groupId,
+        linkedProjectId: ordinaryId,
+      },
+      { kind: "user" },
+    );
+    assert.deepEqual(noop.config?.linkedProjectIds, []);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("rejects linking a container, the group itself, or an unknown project", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-link-reject-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const self = yield* Effect.exit(
+      service.linkProject(
+        { requestId: "req-link-self", projectId: groupId, linkedProjectId: groupId },
+        { kind: "user" },
+      ),
+    );
+    const studio = yield* Effect.exit(
+      service.linkProject(
+        { requestId: "req-link-studio", projectId: groupId, linkedProjectId: studioId },
+        { kind: "user" },
+      ),
+    );
+    const unknown = yield* Effect.exit(
+      service.linkProject(
+        {
+          requestId: "req-link-unknown",
+          projectId: groupId,
+          linkedProjectId: ProjectId.makeUnsafe("project-missing"),
+        },
+        { kind: "user" },
+      ),
+    );
+    assert.equal(self._tag, "Failure");
+    assert.equal(studio._tag, "Failure");
+    assert.equal(unknown._tag, "Failure");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("allows group-coordinator thread creation in the group or a linked repo", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const overview = yield* service.configure(
+      {
+        requestId: "req-allowlist-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const coordinatorThreadId = overview.config!.coordinatorThreadId;
+    yield* service.assertCallerMayCreateThreadInProject({
+      callerThreadId: coordinatorThreadId,
+      targetProjectId: groupId,
+    });
+    yield* service.linkProject(
+      { requestId: "req-allowlist-link", projectId: groupId, linkedProjectId: ordinaryId },
+      { kind: "user" },
+    );
+    yield* service.assertCallerMayCreateThreadInProject({
+      callerThreadId: coordinatorThreadId,
+      targetProjectId: ordinaryId,
+    });
+    const rejected = yield* Effect.exit(
+      service.assertCallerMayCreateThreadInProject({
+        callerThreadId: coordinatorThreadId,
+        targetProjectId: groupId2,
+      }),
+    );
+    assert.equal(rejected._tag, "Failure");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("round-trips library hosting fields and rejects a relative libraryPath", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const relative = yield* Effect.exit(
+      service.configure(
+        {
+          requestId: "req-lib-relative",
+          projectId: groupId,
+          coordinatorModelSelection: modelSelection,
+          libraryPath: "relative/library",
+        },
+        { kind: "user" },
+      ),
+    );
+    assert.equal(relative._tag, "Failure");
+    const overview = yield* service.configure(
+      {
+        requestId: "req-lib-ok",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+        libraryPath: "/tmp/group-library",
+        libraryRemoteUrl: "https://example.com/library.git",
+        libraryPushOnChange: true,
+      },
+      { kind: "user" },
+    );
+    assert.equal(overview.config?.libraryPath, "/tmp/group-library");
+    assert.equal(overview.config?.libraryRemoteUrl, "https://example.com/library.git");
+    assert.equal(overview.config?.libraryPushOnChange, true);
+    const preserved = yield* service.configure(
+      {
+        requestId: "req-lib-preserve",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+        expectedRevision: overview.config?.revision,
+      },
+      { kind: "user" },
+    );
+    assert.equal(preserved.config?.libraryPath, "/tmp/group-library");
+    assert.equal(preserved.config?.libraryRemoteUrl, "https://example.com/library.git");
+    assert.equal(preserved.config?.libraryPushOnChange, true);
   }).pipe(Effect.provide(harness.layer));
 });

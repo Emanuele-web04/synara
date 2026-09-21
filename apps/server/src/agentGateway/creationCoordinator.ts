@@ -110,6 +110,10 @@ interface CreationCoordinatorDependencies {
     readonly threadIds: ReadonlyArray<ThreadId>;
     readonly titles: ReadonlyArray<string>;
   }) => Effect.Effect<void, ToolInputError>;
+  readonly assertCreateTargetProject?: (input: {
+    readonly callerThreadId: string;
+    readonly targetProjectId: ProjectId;
+  }) => Effect.Effect<void, ToolInputError>;
 }
 
 export type GatewayCreationContext =
@@ -192,6 +196,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
     requireThreadShell,
     authorizeManagedGoalCreation,
     recordManagedWorkerThreads,
+    assertCreateTargetProject,
   } = dependencies;
   const lockIndex = yield* Semaphore.make(1);
   const locks = new Map<string, { readonly lock: Semaphore.Semaphore; users: number }>();
@@ -1078,6 +1083,12 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
                   const interactionMode = interactionModeForGatewayTarget(entry.target);
                   yield* context.assertAuthority();
+                  if (context.kind === "provider-session" && assertCreateTargetProject) {
+                    yield* assertCreateTargetProject({
+                      callerThreadId: context.callerThreadId,
+                      targetProjectId: entry.projectId,
+                    });
+                  }
                   yield* orchestrationEngine
                     .dispatch({
                       type: "thread.create",

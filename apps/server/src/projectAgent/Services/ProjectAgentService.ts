@@ -2,6 +2,8 @@ import type {
   ProjectActivity,
   ProjectAgentBackfillInput,
   ProjectAgentConfigureInput,
+  ProjectAgentLinkProjectInput,
+  ProjectAgentUnlinkProjectInput,
   ProjectAgentContextPacket,
   ProjectAgentCreateTaskInput,
   ProjectAgentExcludeThreadInput,
@@ -58,6 +60,18 @@ export interface ProjectAgentServiceShape {
     input: ProjectAgentConfigureInput,
     principal: ProjectAgentPrincipal,
   ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly linkProject: (
+    input: ProjectAgentLinkProjectInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly unlinkProject: (
+    input: ProjectAgentUnlinkProjectInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly assertCallerMayCreateThreadInProject: (input: {
+    readonly callerThreadId: ThreadId;
+    readonly targetProjectId: ProjectId;
+  }) => Effect.Effect<void, ProjectAgentServiceError>;
   readonly startGoal: (
     input: ProjectAgentStartGoalInput,
     principal: ProjectAgentPrincipal,

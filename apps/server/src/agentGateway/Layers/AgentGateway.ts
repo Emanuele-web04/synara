@@ -289,6 +289,13 @@ export const makeAgentGateway = Effect.gen(function* () {
       projectAgentService
         .recordManagedWorkerThreads(input)
         .pipe(Effect.mapError((error) => new ToolInputError(error.message))),
+    assertCreateTargetProject: (input) =>
+      projectAgentService
+        .assertCallerMayCreateThreadInProject({
+          callerThreadId: ThreadId.makeUnsafe(input.callerThreadId),
+          targetProjectId: input.targetProjectId,
+        })
+        .pipe(Effect.mapError((error) => new ToolInputError(error.message))),
   });
 
   const createThreads: ToolEntry = {

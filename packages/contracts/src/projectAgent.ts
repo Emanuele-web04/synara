@@ -76,6 +76,9 @@ export const ProjectAgentConfig = Schema.Struct({
   icon: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
   autoMemoryEnabled: Schema.optional(Schema.Boolean),
   linkedProjectIds: Schema.optional(Schema.Array(ProjectId)),
+  libraryPath: Schema.optional(TrimmedNonEmptyString),
+  libraryRemoteUrl: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
+  libraryPushOnChange: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentConfig = typeof ProjectAgentConfig.Type;
 
@@ -393,8 +396,25 @@ export const ProjectAgentConfigureInput = Schema.Struct({
   icon: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
   autoMemoryEnabled: Schema.optional(Schema.Boolean),
   userDisplayName: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
+  libraryPath: Schema.optional(TrimmedNonEmptyString),
+  libraryRemoteUrl: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
+  libraryPushOnChange: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentConfigureInput = typeof ProjectAgentConfigureInput.Type;
+
+export const ProjectAgentLinkProjectInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  linkedProjectId: ProjectId,
+});
+export type ProjectAgentLinkProjectInput = typeof ProjectAgentLinkProjectInput.Type;
+
+export const ProjectAgentUnlinkProjectInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  linkedProjectId: ProjectId,
+});
+export type ProjectAgentUnlinkProjectInput = typeof ProjectAgentUnlinkProjectInput.Type;
 
 export const ProjectAgentStartGoalInput = Schema.Struct({
   requestId: ProjectAgentRequestId,

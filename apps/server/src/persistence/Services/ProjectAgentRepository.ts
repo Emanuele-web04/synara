@@ -60,6 +60,18 @@ export interface ProjectAgentRepositoryShape {
     config: ProjectAgentConfig,
     expectedRevision: number | null,
   ) => Effect.Effect<ProjectAgentConfig, ProjectAgentRepositoryError>;
+  readonly listLinkedProjectIds: (
+    projectId: ProjectId,
+  ) => Effect.Effect<ReadonlyArray<ProjectId>, ProjectAgentRepositoryError>;
+  readonly linkProject: (input: {
+    readonly projectId: ProjectId;
+    readonly linkedProjectId: ProjectId;
+    readonly createdAt: string;
+  }) => Effect.Effect<void, ProjectAgentRepositoryError>;
+  readonly unlinkProject: (input: {
+    readonly projectId: ProjectId;
+    readonly linkedProjectId: ProjectId;
+  }) => Effect.Effect<void, ProjectAgentRepositoryError>;
   readonly getActiveGoal: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<ProjectGoal>, ProjectAgentRepositoryError>;
