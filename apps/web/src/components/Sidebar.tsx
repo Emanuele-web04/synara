@@ -320,6 +320,8 @@ import {
   type SidebarThreadFolder,
   useSidebarThreadFolderStore,
 } from "../sidebarThreadFolderStore";
+import { detachedThreadIdSet, useSidebarSubagentDetachStore } from "../sidebarSubagentDetachStore";
+import { useNowMs } from "../hooks/useNowMs";
 import {
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
@@ -345,6 +347,8 @@ import {
   resolveActiveSidebarThreadId,
   archiveThreadsForFolderRemoval,
   deleteThreadsForFolderRemoval,
+  isThreadFolderAssignable,
+  resolveHiddenFinishedSubagentThreadIds,
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
@@ -1511,6 +1515,7 @@ export default function Sidebar() {
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
   const studioSectionVisible = appSettings.showStudioSection;
+  const threadFoldersVisible = appSettings.showThreadFolders;
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { handleNewStudioChat } = useHandleNewStudioChat();
@@ -1757,6 +1762,15 @@ export default function Sidebar() {
   const restoreThreadFolder = useSidebarThreadFolderStore((state) => state.restoreFolder);
   const deleteThreadFolder = useSidebarThreadFolderStore((state) => state.deleteFolder);
   const pruneThreadFolderProjects = useSidebarThreadFolderStore((state) => state.pruneProjects);
+  const detachedSubagentThreadIds = useSidebarSubagentDetachStore(
+    (state) => state.detachedThreadIds,
+  );
+  const detachSubagent = useSidebarSubagentDetachStore((state) => state.detachSubagent);
+  const attachSubagent = useSidebarSubagentDetachStore((state) => state.attachSubagent);
+  const detachedSubagentIdSet = useMemo(
+    () => detachedThreadIdSet(detachedSubagentThreadIds),
+    [detachedSubagentThreadIds],
+  );
 
   const routeActiveSidebarThreadId = routeThreadId;
   const activeSidebarThreadId = resolveActiveSidebarThreadId({
@@ -1773,6 +1787,27 @@ export default function Sidebar() {
   );
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
+  // Finished subagent rows age out of the tree source. The clock only ticks while
+  // auto-hide is on, so an idle sidebar never re-renders on a timer.
+  const subagentAutoHideMinutes = appSettings.subagentAutoHideMinutes;
+  const subagentAutoHideNowMs = useNowMs(subagentAutoHideMinutes > 0, 30_000);
+  const hiddenFinishedSubagentThreadIds = useMemo(
+    () =>
+      resolveHiddenFinishedSubagentThreadIds({
+        threads: sidebarTreeThreads,
+        detachedThreadIds: detachedSubagentIdSet,
+        activeThreadId: activeSidebarThreadId ?? undefined,
+        autoHideMinutes: subagentAutoHideMinutes,
+        nowMs: subagentAutoHideNowMs,
+      }),
+    [
+      activeSidebarThreadId,
+      detachedSubagentIdSet,
+      sidebarTreeThreads,
+      subagentAutoHideMinutes,
+      subagentAutoHideNowMs,
+    ],
+  );
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
   const studioProjectIdSet = useMemo(
@@ -3043,15 +3078,14 @@ export default function Sidebar() {
       const eligibleIds = threadIds.filter((threadId) => {
         const thread = getThreadFromState(useStore.getState(), threadId);
         return (
-          thread !== undefined &&
-          (thread.parentThreadId ?? null) === null &&
+          isThreadFolderAssignable(thread, detachedSubagentIdSet) &&
           (folder === null || (thread.projectId === folder.projectId && folder.archivedAt === null))
         );
       });
       assignThreadsToFolder(folderId, eligibleIds);
       removeFromSelection(eligibleIds);
     },
-    [assignThreadsToFolder, removeFromSelection],
+    [assignThreadsToFolder, detachedSubagentIdSet, removeFromSelection],
   );
 
   const clearSidebarThreadDrag = useCallback(() => {
@@ -3075,14 +3109,17 @@ export default function Sidebar() {
             : [];
       return candidateIds.filter((threadId) => {
         const thread = getThreadFromState(useStore.getState(), threadId);
-        return thread?.projectId === projectId && (thread.parentThreadId ?? null) === null;
+        return (
+          isThreadFolderAssignable(thread, detachedSubagentIdSet) && thread.projectId === projectId
+        );
       });
     },
-    [],
+    [detachedSubagentIdSet],
   );
 
   const handleThreadFolderDragOver = useCallback(
     (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
+      if (!threadFoldersVisible) return;
       if (!isThreadDragTransfer(event.dataTransfer)) return;
       // A folder owns its whole subtree as a drop target. Blocking the project-root
       // parent prevents dropping on the current folder from accidentally extracting it.
@@ -3101,22 +3138,24 @@ export default function Sidebar() {
       event.dataTransfer.dropEffect = "move";
       setThreadFolderDropTargetKey(threadFolderDropKey(projectId, targetFolderId));
     },
-    [resolveSidebarThreadDropIds],
+    [resolveSidebarThreadDropIds, threadFoldersVisible],
   );
 
   const handleThreadFolderDragLeave = useCallback(
     (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
+      if (!threadFoldersVisible) return;
       if (!isThreadDragTransfer(event.dataTransfer)) return;
       const relatedTarget = event.relatedTarget as Node | null;
       if (relatedTarget && event.currentTarget.contains(relatedTarget)) return;
       const key = threadFolderDropKey(projectId, targetFolderId);
       setThreadFolderDropTargetKey((current) => (current === key ? null : current));
     },
-    [],
+    [threadFoldersVisible],
   );
 
   const handleThreadFolderDrop = useCallback(
     (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
+      if (!threadFoldersVisible) return;
       if (!isThreadDragTransfer(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -3136,6 +3175,7 @@ export default function Sidebar() {
       moveThreadsToFolder,
       resolveSidebarThreadDropIds,
       setThreadFolderCollapsed,
+      threadFoldersVisible,
     ],
   );
 
@@ -3156,10 +3196,12 @@ export default function Sidebar() {
         return;
       }
 
-      const topLevelIds = assignedIds.filter((threadId) => {
-        const thread = getThreadFromState(useStore.getState(), threadId);
-        return thread !== undefined && (thread.parentThreadId ?? null) === null;
-      });
+      const topLevelIds = assignedIds.filter((threadId) =>
+        isThreadFolderAssignable(
+          getThreadFromState(useStore.getState(), threadId),
+          detachedSubagentIdSet,
+        ),
+      );
       try {
         if (mode === "archive") {
           pendingThreadFolderArchiveIdsRef.current.add(folder.id);
@@ -3201,6 +3243,7 @@ export default function Sidebar() {
       assignThreadsToFolder,
       deleteThread,
       deleteThreadFolder,
+      detachedSubagentIdSet,
       removeFromSelection,
     ],
   );
@@ -3343,26 +3386,27 @@ export default function Sidebar() {
         envMode: thread.envMode,
         worktreePath: thread.worktreePath,
       });
-      const projectThreadFolders = getProjectThreadFolders(
-        useSidebarThreadFolderStore.getState().folders,
-        thread.projectId,
-      );
+      const projectThreadFolders = threadFoldersVisible
+        ? getProjectThreadFolders(useSidebarThreadFolderStore.getState().folders, thread.projectId)
+        : [];
       const currentThreadFolderId =
         useSidebarThreadFolderStore.getState().folderIdByThreadId[threadId] ?? null;
-      const threadFolderItems = thread.parentThreadId
-        ? []
-        : [
-            { id: "folder:new", label: "New folder with this thread", separatorBefore: true },
-            ...(currentThreadFolderId
-              ? [{ id: "folder:root", label: "Move to project root" }]
-              : []),
-            ...projectThreadFolders
-              .filter((folder) => folder.id !== currentThreadFolderId)
-              .map((folder) => ({
-                id: `folder:${folder.id}`,
-                label: `Move to ${folder.name}`,
-              })),
-          ];
+      const threadFolderItems =
+        threadFoldersVisible && isThreadFolderAssignable(thread, detachedSubagentIdSet)
+          ? [
+              { id: "folder:new", label: "New folder with this thread", separatorBefore: true },
+              ...(currentThreadFolderId
+                ? [{ id: "folder:root", label: "Move to project root" }]
+                : []),
+              ...projectThreadFolders
+                .filter((folder) => folder.id !== currentThreadFolderId)
+                .map((folder) => ({
+                  id: `folder:${folder.id}`,
+                  label: `Move to ${folder.name}`,
+                })),
+            ]
+          : [];
+      const isDetachedSubagent = detachedSubagentIdSet.has(threadId);
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread", icon: THREAD_CONTEXT_MENU_ICONS.rename },
@@ -3399,6 +3443,17 @@ export default function Sidebar() {
             : []),
           { id: "copy-thread-id", label: "Copy Thread ID", icon: THREAD_CONTEXT_MENU_ICONS.copy },
           ...threadFolderItems,
+          // Subagent rows only appear while their branch is active; detaching one
+          // keeps it as a permanent top-level row until it finishes and ages out.
+          ...(thread.parentThreadId
+            ? [
+                {
+                  id: isDetachedSubagent ? "attach-subagent" : "detach-subagent",
+                  label: isDetachedSubagent ? "Attach to parent" : "Detach from parent",
+                  separatorBefore: true,
+                },
+              ]
+            : []),
           ...(options?.extraItems ?? []),
           // Subagent threads are archived and restored through their parent
           // (thread.archive cascades); archiving one alone would strand it with
@@ -3430,6 +3485,18 @@ export default function Sidebar() {
       }
       if (clicked === "toggle-pin") {
         toggleThreadPinned(threadId);
+        return;
+      }
+
+      if (clicked === "detach-subagent") {
+        detachSubagent(threadId);
+        return;
+      }
+      if (clicked === "attach-subagent") {
+        attachSubagent(threadId);
+        // Back under its parent the row follows the parent's folder again, so the
+        // detached-only assignment must not linger.
+        assignThreadsToFolder(null, [threadId]);
         return;
       }
 
@@ -3580,6 +3647,10 @@ export default function Sidebar() {
       copyThreadIdToClipboard,
       clearDismissedThreadStatus,
       clearThreadNotification,
+      assignThreadsToFolder,
+      attachSubagent,
+      detachSubagent,
+      detachedSubagentIdSet,
       handoffThread,
       markThreadUnread,
       navigate,
@@ -3592,6 +3663,7 @@ export default function Sidebar() {
       resolveThreadStatusForSidebar,
       serverSettingsQuery.data?.providers,
       sidebarThreadSummaryById,
+      threadFoldersVisible,
       toggleThreadPinned,
     ],
   );
@@ -3607,11 +3679,13 @@ export default function Sidebar() {
         .filter((thread): thread is Thread => thread !== undefined);
       const selectedProjectId = selectedThreads[0]?.projectId ?? null;
       const canOrganizeSelection =
+        threadFoldersVisible &&
         selectedProjectId !== null &&
         selectedThreads.length === ids.length &&
         selectedThreads.every(
           (thread) =>
-            thread.projectId === selectedProjectId && (thread.parentThreadId ?? null) === null,
+            thread.projectId === selectedProjectId &&
+            isThreadFolderAssignable(thread, detachedSubagentIdSet),
         );
       const projectFolders =
         canOrganizeSelection && selectedProjectId !== null
@@ -3744,11 +3818,13 @@ export default function Sidebar() {
       clearSelection,
       clearDismissedThreadStatus,
       deleteThread,
+      detachedSubagentIdSet,
       markThreadUnread,
       moveThreadsToFolder,
       openCreateThreadFolder,
       removeFromSelection,
       selectedThreadIds,
+      threadFoldersVisible,
     ],
   );
 
@@ -4320,13 +4396,23 @@ export default function Sidebar() {
   const sortedSidebarThreadsByProjectId = useMemo(() => {
     const byProjectId = new Map<ProjectId, SidebarThreadSummary[]>();
     for (const [projectId, projectThreads] of sidebarThreadsByProjectId) {
+      // Auto-hidden finished subagents leave the tree source entirely, so paging
+      // counts, folder counts, and status indicators all agree with what renders.
+      const visibleThreads =
+        hiddenFinishedSubagentThreadIds.size === 0
+          ? projectThreads
+          : projectThreads.filter((thread) => !hiddenFinishedSubagentThreadIds.has(thread.id));
       byProjectId.set(
         projectId,
-        sortThreadsForSidebar(projectThreads, appSettings.sidebarThreadSortOrder),
+        sortThreadsForSidebar(visibleThreads, appSettings.sidebarThreadSortOrder),
       );
     }
     return byProjectId;
-  }, [appSettings.sidebarThreadSortOrder, sidebarThreadsByProjectId]);
+  }, [
+    appSettings.sidebarThreadSortOrder,
+    hiddenFinishedSubagentThreadIds,
+    sidebarThreadsByProjectId,
+  ]);
   const handleProjectTitlePointerDownCapture = useCallback(() => {
     suppressProjectClickAfterDragRef.current = false;
   }, []);
@@ -4371,12 +4457,14 @@ export default function Sidebar() {
         appSettings.sidebarThreadSortOrder,
       ),
       forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+      detachedThreadIds: detachedSubagentIdSet,
     });
   }, [
     activeSidebarThreadId,
     appSettings.sidebarThreadSortOrder,
     chatSectionExpanded,
     chatProjects,
+    detachedSubagentIdSet,
     sortedSidebarThreadsByProjectId,
   ]);
   const visibleChatThreadIds = useMemo(
@@ -4402,10 +4490,12 @@ export default function Sidebar() {
         appSettings.sidebarThreadSortOrder,
       ),
       forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+      detachedThreadIds: detachedSubagentIdSet,
     });
   }, [
     activeSidebarThreadId,
     appSettings.sidebarThreadSortOrder,
+    detachedSubagentIdSet,
     isOnStudio,
     pinnedThreadIds,
     sortedSidebarThreadsByProjectId,
@@ -4522,10 +4612,12 @@ export default function Sidebar() {
         activeSidebarThreadId: activeSidebarThreadId ?? undefined,
         previewLimit: THREAD_PREVIEW_LIMIT,
         previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
+        detachedThreadIds: detachedSubagentIdSet,
         resolveThreadStatus: resolveThreadStatusForSidebar,
       }),
     [
       activeSidebarThreadId,
+      detachedSubagentIdSet,
       threadListExtraPagesByProjectCwd,
       pinnedThreadIds,
       sortedSidebarThreadsByProjectId,
@@ -4552,10 +4644,12 @@ export default function Sidebar() {
       activeSidebarThreadId: activeSidebarThreadId ?? undefined,
       previewLimit: THREAD_PREVIEW_LIMIT,
       previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
+      detachedThreadIds: detachedSubagentIdSet,
       resolveThreadStatus: resolveThreadStatusForSidebar,
     });
   }, [
     activeSidebarThreadId,
+    detachedSubagentIdSet,
     isOnStudio,
     threadListExtraPagesByProjectCwd,
     pinnedThreadIds,
@@ -5034,9 +5128,12 @@ export default function Sidebar() {
       threadAutomations: automationsByThreadId.get(thread.id),
     });
     const threadStatus = resolveThreadStatusForSidebar(thread);
-    const isSubagentThread = Boolean(thread.parentThreadId);
+    // A detached subagent renders as a top-level row; only attached ones keep the
+    // compact, indented subagent presentation.
+    const isNestedSubagentThread =
+      Boolean(thread.parentThreadId) && !detachedSubagentIdSet.has(thread.id);
     const pr = prByThreadId.get(thread.id) ?? null;
-    const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
+    const leadingPr = isNestedSubagentThread || thread.forkSourceThreadId ? null : pr;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
@@ -5141,7 +5238,7 @@ export default function Sidebar() {
             />
             <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
               {renderThreadRowTrailingCluster({
-                isSubagentThread,
+                isSubagentThread: isNestedSubagentThread,
                 threadJumpLabel,
                 threadJumpLabelParts,
                 rightMetaChips,
@@ -5151,7 +5248,7 @@ export default function Sidebar() {
                   threadId: thread.id,
                   toneClassName: "text-muted-foreground/42",
                   isPinned: true,
-                  compact: isSubagentThread,
+                  compact: isNestedSubagentThread,
                 }),
               })}
             </div>
@@ -5199,10 +5296,11 @@ export default function Sidebar() {
         Boolean(thread.handoff?.sourceProvider),
       threadAutomations: automationsByThreadId.get(thread.id),
     });
-    const isSubagentThread = Boolean(thread.parentThreadId);
-    const leadingPr = isSubagentThread || thread.forkSourceThreadId ? null : pr;
+    const isNestedSubagentThread =
+      Boolean(thread.parentThreadId) && !detachedSubagentIdSet.has(thread.id);
+    const leadingPr = isNestedSubagentThread || thread.forkSourceThreadId ? null : pr;
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
-    const showCompactMeta = !isSubagentThread;
+    const showCompactMeta = !isNestedSubagentThread;
     const showTemporaryThreadIcon = showCompactMeta && isTemporaryThread;
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
@@ -5240,8 +5338,8 @@ export default function Sidebar() {
                     isActive,
                     isSelected,
                   }),
-                  leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
-                  isSubagentThread
+                  leadingPr ? "pl-8" : topLevel && !isNestedSubagentThread ? "pl-2" : null,
+                  isNestedSubagentThread
                     ? "pr-7.5"
                     : resolveThreadRowTrailingReserveClass({
                         metaChipCount: showCompactMeta ? rightMetaChips.length : 0,
@@ -5256,9 +5354,8 @@ export default function Sidebar() {
                   const draggableFolderThreadIds = candidateIds.filter((threadId) => {
                     const candidate = getThreadFromState(useStore.getState(), threadId);
                     return (
-                      candidate !== undefined &&
-                      candidate.projectId === thread.projectId &&
-                      (candidate.parentThreadId ?? null) === null
+                      isThreadFolderAssignable(candidate, detachedSubagentIdSet) &&
+                      candidate.projectId === thread.projectId
                     );
                   });
                   sidebarThreadDragIdsRef.current = draggableFolderThreadIds;
@@ -5344,12 +5441,12 @@ export default function Sidebar() {
             />
             <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
               {renderThreadRowTrailingCluster({
-                isSubagentThread,
+                isSubagentThread: isNestedSubagentThread,
                 threadJumpLabel,
                 threadJumpLabelParts,
                 rightMetaChips: showCompactMeta ? rightMetaChips : [],
                 threadStatus,
-                timestampToneClassName: isSubagentThread
+                timestampToneClassName: isNestedSubagentThread
                   ? isHighlighted
                     ? "text-foreground/38 dark:text-foreground/46"
                     : "text-muted-foreground/24"
@@ -5358,7 +5455,7 @@ export default function Sidebar() {
                   threadId: thread.id,
                   toneClassName: secondaryMetaClass,
                   isPinned,
-                  compact: isSubagentThread,
+                  compact: isNestedSubagentThread,
                 }),
               })}
             </div>
@@ -5465,7 +5562,9 @@ export default function Sidebar() {
       canShowMoreThreads,
       canShowLessThreads,
     } = projectSidebarData;
-    const projectThreadFolders = getProjectThreadFolders(threadFolders, project.id);
+    const projectThreadFolders = threadFoldersVisible
+      ? getProjectThreadFolders(threadFolders, project.id)
+      : [];
     const activeFolderIds = new Set(projectThreadFolders.map((folder) => folder.id));
     const { entriesByFolderId: visibleEntriesByFolderId, rootEntries: rootVisibleEntries } =
       groupThreadFolderEntries({
@@ -5475,7 +5574,7 @@ export default function Sidebar() {
       });
     const threadCountByFolderId = new Map<string, number>();
     for (const thread of projectThreads) {
-      if ((thread.parentThreadId ?? null) !== null) continue;
+      if (!isThreadFolderAssignable(thread, detachedSubagentIdSet)) continue;
       const folderId = folderIdByThreadId[thread.id];
       if (!folderId || !activeFolderIds.has(folderId)) continue;
       threadCountByFolderId.set(folderId, (threadCountByFolderId.get(folderId) ?? 0) + 1);
@@ -5483,7 +5582,9 @@ export default function Sidebar() {
     const projectRootDropKey = threadFolderDropKey(project.id, null);
     const projectRootDropActive = threadFolderDropTargetKey === projectRootDropKey;
     const showProjectRootDropTarget =
-      sidebarThreadDragProjectId === project.id && sidebarThreadDragIncludesFolderMember;
+      threadFoldersVisible &&
+      sidebarThreadDragProjectId === project.id &&
+      sidebarThreadDragIncludesFolderMember;
     const projectFolderIconClassName = isProjectPinned
       ? "opacity-0"
       : sidebarHoverRevealHideClassName("project-header");
@@ -5642,17 +5743,19 @@ export default function Sidebar() {
                   });
                 }}
               />
-              <SidebarIconButton
-                icon={FolderClosed}
-                label={`Create thread folder in ${project.name}`}
-                tooltip="New thread folder"
-                tooltipSide="top"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  openCreateThreadFolder(project.id);
-                }}
-              />
+              {threadFoldersVisible ? (
+                <SidebarIconButton
+                  icon={FolderClosed}
+                  label={`Create thread folder in ${project.name}`}
+                  tooltip="New thread folder"
+                  tooltipSide="top"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openCreateThreadFolder(project.id);
+                  }}
+                />
+              ) : null}
               <SidebarIconButton
                 icon={TerminalIcon}
                 label={`Create new terminal thread in ${project.name}`}
@@ -7332,42 +7435,46 @@ export default function Sidebar() {
                 </ComposerPickerMenuSubPopup>
               </MenuSub>
               <MenuSeparator />
-              <MenuItem
-                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() =>
-                  void handleProjectContextMenuAction(
-                    projectContextMenuState.projectId,
-                    "new-folder",
-                  )
-                }
-              >
-                <ProjectContextMenuIcon icon={AddPlusIcon} />
-                <span>New thread folder…</span>
-              </MenuItem>
-              {projectContextMenuArchivedThreadFolders.length > 0 ? (
-                <MenuSub keepOpenOnFocusOut>
-                  <MenuSubTrigger className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}>
-                    <ProjectContextMenuIcon icon={ArchiveIcon} />
-                    <span>Archived folders</span>
-                  </MenuSubTrigger>
-                  <ComposerPickerMenuSubPopup className="min-w-48">
-                    {projectContextMenuArchivedThreadFolders.map((folder) => (
-                      <MenuItem
-                        key={folder.id}
-                        className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                        onClick={() => {
-                          restoreThreadFolder(folder.id);
-                          setProjectContextMenuState(null);
-                        }}
-                      >
-                        <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
-                          <FolderClosed />
-                        </span>
-                        <span className="min-w-0 truncate">Restore {folder.name}</span>
-                      </MenuItem>
-                    ))}
-                  </ComposerPickerMenuSubPopup>
-                </MenuSub>
+              {threadFoldersVisible ? (
+                <>
+                  <MenuItem
+                    className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                    onClick={() =>
+                      void handleProjectContextMenuAction(
+                        projectContextMenuState.projectId,
+                        "new-folder",
+                      )
+                    }
+                  >
+                    <ProjectContextMenuIcon icon={AddPlusIcon} />
+                    <span>New thread folder…</span>
+                  </MenuItem>
+                  {projectContextMenuArchivedThreadFolders.length > 0 ? (
+                    <MenuSub keepOpenOnFocusOut>
+                      <MenuSubTrigger className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}>
+                        <ProjectContextMenuIcon icon={ArchiveIcon} />
+                        <span>Archived folders</span>
+                      </MenuSubTrigger>
+                      <ComposerPickerMenuSubPopup className="min-w-48">
+                        {projectContextMenuArchivedThreadFolders.map((folder) => (
+                          <MenuItem
+                            key={folder.id}
+                            className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                            onClick={() => {
+                              restoreThreadFolder(folder.id);
+                              setProjectContextMenuState(null);
+                            }}
+                          >
+                            <span className={PROJECT_CONTEXT_MENU_ICON_CLASS_NAME}>
+                              <FolderClosed />
+                            </span>
+                            <span className="min-w-0 truncate">Restore {folder.name}</span>
+                          </MenuItem>
+                        ))}
+                      </ComposerPickerMenuSubPopup>
+                    </MenuSub>
+                  ) : null}
+                </>
               ) : null}
               <MenuSeparator />
               <MenuItem

@@ -24,6 +24,7 @@ import {
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
   isGitTextGenerationSettingsDirty,
+  SUBAGENT_AUTO_HIDE_MINUTE_OPTIONS,
   TERMINAL_FONT_FAMILY_SUGGESTIONS,
   useAppSettings,
 } from "../appSettings";
@@ -175,6 +176,15 @@ const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
   created_at: "Newest first",
 } as const;
 
+const SUBAGENT_AUTO_HIDE_LABELS: Record<number, string> = {
+  0: "Never",
+  5: "5 minutes",
+  15: "15 minutes",
+  30: "30 minutes",
+  60: "1 hour",
+  240: "4 hours",
+};
+
 const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "queue", label: "Queue" },
   { value: "steer", label: "Steer" },
@@ -320,6 +330,10 @@ function SettingsRouteView() {
     ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
     ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
       ? ["Automation runs"]
+      : []),
+    ...(settings.showThreadFolders !== defaults.showThreadFolders ? ["Thread folders"] : []),
+    ...(settings.subagentAutoHideMinutes !== defaults.subagentAutoHideMinutes
+      ? ["Subagent auto-hide"]
       : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
@@ -647,6 +661,55 @@ function SettingsRouteView() {
           resetLabel: "automation runs",
           ariaLabel: "Show automation run threads in the sidebar",
         })}
+
+        {renderBooleanSettingRow({
+          settingKey: "showThreadFolders",
+          title: "Thread folders",
+          description:
+            "Group top-level threads into visual folders inside each project. Turning this off returns every thread to the project list; folder assignments are kept and come back when re-enabled.",
+          resetLabel: "thread folders",
+          ariaLabel: "Show thread folders in the sidebar",
+        })}
+      </SettingsSection>
+
+      <SettingsSection title="Subagents">
+        <SettingsRow
+          title="Hide finished subagents"
+          description="Detached or revealed subagent rows disappear from the sidebar this long after their last turn finishes. The thread you are viewing and rows waiting on approvals or input always stay visible."
+          resetAction={
+            settings.subagentAutoHideMinutes !== defaults.subagentAutoHideMinutes ? (
+              <SettingResetButton
+                label="subagent auto-hide"
+                onClick={() =>
+                  updateSettings({
+                    subagentAutoHideMinutes: defaults.subagentAutoHideMinutes,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={String(settings.subagentAutoHideMinutes)}
+              onValueChange={(value) => {
+                const minutes = Number(value);
+                if (!Number.isFinite(minutes)) return;
+                updateSettings({ subagentAutoHideMinutes: minutes });
+              }}
+              ariaLabel="Hide finished subagents after"
+              valueContent={
+                SUBAGENT_AUTO_HIDE_LABELS[settings.subagentAutoHideMinutes] ??
+                `${settings.subagentAutoHideMinutes} minutes`
+              }
+            >
+              {SUBAGENT_AUTO_HIDE_MINUTE_OPTIONS.map((minutes) => (
+                <SelectItem key={minutes} hideIndicator value={String(minutes)}>
+                  {SUBAGENT_AUTO_HIDE_LABELS[minutes]}
+                </SelectItem>
+              ))}
+            </SettingsSelectControl>
+          }
+        />
       </SettingsSection>
 
       <div id={SETTINGS_TARGETS.environmentPanel} className="space-y-6">

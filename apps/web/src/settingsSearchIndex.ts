@@ -87,6 +87,20 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Show the thread each standalone automation run creates in the sidebar. hide automation run threads clutter scheduled",
   },
   {
+    id: "general:thread-folders",
+    section: "general",
+    title: "Thread folders",
+    keywords:
+      "Group top-level threads into visual folders inside each project in the sidebar. organize groups sections",
+  },
+  {
+    id: "general:subagent-auto-hide",
+    section: "general",
+    title: "Hide finished subagents",
+    keywords:
+      "Subagent rows disappear from the sidebar after their last turn finishes. detached agents ttl expire cleanup",
+  },
+  {
     id: "general:environment-default-open",
     section: "general",
     title: "Open by default",

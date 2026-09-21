@@ -41,6 +41,8 @@ import {
   resolveActiveSidebarThreadId,
   archiveThreadsForFolderRemoval,
   deleteThreadsForFolderRemoval,
+  isThreadFolderAssignable,
+  resolveHiddenFinishedSubagentThreadIds,
   resolveSidebarNewThreadEnvMode,
   resolveSidebarProjectRowLabel,
   resolveThreadHoverCardMetadata,
@@ -2615,5 +2617,209 @@ describe("deleteThreadsForFolderRemoval", () => {
     ).rejects.toThrow("delete failed");
 
     expect(reconcileDeletedThreads).not.toHaveBeenCalled();
+  });
+});
+
+describe("isThreadFolderAssignable", () => {
+  const detachedId = ThreadId.makeUnsafe("thread-detached");
+
+  it("accepts top-level threads and detached subagents", () => {
+    expect(
+      isThreadFolderAssignable(
+        { id: ThreadId.makeUnsafe("thread-root"), parentThreadId: null },
+        new Set(),
+      ),
+    ).toBe(true);
+    expect(
+      isThreadFolderAssignable(
+        { id: detachedId, parentThreadId: ThreadId.makeUnsafe("thread-parent") },
+        new Set([detachedId]),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects attached subagents and missing threads", () => {
+    expect(
+      isThreadFolderAssignable(
+        {
+          id: ThreadId.makeUnsafe("thread-child"),
+          parentThreadId: ThreadId.makeUnsafe("thread-p"),
+        },
+        new Set(),
+      ),
+    ).toBe(false);
+    expect(isThreadFolderAssignable(undefined, new Set())).toBe(false);
+  });
+});
+
+describe("buildProjectThreadTree with detached subagents", () => {
+  it("promotes a detached subagent to a root row without duplicating it under its parent", () => {
+    const parentId = ThreadId.makeUnsafe("thread-parent");
+    const childId = ThreadId.makeUnsafe("thread-child");
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({ id: parentId, createdAt: "2026-03-09T10:02:00.000Z" }),
+        makeThread({
+          id: childId,
+          parentThreadId: parentId,
+          createdAt: "2026-03-09T10:01:00.000Z",
+        }),
+      ],
+      detachedThreadIds: new Set([childId]),
+    });
+
+    expect(rows.map((row) => [row.thread.id, row.depth, row.rootThreadId])).toEqual([
+      [parentId, 0, parentId],
+      [childId, 0, childId],
+    ]);
+  });
+
+  it("does not reveal the old parent chain for an active detached thread", () => {
+    const parentId = ThreadId.makeUnsafe("thread-parent");
+    const attachedSiblingId = ThreadId.makeUnsafe("thread-attached-sibling");
+    const detachedId = ThreadId.makeUnsafe("thread-detached");
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({ id: parentId, createdAt: "2026-03-09T10:03:00.000Z" }),
+        makeThread({
+          id: attachedSiblingId,
+          parentThreadId: parentId,
+          createdAt: "2026-03-09T10:02:00.000Z",
+        }),
+        makeThread({
+          id: detachedId,
+          parentThreadId: parentId,
+          createdAt: "2026-03-09T10:01:00.000Z",
+        }),
+      ],
+      forceVisibleThreadId: detachedId,
+      detachedThreadIds: new Set([detachedId]),
+    });
+
+    expect(rows.map((row) => row.thread.id)).toEqual([parentId, detachedId]);
+  });
+});
+
+describe("resolveHiddenFinishedSubagentThreadIds", () => {
+  const nowMs = Date.parse("2026-03-09T12:00:00.000Z");
+  const parentId = ThreadId.makeUnsafe("thread-parent");
+
+  function makeChild(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSummary {
+    return makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-child"),
+      parentThreadId: parentId,
+      latestTurn: makeLatestTurn({ completedAt: "2026-03-09T10:00:00.000Z" }),
+      ...overrides,
+    });
+  }
+
+  it("hides nothing when auto-hide is disabled", () => {
+    const hidden = resolveHiddenFinishedSubagentThreadIds({
+      threads: [makeChild()],
+      detachedThreadIds: new Set(),
+      activeThreadId: undefined,
+      autoHideMinutes: 0,
+      nowMs,
+    });
+
+    expect(hidden.size).toBe(0);
+  });
+
+  it("hides a subagent that finished longer ago than the delay", () => {
+    const child = makeChild();
+    const hidden = resolveHiddenFinishedSubagentThreadIds({
+      threads: [child],
+      detachedThreadIds: new Set(),
+      activeThreadId: undefined,
+      autoHideMinutes: 30,
+      nowMs,
+    });
+
+    expect(hidden).toEqual(new Set([child.id]));
+  });
+
+  it("keeps a subagent that finished inside the delay window", () => {
+    const child = makeChild({
+      latestTurn: makeLatestTurn({ completedAt: "2026-03-09T11:50:00.000Z" }),
+    });
+    const hidden = resolveHiddenFinishedSubagentThreadIds({
+      threads: [child],
+      detachedThreadIds: new Set(),
+      activeThreadId: undefined,
+      autoHideMinutes: 30,
+      nowMs,
+    });
+
+    expect(hidden.size).toBe(0);
+  });
+
+  it("keeps running subagents, pending approvals, and the active thread", () => {
+    const running = makeChild({
+      id: ThreadId.makeUnsafe("thread-running"),
+      latestTurn: {
+        turnId: "turn-running" as never,
+        state: "running",
+        assistantMessageId: null,
+        requestedAt: "2026-03-09T11:59:00.000Z",
+        startedAt: "2026-03-09T11:59:00.000Z",
+        completedAt: null,
+      },
+    });
+    const pending = makeChild({
+      id: ThreadId.makeUnsafe("thread-pending"),
+      hasPendingApprovals: true,
+    });
+    const active = makeChild({ id: ThreadId.makeUnsafe("thread-active") });
+
+    const hidden = resolveHiddenFinishedSubagentThreadIds({
+      threads: [running, pending, active],
+      detachedThreadIds: new Set(),
+      activeThreadId: active.id,
+      autoHideMinutes: 30,
+      nowMs,
+    });
+
+    expect(hidden.size).toBe(0);
+  });
+
+  it("protects the ancestor chain of the active thread", () => {
+    const parent = makeSidebarThreadSummary({
+      id: parentId,
+      parentThreadId: ThreadId.makeUnsafe("thread-grandparent"),
+      latestTurn: makeLatestTurn({ completedAt: "2026-03-09T09:00:00.000Z" }),
+    });
+    const grandparent = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-grandparent"),
+      latestTurn: makeLatestTurn({ completedAt: "2026-03-09T09:00:00.000Z" }),
+    });
+    const active = makeChild({ id: ThreadId.makeUnsafe("thread-active") });
+
+    const hidden = resolveHiddenFinishedSubagentThreadIds({
+      threads: [grandparent, parent, active],
+      detachedThreadIds: new Set(),
+      activeThreadId: active.id,
+      autoHideMinutes: 30,
+      nowMs,
+    });
+
+    expect(hidden.size).toBe(0);
+  });
+
+  it("ages out detached subagents too and never hides top-level threads", () => {
+    const detached = makeChild({ id: ThreadId.makeUnsafe("thread-detached") });
+    const topLevel = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-root"),
+      latestTurn: makeLatestTurn({ completedAt: "2026-03-09T09:00:00.000Z" }),
+    });
+
+    const hidden = resolveHiddenFinishedSubagentThreadIds({
+      threads: [detached, topLevel],
+      detachedThreadIds: new Set([detached.id]),
+      activeThreadId: undefined,
+      autoHideMinutes: 30,
+      nowMs,
+    });
+
+    expect(hidden).toEqual(new Set([detached.id]));
   });
 });
