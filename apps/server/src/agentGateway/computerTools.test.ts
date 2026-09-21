@@ -5842,13 +5842,17 @@ describe("computer_help", () => {
     }
   });
 
-  it("puts macOS menu commands before coordinate clicks and teaches whole-string insertion", async () => {
+  it("prefers element refs, gates menus on visible-use consent, and teaches whole-string insertion", async () => {
     const { call, manager } = await setup(new FakeComputerBackend({ agentDialect: "macos" }));
     try {
       const menus = resultJson(await call("computer_help", { topic: "menus" })) as { text: string };
       expect(menus.text).toContain("On macOS");
-      expect(menus.text).toContain("exact menu path first");
-      expect(menus.text).toContain("absent from both the element list and the menu bar");
+      expect(menus.text).toContain("act on an element ref first");
+      // Menus activate the app, so background tasks must not be sent there first.
+      expect(menus.text).toContain("only when the user asked to see the screen");
+      expect(menus.text.indexOf("element ref")).toBeLessThan(
+        menus.text.indexOf("computer_invoke_menu"),
+      );
       expect(menus.text.indexOf("computer_invoke_menu")).toBeLessThan(
         menus.text.indexOf("coordinate click"),
       );

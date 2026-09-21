@@ -661,8 +661,9 @@ where `AXValue` read-back is not renderer evidence.
 The same-pid keyboard ambiguity check still requires independently AX-mapped,
 non-minimized top-level siblings. It now excludes a sibling whose known AX
 subrole is not `AXStandardWindow`, `AXDialog`, `AXSystemDialog`, or
-`AXFloatingWindow`, or whose WindowServer record explicitly says off-screen
-and whose AX main/focused state is proven false. `AXFocusedWindow` also
+`AXFloatingWindow`, or whose WindowServer record explicitly says off-screen.
+Either exclusion additionally requires AX main and focused both proven false:
+a panel with an unusual subrole can still hold the key window. `AXFocusedWindow` also
 identifies the app's keyboard window when a per-window focus attribute is absent.
 No size, stacking-order, or recency heuristic participates in native admission.
 

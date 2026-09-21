@@ -25179,3 +25179,48 @@ index 06d0809..8332a9d 100644
              current_space_id: None,
              on_current_space: None,
              space_ids: None,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+index 3b16eb4..c06facc 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+@@ -254,6 +254,12 @@ fn count_competing_keyboard_destinations(
+                     let off_screen_non_key = *on_screen == Some(false)
+                         && record.main == Some(false)
+                         && record.focused == Some(false);
++                    // A panel with an unusual subrole can still hold the key
++                    // window: its subrole excludes it only with AX main and
++                    // focus both proven false, like the off-screen rule.
++                    let non_keyboard_subrole = non_keyboard_subrole
++                        && record.main == Some(false)
++                        && record.focused == Some(false);
+                     record.window_id == *window_id
+                         && record.minimized != Some(true)
+                         && !non_keyboard_subrole
+@@ -420,6 +426,27 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn focused_or_unproven_non_standard_subrole_sibling_remains_ambiguous() {
++        let rows = [(42, 10, Some(true)), (42, 11, Some(true))];
++        for (main, focused) in [
++            (Some(false), Some(true)),
++            (Some(true), Some(false)),
++            (None, Some(false)),
++            (Some(false), None),
++        ] {
++            let mut sibling = ax_window(11, Some(false));
++            sibling.subrole = Some("AXSystemFloatingWindow".to_string());
++            sibling.main = main;
++            sibling.focused = focused;
++            let records = [ax_window(10, Some(false)), sibling];
++            assert_eq!(
++                count_competing_keyboard_destinations(42, 10, rows, &records),
++                1
++            );
++        }
++    }
++
+     #[test]
+     fn non_standard_subrole_sibling_is_not_a_keyboard_destination() {
+         let rows = [(42, 10, Some(true)), (42, 11, Some(true))];
