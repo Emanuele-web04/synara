@@ -4,10 +4,13 @@ import { describe, expect, it } from "vitest";
 import {
   detectProjectTaskDependencyCycle,
   INITIAL_PROJECT_DIGEST_SUMMARY,
+  canWriteMemoryDocument,
   isMemoryDocumentPath,
+  isMemoryThreadDocumentPath,
   isProjectContextPreviewPath,
   MEMORY_AUTO_DOCUMENT_PATH,
   MEMORY_DOCUMENT_PREFIX,
+  memoryThreadDocumentPath,
   normalizeProjectDocumentPath,
   PROJECT_CONTEXT_PREVIEW_DOCUMENTS,
   ProjectAgentPathError,
@@ -32,11 +35,42 @@ describe("normalizeProjectDocumentPath", () => {
 });
 
 describe("isMemoryDocumentPath", () => {
-  it("recognizes memory documents after path normalization", () => {
+  it("recognizes already-normalized memory paths without re-normalizing", () => {
     expect(isMemoryDocumentPath(MEMORY_AUTO_DOCUMENT_PATH)).toBe(true);
-    expect(isMemoryDocumentPath("./memory/note.md")).toBe(true);
+    expect(isMemoryDocumentPath("memory/threads/thread-1.md")).toBe(true);
+    expect(isMemoryDocumentPath("./memory/note.md")).toBe(false);
     expect(isMemoryDocumentPath("instructions.md")).toBe(false);
     expect(MEMORY_DOCUMENT_PREFIX).toBe("memory/");
+    expect(memoryThreadDocumentPath("thread-1")).toBe("memory/threads/thread-1.md");
+    expect(isMemoryThreadDocumentPath("memory/threads/thread-1.md")).toBe(true);
+    expect(isMemoryThreadDocumentPath("memory/MEMORY.md")).toBe(false);
+    expect(
+      canWriteMemoryDocument({
+        logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+        principalKind: "user",
+      }),
+    ).toBe(true);
+    expect(
+      canWriteMemoryDocument({
+        logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+        principalKind: "worker",
+        principalThreadId: "thread-1",
+      }),
+    ).toBe(false);
+    expect(
+      canWriteMemoryDocument({
+        logicalPath: memoryThreadDocumentPath("thread-1"),
+        principalKind: "worker",
+        principalThreadId: "thread-1",
+      }),
+    ).toBe(true);
+    expect(
+      canWriteMemoryDocument({
+        logicalPath: memoryThreadDocumentPath("thread-2"),
+        principalKind: "worker",
+        principalThreadId: "thread-1",
+      }),
+    ).toBe(false);
   });
 });
 

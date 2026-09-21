@@ -40,9 +40,19 @@ describe("project agent dialog defaults", () => {
       projectId,
       coordinatorName: "synara Coordinator",
       modelSelection,
+      requestId: "req-stable",
     });
     expect(created.expectedRevision).toBeUndefined();
     expect(created.coordinatorName).toBe("synara Coordinator");
+    expect(created.requestId).toBe("req-stable");
+    expect(
+      buildProjectAgentConfigureInput({
+        projectId,
+        coordinatorName: "synara Coordinator",
+        modelSelection,
+        requestId: "req-stable",
+      }).requestId,
+    ).toBe("req-stable");
 
     const edited = buildProjectAgentConfigureInput({
       projectId,

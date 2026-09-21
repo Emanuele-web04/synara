@@ -115,6 +115,7 @@ import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { formatShortcutLabel, shortcutLabelForCommand } from "../keybindings";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
+import { isGroupContainerProject } from "../lib/groupProjects";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import { createPastedTextDraft } from "../lib/composerPastedText";
 import {
@@ -1034,6 +1035,7 @@ export default function ChatView({
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
+  const groupsWorkspaceRoot = useWorkspacePathsStore((state) => state.groupsWorkspaceRoot);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const isHomeChatContainer = isHomeChatContainerProject(activeProject, {
     homeDir,
@@ -1043,6 +1045,12 @@ export default function ChatView({
     homeDir,
     chatWorkspaceRoot,
     studioWorkspaceRoot,
+  });
+  const isGroupContainer = isGroupContainerProject(activeProject, {
+    homeDir,
+    chatWorkspaceRoot,
+    studioWorkspaceRoot,
+    groupsWorkspaceRoot,
   });
   const isContainerLandingProject = isHomeChatContainer || isStudioContainer;
   const activeProjectDisplayName = isHomeChatContainer
@@ -2690,7 +2698,7 @@ export default function ChatView({
   });
   const projectPanelEnabled = resolveProjectPanelEnabled({
     environmentEnabled,
-    isOrdinaryProject: Boolean(activeProject) && !isHomeChatContainer && !isStudioContainer,
+    isGroupContainer,
   });
   const [auxiliarySurface, setAuxiliarySurface] = useState<ChatAuxiliarySurface | null>(
     environmentPanelVisible ? "environment" : null,

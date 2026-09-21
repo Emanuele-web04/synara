@@ -279,11 +279,17 @@ export function ProjectPanel({
         busy={agent.busy}
         error={agent.error}
         onOpenChange={setAgentDialogOpen}
-        onSave={async ({ coordinatorName: nextName, modelSelection, expectedRevision }) => {
+        onSave={async ({
+          coordinatorName: nextName,
+          modelSelection,
+          expectedRevision,
+          requestId,
+        }) => {
           const saved = await agent.configure({
             modelSelection,
             coordinatorName: nextName,
             userDisplayName,
+            requestId,
             ...(agent.overview?.config?.workerRouting
               ? { workerRouting: agent.overview.config.workerRouting }
               : {}),

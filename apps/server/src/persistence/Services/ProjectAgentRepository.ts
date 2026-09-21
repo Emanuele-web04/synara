@@ -183,9 +183,10 @@ export interface ProjectAgentRepositoryShape {
     readonly coordinatorBusy: boolean;
     readonly updatedAt: string;
   }) => Effect.Effect<void, ProjectAgentRepositoryError>;
-  readonly getReceipt: (
-    requestId: string,
-  ) => Effect.Effect<Option.Option<ProjectAgentReceipt>, ProjectAgentRepositoryError>;
+  readonly getReceipt: (input: {
+    readonly requestId: string;
+    readonly projectId: ProjectId;
+  }) => Effect.Effect<Option.Option<ProjectAgentReceipt>, ProjectAgentRepositoryError>;
   readonly saveReceipt: (
     receipt: ProjectAgentReceipt,
   ) => Effect.Effect<void, ProjectAgentRepositoryError>;

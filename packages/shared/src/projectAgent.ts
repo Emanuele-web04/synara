@@ -57,9 +57,43 @@ export function isGeneratedDocumentPath(logicalPath: string): boolean {
 
 export const MEMORY_DOCUMENT_PREFIX = "memory/";
 export const MEMORY_AUTO_DOCUMENT_PATH = "memory/MEMORY.md";
+export const MEMORY_THREAD_DOCUMENT_PREFIX = "memory/threads/";
 
 export function isMemoryDocumentPath(logicalPath: string): boolean {
-  return normalizeProjectDocumentPath(logicalPath).startsWith(MEMORY_DOCUMENT_PREFIX);
+  return logicalPath.startsWith(MEMORY_DOCUMENT_PREFIX);
+}
+
+export function memoryThreadDocumentPath(threadId: string): string {
+  return `${MEMORY_THREAD_DOCUMENT_PREFIX}${threadId}.md`;
+}
+
+export function isMemoryThreadDocumentPath(logicalPath: string): boolean {
+  return (
+    logicalPath.startsWith(MEMORY_THREAD_DOCUMENT_PREFIX) &&
+    logicalPath.endsWith(".md") &&
+    !logicalPath.slice(MEMORY_THREAD_DOCUMENT_PREFIX.length, -3).includes("/")
+  );
+}
+
+export function memoryThreadIdFromDocumentPath(logicalPath: string): string | null {
+  if (!isMemoryThreadDocumentPath(logicalPath)) return null;
+  return logicalPath.slice(MEMORY_THREAD_DOCUMENT_PREFIX.length, -3);
+}
+
+export function canWriteMemoryDocument(input: {
+  readonly logicalPath: string;
+  readonly principalKind: string;
+  readonly principalThreadId?: string | null;
+}): boolean {
+  if (input.logicalPath === MEMORY_AUTO_DOCUMENT_PATH) {
+    return input.principalKind === "user" || input.principalKind === "coordinator";
+  }
+  const threadId = memoryThreadIdFromDocumentPath(input.logicalPath);
+  if (threadId === null) return false;
+  if (input.principalKind !== "worker" && input.principalKind !== "coordinator") {
+    return false;
+  }
+  return input.principalThreadId === threadId;
 }
 
 export const PROJECT_CONTEXT_PREVIEW_DOCUMENTS = [

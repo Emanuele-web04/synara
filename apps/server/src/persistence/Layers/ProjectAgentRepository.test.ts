@@ -139,6 +139,26 @@ layer("ProjectAgentRepository", (it) => {
     }),
   );
 
+  it.effect("does not replay a receipt from another project", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectAgentRepository;
+      yield* repository.saveReceipt({
+        requestId: "req-shared",
+        projectId,
+        operation: "configure",
+        resultJson: JSON.stringify({ project: "coord-1" }),
+        createdAt: now,
+      });
+      const own = yield* repository.getReceipt({ requestId: "req-shared", projectId });
+      assert.equal(Option.isSome(own), true);
+      const other = yield* repository.getReceipt({
+        requestId: "req-shared",
+        projectId: ProjectId.makeUnsafe("project-other"),
+      });
+      assert.equal(Option.isNone(other), true);
+    }),
+  );
+
   it.effect("stores attempts without implying task completion", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectAgentRepository;

@@ -52,6 +52,7 @@ export function ProjectAgentDialog(props: {
     coordinatorName: string;
     modelSelection: ModelSelection;
     expectedRevision?: number | undefined;
+    requestId: string;
   }) => Promise<void> | void;
 }) {
   return (
@@ -106,9 +107,11 @@ function ProjectAgentDialogForm(props: {
     coordinatorName: string;
     modelSelection: ModelSelection;
     expectedRevision?: number | undefined;
+    requestId: string;
   }) => Promise<void> | void;
 }) {
   const nameInputId = useId();
+  const [requestId] = useState(() => crypto.randomUUID());
   const fallbackName = defaultProjectAgentName(props.projectName);
   const [name, setName] = useState(props.agentName?.trim() || fallbackName);
   const [modelSelection, setModelSelection] = useState<ModelSelection>(() =>
@@ -133,6 +136,7 @@ function ProjectAgentDialogForm(props: {
           ...(props.mode === "edit" && props.expectedRevision !== undefined
             ? { expectedRevision: props.expectedRevision }
             : {}),
+          requestId,
         });
       }}
     >

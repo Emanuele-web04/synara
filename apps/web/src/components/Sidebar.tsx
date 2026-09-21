@@ -7142,7 +7142,7 @@ export default function Sidebar() {
             setProjectAgentDialogBusy(false);
           }
         }}
-        onSave={async ({ coordinatorName, modelSelection, expectedRevision }) => {
+        onSave={async ({ coordinatorName, modelSelection, expectedRevision, requestId }) => {
           const project = projectAgentDialogProject;
           const api = readNativeApi();
           setProjectAgentDialogBusy(true);
@@ -7153,6 +7153,7 @@ export default function Sidebar() {
             modelSelection,
             expectedRevision,
             userDisplayName,
+            requestId,
             configure: api?.projectAgent ? (payload) => api.projectAgent!.configure(payload) : null,
           });
           if (result.ok) {

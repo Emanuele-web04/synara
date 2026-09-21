@@ -230,7 +230,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         icon = ${row.icon},
         auto_memory_enabled = ${row.autoMemoryEnabled}
       WHERE project_id = ${row.projectId} AND revision = ${expectedRevision}
-      RETURNING changes() AS changed
+      RETURNING 1 AS changed
     `,
   });
 
@@ -1154,12 +1154,12 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveCursor")),
         Effect.asVoid,
       ),
-    getReceipt: (requestId) =>
+    getReceipt: (input) =>
       sql<ProjectAgentReceipt>`
         SELECT request_id AS "requestId", project_id AS "projectId", operation,
           result_json AS "resultJson", created_at AS "createdAt"
         FROM project_agent_receipts
-        WHERE request_id = ${requestId}
+        WHERE request_id = ${input.requestId} AND project_id = ${input.projectId}
       `.pipe(
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.getReceipt")),
         Effect.flatMap((rows) =>

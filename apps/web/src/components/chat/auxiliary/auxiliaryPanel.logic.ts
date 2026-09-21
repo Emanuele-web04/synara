@@ -16,9 +16,9 @@ export function resolveAuxiliaryOpen(input: {
 
 export function resolveProjectPanelEnabled(input: {
   readonly environmentEnabled: boolean;
-  readonly isOrdinaryProject: boolean;
+  readonly isGroupContainer: boolean;
 }): boolean {
-  return input.environmentEnabled && input.isOrdinaryProject;
+  return input.environmentEnabled && input.isGroupContainer;
 }
 
 export function resolveAuxiliaryContentProjectId(input: {

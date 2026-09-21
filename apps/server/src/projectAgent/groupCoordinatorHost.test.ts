@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { ThreadId } from "@synara/contracts";
+
 import {
   coordinatorWelcomeDisplayName,
+  coordinatorWelcomeMessageId,
   coordinatorWelcomeText,
   isGroupCoordinatorHostProject,
 } from "./groupCoordinatorHost.ts";
@@ -41,6 +44,16 @@ describe("isGroupCoordinatorHostProject", () => {
       }),
     ).toBe(false);
   });
+
+  it("rejects a group row outside the Groups root", () => {
+    expect(
+      isGroupCoordinatorHostProject({
+        kind: "group",
+        workspaceRoot: "/tmp/not-groups/alpha",
+        ...roots,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("coordinator welcome copy", () => {
@@ -62,5 +75,13 @@ describe("coordinator welcome copy", () => {
 
   it("substitutes the name into the greeting", () => {
     expect(coordinatorWelcomeText("Dilip")).toContain("Hi Dilip, welcome to your new group.");
+  });
+
+  it("derives a stable welcome message id from the coordinator thread", () => {
+    const threadId = ThreadId.makeUnsafe("11111111-1111-4111-8111-111111111111");
+    expect(coordinatorWelcomeMessageId(threadId)).toBe(coordinatorWelcomeMessageId(threadId));
+    expect(coordinatorWelcomeMessageId(threadId)).not.toBe(
+      coordinatorWelcomeMessageId(ThreadId.makeUnsafe("22222222-2222-4222-8222-222222222222")),
+    );
   });
 });

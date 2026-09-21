@@ -32,10 +32,12 @@ import {
 import { isOrdinaryProjectRow } from "@synara/shared/projectContainers";
 import {
   coordinatorWelcomeDisplayName,
+  coordinatorWelcomeMessageId,
   coordinatorWelcomeText,
   isGroupCoordinatorHostProject,
 } from "../groupCoordinatorHost.ts";
 import {
+  canWriteMemoryDocument,
   decodeProjectAgentListCursor,
   detectProjectTaskDependencyCycle,
   encodeProjectAgentListCursor,
@@ -44,13 +46,14 @@ import {
   isGeneratedDocumentPath,
   isInboxDocumentPath,
   isMemoryDocumentPath,
+  isMemoryThreadDocumentPath,
   isUserOwnedDocumentPath,
   MEMORY_AUTO_DOCUMENT_PATH,
   normalizeProjectDocumentPath,
   sanitizeProjectDigestSummary,
   truncateToContextBudget,
 } from "@synara/shared/projectAgent";
-import { Cause, Duration, Effect, Layer, Option, PubSub, Queue, Ref, Stream } from "effect";
+import { Cause, Duration, Effect, Exit, Layer, Option, PubSub, Queue, Ref, Stream } from "effect";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ServerConfig } from "../../config.ts";
@@ -134,8 +137,7 @@ const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
   { path: "internal/manifest.json", content: "{}\n" },
   {
     path: MEMORY_AUTO_DOCUMENT_PATH,
-    content:
-      "# Memory\n\nDurable notes for this group. Threads append here when auto memory is on.\n",
+    content: "# Memory\n\nCurated memory. Threads write their own notes under memory/threads/.\n",
   },
 ];
 
@@ -195,7 +197,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
     );
   void requireOrdinaryRepoProject;
 
-  const requireGroupContainerProject = (projectId: ProjectId) =>
+  const resolveGroupCoordinatorProject = (projectId: ProjectId) =>
     snapshotQuery.getProjectShellById(projectId).pipe(
       Effect.mapError(toServiceError("Failed to load project.")),
       Effect.flatMap(
@@ -520,8 +522,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
       };
     });
 
-  const replayReceipt = <A>(requestId: string, decode: (json: string) => A) =>
-    repository.getReceipt(requestId).pipe(
+  const replayReceipt = <A>(requestId: string, projectId: ProjectId, decode: (json: string) => A) =>
+    repository.getReceipt({ requestId, projectId }).pipe(
       Effect.mapError(toServiceError("Failed to load request receipt.")),
       Effect.map((option) => (Option.isSome(option) ? decode(option.value.resultJson) : null)),
     );
@@ -578,6 +580,48 @@ export const makeProjectAgentService = Effect.gen(function* () {
     }
     return Effect.void;
   };
+
+  const requireProjectAccess = (principal: ProjectAgentPrincipal, projectId: ProjectId) =>
+    assertSameProject(principal, projectId).pipe(
+      Effect.andThen(resolveGroupCoordinatorProject(projectId)),
+      Effect.asVoid,
+    );
+
+  const importCoordinatorGreeting = (input: {
+    readonly threadId: ThreadId;
+    readonly userDisplayName?: string | undefined;
+  }) =>
+    Effect.gen(function* () {
+      const messageId = coordinatorWelcomeMessageId(input.threadId);
+      const detail = yield* snapshotQuery
+        .getThreadDetailById(input.threadId)
+        .pipe(Effect.mapError(toServiceError("Failed to load coordinator thread.")));
+      const alreadyImported =
+        Option.isSome(detail) && detail.value.messages.some((message) => message.id === messageId);
+      if (alreadyImported) return;
+      const greetingAt = isoNow();
+      const welcomeName = coordinatorWelcomeDisplayName({
+        userDisplayName: input.userDisplayName,
+        homeDir: serverConfig.homeDir,
+      });
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.messages.import",
+          commandId: branded.command(),
+          threadId: input.threadId,
+          messages: [
+            {
+              messageId,
+              role: "assistant",
+              text: coordinatorWelcomeText(welcomeName),
+              createdAt: greetingAt,
+              updatedAt: greetingAt,
+            },
+          ],
+          createdAt: greetingAt,
+        })
+        .pipe(Effect.mapError(toServiceError("Failed to persist the coordinator greeting.")));
+    });
 
   const generateDigestNow = (projectId: ProjectId) =>
     Effect.gen(function* () {
@@ -708,8 +752,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
   const impl: ProjectAgentServiceShape = {
     getOverview: (input, principal) =>
-      assertSameProject(principal, input.projectId).pipe(
-        Effect.andThen(requireGroupContainerProject(input.projectId)),
+      requireProjectAccess(principal, input.projectId).pipe(
         Effect.andThen(buildOverview(input.projectId)),
       ),
 
@@ -718,16 +761,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
         Effect.mapError(toServiceError("Failed to list project agents.")),
         Effect.flatMap((rows) =>
           Effect.gen(function* () {
+            const shells = yield* snapshotQuery
+              .getProjectShellsByIds(rows.map((row) => row.projectId))
+              .pipe(Effect.mapError(toServiceError("Failed to list project agents.")));
+            const shellById = new Map(shells.map((shell) => [shell.id, shell] as const));
             const visible: ProjectAgentSummary[] = [];
             for (const row of rows) {
-              const shell = yield* snapshotQuery
-                .getProjectShellById(row.projectId)
-                .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-              if (Option.isNone(shell)) continue;
+              const shell = shellById.get(row.projectId);
+              if (!shell) continue;
               if (
                 !isGroupCoordinatorHostProject({
-                  kind: shell.value.kind,
-                  workspaceRoot: shell.value.workspaceRoot,
+                  kind: shell.kind,
+                  workspaceRoot: shell.workspaceRoot,
                   groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
                   studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
                 })
@@ -759,10 +804,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         const existingReceipt = yield* replayReceipt(
           input.requestId,
+          input.projectId,
           (json) => JSON.parse(json) as ProjectAgentOverview,
         );
         if (existingReceipt) return existingReceipt;
-        const project = yield* requireGroupContainerProject(input.projectId);
+        const project = yield* resolveGroupCoordinatorProject(input.projectId);
         const existing = yield* repository
           .getConfig(input.projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")));
@@ -789,28 +835,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
             title: coordinatorName,
             modelSelection: input.coordinatorModelSelection,
           });
-          // Idempotency is already covered by replayReceipt(input.requestId) above.
-          const welcomeName = coordinatorWelcomeDisplayName({
-            userDisplayName: input.userDisplayName,
-            homeDir: serverConfig.homeDir,
-          });
-          yield* orchestrationEngine
-            .dispatch({
-              type: "thread.messages.import",
-              commandId: branded.command(),
-              threadId: coordinatorThreadId,
-              messages: [
-                {
-                  messageId: branded.message(),
-                  role: "assistant",
-                  text: coordinatorWelcomeText(welcomeName),
-                  createdAt: now,
-                  updatedAt: now,
-                },
-              ],
-              createdAt: now,
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to persist the coordinator greeting.")));
         }
         const existingConfig = Option.isSome(existing) ? existing.value : null;
         const config: ProjectAgentConfig = {
@@ -846,7 +870,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const saved = yield* repository
           .saveConfig(config, Option.isSome(existing) ? existing.value.revision : null)
           .pipe(Effect.mapError(toServiceError("Failed to save coordinator configuration.")));
-        if (Option.isNone(existing)) {
+        const documentHeads = yield* repository
+          .listDocumentHeads(input.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to list project documents.")));
+        if (documentHeads.length === 0) {
           for (const seed of SEED_DOCUMENTS) {
             const content =
               seed.path === "instructions.md" && input.importedInstructions?.trim()
@@ -885,6 +912,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
               lastError: null,
             })
             .pipe(Effect.mapError(toServiceError("Failed to store initial digest.")));
+        }
+        yield* importCoordinatorGreeting({
+          threadId: coordinatorThreadId,
+          userDisplayName: input.userDisplayName,
+        });
+        if (!automationId) {
           const automation = yield* automationService
             .createProjectManaged({
               projectId: input.projectId,
@@ -940,10 +973,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         const existingReceipt = yield* replayReceipt(
           input.requestId,
+          input.projectId,
           (json) => JSON.parse(json) as ProjectGoal,
         );
         if (existingReceipt) return existingReceipt;
-        yield* requireGroupContainerProject(input.projectId);
+        yield* resolveGroupCoordinatorProject(input.projectId);
         const config = yield* requireConfig(input.projectId);
         const open = yield* repository
           .getActiveGoal(input.projectId)
@@ -998,9 +1032,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         const existingReceipt = yield* replayReceipt(
           input.requestId,
+          input.projectId,
           (json) => JSON.parse(json) as ProjectGoal,
         );
         if (existingReceipt) return existingReceipt;
+        yield* resolveGroupCoordinatorProject(input.projectId);
         const current = yield* repository.getGoal(input.goalId).pipe(
           Effect.mapError(toServiceError("Failed to load project goal.")),
           Effect.flatMap(
@@ -1063,7 +1099,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       ),
 
     listTasks: (input, principal) =>
-      assertSameProject(principal, input.projectId).pipe(
+      requireProjectAccess(principal, input.projectId).pipe(
         Effect.andThen(
           repository
             .listTasks({
@@ -1091,12 +1127,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     createTask: (input, principal) =>
       Effect.gen(function* () {
-        yield* assertSameProject(principal, input.projectId);
+        yield* requireProjectAccess(principal, input.projectId);
         if (!canAcceptTask(principal, input.projectId) && principal.kind !== "coordinator") {
           return yield* Effect.fail(fail("Workers cannot create tasks.", "forbidden"));
         }
         const existingReceipt = yield* replayReceipt(
           input.requestId,
+          input.projectId,
           (json) => JSON.parse(json) as ProjectTask,
         );
         if (existingReceipt) return existingReceipt;
@@ -1186,9 +1223,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     updateTask: (input, principal) =>
       Effect.gen(function* () {
-        yield* assertSameProject(principal, input.projectId);
+        yield* requireProjectAccess(principal, input.projectId);
         const existingReceipt = yield* replayReceipt(
           input.requestId,
+          input.projectId,
           (json) => JSON.parse(json) as ProjectTask,
         );
         if (existingReceipt) return existingReceipt;
@@ -1302,7 +1340,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }),
 
     listActivity: (input, principal) =>
-      assertSameProject(principal, input.projectId).pipe(
+      requireProjectAccess(principal, input.projectId).pipe(
         Effect.andThen(
           repository
             .listActivity({
@@ -1327,7 +1365,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       ),
 
     listDocuments: (input, principal) =>
-      assertSameProject(principal, input.projectId).pipe(
+      requireProjectAccess(principal, input.projectId).pipe(
         Effect.andThen(
           repository
             .listDocumentHeads(input.projectId)
@@ -1342,7 +1380,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     readDocument: (input, principal) =>
       Effect.gen(function* () {
-        yield* assertSameProject(principal, input.projectId);
+        yield* requireProjectAccess(principal, input.projectId);
         const logicalPath = normalizeProjectDocumentPath(input.logicalPath);
         const head = yield* repository.getDocumentHead(input.projectId, logicalPath).pipe(
           Effect.mapError(toServiceError("Failed to load document head.")),
@@ -1387,21 +1425,32 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     writeDocument: (input, principal) =>
       Effect.gen(function* () {
-        yield* assertSameProject(principal, input.projectId);
+        yield* requireProjectAccess(principal, input.projectId);
         const existingReceipt = yield* replayReceipt(
           input.requestId,
+          input.projectId,
           (json) => JSON.parse(json) as ProjectDocumentRevision,
         );
         if (existingReceipt) return existingReceipt;
         const logicalPath = normalizeProjectDocumentPath(input.logicalPath);
         if (isMemoryDocumentPath(logicalPath)) {
+          const allowed = canWriteMemoryDocument({
+            logicalPath,
+            principalKind: principal.kind,
+            principalThreadId: principal.kind === "user" ? null : principal.threadId,
+          });
+          if (!allowed) {
+            return yield* Effect.fail(
+              fail("This principal cannot write that memory document.", "forbidden"),
+            );
+          }
           if (
+            logicalPath === MEMORY_AUTO_DOCUMENT_PATH &&
             principal.kind !== "user" &&
-            principal.kind !== "coordinator" &&
-            principal.kind !== "worker"
+            input.expectedRevision === undefined
           ) {
             return yield* Effect.fail(
-              fail("Only group members can write memory documents.", "forbidden"),
+              fail("Coordinator memory writes require the latest revision.", "conflict"),
             );
           }
         } else if (isGeneratedDocumentPath(logicalPath) && principal.kind !== "user") {
@@ -1522,6 +1571,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             fail("Exporting project documents is a user action.", "forbidden"),
           );
         }
+        yield* resolveGroupCoordinatorProject(input.projectId);
         if (input.logicalPaths.length > 50) {
           return yield* Effect.fail(fail("Export at most 50 documents at a time.", "invalid"));
         }
@@ -1552,7 +1602,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
     refreshDigest: (input, principal) =>
       Effect.gen(function* () {
-        yield* assertSameProject(principal, input.projectId);
+        yield* requireProjectAccess(principal, input.projectId);
         yield* generateDigestNow(input.projectId);
         return yield* buildOverview(input.projectId);
       }),
@@ -1578,7 +1628,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }).pipe(Effect.asVoid),
 
     listEvidence: (input, principal) =>
-      assertSameProject(principal, input.projectId).pipe(
+      requireProjectAccess(principal, input.projectId).pipe(
         Effect.andThen(
           repository
             .listEvidenceForTask(input.taskId)
@@ -1588,7 +1638,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       ),
 
     listThreadIndex: (input, principal) =>
-      assertSameProject(principal, input.projectId).pipe(
+      requireProjectAccess(principal, input.projectId).pipe(
         Effect.andThen(
           repository
             .listThreadIndex(input.projectId)
@@ -1602,6 +1652,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (!isUserPrincipal(principal)) {
           return yield* Effect.fail(fail("Thread coverage is a user action.", "forbidden"));
         }
+        yield* resolveGroupCoordinatorProject(input.projectId);
         yield* requireConfig(input.projectId);
         const existing = yield* repository
           .listThreadIndex(input.projectId)
@@ -1630,6 +1681,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (!isUserPrincipal(principal)) {
           return yield* Effect.fail(fail("Historical backfill is a user action.", "forbidden"));
         }
+        yield* resolveGroupCoordinatorProject(input.projectId);
         const index = yield* repository
           .listThreadIndex(input.projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load pending threads.")));
@@ -1714,28 +1766,37 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const memoryEnabled = Option.isSome(config)
           ? Boolean(config.value.autoMemoryEnabled)
           : false;
-        const memoryDocument = memoryEnabled
-          ? yield* repository
-              .readDocumentRevision({
-                projectId: principal.projectId,
-                logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
-              })
-              .pipe(Effect.catch(() => Effect.succeed(Option.none())))
-          : Option.none();
+        const memoryHeads = memoryEnabled
+          ? (yield* repository
+              .listDocumentHeads(principal.projectId)
+              .pipe(Effect.catch(() => Effect.succeed([]))))
+              .filter(
+                (head) =>
+                  head.logicalPath === MEMORY_AUTO_DOCUMENT_PATH ||
+                  isMemoryThreadDocumentPath(head.logicalPath),
+              )
+              .slice()
+              .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          : [];
+        const memorySections: string[] = [];
+        for (const head of memoryHeads) {
+          const document = yield* repository
+            .readDocumentRevision({
+              projectId: principal.projectId,
+              logicalPath: head.logicalPath,
+            })
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(document) && document.value.content.trim().length > 0) {
+            memorySections.push(`### ${head.logicalPath}\n${document.value.content.trim()}`);
+          }
+        }
         const budget = truncateToContextBudget([
           {
             label: "Playbook",
             text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
           },
-          ...(groupGoal ? [{ label: "Goal", text: groupGoal }] : []),
-          ...(memoryEnabled
-            ? [
-                {
-                  label: "Memory",
-                  text: Option.isSome(memoryDocument) ? memoryDocument.value.content : "",
-                },
-              ]
-            : []),
+          ...(groupGoal ? [{ label: "Objective", text: groupGoal }] : []),
+          ...(memoryEnabled ? [{ label: "Memory", text: memorySections.join("\n\n") }] : []),
           { label: "Watch", text: PROJECT_BOT_WATCH_RULES },
           {
             label: "Workers",
@@ -1903,7 +1964,77 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const configs = yield* repository
           .listConfigs()
           .pipe(Effect.mapError(toServiceError("Failed to list project coordinators.")));
+        const shells = yield* snapshotQuery
+          .getProjectShellsByIds(configs.map((config) => config.projectId))
+          .pipe(Effect.mapError(toServiceError("Failed to list project coordinators.")));
+        const shellById = new Map(shells.map((shell) => [shell.id, shell] as const));
         for (const config of configs) {
+          const shell = shellById.get(config.projectId);
+          const isHost = Boolean(
+            shell &&
+            isGroupCoordinatorHostProject({
+              kind: shell.kind,
+              workspaceRoot: shell.workspaceRoot,
+              groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+              studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
+            }),
+          );
+          if (!isHost) {
+            yield* Effect.gen(function* () {
+              const latest = yield* repository
+                .getConfig(config.projectId)
+                .pipe(Effect.mapError(toServiceError("Failed to load leftover coordinator.")));
+              if (Option.isNone(latest)) return;
+              const current = latest.value;
+              if (current.enabled) {
+                const now = isoNow();
+                const saved = yield* repository
+                  .saveConfig(
+                    {
+                      ...current,
+                      enabled: false,
+                      revision: current.revision + 1,
+                      updatedAt: now,
+                      disabledAt: now,
+                    },
+                    current.revision,
+                  )
+                  .pipe(Effect.exit);
+                if (Exit.isFailure(saved)) {
+                  const again = yield* repository
+                    .getConfig(config.projectId)
+                    .pipe(Effect.mapError(toServiceError("Failed to load leftover coordinator.")));
+                  if (Option.isNone(again) || again.value.enabled) {
+                    return yield* Effect.failCause(saved.cause);
+                  }
+                }
+                yield* appendActivity({
+                  projectId: current.projectId,
+                  kind: "config-updated",
+                  actorKind: "system",
+                  actorThreadId: null,
+                  goalId: null,
+                  taskId: null,
+                  source: null,
+                  summary: "Coordinator disabled: this project is not a group.",
+                  createdAt: now,
+                });
+              }
+              if (current.automationId) {
+                yield* automationService
+                  .update({ id: current.automationId, enabled: false })
+                  .pipe(Effect.catch(() => Effect.void));
+              }
+            }).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("failed to disable leftover coordinator", {
+                  projectId: config.projectId,
+                  error: String(error),
+                }),
+              ),
+            );
+            continue;
+          }
           if (!config.enabled) continue;
           const cursor = yield* repository
             .getCursor(config.projectId)
@@ -1923,7 +2054,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         ) {
           return yield* Effect.fail(fail("Unknown principal.", "forbidden"));
         }
-        yield* assertSameProject(principal, input.projectId);
+        yield* requireProjectAccess(principal, input.projectId);
         const task = yield* repository.getTask(input.taskId).pipe(
           Effect.mapError(toServiceError("Failed to load project task.")),
           Effect.flatMap(
@@ -2275,7 +2406,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           toInboxId,
         });
         const existingWake = yield* repository
-          .getReceipt(receiptId)
+          .getReceipt({ requestId: receiptId, projectId })
           .pipe(Effect.mapError(toServiceError("Failed to load wake receipt.")));
         yield* repository
           .saveCursor({
@@ -2379,6 +2510,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .getConfigByCoordinatorThread(threadId)
           .pipe(Effect.mapError(toServiceError("Failed to resolve coordinator principal.")));
         if (Option.isSome(coordinator)) {
+          yield* resolveGroupCoordinatorProject(coordinator.value.projectId);
           return {
             kind: "coordinator" as const,
             threadId,
@@ -2389,6 +2521,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .findTaskByAssignedThread(threadId)
           .pipe(Effect.mapError(toServiceError("Failed to resolve worker principal.")));
         if (Option.isSome(task)) {
+          yield* resolveGroupCoordinatorProject(task.value.projectId);
           return {
             kind: "worker" as const,
             threadId,
@@ -2474,6 +2607,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
     streamEvents: (input) =>
       Stream.unwrap(
         Effect.gen(function* () {
+          yield* resolveGroupCoordinatorProject(input.projectId);
           const matchesProject = (event: ProjectAgentStreamEvent) => {
             if (event.type === "snapshot") return event.overview.projectId === input.projectId;
             if (event.type === "config-upserted") return event.config.projectId === input.projectId;
@@ -2549,6 +2683,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       if (status === "stopped" && !isUserPrincipal(principal)) {
         return yield* Effect.fail(fail("Stopping a goal is a user action.", "forbidden"));
       }
+      yield* resolveGroupCoordinatorProject(input.projectId);
       const current = yield* repository.getGoal(input.goalId).pipe(
         Effect.mapError(toServiceError("Failed to load project goal.")),
         Effect.flatMap(

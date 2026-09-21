@@ -57,9 +57,10 @@ export function buildProjectAgentConfigureInput(input: {
   readonly icon?: string | undefined;
   readonly autoMemoryEnabled?: boolean | undefined;
   readonly userDisplayName?: string | undefined;
+  readonly requestId?: string | undefined;
 }): ProjectAgentConfigureInput {
   return {
-    requestId: crypto.randomUUID(),
+    requestId: input.requestId ?? crypto.randomUUID(),
     projectId: input.projectId,
     coordinatorModelSelection: input.modelSelection,
     coordinatorName: input.coordinatorName,
@@ -89,6 +90,7 @@ export async function saveProjectAgentDialog(input: {
   readonly icon?: string | undefined;
   readonly autoMemoryEnabled?: boolean | undefined;
   readonly userDisplayName?: string | undefined;
+  readonly requestId?: string | undefined;
   readonly configure:
     | ((payload: ProjectAgentConfigureInput) => Promise<ProjectAgentOverview>)
     | null
@@ -111,6 +113,7 @@ export async function saveProjectAgentDialog(input: {
         icon: input.icon,
         autoMemoryEnabled: input.autoMemoryEnabled,
         userDisplayName: input.userDisplayName,
+        requestId: input.requestId,
       }),
     );
     return { ok: true, overview };

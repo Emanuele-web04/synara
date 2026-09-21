@@ -148,10 +148,11 @@ export function useProjectAgent(input: {
       icon?: string | undefined;
       autoMemoryEnabled?: boolean | undefined;
       userDisplayName?: string | undefined;
+      requestId?: string | undefined;
     }) =>
       runMutation(async (projectAgent, projectId) => {
         const overview = await projectAgent.configure({
-          requestId: crypto.randomUUID(),
+          requestId: input.requestId ?? crypto.randomUUID(),
           projectId,
           coordinatorModelSelection: input.modelSelection,
           ...(input.coordinatorName ? { coordinatorName: input.coordinatorName } : {}),
