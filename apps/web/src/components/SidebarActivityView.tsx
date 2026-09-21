@@ -19,6 +19,7 @@ import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 
 import {
   AddPlusIcon,
+  ChatBubbleIcon,
   CircleCheckIcon,
   GitBranchIcon,
   NewThreadIcon,
@@ -43,6 +44,7 @@ import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon } from "./ProviderIcon";
 import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
+  SIDEBAR_NO_PROJECT_LABEL,
   createSidebarThreadHoverAnchorId,
   resolveSidebarThreadListPaging,
   resolveThreadDisplayBranch,
@@ -141,7 +143,8 @@ function ActivityThreadRow({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
     }) === "worktree";
-  const ProjectGlyph = isWorktree ? WorktreeIcon : FolderClosed;
+  const ProjectGlyph =
+    project?.kind !== "project" ? ChatBubbleIcon : isWorktree ? WorktreeIcon : FolderClosed;
   const hoverAnchorId = createSidebarThreadHoverAnchorId({
     scope: "activity",
     threadId: thread.id,
@@ -376,7 +379,7 @@ function ActivityScopeMenu({
     scopeSelection === null
       ? "All activity"
       : scopeSelection === "chats"
-        ? "Synara"
+        ? SIDEBAR_NO_PROJECT_LABEL
         : resolveThreadProjectLabel(projectById.get(scopeSelection));
 
   return (
@@ -429,7 +432,7 @@ function ActivityScopeMenu({
                 <span className="min-w-0 flex-1 truncate">
                   {option.kind === "project"
                     ? resolveThreadProjectLabel(projectById.get(option.projectId))
-                    : "Synara"}
+                    : SIDEBAR_NO_PROJECT_LABEL}
                 </span>
                 <span className="ml-2 shrink-0 tabular-nums text-muted-foreground/60">
                   {option.threadCount}
@@ -758,7 +761,7 @@ export function SidebarActivityView({
     activeScope === null
       ? "No activity yet"
       : activeScope === "chats"
-        ? "No activity in Synara chats"
+        ? "No activity in chats without a project"
         : "No activity for this project";
 
   return (
@@ -818,7 +821,7 @@ export function SidebarActivityView({
             <ActivitySectionLabel
               label={
                 group.kind === "chats"
-                  ? "Synara"
+                  ? SIDEBAR_NO_PROJECT_LABEL
                   : resolveThreadProjectLabel(projectById.get(group.projectId))
               }
               {...(group.kind === "project"

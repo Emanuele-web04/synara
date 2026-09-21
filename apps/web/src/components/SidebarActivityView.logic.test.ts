@@ -716,13 +716,23 @@ describe("collectUnreadActivityThreads", () => {
 });
 
 describe("resolveThreadProjectLabel", () => {
-  it("uses the project name for real projects and Synara otherwise", () => {
+  it("preserves real project names, including Synara, and falls back to the folder name", () => {
     expect(
-      resolveThreadProjectLabel({ kind: "project", name: "Synara App", folderName: "synara" }),
-    ).toBe("Synara App");
-    expect(resolveThreadProjectLabel({ kind: "chat", name: "Chats", folderName: "chats" })).toBe(
-      "Synara",
-    );
-    expect(resolveThreadProjectLabel(undefined)).toBe("Synara");
+      resolveThreadProjectLabel({ kind: "project", name: "  Synara  ", folderName: "synara" }),
+    ).toBe("Synara");
+    expect(
+      resolveThreadProjectLabel({ kind: "project", name: "  ", folderName: "repository" }),
+    ).toBe("repository");
+  });
+
+  it.each(["chat", "studio"] as const)("labels %s containers as No project", (kind) => {
+    expect(
+      resolveThreadProjectLabel({ kind, name: "Home", folderName: "generated-chat-slug" }),
+    ).toBe("No project");
+  });
+
+  it("does not invent a project name while project metadata is unavailable", () => {
+    expect(resolveThreadProjectLabel(null)).toBe("No project");
+    expect(resolveThreadProjectLabel(undefined)).toBe("No project");
   });
 });
