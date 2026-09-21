@@ -23491,3 +23491,1140 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs b
 
      fn ax_window(window_id: u32, minimized: Option<bool>) -> AxWindowRecord {
          AxWindowRecord {
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
+@@ -14,6 +14,7 @@
+ pub mod interactive;
+ pub mod keyboard;
+ pub mod mouse;
++pub(crate) mod modal_guard;
+ pub mod skylight;
+ pub mod target_guard;
+
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
+@@ -2,9 +2,7 @@
+ //! to the active Space. Exact semantic text may instead stay bound to unchanged
+ //! WindowServer Space membership without switching the user's active Space.
+
+-use crate::ax::bindings::{copy_element_attr, copy_string_attr, AXUIElementCreateApplication};
+ use crate::windows::{WindowBounds, WindowInfo};
+-use core_foundation::base::{CFRelease, CFTypeRef};
+ use cua_driver_core::protocol::ToolResult;
+ use serde::Deserialize;
+ use serde_json::{json, Value};
+@@ -53,7 +51,12 @@
+     pub window_id: u32,
+ }
+ impl TargetRefusal {
+-    fn new(code: &'static str, reason: impl Into<String>, pid: i32, window_id: u32) -> Self {
++    pub(crate) fn new(
++        code: &'static str,
++        reason: impl Into<String>,
++        pid: i32,
++        window_id: u32,
++    ) -> Self {
+         Self {
+             code,
+             reason: reason.into(),
+@@ -86,6 +89,7 @@
+     space_epoch: u64,
+     current_space: Option<u64>,
+     space_ids: Option<Vec<u64>>,
++    modal: Option<super::modal_guard::ModalTarget>,
+ }
+ impl InputTarget {
+     fn parse(args: &Value, space_policy: SpacePolicy) -> Result<Self, TargetRefusal> {
+@@ -123,6 +127,7 @@
+             space_epoch: SPACE_EPOCH.load(Ordering::Acquire),
+             current_space: None,
+             space_ids: None,
++            modal: None,
+         })
+     }
+
+@@ -146,16 +151,19 @@
+             target.current_space = window.current_space_id;
+             target.space_ids = window.space_ids;
+         }
+-        // Modal-sheet admission: when the target app's focus sits inside a modal
+-        // sheet, that sheet owns the keyboard. Refuse before any lease or
+-        // dispatch; check_input_ready surfaces the same code through readiness()
+-        // so JS can map it into the inputPause set.
+-        let roles = focused_ancestor_roles(target.pid);
+-        let role_refs: Vec<&str> = roles.iter().map(String::as_str).collect();
+-        if let Some(refusal) = focused_sheet_refusal(target.pid, target.window_id, &role_refs) {
+-            return Err(refusal);
+-        }
++        target.modal = super::modal_guard::ModalTarget::capture(target.pid, target.window_id)?;
+         Ok(target)
++    }
++
++    pub(crate) fn verify_modal(&self, element: Option<usize>) -> Result<(), TargetRefusal> {
++        if let Some(modal) = &self.modal {
++            modal.verify(self.pid, self.window_id, element)?;
++        }
++        Ok(())
++    }
++
++    pub(crate) fn has_modal(&self) -> bool {
++        self.modal.is_some()
+     }
+
+     pub fn requires_active_space(&self) -> bool {
+@@ -290,58 +298,6 @@
+     fn IsSecureEventInputEnabled() -> u8;
+ }
+
+-/// AXRole values from the target app's focused element outward, innermost
+-/// first and bounded like the selection-ancestor walk. Read-only AX facts; a
+-/// missing element or attribute ends the chain as inconclusive.
+-fn focused_ancestor_roles(pid: i32) -> Vec<String> {
+-    const MAX_FOCUS_ANCESTORS: usize = 8;
+-    let mut roles = Vec::new();
+-    unsafe {
+-        let app = AXUIElementCreateApplication(pid);
+-        if app.is_null() {
+-            return roles;
+-        }
+-        let mut current = copy_element_attr(app, "AXFocusedUIElement");
+-        CFRelease(app as CFTypeRef);
+-        for _ in 0..MAX_FOCUS_ANCESTORS {
+-            let Some(element) = current.take() else {
+-                break;
+-            };
+-            roles.push(copy_string_attr(element, "AXRole").unwrap_or_default());
+-            current = copy_element_attr(element, "AXParent");
+-            CFRelease(element as CFTypeRef);
+-        }
+-        if let Some(element) = current.take() {
+-            CFRelease(element as CFTypeRef);
+-        }
+-    }
+-    roles
+-}
+-
+-/// Pure decision core for the modal-sheet guard: refuse when focus sits inside
+-/// a sheet before reaching the enclosing window or application. Only positive
+-/// detection refuses; an inconclusive chain never blocks an unrelated action.
+-fn focused_sheet_refusal(
+-    pid: i32,
+-    window_id: u32,
+-    ancestor_roles: &[&str],
+-) -> Option<TargetRefusal> {
+-    for role in ancestor_roles {
+-        if *role == "AXSheet" {
+-            return Some(TargetRefusal::new(
+-                "auth_sheet_focused",
+-                "The target app has a modal sheet holding focus. Dismiss the sheet or focus the target window and retry; nothing was sent.",
+-                pid,
+-                window_id,
+-            ));
+-        }
+-        if *role == "AXWindow" || *role == "AXApplication" {
+-            break;
+-        }
+-    }
+-    None
+-}
+-
+ fn install_space_observer() {
+     static ONCE: Once = Once::new();
+     ONCE.call_once(|| {
+@@ -522,28 +478,4 @@
+         assert_eq!(value["structuredContent"]["effect"], "refused");
+         assert_eq!(value["structuredContent"]["ready"], false);
+     }
+-    #[test]
+-    fn focused_sheet_before_its_window_refuses_with_auth_sheet_focused() {
+-        let refusal =
+-            focused_sheet_refusal(42, 7, &["AXTextField", "AXSheet", "AXWindow"]).unwrap();
+-        assert_eq!(refusal.code, "auth_sheet_focused");
+-        let value = serde_json::to_value(refusal.tool_result()).unwrap();
+-        assert_eq!(value["structuredContent"]["effect"], "refused");
+-        assert_eq!(value["structuredContent"]["code"], "auth_sheet_focused");
+-        assert_eq!(value["structuredContent"]["ready"], false);
+-        assert!(value["structuredContent"]["reason"]
+-            .as_str()
+-            .unwrap()
+-            .contains("nothing was sent"));
+-    }
+-    #[test]
+-    fn focus_without_a_sheet_never_refuses() {
+-        assert!(focused_sheet_refusal(42, 7, &[]).is_none());
+-        assert!(focused_sheet_refusal(42, 7, &["AXButton", "AXWindow"]).is_none());
+-        assert!(
+-            focused_sheet_refusal(42, 7, &["AXTextField", "AXWindow", "AXApplication"]).is_none()
+-        );
+-        // A sheet beyond the enclosing window is not the focus chain.
+-        assert!(focused_sheet_refusal(42, 7, &["AXTextField", "AXWindow", "AXSheet"]).is_none());
+-    }
+-}
++}
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/cancellation.rs
+@@ -151,10 +151,66 @@
+         }
+     }
+
++    fn validate_modal_target(state: &State, element: Option<usize>) -> anyhow::Result<()> {
++        if let Some(target) = &state.target {
++            target.verify_modal(element)?;
++            return Ok(());
++        }
++        if !state
++            .concurrent_targets
++            .values()
++            .any(|target| target.has_modal())
++        {
++            return Ok(());
++        }
++        if let Some(element) = element {
++            let window_id = unsafe {
++                crate::ax::exact_target::element_window_id(
++                    element as crate::ax::bindings::AXUIElementRef,
++                )
++            };
++            let target = state
++                .concurrent_targets
++                .values()
++                .find(|target| Some(target.window_id) == window_id)
++                .ok_or_else(|| {
++                    anyhow::anyhow!(
++                        "modal_target_mismatch: the semantic element's window cannot be proven"
++                    )
++                })?;
++            target.verify_modal(Some(element))?;
++        } else {
++            for target in state.concurrent_targets.values() {
++                target.verify_modal(None)?;
++            }
++        }
++        Ok(())
++    }
++
++    pub fn check_modal_target(&self, element: Option<usize>) -> anyhow::Result<()> {
++        let mut state = self.lock();
++        Self::validate_target(&mut state)?;
++        Self::validate_modal_target(&state, element)
++    }
++
++    /// Semantic dispatch may address an exact descendant of a normal modal.
++    /// Raw events have no such ancestry proof and retain the stricter gate.
++    pub fn check_ax_target(&self, element: usize) -> anyhow::Result<()> {
++        self.check_modal_target(Some(element))
++    }
++
++    pub fn post_ax<T>(&self, element: usize, send: impl FnOnce() -> T) -> anyhow::Result<T> {
++        let mut state = self.lock();
++        Self::validate_target(&mut state)?;
++        Self::validate_modal_target(&state, Some(element))?;
++        Ok(send())
++    }
++
+     /// Serialize one non-held event with cancellation admission.
+     pub fn post<T>(&self, send: impl FnOnce() -> T) -> anyhow::Result<T> {
+         let mut state = self.lock();
+         Self::validate_target(&mut state)?;
++        Self::validate_modal_target(&state, None)?;
+         Ok(send())
+     }
+
+@@ -224,6 +280,15 @@
+         down: impl FnOnce(),
+         release: R,
+     ) -> anyhow::Result<HeldInput<'_, R>> {
++        self.press_ax(None, down, release)
++    }
++
++    pub fn press_ax<R: FnOnce()>(
++        &self,
++        element: Option<usize>,
++        down: impl FnOnce(),
++        release: R,
++    ) -> anyhow::Result<HeldInput<'_, R>> {
+         // Declared before the mutex guard so unwinding unlocks before release.
+         let mut held = HeldInput {
+             gate: self,
+@@ -231,6 +296,7 @@
+         };
+         let mut state = self.lock();
+         Self::validate_target(&mut state)?;
++        Self::validate_modal_target(&state, element)?;
+         held.release = Some(release);
+         state.held += 1;
+         down();
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/ax_actions.rs
+@@ -47,7 +47,10 @@
+     }
+
+     pub fn refused_with_code(code: &'static str, message: impl Into<String>) -> Self {
+-        Self { code: Some(code), ..Self::refused(message) }
++        Self {
++            code: Some(code),
++            ..Self::refused(message)
++        }
+     }
+
+     pub fn before_dispatch(error: anyhow::Error) -> Self {
+@@ -389,6 +392,7 @@
+ /// cached snapshot value: foreground delivery can make a menu item live after
+ /// it was resolved, while backgrounding can disable it in the other direction.
+ pub fn ensure_ax_action_enabled(element_ptr: usize, action: &str) -> anyhow::Result<()> {
++    crate::input::cancellation::gate().check_ax_target(element_ptr)?;
+     let enabled = unsafe { copy_bool_attr(element_ptr as AXUIElementRef, "AXEnabled") };
+     ensure_ax_enabled(enabled, action)
+ }
+@@ -652,7 +656,7 @@
+ /// Set AXFocused=true on an element (for pre-focusing before key press).
+ pub fn focus_element(element_ptr: usize) -> anyhow::Result<()> {
+     crate::input::cancellation::gate()
+-        .check_target()
++        .check_ax_target(element_ptr)
+         .map_err(AxActionFailure::before_dispatch)?;
+     let err = unsafe { set_bool_attr_true(element_ptr as AXUIElementRef, "AXFocused") };
+     if err == kAXErrorSuccess {
+@@ -690,7 +694,7 @@
+ /// Set the AXValue of an element (for dropdowns, text fields, etc.).
+ pub fn set_ax_value(element_ptr: usize, value: &str) -> anyhow::Result<()> {
+     crate::input::cancellation::gate()
+-        .check_target()
++        .check_ax_target(element_ptr)
+         .map_err(AxActionFailure::before_dispatch)?;
+     let err = unsafe { set_string_attr(element_ptr as AXUIElementRef, "AXValue", value) };
+     if err == kAXErrorSuccess {
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs
+@@ -243,6 +243,7 @@
+     // must never be replayed through a CGEvent queue.
+     pulse_ax_return_with(
+         super::cancellation::gate(),
++        element,
+         |down| unsafe {
+             AXUIElementPostKeyboardEvent(
+                 application.as_ptr() as crate::ax::bindings::AXUIElementRef,
+@@ -257,6 +258,7 @@
+
+ fn pulse_ax_return_with(
+     gate: &super::cancellation::InputGate,
++    element: Option<usize>,
+     post: impl Fn(bool) -> i32,
+     pause: impl FnOnce() -> anyhow::Result<()>,
+ ) -> anyhow::Result<()> {
+@@ -267,7 +269,8 @@
+         gate,
+         error: std::cell::Cell::new(0),
+     };
+-    let held = gate.press(
++    let held = gate.press_ax(
++        element,
+         || down_error.set(post(true)),
+         || {
+             release.error.set(-25204);
+@@ -817,6 +820,7 @@
+             let events = std::cell::RefCell::new(Vec::new());
+             let result = pulse_ax_return_with(
+                 &gate,
++                None,
+                 |down| {
+                     events.borrow_mut().push(down);
+                     if down {
+@@ -846,6 +850,7 @@
+             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                 pulse_ax_return_with(
+                     &gate,
++                    None,
+                     |down| if down { 0 } else { -25204 },
+                     || {
+                         if panic_during_pause {
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+@@ -1354,9 +1354,9 @@
+             let mut result = kAXErrorSuccess;
+             for (index, character) in chars.iter().enumerate() {
+                 let chunk = character.to_string();
+-                match crate::input::cancellation::gate()
+-                    .post(|| unsafe { set_string_attr(element, "AXSelectedText", &chunk) })
+-                {
++                match crate::input::cancellation::gate().post_ax(element as usize, || unsafe {
++                    set_string_attr(element, "AXSelectedText", &chunk)
++                }) {
+                     Ok(code) if code == kAXErrorSuccess => {
+                         accepted_chars += 1;
+                     }
+@@ -1380,9 +1380,9 @@
+             }
+             result
+         } else {
+-            match crate::input::cancellation::gate()
+-                .post(|| unsafe { set_string_attr(element, "AXSelectedText", text) })
+-            {
++            match crate::input::cancellation::gate().post_ax(element as usize, || unsafe {
++                set_string_attr(element, "AXSelectedText", text)
++            }) {
+                 Ok(code) => {
+                     if code == kAXErrorSuccess {
+                         accepted_chars = text.chars().count();
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
+@@ -19,7 +19,9 @@
+             (x/y/width/height, top-left origin), z_index (integer or null; higher values are \
+             closer to the front; null means stacking order is unavailable and callers must not \
+             infer one), is_on_screen, space_ids, current_space_id (the active Space on that \
+-            window's display), and on_current_space. The top-level current_space_id is \
++            window's display), and on_current_space. When include_keyboard_focus is true, optional \
++            keyboard_focused reports the app's observed keyboard window; missing means unknown, not \
++            false. The top-level current_space_id is \
+             WindowServer's main/global active Space and can differ from a record's \
+             current_space_id when displays use independent Spaces. To select a frontmost candidate, take the \
+             maximum integer z_index; if every value is null, use an explicit fallback instead of \
+@@ -34,6 +36,11 @@
+                 "on_screen_only": {
+                     "type": "boolean",
+                     "description": "When true, drop windows not on the current Space. Default false."
++                },
++                "include_keyboard_focus": {
++                    "type": "boolean",
++                    "default": false,
++                    "description": "Observe the app's keyboard-focused window through Accessibility. Default false; enable for an explicit desktop observation, not geometry revalidation."
+                 }
+             },
+             "additionalProperties": false
+@@ -55,6 +62,7 @@
+         use cua_driver_core::tool_args::ArgsExt;
+         let pid_filter: Option<i32> = args.opt_i64("pid").map(|v| v as i32);
+         let on_screen_only = args.bool_or("on_screen_only", false);
++        let include_keyboard_focus = args.bool_or("include_keyboard_focus", false);
+
+         let enumeration = if on_screen_only {
+             crate::windows::visible_windows_with_space_snapshot()
+@@ -68,7 +76,28 @@
+             windows.retain(|w| w.pid == pid);
+         }
+
+-        let windows_json: Vec<Value> = windows.iter().map(window_record_json).collect();
++        let windows_json = if include_keyboard_focus {
++            match tokio::task::spawn_blocking(move || {
++                window_records_with_keyboard_focus(
++                    &windows,
++                    true,
++                    crate::ax::exact_target::keyboard_focused_window_id,
++                )
++            })
++            .await
++            {
++                Ok(records) => records,
++                Err(error) => {
++                    return ToolResult::error(format!("Window focus observation failed: {error}"))
++                }
++            }
++        } else {
++            window_records_with_keyboard_focus(
++                &windows,
++                false,
++                crate::ax::exact_target::keyboard_focused_window_id,
++            )
++        };
+
+         ToolResult::text(format!("Found {} window(s).", windows_json.len())).with_structured(
+             serde_json::json!({
+@@ -77,6 +106,38 @@
+             }),
+         )
+     }
++}
++
++fn window_records_with_keyboard_focus(
++    windows: &[crate::windows::WindowInfo],
++    include_keyboard_focus: bool,
++    mut focused_window: impl FnMut(i32) -> Option<u32>,
++) -> Vec<Value> {
++    if !include_keyboard_focus {
++        return windows.iter().map(window_record_json).collect();
++    }
++    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
++    let mut by_pid = std::collections::HashMap::<i32, Option<u32>>::new();
++    windows
++        .iter()
++        .map(|window| {
++            let focused = *by_pid.entry(window.pid).or_insert_with(|| {
++                if std::time::Instant::now() >= deadline {
++                    return None;
++                }
++                focused_window(window.pid).filter(|id| {
++                    windows
++                        .iter()
++                        .any(|candidate| candidate.pid == window.pid && candidate.window_id == *id)
++                })
++            });
++            let mut record = window_record_json(window);
++            if let Some(focused) = focused {
++                record["keyboard_focused"] = Value::Bool(window.window_id == focused);
++            }
++            record
++        })
++        .collect()
+ }
+
+ pub(super) fn window_record_json(w: &crate::windows::WindowInfo) -> Value {
+@@ -104,9 +165,8 @@
+ mod tests {
+     use super::*;
+
+-    #[test]
+-    fn window_record_includes_observed_z_index() {
+-        let window = crate::windows::WindowInfo {
++    fn window() -> crate::windows::WindowInfo {
++        crate::windows::WindowInfo {
+             window_id: 42,
+             pid: 123,
+             app_name: "Example".into(),
+@@ -123,8 +183,58 @@
+             current_space_id: Some(1),
+             on_current_space: Some(true),
+             space_ids: Some(vec![1]),
+-        };
+-
++        }
++    }
++
++    #[test]
++    fn keyboard_focus_is_opt_in_and_disabled_observations_do_not_read_ax() {
++        use cua_driver_core::tool_args::ArgsExt;
++        assert_eq!(
++            def().input_schema["properties"]["include_keyboard_focus"]["default"],
++            false
++        );
++        let args = serde_json::json!({});
++        let records = window_records_with_keyboard_focus(
++            &[window()],
++            args.bool_or("include_keyboard_focus", false),
++            |_| panic!("Default window enumeration must not query Accessibility"),
++        );
++        assert_eq!(records, vec![window_record_json(&window())]);
++        let records = window_records_with_keyboard_focus(&[window()], false, |_| {
++            panic!("Disabled keyboard-focus observation must not query Accessibility")
++        });
++        assert_eq!(records, vec![window_record_json(&window())]);
++    }
++
++    #[test]
++    fn keyboard_focus_is_read_once_per_pid_and_unknown_stays_absent() {
++        let mut sibling = window();
++        sibling.window_id = 43;
++        let mut unknown = window();
++        unknown.pid = 456;
++        unknown.window_id = 44;
++        let mut reads = std::collections::HashMap::new();
++        let records =
++            window_records_with_keyboard_focus(&[window(), sibling, unknown], true, |pid| {
++                *reads.entry(pid).or_insert(0) += 1;
++                if pid == 123 {
++                    Some(42)
++                } else {
++                    None
++                }
++            });
++        assert_eq!(reads.get(&123), Some(&1));
++        assert_eq!(reads.get(&456), Some(&1));
++        assert_eq!(records[0]["keyboard_focused"], true);
++        assert_eq!(records[1]["keyboard_focused"], false);
++        assert!(records[2].get("keyboard_focused").is_none());
++        let records = window_records_with_keyboard_focus(&[window()], true, |_| Some(99));
++        assert!(records[0].get("keyboard_focused").is_none());
++    }
++
++    #[test]
++    fn window_record_includes_observed_z_index() {
++        let window = window();
+         assert_eq!(window_record_json(&window)["z_index"], serde_json::json!(7));
+         assert_eq!(
+             window_record_json(&window)["current_space_id"],
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+@@ -86,6 +86,25 @@
+     } else {
+         CFRelease(element as CFTypeRef);
+         None
++    }
++}
++
++/// Observed application keyboard window. Missing AX metadata stays unknown.
++/// The caller must cross-check the id against the same PID's WindowServer rows.
++pub fn keyboard_focused_window_id(pid: i32) -> Option<u32> {
++    unsafe {
++        let app = AXUIElementCreateApplication(pid);
++        if app.is_null() {
++            return None;
++        }
++        super::bindings::AXUIElementSetMessagingTimeout(app, 0.05);
++        let window = copy_element_attr(app, "AXFocusedWindow");
++        CFRelease(app as CFTypeRef);
++        window.and_then(|window| {
++            let id = ax_get_window_id(window);
++            CFRelease(window as CFTypeRef);
++            id
++        })
+     }
+ }
+
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -710,7 +710,7 @@
+         .expect("daemon metadata is serializable");
+     #[cfg(target_os = "macos")]
+     {
+-        metadata["synara_native_revision"] = serde_json::json!(36);
++        metadata["synara_native_revision"] = serde_json::json!(37);
+     }
+     DaemonResponse::ok(metadata)
+ }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/modal_guard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/modal_guard.rs
+new file mode 100644
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/modal_guard.rs
+@@ -0,0 +1,211 @@
++//! Exact modal admission. A normal dialog is an input target, not an authorization UI.
++//! Capture once per action; only actions with a modal need an extra ancestry check.
++
++use crate::ax::bindings::{
++    ax_get_window_id, copy_bool_attr, copy_element_attr, copy_string_attr,
++    AXUIElementCreateApplication, AXUIElementRef, AXUIElementSetMessagingTimeout,
++};
++use crate::ax::cache::RetainedElement;
++use core_foundation::base::{CFEqual, CFRelease, CFTypeRef};
++
++use super::target_guard::TargetRefusal;
++
++const MAX_ANCESTORS: usize = 40;
++
++#[derive(Clone)]
++pub(crate) struct ModalTarget {
++    element: RetainedElement,
++    // Only a separately addressable modal window permits raw window input.
++    raw_window_id: Option<u32>,
++}
++
++impl std::fmt::Debug for ModalTarget {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("ModalTarget")
++            .field("raw_window_id", &self.raw_window_id)
++            .finish_non_exhaustive()
++    }
++}
++
++fn protected_bundle(bundle: Option<&str>) -> bool {
++    bundle.is_some_and(|bundle| {
++        matches!(
++            bundle.to_ascii_lowercase().as_str(),
++            "com.apple.securityagent"
++                | "com.apple.security.authorization"
++                | "com.apple.coreautha.uiagent"
++                | "com.apple.localauthentication.uiagent"
++                | "com.apple.loginwindow"
++        )
++    })
++}
++
++fn modal_role(role: &str, subrole: &str, modal: Option<bool>) -> bool {
++    role == "AXSheet"
++        || (role == "AXWindow"
++            && (modal == Some(true) || matches!(subrole, "AXDialog" | "AXSystemDialog")))
++}
++
++fn modal_target_matches(
++    addressed_element: bool,
++    descendant: bool,
++    raw_window_id: Option<u32>,
++    requested_window_id: u32,
++) -> bool {
++    if addressed_element {
++        descendant
++    } else {
++        raw_window_id == Some(requested_window_id)
++    }
++}
++
++impl ModalTarget {
++    pub(crate) fn capture(pid: i32, window_id: u32) -> Result<Option<Self>, TargetRefusal> {
++        let protected = || {
++            TargetRefusal::new(
++                "auth_sheet_focused",
++                "Authentication or protected security input requires the user; nothing was sent.",
++                pid,
++                window_id,
++            )
++        };
++        if protected_bundle(crate::apps::bundle_id_for_pid(pid).as_deref()) {
++            return Err(protected());
++        }
++        unsafe {
++            let app = AXUIElementCreateApplication(pid);
++            if app.is_null() {
++                return Ok(None);
++            }
++            AXUIElementSetMessagingTimeout(app, 0.1);
++            let mut current = copy_element_attr(app, "AXFocusedUIElement")
++                .or_else(|| copy_element_attr(app, "AXFocusedWindow"));
++            CFRelease(app as CFTypeRef);
++            for _ in 0..MAX_ANCESTORS {
++                let Some(element) = current.take() else { break };
++                let retained = RetainedElement::retain(element as usize);
++                CFRelease(element as CFTypeRef);
++                let role = copy_string_attr(element, "AXRole").unwrap_or_default();
++                let subrole = if matches!(role.as_str(), "AXTextField" | "AXWindow") {
++                    copy_string_attr(element, "AXSubrole").unwrap_or_default()
++                } else {
++                    String::new()
++                };
++                if role == "AXSecureTextField" || subrole == "AXSecureTextField" {
++                    return Err(protected());
++                }
++                let is_modal = if role == "AXWindow" {
++                    copy_bool_attr(element, "AXModal")
++                } else {
++                    None
++                };
++                if modal_role(&role, &subrole, is_modal) {
++                    let own_window_id = ax_get_window_id(element);
++                    let parent_window_id =
++                        copy_element_attr(element, "AXParent").and_then(|parent| {
++                            let id = crate::ax::exact_target::element_window_id(parent);
++                            CFRelease(parent as CFTypeRef);
++                            id
++                        });
++                    // Sheets commonly share their parent's window identity. In
++                    // that case only exact descendants may be changed; accepting
++                    // the parent id would admit clicks behind the sheet.
++                    let raw_window_id = own_window_id.filter(|own| {
++                        role == "AXWindow" || parent_window_id.is_some_and(|parent| parent != *own)
++                    });
++                    return Ok(Some(Self {
++                        element: retained,
++                        raw_window_id,
++                    }));
++                }
++                if role == "AXWindow" || role == "AXApplication" {
++                    break;
++                }
++                current = copy_element_attr(element, "AXParent");
++            }
++            if let Some(element) = current {
++                CFRelease(element as CFTypeRef);
++            }
++            Ok(None)
++        }
++    }
++
++    pub(crate) fn verify(
++        &self,
++        pid: i32,
++        window_id: u32,
++        element: Option<usize>,
++    ) -> Result<(), TargetRefusal> {
++        let descendant = element.is_some_and(|element| unsafe {
++            is_descendant(
++                element as AXUIElementRef,
++                self.element.as_ptr() as AXUIElementRef,
++            )
++        });
++        if modal_target_matches(element.is_some(), descendant, self.raw_window_id, window_id) {
++            Ok(())
++        } else {
++            Err(TargetRefusal::new(
++                "modal_target_mismatch",
++                "A modal dialog owns this application's input. Observe and address a control inside that exact dialog; input behind it was not sent.",
++                pid,
++                window_id,
++            ))
++        }
++    }
++}
++
++unsafe fn is_descendant(element: AXUIElementRef, modal: AXUIElementRef) -> bool {
++    let mut current = Some(RetainedElement::retain(element as usize));
++    for _ in 0..MAX_ANCESTORS {
++        let Some(retained) = current.take() else {
++            break;
++        };
++        let element = retained.as_ptr() as AXUIElementRef;
++        if CFEqual(element as CFTypeRef, modal as CFTypeRef) != 0 {
++            return true;
++        }
++        current = copy_element_attr(element, "AXParent").map(|parent| {
++            let retained = RetainedElement::retain(parent as usize);
++            CFRelease(parent as CFTypeRef);
++            retained
++        });
++    }
++    false
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn ordinary_dialog_is_not_a_protected_authentication_surface() {
++        assert!(!protected_bundle(Some(
++            "com.blackmagic-design.DaVinciResolve"
++        )));
++        assert!(!protected_bundle(Some("net.imput.helium")));
++        assert!(protected_bundle(Some("com.apple.SecurityAgent")));
++        assert!(protected_bundle(Some(
++            "com.apple.LocalAuthentication.UIAgent"
++        )));
++        assert!(modal_role("AXSheet", "", None));
++        assert!(modal_role("AXWindow", "AXDialog", None));
++        assert!(modal_role("AXWindow", "", Some(true)));
++        assert!(!modal_role("AXWindow", "AXStandardWindow", Some(false)));
++    }
++
++    #[test]
++    fn sheet_controls_are_allowed_but_parent_and_siblings_are_not() {
++        assert!(modal_target_matches(true, true, None, 7));
++        assert!(!modal_target_matches(true, false, None, 7));
++        assert!(!modal_target_matches(false, false, None, 7));
++        assert!(!modal_target_matches(true, false, Some(7), 7));
++    }
++
++    #[test]
++    fn raw_input_requires_the_modals_own_distinct_window() {
++        assert!(modal_target_matches(false, false, Some(8), 8));
++        assert!(!modal_target_matches(false, false, Some(8), 7));
++        assert!(!modal_target_matches(false, false, None, 8));
++    }
++}
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
+@@ -271,17 +271,36 @@
+         element_ptr.map(|ptr| unsafe { crate::ax::cache::RetainedElement::retain(ptr) });
+     let facts = match tokio::task::spawn_blocking(move || {
+         let element_ptr = element_guard.as_ref().map(|guard| guard.as_ptr());
++        let semantic_target = matches!(
++            action,
++            cua_driver_core::background_input::BackgroundAction::AxSemantic
++                | cua_driver_core::background_input::BackgroundAction::FocusedWindowKey
++        )
++        .then_some(element_ptr)
++        .flatten();
++        if let Err(error) = crate::input::cancellation::gate().check_modal_target(semantic_target) {
++            let refusal = error
++                .downcast_ref::<crate::input::target_guard::TargetRefusal>()
++                .map(|refusal| refusal.tool_result())
++                .unwrap_or_else(|| {
++                    cua_driver_core::protocol::ToolResult::error(error.to_string()).with_structured(
++                        serde_json::json!({"effect":"refused", "code":"native_input_unavailable"}),
++                    )
++                });
++            return Err(refusal);
++        }
+         let mut facts =
+             crate::ax::exact_target::gather_background_facts(pid, window_id, element_ptr);
+         if action == cua_driver_core::background_input::BackgroundAction::FocusedWindowKey {
+             facts.keyboard_focus_proven =
+                 crate::ax::exact_target::keyboard_focus_matches_target(pid, window_id, element_ptr);
+         }
+-        facts
++        Ok(facts)
+     })
+     .await
+     {
+-        Ok(facts) => facts,
++        Ok(Ok(facts)) => facts,
++        Ok(Err(refusal)) => return Err(refusal),
+         Err(error) => {
+             return Err(cua_driver_core::protocol::ToolResult::error(format!(
+                 "Could not gather exact-target facts for pid {pid} window {window_id}: {error}"
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs
+@@ -59,6 +59,10 @@
+              The route is selected before dispatch; an uncertain effect never \
+              permits another write or a fallback.\n\
+              \n\
++             Optional append:true requires an exact element_token and a readable, \
++             writable text target. It reads that retained element's current value \
++             and appends value within the same native action, without replacing \
++             the snapshot or guessing another element.\n\n\
+              For free-form text entry into web inputs, prefer `type_text_chars` \
+              which synthesises key events — AXValue writes are ignored by WebKit."
+             .into(),
+@@ -78,6 +82,11 @@
+                 "value": {
+                     "type": "string",
+                     "description": "New value. Numeric controls require a finite number; text preserves the exact string."
++                },
++                "append": {
++                    "type": "boolean",
++                    "default": false,
++                    "description": "Append to the exact retained text element's current AXValue. Requires element_token; refuses secure, unreadable, or nontext targets and combined text exceeding 16384 UTF-16 code units. No alternate route or replay."
+                 }
+             },
+             "additionalProperties": false
+@@ -110,6 +119,17 @@
+         // is now schema-required so the resolver can centralize the
+         // "missing addressing" error message.
+         let element_token_arg = args.opt_str("element_token");
++        let append = args.bool_or("append", false);
++        if append && element_token_arg.is_none() {
++            return action_failure_result(
++                AxActionFailure::refused_with_code(
++                    "exact_element_token_required",
++                    "set_value append requires the original exact element_token",
++                )
++                .into(),
++                "set_value refused",
++            );
++        }
+         let window_id_arg = args.opt_u64("window_id");
+         let element_index_arg = args.opt_u64("element_index").map(|v| v as usize);
+         let resolved = match self.state.element_cache.resolve_element_args(
+@@ -207,7 +227,7 @@
+             "set_value.AXValue",
+             || async move {
+                 tokio::task::spawn_blocking(move || {
+-                    set_value_blocking(element_ptr, element_index, &value)
++                    set_value_blocking(element_ptr, element_index, &value, append)
+                 })
+                 .await
+             },
+@@ -370,10 +390,19 @@
+     element_ptr: usize,
+     element_index: usize,
+     value: &str,
++    append: bool,
+ ) -> anyhow::Result<SetValueOutcome> {
+     let element = element_ptr as AXUIElementRef;
+
+     let role = unsafe { copy_string_attr(element, "AXRole") }.unwrap_or_default();
++    if append {
++        let subrole = unsafe { copy_string_attr(element, "AXSubrole") };
++        validate_append_target(&role, subrole.as_deref(), unsafe {
++            is_attribute_settable(element, "AXValue")
++        })?;
++        crate::input::ax_actions::ensure_ax_action_enabled(element_ptr, "AXValue append")
++            .map_err(AxActionFailure::before_dispatch)?;
++    }
+
+     if role == "AXPopUpButton" {
+         let element_title = unsafe { copy_string_attr(element, "AXTitle") }.unwrap_or_default();
+@@ -386,22 +415,34 @@
+             }
+         })
+     } else {
+-        let current_number = unsafe { copy_number_attr(element, "AXValue") };
+-        let actions = unsafe { copy_action_names(element) };
+-        let route = choose_value_route(
+-            &role,
+-            current_number,
+-            unsafe { is_attribute_settable(element, "AXValue") },
+-            actions.iter().any(|action| action == "AXIncrement"),
+-            actions.iter().any(|action| action == "AXDecrement"),
+-            value,
+-        )?;
++        let current_number = if append {
++            None
++        } else {
++            unsafe { copy_number_attr(element, "AXValue") }
++        };
++        let route = if append {
++            ValueRoute::String
++        } else {
++            let actions = unsafe { copy_action_names(element) };
++            choose_value_route(
++                &role,
++                current_number,
++                unsafe { is_attribute_settable(element, "AXValue") },
++                actions.iter().any(|action| action == "AXIncrement"),
++                actions.iter().any(|action| action == "AXDecrement"),
++                value,
++            )?
++        };
+         let numeric = !matches!(route, ValueRoute::String);
+         let before = if numeric {
+             current_number.map(|number| number.to_string())
+         } else {
+             unsafe { copy_string_attr(element, "AXValue") }
+         };
++        let appended = append
++            .then(|| compose_append_value(before.as_deref(), value))
++            .transpose()?;
++        let value = appended.as_deref().unwrap_or(value);
+         let stepped = match &route {
+             ValueRoute::Steps { initial, target } => {
+                 step_to_value_with(
+@@ -420,15 +461,26 @@
+                 true
+             }
+             _ => {
+-                write_value_with(
+-                    &route,
+-                    || {
+-                        crate::input::ax_actions::ensure_ax_action_enabled(element_ptr, "AXValue")?;
+-                        crate::input::cancellation::gate().check_target()
+-                    },
+-                    |number| unsafe { set_number_attr(element, "AXValue", number) },
+-                    || unsafe { set_string_attr(element, "AXValue", value) },
+-                )?;
++                crate::input::ax_actions::ensure_ax_action_enabled(element_ptr, "AXValue")
++                    .map_err(AxActionFailure::before_dispatch)?;
++                let write = || {
++                    write_value_with(
++                        &route,
++                        || Ok(()),
++                        |number| unsafe { set_number_attr(element, "AXValue", number) },
++                        || unsafe { set_string_attr(element, "AXValue", value) },
++                    )
++                };
++                if append {
++                    crate::input::cancellation::gate()
++                        .post_ax(element_ptr, write)
++                        .map_err(AxActionFailure::before_dispatch)??;
++                } else {
++                    crate::input::cancellation::gate()
++                        .check_target()
++                        .map_err(AxActionFailure::before_dispatch)?;
++                    write()?;
++                }
+                 false
+             }
+         };
+@@ -458,6 +510,56 @@
+             changed,
+         })
+     }
++}
++
++// Matches packages/contracts COMPUTER_TEXT_MAX_LENGTH, which bounds JavaScript
++// strings in UTF-16 code units. Only append's combined value uses this new bound;
++// ordinary replacement retains its existing contract and behavior.
++const MAX_APPENDED_TEXT_UTF16: usize = 16 * 1024;
++
++fn validate_append_target(role: &str, subrole: Option<&str>, settable: bool) -> anyhow::Result<()> {
++    if !matches!(
++        role,
++        "AXTextField" | "AXTextArea" | "AXSearchField" | "AXComboBox"
++    ) || subrole == Some("AXSecureTextField")
++    {
++        return Err(AxActionFailure::refused_with_code(
++            "append_target_unsupported",
++            "Appending requires a nonsecure text element; no value was read or written",
++        )
++        .into());
++    }
++    if !settable {
++        return Err(AxActionFailure::refused_with_code(
++            "append_target_unsupported",
++            "The exact text element does not expose writable AXValue",
++        )
++        .into());
++    }
++    Ok(())
++}
++
++fn compose_append_value(current: Option<&str>, suffix: &str) -> anyhow::Result<String> {
++    let current = current.ok_or_else(|| {
++        AxActionFailure::refused_with_code(
++            "append_value_unreadable",
++            "The exact element's current AXValue is unreadable; nothing was appended",
++        )
++    })?;
++    if current
++        .encode_utf16()
++        .chain(suffix.encode_utf16())
++        .take(MAX_APPENDED_TEXT_UTF16 + 1)
++        .count()
++        > MAX_APPENDED_TEXT_UTF16
++    {
++        return Err(AxActionFailure::refused_with_code(
++            "append_value_too_large",
++            "The combined text exceeds the 16384 UTF-16 code unit limit; nothing was appended",
++        )
++        .into());
++    }
++    Ok(format!("{current}{suffix}"))
+ }
+
+ /// Decide what a post-write AXValue read proves.
+@@ -625,10 +727,67 @@
+ mod tests {
+     use super::{
+         apply_surface_trust, apply_verification_label, choose_value_route, classify_write,
+-        kAXErrorSuccess, step_to_value_with, write_value_with, AxActionFailure, SetValueOutcome,
+-        ValueRoute,
++        compose_append_value, kAXErrorSuccess, step_to_value_with, validate_append_target,
++        write_value_with, AxActionFailure, SetValueOutcome, ValueRoute, MAX_APPENDED_TEXT_UTF16,
+     };
+     use std::cell::Cell;
++
++    #[test]
++    fn append_accepts_only_writable_nonsecure_text_targets() {
++        for role in ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"] {
++            validate_append_target(role, None, true).unwrap();
++            assert!(validate_append_target(role, Some("AXSecureTextField"), true).is_err());
++            assert!(validate_append_target(role, None, false).is_err());
++        }
++        for role in [
++            "AXSecureTextField",
++            "AXPopUpButton",
++            "AXSlider",
++            "AXUnknown",
++        ] {
++            let error = validate_append_target(role, None, true).unwrap_err();
++            assert!(!error.downcast_ref::<AxActionFailure>().unwrap().attempted);
++        }
++    }
++
++    #[test]
++    fn append_preserves_exact_text_and_empty_values() {
++        assert_eq!(
++            compose_append_value(Some("007 "), "🦀\n").unwrap(),
++            "007 🦀\n"
++        );
++        assert_eq!(compose_append_value(Some(""), "new").unwrap(), "new");
++        assert_eq!(
++            compose_append_value(Some("unchanged"), "").unwrap(),
++            "unchanged"
++        );
++    }
++
++    #[test]
++    fn append_never_treats_an_unreadable_value_as_empty() {
++        let error = compose_append_value(None, "new").unwrap_err();
++        assert!(!error.downcast_ref::<AxActionFailure>().unwrap().attempted);
++    }
++
++    #[test]
++    fn append_bounds_combined_utf16_text_before_a_write() {
++        let prefix = "a".repeat(MAX_APPENDED_TEXT_UTF16 - 2);
++        assert_eq!(
++            compose_append_value(Some(&prefix), "🦀")
++                .unwrap()
++                .encode_utf16()
++                .count(),
++            MAX_APPENDED_TEXT_UTF16
++        );
++        for (current, suffix) in [
++            (prefix.as_str(), "🦀x"),
++            (&"a".repeat(MAX_APPENDED_TEXT_UTF16 + 1), ""),
++            ("", &"a".repeat(MAX_APPENDED_TEXT_UTF16 + 1)),
++        ] {
++            let error = compose_append_value(Some(current), suffix).unwrap_err();
++            assert!(!error.downcast_ref::<AxActionFailure>().unwrap().attempted);
++        }
++    }
+
+     #[test]
+     fn read_only_facts_select_one_typed_write_route() {

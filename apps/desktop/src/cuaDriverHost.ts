@@ -43,6 +43,11 @@ interface TaskCursor {
   enabled: boolean;
 }
 
+interface TaskRequest {
+  readonly task: CuaComputerTask;
+  stopped: boolean;
+}
+
 // Keep the marker through ordinary model turns, with a native expiry backstop
 // if task-end cleanup cannot reach the overlay. This wait does not repaint.
 export const CUA_CURSOR_IDLE_HIDE_MS = 60_000;
@@ -66,6 +71,8 @@ interface Generation {
   retired: boolean;
   cancellationReady: boolean;
   inputInFlight: boolean;
+  /** Exact task owning input that has not yet acknowledged its release. */
+  inputTask: CuaComputerTask | undefined;
   browserInputInFlight: boolean;
   /** Stays set once any action tool was dispatched to this generation, so a
    * driver that wedges before ever receiving input stays distinguishable
@@ -389,6 +396,7 @@ export class CuaDriverHost {
    * observation in flight is not input.
    */
   private readonly inFlightInputInterrupts = new Set<AbortController>();
+  private readonly activeTaskCalls = new Map<AbortController, string>();
   private readonly desktopPauses = new Set<string>();
   private desktopObservationRequired = false;
   private browserObservationRequired = false;
@@ -419,8 +427,10 @@ export class CuaDriverHost {
   private inputMonitorEpochChanges = 0;
   private readonly connections = new Set<Socket>();
   private permissions: HostPermissions | undefined;
-  private readonly pendingPermissionChecks = new Set<() => void>();
+  private readonly pendingPermissionChecks = new Map<() => void, string | undefined>();
   private readonly userStoppedTasks = new Set<string>();
+  private readonly admittedTaskRequests = new Set<TaskRequest>();
+  private readonly knownTasks = new Map<string, CuaComputerTask>();
   private readonly endedFrameTasks = new Set<string>();
   private frameTapTask: CuaComputerTask | undefined;
   constructor(
@@ -615,7 +625,37 @@ export class CuaDriverHost {
       !timingSafeEqual(supplied, expected)
     )
       throw new Error("Computer host authority is required.");
+    const task = parseCuaComputerTask(request.task);
+    if (request.task !== undefined && !task) throw new Error("Invalid computer task attribution.");
+    const admitted = request.method === "call" && task ? { task, stopped: false } : undefined;
+    if (admitted) {
+      this.admittedTaskRequests.add(admitted);
+      const key = cuaComputerTaskKey(admitted.task);
+      this.knownTasks.delete(key);
+      this.knownTasks.set(key, admitted.task);
+      while (this.knownTasks.size > 256)
+        this.knownTasks.delete(this.knownTasks.keys().next().value!);
+    }
+    try {
+      return await this.handleAuthenticatedRequest(request, connection, task, admitted);
+    } finally {
+      if (admitted) this.admittedTaskRequests.delete(admitted);
+    }
+  }
+
+  private async handleAuthenticatedRequest(
+    request: Record<string, unknown>,
+    connection: Socket,
+    task: CuaComputerTask | undefined,
+    admitted: TaskRequest | undefined,
+  ): Promise<CuaReply> {
+    const taskStopped = () =>
+      admitted?.stopped === true || (task && this.userStoppedTasks.has(cuaComputerTaskKey(task)));
     if (request.method === "stop") {
+      if (task) {
+        const scope = await this.stopTaskInput(task);
+        return { ok: true, result: { stop_scope: scope } };
+      }
       // The backend's generic input-stop verb — turn Stop, control revoke,
       // the relayed physical-Escape notice, shutdown — all send it. While the
       // host is serving it means interrupt input, not retire the driver: the
@@ -628,45 +668,9 @@ export class CuaDriverHost {
       else await this.interruptInput();
       return { ok: true };
     }
-    const task = parseCuaComputerTask(request.task);
-    if (request.task !== undefined && !task) throw new Error("Invalid computer task attribution.");
     if (request.method === "end_task") {
       if (!task) throw new Error("Computer task attribution is required.");
-      this.controlledTargets.delete(cuaComputerTaskKey(task));
-      this.takeoverTargets.delete(cuaComputerTaskKey(task));
-      this.monitoredTasks.delete(cuaComputerTaskKey(task));
-      if (task.turnId === undefined) {
-        for (const [key, target] of this.controlledTargets) {
-          if (target.threadId === task.threadId) this.controlledTargets.delete(key);
-        }
-        for (const [key, target] of this.takeoverTargets) {
-          if (target.threadId === task.threadId) this.takeoverTargets.delete(key);
-        }
-        for (const [key, threadId] of this.monitoredTasks) {
-          if (threadId === task.threadId) this.monitoredTasks.delete(key);
-        }
-      }
-      if (this.monitoredTasks.size === 0) {
-        this.inputMonitorRequested = false;
-        this.inputMonitorArmed = false;
-        this.options.onInputMonitorArmedChange?.(false);
-      }
-      this.rememberTask(this.endedFrameTasks, task);
-      if (
-        this.frameTapTask?.threadId === task.threadId &&
-        (task.turnId === undefined || task.turnId === this.frameTapTask.turnId)
-      ) {
-        this.rememberTask(this.endedFrameTasks, this.frameTapTask);
-        this.frameTapTask = undefined;
-      }
-      // The same task boundary ends its shield lease: an activation whose
-      // task is gone has no remaining authority to keep a mask up. Start
-      // preview/shield cleanup now, independent of the queued cursor update.
-      await Promise.all([
-        this.options.frameTap?.endTask(task),
-        this.options.shield?.endTask(task),
-        this.endTaskCursors(task),
-      ]);
+      await this.endTask(task, task.turnId === undefined);
       return { ok: true };
     }
     if (request.method === "shield") {
@@ -738,6 +742,7 @@ export class CuaDriverHost {
     if (this.closed) throw new Error("Computer host is closed.");
     if (this.suspended)
       throw new Error("Computer host is suspended while the backend is stopping.");
+    if (taskStopped()) return this.taskStoppedReply();
     const activeComputerWork =
       request.method === "call" &&
       typeof request.name === "string" &&
@@ -755,7 +760,13 @@ export class CuaDriverHost {
       const activationEpoch = this.epoch;
       const activationMonitorEpochChanges = this.inputMonitorEpochChanges;
       await this.options.activateInputMonitor?.();
-      if (activationEpoch !== this.epoch || connection.destroyed || this.closed || this.suspended) {
+      if (
+        activationEpoch !== this.epoch ||
+        connection.destroyed ||
+        this.closed ||
+        this.suspended ||
+        taskStopped()
+      ) {
         const monitor = this.options.inputMonitorState?.();
         // Listener failure fences input just like Stop. Preserve its useful
         // diagnosis only when no other cancellation occurred while activating.
@@ -915,12 +926,8 @@ export class CuaDriverHost {
         (CUA_ACTION_TOOLS.has(name) || CUA_BROWSER_MUTATION_TOOLS.has(name))
       )
         return this.inputInterruptedReply();
-      if (task && this.userStoppedTasks.has(cuaComputerTaskKey(task))) {
-        return {
-          ok: false,
-          error: "The user stopped computer use for this turn. Do not retry actions.",
-          effect: "not-dispatched" as const,
-        };
+      if (taskStopped()) {
+        return this.taskStoppedReply();
       }
       if (name === "check_permissions" && this.options.checkPermissions) {
         // AppSnap's short-lived helper avoids the embedded daemon's TCC cache.
@@ -928,8 +935,12 @@ export class CuaDriverHost {
         // from tools never reach the permission request path.
         const check = this.options.checkPermissions;
         const cancelled = () =>
-          this.closed || this.suspended || connection.destroyed || epoch !== this.epoch;
-        let permissions = await this.checkPermissions(connection, check);
+          this.closed ||
+          this.suspended ||
+          connection.destroyed ||
+          epoch !== this.epoch ||
+          taskStopped();
+        let permissions = await this.checkPermissions(connection, check, false, task);
         if (!permissions || cancelled())
           return {
             ok: false,
@@ -942,7 +953,7 @@ export class CuaDriverHost {
           // desktop: every action runs check_permissions first, so a flapping
           // helper re-arms the gate after each observation clears it. Only a
           // confirmed second read counts as a real change.
-          const confirmed = await this.checkPermissions(connection, check, true);
+          const confirmed = await this.checkPermissions(connection, check, true, task);
           if (!confirmed || cancelled())
             return {
               ok: false,
@@ -1036,7 +1047,7 @@ export class CuaDriverHost {
       if (
         task &&
         !this.endedFrameTasks.has(cuaComputerTaskKey(task)) &&
-        !this.userStoppedTasks.has(cuaComputerTaskKey(task)) &&
+        !taskStopped() &&
         epoch === this.epoch &&
         !connection.destroyed &&
         reply.ok &&
@@ -1146,6 +1157,7 @@ export class CuaDriverHost {
     connection: Socket,
     check: (options?: { readonly force: boolean }) => Promise<HostPermissions>,
     force = false,
+    task?: CuaComputerTask,
   ): Promise<HostPermissions | undefined> {
     // Stop and disconnected status readers must release native admission even
     // while a different feature owns a macOS prompt in the shared helper queue.
@@ -1159,7 +1171,7 @@ export class CuaDriverHost {
         cleanup();
         resolve(undefined);
       };
-      this.pendingPermissionChecks.add(cancel);
+      this.pendingPermissionChecks.set(cancel, task ? cuaComputerTaskKey(task) : undefined);
       connection.once("close", cancel);
       void Promise.resolve()
         .then(() => check({ force }))
@@ -1211,6 +1223,7 @@ export class CuaDriverHost {
     // retire on an aborted call.
     const callCancel = new AbortController();
     if (mutation) this.inFlightInputInterrupts.add(callCancel);
+    if (task) this.activeTaskCalls.set(callCancel, cuaComputerTaskKey(task));
     const abort = () => {
       if (this.repliedConnections.has(connection)) return;
       const alreadyInterrupted = callCancel.signal.aborted;
@@ -1323,21 +1336,19 @@ export class CuaDriverHost {
               this.controlledTargets.delete(this.controlledTargets.keys().next().value!);
           }
         }
-        this.activeInputTaskKey = mutation
-          ? task
-            ? cuaComputerTaskKey(task)
-            : "anonymous"
-          : undefined;
-        this.activeForegroundInput =
-          mutation &&
-          (foregroundDelivery ||
+        if (mutation) {
+          this.activeInputTaskKey = task ? cuaComputerTaskKey(task) : "anonymous";
+          this.activeForegroundInput =
+            foregroundDelivery ||
             (args as Record<string, unknown>).delivery_mode === "foreground" ||
-            name === "bring_to_front");
+            name === "bring_to_front";
+        }
         dispatched = true;
         if (label) generation.liveBrowserSessions.add(label);
-        if (mutation || this.nativeInputCleanupPending !== generation) {
-          generation.inputInFlight = mutation;
-          generation.browserInputInFlight = isBrowser && mutation;
+        if (mutation) {
+          generation.inputInFlight = true;
+          generation.browserInputInFlight = isBrowser;
+          generation.inputTask = task;
         }
         generation.inputEverDispatched ||= generation.inputInFlight;
         const attemptReply = await cuaRequest<CuaReply>(
@@ -1367,9 +1378,10 @@ export class CuaDriverHost {
           generation.inputInFlight = true;
           generation.browserInputInFlight ||= isBrowser;
           this.nativeInputCleanupPending = generation;
-        } else if (this.nativeInputCleanupPending !== generation) {
+        } else if (mutation && this.nativeInputCleanupPending !== generation) {
           generation.inputInFlight = false;
           generation.browserInputInFlight = false;
+          generation.inputTask = undefined;
         }
         if (isDriverSessionDeath(attemptReply)) {
           if (isBrowser && label) {
@@ -1512,10 +1524,13 @@ export class CuaDriverHost {
         effect: dispatched && mutation ? "dispatched-unknown" : "not-dispatched",
       };
     } finally {
-      this.activeForegroundInput = false;
-      this.activeInputTaskKey = undefined;
+      if (mutation) {
+        this.activeForegroundInput = false;
+        this.activeInputTaskKey = undefined;
+      }
       connection.removeListener("close", abort);
       this.inFlightInputInterrupts.delete(callCancel);
+      this.activeTaskCalls.delete(callCancel);
     }
   }
 
@@ -1604,7 +1619,10 @@ export class CuaDriverHost {
 
   /** End only the latest matching turn, in the same queue as native dispatch.
    * A late terminal for turn A must not remove turn B's reused cursor. */
-  private async endTaskCursors(task: CuaComputerTask): Promise<void> {
+  private async endTaskCursors(
+    task: CuaComputerTask,
+    allTurns = task.turnId === undefined,
+  ): Promise<void> {
     const previous = this.operations;
     const operation = (async () => {
       await previous;
@@ -1613,13 +1631,61 @@ export class CuaDriverHost {
       for (const [label, cursor] of generation.taskCursors) {
         if (
           cursor.task.threadId === task.threadId &&
-          (task.turnId === undefined || cursor.task.turnId === task.turnId)
+          (allTurns || cursor.task.turnId === task.turnId)
         )
           await this.endCursorSession(generation, label);
       }
     })();
     this.operations = operation.catch(() => undefined);
     await operation;
+  }
+
+  private async endTask(
+    task: CuaComputerTask,
+    allTurns: boolean,
+    waitForCursor = true,
+  ): Promise<void> {
+    const taskKey = cuaComputerTaskKey(task);
+    this.controlledTargets.delete(taskKey);
+    this.takeoverTargets.delete(taskKey);
+    this.monitoredTasks.delete(taskKey);
+    if (allTurns) {
+      for (const [key, target] of this.controlledTargets) {
+        if (target.threadId === task.threadId) this.controlledTargets.delete(key);
+      }
+      for (const [key, target] of this.takeoverTargets) {
+        if (target.threadId === task.threadId) this.takeoverTargets.delete(key);
+      }
+      for (const [key, threadId] of this.monitoredTasks) {
+        if (threadId === task.threadId) this.monitoredTasks.delete(key);
+      }
+    }
+    if (this.monitoredTasks.size === 0) {
+      this.inputMonitorRequested = false;
+      this.inputMonitorArmed = false;
+      this.options.onInputMonitorArmedChange?.(false);
+    }
+    this.rememberTask(this.endedFrameTasks, task);
+    if (
+      this.frameTapTask?.threadId === task.threadId &&
+      (allTurns || task.turnId === this.frameTapTask.turnId)
+    ) {
+      this.rememberTask(this.endedFrameTasks, this.frameTapTask);
+      this.frameTapTask = undefined;
+    }
+    // Preview/shield authority ends immediately. Cosmetic cursor cleanup
+    // stays on the native queue, but task Stop must not wait for another
+    // task's long-running native action merely to hide this task's cursor.
+    const cursorEnded = this.endTaskCursors(task, allTurns);
+    if (!waitForCursor)
+      void cursorEnded.catch((error: unknown) =>
+        log(`stopped task cursor cleanup failed: ${String(error)}`),
+      );
+    await Promise.all([
+      this.options.frameTap?.endTask(task),
+      this.options.shield?.endTask(task),
+      ...(waitForCursor ? [cursorEnded] : []),
+    ]);
   }
 
   /**
@@ -1814,6 +1880,7 @@ export class CuaDriverHost {
         retired: false,
         cancellationReady: false,
         inputInFlight: false,
+        inputTask: undefined,
         browserInputInFlight: false,
         inputEverDispatched: false,
         controlSession: `synara-transport-${randomUUID()}`,
@@ -2226,7 +2293,7 @@ export class CuaDriverHost {
     // observation afterwards: bumping the desktop epoch turns that silent
     // clear-void into a visible stale-read refusal.
     this.desktopEpoch += 1;
-    for (const cancel of this.pendingPermissionChecks) cancel();
+    for (const cancel of this.pendingPermissionChecks.keys()) cancel();
     const admitted = this.operations;
     const frameTapStopped = this.options.frameTap?.stop();
     // Any shield still up belongs to an excursion this stop interrupts: drop
@@ -2261,7 +2328,7 @@ export class CuaDriverHost {
   private interruptInput(): Promise<void> {
     this.epoch += 1;
     this.desktopEpoch += 1;
-    for (const cancel of this.pendingPermissionChecks) cancel();
+    for (const cancel of this.pendingPermissionChecks.keys()) cancel();
     const admitted = this.operations;
     const frameTapStopped = this.options.frameTap?.stop();
     const shieldStopped = this.options.shield?.stop();
@@ -2331,6 +2398,7 @@ export class CuaDriverHost {
     }
     generation.inputInFlight = false;
     generation.browserInputInFlight = false;
+    generation.inputTask = undefined;
     if (this.nativeInputCleanupPending === generation) this.nativeInputCleanupPending = undefined;
   }
 
@@ -2457,9 +2525,65 @@ export class CuaDriverHost {
   }
 
   /** User Stop revokes the turn without changing OS grants. */
-  stopTaskByUser(task: CuaComputerTask): Promise<void> {
+  async stopTaskByUser(task: CuaComputerTask): Promise<void> {
+    await this.stopTaskInput(task);
+  }
+
+  private async stopTaskInput(task: CuaComputerTask): Promise<"task" | "generation"> {
+    const key = cuaComputerTaskKey(task);
+    const matches = (candidate: CuaComputerTask) =>
+      candidate.threadId === task.threadId &&
+      (task.turnId === undefined || candidate.turnId === task.turnId);
+    const stoppedKeys = new Set([key]);
     this.rememberTask(this.userStoppedTasks, task);
-    return this.stop();
+    for (const known of this.knownTasks.values()) {
+      if (!matches(known)) continue;
+      stoppedKeys.add(cuaComputerTaskKey(known));
+      this.rememberTask(this.userStoppedTasks, known);
+    }
+    for (const admitted of this.admittedTaskRequests) {
+      if (!matches(admitted.task)) continue;
+      admitted.stopped = true;
+      stoppedKeys.add(cuaComputerTaskKey(admitted.task));
+      this.rememberTask(this.userStoppedTasks, admitted.task);
+    }
+    for (const [cancel, owner] of this.pendingPermissionChecks) {
+      if (owner !== undefined && stoppedKeys.has(owner)) cancel();
+    }
+    for (const [cancel, owner] of this.activeTaskCalls) {
+      if (stoppedKeys.has(owner)) cancel.abort();
+    }
+    // Native input is serialized but shares one cancellation gate. Once
+    // this task dispatched input, stopping it must drain that generation
+    // and fence queued siblings too. Idle/queued tasks and observations
+    // need only their own revocation; they must not interrupt another task.
+    // A thread-wide Stop matches its admitted/known turns. It must not
+    // interrupt another thread just because the caller omitted a turn id.
+    const scope =
+      this.generation?.inputInFlight &&
+      this.generation.inputTask !== undefined &&
+      matches(this.generation.inputTask)
+        ? "generation"
+        : "task";
+    const interrupted = scope === "generation" ? this.interruptInput() : Promise.resolve();
+    await Promise.all([interrupted, this.endTask(task, task.turnId === undefined, false)]);
+    log(
+      JSON.stringify({
+        event: "computer_task_stop",
+        thread: task.threadId,
+        turn: task.turnId,
+        scope,
+      }),
+    );
+    return scope;
+  }
+
+  private taskStoppedReply(): CuaReply {
+    return {
+      ok: false,
+      error: "The user stopped computer use for this turn. Do not retry actions.",
+      effect: "not-dispatched",
+    };
   }
 
   private rememberTask(set: Set<string>, task: CuaComputerTask): void {

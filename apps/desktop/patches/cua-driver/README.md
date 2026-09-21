@@ -600,3 +600,38 @@ Fresh confirmation bypasses cached results, partial/failed checks cannot keep
 stale granted badges, and dismissed setup sessions cannot reopen a guide.
 Foreground authorization is checked before claiming desktop control or
 starting a driver. See the report follow-up for live evidence and limits.
+
+### Revision 37: exact modal controls and observed keyboard focus
+
+Ordinary sheets and dialogs no longer become `auth_sheet_focused` merely because
+of their accessibility role. Admission retains the current modal's identity for
+that action. A semantic actuator must freshly prove that its exact element is
+inside that modal; controls behind it refuse with `modal_target_mismatch` before
+dispatch. Raw events still require the modal's own distinct window, so a sheet
+sharing its parent's window id cannot admit clicks behind the sheet. The same
+checks cover semantic value/selection writes and element-addressed AX Return;
+owned key releases still run unconditionally. Authentication processes and
+secure focused fields retain the separate protected-input refusal, and the
+host's protected-app and secure-input policies remain in force.
+
+`list_windows` can return optional `keyboard_focused` metadata from the app's
+observed `AXFocusedWindow`, independently of Synara's selected target. This is
+opt-in through `include_keyboard_focus`; ordinary geometry revalidation performs
+no Accessibility focus reads or blocking-worker dispatch. Explicit observations
+coalesce reads per PID and bound them across each request. A missing or unmapped
+identity stays absent, not false; metadata does not bypass the fresh window/field
+proof at key dispatch. This revision does not broaden generic hotkey delivery or
+prove that a never-activated application supplies a usable keyboard destination.
+
+`set_value` also accepts `append:true` with an exact retained `element_token`.
+It reads that element's current text, composes the appended value, and submits
+one AX write under the existing semantic lease and cancellation gate. It never
+refreshes the snapshot or rematches a control. Nontext, secure, unreadable, and
+unwritable targets refuse, as does combined text exceeding 16,384 UTF-16 code
+units. Existing replacement behavior and web-content readback distrust remain.
+
+The adapter fixes accompanying this revision preserve exact refs for key tools,
+correct the macOS signed-wheel direction, and retain launch focus observations.
+Pure native policy and cancellation checks do not qualify Resolve dialogs,
+Helium browser chrome, or another machine's permission state; those still need
+an application-specific trace and observed outcome.

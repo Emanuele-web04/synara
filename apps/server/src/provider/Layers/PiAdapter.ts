@@ -541,6 +541,7 @@ export function piInstalledGatewayToolNames(freshNames: Iterable<string>): Set<s
 export async function buildPiAgentGatewayCustomTools(input: {
   readonly connection: AgentGatewayMcpConnection;
   readonly defineTool: (tool: ToolDefinition) => ToolDefinition;
+  readonly enableComputerControl?: boolean;
   readonly fetch?: AgentGatewayMcpFetch;
 }): Promise<ReadonlyArray<ToolDefinition>> {
   const tools = await listAgentGatewayMcpTools({
@@ -551,6 +552,22 @@ export async function buildPiAgentGatewayCustomTools(input: {
     throw new Error("Synara MCP returned an empty tool catalog.");
   }
   const catalog = new Map(tools.map((tool) => [tool.name, tool]));
+  if (input.enableComputerControl === true) {
+    // These are always advertised by the shared Computer catalog. Check the
+    // negotiated definitions before compatibility forwarders fill hidden names;
+    // a help-only catalog must not masquerade as observation and action support.
+    const missing = [
+      "computer_get_state",
+      "computer_click",
+      "computer_press_key",
+      "computer_run",
+    ].filter((name) => !catalog.has(name));
+    if (missing.length > 0) {
+      throw new Error(
+        `Synara MCP catalog is missing required Computer tools: ${missing.join(", ")}.`,
+      );
+    }
+  }
   return [...piInstalledGatewayToolNames(catalog.keys())].map((name) => {
     const tool = catalog.get(name);
     return input.defineTool({
@@ -1833,6 +1850,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             rebuilt = await buildPiAgentGatewayCustomTools({
               connection,
               defineTool: context.gatewayDefineTool,
+              enableComputerControl: context.enableComputerControl === true,
               ...fetchOptions,
             });
           } catch (cause) {
@@ -2771,6 +2789,14 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           input,
         );
         const agentGatewayConnection = agentGatewaySessionLease?.connection;
+        if (input.enableComputerControl === true && !agentGatewayConnection) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/start",
+            detail:
+              "Computer Use could not start because Pi did not receive a thread-scoped Synara gateway connection.",
+          });
+        }
         const gatewayTools = agentGatewayConnection
           ? yield* releaseAgentGatewaySessionLeaseOnInterrupt(
               agentGatewaySessionLease,
@@ -2779,6 +2805,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                   buildPiAgentGatewayCustomTools({
                     connection: agentGatewayConnection,
                     defineTool: (tool) => piSdk.defineTool(tool),
+                    enableComputerControl: input.enableComputerControl === true,
                     ...(options?.agentGatewayFetch === undefined
                       ? {}
                       : { fetch: options.agentGatewayFetch }),
@@ -2789,10 +2816,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               Effect.catch((cause) =>
                 Effect.sync(() => agentGatewaySessionLease?.release()).pipe(
                   Effect.andThen(
-                    Effect.logWarning(
-                      "Pi could not install thread-scoped Synara gateway tools",
-                      cause,
-                    ),
+                    input.enableComputerControl === true
+                      ? Effect.fail(
+                          new ProviderAdapterRequestError({
+                            provider: PROVIDER,
+                            method: "session/start",
+                            detail: `Computer Use could not start because Pi could not install Synara gateway tools: ${toMessage(cause, "Gateway setup failed.")}`,
+                            cause,
+                          }),
+                        )
+                      : Effect.logWarning(
+                          "Pi could not install thread-scoped Synara gateway tools",
+                          cause,
+                        ),
                   ),
                   Effect.as([] as ReadonlyArray<ToolDefinition>),
                 ),

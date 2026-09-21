@@ -61,6 +61,7 @@ async function fixture(
     inputDelayMs?: number;
     delayBrowserObservation?: boolean;
     delayObservation?: boolean;
+    delayListWindowsMs?: number;
     hangSession?: boolean;
     dropCancel?: boolean;
     startupTimeoutMs?: number;
@@ -172,7 +173,7 @@ net.createServer(s=>{
     else if(r.name==='press_key') { if(!options.unpatched&&r.expected_input_epoch!==inputEpoch) { reply({isError:true,structuredContent:{effect:'refused',code:'input_admission_closed'}}); return; } write('key'); write('observation-budget-'+process.env.SYNARA_CUA_FOREGROUND_OBSERVATION_MS); reply(options.actionResult??{}); }
     else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:r.args?.fixture_usable?[{role:"AXWindow"}]:[],window_is_on_screen:r.args?.fixture_usable===true,window_on_current_space:r.args?.fixture_usable===true,degraded:r.args?.fixture_degraded,screenshot_frame_valid:r.args?.fixture_stale!==true,pid:r.args?.pid,window_id:r.args?.fixture_wrong_window?99999:r.args?.window_id}}),options.delayObservation?60:0); }
     else if(r.name==='get_desktop_state') reply({content:[{type:'image',data:'fixture-image'}]});
-    else if(r.name==='list_windows') { write('list-windows'); reply({structuredContent:{windows:options.listWindows||[]}}); }
+    else if(r.name==='list_windows') { write('list-windows'); setTimeout(()=>{reply({structuredContent:{windows:options.listWindows||[]}});if(options.delayListWindowsMs) write('list-windows-replied');},options.delayListWindowsMs??0); }
     // Browser family observability: the persistent control connection opens
     // with session_begin; lifecycle calls attributed to a transport session
     // are the browser path (the desktop start_session carries no session_id).
@@ -1288,6 +1289,280 @@ describe("task-owned user stop", () => {
     });
     expect(next.ok).toBe(true);
   });
+
+  it.each([
+    { threadId: "other-thread", turnId: "turn" },
+    { threadId: "thread", turnId: "new-turn" },
+  ])(
+    "stopping queued $threadId/$turnId's sibling preserves its native input",
+    async (activeTask) => {
+      const f = await fixture(capability, { inputDelayMs: 300, logSessions: true });
+      const active = cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "type_text",
+        task: activeTask,
+        args: { text: "fixture" },
+      });
+      await waitForEvent(f, "dispatch");
+      const queued = cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        task,
+        args: { key: "enter" },
+      });
+      await expect(cuaRequest(f.endpoint, { method: "stop", task })).resolves.toMatchObject({
+        ok: true,
+        result: { stop_scope: "task" },
+      });
+      await expect(queued).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+      await expect(active).resolves.toMatchObject({ ok: true });
+      await expect(
+        cuaRequest(f.endpoint, {
+          method: "call",
+          name: "press_key",
+          task: activeTask,
+          args: { key: "enter" },
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      const events = (await f.events()).map((row) => row.event);
+      expect(events.filter((event) => event === "start")).toHaveLength(1);
+      expect(events.filter((event) => event === "key")).toHaveLength(1);
+      expect(events).toContain("effect");
+      expect(events).not.toContain("interrupt");
+      expect(events).not.toContain("retiring");
+    },
+  );
+
+  it("drains matching native input and reports that queued siblings share the generation fence", async () => {
+    const f = await fixture();
+    const active = cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "type_text",
+      task,
+      args: { text: "fixture" },
+    });
+    await waitForEvent(f, "dispatch");
+    const sibling = { threadId: "other-thread", turnId: "turn" };
+    const queued = cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "press_key",
+      task: sibling,
+      args: { key: "enter" },
+    });
+    await expect(cuaRequest(f.endpoint, { method: "stop", task })).resolves.toMatchObject({
+      ok: true,
+      result: { stop_scope: "generation" },
+    });
+    await expect(active).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
+    await expect(queued).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    await expect(
+      cuaRequest(f.endpoint, {
+        method: "call",
+        name: "press_key",
+        task: sibling,
+        args: { key: "enter" },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const events = (await f.events()).map((row) => row.event);
+    expect(events.indexOf("interrupt-ack")).toBeLessThan(events.indexOf("key"));
+    expect(events.filter((event) => event === "start")).toHaveLength(1);
+    expect(events).not.toContain("effect");
+    expect(events).not.toContain("cancel");
+    expect(events).not.toContain("retiring");
+  });
+
+  it("cancels only the matching observation without interrupting queued sibling input", async () => {
+    const f = await fixture(capability, { delayObservation: true });
+    const observation = cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "get_window_state",
+      task,
+      modelObservation: true,
+      args: { pid: 42, window_id: 10 },
+    });
+    await waitForEvent(f, "observe");
+    const sibling = cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "press_key",
+      task: { threadId: "other-thread", turnId: "turn" },
+      args: { key: "enter" },
+    });
+    await expect(cuaRequest(f.endpoint, { method: "stop", task })).resolves.toMatchObject({
+      ok: true,
+      result: { stop_scope: "task" },
+    });
+    await expect(observation).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    await expect(sibling).resolves.toMatchObject({ ok: true });
+    expect((await f.events()).some((row) => row.event === "interrupt")).toBe(false);
+  });
+
+  it("releases a matching permission wait without cancelling AppSnap's shared check", async () => {
+    const entered = deferred<void>();
+    const pending = deferred<{ accessibility: boolean; screenRecording: boolean }>();
+    const f = await fixture(capability, {
+      checkPermissions: () => {
+        entered.resolve();
+        return pending.promise;
+      },
+    });
+    const check = cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "check_permissions",
+      task,
+    });
+    await entered.promise;
+    await f.host.stopTaskByUser(task);
+    await expect(check).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } }),
+    ).resolves.toMatchObject({ ok: true });
+    pending.resolve({ accessibility: true, screenRecording: true });
+    expect((await f.events()).some((row) => row.event === "interrupt")).toBe(false);
+  });
+
+  it("revokes a task during native startup without retiring the sibling's shared generation", async () => {
+    const f = await fixture(capability, { metadataDelayMs: 100 });
+    const starting = cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "press_key",
+      task,
+      args: { key: "enter" },
+    });
+    await waitForEvent(f, "start");
+    await expect(cuaRequest(f.endpoint, { method: "stop", task })).resolves.toMatchObject({
+      ok: true,
+      result: { stop_scope: "task" },
+    });
+    await expect(starting).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key", args: { key: "enter" } }),
+    ).resolves.toMatchObject({ ok: true });
+    const events = (await f.events()).map((row) => row.event);
+    expect(events.filter((event) => event === "key")).toHaveLength(1);
+    expect(events.filter((event) => event === "start")).toHaveLength(1);
+    expect(events).not.toContain("interrupt");
+    expect(events).not.toContain("retiring");
+  });
+
+  it("keeps native input ownership when a detached launch-preview read finishes", async () => {
+    const f = await fixture(capability, {
+      delayListWindowsMs: 100,
+      frameTap: {
+        update: () => {},
+        endTask: async () => {},
+        stop: async () => {},
+        dispose: async () => {},
+      },
+    });
+    await cuaRequest(f.endpoint, {
+      method: "call",
+      name: "launch_app",
+      task: { threadId: "launching-thread", turnId: "turn" },
+      args: { name: "Calculator" },
+    });
+    await waitForEvent(f, "list-windows");
+    const active = cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "type_text",
+      task,
+      args: { text: "fixture" },
+    });
+    await waitForEvent(f, "dispatch");
+    await waitForEvent(f, "list-windows-replied");
+    await expect(cuaRequest(f.endpoint, { method: "stop", task })).resolves.toMatchObject({
+      ok: true,
+      result: { stop_scope: "generation" },
+    });
+    await expect(active).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
+    const events = (await f.events()).map((row) => row.event);
+    expect(events).toContain("interrupt-ack");
+    expect(events).not.toContain("effect");
+    expect(events).not.toContain("retiring");
+  });
+
+  it("drains its thread's active native input when Stop omits a turn identity", async () => {
+    const f = await fixture();
+    const active = cuaRequest<CuaReply>(f.endpoint, {
+      method: "call",
+      name: "type_text",
+      task,
+      args: { text: "fixture" },
+    });
+    await waitForEvent(f, "dispatch");
+    await expect(
+      cuaRequest(f.endpoint, { method: "stop", task: { threadId: task.threadId } }),
+    ).resolves.toMatchObject({ ok: true, result: { stop_scope: "generation" } });
+    await expect(active).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
+    const events = (await f.events()).map((row) => row.event);
+    expect(events).toContain("interrupt-ack");
+    expect(events).not.toContain("effect");
+    expect(events).not.toContain("retiring");
+  });
+
+  it.each(["idle", "queued"] as const)(
+    "thread-wide Stop preserves a sibling when its own work is %s",
+    async (state) => {
+      let activations = 0;
+      const f = await fixture(capability, {
+        inputDelayMs: 500,
+        activateInputMonitor: async () => {
+          activations += 1;
+        },
+      });
+      await cuaRequest(f.endpoint, {
+        method: "call",
+        name: "get_window_state",
+        task,
+        args: { pid: 42, window_id: 10 },
+      });
+      const sibling = cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "type_text",
+        task: { threadId: "other-thread", turnId: "turn" },
+        args: { text: "fixture" },
+      });
+      await waitForEvent(f, "dispatch");
+      const queued =
+        state === "queued"
+          ? ["queued-turn", "other-queued-turn"].map((turnId) =>
+              cuaRequest<CuaReply>(f.endpoint, {
+                method: "call",
+                name: "press_key",
+                task: { threadId: task.threadId, turnId },
+                args: { key: "enter" },
+              }),
+            )
+          : [];
+      if (state === "queued") await vi.waitFor(() => expect(activations).toBe(3));
+      await expect(
+        cuaRequest(f.endpoint, { method: "stop", task: { threadId: task.threadId } }),
+      ).resolves.toMatchObject({ ok: true, result: { stop_scope: "task" } });
+      for (const call of queued)
+        await expect(call).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+      await expect(sibling).resolves.toMatchObject({ ok: true });
+      await expect(
+        cuaRequest(f.endpoint, {
+          method: "call",
+          name: "press_key",
+          task,
+          args: { key: "enter" },
+        }),
+      ).resolves.toMatchObject({ ok: false, effect: "not-dispatched" });
+      await expect(
+        cuaRequest(f.endpoint, {
+          method: "call",
+          name: "press_key",
+          task: { threadId: task.threadId, turnId: "new-turn-after-stop" },
+          args: { key: "enter" },
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      const events = (await f.events()).map((row) => row.event);
+      expect(events.filter((event) => event === "key")).toHaveLength(1);
+      expect(events).toContain("effect");
+      expect(events).not.toContain("interrupt");
+      expect(events).not.toContain("retiring");
+    },
+  );
 });
 
 describe("frame tap launch prime", () => {

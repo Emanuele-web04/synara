@@ -453,6 +453,8 @@ export const ComputerWindow = Schema.Struct({
    */
   bounds: Schema.optional(ComputerRect),
   focused: Schema.Boolean,
+  /** Actual app keyboard window when proven by the native backend; absent means unknown. */
+  keyboardFocused: Schema.optional(Schema.Boolean),
   /**
    * Whether the compositor reports this window as activated to its client.
    * Distinct from `focused` (the agent's own input target): toolkits gate
@@ -636,6 +638,8 @@ export const ThreadComputerState = Schema.Struct({
    * to that thread's clients, and nothing else here crosses conversations.
    */
   controlledByOtherThread: Schema.Boolean,
+  /** The legacy host-wide preview cannot attribute frames while tasks own distinct apps. */
+  sharedPreviewUnavailable: Schema.optional(Schema.Boolean),
   availability: ComputerAvailability,
   /**
    * Live backend health, republished whenever the supervision loop changes it.
@@ -906,6 +910,8 @@ export type ComputerLaunchAppInput = typeof ComputerLaunchAppInput.Type;
 export const ComputerLaunchAppResult = Schema.Struct({
   computerId: ComputerId,
   app: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  /** Observed desktop focus change during launch, including app-initiated activation. */
+  focusChangedDuringLaunch: Schema.optional(Schema.Boolean),
   pid: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 0x7fffffff }))),
   /** Launch delivery and usable-window readiness are separate facts. */
   windowStatus: Schema.optional(Schema.Literals(["ready", "no_usable_window", "not_checked"])),

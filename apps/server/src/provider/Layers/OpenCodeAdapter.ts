@@ -3395,6 +3395,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const providerOptions = input.providerOptions?.[adapterConfig.providerOptionsKey];
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
+          if (input.enableComputerControl === true && serverUrl) {
+            return yield* new ProviderAdapterValidationError({
+              provider,
+              operation: "session/start",
+              issue: `Computer Use requires a Synara-managed ${adapterConfig.displayName} server with a thread-scoped gateway. It is unavailable with an external server URL.`,
+            });
+          }
           const serverPassword = options?.resolveServerPassword
             ? yield* options.resolveServerPassword(provider)
             : undefined;
@@ -3433,6 +3440,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 input,
               );
           const agentGatewayConnection = agentGatewaySessionLease?.connection;
+          if (input.enableComputerControl === true && !agentGatewayConnection) {
+            return yield* new ProviderAdapterRequestError({
+              provider,
+              method: "session/start",
+              detail:
+                "Computer Use could not start because the thread-scoped Synara gateway is unavailable.",
+            });
+          }
           const poolIsolationKey = agentGatewayConnection ? randomUUID() : undefined;
 
           let sessionScopeTransferred = false;
@@ -3469,16 +3484,26 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                         connection: agentGatewayConnection,
                       }).pipe(
                         Effect.as(true),
+                        Effect.mapError((cause) =>
+                          input.enableComputerControl === true
+                            ? new OpenCodeRuntimeError({
+                                operation: "mcp.add",
+                                detail: `Computer Use could not start because the thread-scoped Synara MCP connection is not ready: ${openCodeRuntimeErrorDetail(cause)}`,
+                              })
+                            : cause,
+                        ),
                         Effect.catchCause((cause) =>
-                          Effect.sync(() => agentGatewaySessionLease?.release()).pipe(
-                            Effect.andThen(
-                              Effect.logWarning(
-                                `${adapterConfig.displayName} could not install thread-scoped Synara MCP control`,
-                                Cause.squash(cause),
+                          input.enableComputerControl === true
+                            ? Effect.failCause(cause)
+                            : Effect.sync(() => agentGatewaySessionLease?.release()).pipe(
+                                Effect.andThen(
+                                  Effect.logWarning(
+                                    `${adapterConfig.displayName} could not install thread-scoped Synara MCP control`,
+                                    Cause.squash(cause),
+                                  ),
+                                ),
+                                Effect.as(false),
                               ),
-                            ),
-                            Effect.as(false),
-                          ),
                         ),
                       );
                     }

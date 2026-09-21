@@ -25,6 +25,7 @@ import {
   type UiTreeTargetSpec,
 } from "@synara/shared/uiTreeTargeting";
 import { clampTextToLength } from "./utf8Truncation.ts";
+import { retainComputerElementRef } from "./computerElementIdentity.ts";
 
 export interface ComputerTargetCandidate {
   readonly label: string;
@@ -143,10 +144,9 @@ export function resolveComputerSemanticTarget(
  *
  * Only exact label matches are considered — the listing already named the
  * control verbatim, so substring promotion would only buy collisions with
- * controls that share a prefix. When the ordinal slot no longer exists the
- * outcome follows what a plain label search would conclude: one survivor
- * resolves, none reports the pool's near-misses, and several that cannot be
- * told apart refuse rather than guess. Preferring on-screen matches mirrors
+ * controls that share a prefix. When the ordinal slot no longer exists,
+ * refuse rather than substitute another control, even if only one survives.
+ * Preferring on-screen matches mirrors
  * the digest's own membership (it only lists on-screen controls), and the
  * usual off-screen refusal still applies to the picked node.
  */
@@ -171,12 +171,15 @@ function resolveComputerOrdinalTarget(
   let node: ComputerUiNode;
   if (ordered.length > ordinal) {
     node = ordered[ordinal]!;
-  } else if (ordered.length === 1) {
-    node = ordered[0]!;
   } else if (ordered.length === 0) {
     throw spec.noMatch(pool);
   } else {
-    throw spec.ambiguous(ordered);
+    throw new ComputerTargetError({
+      code: "computer_target_not_found",
+      message: `Computer target ${describeTarget(target)} no longer exists at its observed duplicate position. Observe again with computer_get_state before acting.`,
+      candidates: candidateDescriptions(ordered),
+      notFound: true,
+    });
   }
   if (!spec.isOnScreen(node) && !allowOffscreen) {
     throw new ComputerTargetError({
@@ -478,7 +481,12 @@ export function actionableElements(
       const ordinal = ordinals.get(identity) ?? 0;
       ordinals.set(identity, ordinal + 1);
       if (items.length < ELEMENT_DIGEST_MAX_LENGTH) {
-        refIndex.push({ label, role: node.role, windowId: node.windowId, ordinal });
+        refIndex.push(
+          retainComputerElementRef(
+            { label, role: node.role, windowId: node.windowId, ordinal },
+            node,
+          ),
+        );
         items.push({
           ref: items.length,
           role: node.role,

@@ -10,15 +10,19 @@ import type { OrchestrationMessage } from "@synara/contracts";
  * user's own request or direct confirmation — not the model's judgment, not
  * the approval mode, not `full-access`.
  *
- * The answer is computed from the thread's latest user-authored message:
- * the same opening line the consent model already treats as the task, read
- * fresh on every foreground call so a user reply that authorizes visibility
- * ("yes, show me the browser", or "yes" to a direct permission question)
- * takes effect immediately, and "stop" revokes it just as fast.
+ * The answer is reconstructed from durable human messages in this task.
+ * Explicit consent survives a chain of routine continuations; a new task,
+ * stop, background request, imported history or nonhuman dispatch ends it.
+ * There is no thread-wide grant that a later unrelated turn can inherit.
  */
 export interface ComputerForegroundAuthorization {
   /** The user explicitly requested or confirmed visible use for the current task. */
   readonly userRequestedVisibleUse: boolean;
+}
+
+export interface ComputerForegroundContext {
+  /** Names from the desktop's observed app inventory, never model arguments or window titles. */
+  readonly knownAppNames?: readonly string[];
 }
 
 /** The authorization a call carries when nothing asked for visible use. */
@@ -58,7 +62,7 @@ const VISIBLE_USE_PATTERNS: readonly RegExp[] = [
   /\bi (?:want|would like|'d like) to see (?:the |my )?(?:[\w-]+ ){0,3}(?:window|app|screen|desktop|browser|page)(?=\s*(?:[.!?,;:]|$))/i,
   /\b(?:put|show|display)\b[^.!?\n]{0,40}\bon (?:my|the) screen\b/i,
   /\b(?:make|keep) (?:it|(?:the |my )?(?:[\w-]+ ){0,3}(?:app|window|browser)) visible\b/i,
-  /\b(?:bring|put|move)\b[^.!?]{0,40}\b(?:to the )?front(?=\s*(?:[.!?,;:]|$))/i,
+  /\b(?:bring|put|move)\b[^.!?]{0,40}\b(?:front|foreground)(?=\s*(?:[.!?,;:]|$))/i,
   /\buse (?:the )?foreground(?: mode)?(?=\s*(?:[.!?,;:]|$))/i,
   /\btake over (?:my|the) (?:screen|desktop|computer)\b/i,
   /\bdrive (?:my|the) (?:screen|desktop|computer)\b/i,
@@ -77,38 +81,113 @@ const BACKGROUND_USE_PATTERNS: readonly RegExp[] = [
 ];
 
 function unquotedRequest(text: string): string {
-  return text.replace(/```[\s\S]*?```|`[^`]*`|"[^"\n]*"|“[^”\n]*”/g, "").replace(/^\s*>.*$/gm, "");
+  return text
+    .replace(/<untrusted_text\b[^>]*>[\s\S]*?(?:<\/untrusted_text>|$)/gi, "")
+    .replace(/```[\s\S]*?(?:```|$)|`[^`]*(?:`|$)|"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’/g, "")
+    .replace(/(^|[\s(])'[^'\n]+'(?=$|[\s.,;:)])/g, "$1")
+    .replace(/^\s*>.*$/gm, "");
+}
+
+function requestsKnownAppVisibility(text: string, context: ComputerForegroundContext): boolean {
+  const app = text
+    .trim()
+    .match(/^(?:please[, ]+)?(?:show(?: me)?|display|mostra(?:mi)?)\s+(.+?)[.!?]*$/iu)?.[1];
+  if (!app) return false;
+  const name = app.trim().toLocaleLowerCase();
+  return (
+    context.knownAppNames?.some((candidate) => candidate.trim().toLocaleLowerCase() === name) ===
+    true
+  );
 }
 
 /** Whether one message text explicitly asks to see the desktop. Pure. */
-export function messageRequestsVisibleUse(text: string): boolean {
+export function messageRequestsVisibleUse(
+  text: string,
+  context: ComputerForegroundContext = {},
+): boolean {
   const request = unquotedRequest(text);
   return (
     !BACKGROUND_USE_PATTERNS.some((pattern) => pattern.test(request)) &&
-    VISIBLE_USE_PATTERNS.some((pattern) => pattern.test(request))
+    (VISIBLE_USE_PATTERNS.some((pattern) => pattern.test(request)) ||
+      requestsKnownAppVisibility(request, context))
   );
+}
+
+function isAffirmativeReply(text: string): boolean {
+  return /^(?:yes|yeah|yep|ok(?:ay)?|sure|go ahead|s[iì]|va bene|certo|procedi|vai)(?:[, ]+(?:please|go ahead|per favore|fallo))?[.!]*$/iu.test(
+    text.trim(),
+  );
+}
+
+function asksVisibleUsePermission(text: string, context: ComputerForegroundContext): boolean {
+  const question = unquotedRequest(text).trim();
+  // Take only the final, standalone permission question. General task
+  // approval ("continue?") and statements about visible use do not qualify.
+  const action = question.match(
+    /(?:^|[.!?]\s+)(?:can i|may i|shall i|do you want me to|would you like me to|is it (?:ok(?:ay)?|alright) (?:if i|to)|posso|vuoi che)\s+([^?]*\?)$/iu,
+  )?.[1];
+  return action !== undefined && messageRequestsVisibleUse(action, context);
+}
+
+function isLocalHumanMessage(message: OrchestrationMessage): boolean {
+  return (
+    message.role === "user" &&
+    message.dispatchOrigin !== "automation" &&
+    message.dispatchOrigin !== "agent" &&
+    (message.source === "native" || message.source === "async-user-input")
+  );
+}
+
+function isLocalAssistantMessage(
+  message: OrchestrationMessage | undefined,
+): message is OrchestrationMessage {
+  return message?.role === "assistant" && message.source === "native" && !message.streaming;
 }
 
 /** A short affirmative answers one direct visibility question, never quoted page text. */
 function confirmsVisibleUse(
   reply: OrchestrationMessage,
   preceding: OrchestrationMessage | undefined,
+  context: ComputerForegroundContext,
 ): boolean {
-  if (preceding?.role !== "assistant" || preceding.streaming) return false;
-  if (
-    !/^(?:yes|yeah|yep|ok(?:ay)?|sure|go ahead|s[iì]|va bene|certo|procedi|vai)(?:[, ]+(?:please|go ahead|per favore|fallo))?[.!]*$/iu.test(
-      reply.text.trim(),
-    )
-  ) {
-    return false;
+  return (
+    isLocalAssistantMessage(preceding) &&
+    isAffirmativeReply(reply.text) &&
+    asksVisibleUsePermission(preceding.text, context)
+  );
+}
+
+/** The persisted answer names its exact response message; generated question text is not consent. */
+function confirmsStructuredVisibleUse(
+  messages: readonly OrchestrationMessage[],
+  replyIndex: number,
+  context: ComputerForegroundContext,
+): boolean {
+  const reply = messages[replyIndex]!;
+  for (let index = replyIndex - 1; index >= 0; index -= 1) {
+    const question = messages[index]!;
+    // Answering a stale card from an earlier user task must not grant the new task visibility.
+    if (question.role === "user") return false;
+    const input = question.asyncUserInput;
+    if (input?.response?.messageId !== reply.id) continue;
+    return (
+      isLocalAssistantMessage(question) &&
+      input.questions.length === 1 &&
+      input.response.answers.length === 1 &&
+      isAffirmativeReply(input.response.answers[0]!) &&
+      asksVisibleUsePermission(input.questions[0]!.title, context)
+    );
   }
-  const question = unquotedRequest(preceding.text).trim();
-  // Take only the final, standalone permission question. General task
-  // approval ("continue?") and statements about visible use do not qualify.
-  const permissionQuestion = question.match(
-    /(?:^|[.!?]\s+)((?:can i|may i|shall i|do you want me to|would you like me to|is it (?:ok(?:ay)?|alright) (?:if i|to)|posso|vuoi che)\b[^?]*\?)$/iu,
-  )?.[1];
-  return permissionQuestion !== undefined && messageRequestsVisibleUse(permissionQuestion);
+  return false;
+}
+
+/** Only a whole, scope-preserving reply may carry earlier consent into this turn. */
+function isRoutineContinuation(message: OrchestrationMessage): boolean {
+  if (message.attachments?.length || message.skills?.length || message.mentions?.length)
+    return false;
+  return /^(?:(?:ok(?:ay)?|yes|s[iì])[, ]+)?(?:please[, ]+)?(?:continue(?: (?:working|with (?:the |this |our )?(?:same |current )?(?:task|work|plan)))?|keep (?:going|working)|carry on|go (?:on|ahead)|proceed(?: with (?:the |this |our )?(?:same |current )?(?:task|work|plan))?|(?:try|retry)(?: (?:again|that|it|the same step))?|continua(?: pure)?|prosegui|procedi|vai|riprova)(?:[, ]+(?:please|per favore))?[.!]*$/iu.test(
+    message.text.trim(),
+  );
 }
 
 /**
@@ -129,20 +208,29 @@ export function latestUserAuthoredMessage(
 }
 
 /**
- * The authorization a thread's current task carries. The message list is the
- * projection's ascending order; only the newest user message decides, so an
- * earlier "show me" cannot authorize a later background-only task and a later
- * "stop" revokes an earlier one.
+ * Reconstruct this task's grant, stopping at the first human scope change.
+ * Routine continuations preserve an explicit grant; they cannot create one.
+ * A new task, refusal or nonhuman/imported turn is a barrier, so a later
+ * "continue" cannot recover consent from an unrelated historical task.
  */
 export function computerForegroundAuthorizationForMessages(
   messages: readonly OrchestrationMessage[],
+  context: ComputerForegroundContext = {},
 ): ComputerForegroundAuthorization {
-  const latest = latestUserAuthoredMessage(messages);
-  const latestIndex = latest === undefined ? -1 : messages.lastIndexOf(latest);
-  return {
-    userRequestedVisibleUse:
-      latest !== undefined &&
-      (messageRequestsVisibleUse(latest.text) ||
-        confirmsVisibleUse(latest, messages[latestIndex - 1])),
-  };
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
+    if (message.role !== "user") continue;
+    if (!isLocalHumanMessage(message)) return COMPUTER_FOREGROUND_NOT_AUTHORIZED;
+    if (message.source === "async-user-input") {
+      return { userRequestedVisibleUse: confirmsStructuredVisibleUse(messages, index, context) };
+    }
+    if (
+      messageRequestsVisibleUse(message.text, context) ||
+      confirmsVisibleUse(message, messages[index - 1], context)
+    ) {
+      return { userRequestedVisibleUse: true };
+    }
+    if (!isRoutineContinuation(message)) return COMPUTER_FOREGROUND_NOT_AUTHORIZED;
+  }
+  return COMPUTER_FOREGROUND_NOT_AUTHORIZED;
 }

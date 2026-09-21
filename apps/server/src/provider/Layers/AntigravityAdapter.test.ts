@@ -8,10 +8,11 @@ import { PassThrough } from "node:stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@synara/contracts";
-import { Deferred, Effect, Fiber, Layer, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { ServerConfig } from "../../config";
+import { computerToolInstructions } from "../../agentGateway/computerGuidance";
 import {
   AgentGatewayCredentials,
   type AgentGatewayCredentialsShape,
@@ -1401,6 +1402,133 @@ describe("Antigravity CLI integration helpers", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it.each(["bootstrap", "synchronous spawn", "asynchronous spawn"] as const)(
+    "delivers the full Computer guide once after a failed %s attempt",
+    async (failure) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-policy-retry-"));
+      const revokedTokens: string[] = [];
+      const deliveredPrompts: string[] = [];
+      let tokenSequence = 0;
+      const credentials: AgentGatewayCredentialsShape = {
+        mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
+        setListeningPort: () => undefined,
+        issueSessionToken: () => `turn-session-${++tokenSequence}`,
+        verifySessionToken: () => null,
+        verifySession: () => null,
+        issueStdioBootstrapToken: (token) =>
+          failure === "bootstrap" && token === "turn-session-1" ? null : `bootstrap-${token}`,
+        exchangeStdioBootstrapToken: () => null,
+        bindWriteAuthority: () => null,
+        verifyWriteAuthority: () => false,
+        registerInFlightRequest: () => () => undefined,
+        cancelInFlightRequests: () => ({ count: 0, settled: Promise.resolve() }),
+        cancelSessionTurnRequests: () => Promise.resolve(),
+        retireSessionTurn: () => Promise.resolve(),
+        revokeSessionToken: (token) => revokedTokens.push(token),
+        connectionForThread: () => ({
+          url: "http://127.0.0.1:3773/mcp",
+          bearerToken: `turn-session-${++tokenSequence}`,
+        }),
+        stdioProxy: { command: process.execPath, args: ["proxy.mjs"] },
+      };
+      let spawnCount = 0;
+      const spawnProcess = ((_: string, args: readonly string[]) => {
+        spawnCount += 1;
+        if (failure === "synchronous spawn" && spawnCount === 1) {
+          throw new Error("Synthetic spawn failure");
+        }
+        const failSpawn = failure === "asynchronous spawn" && spawnCount === 1;
+        const child = new EventEmitter() as ChildProcess;
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        Object.assign(child, {
+          pid: failSpawn ? undefined : 11_000 + spawnCount,
+          stdout,
+          stderr,
+          killed: false,
+          kill: () => true,
+        });
+        setTimeout(() => {
+          if (failSpawn) {
+            child.emit("error", new Error("Synthetic asynchronous spawn failure"));
+            stdout.end();
+            stderr.end();
+            child.emit("close", -1, null);
+            return;
+          }
+          deliveredPrompts.push(args[args.indexOf("-p") + 1]!);
+          child.emit("spawn");
+          stdout.end("done\n");
+          stderr.end();
+          child.emit("close", 0, null);
+        }, 0).unref();
+        return child;
+      }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* AntigravityAdapter;
+            const threadId = ThreadId.makeUnsafe("thread-antigravity-policy-retry");
+            yield* adapter.startSession({
+              provider: "antigravity",
+              threadId,
+              runtimeMode: "full-access",
+              cwd: root,
+              enableComputerControl: true,
+              providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+            });
+            const waitUntilSettled = (status: "ready" | "error" = "ready") =>
+              Effect.gen(function* () {
+                for (let attempt = 0; attempt < 100; attempt += 1) {
+                  const session = (yield* adapter.listSessions()).find(
+                    (candidate) => candidate.threadId === threadId,
+                  );
+                  if (session?.status === status) return;
+                  yield* Effect.sleep(10);
+                }
+                throw new Error("Antigravity test turn did not settle.");
+              });
+            const firstAttempt = yield* adapter
+              .sendTurn({ threadId, input: "first attempt", attachments: [] })
+              .pipe(Effect.exit);
+            expect(Exit.isFailure(firstAttempt)).toBe(failure !== "asynchronous spawn");
+            if (failure === "asynchronous spawn") yield* waitUntilSettled("error");
+            expect(deliveredPrompts).toEqual([]);
+            expect(revokedTokens).toEqual(["turn-session-1"]);
+
+            yield* adapter.sendTurn({ threadId, input: "retry", attachments: [] });
+            yield* waitUntilSettled();
+            expect(deliveredPrompts).toHaveLength(1);
+            expect(deliveredPrompts[0]).toContain(computerToolInstructions());
+            expect(deliveredPrompts[0]).toContain("retry");
+
+            yield* adapter.sendTurn({ threadId, input: "next turn", attachments: [] });
+            yield* waitUntilSettled();
+            expect(deliveredPrompts).toHaveLength(2);
+            expect(deliveredPrompts[1]).toBe("next turn");
+            yield* adapter.stopSession(threadId);
+            expect(revokedTokens).toEqual(["turn-session-1", "turn-session-2", "turn-session-3"]);
+          }).pipe(
+            Effect.provide(
+              makeAntigravityAdapterLive({
+                ensurePlugin: async () => undefined,
+                spawnProcess,
+              }).pipe(
+                Layer.provide(Layer.succeed(AgentGatewayCredentials, credentials)),
+                Layer.provideMerge(
+                  ServerConfig.layerTest(root, { prefix: "antigravity-policy-retry-test-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   // #465: an active Stop hook must not emit a non-standard decision that can
   // hang the print process after the assistant reply is already visible.

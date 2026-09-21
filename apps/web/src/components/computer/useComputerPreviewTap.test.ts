@@ -480,6 +480,23 @@ describe("useComputerPreviewTap", () => {
     expect(output.frameSize).toEqual({ width: 320, height: 200 });
   });
 
+  it("leaves untagged frames to the stills fallback while background tasks share the host", async () => {
+    tapOwnership.state = ownedThreadState({
+      controlOwnerThreadId: THREAD_ID,
+      agentActive: true,
+      sharedPreviewUnavailable: true,
+    });
+    const bridge = createBridge();
+    vi.stubGlobal("window", { desktopBridge: { computerPreview: { onFrame: bridge.onFrame } } });
+    const { context, canvasRef } = createCanvas();
+    const output = render({ enabled: true, canvasRef, threadId: THREAD_ID });
+    expect(output.active).toBe(false);
+    expect(bridge.onFrame).not.toHaveBeenCalled();
+    feed(bridge, 1);
+    await flushDecode();
+    expect(context.drawImage).not.toHaveBeenCalled();
+  });
+
   it("draws while its agent call is in flight before the lease arrives", async () => {
     tapOwnership.state = ownedThreadState({
       controlOwnerThreadId: undefined,

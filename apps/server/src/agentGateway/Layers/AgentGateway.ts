@@ -1141,8 +1141,8 @@ export const makeAgentGateway = Effect.gen(function* () {
     return approved;
   };
 
-  // Resolve visible-use consent from the same latest user message for native
-  // apps and driver-owned browsers. Full-access mode does not imply visibility.
+  // Native apps and browsers share durable task consent. Full-access mode
+  // alone does not authorize taking the user's screen.
   const resolveComputerForegroundAuthorization: NonNullable<
     AgentGatewayComputerToolsOptions["resolveForegroundAuthorization"]
   > = async (context) => {
@@ -1151,7 +1151,9 @@ export const makeAgentGateway = Effect.gen(function* () {
     );
     return Option.isNone(detail)
       ? COMPUTER_FOREGROUND_NOT_AUTHORIZED
-      : computerForegroundAuthorizationForMessages(detail.value.messages);
+      : computerForegroundAuthorizationForMessages(detail.value.messages, {
+          knownAppNames: computerService?.manager.observedAppNames() ?? [],
+        });
   };
 
   const resolveComputerSpaceDesignation: NonNullable<

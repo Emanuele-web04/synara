@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CuaActionError, CuaComputerBackend } from "./CuaComputerBackend.ts";
 import { ComputerAvailability, ComputerScreenshot, ComputerState } from "@synara/contracts";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   CuaTransportError,
   CUA_SETUP_TIMEOUT_MS,
@@ -12,6 +12,8 @@ import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import { withDesktopDeliveryMode, withDesktopOperationSignal } from "./DesktopOperationQueue.ts";
 import { withModelDesktopObservation } from "./modelDesktopObservation.ts";
 import { withComputerTask } from "./computerTaskContext.ts";
+import { makeAgentGatewayComputerTools } from "../agentGateway/computerTools.ts";
+import type { ToolContext } from "../agentGateway/toolRuntime.ts";
 
 const isTyping = (name?: string) => name === "type_text";
 
@@ -194,7 +196,8 @@ function fixture(options?: {
       const token = (request.args as Record<string, unknown> | undefined)?.element_token;
       const written = (request.args as Record<string, unknown> | undefined)?.value;
       const target = elements.find((element) => element.element_token === token);
-      if (target && typeof written === "string") target.value = written;
+      if (target && typeof written === "string")
+        target.value = request.args?.append === true ? `${target.value ?? ""}${written}` : written;
     }
     if (isTyping(request.name)) data = actionResult;
     const toolHandler = request.name ? toolHandlers[request.name] : undefined;
@@ -324,7 +327,378 @@ function fixture(options?: {
   };
 }
 
+function gatewayFixture(f: ReturnType<typeof fixture>) {
+  const manager = new ComputerManager({ backend: f.backend, actionSettleMs: 0 });
+  const tools = makeAgentGatewayComputerTools({ manager });
+  const context: ToolContext = {
+    principal: {
+      kind: "provider-session",
+      sessionKey: "test-session",
+      threadId: "test-thread",
+      turnId: "test-turn",
+      provider: "claudeAgent",
+    },
+    callerThreadId: "test-thread",
+    callerThreadLabel: null,
+    callerSessionKey: "test-session",
+    callerProvider: "claudeAgent",
+    callerCapabilities: new Set(["computer:control"]),
+    callerTurnId: "test-turn",
+    assertCallerTurnActive: () => Effect.void,
+    jsonRpcRequestId: 1,
+  };
+  const call = (name: string, args: Record<string, unknown>) =>
+    Effect.runPromise(tools.find((tool) => tool.definition.name === name)!.handler(args, context));
+  const list = async () => {
+    const result = await call("computer_get_state", {
+      window_id: "cua:10:20",
+      include_screenshot: false,
+    });
+    expect(result.isError).not.toBe(true);
+    const text = result.content.find((entry) => entry.type === "text");
+    return JSON.parse(text?.type === "text" ? text.text : "{}").elements as Array<{
+      ref: number;
+      label: string;
+      value?: string;
+    }>;
+  };
+  return { manager, call, list };
+}
+
 describe("Cua native boundary", () => {
+  it("requests AX keyboard focus only for explicit observations, not input revalidation", async () => {
+    const f = fixture({ nativeRevision: 37 });
+    await withModelDesktopObservation(() =>
+      f.backend.getState({ windowId: "cua:10:20", includeTree: true }),
+    );
+    expect(f.calls.find((call) => call.name === "list_windows")?.args).toEqual({
+      include_keyboard_focus: true,
+    });
+    f.calls.length = 0;
+    await withModelDesktopObservation(() => f.backend.pressKey("enter", "cua:10:20"));
+    expect(f.calls.find((call) => call.name === "list_windows")?.args).toEqual({});
+  });
+  it("carries a provider's observed field ref through the gateway and manager to native Return", async () => {
+    const f = fixture({ nativeRevision: 37 });
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Address",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "address-token",
+      },
+    ]);
+    const { manager, call } = gatewayFixture(f);
+    try {
+      const state = await call("computer_get_state", { window_id: "cua:10:20" });
+      expect(state.isError).not.toBe(true);
+      const content = state.content.find((entry) => entry.type === "text")!;
+      const payload = JSON.parse(content.type === "text" ? content.text : "{}");
+      const field = payload.elements.find(
+        (element: { label: string }) => element.label === "Address",
+      );
+      expect(field.ref).toEqual(expect.any(Number));
+      const result = await call("computer_press_key", {
+        key: "enter",
+        ref: field.ref,
+        include_screenshot: false,
+      });
+      expect(result.isError).not.toBe(true);
+      expect(f.calls.findLast((call) => call.name === "press_key")?.args).toMatchObject({
+        key: "enter",
+        element_token: "address-token",
+        pid: 10,
+        window_id: 20,
+      });
+      const batch = await call("computer_run", {
+        steps: [{ type: "press_key", key: "enter", ref: field.ref }],
+        include_screenshot: false,
+      });
+      expect(batch.isError).not.toBe(true);
+      expect(f.calls.filter((call) => call.name === "press_key")).toHaveLength(2);
+      expect(f.calls.findLast((call) => call.name === "press_key")?.args).toHaveProperty(
+        "element_token",
+        "address-token",
+      );
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each(["press_key", "click", "set_value", "type_text"] as const)(
+    "keeps the original native identity after identical-label controls reorder for %s",
+    async (action) => {
+      const f = fixture({ nativeRevision: 37 });
+      const first = {
+        role: action === "click" ? "AXButton" : "AXTextField",
+        label: "Duplicate",
+        value: "first",
+        frame: { x: -290, y: 30, width: 70, height: 20 },
+        element_token: "original-first-token",
+        actions: ["AXPress"],
+        in_web_content: true,
+      };
+      const second = {
+        ...first,
+        value: "second",
+        frame: { ...first.frame, x: -200 },
+        element_token: "original-second-token",
+      };
+      f.setElements([first, second]);
+      f.onTool("set_value", () => ({
+        structuredContent: { effect: "confirmed", evidence: [{ kind: "value_readback" }] },
+      }));
+      const { manager, call, list } = gatewayFixture(f);
+      try {
+        const original = await list();
+        const firstRef = original[0]!.ref;
+        expect(JSON.stringify(original)).not.toContain("original-first-token");
+        f.setElements([second, first]);
+        const reordered = await list();
+        expect(reordered.map((element) => element.ref)).toEqual([original[1]!.ref, firstRef]);
+        const beforeAction = f.calls.length;
+        const result = await call(`computer_${action}`, {
+          ref: firstRef,
+          include_screenshot: false,
+          ...(action === "press_key" ? { key: "enter" } : {}),
+          ...(action === "set_value" ? { value: "updated" } : {}),
+          ...(action === "type_text" ? { text: " appended" } : {}),
+        });
+        expect(result.isError).not.toBe(true);
+        const nativeAction = action === "type_text" ? "set_value" : action;
+        expect(f.calls.findLast((call) => call.name === nativeAction)?.args).toHaveProperty(
+          "element_token",
+          "original-first-token",
+        );
+        const actionCalls = f.calls.slice(beforeAction);
+        const writeIndex = actionCalls.findIndex((call) => call.name === nativeAction);
+        expect(
+          actionCalls.slice(0, writeIndex).some((call) => call.name === "get_window_state"),
+        ).toBe(false);
+        if (action === "type_text") {
+          expect(actionCalls[writeIndex]?.args).toMatchObject({ append: true, value: " appended" });
+          expect(first.value).toBe("first appended");
+          expect(second.value).toBe("second");
+        }
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("refuses a retained web append when an identical replacement occupies the same geometry", async () => {
+    const f = fixture({ nativeRevision: 37 });
+    const field = {
+      role: "AXTextField",
+      label: "Search",
+      value: "old",
+      frame: { x: -290, y: 30, width: 120, height: 20 },
+      element_token: "original-token",
+      in_web_content: true,
+    };
+    f.setElements([field]);
+    const { manager, call, list } = gatewayFixture(f);
+    try {
+      const original = (await list())[0]!;
+      f.setElements([{ ...field, value: "replacement", element_token: "replacement-token" }]);
+      await list();
+      f.onTool("set_value", () => ({
+        isError: true,
+        structuredContent: {
+          effect: "not-dispatched",
+          code: "stale_target",
+          message: "The original token expired.",
+        },
+      }));
+      const beforeAction = f.calls.length;
+      const result = await call("computer_type_text", {
+        ref: original.ref,
+        text: " appended",
+        include_screenshot: false,
+      });
+      expect(result.isError).toBe(true);
+      const writes = f.calls
+        .slice(beforeAction)
+        .filter((call) => call.name === "set_value" || call.name === "type_text");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.args).toMatchObject({ element_token: "original-token", append: true });
+      expect(f.calls.slice(beforeAction).some((call) => call.name === "get_window_state")).toBe(
+        false,
+      );
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses retained web append on older native revisions without a snapshot or write", async () => {
+    const f = fixture({ nativeRevision: 36 });
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Search",
+        value: "old",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "original-token",
+        in_web_content: true,
+      },
+    ]);
+    const { manager, call, list } = gatewayFixture(f);
+    try {
+      const original = (await list())[0]!;
+      const beforeAction = f.calls.length;
+      const result = await call("computer_type_text", {
+        ref: original.ref,
+        text: " appended",
+        include_screenshot: false,
+      });
+      expect(result.isError).toBe(true);
+      expect(
+        f.calls
+          .slice(beforeAction)
+          .filter((call) =>
+            ["get_window_state", "set_value", "type_text"].includes(call.name ?? ""),
+          ),
+      ).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses a native retained ref without a semantic click instead of using its stale coordinates", async () => {
+    const f = fixture({ nativeRevision: 37 });
+    f.setElements([
+      {
+        role: "AXTextField",
+        label: "Search",
+        frame: { x: -290, y: 30, width: 120, height: 20 },
+        element_token: "original-token",
+      },
+    ]);
+    const { manager, call, list } = gatewayFixture(f);
+    try {
+      const original = (await list())[0]!;
+      const result = await call("computer_click", { ref: original.ref, include_screenshot: false });
+      expect(result.isError).toBe(true);
+      expect(f.calls.filter((call) => call.name === "click")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("never recycles a native ref when its bounded table is evicted", async () => {
+    const f = fixture({ nativeRevision: 37 });
+    const { manager, call, list } = gatewayFixture(f);
+    try {
+      let firstRef: number | undefined;
+      let latestRefs: number[] = [];
+      for (let batch = 0; batch < 9; batch += 1) {
+        f.setElements(
+          Array.from({ length: 60 }, (_, index) => ({
+            role: "AXButton",
+            label: `Button ${batch}-${index}`,
+            frame: { x: -290, y: 30, width: 20, height: 20 },
+            element_token: `token-${batch}-${index}`,
+            actions: ["AXPress"],
+          })),
+        );
+        latestRefs = (await list()).map((element) => element.ref);
+        firstRef ??= latestRefs[0];
+      }
+      expect(Math.min(...latestRefs)).toBeGreaterThan(firstRef!);
+      const stale = await call("computer_click", { ref: firstRef, include_screenshot: false });
+      expect(stale.isError).toBe(true);
+      expect(f.calls.filter((call) => call.name === "click")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("keeps advertised retained AX actions available off-Space without dispatching pointer input", async () => {
+    const f = fixture({ nativeRevision: 37 });
+    f.setElements([
+      {
+        role: "AXButton",
+        label: "Import",
+        frame: { x: -290, y: 30, width: 20, height: 20 },
+        element_token: "import-token",
+        actions: ["AXPress"],
+      },
+    ]);
+    const state = await f.backend.getState({ windowId: "cua:10:20", includeTree: true });
+    const node = state.root!.children[0]!;
+    f.setVisible(false);
+    await f.backend.performAction(
+      { target: { label: "Import" }, node, point: node.activationPoint! },
+      "AXPress",
+    );
+    expect(f.calls.findLast((call) => call.name === "click")?.args).toMatchObject({
+      element_token: "import-token",
+      action: "press",
+      delivery_mode: "background",
+    });
+    expect(f.calls.findLast((call) => call.name === "click")?.args).not.toHaveProperty("x");
+    await expect(f.backend.pressKey("enter", "cua:10:20")).rejects.toMatchObject({
+      code: "target_not_on_active_space",
+      effect: "not-dispatched",
+    });
+  });
+
+  it("preserves actual native keyboard focus independently of the selected target", async () => {
+    const f = fixture();
+    f.setWindows([
+      {
+        pid: 10,
+        window_id: 21,
+        title: "Sheet",
+        bounds: { x: 0, y: 0, width: 100, height: 100 },
+        is_on_screen: true,
+        keyboard_focused: true,
+      },
+    ]);
+    await f.backend.focusWindow("cua:10:20");
+    const windows = await f.backend.listWindows();
+    expect(windows.find((window) => window.id === "cua:10:20")).toMatchObject({ focused: true });
+    expect(windows.find((window) => window.id === "cua:10:20")).not.toHaveProperty(
+      "keyboardFocused",
+    );
+    expect(windows.find((window) => window.id === "cua:10:21")).toMatchObject({
+      focused: false,
+      keyboardFocused: true,
+    });
+  });
+
+  it("preserves app-initiated focus changes during a requested background launch", async () => {
+    const f = fixture();
+    f.onTool("launch_app", () => ({
+      structuredContent: { pid: 10, focus_changed_during_launch: true },
+    }));
+    expect(await f.backend.launchApp("Resolve")).toMatchObject({
+      pid: 10,
+      focusChangedDuringLaunch: true,
+    });
+    expect(f.calls.filter((call) => call.name === "launch_app")).toHaveLength(1);
+  });
+
+  it.each([
+    ["down", 0, 240, 0, -2],
+    ["up", 0, -240, 0, 2],
+    ["right", 240, 0, -2, 0],
+    ["left", -240, 0, 2, 0],
+  ] as const)(
+    "maps public %s scrolling to Core Graphics wheel signs",
+    async (direction, dx, dy, nativeX, nativeY) => {
+      const f = fixture();
+      await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+      const result = await f.backend.scroll({ x: -275, y: 30 }, dx, dy, "cua:10:20");
+      expect(result.scrollDelta).toEqual({ deltaX: dx, deltaY: dy });
+      expect(f.calls.find((call) => call.name === "scroll")?.args).toMatchObject({
+        direction,
+        delta_x: nativeX,
+        delta_y: nativeY,
+      });
+    },
+  );
+
   it("uses advertised AX actions and retains a fresh check at input dispatch", async () => {
     const f = fixture();
     f.setElements([
@@ -3092,7 +3466,7 @@ describe("Cua native boundary", () => {
     expect(f.calls.filter((c) => c.name === "scroll")).toHaveLength(1);
     expect(f.calls.find((c) => c.name === "scroll")?.args).toMatchObject({
       delta_x: 0,
-      delta_y: 2,
+      delta_y: -2,
       direction: "down",
     });
   });
@@ -3109,8 +3483,8 @@ describe("Cua native boundary", () => {
     expect(result.scrollDelta).toEqual({ deltaX: -120, deltaY: 240 });
     expect(f.calls.filter((c) => c.name === "scroll")).toHaveLength(1);
     expect(f.calls.find((c) => c.name === "scroll")?.args).toMatchObject({
-      delta_x: -1,
-      delta_y: 2,
+      delta_x: 1,
+      delta_y: -2,
       direction: "down",
       modifiers: ["command", "shift"],
     });
@@ -3171,8 +3545,8 @@ describe("Cua native boundary", () => {
     // A horizontal or modified request cannot ride the vertical AX rung.
     await f.backend.scroll(target.point, -140, 250, "cua:10:20", undefined, target);
     expect(f.calls.filter((c) => c.name === "scroll")[1]?.args).toMatchObject({
-      delta_x: -1,
-      delta_y: 2,
+      delta_x: 1,
+      delta_y: -2,
     });
     expect(f.calls.filter((c) => c.name === "scroll")[1]?.args).not.toHaveProperty("element_token");
   });

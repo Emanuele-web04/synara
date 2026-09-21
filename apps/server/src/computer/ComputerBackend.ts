@@ -533,10 +533,9 @@ export interface ComputerBackend {
     args: readonly string[],
     options?: {
       /**
-       * Launch with windows created but never rendered — the `open -j`
-       * posture. Nothing activates and no Space switches; the hidden app's
-       * windows stay addressable for background semantic actions. Absent or
-       * false is an ordinary background launch.
+       * Request a hidden, non-activating launch. An application may still
+       * activate itself; focusChangedDuringLaunch reports an observed change.
+       * Hidden windows remain addressable for exact semantic actions.
        */
       readonly hidden?: boolean;
     },
@@ -711,13 +710,23 @@ export interface ComputerBackend {
    * activation or process-scoped keyboard delivery.
    */
   readonly focusNeutralSemanticText?: boolean;
+  /** Exact targets are revalidated and background input never falls back to global input. */
+  readonly exactTargetBackgroundInput?: boolean;
   typeText(
     text: string,
     windowId?: string,
     target?: ComputerResolvedTarget,
   ): Promise<ComputerBackendActionResult | void>;
-  pressKey(key: string, windowId?: string): Promise<ComputerBackendActionResult | void>;
-  hotkey(keys: readonly string[], windowId?: string): Promise<ComputerBackendActionResult | void>;
+  pressKey(
+    key: string,
+    windowId?: string,
+    target?: ComputerResolvedTarget,
+  ): Promise<ComputerBackendActionResult | void>;
+  hotkey(
+    keys: readonly string[],
+    windowId?: string,
+    target?: ComputerResolvedTarget,
+  ): Promise<ComputerBackendActionResult | void>;
   /**
    * The system clipboard the human user shares, not an agent-private one.
    * Toolkits bind their data device to the session's primary seat whichever
@@ -771,7 +780,7 @@ export interface ComputerBackend {
   engageShield?(target: ComputerShieldTarget): Promise<string>;
   releaseShield?(shieldId: string): Promise<void>;
   releaseAllShields?(): Promise<void>;
-  stopInput?(): Promise<void>;
+  stopInput?(task?: { readonly threadId: string; readonly turnId?: string }): Promise<void>;
   /** Release task-owned observation resources, including read-only turns. */
   endTask?(threadId: string, turnId?: string): Promise<void>;
   /**

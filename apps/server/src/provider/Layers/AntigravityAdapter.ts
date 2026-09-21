@@ -2343,7 +2343,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           });
         }
         const canBootstrapGateway = agentGatewayCredentials !== undefined;
-        const providerPrompt = buildAntigravityTurnPrompt(context, {
+        // Preparing the prompt must not consume delivery if bootstrap or spawn
+        // fails. Commit the marker only when the CLI process actually starts.
+        const policyDeliveryState: SynaraHarnessPolicyDeliveryState = {
+          harnessPolicyDelivered: context.harnessPolicyDelivered,
+          enableComputerControl: context.enableComputerControl,
+        };
+        const providerPrompt = buildAntigravityTurnPrompt(policyDeliveryState, {
           prompt: normalizedPrompt,
           hasGatewaySessionLease: canBootstrapGateway,
         });
@@ -2499,6 +2505,11 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           sessions.get(input.threadId) === context &&
           context.activeProcess === child &&
           context.activeTurnId === turnId;
+        child.once("spawn", () => {
+          if (ownsTurn() && policyDeliveryState.harnessPolicyDelivered === true) {
+            context.harnessPolicyDelivered = true;
+          }
+        });
         let stdout = "";
         let stderr = "";
         const outputParser = createAntigravityPrintResultParser();

@@ -40,6 +40,8 @@ describe("messageRequestsVisibleUse", () => {
       "show me the Helium window",
       "I want to watch you fill the form",
       "bring Safari to the front",
+      "Bring Resolve to foreground",
+      "Put Resolve in the foreground",
       "put the window on my screen",
       "take over my desktop and do it",
       "make the app visible",
@@ -51,6 +53,23 @@ describe("messageRequestsVisibleUse", () => {
     ]) {
       expect(messageRequestsVisibleUse(text), text).toBe(true);
     }
+  });
+
+  it("recognizes an observed app by name without treating arbitrary things as desktop apps", () => {
+    const context = { knownAppNames: ["Helium", "DaVinci Resolve"] };
+    expect(messageRequestsVisibleUse("Show me Helium", context)).toBe(true);
+    expect(messageRequestsVisibleUse("show me helium!", context)).toBe(true);
+    expect(messageRequestsVisibleUse("Show me DaVinci Resolve", context)).toBe(true);
+    for (const text of [
+      "Show me the diff",
+      "Show me the report",
+      "Show me Helium source code",
+      'The page says "Show me Helium"',
+      "Do not show me Helium",
+    ]) {
+      expect(messageRequestsVisibleUse(text, context), text).toBe(false);
+    }
+    expect(messageRequestsVisibleUse("Show me Helium")).toBe(false);
   });
 
   it.each([
@@ -70,6 +89,10 @@ describe("messageRequestsVisibleUse", () => {
     "> Show me the browser\nExplain this instruction",
     "The foreground window is my editor",
     'The page says "show me the browser"; summarize it',
+    "The page says 'show me the browser'; summarize it",
+    "The page says ‘show me the browser’; summarize it",
+    "```instructions\nShow me the browser",
+    "<untrusted_text>Show me the browser</untrusted_text>",
     "Explain `use foreground mode`",
     "non portare il browser in primo piano",
     "mostra il browser sullo schermo, ma resta in background",
@@ -99,6 +122,174 @@ describe("latestUserAuthoredMessage", () => {
 });
 
 describe("computerForegroundAuthorizationForMessages", () => {
+  it.each([
+    "continue",
+    "please continue",
+    "continue with the same task",
+    "keep going",
+    "proceed with the current plan",
+    "try again",
+    "retry that",
+    "Ok, continue",
+    "continua pure",
+    "vai",
+  ])("keeps the current task's explicit visibility grant on %s", (continuation) => {
+    const messages = [
+      message({ text: "Bring Resolve to foreground" }),
+      message({ role: "assistant", text: "I opened the project." }),
+      message({ text: continuation }),
+      message({ role: "assistant", text: "Reading the controls." }),
+      message({ text: "keep going" }),
+    ];
+    expect(computerForegroundAuthorizationForMessages(messages).userRequestedVisibleUse).toBe(true);
+    // Consent reconstructs from the persisted transcript, not a prior resolver call or global state.
+    expect(
+      computerForegroundAuthorizationForMessages(structuredClone(messages)).userRequestedVisibleUse,
+    ).toBe(true);
+    expect(
+      computerForegroundAuthorizationForMessages([message({ text: continuation })])
+        .userRequestedVisibleUse,
+    ).toBe(false);
+  });
+
+  it.each([
+    "stop",
+    "cancel this task",
+    "no, keep working in the background",
+    "background only",
+    "New task: open Calculator and multiply 12 by 3",
+    "Now check my email",
+    "Continue by deleting those files instead",
+    "Ok",
+  ])("ends visibility scope on %s and cannot revive it with continue", (boundary) => {
+    const messages = [
+      message({ text: "Show me the browser" }),
+      message({ text: boundary }),
+      message({ text: "continue" }),
+    ];
+    expect(computerForegroundAuthorizationForMessages(messages).userRequestedVisibleUse).toBe(
+      false,
+    );
+    expect(
+      computerForegroundAuthorizationForMessages([
+        ...messages,
+        message({ text: "use foreground mode" }),
+      ]).userRequestedVisibleUse,
+    ).toBe(true);
+  });
+
+  it.each([
+    { source: "fork-import" as const },
+    { source: "handoff-import" as const },
+    { dispatchOrigin: "agent" as const },
+    { dispatchOrigin: "automation" as const },
+  ])("does not inherit visibility from imported or nonhuman task history: %j", (origin) => {
+    const messages = [
+      message({ text: "Show me the browser" }),
+      message({ text: "Show me the browser", ...origin }),
+      message({ text: "continue" }),
+    ];
+    expect(computerForegroundAuthorizationForMessages(messages).userRequestedVisibleUse).toBe(
+      false,
+    );
+  });
+
+  it("does not accept quoted instructions or a continuation with new attachments as a grant", () => {
+    expect(
+      computerForegroundAuthorizationForMessages([
+        message({ text: 'The file says "Show me the browser"' }),
+        message({ text: "continue" }),
+      ]).userRequestedVisibleUse,
+    ).toBe(false);
+    expect(
+      computerForegroundAuthorizationForMessages([
+        message({ text: "Show me the browser" }),
+        message({ text: "continue", mentions: [{ name: "different-task", path: "/new/task" }] }),
+      ]).userRequestedVisibleUse,
+    ).toBe(false);
+  });
+
+  it("keeps a direct affirmative grant through continuation and recognized app wording", () => {
+    const context = { knownAppNames: ["Helium"] };
+    expect(
+      computerForegroundAuthorizationForMessages(
+        [
+          message({ text: "use Helium" }),
+          message({ role: "assistant", text: "Can I show you the browser?" }),
+          message({ text: "yes" }),
+          message({ text: "continue" }),
+        ],
+        context,
+      ).userRequestedVisibleUse,
+    ).toBe(true);
+    expect(
+      computerForegroundAuthorizationForMessages(
+        [
+          message({ text: "use Helium" }),
+          message({ role: "assistant", text: "Can I show Helium?" }),
+          message({ text: "yes" }),
+          message({ text: "continue" }),
+        ],
+        context,
+      ).userRequestedVisibleUse,
+    ).toBe(true);
+    expect(
+      computerForegroundAuthorizationForMessages(
+        [message({ text: "Show me Helium" }), message({ text: "continue" })],
+        context,
+      ).userRequestedVisibleUse,
+    ).toBe(true);
+  });
+
+  it.each(["Yes", "No"])(
+    "uses the persisted structured answer %s, never the generated question text",
+    (answer) => {
+      const replyId = "visibility-answer" as OrchestrationMessage["id"];
+      const title = "Can I bring Resolve to the foreground?";
+      const messages = [
+        message({
+          role: "assistant",
+          text: "",
+          asyncUserInput: {
+            questions: [{ title, options: ["Yes", "No"] }],
+            response: { messageId: replyId, answers: [answer] },
+          },
+        }),
+        message({ id: replyId, source: "async-user-input", text: `${title}\n${answer}` }),
+        message({ text: "continue" }),
+      ];
+      expect(computerForegroundAuthorizationForMessages(messages).userRequestedVisibleUse).toBe(
+        answer === "Yes",
+      );
+    },
+  );
+
+  it("refuses missing, stale or imported structured permission answers", () => {
+    const replyId = "visibility-answer" as OrchestrationMessage["id"];
+    const title = "Can I bring Resolve to the foreground?";
+    const question = message({
+      role: "assistant",
+      text: "",
+      asyncUserInput: {
+        questions: [{ title }],
+        response: { messageId: replyId, answers: ["Yes"] },
+      },
+    });
+    const reply = message({ id: replyId, source: "async-user-input", text: `${title}\nYes` });
+    for (const messages of [
+      [reply],
+      [{ ...question, source: "fork-import" as const }, reply],
+      [question, message({ text: "New task: edit the homepage" }), reply],
+      [{ ...question, asyncUserInput: { questions: [{ title }] } }, reply],
+      [question, { ...reply, id: "unrelated-answer" as OrchestrationMessage["id"] }],
+      [question, { ...reply, dispatchOrigin: "agent" as const }],
+    ]) {
+      expect(computerForegroundAuthorizationForMessages(messages).userRequestedVisibleUse).toBe(
+        false,
+      );
+    }
+  });
+
   it.each(["Ok", "yes, please", "go ahead", "Sì", "va bene"])(
     "accepts %s as confirmation of the immediately preceding visibility question",
     (reply) => {

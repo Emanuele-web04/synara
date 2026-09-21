@@ -177,6 +177,15 @@ async function withAdapter(
             description: "List threads",
             inputSchema: { type: "object", properties: {} },
           },
+          ...(startSessionOverrides?.enableComputerControl === true
+            ? ["computer_get_state", "computer_click", "computer_press_key", "computer_run"].map(
+                (name) => ({
+                  name,
+                  description: name,
+                  inputSchema: { type: "object", properties: {} },
+                }),
+              )
+            : []),
         ],
       },
     });
@@ -957,6 +966,68 @@ function gatewayCredentials() {
   } satisfies AgentGatewayCredentialsShape;
 }
 
+it.each(["request failure", "empty catalog", "ordinary-only catalog"] as const)(
+  "rejects enabled Computer startup with %s before creating a Pi runtime",
+  async (failure) => {
+    const modelCalls = responses("success");
+    const credentials = gatewayCredentials();
+    const run = vi.fn();
+    const fetch: AgentGatewayMcpFetch = async (_input, init) => {
+      if (failure === "request failure") return new Response("Unavailable", { status: 503 });
+      return Response.json({
+        jsonrpc: "2.0",
+        id: JSON.parse(String(init?.body)).id,
+        result: {
+          tools:
+            failure === "empty catalog"
+              ? []
+              : [
+                  {
+                    name: "synara_list_threads",
+                    description: "List threads",
+                    inputSchema: { type: "object", properties: {} },
+                  },
+                ],
+        },
+      });
+    };
+
+    await expect(
+      withAdapter(run, 1, credentials, { enableComputerControl: true }, fetch),
+    ).rejects.toThrow("Computer Use could not start");
+    expect(run).not.toHaveBeenCalled();
+    expect(captured.sessions).toHaveLength(0);
+    expect(modelCalls()).toBe(0);
+    expect(credentials.revokeSessionToken).toHaveBeenCalledExactlyOnceWith("lease-1");
+
+    // Ordinary chats retain the existing fallback and do not acquire Computer
+    // descriptors merely because gateway registration failed or was partial.
+    await withAdapter(
+      async (adapter, events) => {
+        await send(adapter);
+        await waitFor(() => expect(completions(events)).toHaveLength(1));
+        expect(captured.modelTools.at(-1)?.some((tool) => tool.name.startsWith("computer_"))).toBe(
+          false,
+        );
+      },
+      1,
+      gatewayCredentials(),
+      { enableComputerControl: false },
+      fetch,
+    );
+    expect(modelCalls()).toBe(1);
+  },
+);
+
+it("rejects enabled Computer startup when no gateway credentials are available", async () => {
+  const modelCalls = responses("success");
+  await expect(
+    withAdapter(async () => undefined, 1, undefined, { enableComputerControl: true }),
+  ).rejects.toThrow("Pi did not receive a thread-scoped Synara gateway connection");
+  expect(captured.sessions).toHaveLength(0);
+  expect(modelCalls()).toBe(0);
+});
+
 it.each(["success", "failure", "cancel", "rejection"] as const)(
   "retires or revokes the gateway turn authority once on %s",
   async (outcome) => {
@@ -1149,6 +1220,14 @@ it("keeps Computer schemas out of idle model requests and refreshes them on resu
       required: ["steps"],
     },
   };
+  const requiredComputerTools = [
+    computer,
+    ...["computer_get_state", "computer_click", "computer_press_key"].map((name) => ({
+      name,
+      description: name,
+      inputSchema: { type: "object", properties: {} },
+    })),
+  ];
   const fetch: AgentGatewayMcpFetch = async (_input, init) => {
     const body = JSON.parse(String(init?.body));
     const enabled = grants.get(new Headers(init?.headers).get("Authorization") ?? "") === true;
@@ -1162,7 +1241,7 @@ it("keeps Computer schemas out of idle model requests and refreshes them on resu
             description: "List threads",
             inputSchema: { type: "object", properties: {} },
           },
-          ...(enabled ? [computer] : []),
+          ...(enabled ? requiredComputerTools : []),
         ],
       },
     });
@@ -1206,8 +1285,10 @@ it("keeps Computer schemas out of idle model requests and refreshes them on resu
         expect(computerTools.map((tool) => tool.name)).toEqual(
           enabled
             ? [
-                computer.name,
-                ...SYNARA_COMPUTER_TOOL_NAMES.filter((name) => name !== computer.name),
+                ...requiredComputerTools.map((tool) => tool.name),
+                ...SYNARA_COMPUTER_TOOL_NAMES.filter(
+                  (name) => !requiredComputerTools.some((tool) => tool.name === name),
+                ),
               ]
             : [],
         );

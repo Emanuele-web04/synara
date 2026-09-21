@@ -634,23 +634,35 @@ describe("resolving a duplicate by ordinal", () => {
     expect(match.point).toEqual({ x: 20, y: 20 });
   });
 
-  it("falls back to the sole survivor when the ordinal slot is gone", () => {
-    const oneSave = node({
-      role: "desktop",
-      children: [
-        node({
-          role: "push button",
-          label: "Save",
-          windowId: windowId("editor"),
-          activationPoint: { x: 10, y: 10 },
-        }),
-      ],
-    });
-    const match = resolveComputerSemanticTarget(oneSave, {
-      label: "Save",
-      refOrdinal: 3,
-    });
-    expect(match.point).toEqual({ x: 10, y: 10 });
+  it.each([false, true])(
+    "refuses a disappeared ordinal instead of targeting the sole survivor (allowOffscreen=%s)",
+    (allowOffscreen) => {
+      const oneSave = node({
+        role: "desktop",
+        children: [
+          node({
+            role: "push button",
+            label: "Save",
+            windowId: windowId("editor"),
+            activationPoint: { x: 10, y: 10 },
+          }),
+        ],
+      });
+      const error = thrown(() =>
+        resolveComputerSemanticTarget(oneSave, { label: "Save", refOrdinal: 1 }, allowOffscreen),
+      );
+      expect(error.code).toBe("computer_target_not_found");
+      expect(error.notFound).toBe(true);
+      expect(error.message).toContain("Observe again with computer_get_state");
+    },
+  );
+
+  it("refuses a disappeared ordinal even when multiple controls survive", () => {
+    const error = thrown(() =>
+      resolveComputerSemanticTarget(twoSaves, { label: "Save", refOrdinal: 2 }),
+    );
+    expect(error.code).toBe("computer_target_not_found");
+    expect(error.candidates).toHaveLength(2);
   });
 
   it("reports the pool's near-misses when nothing matches", () => {

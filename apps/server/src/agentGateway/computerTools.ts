@@ -1,5 +1,10 @@
 import { parseCuaActionDiagnostics } from "@synara/shared/cuaActionDiagnostics";
+import { ComputerProgressGuard, type ComputerProgressAction } from "./computerProgressGuard.ts";
 import { beginComputerTurnCall } from "../computer/computerTurnTiming.ts";
+import {
+  bindComputerTargetRef,
+  computerElementRefIdentity,
+} from "../computer/computerElementIdentity.ts";
 import { makeComputerSpaceTools } from "./computerSpaceTools.ts";
 import { cursorToolActivity } from "../computer/cursorActivity.ts";
 import { waitForControl } from "../computer/waitForControl.ts";
@@ -142,6 +147,14 @@ const LAUNCH_NULL_WINDOW_GUIDANCE =
   "No usable window was established. The launch may already have started the app; never launch again automatically. Inspect computer_list_windows once using the returned app identity. If no usable target exists, report the limitation instead of looping. An isolated browser via computer_browser_prepare is an alternative only when compatible with the requested task; do not silently replace a requested personal browser or incognito window.";
 
 function withLaunchGuidance(result: ComputerLaunchAppResult) {
+  if (result.focusChangedDuringLaunch === true) {
+    return {
+      ...result,
+      toolGuidance:
+        "The app changed desktop focus during launch despite the background request. Do not relaunch or continue input from the previous observation. Read fresh state and respect the user's visible-use permission." +
+        (result.window === null ? ` ${LAUNCH_NULL_WINDOW_GUIDANCE}` : ""),
+    };
+  }
   return result.window === null ? { ...result, toolGuidance: LAUNCH_NULL_WINDOW_GUIDANCE } : result;
 }
 
@@ -404,11 +417,11 @@ const INCLUDE_ACTION_SCREENSHOT_PROPERTY = {
 } as const;
 
 const WINDOW_FOCUS_NOTE =
-  "focused means selected input target; active reports native activation when known.";
+  "focused: agent target; keyboardFocused: app keyboard window; active: native activation. Absent fields mean unknown.";
 
 /** The short form the keyboard tools carry. */
 const KEYBOARD_TARGET_HINT =
-  "Pass window_id or use the last aimed window; hover does not aim keys. Exact-window text uses the sole writable control without activation; pass its label and optional role when several exist.";
+  "Pass window_id or use the last aimed window; hover does not aim keys. Use a field ref or label to disambiguate text targets.";
 
 /** The short form the input tools carry. */
 const DELIVERY_HINT =
@@ -500,11 +513,11 @@ function textTargetProperty(): Record<string, unknown> {
     label: {
       type: "string",
       description:
-        "Exact writable label from computer_get_state; window_id scopes semantic insertion without activation.",
+        "Writable label from computer_get_state, scoped by window_id without activation.",
     },
     role: {
       type: "string",
-      description: "Optional role used to disambiguate the text control label.",
+      description: "Role to disambiguate the field label.",
     },
     ref: {
       type: "integer",
@@ -514,8 +527,7 @@ function textTargetProperty(): Record<string, unknown> {
     ref_ordinal: {
       type: "integer",
       minimum: 0,
-      description:
-        "With label: zero-based index among same-labelled text controls, when no ref is given.",
+      description: "With label: zero-based duplicate index when no ref is given.",
     },
   };
 }
@@ -1350,11 +1362,10 @@ export function makeAgentGatewayComputerTools(
    * meaning "that Save button" across observations and window-scoped reads,
    * so a diff does not silently move the handles a model is holding.
    *
-   * Nothing prunes a live binding: resolution goes back to the real tree, so
-   * a control that vanished fails there as not-found with candidates rather
-   * than being second-guessed here. The cap resets the whole table rather
-   * than recycling numbers a model could still be holding — old refs then
-   * fail loudly instead of retargeting.
+   * Native refs retain the observed actuator identity; a fresh tree must never
+   * substitute a same-labelled control. Other backends resolve against their
+   * tree as before. The cap clears the table without recycling numbers a model
+   * could still be holding — old refs then fail loudly instead of retargeting.
    */
   interface ElementRefTable {
     next: number;
@@ -1377,20 +1388,27 @@ export function makeAgentGatewayComputerTools(
       table = { next: 0, byKey: new Map(), entries: new Map() };
       elementRefTables.set(threadId, table);
     }
+    // Clear before stamping the listing, so every ref returned in this digest
+    // remains resolvable. next stays monotonic across bounded table eviction.
+    if (table.entries.size + elements.items.length > MAX_ELEMENT_REFS) {
+      table.byKey.clear();
+      table.entries.clear();
+    }
     const items = elements.items.map((item, index) => {
       const id = elements.refIndex[index]!;
-      const key = JSON.stringify([id.windowId, id.role, id.label, id.ordinal]);
+      const nativeIdentity = computerElementRefIdentity(id);
+      const key = JSON.stringify([
+        id.windowId,
+        id.role,
+        id.label,
+        nativeIdentity === undefined ? ["ordinal", id.ordinal] : ["native", nativeIdentity],
+      ]);
       let ref = table.byKey.get(key);
       if (ref === undefined) {
-        if (table.next >= MAX_ELEMENT_REFS) {
-          table.next = 0;
-          table.byKey.clear();
-          table.entries.clear();
-        }
         ref = table.next++;
         table.byKey.set(key, ref);
+        table.entries.set(ref, id);
       }
-      table.entries.set(ref, id);
       return { ...item, ref };
     });
     return { ...elements, items };
@@ -1565,12 +1583,15 @@ export function makeAgentGatewayComputerTools(
           `ref ${target.ref} is duplicate ${entry.ordinal + 1} of its label, not ${target.refOrdinal + 1}. Observe again with computer_get_state.`,
         );
       }
-      return {
-        label: entry.label,
-        role: entry.role,
-        ...(entry.windowId !== null ? { windowId: entry.windowId } : {}),
-        refOrdinal: entry.ordinal,
-      };
+      return bindComputerTargetRef(
+        {
+          label: entry.label,
+          role: entry.role,
+          ...(entry.windowId !== null ? { windowId: entry.windowId } : {}),
+          refOrdinal: entry.ordinal,
+        },
+        entry,
+      );
     }
     if (typeof target.x !== "number" || typeof target.y !== "number") return rest;
     const frame = frames.resolve(threadId, screenshotId);
@@ -1633,20 +1654,7 @@ export function makeAgentGatewayComputerTools(
     }).pipe(Effect.as(result));
   };
 
-  /**
-   * Per-thread ring of the last mutating calls, keyed by tool name plus the
-   * stable JSON of its arguments with `screenshot_id`/`include_screenshot`
-   * stripped — a fresh frame must not disguise a repeat. Three identical calls
-   * in a row with no observed effect is a loop, not progress: the third is
-   * refused before dispatch. A `verified` effect or any different call clears
-   * the ring, so re-observing and then acting differently is never blocked.
-   */
-  interface RepeatedActionEntry {
-    readonly key: string;
-    readonly effect: ComputerAuditEffect;
-  }
-  const actionRings = new Map<string, RepeatedActionEntry[]>();
-  const ACTION_RING_THREAD_CAP = 256;
+  const progressGuard = new ComputerProgressGuard();
 
   /**
    * The calls that mutate the desktop — the approval taxonomy minus its one
@@ -1678,31 +1686,6 @@ export function makeAgentGatewayComputerTools(
       ...rest
     } = args;
     return `${toolName}${stable(rest)}`;
-  };
-
-  /**
-   * Fold one finished call into its thread's ring. Only mutating calls enter;
-   * a verified effect or a different call resets the streak. A call refused
-   * before dispatch (approval, this guard) never reaches here, so it can
-   * neither extend nor clear a streak.
-   */
-  const noteActionOutcome = (threadId: string, key: string, effect: ComputerAuditEffect): void => {
-    // Lease, admission and argument refusals prove nothing was dispatched.
-    // They must neither arm the loop guard nor erase earlier uncertain input.
-    if (effect === "refused" || effect === "not-dispatched") return;
-    if (effect === "verified") {
-      actionRings.delete(threadId);
-      return;
-    }
-    let ring = actionRings.get(threadId);
-    if (ring === undefined || ring[ring.length - 1]?.key !== key) {
-      while (actionRings.size >= ACTION_RING_THREAD_CAP && !actionRings.has(threadId))
-        actionRings.delete(actionRings.keys().next().value!);
-      ring = [];
-      actionRings.set(threadId, ring);
-    }
-    ring.push({ key, effect });
-    if (ring.length > 3) ring.shift();
   };
 
   const handle =
@@ -1741,6 +1724,7 @@ export function makeAgentGatewayComputerTools(
       };
       const mutating = isMutatingToolCall(name);
       const actionKey = mutating ? repeatedActionKey(name, args) : "";
+      let progressAction: ComputerProgressAction | undefined;
       return Effect.tryPromise({
         try: async (abortSignal) => {
           if (name === "computer_invoke_menu" && args.delivery_mode === "background") {
@@ -1748,34 +1732,34 @@ export function makeAgentGatewayComputerTools(
               "computer_invoke_menu requires foreground delivery and explicit visible-use authorization; it cannot preserve background focus.",
             );
           }
-          // The loop guard fires before consent and before dispatch: a third
-          // identical call with no observed effect must not spend an approval
-          // prompt on a refusal.
-          if (mutating) {
-            const ring = actionRings.get(context.callerThreadId);
-            const last = ring?.[ring.length - 1];
-            const before = ring?.[ring.length - 2];
-            if (
-              last !== undefined &&
-              before !== undefined &&
-              last.key === actionKey &&
-              before.key === actionKey &&
-              last.effect !== "verified" &&
-              before.effect !== "verified"
-            ) {
-              audit({ effect: "refused", code: "repeated_unverified_action" });
+          // Fresh screenshots and alternating failed techniques must not
+          // disguise retries. No turn ID means no cross-turn retained guard.
+          if (mutating && context.callerTurnId) {
+            // History lookup is not target validation: frame-setting x/y are
+            // desktop bounds, not screenshot pixels, and consent still runs
+            // before parsing or resolving a requested input target.
+            const requestedWindow = args.window_id ?? args.windowId;
+            const refWindow =
+              typeof args.ref === "number"
+                ? elementRefTables.get(context.callerThreadId)?.entries.get(args.ref)?.windowId
+                : undefined;
+            progressAction = {
+              scope: {
+                threadId: context.callerThreadId,
+                turnId: context.callerTurnId,
+                sessionKey: context.callerSessionKey,
+              },
+              targetKey:
+                typeof requestedWindow === "string"
+                  ? requestedWindow
+                  : (refWindow ?? (typeof args.app === "string" ? args.app : "selected-window")),
+              actionKey,
+            };
+            const blocked = progressGuard.check(progressAction);
+            if (blocked) {
+              audit({ effect: "refused", code: blocked.code });
               return {
-                result: {
-                  ...mcpToolResultJson({
-                    error: {
-                      code: "repeated_unverified_action",
-                      message:
-                        "The same action was sent three times with no observed change. " +
-                        "Take a fresh computer_get_state and change approach, or ask the user.",
-                    },
-                  }),
-                  isError: true,
-                },
+                result: { ...mcpToolResultJson({ error: blocked }), isError: true },
                 signal: undefined,
               };
             }
@@ -1949,7 +1933,19 @@ export function makeAgentGatewayComputerTools(
               },
             }),
           });
-          if (mutating) noteActionOutcome(context.callerThreadId, actionKey, successEffect);
+          if (progressAction) {
+            const batch = payload as { steps?: Array<{ error?: { code?: unknown } }> } | undefined;
+            const refusalCode =
+              name === "computer_run" &&
+              successEffect === "not-dispatched" &&
+              Array.isArray(batch?.steps)
+                ? batch.steps.find((step) => typeof step.error?.code === "string")?.error?.code
+                : undefined;
+            progressGuard.record(progressAction, {
+              effect: successEffect,
+              ...(typeof refusalCode === "string" ? { code: refusalCode } : {}),
+            });
+          }
           // A call can succeed and still report that the desktop is out of
           // reach: a perception read answers with a `permission-required`
           // availability, and a missing Screen Recording grant blocks nothing at
@@ -1995,9 +1991,16 @@ export function makeAgentGatewayComputerTools(
           if (!(error instanceof ComputerBackendError && error.controlRevoked)) {
             audit(outcome);
           }
-          // Uncertain failures may follow input; proven pre-dispatch refusals
-          // are ignored by the loop guard rather than masquerading as input.
-          if (mutating) noteActionOutcome(context.callerThreadId, actionKey, outcome.effect);
+          // Refusals and uncertain delivery are tracked separately: a refused
+          // retry was not sent, but must not hide a previous uncertain action.
+          if (
+            progressAction &&
+            !(
+              error instanceof ComputerBackendError &&
+              (error.setupRequired || error.controlRevoked)
+            )
+          )
+            progressGuard.record(progressAction, outcome);
           const failure =
             error instanceof ComputerBackendError && error.inputPause
               ? {
@@ -2313,7 +2316,16 @@ export function makeAgentGatewayComputerTools(
       "window_id",
       "windowId",
     ],
-    press_key: ["key", "window_id", "windowId"],
+    press_key: [
+      "key",
+      "window_id",
+      "windowId",
+      "label",
+      "role",
+      "ref",
+      "ref_ordinal",
+      "refOrdinal",
+    ],
     set_value: [...RUN_TARGET_FIELDS, "value"],
     perform_action: [...RUN_TARGET_FIELDS, "action"],
     // Semantic-only like its standalone tool: a range cannot be aimed at a
@@ -2454,11 +2466,12 @@ export function makeAgentGatewayComputerTools(
       }
       case "press_key": {
         const { key, chord } = readKeyOrChord(step);
-        const windowId = readWindowIdArg(step);
+        const target = readTarget(step, context);
+        const exact = target.label !== undefined || target.role !== undefined ? target : undefined;
         return () =>
           chord === undefined
-            ? manager.pressKey(threadId, key, windowId)
-            : manager.hotkey(threadId, chord, windowId);
+            ? manager.pressKey(threadId, key, target.windowId, exact)
+            : manager.hotkey(threadId, chord, target.windowId, exact);
       }
       case "set_value": {
         const target = readTarget(step, context);
@@ -4254,7 +4267,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_press_key",
       "Press key",
-      `Press a key or chord such as "cmd+s". On multi-window Chromium/Electron apps background keys may refuse with same_pid_keyboard_ambiguity; use exact-element type_text/set_value or an advertised action instead of retrying. ${hotkeyFormNote(dialect)} ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
+      `Press a key or chord such as "cmd+s". Pass the observed field ref for exact background Enter/Return. Other shortcuts can still refuse with same_pid_keyboard_ambiguity; use an advertised action instead of retrying. ${hotkeyFormNote(dialect)} ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
       {
         type: "object",
         properties: {
@@ -4262,17 +4275,18 @@ export function makeAgentGatewayComputerTools(
             type: "string",
             description: keyArgumentNote(dialect),
           },
-          ...keyboardTargetProperties,
+          ...textTargetProperties,
         },
         required: ["key"],
         additionalProperties: false,
       },
       async (args, context) => {
         const { key, chord } = readKeyOrChord(args);
-        const windowId = readWindowIdArg(args);
+        const target = readTarget(args, context);
+        const exact = target.label !== undefined || target.role !== undefined ? target : undefined;
         return chord === undefined
-          ? manager.pressKey(context.callerThreadId, key, windowId)
-          : manager.hotkey(context.callerThreadId, chord, windowId);
+          ? manager.pressKey(context.callerThreadId, key, target.windowId, exact)
+          : manager.hotkey(context.callerThreadId, chord, target.windowId, exact);
       },
     ),
     discoveryOnly(

@@ -1559,7 +1559,7 @@ describe("agent gateway computer tools", () => {
       await manager.dispose();
     }
   });
-  it("does not count native admission refusals as dispatched input", async () => {
+  it("bounds repeated native refusals without claiming any input was dispatched", async () => {
     const { backend, manager, call } = await setup();
     const key = vi
       .spyOn(backend, "pressKey")
@@ -1567,7 +1567,7 @@ describe("agent gateway computer tools", () => {
         new CuaActionError("No input was sent.", "not-dispatched", "same_pid_keyboard_ambiguity"),
       );
     try {
-      for (let attempt = 0; attempt < 4; attempt += 1) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         expect(
           resultJson(await call("computer_press_key", { key: "enter", include_screenshot: false })),
         ).toMatchObject({
@@ -1575,7 +1575,40 @@ describe("agent gateway computer tools", () => {
           effect: "not-dispatched",
         });
       }
-      expect(key).toHaveBeenCalledTimes(4);
+      expect(
+        resultJson(await call("computer_press_key", { key: "enter", include_screenshot: false })),
+      ).toMatchObject({
+        error: {
+          code: "repeated_computer_refusal",
+          effect: "not-dispatched",
+          previousInputMayHaveTakenEffect: false,
+        },
+      });
+      expect(key).toHaveBeenCalledTimes(3);
+    } finally {
+      key.mockRestore();
+      await manager.dispose();
+    }
+  });
+  it("bounds batches that repeatedly stop at the same refused first action", async () => {
+    const { backend, manager, call } = await setup();
+    const key = vi
+      .spyOn(backend, "pressKey")
+      .mockRejectedValue(
+        new CuaActionError("No input was sent.", "not-dispatched", "same_pid_keyboard_ambiguity"),
+      );
+    const args = {
+      steps: [{ type: "press_key", key: "enter", window_id: "fake-calculator" }],
+      include_screenshot: false,
+    };
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        expect(resultJson(await call("computer_run", args))).toMatchObject({ completed: 0 });
+      }
+      expect(resultJson(await call("computer_run", args))).toMatchObject({
+        error: { code: "repeated_computer_refusal", previousInputMayHaveTakenEffect: false },
+      });
+      expect(key).toHaveBeenCalledTimes(3);
     } finally {
       key.mockRestore();
       await manager.dispose();

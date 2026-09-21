@@ -159,6 +159,41 @@ describe("Pi native Synara gateway tools", () => {
     );
   });
 
+  it.each([
+    ["help-only", ["computer_help"]],
+    ["list-only", ["computer_list_windows"]],
+    ["read-only", ["computer_list_windows", "computer_get_state", "computer_screenshot"]],
+    ["actions-only", ["computer_click", "computer_press_key", "computer_run"]],
+  ] as const)(
+    "rejects an enabled %s catalog before creating compatibility forwarders",
+    async (_, names) => {
+      let defined = 0;
+      await expect(
+        buildPiAgentGatewayCustomTools({
+          connection: { url: "http://127.0.0.1:3773/mcp", bearerToken: "token-a" },
+          enableComputerControl: true,
+          defineTool: (tool) => {
+            defined += 1;
+            return tool;
+          },
+          fetch: async (_input, init) =>
+            Response.json({
+              jsonrpc: "2.0",
+              id: JSON.parse(String(init?.body)).id,
+              result: {
+                tools: names.map((name) => ({
+                  name,
+                  description: name,
+                  inputSchema: { type: "object", properties: {} },
+                })),
+              },
+            }),
+        }),
+      ).rejects.toThrow("missing required Computer tools");
+      expect(defined).toBe(0);
+    },
+  );
+
   it("retains enabled specialist routes, no idle schemas, and gateway denials after revocation", async () => {
     const computerTool = {
       name: "computer_click",

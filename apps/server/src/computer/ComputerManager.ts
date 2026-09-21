@@ -6,6 +6,7 @@ import { computerApprovalGate } from "./ComputerApprovalGate.ts";
 import { currentComputerTask } from "./computerTaskContext.ts";
 import { CursorActivity } from "./cursorActivity.ts";
 import { waitForWindow } from "./waitForWindow.ts";
+import { observedComputerTargetNode } from "./computerElementIdentity.ts";
 import {
   ComputerId,
   ComputerPoint,
@@ -52,6 +53,7 @@ import {
   assertDesktopOperationAdmission,
   withDesktopOperationSignal,
   desktopOperationSignal,
+  desktopDeliveryMode,
   withoutDesktopCancellation,
 } from "./DesktopOperationQueue.ts";
 import {
@@ -87,6 +89,7 @@ import { decodePngLuma, estimateVerticalTravel, ScrollGearingStore } from "./scr
 import { ScrollGearingFile } from "./scrollGearingFile.ts";
 import {
   ComputerTargetError,
+  activationPointForNode,
   computerTargetCandidates,
   resolveComputerPoint,
   resolveComputerSemanticTarget,
@@ -116,10 +119,11 @@ export const COMPUTER_FRAME_SOCKET_BUDGET_BYTES = 2 * 1024 * 1024;
 /**
  * Crash backstop for the desktop lease, not the normal release path.
  *
- * There is one desktop, one cursor and one focused keyboard stream, so exactly
- * one thread may drive those shared resources at a time. Exact-window
- * `type_text` can use a separate semantic lane; other mutations still share
- * this lease. Ownership is released the moment the owner's turn ends
+ * Foreground input, clipboard and complete gestures share one exclusive
+ * desktop lease. A backend proving exact background delivery instead owns
+ * its application's keyboard/modal state, or one window for pure semantic
+ * writes. Unrelated applications can progress between atomic native actions.
+ * Ownership is released the moment the owner's turn ends
  * (`releaseDesktopControl`, driven by the provider
  * runtime's terminal turn and session events), because a takeover mid-turn
  * corrupts the owner: its drag is teleported, its typing is retargeted. Idle
@@ -151,14 +155,14 @@ export const COMPUTER_ACTION_SETTLE_MS = 300;
 /**
  * The driver-observed settle that replaces the fixed wait when the backend
  * exposes `waitForSettle`: the AX observer debounces
- * `COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS` of notification silence after a
+ * the configured `actionSettleMs` of notification silence after a
  * mutation, bounded by `COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS` when the
  * surface keeps churning (a busy indicator, a repeating animation). A
  * settled verdict usually lands faster than the fixed budget; a busy surface
  * waits longer than it — both better than the blind sleep they replace.
  */
 export const COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS = 5_000;
-export const COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS = 1_000;
+export const COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS = COMPUTER_ACTION_SETTLE_MS;
 
 /**
  * How long paste waits before restoring the user's previous clipboard. The
@@ -266,6 +270,17 @@ interface DesktopLease {
   releaseRequestedTurnId?: string | undefined;
 }
 
+/** Semantic writes own a window; keyboard and modal state belong to its process. */
+interface BackgroundControlTarget {
+  readonly key: string;
+  readonly pid?: number;
+  readonly windowId?: string;
+}
+
+interface BackgroundLease extends DesktopLease {
+  readonly target: BackgroundControlTarget;
+}
+
 export interface ComputerManagerOptions {
   readonly backend: ComputerBackend;
   readonly controlStatePath?: string;
@@ -341,13 +356,14 @@ export type ComputerActionObservation =
 export class ComputerLeaseError extends ComputerBackendError {
   readonly code = "computer_controlled_by_other_thread";
 
-  constructor() {
+  constructor(targetOnly = false) {
     super(
-      "The shared pointer and focused keyboard are controlled by another conversation; " +
+      (targetOnly
+        ? "This application or window is controlled by another conversation; "
+        : "The shared pointer and focused keyboard are controlled by another conversation; ") +
         "no input was sent. Do not retry this blocked action or switch tools to bypass " +
         "the lease. Wait until that conversation's turn ends. Reading the desktop still " +
-        "works; computer_type_text can proceed independently when it names an exact " +
-        "window and accessibility element for focus-neutral semantic insertion.",
+        "works. Background actions on independently owned applications remain available.",
       { retryable: false },
     );
     this.name = "ComputerLeaseError";
@@ -391,6 +407,8 @@ export class ComputerManager {
    * call.
    */
   private readonly agentCallsInFlight = new Map<string, number>();
+  private readonly backgroundLeases = new Map<string, BackgroundLease>();
+  private readonly knownAppNames = new Set<string>();
   /** Display names for the agent cursor badge, keyed by thread id. */
   private readonly threadLabels = new Map<string, string>();
   private readonly backendUnsubscribe?: () => void;
@@ -451,6 +469,22 @@ export class ComputerManager {
 
   get supportsFocusNeutralSemanticText(): boolean {
     return this.backend.focusNeutralSemanticText === true;
+  }
+
+  /** Trusted observations only: resolving visible-use intent never performs IPC. */
+  observedAppNames(): readonly string[] {
+    return [...this.knownAppNames];
+  }
+
+  private rememberObservedAppNames(windows: readonly ComputerWindow[]): void {
+    for (const window of windows) {
+      const name = window.appName?.trim();
+      if (!name) continue;
+      this.knownAppNames.delete(name);
+      this.knownAppNames.add(name);
+    }
+    while (this.knownAppNames.size > 256)
+      this.knownAppNames.delete(this.knownAppNames.values().next().value!);
   }
 
   /**
@@ -885,9 +919,15 @@ export class ComputerManager {
     const stop = (async () => {
       if (
         this.lease?.threadId === threadId ||
+        [...this.backgroundLeases.values()].some((lease) => lease.threadId === threadId) ||
         (this.activeAuthorities.get(threadId)?.size ?? 0) > 0
       )
-        await this.backend.stopInput?.();
+        await this.backend.stopInput?.({
+          threadId,
+          ...(this.authorityTurns.get(threadId)
+            ? { turnId: this.authorityTurns.get(threadId)! }
+            : {}),
+        });
       await this.releaseDesktopControl(threadId);
     })().finally(() => {
       this.pendingStops.delete(threadId);
@@ -1101,6 +1141,7 @@ export class ComputerManager {
         if (event.type === "windows-changed") {
           this.lastKnownWindowIds = windowIdSet(event.windows);
           this.lastKnownWindows = new Map(event.windows.map((window) => [window.id, window]));
+          this.rememberObservedAppNames(event.windows);
           for (const state of this.threads.values()) state.windows = event.windows;
           this.emit({
             type: "computer.windows-changed",
@@ -1252,6 +1293,7 @@ export class ComputerManager {
     const windows = await this.backend.listWindows();
     this.lastKnownWindowIds = windowIdSet(windows);
     this.lastKnownWindows = new Map(windows.map((window) => [window.id, window]));
+    this.rememberObservedAppNames(windows);
     return windows;
   }
 
@@ -1387,7 +1429,7 @@ export class ComputerManager {
           const outcome = await this.backend.waitForSettle({
             windowId,
             timeoutMs: timeout,
-            quietMs: COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS,
+            quietMs: this.actionSettleMs,
           });
           this.observerSettle = "supported";
           currentComputerCall()?.timing?.count(
@@ -1539,7 +1581,7 @@ export class ComputerManager {
         const outcome = await this.backend.waitForSettle({
           windowId,
           timeoutMs: COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS,
-          quietMs: COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS,
+          quietMs: this.actionSettleMs,
         });
         this.observerSettle = "supported";
         currentComputerCall()?.timing?.count(
@@ -1763,7 +1805,8 @@ export class ComputerManager {
   }
 
   /**
-   * Launching spawns windows on the shared desktop, so it takes the lease too.
+   * A verified background backend reserves the launched app; other backends
+   * keep the desktop lease because their launch may use shared input state.
    *
    * A background launch must still create a usable window. Hiding an app is
    * a separate, explicit option; it is not the default for background work.
@@ -1776,7 +1819,7 @@ export class ComputerManager {
     waitForWindowMs = 0,
     options?: { readonly hidden?: boolean },
   ): Promise<ComputerLaunchAppResult> {
-    return this.withDesktopControl(threadId, async () => {
+    return this.withBackgroundAppControl(threadId, app, async () => {
       markComputerCall("computer_launch_app");
       assertDesktopOperationActive();
       this.assertDrivenAppAllowed(app);
@@ -1784,6 +1827,21 @@ export class ComputerManager {
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.launchApp(app, args, options),
       );
+      const owner = agentThreadId(threadId);
+      if (
+        result.focusChangedDuringLaunch === true &&
+        owner &&
+        desktopDeliveryMode() !== "foreground"
+      ) {
+        const state = this.threadRuntime(owner);
+        state.inputPause = {
+          ...(result.window ? { windowId: result.window.id } : {}),
+          ...(result.pid !== undefined ? { pid: result.pid } : {}),
+          message:
+            "The app changed desktop focus while launching. The launch already happened; do not replay it. Observe the app's exact window before continuing background input.",
+        };
+        this.publishCached(owner);
+      }
       this.emitAction(threadId, "computer_launch_app");
       if (!result.window && result.windowStatus !== "no_usable_window" && waitForWindowMs > 0) {
         const readiness = await waitForWindow(
@@ -1859,7 +1917,7 @@ export class ComputerManager {
     windowId: string,
     frame: ComputerRect,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
+    return this.withBackgroundProcessControl(threadId, windowId, async () => {
       const setter = this.backend.setWindowFrame?.bind(this.backend);
       if (!setter) throw new ComputerBackendError("This backend cannot move or resize windows.");
       const target = await this.resolveWindowTarget(threadId, windowId);
@@ -1980,7 +2038,7 @@ export class ComputerManager {
     windowId: string,
     minimized: boolean,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
+    return this.withBackgroundProcessControl(threadId, windowId, async () => {
       const setter = this.backend.setWindowMinimized?.bind(this.backend);
       if (!setter)
         throw new ComputerBackendError("This backend cannot minimize or restore windows.");
@@ -2080,7 +2138,7 @@ export class ComputerManager {
   }
 
   async killApp(threadId: string | undefined, windowId: string): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
+    return this.withBackgroundProcessControl(threadId, windowId, async () => {
       const kill = this.backend.killApp?.bind(this.backend);
       if (!kill) throw new ComputerBackendError("This backend cannot terminate applications.");
       // The pid gate runs ahead of admission, as it always has: a window
@@ -2217,7 +2275,7 @@ export class ComputerManager {
     modifiers: readonly ComputerInputModifier[] | undefined,
     gesture: ComputerClickGesture | undefined,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
+    return this.withBackgroundProcessControl(threadId, target.windowId, async () => {
       markComputerCall("computer_click");
       const inject = this.clickInjector(gesture);
       const resolved = await timedComputerLeg("resolve", () =>
@@ -2250,6 +2308,7 @@ export class ComputerManager {
           resolved.windowId,
         );
       }
+      this.assertTargetCanUseCoordinates(target);
       const result = await this.injectScoped("computer_click", resolved, () =>
         inject(resolved.point, resolved.windowId, modifiers),
       );
@@ -2653,7 +2712,8 @@ export class ComputerManager {
     threadId: string | undefined,
     target: ComputerTarget,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
+    this.assertTargetCanUseCoordinates(target);
+    return this.withBackgroundProcessControl(threadId, target.windowId, async () => {
       const resolved = await timedComputerLeg("resolve", () =>
         this.resolvePointTarget(target, threadId),
       );
@@ -2677,6 +2737,8 @@ export class ComputerManager {
     to: ComputerTarget,
     durationMs = 250,
   ): Promise<ComputerActionResult> {
+    this.assertTargetCanUseCoordinates(from);
+    this.assertTargetCanUseCoordinates(to);
     return this.withDesktopControl(threadId, async () => {
       const [resolvedFrom, resolvedTo] = await timedComputerLeg("resolve", () =>
         Promise.all([
@@ -2716,7 +2778,7 @@ export class ComputerManager {
     deltaX: number,
     deltaY: number,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
+    return this.withBackgroundProcessControl(threadId, target?.windowId, async () => {
       const resolved = await timedComputerLeg("resolve", () =>
         this.prepareScrollTarget(target, threadId),
       );
@@ -2772,7 +2834,7 @@ export class ComputerManager {
     readonly result: ComputerActionResult;
     readonly observation?: ComputerActionObservation;
   }> {
-    return this.withDesktopControl(threadId, async () => {
+    return this.withBackgroundProcessControl(threadId, target?.windowId, async () => {
       // An untargeted scroll routes to whatever sits under the agent's cursor
       // once the pinned focus is cleared — but preparing the target clears that
       // focus, and it was the only fallback naming the observed window. Read the
@@ -3266,12 +3328,26 @@ export class ComputerManager {
     threadId: string | undefined,
     key: string,
     windowId?: string,
+    target?: ComputerTarget,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
-      const result = await this.runKeyboardDispatch(threadId, windowId, () =>
-        this.backend.pressKey(key, windowId),
+    const exactWindow = this.keyboardTargetWindow(windowId, target);
+    return this.withBackgroundProcessControl(threadId, exactWindow, async () => {
+      const resolved = target
+        ? await this.resolveSemanticTarget(
+            { ...target, ...(exactWindow ? { windowId: exactWindow } : {}) },
+            true,
+          )
+        : undefined;
+      const result = await this.runKeyboardDispatch(threadId, exactWindow, () =>
+        this.backend.pressKey(key, exactWindow, resolved),
       );
-      return this.actionResult(threadId, "computer_press_key", undefined, result, windowId);
+      return this.actionResult(
+        threadId,
+        "computer_press_key",
+        resolved?.point,
+        result,
+        exactWindow,
+      );
     });
   }
 
@@ -3279,14 +3355,41 @@ export class ComputerManager {
     threadId: string | undefined,
     keys: readonly string[],
     windowId?: string,
+    target?: ComputerTarget,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
-      const result = await this.runKeyboardDispatch(threadId, windowId, () =>
-        this.backend.hotkey(keys, windowId),
+    const exactWindow = this.keyboardTargetWindow(windowId, target);
+    return this.withBackgroundProcessControl(threadId, exactWindow, async () => {
+      const resolved = target
+        ? await this.resolveSemanticTarget(
+            { ...target, ...(exactWindow ? { windowId: exactWindow } : {}) },
+            true,
+          )
+        : undefined;
+      const result = await this.runKeyboardDispatch(threadId, exactWindow, () =>
+        this.backend.hotkey(keys, exactWindow, resolved),
       );
       // The tool surface folds chords into computer_press_key.
-      return this.actionResult(threadId, "computer_press_key", undefined, result, windowId);
+      return this.actionResult(
+        threadId,
+        "computer_press_key",
+        resolved?.point,
+        result,
+        exactWindow,
+      );
     });
+  }
+
+  private keyboardTargetWindow(
+    windowId: string | undefined,
+    target: ComputerTarget | undefined,
+  ): string | undefined {
+    if (windowId !== undefined && target?.windowId !== undefined && target.windowId !== windowId) {
+      throw new ComputerTargetError({
+        code: "computer_target_invalid",
+        message: "The keyboard window and element target name different windows; nothing was sent.",
+      });
+    }
+    return windowId ?? target?.windowId;
   }
 
   /**
@@ -3395,7 +3498,7 @@ export class ComputerManager {
     target: ComputerTarget,
     value: string,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
+    return this.withSemanticControl(threadId, target.windowId, async () => {
       // Preferred over click-then-type when the target carries a live element
       // token: one atomic write instead of focus plus keystrokes.
       const resolved = await this.prepareSemanticDispatch(target, threadId);
@@ -3417,7 +3520,7 @@ export class ComputerManager {
     target: ComputerTarget,
     action: string,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
+    return this.withBackgroundProcessControl(threadId, target.windowId, async () => {
       const resolved = await this.prepareSemanticDispatch(target, threadId);
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.performAction(resolved, action),
@@ -3446,7 +3549,7 @@ export class ComputerManager {
     target: ComputerTarget,
     range: ComputerTextRange,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
+    return this.withSemanticControl(threadId, target.windowId, async () => {
       const resolved = await this.prepareSemanticDispatch(target, threadId, true);
       const result = await timedComputerLeg("dispatch", () =>
         this.backend.selectText(resolved, range),
@@ -3524,6 +3627,13 @@ export class ComputerManager {
         const remaining = Math.max(0, (this.agentCallsInFlight.get(owner) ?? 1) - 1);
         if (remaining === 0) {
           this.agentCallsInFlight.delete(owner);
+          this.releaseBackgroundControl(owner, undefined, true);
+          if (
+            this.lease?.threadId !== owner &&
+            ![...this.backgroundLeases.values()].some((lease) => lease.threadId === owner)
+          ) {
+            this.authorityTurns.delete(owner);
+          }
           if (this.lease?.threadId === owner && this.lease.releaseRequested) {
             const requestedTurnId = this.lease.releaseRequestedTurnId;
             // The deferred release is only valid while the lease still names
@@ -3653,11 +3763,206 @@ export class ComputerManager {
     });
   }
 
+  private canUseBackgroundTarget(): boolean {
+    return (
+      this.backend.exactTargetBackgroundInput === true && desktopDeliveryMode() !== "foreground"
+    );
+  }
+
+  private withSemanticControl<A>(
+    threadId: string | undefined,
+    windowId: string | undefined,
+    action: () => Promise<A>,
+  ): Promise<A> {
+    return windowId && this.canUseBackgroundTarget()
+      ? this.withBackgroundWindowControl(threadId, windowId, action)
+      : this.withDesktopControl(threadId, action);
+  }
+
+  /** Keep a complete native gesture atomic without reserving unrelated apps for a whole turn. */
+  private withBackgroundProcessControl<A>(
+    threadId: string | undefined,
+    windowId: string | undefined,
+    action: () => Promise<A>,
+  ): Promise<A> {
+    if (!windowId || !this.canUseBackgroundTarget())
+      return this.withDesktopControl(threadId, action);
+    return this.withBackgroundResourceControl(
+      threadId,
+      async () => {
+        const window = await this.resolveWindowTarget(threadId, windowId);
+        if (window.pid === undefined || window.pid <= 0) {
+          throw new ComputerBackendError(
+            "Background input needs a verified application process for the exact window.",
+          );
+        }
+        return { key: `process:${window.pid}`, pid: window.pid };
+      },
+      action,
+    );
+  }
+
+  private withBackgroundAppControl(
+    threadId: string | undefined,
+    app: string,
+    action: () => Promise<ComputerLaunchAppResult>,
+  ): Promise<ComputerLaunchAppResult> {
+    if (!this.canUseBackgroundTarget()) return this.withDesktopControl(threadId, action);
+    return this.withBackgroundResourceControl(
+      threadId,
+      async () => {
+        this.assertDrivenAppAllowed(app);
+        const apps = await this.backend.listApps?.();
+        const spelling = app.trim().toLowerCase();
+        const matches =
+          apps?.filter((candidate) =>
+            [candidate.name, candidate.bundleId, candidate.launchPath].some(
+              (name) => name?.toLowerCase() === spelling,
+            ),
+          ) ?? [];
+        // Never guess which process LaunchServices will choose among several
+        // running instances of the same app.
+        const running = matches.filter((candidate) => candidate.running && candidate.pid > 0);
+        if (running.length > 1) {
+          throw new ComputerBackendError(
+            "Several running applications match this launch. Use an exact existing window instead.",
+          );
+        }
+        const target = running[0] ?? matches[0];
+        return target?.running
+          ? { key: `process:${target.pid}`, pid: target.pid }
+          : {
+              key: `application:${(target?.bundleId ?? target?.launchPath ?? target?.name ?? spelling).toLowerCase()}`,
+            };
+      },
+      async (target) => {
+        const result = await action();
+        // A cold launch now has a process identity. Keep its app reservation
+        // attached to that pid, so another task cannot take its first window
+        // while the launching task is observing it.
+        const held = this.backgroundLeases.get(target.key);
+        const pid = result.pid ?? result.window?.pid;
+        if (held && held.threadId === agentThreadId(threadId) && pid !== undefined && pid > 0) {
+          this.backgroundLeases.set(target.key, { ...held, target: { ...target, pid } });
+        }
+        return result;
+      },
+    );
+  }
+
+  private withBackgroundResourceControl<A>(
+    threadId: string | undefined,
+    resolve: () => Promise<BackgroundControlTarget>,
+    action: (target: BackgroundControlTarget) => Promise<A>,
+  ): Promise<A> {
+    assertDesktopOperationAdmission();
+    const owner = agentThreadId(threadId);
+    if (owner === undefined) this.lastUserDesktopInputAt = this.now();
+    // Process-scoped native input and its observation remain one exclusive
+    // queue transaction. Only logical ownership is narrower than the desktop.
+    return this.operations.run(async () => {
+      this.assertControlAuthority(owner);
+      this.assertInputNotPaused(owner);
+      const target = await resolve();
+      assertDesktopOperationActive();
+      this.claimBackgroundControl(owner, target);
+      this.engageBackend();
+      try {
+        return await this.withComputerCall(() => action(target));
+      } catch (error) {
+        this.recordInputPause(owner, error);
+        throw error;
+      }
+    });
+  }
+
+  private claimBackgroundControl(owner: string | undefined, target: BackgroundControlTarget): void {
+    if (owner === undefined) return;
+    const now = this.now();
+    if (this.lease && this.lease.threadId !== owner && !this.isLeaseStale(this.lease, now)) {
+      throw new ComputerLeaseError();
+    }
+    if (this.lease && this.isLeaseStale(this.lease, now)) {
+      this.authorityTurns.delete(this.lease.threadId);
+      this.lease = null;
+    }
+    for (const [key, lease] of this.backgroundLeases) {
+      if (this.isLeaseStale(lease, now)) {
+        this.backgroundLeases.delete(key);
+        this.clearEvictedBackgroundOwner(lease.threadId);
+        continue;
+      }
+      const sameProcess = target.pid !== undefined && target.pid === lease.target.pid;
+      const conflict =
+        target.key === key || (sameProcess && (!target.windowId || !lease.target.windowId));
+      if (conflict && lease.threadId !== owner) throw new ComputerLeaseError(true);
+    }
+    const claiming = currentComputerTask();
+    const turnId =
+      (claiming?.threadId === owner ? claiming.turnId : undefined) ??
+      this.authorityTurns.get(owner);
+    const held = this.backgroundLeases.get(target.key);
+    this.backgroundLeases.set(target.key, {
+      threadId: owner,
+      target,
+      ...(turnId ? { turnId } : {}),
+      lastActivityMs: now,
+      ...(held?.threadId === owner && held.turnId === turnId && held.releaseRequested
+        ? { releaseRequested: true, releaseRequestedTurnId: held.releaseRequestedTurnId }
+        : {}),
+    });
+    if (held?.threadId !== owner) this.publishOwnershipCached();
+  }
+
+  private publishOwnershipCached(): void {
+    for (const threadId of this.threads.keys()) this.publishCached(threadId);
+  }
+
+  private clearEvictedBackgroundOwner(owner: string): void {
+    if (
+      this.lease?.threadId === owner ||
+      [...this.backgroundLeases.values()].some((lease) => lease.threadId === owner)
+    )
+      return;
+    this.authorityTurns.delete(owner);
+    const state = this.threads.get(owner);
+    if (state) state.paneSurfaced = false;
+    this.publishOwnershipCached();
+  }
+
+  private releaseBackgroundControl(owner: string, turnId?: string, onlyRequested = false): void {
+    let changed = false;
+    for (const [key, lease] of this.backgroundLeases) {
+      if (lease.threadId !== owner || (turnId && lease.turnId && lease.turnId !== turnId)) continue;
+      if (
+        onlyRequested &&
+        (!lease.releaseRequested || lease.releaseRequestedTurnId !== lease.turnId)
+      )
+        continue;
+      if ((this.agentCallsInFlight.get(owner) ?? 0) > 0) {
+        lease.releaseRequested = true;
+        lease.releaseRequestedTurnId = turnId ?? lease.turnId;
+      } else {
+        this.backgroundLeases.delete(key);
+        changed = true;
+      }
+    }
+    if (
+      this.lease?.threadId !== owner &&
+      ![...this.backgroundLeases.values()].some((lease) => lease.threadId === owner)
+    ) {
+      const state = this.threads.get(owner);
+      if (state) state.paneSurfaced = false;
+    }
+    if (changed) this.publishOwnershipCached();
+  }
+
   private withBackgroundWindowControl<A>(
     threadId: string | undefined,
     windowId: string,
     action: () => Promise<A>,
   ): Promise<A> {
+    if (desktopDeliveryMode() === "foreground") return this.withDesktopControl(threadId, action);
     assertDesktopOperationAdmission();
     const owner = agentThreadId(threadId);
     // Pane input (no owning thread) is the human driving their own desktop:
@@ -3666,8 +3971,14 @@ export class ComputerManager {
     if (owner === undefined) this.lastUserDesktopInputAt = this.now();
     return this.operations.runScoped(windowId, async () => {
       this.assertControlAuthority(owner);
-      await this.assertWindowInputAllowed(threadId, windowId);
       this.assertInputNotPaused(owner);
+      const target = await this.resolveWindowTarget(threadId, windowId);
+      assertDesktopOperationActive();
+      this.claimBackgroundControl(owner, {
+        key: `window:${windowId}`,
+        windowId,
+        ...(target.pid !== undefined ? { pid: target.pid } : {}),
+      });
       this.engageBackend();
       try {
         return await this.withComputerCall(action);
@@ -3798,6 +4109,12 @@ export class ComputerManager {
     this.preActionWindowIds =
       this.lastKnownWindowIds ?? (await this.readWindows().then(windowIdSet, () => undefined));
     const now = this.now();
+    for (const [key, lease] of this.backgroundLeases) {
+      if (this.isLeaseStale(lease, now)) {
+        this.backgroundLeases.delete(key);
+        this.clearEvictedBackgroundOwner(lease.threadId);
+      } else if (lease.threadId !== owner) throw new ComputerLeaseError();
+    }
     const held = this.lease;
     const heldStale = held !== null && this.isLeaseStale(held, now);
     if (held && held.threadId !== owner && !heldStale) {
@@ -3924,6 +4241,7 @@ export class ComputerManager {
     const owner = agentThreadId(threadId);
     if (owner === undefined) return;
     this.spaceBroker.release(owner, turnId);
+    this.releaseBackgroundControl(owner, turnId);
     // A normal thread-level completion must keep its queued preview/cursor
     // cleanup on the observed turn, just like the lease release below. Real
     // control revocation/removal is thread-wide and also closes older tasks.
@@ -3933,7 +4251,7 @@ export class ComputerManager {
       !this.suspendedThreads.has(owner) &&
       this.lease?.threadId === owner
         ? this.lease.turnId
-        : undefined);
+        : this.authorityTurns.get(owner));
     // Preview teardown must not block lifecycle ingestion or an in-flight
     // operation's finalizer. In particular, awaiting it on the deferred path
     // would prevent the operation from draining and leave the lease held.
@@ -3944,7 +4262,16 @@ export class ComputerManager {
           () => undefined,
         );
       });
-    if (this.lease?.threadId !== owner) return;
+    if (this.lease?.threadId !== owner) {
+      if (
+        (this.agentCallsInFlight.get(owner) ?? 0) === 0 &&
+        ![...this.backgroundLeases.values()].some((lease) => lease.threadId === owner) &&
+        (!turnId || this.authorityTurns.get(owner) === turnId)
+      )
+        this.authorityTurns.delete(owner);
+      this.publishCached(owner);
+      return;
+    }
     if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
     if ((this.agentCallsInFlight.get(owner) ?? 0) > 0) {
       if (!this.lease.releaseRequested) {
@@ -4171,6 +4498,16 @@ export class ComputerManager {
    * coordinate is at most a hint, so those keep going through AT-SPI
    * resolution, which owns the final point.
    */
+  private assertTargetCanUseCoordinates(target: ComputerTarget): void {
+    if (observedComputerTargetNode(target)) {
+      throw new ComputerTargetError({
+        code: "computer_target_refused",
+        message:
+          "This observed element does not support the requested exact pointer action. Use an advertised semantic action or explicitly target a current screenshot; no coordinate fallback was sent.",
+      });
+    }
+  }
+
   private async resolvePointTarget(
     target: ComputerTarget,
     threadId: string | undefined,
@@ -4415,6 +4752,10 @@ export class ComputerManager {
     if (window === undefined) {
       throw windowNotFoundError(windowId);
     }
+    if (this.canUseBackgroundTarget()) {
+      await this.admitWindowTarget(threadId, window);
+      return;
+    }
     await this.prepareResolvedTarget({ windowId }, threadId);
   }
 
@@ -4437,8 +4778,8 @@ export class ComputerManager {
 
   /**
    * The resolve-and-aim every element-grain mutation shares: the target is
-   * resolved from fresh state so the backend dispatches on a live element
-   * token, the resolved point gets the same focus aim a click would, and the
+   * resolved from fresh state, or keeps an observed ref's native identity for
+   * the backend to revalidate. The point gets the same focus aim a click would, and the
    * operation must still be live before anything dispatches. Set-value,
    * perform-action and select-text differ only in the call each carries
    * afterward — and in whether a window-only target may name the sole
@@ -4452,9 +4793,13 @@ export class ComputerManager {
     const resolved = await timedComputerLeg("resolve", () =>
       this.resolveSemanticTarget(target, allowUniqueTextTarget),
     );
-    await timedComputerLeg("resolve", () =>
-      this.prepareResolvedTarget(semanticPointTarget(resolved), threadId),
-    );
+    if (this.canUseBackgroundTarget() && target.windowId) {
+      await this.assertWindowInputAllowed(threadId, target.windowId);
+    } else {
+      await timedComputerLeg("resolve", () =>
+        this.prepareResolvedTarget(semanticPointTarget(resolved), threadId),
+      );
+    }
     assertDesktopOperationActive();
     return resolved;
   }
@@ -4544,6 +4889,19 @@ export class ComputerManager {
     } else if (this.agentDialect !== "macos") {
       const denied = await this.deniedVisibleWindow();
       if (denied) throw new ComputerDenylistError(denied.match.app, denied.match.matched);
+    }
+    const observedNode = observedComputerTargetNode(target);
+    if (observedNode) {
+      if (!observedNode.windowId || observedNode.windowId !== target.windowId) {
+        throw new ComputerTargetError({
+          code: "computer_target_invalid",
+          message: "The observed element and target name different windows; nothing was sent.",
+        });
+      }
+      // The backend revalidates this original native token's window ancestry
+      // and freshness at dispatch. Re-resolving a label/ordinal here could
+      // silently give a stale ref the token of a different control.
+      return { target, node: observedNode, point: activationPointForNode(observedNode) };
     }
     let state = await this.backend.getState({
       includeTree: true,
@@ -4848,6 +5206,11 @@ export class ComputerManager {
   }
 
   private threadSnapshot(threadId: string, state: ThreadComputerRuntimeState): ThreadComputerState {
+    const backgroundOwners = new Set(
+      [...this.backgroundLeases.values()].map((lease) => lease.threadId),
+    );
+    const controlOwner =
+      this.lease?.threadId ?? (backgroundOwners.has(threadId) ? threadId : undefined);
     return {
       threadId: ThreadId.makeUnsafe(threadId),
       controlGeneration: this.controlState.get(threadId).generation,
@@ -4860,13 +5223,11 @@ export class ComputerManager {
       ...(this.activity && this.lease?.threadId === threadId ? { activity: this.activity } : {}),
       ...(state.inputPause ? { inputPause: state.inputPause } : {}),
       controlledByOtherThread: this.lease !== null && this.lease.threadId !== threadId,
-      ...(this.lease
+      ...(backgroundOwners.size > 1 ? { sharedPreviewUnavailable: true } : {}),
+      ...(controlOwner
         ? {
-            controlOwnerThreadId: ThreadId.makeUnsafe(this.lease.threadId),
-            controlOwnerLabel: (this.threadLabels.get(this.lease.threadId) ?? "Agent").slice(
-              0,
-              512,
-            ),
+            controlOwnerThreadId: ThreadId.makeUnsafe(controlOwner),
+            controlOwnerLabel: (this.threadLabels.get(controlOwner) ?? "Agent").slice(0, 512),
           }
         : {}),
       availability: this.correctedAvailability(state.availability),

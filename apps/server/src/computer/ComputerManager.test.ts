@@ -111,6 +111,321 @@ function semanticTextRoot(windowIds: readonly string[]): ComputerUiNode {
   };
 }
 
+function backgroundTargetBackend() {
+  const ids = ["editor-a", "editor-b", "editor-a-other"];
+  const windows = ids.map(
+    (id, index): ComputerWindow => ({
+      id,
+      title: id,
+      appName: index === 1 ? "Editor B" : "Editor A",
+      pid: index === 1 ? 220 : 110,
+      bounds: { x: index * 400, y: 0, width: 360, height: 300 },
+      focused: false,
+      minimized: false,
+      visible: true,
+    }),
+  );
+  return Object.assign(
+    new FakeComputerBackend({
+      windows,
+      root: semanticTextRoot(ids),
+      apps: [
+        { pid: 110, name: "Editor A", bundleId: "app.editor.a", running: true, active: false },
+        { pid: 220, name: "Editor B", bundleId: "app.editor.b", running: true, active: false },
+      ],
+    }),
+    {
+      exactTargetBackgroundInput: true,
+      focusNeutralSemanticText: true,
+      agentDialect: "macos" as const,
+    },
+  );
+}
+
+describe("ComputerManager background task ownership", () => {
+  it("lets separate apps progress while protecting one app's keyboard and modal state", async () => {
+    const backend = backgroundTargetBackend();
+    const manager = new ComputerManager({ backend });
+    try {
+      await manager.click("a", { windowId: "editor-a", x: 20, y: 50 });
+      await manager.click("b", { windowId: "editor-b", x: 420, y: 50 });
+      await manager.pressKey("a", "enter", "editor-a");
+      await manager.pressKey("b", "enter", "editor-b");
+      expect(backend.callsFor("pressKey")).toHaveLength(2);
+      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+      await expect(manager.pressKey("b", "enter", "editor-a-other")).rejects.toHaveProperty(
+        "code",
+        "computer_controlled_by_other_thread",
+      );
+      expect((await manager.getThreadState("b")).controlledByOtherThread).toBe(false);
+      expect((await manager.getThreadState("b")).sharedPreviewUnavailable).toBe(true);
+      await manager.releaseDesktopControl("a");
+      expect((await manager.getThreadState("b")).sharedPreviewUnavailable).toBeUndefined();
+      await manager.pressKey("b", "enter", "editor-a-other");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("allows independent semantic windows but blocks conflicting app-wide input", async () => {
+    const backend = backgroundTargetBackend();
+    const manager = new ComputerManager({ backend });
+    try {
+      await manager.typeText("a", "alpha", "editor-a");
+      await manager.setValue("b", { windowId: "editor-a-other", role: "AXTextArea" }, "bravo");
+      expect(backend.callsFor("focusWindow")).toHaveLength(0);
+      await expect(
+        manager.setValue("b", { windowId: "editor-a", role: "AXTextArea" }, "wrong"),
+      ).rejects.toHaveProperty("code", "computer_controlled_by_other_thread");
+      await expect(manager.pressKey("b", "enter", "editor-a-other")).rejects.toHaveProperty(
+        "code",
+        "computer_controlled_by_other_thread",
+      );
+      await manager.releaseDesktopControl("a");
+      await manager.pressKey("b", "enter", "editor-a-other");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("keeps foreground, clipboard and drags globally exclusive", async () => {
+    const backend = backgroundTargetBackend();
+    const manager = new ComputerManager({ backend });
+    try {
+      await manager.pressKey("a", "enter", "editor-a");
+      await expect(manager.writeClipboard("b", "clipboard")).rejects.toHaveProperty(
+        "code",
+        "computer_controlled_by_other_thread",
+      );
+      await expect(
+        manager.drag(
+          "b",
+          { windowId: "editor-b", x: 420, y: 50 },
+          { windowId: "editor-b", x: 440, y: 60 },
+        ),
+      ).rejects.toHaveProperty("code", "computer_controlled_by_other_thread");
+      await expect(
+        manager.activateWindow("b", "editor-b", VISIBLE_USE_AUTHORIZED),
+      ).rejects.toHaveProperty("code", "computer_controlled_by_other_thread");
+      expect(backend.callsFor("drag")).toHaveLength(0);
+      expect(backend.callsFor("writeClipboard")).toHaveLength(0);
+      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("protects a running app from another task's launch alias and permits other apps", async () => {
+    const backend = backgroundTargetBackend();
+    const manager = new ComputerManager({ backend });
+    try {
+      await manager.pressKey("a", "enter", "editor-a");
+      await expect(manager.launchApp("b", "app.editor.a")).rejects.toHaveProperty(
+        "code",
+        "computer_controlled_by_other_thread",
+      );
+      await manager.launchApp("b", "Editor B");
+      expect(backend.callsFor("launchApp")).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not release a newer background turn after a late old completion", async () => {
+    const backend = backgroundTargetBackend();
+    const manager = new ComputerManager({ backend });
+    try {
+      await manager.withAgentActivity(
+        "a",
+        () => manager.pressKey("a", "enter", "editor-a"),
+        undefined,
+        "old",
+      );
+      await manager.releaseDesktopControl("a", "old");
+      await manager.withAgentActivity(
+        "a",
+        () => manager.pressKey("a", "enter", "editor-a"),
+        undefined,
+        "new",
+      );
+      await manager.releaseDesktopControl("a", "old");
+      await expect(manager.pressKey("b", "enter", "editor-a")).rejects.toHaveProperty(
+        "code",
+        "computer_controlled_by_other_thread",
+      );
+      await manager.releaseDesktopControl("a", "new");
+      await manager.pressKey("b", "enter", "editor-a");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("does not inherit an evicted background turn on a later anonymous claim", async () => {
+    let now = 0;
+    const backend = backgroundTargetBackend();
+    const manager = new ComputerManager({ backend, now: () => now, leaseIdleMs: 100 });
+    try {
+      await manager.withAgentActivity(
+        "a",
+        () => manager.pressKey("a", "enter", "editor-a"),
+        undefined,
+        "old-a",
+      );
+      now = 200;
+      await manager.withAgentActivity(
+        "b",
+        () => manager.pressKey("b", "enter", "editor-a"),
+        undefined,
+        "turn-b",
+      );
+      await manager.releaseDesktopControl("b", "turn-b");
+      await manager.withAgentActivity("a", () => manager.pressKey("a", "enter", "editor-a"));
+      // An anonymous lease is released by any named completion; inheriting
+      // old-a would incorrectly retain it against this terminal identity.
+      await manager.releaseDesktopControl("a", "current-a");
+      await manager.pressKey("b", "enter", "editor-a");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("releases a completed background turn only after its admitted input drains", async () => {
+    const backend = backgroundTargetBackend();
+    const started = deferred();
+    const finish = deferred();
+    const press = vi.spyOn(backend, "pressKey").mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+      return {};
+    });
+    const manager = new ComputerManager({ backend });
+    const active = manager.withAgentActivity(
+      "a",
+      () => manager.pressKey("a", "enter", "editor-a"),
+      undefined,
+      "turn-a",
+    );
+    try {
+      await started.promise;
+      await manager.releaseDesktopControl("a", "turn-a");
+      const next = manager.withAgentActivity(
+        "b",
+        () => manager.pressKey("b", "enter", "editor-a"),
+        undefined,
+        "turn-b",
+      );
+      expect(press).toHaveBeenCalledTimes(1);
+      finish.resolve();
+      await Promise.all([active, next]);
+      expect(press).toHaveBeenCalledTimes(2);
+    } finally {
+      finish.resolve();
+      await active;
+      await manager.dispose();
+    }
+  });
+
+  it("revokes a queued task without stopping the other app's active input", async () => {
+    const backend = backgroundTargetBackend();
+    const started = deferred();
+    const finish = deferred();
+    const stop = vi.fn(async () => {});
+    Object.assign(backend, { stopInput: stop });
+    const press = vi.spyOn(backend, "pressKey").mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+      return {};
+    });
+    const manager = new ComputerManager({ backend });
+    const active = manager.withAgentActivity(
+      "b",
+      () => manager.pressKey("b", "enter", "editor-b"),
+      undefined,
+      "turn-b",
+    );
+    try {
+      await started.promise;
+      const queued = manager.withAgentActivity(
+        "a",
+        () => manager.pressKey("a", "enter", "editor-a"),
+        undefined,
+        "turn-a",
+      );
+      const refused = expect(queued).rejects.toHaveProperty("controlRevoked", true);
+      await manager.setControlEnabled("a", false);
+      expect(stop).not.toHaveBeenCalled();
+      finish.resolve();
+      await Promise.all([active, refused]);
+      expect(press).toHaveBeenCalledTimes(1);
+    } finally {
+      finish.resolve();
+      await active;
+      await manager.dispose();
+    }
+  });
+
+  it("forwards exact key targets without focus changes and rejects window mismatches", async () => {
+    const backend = backgroundTargetBackend();
+    const press = vi.spyOn(backend, "pressKey");
+    const manager = new ComputerManager({ backend });
+    try {
+      await manager.pressKey("a", "enter", "editor-a", {
+        windowId: "editor-a",
+        role: "AXTextArea",
+      });
+      expect(press).toHaveBeenCalledWith(
+        "enter",
+        "editor-a",
+        expect.objectContaining({ node: expect.objectContaining({ windowId: "editor-a" }) }),
+      );
+      expect(backend.callsFor("focusWindow")).toHaveLength(0);
+      await expect(
+        manager.pressKey("a", "enter", "editor-a", { windowId: "editor-b", role: "AXTextArea" }),
+      ).rejects.toHaveProperty("code", "computer_target_invalid");
+      expect(press).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("pauses after observed launch activation without losing the launch outcome or replaying", async () => {
+    const backend = backgroundTargetBackend();
+    const launch = vi.spyOn(backend, "launchApp").mockResolvedValue({
+      computerId: backend.computerId,
+      app: "Editor A",
+      pid: 110,
+      window: (await backend.listWindows())[0]!,
+      focusChangedDuringLaunch: true,
+    });
+    Object.assign(backend, { checkInputReady: async () => {} });
+    const manager = new ComputerManager({ backend });
+    try {
+      const result = await manager.launchApp("a", "Editor A");
+      expect(result.focusChangedDuringLaunch).toBe(true);
+      await expect(manager.pressKey("a", "enter", "editor-a")).rejects.toHaveProperty("inputPause");
+      expect(launch).toHaveBeenCalledTimes(1);
+      await withComputerTask({ threadId: "a" }, () => manager.getState({ windowId: "editor-a" }));
+      await manager.pressKey("a", "enter", "editor-a");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("retains a bounded list of previously observed app names without probing", async () => {
+    const backend = backgroundTargetBackend();
+    const manager = new ComputerManager({ backend });
+    try {
+      await manager.listWindows();
+      backend.emitWindowsChanged([]);
+      const reads = backend.callsFor("listWindows").length;
+      expect(manager.observedAppNames()).toEqual(["Editor B", "Editor A"]);
+      expect(backend.callsFor("listWindows")).toHaveLength(reads);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
 describe("ComputerManager and FakeComputerBackend", () => {
   it("publishes thread snapshots, activity transitions, and backend window events", async () => {
     const backend = new FakeComputerBackend({
@@ -958,7 +1273,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
       expect(settleCalls[0]?.args[0]).toMatchObject({
         windowId: "fake-terminal",
         timeoutMs: 5_000,
-        quietMs: 1_000,
+        quietMs: 60,
       });
       // The observer answered the settle itself; no blind timer ran beside it.
       expect(settleWaitedFor(spy, 60)).toBe(false);

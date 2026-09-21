@@ -30,6 +30,8 @@ describe("ComputerWindow observed Space membership", () => {
     for (const input of [
       window,
       { ...window, spaceIds: [], onCurrentSpace: false },
+      { ...window, focused: true, keyboardFocused: false },
+      { ...window, keyboardFocused: true },
       { ...window, spaceIds: [3, 8], currentSpaceId: 8, onCurrentSpace: true },
     ]) {
       const decoded = Schema.decodeUnknownSync(ComputerWindow)(input);
@@ -293,6 +295,7 @@ describe("Computer recovery RPC metadata", () => {
       window: null,
       windowStatus: "no_usable_window",
       windowReason: "off_space",
+      focusChangedDuringLaunch: true,
     };
     const wire = Schema.encodeUnknownSync(ComputerLaunchAppResult)(result);
     expect(Schema.decodeUnknownSync(ComputerLaunchAppResult)(wire)).toEqual(result);

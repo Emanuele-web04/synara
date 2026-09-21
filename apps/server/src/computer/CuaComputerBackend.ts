@@ -76,6 +76,10 @@ import {
 } from "./computerCallContext.ts";
 import { jpegDimensions } from "../jpegHeader.ts";
 import { pngDimensions } from "../pngHeader.ts";
+import {
+  observedComputerTargetNode,
+  registerNativeComputerElement,
+} from "./computerElementIdentity.ts";
 
 export class CuaActionError extends ComputerBackendError {
   constructor(
@@ -285,6 +289,11 @@ export class CuaComputerBackend implements ComputerBackend {
   // upstream driver, where the property is unverified and unclaimed.
   get focusNeutralSemanticText(): boolean {
     return (this.hostPlatform ?? process.platform) === "darwin" && this.driverNativeRevision !== 0;
+  }
+  get exactTargetBackgroundInput(): boolean {
+    return (
+      (this.hostPlatform ?? process.platform) === "darwin" && (this.driverNativeRevision ?? 0) >= 36
+    );
   }
   readonly computerId = DEFAULT_COMPUTER_ID;
   // The AXPress/meta-key dialect is macOS semantics; Windows and Linux
@@ -751,7 +760,7 @@ export class CuaComputerBackend implements ComputerBackend {
       ? `Allow ${missing} for this copy of Synara in System Settings. Return here to check again; if macOS asks you to quit and reopen the app, do so.`
       : `The driver host reports missing ${missing} access. Grant it at the OS level the platform uses (display-server access on Linux, integrity/UIAccess on Windows), then check again; no action is retried automatically.`;
   }
-  private refresh(force = false): Promise<void> {
+  private refresh(force = false, includeKeyboardFocus = false): Promise<void> {
     if (this.snapshot) return this.snapshot;
     if (!force && Date.now() - this.snapshotAt < 1_000) return Promise.resolve();
     this.snapshot = (async () => {
@@ -822,7 +831,7 @@ export class CuaComputerBackend implements ComputerBackend {
           ? { kind: "backend-unavailable", message: monitorMessage }
           : { kind: "available", backend: "cua" };
       if (this.currentAvailability.kind === "available") {
-        await this.readWindows();
+        await this.readWindows(includeKeyboardFocus);
         const geometry = (await this.call("get_screen_size")).structuredContent ?? {};
         const width = number(geometry.width),
           height = number(geometry.height);
@@ -854,8 +863,17 @@ export class CuaComputerBackend implements ComputerBackend {
       });
     return this.snapshot;
   }
-  private async readWindows(): Promise<readonly ComputerWindow[]> {
-    const data = (await this.call("list_windows")).structuredContent ?? {};
+  private async readWindows(includeKeyboardFocus = false): Promise<readonly ComputerWindow[]> {
+    const data =
+      (
+        await this.call("list_windows", {
+          ...((this.hostPlatform ?? process.platform) === "darwin" &&
+          (this.driverNativeRevision ?? 0) >= 37 &&
+          includeKeyboardFocus
+            ? { include_keyboard_focus: true }
+            : {}),
+        })
+      ).structuredContent ?? {};
     if (!Array.isArray(data.windows)) throw new Error("Invalid Cua window list.");
     const rows = data.windows
       .map(record)
@@ -892,6 +910,9 @@ export class CuaComputerBackend implements ComputerBackend {
             appName: text(w.app_name),
             bounds,
             focused: this.selectedWindow === `cua:${pid}:${windowId}`,
+            ...(typeof w.keyboard_focused === "boolean"
+              ? { keyboardFocused: w.keyboard_focused }
+              : {}),
             // A minimized window drops out of the screen list but keeps its
             // Space membership; a hidden app's windows report no membership at
             // all; an off-Space window reports on_current_space === false.
@@ -1198,7 +1219,12 @@ export class CuaComputerBackend implements ComputerBackend {
     windowId?: string;
     reuseRecentTree?: boolean;
   }): Promise<ComputerState> {
-    await this.refresh();
+    // Focus metadata is optional observation work, never part of each input's
+    // cheap WindowServer identity/geometry revalidation.
+    await this.refresh(
+      false,
+      options.reuseRecentTree !== true && isModelDesktopObservationActive(),
+    );
     let state: ComputerState = {
       computerId: this.computerId,
       windows: this.windows,
@@ -1280,6 +1306,7 @@ export class CuaComputerBackend implements ComputerBackend {
         };
         if (typeof element.element_token === "string") {
           this.elementTokens.set(node, element.element_token);
+          registerNativeComputerElement(node, element.element_token);
           if (element.in_web_content === true) this.webContentElements.add(node);
           if (Array.isArray(element.actions))
             this.elementActions.set(
@@ -1394,7 +1421,16 @@ export class CuaComputerBackend implements ComputerBackend {
         ),
       );
     }
-    return this.inputDispatch(name, args, windowId, point, preparedBounds, false, {
+    // A retained AX action may operate off-Space. Any native pixel fallback
+    // still has to pass WindowPointer admission, which refuses that surface.
+    const exactSemanticAction =
+      this.exactTargetBackgroundInput &&
+      name === "click" &&
+      typeof args.element_token === "string" &&
+      typeof args.action === "string" &&
+      point === undefined &&
+      desktopDeliveryMode() !== "foreground";
+    return this.inputDispatch(name, args, windowId, point, preparedBounds, exactSemanticAction, {
       pid,
       window_id,
       window,
@@ -1499,7 +1535,7 @@ export class CuaComputerBackend implements ComputerBackend {
     windowId: string | undefined,
     point: ComputerPoint | undefined,
     preparedBounds: ComputerRect | undefined,
-    exactSemanticText: boolean,
+    exactSemanticTarget: boolean,
     resolved: {
       pid: number;
       window_id: number;
@@ -1571,9 +1607,9 @@ export class CuaComputerBackend implements ComputerBackend {
         delete nativeArgs.modifiers;
       }
     }
-    if (!window.visible && !exactSemanticText) {
+    if (!window.visible && !exactSemanticTarget) {
       const message =
-        "The target window is not on the current Space or not on screen. Only an exact retained semantic text element may be mutated without activation; pointer, synthetic keyboard, and generic window actions require computer_activate_window followed by fresh state.";
+        "The target window is not on the current Space or not on screen. Only exact retained semantic text or advertised AX actions may operate there without activation; pointer and synthetic keyboard input require an available window and fresh state.";
       throw new CuaActionError(message, "not-dispatched", "target_not_on_active_space", {
         windowId: window.id,
         message,
@@ -1848,7 +1884,16 @@ export class CuaComputerBackend implements ComputerBackend {
         "unsupported_operation",
       );
     const mods = modifiers?.length ? modifiers.map(cuaKey) : undefined;
+    // CGEvent wheel ticks use negative values for down/right, opposite to
+    // the public pixel deltas. Linux receives named directions below.
+    const wheelSign = (this.hostPlatform ?? process.platform) === "darwin" ? -1 : 1;
     const token = target ? this.elementTokens.get(target.node) : undefined;
+    if (target && observedComputerTargetNode(target.target) && (!token || dx || mods))
+      throw new CuaActionError(
+        "This observed element only supports exact unmodified vertical scrolling. Use an explicit current screenshot target for other wheel gestures; no coordinate fallback was sent.",
+        "not-dispatched",
+        "unsupported_operation",
+      );
     const args: Record<string, unknown> =
       token !== undefined && !dx && mods === undefined
         ? // AX-first: the driver resolves the token, tries scroll-bar presses,
@@ -1864,8 +1909,8 @@ export class CuaComputerBackend implements ComputerBackend {
             // axis while the signed ticks carry the real per-axis amounts —
             // including a two-axis diagonal in one dispatch.
             direction: ticksY ? (dy > 0 ? "down" : "up") : dx > 0 ? "right" : "left",
-            delta_x: ticksX ? Math.sign(dx) * ticksX : 0,
-            delta_y: ticksY ? Math.sign(dy) * ticksY : 0,
+            delta_x: ticksX ? wheelSign * Math.sign(dx) * ticksX : 0,
+            delta_y: ticksY ? wheelSign * Math.sign(dy) * ticksY : 0,
             ...(mods ? { modifiers: mods } : {}),
           };
     const result = await this.input("scroll", args, w, p);
@@ -1885,8 +1930,24 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "stale_target",
       );
-    if (token && this.webContentElements.has(target!.node))
+    if (token && this.webContentElements.has(target!.node)) {
+      if (observedComputerTargetNode(target!.target)) {
+        if ((this.driverNativeRevision ?? 0) < 37)
+          throw new CuaActionError(
+            "This driver cannot append through a retained web element. Use computer_set_value to replace its complete value, or update the driver; no input was sent.",
+            "not-dispatched",
+            "unsupported_operation",
+          );
+        // Snapshot reads rotate native tokens. Compose and verify on the
+        // original retained element inside the driver's semantic lease.
+        return this.input(
+          "set_value",
+          { element_token: token, value, append: true },
+          target!.node.windowId!,
+        );
+      }
       return this.webContentTypeText(target!.node, value);
+    }
     return this.input(
       "type_text",
       {
@@ -1955,6 +2016,8 @@ export class CuaComputerBackend implements ComputerBackend {
    * Re-observe one window and return the record for the same web element.
    * Tokens are snapshot-scoped, so identity matches on role + label + frame,
    * the stable tuple an unchanged element keeps across driver snapshots.
+   * Retained provider refs bypass this compatibility route and dispatch on
+   * their original token without another snapshot.
    */
   private async resolveWebField(
     windowId: string,
@@ -1990,10 +2053,25 @@ export class CuaComputerBackend implements ComputerBackend {
     }
     return match;
   }
-  pressKey(key: string, w?: string) {
-    return this.input("press_key", { key: cuaKey(key) }, w);
+  private keyboardTarget(target: ComputerResolvedTarget | undefined, windowId?: string) {
+    if (!target) return {};
+    const token = this.elementTokens.get(target.node);
+    if (!token || !target.node.windowId || (windowId && target.node.windowId !== windowId))
+      throw new CuaActionError(
+        "The keyboard target is not bound to a live element in the requested window; observe fresh state.",
+        "not-dispatched",
+        "stale_target",
+      );
+    return { element_token: token };
   }
-  hotkey(keys: readonly string[], w?: string) {
+  pressKey(key: string, w?: string, target?: ComputerResolvedTarget) {
+    return this.input(
+      "press_key",
+      { key: cuaKey(key), ...this.keyboardTarget(target, w) },
+      w ?? target?.node.windowId ?? undefined,
+    );
+  }
+  hotkey(keys: readonly string[], w?: string, target?: ComputerResolvedTarget) {
     const native = keys.map(cuaKey);
     const modifiers = new Set([
       "command",
@@ -2011,7 +2089,11 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "invalid_chord",
       );
-    return this.input("hotkey", { keys: native }, w);
+    return this.input(
+      "hotkey",
+      { keys: native, ...this.keyboardTarget(target, w) },
+      w ?? target?.node.windowId ?? undefined,
+    );
   }
   async setValue(target: ComputerResolvedTarget, value: string) {
     const token = this.elementTokens.get(target.node);
@@ -2021,6 +2103,8 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "stale_target",
       );
+    if (observedComputerTargetNode(target.target))
+      return this.input("set_value", { element_token: token, value }, target.node.windowId);
     if (this.webContentElements.has(target.node)) {
       // The web path composes read → set_value → re-read on the same native
       // semantic lease, so the whole compose takes the lane — the same shape
@@ -2175,6 +2259,9 @@ export class CuaComputerBackend implements ComputerBackend {
       computerId: this.computerId,
       app,
       window: null,
+      ...(typeof result.structuredContent?.focus_changed_during_launch === "boolean"
+        ? { focusChangedDuringLaunch: result.structuredContent.focus_changed_during_launch }
+        : {}),
       windowStatus: unavailable ? "no_usable_window" : "not_checked",
       ...(unavailable ? { windowReason } : {}),
       ...(Number.isSafeInteger(pid) && pid > 0 && pid <= 0x7fffffff ? { pid } : {}),
@@ -2733,12 +2820,31 @@ export class CuaComputerBackend implements ComputerBackend {
   async requestKeyframe() {
     await this.stills.requestKeyframe();
   }
-  async stopInput() {
-    this.previewTasks.clear();
-    this.stillTarget = undefined;
+  async stopInput(task?: { readonly threadId: string; readonly turnId?: string }) {
+    if (task) {
+      for (const [key, owned] of this.previewTasks) {
+        if (owned.threadId === task.threadId && (!task.turnId || owned.turnId === task.turnId))
+          this.previewTasks.delete(key);
+      }
+      const still = this.stillTarget;
+      // Native window stills have no task attribution. Stop that preview
+      // until a fresh observation supplies a target, rather than reuse a
+      // cancelled task's window for a surviving subscriber.
+      if (
+        still?.kind === "window" ||
+        (still?.kind === "browser" &&
+          still.task.threadId === task.threadId &&
+          (!task.turnId || still.task.turnId === task.turnId))
+      )
+        this.stillTarget = undefined;
+    } else {
+      this.previewTasks.clear();
+      this.stillTarget = undefined;
+    }
     if (this.endpoint) {
       const result = await this.request<CuaReply>(this.endpoint, {
         method: "stop",
+        ...(task ? { task } : {}),
         capability: this.capability,
       });
       this.observeDesktopInterruption(result);

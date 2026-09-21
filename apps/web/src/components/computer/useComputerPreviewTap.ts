@@ -47,6 +47,9 @@ export function useComputerPreviewTap(input: {
     if (threadId === undefined) return true;
     const threadState = store.threadStatesByThreadId[threadId];
     if (!threadState) return true;
+    // These frames carry no task id. Independent background tasks must use
+    // their observation stills until the native tap can attribute each frame.
+    if (threadState.sharedPreviewUnavailable) return false;
     return (
       threadState.controlOwnerThreadId === threadId ||
       (threadState.agentActive && !threadState.controlledByOtherThread)

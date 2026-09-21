@@ -5,7 +5,7 @@ not a release certification. Results belong to the exact application, driver
 revision, platform and provider named in each report; an older passing fixture
 does not qualify the current branch.
 
-The current driver is Cua 0.28.2 with Synara native revision 32. The
+The current driver is Cua 0.28.2 with Synara native revision 37. The
 [release manifest](../../packages/shared/src/cuaDriverRelease.json) is the source
 of truth for source, patch checksum and Rust version. Packaging must verify the
 staged artifact against that manifest. The checked-in
@@ -14,6 +14,9 @@ staged artifact against that manifest. The checked-in
 [Linux browser patch](../../apps/desktop/patches/cua-driver/0002-synara-linux-browser.patch)
 adds a narrow headless-browser runtime; it does not inherit macOS desktop-input
 guarantees. Its runtime admission requirements are listed below.
+
+The [remote-feedback follow-up](remote-feedback-fixes-2026-09-21.md) describes
+the current input, provider and concurrency corrections and their runtime limits.
 
 ## Isolated packaged build
 
@@ -132,6 +135,47 @@ the chat ends the task.
   measurement; smaller descriptors alone do not establish billing or latency.
 
 ## Permissions and interruption
+
+### Task and application boundaries
+
+On the patched macOS backend, independent tasks can target different apps
+without holding the whole desktop while their providers think. Native input
+transactions remain serialized. Keyboard, pointer and modal operations reserve
+their app process; pure semantic operations reserve their exact window.
+Foreground operations, clipboard use and drag gestures retain exclusive desktop
+ownership. Other backends retain their existing conservative ownership rules.
+Concurrent tasks use still observations when preview ownership cannot be proven;
+a shared native preview stream is not attributed to both tasks.
+
+Stopping an idle or queued task cancels that task's work. Interrupting an active
+native mutation still drains the shared driver before input resumes, and affected
+tasks must observe again. The global emergency Stop continues to stop all input.
+
+Explicit permission to show the app persists through routine continuations such
+as “continue” or “retry”. A new task, a stop/background request, imported history,
+or an automated/agent-authored message ends it. An app name alone never grants
+foreground access. Full access still does not authorize moving the user's screen.
+
+Background launch asks macOS not to activate the app; an app may activate itself.
+An observed `focusChangedDuringLaunch` is returned and pauses subsequent input
+until fresh observation. The launch is never replayed or countered with a focus
+restoration loop. Hidden/off-Space windows permit retained semantic writes and
+AX actions when the native backend proves the exact target; pixel input still
+requires an available window. Normal modal controls must belong to the active
+dialog, and authentication/security dialogs remain protected.
+
+Use an observed field `ref` with `computer_press_key` for background Enter/Return.
+The reference reaches the native exact-element route in standalone and batch
+calls. A generic shortcut can still be refused when its actual destination is
+ambiguous. `focused` denotes the agent's selected target; optional
+`keyboardFocused` reports the app's actual keyboard window when proven.
+
+Pi requires the Computer catalog during enabled startup, and Synara-managed
+OpenCode requires its thread-scoped MCP connection to be ready. An external
+OpenCode server cannot currently receive that isolated Computer connection.
+Antigravity retains undelivered Computer guidance when process startup fails.
+These checks prevent a missing tool connection from appearing as a ready session;
+they do not certify every provider/model or application combination.
 
 Computer and AppSnap reuse the same desktop permission service and native setup
 guide. Computer requests three macOS grants:
