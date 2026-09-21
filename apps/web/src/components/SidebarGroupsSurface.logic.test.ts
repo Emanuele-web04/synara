@@ -1,5 +1,5 @@
 import { ProjectId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   activateThreadWhenHydrated,
@@ -72,49 +72,70 @@ describe("resolveGroupChatTargetProjectId", () => {
 });
 
 describe("activateThreadWhenHydrated", () => {
-  it("activates immediately when the thread is already hydrated", async () => {
+  it("activates immediately when the thread is already hydrated", () => {
     let activated = 0;
-    await expect(
-      activateThreadWhenHydrated({
-        hasThread: () => true,
-        activate: () => {
-          activated += 1;
-        },
-      }),
-    ).resolves.toBe(true);
+    activateThreadWhenHydrated({
+      hasThread: () => true,
+      activate: () => {
+        activated += 1;
+      },
+    });
     expect(activated).toBe(1);
   });
 
-  it("waits for the thread to appear before activating", async () => {
+  it("activates via the poll fallback once the thread appears", async () => {
     let present = false;
     let activated = 0;
     setTimeout(() => {
       present = true;
     }, 30);
-    await expect(
-      activateThreadWhenHydrated({
-        hasThread: () => present,
-        activate: () => {
-          activated += 1;
-        },
-        delayMs: 10,
-      }),
-    ).resolves.toBe(true);
+    activateThreadWhenHydrated({
+      hasThread: () => present,
+      activate: () => {
+        activated += 1;
+      },
+      pollMs: 10,
+    });
+    await vi.waitFor(() => {
+      expect(activated).toBe(1);
+    });
+  });
+
+  it("activates on the store notification before the next poll", () => {
+    let present = false;
+    let activated = 0;
+    const listeners: (() => void)[] = [];
+    activateThreadWhenHydrated({
+      hasThread: () => present,
+      activate: () => {
+        activated += 1;
+      },
+      subscribe: (notify) => {
+        listeners.push(notify);
+        return () => {
+          listeners.length = 0;
+        };
+      },
+      pollMs: 60_000,
+      maxWaitMs: 60_000,
+    });
+    expect(activated).toBe(0);
+    present = true;
+    listeners[0]?.();
     expect(activated).toBe(1);
   });
 
   it("gives up without activating when the thread never appears", async () => {
     let activated = 0;
-    await expect(
-      activateThreadWhenHydrated({
-        hasThread: () => false,
-        activate: () => {
-          activated += 1;
-        },
-        maxAttempts: 3,
-        delayMs: 1,
-      }),
-    ).resolves.toBe(false);
+    activateThreadWhenHydrated({
+      hasThread: () => false,
+      activate: () => {
+        activated += 1;
+      },
+      pollMs: 5,
+      maxWaitMs: 25,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
     expect(activated).toBe(0);
   });
 });

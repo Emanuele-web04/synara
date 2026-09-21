@@ -52,23 +52,50 @@ export function resolveGroupChatTargetProjectId(input: {
 /**
  * A just-configured coordinator thread is not in the sidebar summary map yet when
  * onboarding saves, so a bare activation intent is dropped (`threadExists=false`).
- * Poll briefly until the snapshot catches up, then activate. Returns whether the
- * activation ran.
+ * The snapshot echo can take several seconds, so wait on store notifications (when
+ * the caller passes a subscribe) plus a poll fallback until the row appears or the
+ * window expires. Returns a cancel function.
  */
-export async function activateThreadWhenHydrated(input: {
+export function activateThreadWhenHydrated(input: {
   readonly hasThread: () => boolean;
   readonly activate: () => void;
-  readonly maxAttempts?: number | undefined;
-  readonly delayMs?: number | undefined;
-}): Promise<boolean> {
-  const maxAttempts = input.maxAttempts ?? 20;
-  const delayMs = input.delayMs ?? 100;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (input.hasThread()) {
-      input.activate();
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  readonly subscribe?: ((listener: () => void) => () => void) | undefined;
+  readonly maxWaitMs?: number | undefined;
+  readonly pollMs?: number | undefined;
+}): () => void {
+  if (input.hasThread()) {
+    input.activate();
+    return () => {};
   }
-  return false;
+  const maxWaitMs = input.maxWaitMs ?? 30_000;
+  const pollMs = input.pollMs ?? 250;
+  let finished = false;
+  let intervalId: ReturnType<typeof setInterval> | undefined;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let unsubscribe: (() => void) | undefined;
+  const finish = (activate: boolean): void => {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    unsubscribe?.();
+    if (intervalId !== undefined) {
+      clearInterval(intervalId);
+    }
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+    if (activate) {
+      input.activate();
+    }
+  };
+  const check = (): void => {
+    if (input.hasThread()) {
+      finish(true);
+    }
+  };
+  unsubscribe = input.subscribe?.(check);
+  intervalId = setInterval(check, pollMs);
+  timeoutId = setTimeout(() => finish(false), maxWaitMs);
+  return () => finish(false);
 }

@@ -7022,9 +7022,10 @@ export default function Sidebar() {
             if (projectAgentDialogState?.mode !== "onboarding") return;
             const coordinatorThreadId = overview.config?.coordinatorThreadId;
             if (coordinatorThreadId) {
-              void activateThreadWhenHydrated({
+              activateThreadWhenHydrated({
                 hasThread: () =>
                   useStore.getState().sidebarThreadSummaryById[coordinatorThreadId] !== undefined,
+                subscribe: (listener) => useStore.subscribe(listener),
                 activate: () => {
                   activateThreadFromSidebarIntent(coordinatorThreadId);
                 },
