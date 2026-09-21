@@ -211,9 +211,12 @@ export interface ProjectionSnapshotQueryShape {
 
   /**
    * Read a single active thread shell row by id.
+   * Runtime reconciliation can opt into the latest projected message timestamp
+   * as its activity clock without changing the persisted sidebar shell.
    */
   readonly getThreadShellById: (
     threadId: ThreadId,
+    options?: { readonly includeLatestMessageActivity?: boolean },
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
