@@ -195,6 +195,7 @@ function ComputerPreviewPopoverCard(props: {
     slotHeightPx: slotSize.height > 0 ? slotSize.height : SLOT_FALLBACK_HEIGHT_PX,
     frameAspect,
     viewportWidthPx: typeof window === "undefined" ? cardMaxWidth : window.innerWidth,
+    viewportHeightPx: typeof window === "undefined" ? SLOT_FALLBACK_HEIGHT_PX : window.innerHeight,
   });
   // Detached-window behavior lives in the hook: stored position (clamped
   // back on screen every render so a shrinking window can never strand the

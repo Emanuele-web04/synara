@@ -62,14 +62,34 @@ export function clampComputerPreviewFloat(input: {
   };
 }
 
-/** Width a detached card takes: its footprint cap, minus viewport margin. */
+/**
+ * How much bigger a detached card is than the docked one. The pop-out control
+ * is drawn with expand arrows, and the rail card already sits at its footprint
+ * cap on any normal window: at 1:1 the detached card re-rendered at the exact
+ * same rect, so the control read as dead.
+ */
+export const COMPUTER_PREVIEW_FLOAT_EXPAND_SCALE = 1.5;
+
+/**
+ * Width a detached card takes. Leaving the rail is the expansion: the card
+ * grows past the footprint cap that bounds it while docked, and the viewport
+ * is its only remaining bound — on both axes, so a tall portrait window
+ * shrinks the card back instead of hanging off the bottom of the screen.
+ */
 export function computerPreviewFloatWidthPx(input: {
   readonly caps: ComputerPreviewCardCaps;
   readonly viewportWidthPx: number;
+  readonly viewportHeightPx: number;
+  readonly frameAspect: number;
 }): number {
+  const margins = COMPUTER_PREVIEW_FLOAT_MARGIN_PX * 2;
   return Math.max(
     input.caps.minWidthPx,
-    Math.min(input.caps.maxWidthPx, input.viewportWidthPx - COMPUTER_PREVIEW_FLOAT_MARGIN_PX * 2),
+    Math.min(
+      input.caps.maxWidthPx * COMPUTER_PREVIEW_FLOAT_EXPAND_SCALE,
+      input.viewportWidthPx - margins,
+      (input.viewportHeightPx - margins) * input.frameAspect,
+    ),
   );
 }
 
@@ -79,10 +99,11 @@ const SLOT_BOTTOM_RESERVE_PX = 120;
 
 /**
  * Rendered card width. Detached cards ignore the rail slot entirely — their
- * bound is the viewport. Docked cards fill the slot's width and height
- * budget at the content aspect, clamped to sane bounds: a tall phone-shaped
- * window narrows the card instead of growing past the chat; a wide desktop
- * caps at the max. The docked width basis is the rail budget when provided:
+ * bound is the viewport, at the larger detached footprint. Docked cards fill
+ * the slot's width and height budget at the content aspect, clamped to sane
+ * bounds: a tall phone-shaped window narrows the card instead of growing past
+ * the chat; a wide desktop caps at the max. The docked width basis is the rail
+ * budget when provided:
  * the rail wrapper shrink-fits the card, so measuring it would feed the card
  * its own width back and pin it small forever.
  */
@@ -96,11 +117,14 @@ export function computerPreviewCardFitWidth(input: {
   readonly slotHeightPx: number;
   readonly frameAspect: number;
   readonly viewportWidthPx: number;
+  readonly viewportHeightPx: number;
 }): number {
   if (input.floating) {
     return computerPreviewFloatWidthPx({
       caps: input.caps,
       viewportWidthPx: input.viewportWidthPx,
+      viewportHeightPx: input.viewportHeightPx,
+      frameAspect: input.frameAspect,
     });
   }
   const widthBasis = input.railBudgetPx ?? input.slotWidthPx - SLOT_MARGIN_X_PX;

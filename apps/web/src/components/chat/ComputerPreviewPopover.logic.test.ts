@@ -356,17 +356,34 @@ describe("clampComputerPreviewFloat", () => {
 
 describe("computerPreviewFloatWidthPx", () => {
   const compact = { minWidthPx: 240, maxWidthPx: 400 };
+  const viewport = { viewportWidthPx: 1600, viewportHeightPx: 1000, frameAspect: 16 / 10 };
 
-  it("takes the footprint cap on wide viewports", () => {
-    expect(computerPreviewFloatWidthPx({ caps: compact, viewportWidthPx: 1600 })).toBe(400);
+  it("expands past the footprint cap on wide viewports", () => {
+    expect(computerPreviewFloatWidthPx({ caps: compact, ...viewport })).toBe(600);
   });
 
   it("shrinks to the viewport minus margins on narrow windows", () => {
-    expect(computerPreviewFloatWidthPx({ caps: compact, viewportWidthPx: 300 })).toBe(284);
+    expect(computerPreviewFloatWidthPx({ caps: compact, ...viewport, viewportWidthPx: 300 })).toBe(
+      284,
+    );
+  });
+
+  it("shrinks so a tall frame still fits the viewport height", () => {
+    // Portrait content at 8:16: 384 of height budget buys only 192 of width.
+    expect(
+      computerPreviewFloatWidthPx({
+        caps: compact,
+        ...viewport,
+        viewportHeightPx: 400,
+        frameAspect: 0.5,
+      }),
+    ).toBe(240);
   });
 
   it("never drops below the footprint minimum", () => {
-    expect(computerPreviewFloatWidthPx({ caps: compact, viewportWidthPx: 200 })).toBe(240);
+    expect(computerPreviewFloatWidthPx({ caps: compact, ...viewport, viewportWidthPx: 200 })).toBe(
+      240,
+    );
   });
 });
 
@@ -379,6 +396,7 @@ describe("computerPreviewCardFitWidth", () => {
     slotHeightPx: 616,
     frameAspect: 16 / 10,
     viewportWidthPx: 1600,
+    viewportHeightPx: 1000,
   };
 
   it("docked: fills the slot width budget at the footprint cap", () => {
@@ -414,6 +432,21 @@ describe("computerPreviewCardFitWidth", () => {
         slotWidthPx: 50,
         slotHeightPx: 50,
       }),
-    ).toBe(400);
+    ).toBe(600);
+  });
+
+  // The pop-out control is drawn with expand arrows and detaches the card in
+  // place: when the detached width matched the docked one (it did, because both
+  // stopped at the same footprint cap), the card re-rendered at the identical
+  // rect and clicking expand looked like nothing happened.
+  it("floating: is wider than the docked card at every footprint", () => {
+    for (const size of ["compact", "large"] as const) {
+      const caps = computerPreviewCardCaps(size);
+      const railBudgetPx = caps.maxWidthPx;
+      const docked = computerPreviewCardFitWidth({ ...base, caps, railBudgetPx, floating: false });
+      const floated = computerPreviewCardFitWidth({ ...base, caps, railBudgetPx, floating: true });
+      expect(docked).toBe(caps.maxWidthPx);
+      expect(floated).toBeGreaterThan(docked);
+    }
   });
 });
