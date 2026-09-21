@@ -235,6 +235,15 @@ Use the dedicated [provider guides](https://www.trysynara.com/docs/providers) fo
 installation, authentication, verification, capabilities, update paths, and provider-specific
 failure checks.
 
+## Cancel a blocking question
+
+Blocking questions show **Cancel** whether or not they offer choices. Cancel applies to
+the whole pending request, including any later questions in the same set. Once an
+answer or cancellation is being submitted, the form disables Cancel until the
+request settles. For OpenCode, cancellation uses its `question.reject` operation;
+submitting completed answers uses `question.reply`. Both requests are scoped to
+the task's OpenCode working directory.
+
 ## Codex asynchronous questions
 
 On Codex versions and models that expose `request_user_input_async`, Synara shows
