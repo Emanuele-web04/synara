@@ -39,7 +39,7 @@ describe("launch window readiness", () => {
     );
     expect(reads).toBe(2);
   });
-  it("selects the one primary Notes window and checks native input readiness", async () => {
+  it("does not infer a primary Notes window from accessory sizes", async () => {
     const notes = {
       ...window,
       title: "Notes",
@@ -65,8 +65,24 @@ describe("launch window readiness", () => {
         undefined,
         { checkInputReady },
       ),
-    ).toEqual({ window: notes, windowStatus: "ready" });
-    expect(checkInputReady).toHaveBeenCalledExactlyOnceWith(notes.id);
+    ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
+    expect(checkInputReady).not.toHaveBeenCalled();
+  });
+  it.each([
+    { title: "", bounds: { x: 0, y: 0, width: 1000, height: 660 } },
+    { title: "Document", bounds: { x: 0, y: 0, width: 0, height: 0 } },
+  ])("does not bind a titled inspector over a document with $title", async (document) => {
+    const checkInputReady = vi.fn(async () => {});
+    const windows = [
+      { ...window, ...document },
+      { ...window, id: "8", title: "Inspector", bounds: { x: 0, y: 0, width: 240, height: 160 } },
+    ];
+    for (const candidates of [windows, [...windows].reverse()]) {
+      expect(
+        await waitForWindow(async () => candidates, "Helium", 0, undefined, { checkInputReady }),
+      ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
+    }
+    expect(checkInputReady).not.toHaveBeenCalled();
   });
   it("keeps two real titled windows ambiguous regardless of size or order", async () => {
     const first = { ...window, bounds: { x: 0, y: 0, width: 120, height: 80 } };

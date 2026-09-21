@@ -74,20 +74,10 @@ async function probeWindow(
         : window.appName?.toLocaleLowerCase() === name,
     );
     signal?.throwIfAborted();
-    // Do not select a sibling just because it happens to be visible: only a
-    // unique titled, usable primary window with sufficient bounds disambiguates.
-    const primaryCandidates = matches.filter(
-      (window) =>
-        window.visible &&
-        !window.minimized &&
-        window.onCurrentSpace !== false &&
-        window.title.trim().length > 0 &&
-        window.bounds !== undefined &&
-        window.bounds.width >= 120 &&
-        window.bounds.height >= 80,
-    );
-    if (matches.length > 1 && primaryCandidates.length !== 1) return unavailable("ambiguous");
-    const candidate = matches.length > 1 ? primaryCandidates[0] : matches[0];
+    // Titles, visibility and size do not prove which same-app window is the
+    // requested document. Keep the choice explicit when siblings exist.
+    if (matches.length > 1) return unavailable("ambiguous");
+    const candidate = matches[0];
     const reason = !candidate
       ? "no_window"
       : candidate.onCurrentSpace === false
