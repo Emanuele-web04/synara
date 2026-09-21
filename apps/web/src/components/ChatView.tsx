@@ -3423,6 +3423,31 @@ export default function ChatView({
 
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
 
+  // Preserve the original "single mic button" contract:
+  // first click starts recording, the next click submits/transcribes.
+  const toggleComposerVoiceRecording = useCallback(() => {
+    if (isVoiceTranscribing) {
+      return;
+    }
+    if (isVoiceRecording) {
+      void submitComposerVoiceRecording();
+      return;
+    }
+    void startComposerVoiceRecording();
+  }, [
+    isVoiceRecording,
+    isVoiceTranscribing,
+    startComposerVoiceRecording,
+    submitComposerVoiceRecording,
+  ]);
+
+  // The voice shortcut reuses the mic button toggle, but stays inert while voice
+  // notes are unavailable for the active provider.
+  const handleVoiceNoteToggleShortcut = useCallback(() => {
+    if (!showVoiceNotesControl) return;
+    toggleComposerVoiceRecording();
+  }, [showVoiceNotesControl, toggleComposerVoiceRecording]);
+
   useChatKeyboardShortcuts({
     onToggleDevicePanel,
     onSplitSurface,
@@ -3436,6 +3461,7 @@ export default function ChatView({
     onBackgroundAllForegroundSubagentStripItems,
     isVoiceRecording,
     isVoiceTranscribing,
+    onToggleVoiceNote: handleVoiceNoteToggleShortcut,
     isComposerApprovalState,
     terminalState,
     terminalWorkspaceOpen,
@@ -3474,24 +3500,6 @@ export default function ChatView({
     runProjectScript,
     activeThread,
   });
-
-  // Preserve the original "single mic button" contract:
-  // first click starts recording, the next click submits/transcribes.
-  const toggleComposerVoiceRecording = useCallback(() => {
-    if (isVoiceTranscribing) {
-      return;
-    }
-    if (isVoiceRecording) {
-      void submitComposerVoiceRecording();
-      return;
-    }
-    void startComposerVoiceRecording();
-  }, [
-    isVoiceRecording,
-    isVoiceTranscribing,
-    startComposerVoiceRecording,
-    submitComposerVoiceRecording,
-  ]);
 
   // --- Composer attachment entry points -------------------------------------
   const addComposerImages = useCallback(

@@ -60,6 +60,7 @@ interface ChatKeyboardShortcutsInput {
   onBackgroundAllForegroundSubagentStripItems: () => Promise<void>;
   isVoiceRecording: ReturnType<typeof useComposerVoiceController>["isVoiceRecording"];
   isVoiceTranscribing: ReturnType<typeof useComposerVoiceController>["isVoiceTranscribing"];
+  onToggleVoiceNote: () => void;
   isComposerApprovalState: boolean;
   terminalState: ReturnType<typeof useChatTerminalController>["terminalState"];
   terminalWorkspaceOpen: ReturnType<typeof useChatTerminalController>["terminalWorkspaceOpen"];
@@ -124,6 +125,7 @@ export function useChatKeyboardShortcuts({
   onBackgroundAllForegroundSubagentStripItems,
   isVoiceRecording,
   isVoiceTranscribing,
+  onToggleVoiceNote,
   isComposerApprovalState,
   terminalState,
   terminalWorkspaceOpen,
@@ -225,6 +227,16 @@ export function useChatKeyboardShortcuts({
         context: shortcutContext,
       });
       if (!command) return;
+
+      if (command === "composer.voice.toggle") {
+        // Handled before the voice guards below so a second press stops an active
+        // recording. Always consumed: on macOS bare Alt+M would otherwise insert "µ".
+        event.preventDefault();
+        event.stopPropagation();
+        if (isVoiceTranscribing) return;
+        onToggleVoiceNote();
+        return;
+      }
 
       if (command === "composer.focus.toggle") {
         if (isComposerApprovalState || isVoiceRecording || isVoiceTranscribing) return;
@@ -493,6 +505,7 @@ export function useChatKeyboardShortcuts({
     isComposerApprovalState,
     isVoiceRecording,
     isVoiceTranscribing,
+    onToggleVoiceNote,
     setTerminalWorkspaceTab,
     surfaceMode,
     scheduleComposerFocus,
