@@ -968,7 +968,12 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
   }
 
   if (persistedSelection.provider !== input.selectedProvider) {
-    return true;
+    // A persisted selection for another provider is stale context (for example a
+    // project default saved under a previous provider). Draft selections are only
+    // written through the model picker, which never mounts while this skeleton is
+    // shown — so skeletoning past catalog load deadlocks the composer. Keep the
+    // placeholder while the selected provider's catalog resolves, then render.
+    return input.providerModelsLoading;
   }
 
   if (!input.providerModelsLoading) {

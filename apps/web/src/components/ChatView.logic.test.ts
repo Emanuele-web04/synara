@@ -1467,7 +1467,25 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
     ).toBe(false);
   });
 
-  it("shows a skeleton when the provisional provider does not match the persisted thread provider", () => {
+  it("shows a skeleton while the mismatched provider's catalog is still loading", () => {
+    expect(
+      shouldShowComposerModelBootstrapSkeleton({
+        selectedProvider: "codex",
+        selectedModel: "gpt-5.4",
+        persistedModelSelection: {
+          provider: "opencode",
+          model: "openai/gpt-5.4",
+        },
+        draftModelSelection: null,
+        providerModelsLoading: true,
+      }),
+    ).toBe(true);
+  });
+
+  // A persisted selection for another provider (e.g. a project default saved under
+  // a previous provider) must not deadlock the composer: draft selections are only
+  // written through the picker, which never mounts while the skeleton is shown.
+  it("clears the skeleton once loading settles when the persisted provider differs", () => {
     expect(
       shouldShowComposerModelBootstrapSkeleton({
         selectedProvider: "codex",
@@ -1479,7 +1497,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         draftModelSelection: null,
         providerModelsLoading: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 
