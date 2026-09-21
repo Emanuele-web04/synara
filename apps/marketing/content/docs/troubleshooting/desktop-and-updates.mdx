@@ -13,7 +13,7 @@ Work through these checks in order:
 2. Fully quit any existing Synara process.
 3. Start Synara again from the normal application launcher.
 4. Restart the operating system if a previous process cannot be terminated cleanly.
-5. Re-download the current installer from the [official download page](/install).
+5. Re-download the current installer from the [official download page](/install), or on macOS run `brew reinstall --cask synara` when the official cask is installed.
 6. Reinstall over the current application without deleting workspace data.
 
 On macOS, use the Arm64 build for Apple Silicon and the x64 build for Intel. On Linux, ensure the AppImage is executable:
@@ -77,7 +77,7 @@ Fully quit every Synara process, then relaunch. Do not expose or forward Synaraâ
 2. Close active provider turns and terminal processes when practical.
 3. Fully quit Synara.
 4. Start it again and retry the update once.
-5. If the updater still fails, download the newest installer from [trysynara.com/install](/install) or [GitHub Releases](https://github.com/Emanuele-web04/synara/releases).
+5. If the updater still fails, download the newest installer from [trysynara.com/install](/install) or [GitHub Releases](https://github.com/Emanuele-web04/synara/releases). Homebrew installs may use `brew upgrade --cask synara` after `brew update`.
 6. Install the new application over the existing application.
 7. Launch Synara and verify the displayed version before resuming important work.
 
