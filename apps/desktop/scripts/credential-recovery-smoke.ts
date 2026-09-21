@@ -27,6 +27,7 @@ async function smoke() {
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const origin = `http://127.0.0.1:${address.port}`;
+  // Hidden, synthetic-only regression for PR #1028. Never attaches to a user tab.
   const window = new BrowserWindow({
     show: false,
     webPreferences: {

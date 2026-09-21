@@ -40,7 +40,7 @@ import {
   planMigrationLineageAliasRepairs,
 } from "./Migrations.ts";
 
-/** keep at most this many finished pre-migration backups */
+/** keep at most this many finished pre-migration backups (issue #618) */
 export const MIGRATION_BACKUP_RETENTION = 5;
 export const FAILED_MIGRATION_BUNDLE_RETENTION = 3;
 

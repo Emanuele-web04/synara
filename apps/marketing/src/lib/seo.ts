@@ -24,7 +24,7 @@ export const GITHUB_SPONSORS_URL = "https://github.com/sponsors/Emanuele-web04";
 export const X_PROFILE_URL = "https://x.com/emanueledpt";
 export const YOUTUBE_URL = "https://youtube.com/@emanueledpt";
 
-// brand-first title with high-intent keywords, deliberately separate from the on-page H1 — this has to win the SERP/share-card match, the H1 sells the outcome
+// brand-first title with high-intent keywords, deliberately separate from `PRODUCT_HERO_TITLE` (the on-page H1) — this has to win the SERP/share-card match, the H1 sells the outcome
 export const SITE_TITLE = `${SITE_NAME} — AI Coding Workspace for Claude Code, Codex & Cursor`;
 
 export const SITE_DESCRIPTION = PRODUCT_META_DESCRIPTION;

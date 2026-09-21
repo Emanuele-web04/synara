@@ -329,7 +329,7 @@ export const planMigrationLineageAliasRepairs = (
   return repairs;
 };
 
-/** imported DBs carry their own tracker rows under their lineage's names at the same IDs — the migrator gates on max(id), so once the imported mark reaches our latest ID every Synara migration is skipped and startup crashes on missing columns; instead compare (id,name) pairs and delete every row from the first divergence — migrations past the shared boundary are idempotent; Synara's own renumberings are repaired in place via MIGRATION_LINEAGE_ALIASES first */
+/** imported DBs carry their own tracker rows under their lineage's names at the same IDs — the migrator gates on max(id), so once the imported mark reaches our latest ID every Synara migration is skipped and startup crashes on missing columns; instead compare (id,name) pairs and delete every row from the first divergence — migrations past the shared boundary are idempotent; Synara's own renumberings (#023, then #032) are repaired in place via MIGRATION_LINEAGE_ALIASES first */
 export const reconcileMigrationLineage = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 

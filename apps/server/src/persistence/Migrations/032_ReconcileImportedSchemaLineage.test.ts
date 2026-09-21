@@ -174,17 +174,21 @@ layer("032_ReconcileImportedSchemaLineage", (it) => {
       const afterMessagesColumns = yield* projectionThreadMessagesColumnNames(sql);
       const afterProjectsColumns = yield* projectionProjectsColumnNames(sql);
 
+      // #017 + #018 columns
       assert.include(afterThreadsColumns, "handoff_json");
       assert.include(afterMessagesColumns, "source");
       assert.include(afterMessagesColumns, "skills_json");
       assert.include(afterMessagesColumns, "mentions_json");
 
+      // #019 + the columns from #020-#023
       assert.include(afterThreadsColumns, "env_mode");
       assert.include(afterThreadsColumns, "fork_source_thread_id");
       assert.include(afterThreadsColumns, "associated_worktree_path");
       assert.include(afterThreadsColumns, "associated_worktree_branch");
       assert.include(afterThreadsColumns, "associated_worktree_ref");
 
+      // #024-#031 columns can be skipped by the same max-ID gate and must be
+      // healed before read-model queries touch them on startup.
       assert.include(afterThreadsColumns, "archived_at");
       assert.include(afterThreadsColumns, "parent_thread_id");
       assert.include(afterThreadsColumns, "subagent_agent_id");

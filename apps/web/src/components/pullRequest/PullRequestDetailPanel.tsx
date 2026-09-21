@@ -314,7 +314,7 @@ export function PullRequestDetailPanel({
               type="button"
               aria-pressed={tab === item.value}
               onClick={() => setTab(item.value)}
-              // same chip skin as the dock tab strip and header diff toggle: one 28px rounded-lg family for every flat control in these header rows
+              // same chip skin as the dock tab strip ("PR #357") and header diff toggle: one 28px rounded-lg family for every flat control in these header rows
               className={cn(
                 CHAT_SURFACE_CHIP_CLASS_NAME,
                 "inline-flex items-center px-2.5",

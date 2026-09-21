@@ -364,6 +364,7 @@ const browserPerfLoggingEnabled = process.env.SYNARA_BROWSER_PERF === "1";
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
 let mainWindow: BrowserWindow | null = null;
+/** Whether the live BrowserWindow was created with `frame: false` (win32/linux). */
 let customTitleBarActive = false;
 let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
