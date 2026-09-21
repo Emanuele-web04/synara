@@ -1,0 +1,24 @@
+---
+title: Import Codex and Claude projects
+description: Bring local Codex and Claude Code projects and conversation history into Synara while preserving the source sessions.
+---
+
+Synara 0.9.0 can discover projects and conversations from local Codex and Claude Code data. Open **Import projects** from the project-import entry point on the landing page or introductory announcement.
+
+## Choose the source and conversations
+
+Select Codex, Claude Code or both. Scan the available local history, search the results and review the selected projects and sessions. Discovered selectable items start selected; deselect anything you do not want. Enable the archived-session option if those conversations should be included.
+
+The scan depends on accessible local provider data. A provider being authenticated does not guarantee that another machine's history is available locally. Review source errors before treating an empty result as an empty account.
+
+## Confirm the project folder
+
+Use the original project folder when it still exists. If the repository moved or the original folder is missing, choose the current workspace folder. Synara preserves the imported task context while assigning the destination; this is not a Git clone or a request to overwrite repository files.
+
+## Import and recover
+
+Choose **Import selected** and watch the per-item progress. You can stop the remaining queue and retry failed items. Completed imports keep their recorded identity so retry does not duplicate successful work.
+
+Synara copies provider-session state for continuation instead of resuming directly into the original source session. Source history is preserved, including completed legacy turns. This does not promise that every historical attachment or provider-internal artifact can be reconstructed.
+
+Open an imported conversation, review its history and workspace, and check the chosen provider before continuing. See [Providers](/docs/getting-started/providers) for executable/authentication setup and [Organize & navigate](/docs/features/organize) for arranging imported tasks.

@@ -18,6 +18,12 @@ guarantees. Its runtime admission requirements are listed below.
 The [remote-feedback follow-up](remote-feedback-fixes-2026-09-21.md) describes
 the current input, provider and concurrency corrections and their runtime limits.
 
+## Release support
+
+Synara 0.9.0 introduces Computer Use in beta on macOS only. Linux is coming soon.
+The Linux implementation and qualification material below describe development
+work, not released Linux Computer support.
+
 ## Isolated packaged build
 
 Build the test application with an explicit flavor, rather than modifying a

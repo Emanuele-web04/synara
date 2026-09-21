@@ -265,3 +265,9 @@ Inspect every review thread and the actual diff. A textual response does not res
   A merge, close, reopen, or comment affects other collaborators and automation. Verify the
   repository, pull request, account, and current head before confirming it.
 </Callout>
+
+## Status actions and feedback in 0.9.0
+
+PR controls expose actions appropriate to the current status and show pending feedback while an action runs. Hover cards on chat PR links provide context without losing the conversation. Commit authors remain visible even when GitHub does not link them to an account.
+
+Lookups are cached and badge polling is reduced. Recheck the current remote head, checks and mergeability before an irreversible action; a cached badge is not an exact-head release gate.

@@ -223,3 +223,7 @@ One integration owner must compare actual diffs and evidence. Do not ask childre
 ## Model metadata and provider compatibility
 
 Gateway model metadata includes Claude context windows so agents can inspect model capacity. Pi and OpenCode calls use compatible tool schemas; a model catalog entry still describes capabilities rather than granting provider account access.
+
+## Returned task results in 0.9.0
+
+Eligible delegated runs created through the gateway can return their completed result to the originating task automatically. Delivery waits for durable output settlement and follows the initial delegated request, rather than accidentally returning a later turn. Failure and interruption remain distinct outcomes. This scoped handoff is not a promise of automatic completion delivery for every persistent-goal workflow; inspect task status and use the returned read-task reference when more detail is needed.

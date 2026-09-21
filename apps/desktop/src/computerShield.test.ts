@@ -52,7 +52,9 @@ process.stdin.on("end", () => process.exit(0));
   await chmod(binary, 0o755);
   const shield = new ComputerShield({
     helperPath: binary,
-    engageTimeoutMs: 400,
+    // Real child-process startup competes with the full workspace suite. Keep
+    // the short deadline only for the test that deliberately wedges the helper.
+    ...(options.mode === "silent" ? { engageTimeoutMs: 400 } : {}),
     onError: () => undefined,
   });
   cleanups.push(async () => {
