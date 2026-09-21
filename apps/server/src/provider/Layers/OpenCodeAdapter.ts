@@ -2409,6 +2409,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               break;
             }
             context.pendingPermissions.set(event.properties.id, event.properties);
+            const toolRef = event.properties.tool;
+            const proposedTool = toolRef
+              ? Array.from(context.partById.values()).find(
+                  (part) =>
+                    part.type === "tool" &&
+                    part.callID === toolRef.callID &&
+                    part.messageID === toolRef.messageID,
+                )
+              : undefined;
             yield* emit(context, {
               ...buildEventBase({
                 threadId: context.session.threadId,
@@ -2423,7 +2432,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   event.properties.patterns.length > 0
                     ? event.properties.patterns.join("\n")
                     : event.properties.permission,
-                args: event.properties.metadata,
+                args: {
+                  ...event.properties.metadata,
+                  localAutoTool:
+                    proposedTool?.type === "tool" && "input" in proposedTool.state
+                      ? {
+                          permission: event.properties.permission,
+                          toolName: proposedTool.tool,
+                          input: proposedTool.state.input,
+                        }
+                      : null,
+                },
               },
             });
             break;

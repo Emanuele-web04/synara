@@ -4,6 +4,7 @@ const AUTO_RUNTIME_MODE_PROVIDERS = new Set<ProviderKind>(["codex", "claudeAgent
 const RUNTIME_MODE_PRIVILEGE = {
   "approval-required": 0,
   auto: 1,
+  "auto-local": 1,
   "full-access": 2,
 } as const satisfies Record<RuntimeMode, number>;
 

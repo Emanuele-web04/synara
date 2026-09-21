@@ -216,7 +216,7 @@ export function applyDroidAcpModelSelection<E>(input: {
 export function applyDroidAcpInteractionMode<E>(input: {
   readonly runtime: Pick<AcpSessionRuntimeShape, "setConfigOption" | "setMode">;
   readonly interactionMode?: ProviderInteractionMode;
-  readonly runtimeMode?: "approval-required" | "full-access";
+  readonly runtimeMode?: "approval-required" | "auto-local" | "full-access";
   readonly mapError: (context: DroidAcpModeSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {
   const modeId =

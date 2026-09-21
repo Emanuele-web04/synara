@@ -1,3 +1,4 @@
+import { LocalAutoSettingsPanel } from "~/components/settings/LocalAutoSettingsPanel";
 // FILE: _chat.settings.tsx
 // Purpose: Render the dedicated settings experience with its own section sidebar and grouped panels.
 // Layer: Route screen
@@ -1326,6 +1327,7 @@ function SettingsRouteView() {
                 />
                 <WorktreesSettingsPanel active={activeSection === "worktrees"} />
                 <ArchivedSettingsPanel active={activeSection === "archived"} />
+                <LocalAutoSettingsPanel active={activeSection === "auto-mode"} />
                 <ModelsSettingsPanel
                   active={activeSection === "models"}
                   settings={settings}

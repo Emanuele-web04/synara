@@ -252,7 +252,12 @@ export const ProviderStartOptions = Schema.Struct({
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 
-export const RuntimeMode = Schema.Literals(["approval-required", "auto", "full-access"]);
+export const RuntimeMode = Schema.Literals([
+  "approval-required",
+  "auto",
+  "auto-local",
+  "full-access",
+]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan", "debug"]);

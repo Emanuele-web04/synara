@@ -14,6 +14,7 @@ export const SETTINGS_SECTION_IDS = [
   "worktrees",
   "archived",
   "models",
+  "auto-mode",
   "providers",
   "skills",
   "usage",
@@ -135,6 +136,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Choose visible coding agents and manage their installed CLI tools.",
     icon: "puzzle",
     eyebrow: "Coding agents",
+  },
+  {
+    id: "auto-mode",
+    group: "coding",
+    label: "Auto mode",
+    description: "Install a local model to review tool calls and keep work moving.",
+    icon: "shield-code",
+    eyebrow: "Local tool review",
   },
   {
     id: "models",

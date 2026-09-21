@@ -1,3 +1,4 @@
+import { ToolApprovalGate } from "../toolApprovalGate.ts";
 import crypto from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
@@ -134,6 +135,10 @@ type ForeignConversationState = ToolSurfaceCounters & {
 };
 
 type AntigravitySessionContext = ToolSurfaceCounters & {
+  readonly toolApprovals: ToolApprovalGate;
+  readonly seenHookApprovals: Set<string>;
+  approvalDirectory?: string;
+  localAutoContextIncomplete?: boolean;
   session: ProviderSession;
   gatewaySessionLease?: AgentGatewaySessionLease;
   harnessPolicyDelivered?: boolean;
@@ -300,7 +305,8 @@ const event = process.argv[2] || "unknown";
 let payload = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { payload += chunk; });
-process.stdin.on("end", () => {
+process.stdin.on("end", async () => {
+  try {
   const target = process.env.SYNARA_ANTIGRAVITY_EVENTS;
   if (!target) {
     // Mirrors the shell wrapper's inactive fallback: PreToolUse must carry a
@@ -316,6 +322,8 @@ process.stdin.on("end", () => {
     );
     return;
   }
+  const approvalDirectory = process.env.SYNARA_ANTIGRAVITY_APPROVAL_DIR;
+  const approvalId = event === "pre-tool" && approvalDirectory ? require("node:crypto").randomUUID() : undefined;
   let capturedPayload = payload.trim();
   try {
     const input = JSON.parse(capturedPayload);
@@ -353,13 +361,41 @@ process.stdin.on("end", () => {
       if (input.toolOutput !== undefined) sanitized.toolOutput = input.toolOutput;
       if (input.result !== undefined) sanitized.result = input.result;
     }
+    if (approvalId) {
+      if (!sanitized.toolCall || sanitized.toolCall.args === undefined) {
+        process.stdout.write(JSON.stringify({ decision: "deny", reason: "Missing tool arguments for Synara approval." }) + "\\n");
+        return;
+      }
+      sanitized.approvalId = approvalId;
+    }
     capturedPayload = JSON.stringify(sanitized);
   } catch {
+    if (approvalId) {
+      process.stdout.write('{"decision":"deny","reason":"Invalid tool approval payload."}\\n');
+      return;
+    }
     capturedPayload = "{}";
   }
   fs.appendFileSync(target, event + "\\t" + capturedPayload + "\\n");
   if (event === "pre-tool") {
-    const decision = process.env.SYNARA_ANTIGRAVITY_HOOK_DECISION === "allow" ? "allow" : "ask";
+    let decision = process.env.SYNARA_ANTIGRAVITY_HOOK_DECISION === "allow" ? "allow" : "ask";
+    if (approvalId) {
+      decision = "deny";
+      const responseFile = require("node:path").join(approvalDirectory, approvalId + ".json");
+      const deadline = Date.now() + 10 * 60 * 1000;
+      while (Date.now() < deadline) {
+        try {
+          const response = JSON.parse(await fs.promises.readFile(responseFile, "utf8"));
+          decision = response.decision === "allow" ? "allow" : "deny";
+          await fs.promises.unlink(responseFile).catch(() => {});
+          break;
+        } catch (error) {
+          if (error.code !== "ENOENT") break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      fs.appendFileSync(target, "approval-finished\\t" + JSON.stringify({ approvalId }) + "\\n");
+    }
     process.stdout.write(JSON.stringify({ decision }) + "\\n");
   } else if (event === "pre-invocation") {
     // PreInvocation vetoes the upcoming LLM invocation; Synara-managed
@@ -372,6 +408,11 @@ process.stdin.on("end", () => {
     // can hang the print process after the reply is already visible (#465).
     process.stdout.write("{}\\n");
   }
+  } catch {
+    process.stdout.write(JSON.stringify(event === "pre-tool"
+      ? { decision: "deny", reason: "Synara could not review this tool call." }
+      : {}) + "\\n");
+  }
 });
 `;
 }
@@ -379,7 +420,13 @@ process.stdin.on("end", () => {
 export function buildAntigravityHookConfig(
   command: (event: string) => string,
 ): Record<string, unknown> {
-  const hook = (event: string) => ({ type: "command", command: command(event) });
+  // Leave room for the hook's bounded ten-minute manual approval wait.
+  // Antigravity otherwise kills hooks after its default 30 seconds.
+  const hook = (event: string) => ({
+    type: "command",
+    command: command(event),
+    ...(event === "pre-tool" ? { timeout: 610 } : {}),
+  });
   return {
     "synara-capture": {
       PreToolUse: [{ matcher: "*", hooks: [hook("pre-tool")] }],
@@ -530,6 +577,7 @@ export async function ensureCapturePlugin(
 
 export function buildAntigravityTurnProcessEnvironment(input: {
   readonly eventFile: string;
+  readonly approvalDirectory?: string;
   readonly gatewayConnection?: Pick<AgentGatewayMcpConnection, "url">;
   readonly gatewayBootstrapToken?: string;
   readonly baseEnv?: NodeJS.ProcessEnv;
@@ -551,11 +599,13 @@ export function buildAntigravityTurnProcessEnvironment(input: {
     inheritedSynaraKeys: [
       "SYNARA_ANTIGRAVITY_EVENTS",
       "SYNARA_ANTIGRAVITY_HOOK_DECISION",
+      "SYNARA_ANTIGRAVITY_APPROVAL_DIR",
       ...gatewayKeys,
     ],
     overrides: {
       SYNARA_ANTIGRAVITY_EVENTS: input.eventFile,
-      SYNARA_ANTIGRAVITY_HOOK_DECISION: "allow",
+      SYNARA_ANTIGRAVITY_HOOK_DECISION: input.approvalDirectory ? "ask" : "allow",
+      SYNARA_ANTIGRAVITY_APPROVAL_DIR: input.approvalDirectory,
       ...gatewayEnvironment,
     },
   });
@@ -738,7 +788,11 @@ function buildAntigravityToolItemData(
         : undefined;
 
   const rawOutput =
-    postPayload?.toolOutput ?? postPayload?.result ?? postPayload?.error ?? undefined;
+    postPayload?.toolOutput ??
+    postPayload?.result ??
+    (typeof postPayload?.error === "string" && postPayload.error.trim()
+      ? postPayload.error
+      : undefined);
 
   return {
     toolCallId: itemId,
@@ -1408,6 +1462,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           stopReason: input.stopReason,
         }),
       });
+      context.toolApprovals.cancel(context.activeTurnId);
       context.turnTerminalEmitted = true;
       delete context.activeProcess;
       delete context.activeTurnId;
@@ -1926,6 +1981,69 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           typeof payload.transcriptPath === "string" ? payload.transcriptPath : undefined;
         const modelName = typeof payload.modelName === "string" ? payload.modelName : undefined;
         const ownConversationId = context.conversationId;
+        const approvalId =
+          typeof payload.approvalId === "string" &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+            payload.approvalId,
+          )
+            ? payload.approvalId
+            : undefined;
+        if (eventName === "approval-finished" && approvalId) {
+          context.toolApprovals.respond(approvalId, "cancel");
+          continue;
+        }
+        if (
+          eventName === "pre-tool" &&
+          approvalId &&
+          context.approvalDirectory &&
+          turnAtStart &&
+          !context.seenHookApprovals.has(approvalId)
+        ) {
+          context.seenHookApprovals.add(approvalId);
+          if (!Number.isInteger(payload.stepIdx) || (payload.stepIdx as number) < 0)
+            context.localAutoContextIncomplete = true;
+          const tool = payload.toolCall as { name?: unknown; args?: unknown } | undefined;
+          const responseFile = path.join(context.approvalDirectory, approvalId + ".json");
+          const review =
+            tool && typeof tool.name === "string" && tool.args !== undefined
+              ? context.toolApprovals.request({
+                  turnId: turnAtStart,
+                  requestId: approvalId,
+                  toolName: tool.name,
+                  input: tool.args,
+                  cwd: context.session.cwd,
+                  incompleteContext:
+                    context.localAutoContextIncomplete === true ||
+                    (conversationId !== undefined &&
+                      ownConversationId !== undefined &&
+                      conversationId !== ownConversationId),
+                })
+              : Promise.resolve("cancel" as const);
+          void review
+            .then(async (decision) => {
+              const allow =
+                !context.stopped &&
+                !context.interrupted &&
+                context.activeTurnId === turnAtStart &&
+                (decision === "accept" || decision === "acceptForSession");
+              await fs.writeFile(
+                responseFile + ".tmp",
+                JSON.stringify({ decision: allow ? "allow" : "deny" }),
+                { mode: 0o600 },
+              );
+              await fs.rename(responseFile + ".tmp", responseFile);
+            })
+            .catch(() => {
+              offer({
+                ...base(context),
+                type: "runtime.warning",
+                payload: {
+                  message:
+                    "Could not deliver the tool approval to Antigravity. The hook will deny the call.",
+                },
+              });
+            });
+        }
         if (
           conversationId !== undefined &&
           ownConversationId !== undefined &&
@@ -2197,12 +2315,12 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
 
     const startSession: AntigravityAdapterShape["startSession"] = (input) =>
       Effect.gen(function* () {
-        if (input.runtimeMode !== "full-access") {
+        if (input.runtimeMode !== "full-access" && input.runtimeMode !== "auto-local") {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "session/start",
             issue:
-              "Antigravity CLI print mode cannot pause for interactive approvals. Select Full access to use this provider.",
+              "Antigravity CLI print mode requires Full access or Auto (local), which pauses tool hooks for Synara approval.",
           });
         }
         const binaryPath = trim(input.providerOptions?.antigravity?.binaryPath) ?? "agy";
@@ -2222,6 +2340,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         });
         const existing = sessions.get(input.threadId);
         if (existing) {
+          existing.toolApprovals.cancel();
           existing.stopped = true;
           existing.interrupted = true;
           killPendingBackgroundTasks(existing, "session-restart-background-task-killed");
@@ -2250,6 +2369,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           updatedAt: now,
         };
         const context: AntigravitySessionContext = {
+          toolApprovals: new ToolApprovalGate({
+            provider: PROVIDER,
+            threadId: input.threadId,
+            lifecycleGeneration: input.lifecycleGeneration,
+            emit: offer,
+          }),
+          seenHookApprovals: new Set(),
           session,
           ...(input.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: input.lifecycleGeneration }
@@ -2389,6 +2515,16 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         } else {
           delete context.modelOptions;
         }
+        context.toolApprovals.cancel();
+        context.seenHookApprovals.clear();
+        if (context.session.runtimeMode === "auto-local") {
+          context.approvalDirectory = path.join(runDir, "approvals");
+          yield* Effect.promise(() =>
+            fs.mkdir(context.approvalDirectory!, { recursive: true, mode: 0o700 }),
+          );
+        } else {
+          delete context.approvalDirectory;
+        }
         context.eventFile = eventFile;
         context.processedHookBytes = 0;
         context.processedSteps.clear();
@@ -2424,7 +2560,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         const conversationId = context.conversationId;
         const args: string[] = [
           ...(conversationId ? ["--conversation", conversationId] : ["--new-project"]),
-          "--dangerously-skip-permissions",
+          ...(context.session.runtimeMode === "full-access"
+            ? ["--dangerously-skip-permissions"]
+            : []),
           "--model",
           cliModel,
           "--output-format",
@@ -2449,6 +2587,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             cwd: context.session.cwd ?? serverConfig.cwd,
             env: buildAntigravityTurnProcessEnvironment({
               eventFile,
+              ...(context.approvalDirectory
+                ? { approvalDirectory: context.approvalDirectory }
+                : {}),
               ...(gatewaySessionLease && gatewayBootstrapToken
                 ? {
                     gatewayConnection: gatewaySessionLease.connection,
@@ -2624,6 +2765,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           activeTurnId,
           Effect.gen(function* () {
             context.interrupted = true;
+            context.toolApprovals.cancel(activeTurnId);
             const hadProcess = context.activeProcess !== undefined;
             if (hadProcess) {
               // Prefer process close for settlement so stdout/hooks still drain.
@@ -2678,6 +2820,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         if (!context) return;
         context.stopped = true;
         context.interrupted = true;
+        context.toolApprovals.cancel();
         killPendingBackgroundTasks(context, "session-stop-background-task-killed");
         settleForeignConversations(context, {
           state: "interrupted",
@@ -2770,7 +2913,16 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       startSession,
       sendTurn,
       interruptTurn,
-      respondToRequest: (threadId) => unsupported(threadId, "request/respond"),
+      respondToRequest: (threadId, requestId, decision) =>
+        Effect.gen(function* () {
+          const context = yield* requireSession(threadId);
+          if (!context.toolApprovals.respond(requestId, decision))
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "request/respond",
+              detail: `Unknown pending tool approval: ${requestId}`,
+            });
+        }),
       respondToUserInput: (threadId) => unsupported(threadId, "user-input/respond"),
       stopSession,
       listSessions: () =>
