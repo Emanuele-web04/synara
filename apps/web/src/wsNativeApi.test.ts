@@ -1,8 +1,3 @@
-// FILE: wsNativeApi.test.ts
-// Purpose: Verifies the WebSocket-backed NativeApi adapter and push listener fanout.
-// Layer: Web transport tests
-// Depends on: wsTransport mock plus contracts channel constants.
-
 import {
   ApprovalRequestId,
   AutomationId,

@@ -1,8 +1,3 @@
-// FILE: ChatTranscriptPane.tsx
-// Purpose: Isolate the transcript shell so composer state changes do not re-render it unnecessarily.
-// Layer: Chat transcript shell
-// Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
-
 import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
@@ -187,8 +182,7 @@ export function ChatTranscriptPane({
   onResolveWorktreeSetup,
   findHighlightStore: findHighlightStoreProp,
 }: ChatTranscriptPaneProps) {
-  // The composer floats over the transcript's bottom edge, so the scroll-to-bottom
-  // affordance rides above it on the same inset the transcript content uses.
+  // The composer floats over the transcript's bottom edge, so the scroll-to-bottom affordance rides above it on the same inset the transcript content uses.
   const scrollButtonFrameStyle: CSSProperties | undefined =
     contentInsetRightPx || contentInsetBottomPx
       ? {
@@ -199,11 +193,7 @@ export function ChatTranscriptPane({
         }
       : undefined;
 
-  // Left-edge navigation trail: one tick per sent message. Current + visible
-  // highlights are pushed up from MessagesTimeline as the viewport scrolls. They
-  // flow through a stable store (not pane state) so scroll updates re-render only
-  // the trail, not the memoized timeline; reset on thread switch so stale
-  // highlights can't linger.
+  // highlights flow through a stable store (not pane state) so scroll updates re-render only the trail, not the memoized timeline; reset on thread switch
   const trailItems = deriveMessageTrailItems(timelineEntries);
   const [activeTrailStore] = useState(() => createActiveTrailStore());
   const [fallbackFindHighlightStore] = useState(() => createThreadFindHighlightStore());
@@ -321,15 +311,11 @@ export function ChatTranscriptPane({
           <div
             className={cn(
               "pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center py-1",
-              // Reuse the shared disclosure motion so the arrow fades + drifts in/out with
-              // the same 220ms ease-out curve (and motion-reduce fallback) as every other
-              // show/hide in the app. The wrapper stays pointer-events-none; only the
-              // button re-enables pointer events while visible.
+              // shared disclosure motion (220ms ease-out + motion-reduce fallback); wrapper stays pointer-events-none, only the button re-enables them
               DISCLOSURE_CONTENT_MOTION_CLASS,
               scrollButtonVisible ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0",
             )}
-            // Follow the same right inset as transcript rows so the button centers in the
-            // visible chat column while the side panel overlays the viewport edge.
+            // Follow the same right inset as transcript rows so the button centers in the visible chat column while the side panel overlays the viewport edge.
             style={scrollButtonFrameStyle}
           >
             <button

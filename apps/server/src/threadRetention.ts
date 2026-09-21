@@ -1,8 +1,3 @@
-// FILE: threadRetention.ts
-// Purpose: Runs the server-side retention loop that archives inactive orchestration threads.
-// Layer: Server maintenance
-// Exports: retention constants, archive-root selection, and scoped job startup.
-
 import {
   CommandId,
   type OrchestrationReadModel,
@@ -24,8 +19,7 @@ import {
 } from "./persistence/Services/AutomationRepository";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 
-// Stable prefix for retention commands. Older versions used it for reversible
-// soft-deletes; current versions archive threads so users can restore them.
+// older versions used this prefix for reversible soft-deletes; current versions archive so users can restore
 export const THREAD_RETENTION_COMMAND_ID_PREFIX = "thread-retention:";
 
 export const THREAD_RETENTION_UNUSED_MS = 7 * 24 * 60 * 60 * 1000;
@@ -46,10 +40,7 @@ function parseIsoMs(value: string | null | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-// Never trust a single timestamp: forked/handoff threads inherit the source
-// conversation's message timestamps, so `latestUserMessageAt` can predate the
-// thread's own creation. The newest signal wins so a thread is only swept when
-// every timestamp we have is past the cutoff.
+// never trust a single timestamp — forked/handoff threads inherit source message timestamps that can predate creation; the newest signal wins so a thread is swept only when every timestamp is past the cutoff
 function getThreadLastActivityMs(thread: RetentionThread): number | null {
   let lastActivityMs: number | null = null;
   for (const value of [thread.latestUserMessageAt, thread.updatedAt, thread.createdAt]) {
@@ -62,8 +53,7 @@ function getThreadLastActivityMs(thread: RetentionThread): number | null {
   return lastActivityMs;
 }
 
-// Archiving is an explicit "keep this, out of my way" signal, so archived
-// threads are never swept.
+// archiving is an explicit "keep this" signal — archived threads are never swept
 function isThreadArchived(thread: RetentionThread): boolean {
   return "archivedAt" in thread && (thread.archivedAt ?? null) !== null;
 }
@@ -95,8 +85,7 @@ function listRetentionProtectedThreadIds(
     Effect.map((result) => {
       const protectedThreadIds = new Set<ThreadId>();
       for (const definition of result.definitions) {
-        // Any thread an enabled automation still continues, whether the user chose it
-        // (heartbeat) or the automation created it for itself (dedicated).
+        // any thread an enabled automation still continues, user-chosen or automation-created
         const continuationThreadId = automationContinuationThreadId(definition);
         if (definition.enabled && continuationThreadId !== null) {
           protectedThreadIds.add(continuationThreadId);
@@ -167,10 +156,7 @@ function isThreadEligibleForRetention(
   return lastActivityMs !== null && lastActivityMs <= cutoffMs;
 }
 
-// Archiving a parent also archives its active subagent subtree. Select only roots
-// whose entire subtree is eligible, then omit eligible descendants that the root
-// command will archive. This prevents retention from cascading over a protected,
-// pinned, busy, or recent child and avoids duplicate archive commands.
+// archiving a parent also archives its active subagent subtree — select only roots whose entire subtree is eligible, then omit descendants the root command will archive; prevents cascading over a protected/pinned/busy child
 export function getRetentionArchiveRootIds(
   readModel: Pick<OrchestrationReadModel, "threads"> | Pick<OrchestrationShellSnapshot, "threads">,
   nowMs = Date.now(),
@@ -316,8 +302,7 @@ export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(func
     snapshotQuery: projectionSnapshotQuery,
     git,
   }).pipe(Effect.asVoid);
-  // Give startup/projection bootstrap a short settling window, then run one
-  // archive pass promptly so desktop installs do not need to stay open for 24 hours.
+  // give bootstrap a short settling window then run one archive pass promptly — desktop installs shouldn't need 24h open
   yield* Effect.gen(function* () {
     yield* Effect.sleep(THREAD_RETENTION_INITIAL_SWEEP_DELAY_MS);
     yield* runThreadRetentionSweep(

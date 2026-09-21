@@ -1,12 +1,4 @@
-/**
- * CursorAcpCommand tests - regression coverage for Cursor CLI executable/env resolution.
- *
- * Protects the Cursor/Grok collision where the bare `agent` name can belong to
- * Grok while Cursor's current ACP-capable executable is `cursor-agent`, and
- * keeps auth/status subprocesses browserless.
- *
- * @module CursorAcpCommand.test
- */
+// protects the Cursor/Grok `agent` name collision (Cursor's ACP binary is cursor-agent) and keeps auth/status subprocesses browserless
 import { describe, expect, it } from "vitest";
 
 import {

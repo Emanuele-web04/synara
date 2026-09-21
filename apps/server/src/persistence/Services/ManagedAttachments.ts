@@ -143,20 +143,20 @@ export interface ManagedAttachmentRepositoryShape {
     readonly messageId: string;
     readonly now: string;
   }) => Effect.Effect<ClaimManagedAttachmentsResult, PersistenceSqlError>;
-  /** Compose this operation inside the transaction that removes the durable reference. */
+  /** compose inside the transaction removing the durable reference */
   readonly markCleanupByIds: (input: {
     readonly attachmentIds: ReadonlyArray<string>;
     readonly ownerThreadId: string;
     readonly reason: string;
     readonly requestedAt: string;
   }) => Effect.Effect<ReadonlyArray<string>, PersistenceSqlError>;
-  /** Compose this operation inside the transaction that hard-deletes the thread. */
+  /** compose inside the transaction hard-deleting the thread */
   readonly markCleanupByThread: (input: {
     readonly ownerThreadId: string;
     readonly reason: string;
     readonly requestedAt: string;
   }) => Effect.Effect<ReadonlyArray<string>, PersistenceSqlError>;
-  /** Compose inside the projection transaction after computing exact retained managed IDs. */
+  /** compose inside the projection transaction after computing retained managed IDs */
   readonly markUnreferencedClaimedForCleanup: (input: {
     readonly ownerThreadId: string;
     readonly retainedAttachmentIds: ReadonlyArray<string>;
@@ -174,11 +174,11 @@ export interface ManagedAttachmentRepositoryShape {
     readonly leaseExpiresAt: string;
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<ManagedAttachmentCleanupJob>, PersistenceSqlError>;
-  /** Jobs at the retry ceiling remain durable and require operator intervention. */
+  /** jobs at the retry ceiling stay durable and require operator intervention */
   readonly listFailedCleanup: (input: {
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<ManagedAttachmentCleanupJob>, PersistenceSqlError>;
-  /** Purge only completed tombstones older than the caller-owned retention cutoff. */
+  /** purge only completed tombstones older than the caller-owned cutoff */
   readonly compactDeleted: (input: {
     readonly deletedBefore: string;
     readonly limit: number;
@@ -190,7 +190,7 @@ export interface ManagedAttachmentRepositoryShape {
     readonly nextAttemptAt: string;
     readonly updatedAt: string;
   }) => Effect.Effect<boolean, PersistenceSqlError>;
-  /** `already-missing` (ENOENT) and a physical delete have identical durable completion. */
+  /** `already-missing` and a physical delete have identical durable completion */
   readonly completeCleanup: (input: {
     readonly attachmentId: string;
     readonly expectedLeaseOwner: string;

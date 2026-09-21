@@ -1,9 +1,3 @@
-// FILE: PastedTextChip.tsx
-// Purpose: Attachment-style "pasted text" cards for the collapsed big-paste feature
-//   - the composer card (insert-into-field / remove) and the transcript card
-//   (click-to-expand echo of a sent paste).
-// Layer: Chat composer/transcript presentation
-
 import { type ButtonHTMLAttributes, type ReactNode, useState } from "react";
 
 import { ChevronRightIcon, FileIcon } from "~/lib/icons";
@@ -15,8 +9,7 @@ interface PastedTextCardMetrics {
   charCount: number;
 }
 
-// Shared underlined affordance under the card title ("Show in text field" /
-// "Show text"). Callers supply the content and behavior; the treatment is fixed.
+// Shared underlined affordance under the card title ("Show in text field" / "Show text"). Callers supply the content and behavior; the treatment is fixed.
 function PastedTextCardAction({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
@@ -62,8 +55,7 @@ interface ComposerPastedTextCardProps {
   onRemove: () => void;
 }
 
-// Composer attachment card: a document tile, the first line of the paste, and a
-// "Show in text field" action that drops the full text back into the editor.
+// Composer attachment card: a document tile, the first line of the paste, and a "Show in text field" action that drops the full text back into the editor.
 export function ComposerPastedTextCard({
   text,
   metrics,
@@ -93,8 +85,7 @@ interface UserMessagePastedTextCardProps {
   metrics: PastedTextCardMetrics;
 }
 
-// Transcript echo: the same card, but the action expands the full pasted content
-// in place (read-only) instead of editing.
+// Transcript echo: the same card, but the action expands the full pasted content in place (read-only) instead of editing.
 export function UserMessagePastedTextCard({ text, metrics }: UserMessagePastedTextCardProps) {
   const [expanded, setExpanded] = useState(false);
 

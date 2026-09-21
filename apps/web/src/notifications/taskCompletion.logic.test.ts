@@ -566,10 +566,7 @@ describe("collectCompletedThreadCandidates", () => {
   );
 
   it("re-emits a settle wobble under the same dedup key as the original completion", () => {
-    // A follow-up turn spinning up flips orchestrationStatus to "running" while
-    // latestTurn still points at the finished turn; when the status wobbles back
-    // out of "running" before the new turn registers, the old completion is
-    // re-emitted. The runtime dedupes it because the key is identical.
+    // status wobble re-emits the old completion — the runtime dedupes on the identical key
     const settledTurn = {
       turnId: TurnId.makeUnsafe("turn-1"),
       state: "completed",
@@ -612,9 +609,7 @@ describe("collectCompletedThreadCandidates", () => {
   });
 
   it("keeps the dedup key stable when a checkpoint diff rewrites the turn's completedAt", () => {
-    // thread.turn-diff-completed rebuilds latestTurn with the checkpoint's own
-    // timestamp, so the same turn can re-settle under a different completedAt
-    // than the one originally notified. The key must not depend on it.
+    // turn-diff-completed rebuilds latestTurn with the checkpoint's own timestamp — the key must not depend on completedAt
     const settledTurnAt = (completedAt: string) =>
       ({
         turnId: TurnId.makeUnsafe("turn-1"),

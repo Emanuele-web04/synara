@@ -123,8 +123,7 @@ export async function refreshPiOpenCodeCatalog(
       }
     }
     if (signal.aborted) return;
-    // Keep the SDK's native authentication and per-model protocol dispatch.
-    // ModelRuntime composes models.json over this base; extensions load afterward.
+    // Keep the SDK's native authentication and per-model protocol dispatch. ModelRuntime composes models.json over this base; extensions load afterward.
     const resolvedModels = models;
     runtime.registerNativeProvider({
       ...opencodeProvider(),

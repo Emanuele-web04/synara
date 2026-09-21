@@ -49,7 +49,7 @@ export const AutomationSchedule = Schema.Union([
     timeOfDay: AutomationTimeOfDay,
     timezone: Schema.optional(AutomationTimezone),
   }),
-  // Runs at `timeOfDay` on every weekday (Mon-Fri) in the optional schedule timezone.
+  // runs at `timeOfDay` every weekday in the optional schedule timezone
   Schema.Struct({
     type: Schema.Literal("weekdays"),
     timeOfDay: AutomationTimeOfDay,
@@ -72,15 +72,7 @@ export type AutomationSchedule = typeof AutomationSchedule.Type;
 export const AutomationWorktreeMode = Schema.Literals(["auto", "local", "worktree"]);
 export type AutomationWorktreeMode = typeof AutomationWorktreeMode.Type;
 
-/**
- * Automation execution model. It selects *where* runs execute; it never restricts
- * which stop conditions an automation may use.
- * - `standalone`: every run creates a fresh thread + turn (project task on a schedule).
- * - `heartbeat`: every run continues an existing target thread (a self-resuming loop).
- * - `dedicated`: the first run creates a thread the automation owns, and every later
- *   run continues that same thread — one growing conversation instead of one thread
- *   per run, without ever writing into somebody else's thread.
- */
+/** selects *where* runs execute, never which stop conditions apply — standalone: fresh thread per run; heartbeat: continues a chosen thread; dedicated: first run creates a thread the automation owns forever */
 export const AutomationMode = Schema.Literals(["standalone", "heartbeat", "dedicated"]);
 export type AutomationMode = typeof AutomationMode.Type;
 
@@ -151,7 +143,7 @@ export const AutomationPermissionSnapshot = Schema.Struct({
   modelSelection: ModelSelection,
   providerOptions: Schema.optional(ProviderStartOptions),
   completionPolicyVersion: Schema.optional(NonNegativeInt),
-  /** Stable one-based iteration ordinal claimed for this run. */
+  /** stable one-based iteration ordinal claimed for this run */
   iterationNumber: Schema.optional(PositiveInt),
   runtimeMode: RuntimeMode,
   interactionMode: AutomationInteractionMode,
@@ -227,27 +219,23 @@ export const AutomationDefinition = Schema.Struct({
   interactionMode: AutomationInteractionMode,
   worktreeMode: AutomationWorktreeMode,
   mode: AutomationMode,
-  /**
-   * Thread continued on each wake: the user-chosen target for heartbeat, or the
-   * automation's own thread for dedicated (server-assigned after its first run).
-   * Always null for standalone automations.
-   */
+  /** heartbeat: user-chosen target; dedicated: automation's own thread (server-assigned after first run); null for standalone */
   targetThreadId: Schema.NullOr(ThreadId),
-  /** Suggested agent-created automations require an explicit user resolution. */
+  /** suggested agent-created automations require an explicit user resolution */
   proposalState: Schema.optional(Schema.NullOr(AutomationProposalState)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
-  /** Successful-run attention policy. Null legacy rows decode as the default "all". */
+  /** null legacy rows decode as the default "all" */
   notificationPolicy: Schema.optional(AutomationNotificationPolicy).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_NOTIFICATION_POLICY),
   ),
-  /** Minimum quiet period after the continued thread's last completed turn. */
+  /** minimum quiet period after the continued thread's last completed turn */
   heartbeatCooldownSeconds: Schema.optional(NonNegativeInt).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_HEARTBEAT_COOLDOWN_SECONDS),
   ),
-  /** Hard cap on total runs before the automation auto-disables. Null = unbounded. */
+  /** null = unbounded */
   maxIterations: Schema.NullOr(PositiveInt),
-  /** Consecutive failed runs allowed before auto-disable. Null = never auto-disable. */
+  /** null = never auto-disable */
   stopAfterConsecutiveFailures: Schema.optional(Schema.NullOr(PositiveInt)).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_STOP_AFTER_CONSECUTIVE_FAILURES),
   ),
@@ -260,15 +248,15 @@ export const AutomationDefinition = Schema.Struct({
   disabledAt: Schema.optional(Schema.NullOr(AutomationIsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
-  /** Natural language stop condition, evaluated in every mode. */
+  /** evaluated in every mode */
   completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_COMPLETION_POLICY),
   ),
-  /** Increments whenever the persisted stop policy changes; run snapshots use it for stale checks. */
+  /** increments on stop-policy changes; run snapshots use it for stale checks */
   completionPolicyVersion: Schema.optional(NonNegativeInt).pipe(
     Schema.withDecodingDefault(() => 0),
   ),
-  /** Save time for the current completion policy; used only for legacy run snapshots. */
+  /** used only for legacy run snapshots */
   completionPolicyUpdatedAt: Schema.optional(AutomationIsoDateTime).pipe(
     Schema.withDecodingDefault(() => "1970-01-01T00:00:00.000Z"),
   ),
@@ -279,7 +267,6 @@ export const AutomationDefinition = Schema.Struct({
   acknowledgedRisks: Schema.Array(
     Schema.Literals(["full-access", "local-checkout", "fast-interval"]),
   ),
-  /** Number of runs created so far; used to enforce maxIterations. */
   iterationCount: NonNegativeInt,
   createdAt: AutomationIsoDateTime,
   updatedAt: AutomationIsoDateTime,

@@ -1,4 +1,4 @@
-// Merge native provider metadata by local workspace identity, retaining each thread's source cwd.
+// merge native provider metadata by local workspace identity, retaining each thread's source cwd
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 
@@ -85,7 +85,7 @@ export async function buildProjectImportCatalog(
     )
       continue;
     const root = await canonical(project.workspaceRoot);
-    // Keep a deterministic existing destination even if an older database contains duplicate roots.
+    // keep a deterministic existing destination even if an older db contains duplicate roots
     const identity = importPathIdentity(root);
     if (!existingByRoot.has(identity))
       existingByRoot.set(identity, { ...project, workspaceRoot: root });
@@ -114,7 +114,7 @@ export async function buildProjectImportCatalog(
     const git = await gitWorkspace(cwd);
     const existing = mostSpecificRoot(inferenceRoots, cwd);
     if (!git) return existing ?? cwd;
-    // Saved Synara and explicitly declared Codex subprojects both outrank Git's root.
+    // saved Synara and explicitly declared Codex subprojects both outrank Git's root
     if (existing && contains(git.worktree ?? git.root, existing)) return existing;
     if (git.worktree) {
       const originalCwd = path.join(git.root, path.relative(git.worktree, cwd));
@@ -154,7 +154,7 @@ export async function buildProjectImportCatalog(
       for (const sourceRoot of sourceProject.roots) {
         if (!isAbsoluteDirectory(sourceRoot)) continue;
         const physicalRoot = await canonical(sourceRoot);
-        // Claude has no native project IDs: its discovery groups are cwd hints.
+        // Claude has no native project ids — its discovery groups are cwd hints
         const root =
           provider === "claudeAgent" ? await derivedWorkspace(physicalRoot) : physicalRoot;
         roots.set(importPathIdentity(root), root);
@@ -184,7 +184,7 @@ export async function buildProjectImportCatalog(
           : undefined;
       let root: string | undefined;
       if (sourceProject?.roots.length === 1) {
-        // Explicit assignment survives even after a temporary worktree has been deleted.
+        // explicit assignment survives even after a temporary worktree is deleted
         root = sourceProject.roots[0];
       } else if (sourceProject && sourceProject.roots.length > 1) {
         root = mostSpecificRoot(sourceProject.roots, cwd);

@@ -1,6 +1,3 @@
-// FILE: EnvironmentUsageSection.tsx
-// Purpose: "Usage" section of the Environment panel — compact menu for the active provider.
-
 import type { ProviderKind } from "@synara/contracts";
 import { providerUsageDisplayName } from "@synara/shared/providerUsage";
 import { useQuery } from "@tanstack/react-query";
@@ -28,17 +25,14 @@ import {
 export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }) {
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const settingsQuery = useQuery(serverSettingsQueryOptions());
-  // The batch snapshot is an enrichment, not a gate: when the provider's live fetch fails or is
-  // missing from the batch, the menu model still blends local archives and thread rate limits, so
-  // the row must render regardless. Only an explicitly disabled provider hides the section.
+  // the batch snapshot is an enrichment, not a gate — the model still blends local archives and thread rate limits; only an explicitly disabled provider hides the section
   const snapshot = (usageQuery.data ?? []).find((entry) => entry.provider === provider);
   const model = useProviderUsageMenuModel(provider, { providerSnapshot: snapshot });
 
   if (settingsQuery.data?.providers[provider].enabled === false) {
     return null;
   }
-  // Nothing displayable yet (first fetch still running, sign-in required, or the provider
-  // exposes no usage): hide the section entirely — it appears once any source yields data.
+  // nothing displayable yet (first fetch running, sign-in required, provider exposes no usage): hide until any source yields data
   if (model.rows.length === 0 && model.usageLines.length === 0) {
     return null;
   }

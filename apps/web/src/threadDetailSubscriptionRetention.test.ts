@@ -407,10 +407,7 @@ describe("threadDetailSubscriptionRetention", () => {
   });
 
   it("stops owning an evicted thread whose detail a raced snapshot restored", () => {
-    // Regression: eviction wipes detail and notifies lease owners, which refresh the
-    // thread. When that snapshot lands before the lease drops, the restored slices
-    // belong to no retention entry — and eviction only ever runs from a retention
-    // entry, so the lease owner must be able to see that nothing owns them.
+    // eviction only ever runs from a retention entry — when a refreshed snapshot lands before the lease drops, the restored slices belong to no entry and the lease owner must see nothing owns them
     vi.useFakeTimers();
     const threadId = ThreadId.makeUnsafe("thread-raced-snapshot");
 
@@ -420,7 +417,6 @@ describe("threadDetailSubscriptionRetention", () => {
 
     expect(getRetainedThreadDetailIdsSnapshot()).toEqual([]);
 
-    // The refreshed snapshot lands and repopulates the store.
     useStore.setState({
       messageIdsByThreadId: { [threadId]: [] },
       messageByThreadId: { [threadId]: {} },
@@ -429,7 +425,6 @@ describe("threadDetailSubscriptionRetention", () => {
     expect(isThreadDetailRetained(threadId)).toBe(false);
     expect(useStore.getState().messageByThreadId?.[threadId]).toBeDefined();
 
-    // The lease owner evicts on lease drop precisely because retention disclaims it.
     useStore.getState().evictThreadDetail(threadId);
     expect(useStore.getState().messageByThreadId?.[threadId]).toBeUndefined();
   });

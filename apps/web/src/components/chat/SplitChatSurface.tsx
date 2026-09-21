@@ -100,8 +100,7 @@ function clampSplitRatio(value: number): number {
   return Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, value));
 }
 
-// Split panes cannot reuse the desktop Sidebar primitive because it positions the panel
-// against the viewport. This embedded shell keeps browser/diff content anchored to the pane.
+// Split panes cannot reuse the desktop Sidebar primitive because it positions the panel against the viewport. This embedded shell keeps browser/diff content anchored to the pane.
 function SplitPaneEmbeddedPanel(props: {
   splitViewId: SplitViewId;
   paneId: PaneId;
@@ -126,9 +125,7 @@ function SplitPaneEmbeddedPanel(props: {
       : SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX;
   const minPanelWidth =
     props.panel === "browser" ? BROWSER_PANEL_MIN_WIDTH : SINGLE_PANEL_MIN_WIDTH;
-  // Keyed by storageKey so switching panel/pane re-reads the persisted width by
-  // deriving during render instead of resetting from an effect. Resizes stamp the
-  // current key; a stale key re-reads localStorage for the new panel's value.
+  // keyed by storageKey so switching panel/pane re-reads the persisted width by deriving during render; resizes stamp the current key, a stale key re-reads localStorage
   const [panelWidthState, setPanelWidthState] = useState<{ key: string; value: number }>(() => ({
     key: storageKey,
     value: getLocalStorageItem(storageKey, Schema.Finite) ?? defaultPanelWidth,
@@ -588,8 +585,7 @@ function SplitPaneSurface(props: {
       {props.isFocused ? (
         <div
           aria-hidden="true"
-          // The accent border alone marks the focused pane; unfocused panes stay
-          // undimmed so they never read as disabled.
+          // The accent border alone marks the focused pane; unfocused panes stay undimmed so they never read as disabled.
           className="pointer-events-none absolute inset-[0.9px] z-20 border border-[color-mix(in_srgb,var(--info)_45%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--info)_12%,transparent)] transition-opacity duration-150"
         />
       ) : null}
@@ -597,9 +593,7 @@ function SplitPaneSurface(props: {
   );
 }
 
-// Module-level and shell-only: this surface only reads shell fields (title, projectId,
-// modelSelection, timestamps, sidechatSourceThreadId), so subscribing to full threads would
-// rebuild every thread's message/activity lists on each streaming flush for no benefit.
+// shell-only subscription: this surface reads shell fields only — full threads would rebuild every message/activity list on each streaming flush for no benefit
 const selectThreadShells = createThreadShellsSelector();
 
 export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadId: ThreadId }) {

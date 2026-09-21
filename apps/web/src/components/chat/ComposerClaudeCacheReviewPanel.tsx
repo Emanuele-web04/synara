@@ -7,8 +7,7 @@ import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
 
 export type ClaudeCacheReviewDecision = "continue" | "compact" | "cancel";
 
-// An accepted choice is already visible in the transcript (compaction progress
-// or the resumed turn), so the panel only returns if the review fails.
+// An accepted choice is already visible in the transcript (compaction progress or the resumed turn), so the panel only returns if the review fails.
 export function isClaudeCacheReviewPanelVisible(review: PendingClaudeCacheReview): boolean {
   return review.status !== "responding" && review.status !== "compacting";
 }

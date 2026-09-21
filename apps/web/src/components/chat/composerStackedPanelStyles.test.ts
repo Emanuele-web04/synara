@@ -1,7 +1,3 @@
-// FILE: composerStackedPanelStyles.test.ts
-// Purpose: Pins the shared composer-stacked panel row and chrome tokens.
-// Layer: Chat composer regression test
-
 import { describe, expect, it } from "vitest";
 
 import {

@@ -1,7 +1,3 @@
-// FILE: storePersistence.ts
-// Purpose: Persists project-only renderer preferences without depending on the Zustand facade.
-// Exports: Persistence I/O plus read-only remembered project UI state.
-
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 
 import type { AppState } from "./storeState";
@@ -52,10 +48,6 @@ function resetRememberedProjectState(): void {
   persistedExpandedProjectCwdsDefined = false;
 }
 
-/**
- * Retains preferences only for the authoritative snapshot's workspace roots.
- * Callers pass normalized keys (`projectCwdKey`).
- */
 export function resetStaleRememberedProjectState(incomingCwdKeys: ReadonlySet<string>): void {
   if (incomingCwdKeys.size === 0) {
     resetRememberedProjectState();
@@ -66,9 +58,7 @@ export function resetStaleRememberedProjectState(incomingCwdKeys: ReadonlySet<st
     ...persistedExpandedProjectCwds,
     ...persistedProjectNamesByCwd.keys(),
   ]);
-  // An all-collapsed legacy payload has no identities to compare. Preserve it
-  // for the first non-empty snapshot; remembering that snapshot upgrades it to
-  // modern per-project state. An authoritative empty snapshot expires it above.
+  // an all-collapsed legacy payload has no identities to compare — preserve it for the first non-empty snapshot; an authoritative empty snapshot expires it above
   if (persistedExpandedProjectCwdsDefined && rememberedCwdKeys.size === 0) {
     return;
   }
@@ -84,7 +74,6 @@ export function resetStaleRememberedProjectState(incomingCwdKeys: ReadonlySet<st
     resetRememberedProjectState();
     return;
   }
-  // Close gaps left by removals so unknown projects sort after retained ones.
   const orderedCwds = [...persistedProjectOrderByCwd].toSorted((a, b) => a[1] - b[1]);
   for (const [index, [cwdKey]] of orderedCwds.entries()) {
     persistedProjectOrderByCwd.set(cwdKey, index);
@@ -101,9 +90,7 @@ export function rememberProjectState(
     } else {
       persistedExpandedProjectCwds.delete(cwdKey);
     }
-    // Callers pass the full ordered project list, so the array position is the
-    // current order. Re-index known projects too, or the remembered order would
-    // drift after reorderProjects.
+    // Callers pass the full ordered project list, so the array position is the current order. Re-index known projects too, or the remembered order would drift after reorderProjects.
     persistedProjectOrderByCwd.set(cwdKey, index);
     const localName = project.localName?.trim() ?? "";
     if (localName.length > 0) {
@@ -132,8 +119,7 @@ export function readPersistedState(initialState: AppState): AppState {
       resetRememberedProjectState();
       return initialState;
     }
-    // SAFETY: localStorage is only writable by same-origin scripts. We validate the
-    // persisted shape below, discarding any malformed entries and falling back to defaults.
+    // SAFETY: localStorage is only writable by same-origin scripts. We validate the persisted shape below, discarding any malformed entries and falling back to defaults.
     const parsed = JSON.parse(raw) as {
       expandedProjectCwds?: string[];
       projectOrderCwds?: string[];
@@ -193,8 +179,7 @@ export function persistState(state: AppState): void {
       }),
     );
   } catch (error) {
-    // Quota/private-mode storage failures are not actionable in the UI; log at
-    // debug level so they are observable in devtools without breaking chat UX.
+    // Quota/private-mode storage failures are not actionable in the UI; log at debug level so they are observable in devtools without breaking chat UX.
     console.debug("Failed to persist renderer state", error);
   }
 }

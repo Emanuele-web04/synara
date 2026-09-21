@@ -84,7 +84,7 @@ import {
 
 const ORCHESTRATION_DISPATCH_TIMEOUT_MS = 45_000;
 const DEFERRED_PROJECTION_RETRY_DELAYS_MS = [100, 500, 2_000, 10_000, 30_000] as const;
-/** Coalesce/skip full projection rebuilds when large state DBs make repair multi-minute. */
+/** coalesce/skip full rebuilds when large DBs make repair multi-minute */
 const PROJECTION_REPAIR_COOLDOWN_MS = 120_000;
 const REQUIRED_REPAIR_PROJECTORS = Object.values(ORCHESTRATION_PROJECTOR_NAMES);
 
@@ -108,7 +108,7 @@ interface EngineAdmissionState {
 
 type CommittedCommandResult = {
   readonly committedEvents: OrchestrationEvent[];
-  /** Sequences whose deferred phase was settled inside the commit transaction. */
+  /** sequences whose deferred phase settled inside the commit transaction */
   readonly deferredSettledSequences: ReadonlySet<number>;
   readonly lastSequence: number;
   readonly nextCommandReadModel: OrchestrationReadModel;
@@ -143,8 +143,7 @@ function commandToAggregateRef(command: OrchestrationCommand): {
   }
 }
 
-// Space and project metadata events share the synchronous "shell" projection path: they
-// are cheap, sidebar-visible rows that must be queryable the moment the command commits.
+// space/project metadata share the synchronous shell path — cheap sidebar-visible rows queryable the moment the command commits
 function isShellMetadataEvent(event: OrchestrationEvent): event is ShellMetadataOrchestrationEvent {
   return (
     event.type === "space.created" ||
@@ -197,8 +196,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const deferredProjectionRetryAttempts = yield* Ref.make(0);
   const deferredProjectionLastFailure = yield* Ref.make<string | null>(null);
   const deferredProjectionScope = yield* Scope.make("sequential");
-  // Full projection repair is multi-minute on large state DBs. Coalesce concurrent
-  // callers onto one rebuild and skip thrash when a repair just completed.
+  // full repair is multi-minute on large DBs — coalesce concurrent callers and skip thrash
   type ProjectionRepairError = OrchestrationDispatchError | OrchestrationEventStoreError;
   const projectionRepairInFlight = yield* Ref.make<Deferred.Deferred<
     OrchestrationReadModel,
@@ -206,9 +204,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   > | null>(null);
   const lastSuccessfulProjectionRepairAtMs = yield* Ref.make(0);
 
-  // Reactors can dispatch commands while consuming these events. Waiting for
-  // a slow subscriber here would deadlock the single command worker. Keep a
-  // bounded live window; subscribers recover overflow from the durable log.
+  // reactors dispatch commands while consuming these events — waiting on a slow subscriber would deadlock the single command worker; bounded window, subscribers recover from the durable log
   const publishCommittedEvent = (event: OrchestrationEvent) =>
     eventPublicationLock
       .withPermits(1)(
@@ -325,8 +321,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       });
     });
 
-  // When deferred projection slips, supervise bootstrap retries while idle instead of waiting
-  // for unrelated future traffic to rediscover the dirty cursor.
+  // when deferred projection slips, supervise bootstrap retries while idle instead of waiting for unrelated traffic to rediscover the dirty cursor
   const scheduleDeferredProjectionCatchUp = Effect.fn(function* (input: {
     readonly eventType: OrchestrationEvent["type"];
     readonly sequence: number;
@@ -399,21 +394,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         Ref.get(deferredProjectionRetryAttempts),
         Ref.get(deferredProjectionLastFailure),
       ]);
-      // Lag is measured directly from the cursor table so a projector that
-      // stalled without tripping the deferred dirty flag (or whose cursor row
-      // was deleted by an interrupted repair) is still visible here. Only the
-      // snapshot-fence cursors are lag-scored: the live path advances each
-      // per-projector cursor only when its predicate matches (checkpoints
-      // rejects every live event), so individual cursors legitimately trail
-      // the journal between bootstraps and scoring them would report a healthy
-      // system as permanently degraded. Missing rows follow that same fence
-      // scope: predicate-specific cursors are legitimately absent until their
-      // first matching event, while a missing required fence cursor makes the
-      // snapshot sequence incomplete. A read
-      // failure must not masquerade as health: the probe still answers (a
-      // failing /health body is worse than a degraded one), but reports
-      // state "unknown" so a database outage is distinguishable from both a
-      // healthy system and a diagnosed lag.
+      // lag measured from the cursor table so a stalled projector is still visible; only snapshot-fence cursors are scored — per-projector cursors legitimately trail between bootstraps; a failed probe must not masquerade as health: the probe answers but reports "unknown"
       const lag = yield* Effect.gen(function* () {
         const highWaterSequence = yield* eventStore.getHighWaterSequence();
         const stateRows = yield* sql<{
@@ -459,8 +440,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       const degraded =
         dirty || lag.missingProjectors.length > 0 || Object.keys(lag.lagByProjector).length > 0;
       return {
-        // A failed probe with the dirty flag set is still a known degradation;
-        // "unknown" is reserved for a failed probe with no other evidence.
+        // a failed probe with the dirty flag is known degradation — "unknown" is reserved for a failed probe with no other evidence
         state: degraded ? "degraded" : lag.probeFailed ? "unknown" : "healthy",
         inFlight,
         retryAttempts,
@@ -500,9 +480,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     thread: OrchestrationReadModel["threads"][number],
   ): OrchestrationReadModel => {
     const existingThread = model.threads.find((entry) => entry.id === thread.id);
-    // The command cache may contain only deltas received since a restart.
-    // Durable detail includes the complete text, now including pending chunks.
-    // Overlaying that detail with a partial cache would truncate completion.
+    // the cache may hold only deltas since a restart; durable detail has complete text — overlaying a partial cache would truncate completion
     const hasThread = existingThread !== undefined;
     return {
       ...model,
@@ -590,8 +568,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.sidechat.expire":
         return loadThreadDetailForDecider(command, commandReadModel, command.threadId);
       case "thread.message.assistant.complete":
-        // Read the exact message, including a resumed message older than the
-        // transcript window. This avoids loading a whole thread to finalize it.
+        // read the exact message, including one older than the transcript window — avoids loading a whole thread
         return messageRepository
           .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
           .pipe(
@@ -610,8 +587,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               return model.pipe(
                 Effect.map((readModel) => {
                   const thread = readModel.threads.find((entry) => entry.id === command.threadId);
-                  // A missing projection row must not discard text still in cache.
-                  // SQL failures stay errors; a present row remains authoritative.
+                  // a missing projection row must not discard text still in cache; SQL failures stay errors — a present row is authoritative
                   if (!thread || Option.isNone(message)) return readModel;
                   return overlayThread(readModel, {
                     ...thread,
@@ -626,9 +602,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     }
   };
 
-  // Rebuild only the project/space projection rows and snapshot cursors.
-  // Existing thread/chat projection rows stay in place so older installs do not
-  // lose history that is no longer fully represented in orchestration_events.
+  // rebuild only project/space rows and snapshot cursors — existing thread rows stay so older installs don't lose history no longer fully in the event log
   const resetDerivedProjectionState = sql.withTransaction(
     Effect.gen(function* () {
       yield* sql`DELETE FROM projection_spaces`;
@@ -712,9 +686,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       ),
     );
 
-  // Callers must build this effect inside a fiber (see `runEnvelope`): the body
-  // runs synchronously, so anything it throws is only contained when it is raised
-  // while an effect is being evaluated.
+  // callers must build this inside a fiber — the body runs synchronously so throws are only contained while an effect is being evaluated
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void, never> => {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
     const remainingBudgetMs = Math.max(0, envelope.deadlineAtMs - Date.now());
@@ -869,8 +841,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }
 
       if (command.type === "thread.claude-cache.set" && command.hold) {
-        // Admission runs in the command worker, so a stop cannot slip between
-        // this durable fence and the atomic review/session events below.
+        // admission runs in the command worker — a stop can't slip between this fence and the review/session events below
         const cancellation = yield* Stream.runHead(
           eventStore.readThreadEventsFromSequence(
             command.threadId,
@@ -1028,7 +999,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         committedCommand.committedEvents,
         (event) =>
           Effect.gen(function* () {
-            // Settled inside the commit transaction; no deferred work remains.
             if (committedCommand.deferredSettledSequences.has(event.sequence)) return;
             const isDeferredProjectionDirty = yield* Ref.get(deferredProjectionDirty);
             if (isDeferredProjectionDirty) {
@@ -1203,18 +1173,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     ),
   );
 
-  /**
-   * Runs one envelope with the worker's structural safety net.
-   *
-   * `processEnvelope` builds its effect synchronously, so a throw raised while
-   * building it (schema/normalization helpers, read-model access, anything added
-   * to that body later) would otherwise propagate into the worker's `flatMap`
-   * before `Effect.ensuring` is attached: the envelope would never be finished
-   * (`outstanding` leaks, `drain` hangs, the caller waits out the dispatch
-   * timeout) and the defect would kill the worker fiber, wedging every later
-   * command. Building it inside `Effect.suspend` turns that into a defect of this
-   * effect, which is contained per envelope so one poisoned command fails alone.
-   */
+  /** processEnvelope builds its effect synchronously — a throw while building would propagate into the worker's flatMap before `ensuring` attaches: the envelope never finishes (outstanding leaks, drain hangs) and the defect kills the worker; Effect.suspend contains it per envelope so one poisoned command fails alone */
   const runEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> =>
     Effect.suspend(() => processEnvelope(envelope)).pipe(
       Effect.catchCause((cause): Effect.Effect<void> => {
@@ -1233,8 +1192,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           Effect.asVoid,
         );
       }),
-      // Last resort: even a defect raised by the handler above (a throwing getter
-      // on the command, say) must not escape into the worker loop.
+      // last resort — a defect raised by the handler itself must not escape the worker loop
       Effect.catchCause(
         (cause): Effect.Effect<void> =>
           Cause.hasInterruptsOnly(cause) ? Effect.interrupt : Effect.void,
@@ -1306,9 +1264,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     ),
   );
 
-  // Registered after the worker so LIFO finalization gracefully drains queued
-  // commands before forkScoped can interrupt the consumer. The event bus closes
-  // only after the worker has finished every durable publication.
+  // registered after the worker so LIFO drains queued commands before forkScoped interrupts the consumer; the bus closes only after every durable publication
   yield* Effect.addFinalizer(() => stop.pipe(Effect.andThen(PubSub.shutdown(eventPubSub))));
   yield* Effect.log("orchestration engine started").pipe(
     Effect.annotateLogs({ sequence: commandReadModel.snapshotSequence }),
@@ -1356,8 +1312,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const subscribeDomainEvents: OrchestrationEngineShape["subscribeDomainEvents"] =
     eventPublicationLock.withPermits(1)(
       Effect.gen(function* () {
-        // Capture the cursor atomically with attachment, so a publication cannot
-        // fall between the live subscription and its initial replay boundary.
+        // capture the cursor atomically with attachment so a publication can't fall between the subscription and its replay boundary
         const subscription = yield* PubSub.subscribe(eventPubSub);
         let cursor = lastPublishedSequence;
         return Stream.fromEffectRepeat(PubSub.take(subscription)).pipe(
@@ -1381,9 +1336,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }),
     );
 
-  // Compatibility bridge for older tests and out-of-tree callers. Production
-  // code should use ProjectionSnapshotQuery directly instead of depending on
-  // the command engine to own a hydrated read model.
+  // compatibility bridge for older tests — production code should use ProjectionSnapshotQuery directly
   const getReadModel = () => Effect.sync(() => commandReadModel);
   const refreshCommandReadModel: OrchestrationEngineShape["refreshCommandReadModel"] = () =>
     maintenanceLock.withPermits(1)(refreshCommandReadModelFromProjectionState);
@@ -1479,8 +1432,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       );
     });
 
-  // Used by the settings screen to rebuild local indexes without deleting chats.
-  // Also invoked by empty-route / desktop recovery paths — those can stampede.
+  // rebuilds local indexes without deleting chats; also invoked by recovery paths that can stampede
   const runProjectionRepair: OrchestrationEngineShape["repairState"] = () =>
     maintenanceLock.withPermits(1)(
       Effect.gen(function* () {
@@ -1677,9 +1629,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     subscribeDomainEvents,
     dispatch,
     repairState,
-    // Each access creates a fresh PubSub subscription so that multiple
-    // consumers (Effect RPC, ProviderRuntimeIngestion, CheckpointReactor, etc.)
-    // each independently receive all domain events.
+    // each access creates a fresh subscription so every consumer receives all domain events independently
     get streamDomainEvents(): OrchestrationEngineShape["streamDomainEvents"] {
       return Stream.unwrap(subscribeDomainEvents);
     },

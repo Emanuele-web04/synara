@@ -1,9 +1,3 @@
-// FILE: fileReferenceContextMenu.ts
-// Purpose: Right-click menu shared by file rows, file previews, and chat file
-//          links (editor explorer, changed-file lists, dock file pane).
-// Layer: Web UI helpers
-// Exports: showFileReferenceContextMenu, getRevealInFolderLabel
-
 import { formatSelectionLabel, type ChatFileReference } from "~/lib/chatReferences";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { getNavigatorPlatform, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
@@ -20,12 +14,8 @@ export function getRevealInFolderLabel(platform: string): string {
   return "Show in folder";
 }
 
-// Right-click menu shared by explorer rows, changed-file rows, and the file
-// preview. Falls back to a DOM menu outside the desktop app.
 export async function showFileReferenceContextMenu(input: {
   path: string;
-  /** Absolute path to reveal in the platform file manager. Omit when the
-   * surface only knows a repository-relative path. */
   revealPath?: string;
   position: { x: number; y: number };
   /** Line/column range from source views, or a quoted snippet from surfaces

@@ -1,8 +1,3 @@
-// FILE: useThreadRecap.ts
-// Purpose: Idle-generate compact per-thread recaps without wiring into transcript rendering.
-// Layer: React hook
-// Exports: useThreadRecap for the Environment panel.
-
 import type { ProviderStartOptions, ThreadId } from "@synara/contracts";
 import { useEffect, useRef, useState } from "react";
 
@@ -53,7 +48,6 @@ function hydrateThreadRecapCache(): Partial<Record<ThreadId, ThreadRecapCacheEnt
   ) as Partial<Record<ThreadId, ThreadRecapCacheEntry>>;
 }
 
-// Debounces recap generation until a thread is quiet and the latest assistant output settled.
 export function useThreadRecap(input: UseThreadRecapInput): UseThreadRecapResult {
   const [cacheByThreadId, setCacheByThreadId] =
     useState<Partial<Record<ThreadId, ThreadRecapCacheEntry>>>(hydrateThreadRecapCache);
@@ -62,7 +56,6 @@ export function useThreadRecap(input: UseThreadRecapInput): UseThreadRecapResult
   const latestSourceSignatureByThreadIdRef = useRef<Partial<Record<ThreadId, string>>>({});
   const thread = input.thread ?? null;
   const cacheEntry = thread ? cacheByThreadId[thread.id] : undefined;
-  // Keep recap input derivation off the render hot path unless a visible panel can generate.
   const shouldPrepareRecapSource = input.enabled && input.latestTurnSettled && thread !== null;
   const idleMs = resolveThreadRecapIdleMs({
     hasExistingRecap: Boolean(cacheEntry?.text),

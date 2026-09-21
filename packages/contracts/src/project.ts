@@ -107,8 +107,7 @@ export const ProjectSearchEntriesResult = Schema.Struct({
 });
 export type ProjectSearchEntriesResult = typeof ProjectSearchEntriesResult.Type;
 
-// Exported so server and web enforce the same bounds the schema validates —
-// a drifted local copy turns into schema-decode failures instead of graceful UI.
+// exported so server and web enforce the same bounds the schema validates — a drifted copy becomes decode failures
 export const PROJECT_SEARCH_CONTENT_MAX_LIMIT = 100;
 export const PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH = 2;
 export const PROJECT_SEARCH_CONTENT_MAX_LINE_LENGTH = 1024;
@@ -137,9 +136,7 @@ export const ProjectSearchContentResult = Schema.Struct({
 });
 export type ProjectSearchContentResult = typeof ProjectSearchContentResult.Type;
 
-// Fire-and-forget warm-up of the server's workspace search index. The search
-// palette calls this when it opens so the first keystroke's query doesn't pay
-// for the index build; the response returns before the build completes.
+// warm-up call when the palette opens so the first keystroke doesn't pay for the index build
 export const ProjectPrewarmSearchIndexInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
 });
@@ -207,7 +204,7 @@ export const ProjectReadFileResult = Schema.Struct({
   version: Schema.NullOr(TrimmedNonEmptyString),
   encoding: Schema.NullOr(ProjectFileEncoding),
   lineEnding: Schema.NullOr(ProjectFileLineEnding),
-  /** True when the requested path itself is a symbolic link; reads follow it, writes must not edit through it. */
+  /** reads follow it, writes must not edit through it */
   symlink: Schema.optional(Schema.Boolean),
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
@@ -249,12 +246,7 @@ export const ProjectResolveWorkspaceFileReferencesResult = Schema.Struct({
 export type ProjectResolveWorkspaceFileReferencesResult =
   typeof ProjectResolveWorkspaceFileReferencesResult.Type;
 
-// Locates a chat file reference that failed to read inside the workspace root:
-// the server retries the workspace-relative path against ancestor directories
-// of the root (bounded to the user's home directory) and returns the absolute
-// path of the real file, or null when no candidate exists. Reading the located
-// file still goes through the preview-grant flow — this method never returns
-// file contents.
+// retries a failed chat file reference against ancestors of the workspace root (bounded to home); never returns file contents
 export const ProjectResolveOutOfRootFileReferenceInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
@@ -280,12 +272,7 @@ export const ProjectCreateLocalFilePreviewGrantResult = Schema.Struct({
 });
 export type ProjectCreateLocalFilePreviewGrantResult =
   typeof ProjectCreateLocalFilePreviewGrantResult.Type;
-// ── Dev Server Process Manager ───────────────────────────────────────
-//
-// Dev servers are first-class background processes owned by the server and
-// keyed by project id, fully decoupled from chat threads. The server tracks
-// their lifecycle and broadcasts changes over the `project.devServerEvent`
-// push channel so every client stays in sync across reconnects.
+// dev servers are server-owned processes keyed by project id, decoupled from chat threads; lifecycle broadcasts over project.devServerEvent
 
 export const ProjectDevServerStatus = Schema.Literals(["starting", "running"]);
 export type ProjectDevServerStatus = typeof ProjectDevServerStatus.Type;

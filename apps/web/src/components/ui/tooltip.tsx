@@ -50,14 +50,11 @@ function TooltipPopup({
   side?: TooltipPrimitive.Positioner.Props["side"];
   sideOffset?: TooltipPrimitive.Positioner.Props["sideOffset"];
   anchor?: TooltipPrimitive.Positioner.Props["anchor"];
-  // Surface chrome preset; see TOOLTIP_SURFACE_BY_VARIANT. `className` still wins
-  // for per-tooltip tweaks (max-width, wrapping) on top of the chosen variant.
+  // `className` still wins for per-tooltip tweaks on top of the chosen variant
   variant?: TooltipVariant;
-  // Stacking lives on the positioner (the portaled, positioned element), so a
-  // z-index override has to land here rather than on the popup className.
+  // stacking lives on the positioner — a z-index override must land here, not on the popup className
   positionerClassName?: string;
-  // The viewport owns the inner inset (px-2 py-1) for plain text tooltips; rich
-  // cards that bring their own padding can zero it here so they don't double up.
+  // the viewport owns the inner inset for plain text; rich cards with their own padding can zero it here
   viewportClassName?: string;
 }) {
   const variant = variantProp ?? "default";
@@ -79,9 +76,7 @@ function TooltipPopup({
       >
         <TooltipPrimitive.Popup
           className={cn(
-            // Structure + type are shared by every tooltip; the variant supplies the
-            // surface chrome (frosted card, picker, …) and `className` adds per-tooltip
-            // tweaks like max-width or wrapping.
+            // structure + type shared by every tooltip; the variant supplies surface chrome and className adds tweaks
             "flex h-(--popup-height,auto) w-(--popup-width,auto) origin-(--transform-origin) text-balance text-ui-sm transition-[width,height,scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0 data-instant:duration-0",
             TOOLTIP_SURFACE_BY_VARIANT[variant],
             className,

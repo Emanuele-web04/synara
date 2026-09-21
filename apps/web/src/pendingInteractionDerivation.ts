@@ -19,7 +19,6 @@ import { orderedActivities } from "./workLog";
 export interface PendingApproval {
   requestId: ApprovalRequestId;
   lifecycleGeneration?: string;
-  /** Changes only when the durable retryable response attempt changes. */
   responseAttemptKey?: string;
   requestKind: "command" | "file-read" | "file-change" | "permissions";
   createdAt: string;
@@ -38,16 +37,10 @@ export interface PendingUserInput {
 type PendingInteractionKind = OrchestrationPendingInteraction["interactionKind"];
 
 export interface PendingInteractionDerivationOptions {
-  // Aggregate flags cannot identify a pending request. When detailed
-  // settlements are missing, an explicit false clears everything. Undefined
-  // trusts only latest-turn requests; true additionally retains the newest
-  // unresolved older request so a background prompt can outlive later turns.
+  // undefined trusts only latest-turn requests; true additionally retains the newest unresolved older request so a background prompt outlives later turns
   readonly authoritativeHasPending: boolean | undefined;
   readonly latestTurnId: TurnId | undefined;
-  // The active composer supplies a wall-clock reference so durable failures
-  // and orphaned response claims become actionable under the same atomic
-  // reclaim policy enforced by persistence. Historical/sidebar derivations
-  // can omit it to remain time-independent.
+  // the active composer supplies the wall-clock so durable failures and orphaned response claims are actionable under persistence's atomic reclaim policy
   readonly responseClaimReferenceAt?: string;
 }
 
@@ -163,9 +156,7 @@ function replayPendingInteractions<
     if (activity.kind === replay.requestedActivityKind) {
       const isLatestTurnRequest =
         fallbackLatestTurnId !== undefined && activity.turnId === fallbackLatestTurnId;
-      // While aggregate state is absent, only a request tied to the latest turn
-      // is fresh enough to trust. An explicit true is stronger evidence: replay
-      // all request lifecycles, then bound the ambiguous result below.
+      // while aggregate state is absent only a latest-turn request is fresh enough to trust — explicit true is stronger: replay all request lifecycles, then bound the ambiguous result
       if (isAggregateFallback && options.authoritativeHasPending !== true && !isLatestTurnRequest) {
         continue;
       }
@@ -192,9 +183,7 @@ function replayPendingInteractions<
     }
   }
 
-  // Explicit stale-callback failures are terminal for their request instance.
-  // Apply them after replay: their orchestration sequence may be below an older
-  // request's runtime sequence, which must not resurrect an invalid callback.
+  // explicit stale-callback failures are terminal — apply after replay since their orchestration seq may sit below an older request's runtime seq, which must not resurrect an invalid callback
   if (openByInstance.size > 0) {
     const isStale = createStalePendingInteractionMatcher(replayActivities);
     for (const [key, pending] of openByInstance) {
@@ -221,9 +210,7 @@ function replayPendingInteractions<
         }
       }
     } else if (openByInstance.size > 1) {
-      // A boolean shell cannot express concurrent older interactions. Keep the
-      // newest unresolved lifecycle as the safest actionable fallback; current
-      // servers provide detailed settlements and preserve all concurrency.
+      // a boolean shell can't express concurrent older interactions — keep the newest unresolved lifecycle as the safest actionable fallback
       const newest = [...openByInstance.entries()]
         .toSorted(([, left], [, right]) =>
           left.createdAt === right.createdAt

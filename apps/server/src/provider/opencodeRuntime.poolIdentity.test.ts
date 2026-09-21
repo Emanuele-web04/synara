@@ -1,8 +1,3 @@
-// FILE: opencodeRuntime.poolIdentity.test.ts
-// Purpose: Covers managed OpenCode server pool identity normalization.
-// Layer: Provider runtime tests
-// Exports: Vitest regressions for OpenCode local server reuse
-
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";

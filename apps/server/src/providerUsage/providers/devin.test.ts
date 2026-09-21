@@ -1,7 +1,3 @@
-// FILE: providerUsage/providers/devin.test.ts
-// Purpose: Covers Devin credential fallthrough (env key, stored `devin auth login`
-// credentials) and GetUserStatus request/auth handling.
-
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
@@ -84,8 +80,7 @@ describe("devinUsageFetcher", () => {
       );
       const headers = new Headers(init?.headers);
       expect(headers.get("Authorization")).toBe("Bearer env-key");
-      // SAFETY: devinUsageFetcher constructs the body from the resolved auth, so
-      // JSON.parse of the captured request body yields the metadata object below.
+      // SAFETY: the fetcher builds the body from resolved auth, so JSON.parse of the captured body yields the metadata object
       const body = JSON.parse(String(init?.body)) as {
         metadata?: { apiKey?: string; ideName?: string };
       };

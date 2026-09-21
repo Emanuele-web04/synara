@@ -1,8 +1,3 @@
-// FILE: providerUpdates.test.ts
-// Purpose: Covers provider-update filtering shared by notifications and settings.
-// Layer: Web utility tests
-// Exports: Vitest suites for providerUpdates.ts
-
 import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -352,9 +347,7 @@ describe("shouldOfferProviderUpdateAction", () => {
 });
 
 describe("shouldPromptProviderUpdate", () => {
-  // Cursor and Antigravity self-update, so Synara has no registry to read a latest
-  // version from and their advisory is pinned to "unknown" forever. Prompting on that
-  // left a permanent "Update" badge on a fully up-to-date CLI.
+  // Cursor and Antigravity self-update, so Synara has no registry to read a latest version from and their advisory is pinned to "unknown" forever. Prompting on that left a permanent "Update" badge on a fully up-to-date CLI.
   const selfManaged = providerStatus("cursor", {
     version: "2026.07.09-c59fd9a",
     versionAdvisory: {
@@ -372,7 +365,6 @@ describe("shouldPromptProviderUpdate", () => {
   it("does not prompt when the latest version is unknowable", () => {
     expect(isProviderLatestVersionKnowable(selfManaged)).toBe(false);
     expect(shouldPromptProviderUpdate(selfManaged)).toBe(false);
-    // The update itself stays reachable as a manual action.
     expect(shouldOfferProviderUpdateAction(selfManaged)).toBe(true);
   });
 

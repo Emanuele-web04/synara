@@ -396,8 +396,7 @@ describe("terminalContext", () => {
   });
 
   it("separates file comments, terminal context, and assistant selections in display state", () => {
-    // Mirror the composer send path: assistant selections, then terminal
-    // contexts, then file comments (outermost).
+    // Mirror the composer send path: assistant selections, then terminal contexts, then file comments (outermost).
     const prompt = appendFileCommentsToPrompt(
       appendTerminalContextsToPrompt(
         appendAssistantSelectionsToPrompt("Investigate this", [

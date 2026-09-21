@@ -1,4 +1,3 @@
-// Shared confirm-gated Codex resets in settings and usage popovers.
 import type {
   CodexResetCreditOutcome,
   ServerCodexResetCredit,

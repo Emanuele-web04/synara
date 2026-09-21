@@ -1,11 +1,3 @@
-/**
- * Provider status cache helpers.
- *
- * Keeps provider readiness snapshots durable across restarts without making
- * the cache authoritative over fresh CLI probes.
- *
- * @module providerStatusCache
- */
 import { ServerProviderStatus } from "@synara/contracts";
 import { Cause, Effect, FileSystem, Schema } from "effect";
 import { writeFileStringAtomically } from "../atomicWrite";
@@ -45,8 +37,7 @@ export function resolveProviderStatusCachePath(input: {
   return `${input.stateDir}/provider-status/${input.provider}.json`;
 }
 
-// Ignore unreadable or malformed cache entries so the server can still boot
-// and fall back to fresh probes or empty state.
+// Ignore unreadable or malformed cache entries so the server can still boot and fall back to fresh probes or empty state.
 export const readProviderStatusCache = (filePath: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

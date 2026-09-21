@@ -2,10 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-// UI text follows the size chosen in Settings: use the `text-ui*` / `text-chat*`
-// tokens from index.css, never fixed Tailwind sizes (see AGENTS.md). Titles,
-// headings, and exported/static surfaces (ShareCard, SplashScreen) are the only
-// exceptions, so the number of fixed sizes may shrink but must not grow.
+// use the text-ui*/text-chat* tokens, never fixed Tailwind sizes (AGENTS.md) — titles, headings, and exported/static surfaces are the only exceptions, so fixed sizes may shrink but must not grow
 const MAX_FIXED_TEXT_SIZES = 23;
 
 const FIXED_TEXT_SIZE = /(?<![\w[-])text-(?:xs|sm|base|\[(?:9|1[0-4])(?:\.5)?px\])(?![\w-])/g;

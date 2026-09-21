@@ -1,7 +1,3 @@
-// FILE: sidebarNavOrdering.test.ts
-// Purpose: Keeps primary sidebar nav ordering normalization covered for every nav item.
-// Layer: Web settings tests
-
 import { describe, expect, it } from "vitest";
 
 import {

@@ -61,7 +61,6 @@ function requireWebUrl(value: unknown): void {
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("Non-web URL denied.");
 }
 
-/** A browser-shaped connection whose only authority is one leased WebContents. */
 export class BetterwrightCdpTarget {
   private readonly pageSession = randomUUID();
   private readonly browserSessions = new Set<string>();
@@ -110,8 +109,6 @@ export class BetterwrightCdpTarget {
 
   private readonly onDetach = () => {
     this.disposed = true;
-    // Electron detached the debugger outside this lease's teardown. Settle the
-    // lease so pending sends reject instead of hanging on the lease promise.
     this.endLease();
     this.emit({ method: "Target.detachedFromTarget", params: { sessionId: this.pageSession } });
   };
@@ -157,7 +154,6 @@ export class BetterwrightCdpTarget {
       if (!this.disposed) this.emit({ ...response, result });
     } catch {
       this.diagnostic?.(message.method, "denied");
-      // CDP errors can echo expressions, headers and secrets. Keep the transport error fixed.
       this.emit({
         ...response,
         error: { code: -32000, message: "Browser command unavailable for this target lease." },
@@ -167,8 +163,6 @@ export class BetterwrightCdpTarget {
 
   private send(method: string, params: Params, sessionId?: string | null): Promise<unknown> {
     if (this.disposed) return Promise.reject(new Error("Browser target lease ended."));
-    // `null` forces the debugger's root connection: browser-level commands are
-    // rejected when addressed to the leased page session.
     const route = sessionId === null ? undefined : (sessionId ?? this.backendSessionId);
     const operation = Promise.race([
       this.contents.debugger.sendCommand(method, params, route),
@@ -232,15 +226,9 @@ export class BetterwrightCdpTarget {
         this.pageSessions.delete(params.sessionId);
         return {};
       }
-      // Cookie reads are bounded to the leased page, never the partition's complete jar.
       if (method === "Storage.getCookies") {
         return this.send("Network.getCookies", { urls: [this.contents.getURL()] });
       }
-      // The worker installs its download guard on every host-owned target by
-      // sending Browser.setDownloadBehavior { behavior: "deny" }. Downloads are
-      // already denied host-side, so deny is a no-op — matching upstream's
-      // Electron transport. Anything else stays denied: the lease must never
-      // open the browser-wide download gate.
       if (method === "Browser.setDownloadBehavior" && params.behavior === "deny") return {};
       throw new Error("Browser-wide command denied.");
     }
@@ -258,7 +246,6 @@ export class BetterwrightCdpTarget {
         this.childSessions.has(sessionId!) ? sessionId : undefined,
       );
     }
-    // Only a host-created import worker gets this grant. It never runs model code.
     if (this.cookieImport && ["Network.getAllCookies", "Network.setCookies"].includes(method)) {
       return this.send(method, params, this.childSessions.has(sessionId!) ? sessionId : undefined);
     }
@@ -266,8 +253,6 @@ export class BetterwrightCdpTarget {
       throw new Error("Command outside target scope.");
     }
     if (method === "DOM.setFileInputFiles") {
-      // Only private staged files authorized by the host may cross this lease.
-      // An empty list clears a file input without granting filesystem access.
       if (
         !Array.isArray(params.files) ||
         params.files.length > 512 ||
@@ -289,8 +274,6 @@ export class BetterwrightCdpTarget {
       );
       const previousFocus = nativeInput ? webContents.getFocusedWebContents() : null;
       try {
-        // Native focus is shared across tabs; DOM focus alone cannot route text
-        // to an offscreen preview. Keep focus and dispatch in the same lease.
         if (nativeInput && previousFocus !== this.contents) this.contents.focus();
         const send = async () => {
           if (
@@ -306,9 +289,6 @@ export class BetterwrightCdpTarget {
             typeof params.y === "number" &&
             Number.isFinite(params.y)
           ) {
-            // Chromium can leave a move's CDP acknowledgement pending in a
-            // hidden native view. Electron dispatches the same trusted hover
-            // input without waiting for that visual acknowledgement.
             const zoom = this.contents.getZoomFactor();
             const modifiers = typeof params.modifiers === "number" ? params.modifiers : 0;
             this.contents.sendInputEvent({
@@ -371,8 +351,6 @@ export class BetterwrightCdpTarget {
                 {},
                 this.backendSessionId,
               ),
-              // An idle renderer applies termination to its next script. Consume
-              // that interrupt before releasing the lease, not in the next run.
               this.contents.debugger.sendCommand(
                 "Runtime.evaluate",
                 { expression: "void 0", silent: true },
@@ -394,11 +372,8 @@ export class BetterwrightCdpTarget {
           );
       }
     }
-    // Electron can leave awaited Runtime replies pending after a child-session
-    // detach. Only settle them locally once teardown has acknowledged revocation.
     if (leaseRevoked || this.contents.isDestroyed() || !this.contents.debugger.isAttached())
       this.endLease();
     await Promise.allSettled([...this.pending]);
-    // The manager, annotations and diagnostics share this debugger. Never detach or close it here.
   }
 }

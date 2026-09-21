@@ -1,10 +1,3 @@
-// FILE: slashCommandIcons.ts
-// Purpose: Single source of truth mapping built-in slash commands to their glyph,
-//          shared by the composer command menu, the Lexical inline chip, and the
-//          read-only echo in sent messages so `/goal` looks the same everywhere.
-// Layer: Web UI utility
-// Exports: SLASH_COMMAND_ICONS, slashCommandIcon
-
 import {
   BotIcon,
   BrainIcon,
@@ -22,9 +15,7 @@ import {
   TemporaryThreadIcon,
 } from "./icons";
 
-// Reuse the app's existing icon components for each concept so slash commands
-// stay coherent with how plan/fork/review/model/etc. appear everywhere else.
-// Don't introduce bespoke glyphs here — map to the shared `~/lib/icons` exports.
+// reuse the app's icon components so commands stay coherent with plan/fork/review/model everywhere; no bespoke glyphs — map to ~/lib/icons
 export const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   clear: EraserIcon,
   compact: Minimize2,
@@ -43,7 +34,6 @@ export const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   goal: GoalIcon,
 };
 
-/** Glyph for a slash command, falling back to `fallback` for unmapped commands. */
 export function slashCommandIcon(command: string, fallback: LucideIcon): LucideIcon {
   return SLASH_COMMAND_ICONS[command] ?? fallback;
 }

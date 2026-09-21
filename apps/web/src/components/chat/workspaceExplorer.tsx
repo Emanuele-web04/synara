@@ -1,10 +1,3 @@
-// FILE: workspaceExplorer.tsx
-// Purpose: Shared workspace file-tree explorer + file-search building blocks used
-//          by both the full editor view and the right-dock explorer pane.
-// Layer: Chat workspace-browsing UI primitives
-// Exports: WorkspaceFilesSidebar, WorkspaceSearchSidebar, WorkspaceExplorerSidebar,
-//          ExplorerActivityBarButton, useExplorerEntryPrefetch, setFileReferenceDragData.
-
 import type { ProjectEntry, ProjectFileSystemEntry } from "@synara/contracts";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -59,15 +52,12 @@ const EXPLORER_HIDDEN_DIRECTORY_NAMES = new Set([
   "target",
 ]);
 
-// Mirrors the composer mention search: debounce keystrokes so they don't fan
-// out into fuzzy-search RPCs, and cap results to keep the sidebar light.
+// mirrors the composer mention search: debounce keystrokes, cap results
 const EXPLORER_SEARCH_QUERY_DEBOUNCE_MS = 120;
 const EXPLORER_SEARCH_RESULTS_LIMIT = 80;
 const EMPTY_WORKSPACE_SEARCH_FILE_MATCHES: ReadonlyArray<ProjectEntry> = [];
 
-// Default sidebar shell: a full-height column in the editor's wide row layout
-// that collapses to a stacked block on narrow viewports. Surfaces with a fixed
-// horizontal layout (e.g. the right dock) override this via `containerClassName`.
+// full-height column in the wide layout, collapses to a stacked block on narrow viewports; fixed-layout surfaces override via containerClassName
 const EXPLORER_SIDEBAR_CONTAINER_CLASS =
   "flex min-h-[11rem] w-full shrink-0 flex-col border-b border-border/65 bg-[var(--color-background-surface)] lg:h-full lg:w-56 lg:border-b-0 lg:border-r";
 
@@ -113,8 +103,7 @@ export function useExplorerEntryPrefetch(cwd: string | null) {
   };
 }
 
-// Forwards its ref and spreads incoming props so directory rows can act as the
-// Collapsible trigger (Base UI injects onClick/aria/data + ref onto this element).
+// forwards ref and spreads props so directory rows can act as the Collapsible trigger (Base UI injects onClick/aria/ref)
 const ExplorerRow = forwardRef<
   HTMLButtonElement,
   {
@@ -142,8 +131,7 @@ const ExplorerRow = forwardRef<
   ref,
 ) {
   const isDirectory = entry.kind === "directory";
-  // Directory rows are the Collapsible trigger: chain Base UI's injected onClick
-  // (which toggles open/close) and skip file selection. File rows open the preview.
+  // directory rows are the Collapsible trigger: chain the injected onClick (toggles) and skip file selection; file rows open the preview
   const handleClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
     onClick?.(event);
     if (isDirectory) {
@@ -302,9 +290,7 @@ function WorkspaceDirectory(props: {
   );
 }
 
-// Opening the file-reference context menu from a tree row (full entry) or a
-// search-result row (path only). Both wrap the same menu, so they live here
-// instead of being re-declared in every sidebar that renders these rows.
+// shared context-menu open for tree rows (full entry) and search rows (path only)
 function useTreeEntryContextMenu(
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined,
 ) {
@@ -321,8 +307,7 @@ function useResultEntryContextMenu(
   };
 }
 
-// Scrollable file-tree body, shared by the standalone files sidebar and the
-// combined explorer sidebar (which shows it whenever the search box is empty).
+// scrollable file-tree body shared by the standalone files sidebar and combined explorer (shown while the search box is empty)
 function WorkspaceFilesTreeBody(props: {
   workspaceRoot: string | null;
   selectedFilePath: string | null;
@@ -438,9 +423,7 @@ interface WorkspaceFileSearchState {
   truncated: boolean;
 }
 
-// Fuzzy file-name search shared by the standalone search sidebar and the
-// combined explorer sidebar: debounce keystrokes, then expose the matches plus
-// the freshness flags both surfaces need to gate selection on stale results.
+// fuzzy file-name search shared by the search sidebar and combined explorer: debounce, then expose matches plus freshness flags to gate selection on stale results
 function useWorkspaceFileSearch(
   workspaceRoot: string | null,
   query: string,
@@ -458,8 +441,7 @@ function useWorkspaceFileSearch(
       limit: EXPLORER_SEARCH_RESULTS_LIMIT,
     }),
   );
-  // Results are tied to the debounced query. While the user is ahead of that
-  // query, keep old results non-selectable so Enter cannot open a stale match.
+  // results are tied to the debounced query — while the user is ahead of it, keep old results non-selectable so Enter can't open a stale match
   const searchResultsPending = inputQuery !== trimmedQuery || entriesQuery.isPlaceholderData;
   const searchResultsCurrent = !searchResultsPending;
   const fileMatches = searchResultsCurrent
@@ -476,8 +458,7 @@ function useWorkspaceFileSearch(
   };
 }
 
-// Search-box header: a fixed, full-width input that selects the top match on
-// Enter and clears (returning to the tree, in the combined sidebar) on Escape.
+// fixed full-width search input: Enter selects the top match, Escape clears back to the tree
 function WorkspaceSearchInputHeader(props: {
   query: string;
   search: WorkspaceFileSearchState;
@@ -521,8 +502,7 @@ function WorkspaceSearchInputHeader(props: {
   );
 }
 
-// Scrollable search-results body (matches list + truncation hint). Callers only
-// mount it once the query is non-empty, so the empty-query state lives outside.
+// scrollable search-results body; callers mount it only once the query is non-empty
 function WorkspaceSearchResultsBody(props: {
   workspaceRoot: string | null;
   search: WorkspaceFileSearchState;
@@ -628,9 +608,7 @@ export function WorkspaceSearchSidebar(props: {
   );
 }
 
-// Combined explorer: one panel with a fixed search box on top that shows the
-// full file tree while empty and switches to fuzzy file-name results as soon as
-// the user types — no separate Files/Search activity rail needed.
+// combined explorer: fixed search box on top, tree while empty, fuzzy results once typing — no separate Files/Search rail needed
 export function WorkspaceExplorerSidebar(props: {
   workspaceRoot: string | null;
   selectedFilePath: string | null;

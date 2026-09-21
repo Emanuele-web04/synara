@@ -1,7 +1,3 @@
-// FILE: Features.tsx
-// Purpose: Renders homepage provider and product-system sections.
-// Layer: Marketing UI section
-
 import type { ComponentType } from "react";
 import { SiOpenai } from "react-icons/si";
 import {

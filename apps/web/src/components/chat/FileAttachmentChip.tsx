@@ -1,8 +1,3 @@
-// FILE: FileAttachmentChip.tsx
-// Purpose: Renders generic file attachments as compact pills or composer cards.
-// Layer: Chat attachment presentation
-// Depends on: shared byte formatting, chat attachment types, and compact chip styles.
-
 import { formatBytes } from "@synara/shared/formatBytes";
 
 import { basenameOfPath } from "~/file-icons";
@@ -59,8 +54,7 @@ interface FileAttachmentChipProps {
   variant?: FileAttachmentChipVariant;
 }
 
-// Builds the short sub-label shown on composer cards, preferring precise
-// extensions before MIME fallbacks so long vendor MIME strings never leak into UI.
+// Builds the short sub-label shown on composer cards, preferring precise extensions before MIME fallbacks so long vendor MIME strings never leak into UI.
 function fileAttachmentTypeLabel(file: ChatFileAttachment): string {
   const basename = basenameOfPath(file.name).trim();
   const extensionStart = basename.startsWith(".") ? -1 : basename.indexOf(".");
@@ -159,8 +153,7 @@ export function FileAttachmentChip({
             pathValue={file.name}
             mimeType={file.mimeType}
             kind="file"
-            // Attachment cards keep a calm, uniform glyph: the shared icon tint,
-            // not the per-type colors used in the diff/editor file lists.
+            // Attachment cards keep a calm, uniform glyph: the shared icon tint, not the per-type colors used in the diff/editor file lists.
             colorMode="inherit"
             className="size-5"
           />

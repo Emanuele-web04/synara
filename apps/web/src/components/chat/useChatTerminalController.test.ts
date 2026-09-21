@@ -1,7 +1,3 @@
-// FILE: useChatTerminalController.test.ts
-// Purpose: Characterizes terminal split limits, focus requests, and final-tab close behavior.
-// Layer: Chat terminal controller tests
-
 import { ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

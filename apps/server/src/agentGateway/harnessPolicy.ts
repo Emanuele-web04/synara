@@ -2,7 +2,7 @@ import type { ProviderKind } from "@synara/contracts";
 
 import { AUTOMATION_AUTHORING_GUIDANCE } from "./automationAuthoringGuidance.ts";
 
-/** Canonical, versioned host policy delivered to every supported provider. */
+/** canonical, versioned host policy delivered to every supported provider */
 export const SYNARA_HARNESS_POLICY_VERSION = "2026-09-03.1";
 export const SYNARA_HARNESS_POLICY_MARKER = `[Synara harness policy ${SYNARA_HARNESS_POLICY_VERSION}]`;
 
@@ -11,11 +11,7 @@ export interface SynaraHarnessCapabilities {
   readonly automationAuthoring?: "tool-descriptions";
 }
 
-/**
- * Render one truthful policy. Providers without a safely thread-scoped MCP
- * connection still receive host identity, but are never told they can mutate
- * Synara resources.
- */
+/** providers without a thread-scoped MCP connection get host identity but are never told they can mutate Synara */
 export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilities): string {
   const controlPolicy = capabilities.gatewayControlAvailable
     ? [
@@ -37,7 +33,7 @@ export function renderSynaraHarnessPolicy(capabilities: SynaraHarnessCapabilitie
         "Mode controls execution: heartbeat appends to an idle target thread; standalone opens a fresh thread per independent run; dedicated reuses one automation-owned thread so runs build on each other without writing into another thread.",
         "Prefer dedicated for ongoing observation or tracking: standalone runs cannot see prior runs beyond memory, while dedicated keeps one growing thread.",
         'Mode does not restrict stop conditions. completionPolicy {"type":"ai-evaluated","stopWhen":"..."} works in both modes and disables the automation when the clause matches a successful run; prefer it over encoding the stop condition in the prompt. maxIterations remains the backstop, and an automation-dispatched run may always call synara_cancel_automation on its own automation.',
-        // Claude discovers these same instructions on create/update tool schemas.
+        // Claude discovers these same instructions on create/update tool schemas
         ...(capabilities.automationAuthoring === "tool-descriptions"
           ? []
           : [AUTOMATION_AUTHORING_GUIDANCE]),
@@ -92,7 +88,7 @@ export function providerHasSynaraGatewayControl(input: {
   );
 }
 
-/** Return the private host-context block exactly once for one provider session. */
+/** deliver the private host-context block exactly once per provider session */
 export function takeSynaraHarnessPolicyForSession(
   state: SynaraHarnessPolicyDeliveryState,
   capabilities: SynaraHarnessCapabilities,
@@ -106,10 +102,7 @@ export function takeSynaraHarnessPolicyForSession(
   ].join("\n");
 }
 
-/**
- * Provider-aware delivery guard. The transport flag must only become true
- * after a provider has installed thread-scoped gateway tools successfully.
- */
+/** the transport flag must only become true after the provider installed thread-scoped gateway tools */
 export function takeSynaraHarnessPolicyForProviderSession(
   state: SynaraHarnessPolicyDeliveryState,
   input: {

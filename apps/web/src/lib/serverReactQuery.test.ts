@@ -1,7 +1,3 @@
-// FILE: serverReactQuery.test.ts
-// Purpose: Locks down server React Query polling profiles and cache options.
-// Layer: Web data-fetching unit tests
-
 import { ThreadId, type ServerConfig, type ServerProviderStatus } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";

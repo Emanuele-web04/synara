@@ -1,8 +1,3 @@
-// FILE: composerPickerStyles.ts
-// Purpose: Shared tokens for picker open panels (shell, options, radius) and composer chrome.
-// Layer: UI styling helper
-// Exports: surface/option/radius tokens; open panels via ComposerPickerMenuPopup / ComposerPickerSelectPopup
-
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 
 export { COMPOSER_PICKER_SIZE, type ComposerPickerSize } from "./composerPickerSize";
@@ -11,8 +6,7 @@ export { COMPOSER_PICKER_SIZE, type ComposerPickerSize } from "./composerPickerS
 export const COMPOSER_SURFACE_SHADOW_CLASS_NAME =
   "shadow-[0_4px_18px_-6px_color-mix(in_srgb,var(--foreground)_7%,transparent)] dark:shadow-[0_6px_24px_-10px_rgba(0,0,0,0.30)]";
 
-// Uses the UI-sm token so picker labels sit slightly below the editor text size.
-// The sm: override is required to beat the Button component's base responsive text classes.
+// Uses the UI-sm token so picker labels sit slightly below the editor text size. The sm: override is required to beat the Button component's base responsive text classes.
 export const COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME =
   "text-ui-sm text-[var(--color-text-foreground-secondary)] sm:text-ui-sm font-normal hover:text-[var(--color-text-foreground)] data-pressed:text-[var(--color-text-foreground)]";
 
@@ -72,10 +66,7 @@ export const COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME = "pl-[1.125rem]"
  *  can never drift onto two different grays. */
 export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = MUTED_LABEL_TEXT_CLASS_NAME;
 
-// NOTE: Composer picker section headers (Effort, Thinking, Mode, …) now render
-// through the shared `MenuGroupLabel` primitive (../ui/menu) so they stay in
-// sync with dropdown group labels like "Git actions". Picker padding is still
-// tuned via the `--picker-section-py` token on `[data-slot="menu-label"]`.
+// picker section headers render through the shared `MenuGroupLabel` primitive so they stay in sync with dropdown group labels; padding tuned via `--picker-section-py`
 
 export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[var(--app-chat-max-width,46rem)]";
 /** Main chat column background — matches the theme Background setting exactly. */

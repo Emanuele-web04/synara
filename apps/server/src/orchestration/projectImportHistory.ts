@@ -48,7 +48,7 @@ export function makeProjectImportHistoryReader(registry: ProviderAdapterRegistry
     if (input.provider === "claudeAgent") {
       const messages = yield* projectImportPromise(async () => {
         const sdk = await loadClaudeAgentSdk();
-        // The fork has a new identity. Read that frozen copy, never the mutable original.
+        // the fork has a new identity — read that frozen copy, never the mutable original
         const [history, dates] = await Promise.all([
           sdk.getSessionMessages(input.nativeId, { dir: input.sourceCwd }),
           readClaudeImportMessageDates({ sessionId: input.nativeId, configDir: input.sourceHome }),

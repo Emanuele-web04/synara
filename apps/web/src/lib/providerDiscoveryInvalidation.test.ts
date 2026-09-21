@@ -1,7 +1,3 @@
-// FILE: providerDiscoveryInvalidation.test.ts
-// Purpose: Verifies provider-discovery invalidation ignores provider-status metadata noise.
-// Layer: Web UI provider discovery tests
-
 import type { ServerProviderStatus } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 

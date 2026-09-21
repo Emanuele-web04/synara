@@ -1,15 +1,9 @@
-// FILE: dev.mjs
-// Purpose: Runs the desktop bundle watcher and Electron watcher together in dev.
-// Layer: Desktop dev script
-// Depends on: package.json scripts `dev:bundle` and `dev:electron`
-
 import { spawn } from "node:child_process";
 
 const bunExecutable = process.execPath;
 const childProcesses = [];
 let isShuttingDown = false;
 
-// Start one named Bun script and stream its output into the current terminal.
 function startScript(scriptName) {
   const child = spawn(bunExecutable, ["run", scriptName], {
     stdio: "inherit",

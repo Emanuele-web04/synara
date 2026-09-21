@@ -1,7 +1,3 @@
-// FILE: useProviderModelCatalog.test.tsx
-// Purpose: Locks the shared provider-model catalog's memoization and discovery policy.
-// Layer: Web hook tests
-
 import {
   DEFAULT_SERVER_SETTINGS,
   MODEL_OPTIONS_BY_PROVIDER,
@@ -203,8 +199,7 @@ describe("useProviderModelCatalog", () => {
   it("keeps the foreground effect dependency stable across unrelated renders", () => {
     readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: true });
     const [first, second] = mocks.useEffect.mock.calls;
-    // React uses Object.is on each dependency: an equal-but-new query key
-    // would release/reacquire ownership and reorder split-view selections.
+    // React uses Object.is on each dependency: an equal-but-new query key would release/reacquire ownership and reorder split-view selections.
     expect(first?.[1][0]).toBe(second?.[1][0]);
     expect(first?.[1][1]).toBe(second?.[1][1]);
     expect(mocks.useEffect).toHaveBeenCalledTimes(2);
@@ -297,9 +292,7 @@ describe("useProviderModelCatalog", () => {
   });
 
   it("keeps discovering while the server settings are unavailable", () => {
-    // `serverSettings` is undefined until the settings query resolves, and stays
-    // undefined for good if it fails — the query never refetches on its own. Failing
-    // closed here would blank every provider's model list, selected one included.
+    // serverSettings stays undefined if the settings query fails and never refetches — failing closed would blank every provider's model list
     mocks.useAppSettings.mockReturnValue({ settings: SETTINGS, serverSettings: undefined });
 
     readCatalogRenders({ selectedProvider: "claudeAgent", discoveryEnabled: true });
@@ -309,8 +302,7 @@ describe("useProviderModelCatalog", () => {
   });
 
   it("keeps discovering the selected provider when the settings omit it", () => {
-    // A client talking to a server whose provider set it does not fully know must not
-    // lose model discovery over the unknown key — and must not throw reading it.
+    // A client talking to a server whose provider set it does not fully know must not lose model discovery over the unknown key — and must not throw reading it.
     const { cursor: _cursor, ...providersWithoutCursor } = DEFAULT_SERVER_SETTINGS.providers;
     mocks.useAppSettings.mockReturnValue({
       settings: SETTINGS,

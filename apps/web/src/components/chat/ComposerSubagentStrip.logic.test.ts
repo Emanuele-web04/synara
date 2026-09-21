@@ -1,9 +1,3 @@
-// FILE: ComposerSubagentStrip.logic.test.ts
-// Purpose: Locks composer subagent strip row derivation to live-turn scoping,
-// snapshot merging, and retire-once-finished behavior.
-// Layer: Web chat composer tests
-// Depends on: deriveComposerSubagentStripItems
-
 import { EventId, ThreadId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -403,8 +397,7 @@ describe("deriveComposerSubagentStripItems", () => {
     });
     expect(stillRunning.map((row) => row.kind)).toEqual(["parent", "subagent", "subagent"]);
 
-    // Everything finished and the parent turn settled: the strip retires whole,
-    // parent row included.
+    // Everything finished and the parent turn settled: the strip retires whole, parent row included.
     expect(
       deriveComposerSubagentStripItems({
         workEntries: entries("completed"),
@@ -418,8 +411,7 @@ describe("deriveComposerSubagentStripItems", () => {
   describe("settled subagent status", () => {
     const parentThreadId = ThreadId.makeUnsafe("thread-main");
 
-    // A finished subagent's thread parks in an idle session state; the row must
-    // surface the work log's terminal status instead of "Idle".
+    // A finished subagent's thread parks in an idle session state; the row must surface the work log's terminal status instead of "Idle".
     function settledSubagentThread(providerThreadId: string): Thread {
       return {
         id: localSubagentThreadId(parentThreadId, providerThreadId),
@@ -582,8 +574,7 @@ describe("deriveComposerSubagentStripItems", () => {
     };
     const enriched = enrichSubagentWorkEntries(stripEntries, [subagentThread], parentThreadId);
 
-    // Background case: parent turn already settled (liveTurnId null) while the
-    // subagent keeps running.
+    // Background case: parent turn already settled (liveTurnId null) while the subagent keeps running.
     const items = deriveComposerSubagentStripItems({
       workEntries: enriched,
       liveTurnId: null,

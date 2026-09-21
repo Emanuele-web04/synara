@@ -1,8 +1,3 @@
-// FILE: wsTransportEvents.ts
-// Purpose: Publish renderer-local WebSocket transport state changes to UI runtimes.
-// Layer: Web transport utility
-// Exports: event helpers used by wsNativeApi and terminal runtime recovery.
-
 import type { WsCompatibilityError } from "@synara/contracts";
 
 export type WsTransportState = "connecting" | "open" | "closed" | "incompatible" | "disposed";
@@ -39,7 +34,6 @@ export function emitWsTransportState(state: WsTransportState): void {
   );
 }
 
-// Subscribes to the shared transport state event. Returns an idempotent cleanup.
 export function addWsTransportStateListener(
   listener: (state: WsTransportState) => void,
   options?: { readonly replayCurrent?: boolean },

@@ -1,14 +1,3 @@
-// FILE: useTimelineRowOverlapGuard.browser.tsx
-// Purpose: Direct browser regression for the pre-paint overlap guard. The
-//          timeline-level test can't discriminate the guard's effect when the
-//          virtualizer self-corrects before paint, so this harness recreates
-//          the failure state the guard exists for: absolutely positioned
-//          containers whose `top`s were computed from stale row heights (the
-//          virtualizer's write-back deferred past the paint). The guard must
-//          push the stale containers down within the same frame — and must
-//          never pull a container up when a row shrinks.
-// Layer: Vitest browser tests
-
 import { useRef, useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
@@ -88,8 +77,7 @@ describe("useTimelineRowOverlapGuard", () => {
       await nextFrame();
 
       handleRef.current!.setRowHeight(0, 100);
-      // The ResizeObserver fires pre-paint in the frame the growth lays out;
-      // two frames later its corrections are unambiguously visible.
+      // the ResizeObserver fires pre-paint in the frame the growth lays out; two frames later its corrections are unambiguously visible
       await nextFrame();
       await nextFrame();
 
@@ -114,8 +102,7 @@ describe("useTimelineRowOverlapGuard", () => {
       await nextFrame();
       await nextFrame();
 
-      // Pulling rows up is the virtualizer's call (it defers shrink handling
-      // deliberately); the guard must not move anything.
+      // pulling rows up is the virtualizer's call (deferred shrink handling); the guard must not move anything
       expect(containerTop(1)).toBe(INITIAL_ROW_HEIGHT_PX);
       expect(containerTop(2)).toBe(INITIAL_ROW_HEIGHT_PX * 2);
     } finally {

@@ -1,8 +1,3 @@
-// FILE: providerLifecycleCoordinator.test.ts
-// Purpose: Verifies per-thread lifecycle serialization and generation ownership rules.
-// Layer: Provider lifecycle unit tests
-// Depends on: makeProviderLifecycleCoordinator.
-
 import { ThreadId } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
@@ -63,10 +58,7 @@ describe("makeProviderLifecycleCoordinator", () => {
           }),
         );
 
-        // A superseded lifecycle mutation (e.g. an idle stop that lost its race
-        // with new work) returns successfully without touching the provider.
-        // It must not leave behind a generation the live runtime never emits:
-        // that would silently drop every later runtime event for the thread.
+        // a superseded mutation returns without touching the provider — it must not leave a generation the live runtime never emits, which would drop every later event for the thread
         const observed = yield* coordinator.run(threadId, (lease) =>
           Effect.sync(() => {
             expect(coordinator.currentGeneration(threadId)).toBe(lease.generation);
@@ -129,8 +121,7 @@ describe("makeProviderLifecycleCoordinator", () => {
         const generation = yield* Deferred.await(committed);
         yield* Fiber.interrupt(fiber);
 
-        // The started runtime outlives the interrupted request, so rewinding
-        // here would orphan it exactly like an uncommitted run.
+        // The started runtime outlives the interrupted request, so rewinding here would orphan it exactly like an uncommitted run.
         expect(coordinator.currentGeneration(threadId)).toBe(generation);
       }),
     );

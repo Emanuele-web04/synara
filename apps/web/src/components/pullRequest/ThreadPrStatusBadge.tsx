@@ -1,8 +1,3 @@
-// FILE: ThreadPrStatusBadge.tsx
-// Purpose: Renders the compact, clickable PR state icon shown before classic sidebar rows.
-// Layer: Pull request presentation
-// Exports: ThreadPrStatusBadge
-
 import type { OrchestrationThreadPullRequest } from "@synara/contracts";
 import type { MouseEvent } from "react";
 

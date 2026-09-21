@@ -43,8 +43,7 @@ export default function MobileNav() {
         onClick={() => setOpen((current) => !current)}
         className="flex size-8 items-center justify-center rounded-md text-[var(--text-primary)] transition-colors hover:bg-[var(--mock-row)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-link)]"
       >
-        {/* Both icons stay mounted and cross-fade so the swap matches the
-            panel's motion instead of popping. */}
+        {/* both icons stay mounted and cross-fade so the swap matches the panel's motion instead of popping */}
         <span className="relative grid size-[18px] place-items-center">
           <svg
             className={`col-start-1 row-start-1 size-[18px] transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
@@ -69,12 +68,7 @@ export default function MobileNav() {
         </span>
       </button>
 
-      {/*
-        The panel stays mounted so it can transition on close as well as open.
-        `invisible` + `inert` keep it out of hit testing, tab order, and the
-        accessibility tree while collapsed; visibility is a discrete property,
-        so it flips only after the fade-out finishes.
-      */}
+      {/* the panel stays mounted so it can transition on close too; invisible+inert keep it out of hit testing, tab order, and the a11y tree while collapsed — visibility is discrete so it flips only after the fade-out finishes */}
       <div
         id={menuId}
         inert={!open}

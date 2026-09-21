@@ -22,7 +22,7 @@ function node(partial: Partial<DeviceUiNode> & { readonly role: string }): Devic
   };
 }
 
-/** The real Settings > Developer screen, measured on an iPhone 17 Pro. */
+/** the real Settings > Developer screen, measured on an iPhone 17 Pro */
 const DARK_APPEARANCE = node({
   role: "CheckBox",
   subrole: "Switch",
@@ -43,8 +43,7 @@ const SCREEN = node({
 
 describe("tap point resolution", () => {
   it("prefers a control's own activation point over its row centre", () => {
-    // The row spans x 36..366, so its centre is x=201: dead space that
-    // swallowed a real agent's tap. Only x=336.5 hits the switch.
+    // the row spans x 36..366 so its centre x=201 is dead space — only x=336.5 hits the switch
     expect(tapPointForNode(DARK_APPEARANCE)).toEqual({ x: 336.5, y: 198 });
   });
 
@@ -70,7 +69,7 @@ describe("resolving a label to an element", () => {
   });
 
   it("prefers an exact label over a longer one that merely contains it", () => {
-    // "Developer" must not be ambiguous just because "Developer Mode" exists.
+    // "Developer" must not be ambiguous just because "Developer Mode" exists
     const screen = node({
       role: "Application",
       children: [
@@ -125,8 +124,7 @@ describe("resolving a label to an element", () => {
       }
     })();
     expect(error).toBeInstanceOf(DeviceUiTargetError);
-    // The list has to reach the agent through the message: every transport
-    // between here and the model carries only that.
+    // the list reaches the agent through the message — every transport between here and the model carries only that
     expect(error?.message).toMatch(/Dark Appearance/);
     expect(error?.candidates.length).toBeGreaterThan(0);
   });
@@ -155,8 +153,7 @@ describe("reading a tap request", () => {
   it("refuses shapes that are neither, and says which to use", () => {
     expect(() => readTapRequest({})).toThrow(/either label .* or both x and y/);
     expect(() => readTapRequest({ x: 10 })).toThrow(/both x and y/);
-    // Both forms at once is ambiguous: silently preferring one would make the
-    // other's presence a lie about what got tapped.
+    // both forms at once is ambiguous — silently preferring one makes the other's presence a lie
     expect(() => readTapRequest({ label: "A", x: 1, y: 2 })).toThrow(/not both/);
   });
 });
@@ -170,8 +167,7 @@ describe("planning a scroll step", () => {
   });
 
   it("treats a row under the status bar as needing a scroll, not as visible", () => {
-    // On screen by coordinates, untappable in practice: the band exists so a
-    // target does not end up beneath the status bar or home indicator.
+    // on screen by coordinates, untappable in practice — the band exists so a target doesn't end up beneath the status bar
     const underStatusBar = node({ role: "Button", frame: { x: 0, y: 10, width: 402, height: 30 } });
     expect(planScrollStep(underStatusBar, screen)).not.toBeNull();
   });
@@ -179,7 +175,7 @@ describe("planning a scroll step", () => {
   it("swipes upward to pull a target below the fold into view", () => {
     const below = node({ role: "Button", frame: { x: 0, y: 1_500, width: 402, height: 44 } });
     const step = planScrollStep(below, screen);
-    // Content follows the finger, so reaching downward means dragging up.
+    // content follows the finger — reaching downward means dragging up
     expect(step).not.toBeNull();
     expect((step as NonNullable<typeof step>).toY).toBeLessThan(
       (step as NonNullable<typeof step>).fromY,

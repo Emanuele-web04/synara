@@ -15,25 +15,25 @@ describe("capHistoryBytes", () => {
   });
 
   it("bounds a newline-sparse ANSI flood to ~maxBytes (the runaway-TUI case)", () => {
-    // A redrawing TUI repaints via cursor moves with almost no newlines.
-    const frame = `\u001b[H\u001b[2K${"x".repeat(200)}`; // no trailing newline
+    // a redrawing TUI repaints via cursor moves with almost no newlines
+    const frame = `\u001b[H\u001b[2K${"x".repeat(200)}`;
     const history = frame.repeat(5_000); // ~1 MB of bytes, ~0 newlines
     const maxBytes = 16_384;
 
     const capped = capHistoryBytes(history, maxBytes);
 
     expect(Buffer.byteLength(capped, "utf8")).toBeLessThanOrEqual(maxBytes);
-    // The retained tail is still real output, not empty.
+    // the retained tail is still real output, not empty
     expect(capped.length).toBeGreaterThan(0);
   });
 
   it("never splits a multi-byte UTF-8 code point", () => {
     const emoji = "🙂"; // 4 UTF-8 bytes, 2 UTF-16 code units
     const history = `${emoji.repeat(2_000)}`;
-    const capped = capHistoryBytes(history, 401); // odd byte budget to force a mid-char cut
+    const capped = capHistoryBytes(history, 401); // odd byte budget forces a mid-char cut
 
     expect(Buffer.byteLength(capped, "utf8")).toBeLessThanOrEqual(401);
-    // A clean decode round-trips with no U+FFFD replacement characters.
+    // a clean decode round-trips with no U+FFFD
     expect(capped).not.toContain("\uFFFD");
     expect(Buffer.from(capped, "utf8").toString("utf8")).toBe(capped);
   });
@@ -43,8 +43,7 @@ describe("capHistoryBytes", () => {
     const history = `${"a".repeat(100)}${styled.repeat(50)}`;
     const capped = capHistoryBytes(history, 60);
 
-    // The retained text begins with a complete escape sequence, so xterm replay
-    // never starts mid-sequence.
+    // retained text begins with a complete escape sequence so xterm replay never starts mid-sequence
     expect(capped.startsWith("\u001b")).toBe(true);
   });
 
@@ -74,7 +73,7 @@ describe("capHistoryByLimits", () => {
 describe("TerminalHistoryBuffer", () => {
   const ESC = String.fromCharCode(0x1b);
 
-  /** Reference: eager per-chunk capping, the behavior the buffer must reproduce. */
+  /** reference: eager per-chunk capping, the behavior the buffer must reproduce */
   function eagerCap(chunks: string[], limits: HistoryLimits): string {
     let history = "";
     for (const chunk of chunks) {
@@ -124,7 +123,7 @@ describe("TerminalHistoryBuffer", () => {
 
   it("matches eager per-chunk capping for a byte-bound ANSI redraw stream", () => {
     const limits: HistoryLimits = { maxLines: 5_000, maxBytes: 16_384 };
-    // Cursor-move redraws with almost no newlines: byte cap dominates.
+    // cursor-move redraws with almost no newlines: the byte cap dominates
     const chunks = Array.from({ length: 500 }, () => `${ESC}[H${ESC}[2K${"x".repeat(200)}`);
 
     const buffer = new TerminalHistoryBuffer(limits);
@@ -175,7 +174,7 @@ describe("TerminalHistoryBuffer", () => {
     const readOnce = new TerminalHistoryBuffer(limits);
     for (const chunk of chunks) {
       interleaved.append(chunk);
-      // Force a materialize+compact between appends.
+      // force a materialize+compact between appends
       interleaved.toString();
       readOnce.append(chunk);
     }

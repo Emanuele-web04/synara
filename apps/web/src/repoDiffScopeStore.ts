@@ -1,8 +1,3 @@
-// FILE: repoDiffScopeStore.ts
-// Purpose: Persists the active repo diff scope shared by the diff panel and header badge.
-// Layer: Web UI state store
-// Exports: repo diff scope labels, validation, and a persisted Zustand store.
-
 import type { GitReadWorkingTreeDiffInput } from "@synara/contracts";
 import { useMemo } from "react";
 import { create } from "zustand";
@@ -116,8 +111,7 @@ export const useRepoDiffScopeStore = create<RepoDiffScopeStore>()(
       name: REPO_DIFF_SCOPE_STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ scope: state.scope, compareRefs: state.compareRefs }),
-      // Validate the persisted state on rehydrate: an unknown/legacy value would
-      // otherwise flow into the diff request and the label lookup unchecked.
+      // validate persisted scope on rehydrate — an unknown/legacy value would flow into the diff request and label lookup unchecked
       merge: (persisted, current) => {
         const persistedState = persisted as { scope?: unknown; compareRefs?: unknown } | undefined;
         const persistedScope = persistedState?.scope;

@@ -1,8 +1,3 @@
-// FILE: ProviderCommandReactor.test.ts
-// Purpose: Verifies provider intent orchestration, queueing, rollback, and transcript bootstrap flows.
-// Layer: Orchestration integration tests
-// Depends on: ProviderCommandReactorLive with in-memory provider and persistence services.
-
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -393,8 +388,7 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-1"),
       }),
     );
-    // Mirrors adapter behavior: the reactor consults live provider sessions
-    // (status + activeTurnId) to decide whether a turn is genuinely running.
+    // mirrors adapter behavior — the reactor consults live sessions (status + activeTurnId) to decide if a turn is running
     const setRuntimeSessionTurnState = (input: {
       readonly threadId: string;
       readonly status: ProviderSession["status"];
@@ -692,9 +686,7 @@ describe("ProviderCommandReactor", () => {
       Effect.runPromise(PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid));
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
-    // Fault injection for command admission. The reactor resolves
-    // `dispatch` off the shared engine service on every call, so swapping the
-    // property here is observed by the reactor without rebuilding the layer.
+    // the reactor resolves `dispatch` off the shared engine per call — swapping the property is observed without rebuilding the layer
     const engineDispatchTarget = engine as {
       dispatch: OrchestrationEngineShape["dispatch"];
     };
@@ -1460,8 +1452,7 @@ describe("ProviderCommandReactor", () => {
           state: terminal,
           contextCompacted: true,
         });
-        // The terminal removes the blocker before replay finishes; acquire the
-        // reconciliation lock again so the assertion observes the whole operation.
+        // the terminal removes the blocker before replay finishes — reacquire the lock so the assertion observes the whole operation
         await Effect.runPromise(
           harness.reactor.reconcileDelivery({
             threadId: ThreadId.makeUnsafe("thread-1"),
@@ -1810,8 +1801,7 @@ describe("ProviderCommandReactor", () => {
             }),
           );
           await waitFor(() => terminalPublished);
-          // Give the independent runtime-event consumer a turn while the
-          // source delivery is deliberately still awaiting provider acceptance.
+          // give the independent runtime-event consumer a turn while source delivery awaits acceptance
           await new Promise((resolve) => setTimeout(resolve, 30));
           expect((await readHarnessThread(harness))?.claudeCacheReview?.status).toBe("compacting");
           expect(harness.sendTurn).not.toHaveBeenCalled();
@@ -2332,8 +2322,7 @@ describe("ProviderCommandReactor", () => {
         }
         let uncertainUserDeliverySequence: number | undefined;
         if (evidence === "uncertain-user-delivery") {
-          // A confirmed compaction may have released the user's message before
-          // its acknowledgement was lost and the old terminal was pruned.
+          // a confirmed compaction may have released the user's message before its acknowledgement was lost
           const continued = await Effect.runPromise(
             harness.engine.dispatch({
               type: "thread.claude-cache.compacted",
@@ -2585,8 +2574,7 @@ describe("ProviderCommandReactor", () => {
           evidence === "confirmed-unacknowledged"
         ) {
           await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-          // The ingestion waiter releases the send asynchronously. Entering
-          // sendTurn does not mean its durable acknowledgement has completed.
+          // the ingestion waiter releases send asynchronously — entering sendTurn doesn't mean its durable ack completed
           await waitFor(async () => (await readHarnessThread(harness))?.claudeCacheReview === null);
           expect(harness.sendTurn.mock.calls[0]?.[0].input).toBe(
             "Resume the saved original message",
@@ -3598,8 +3586,6 @@ describe("ProviderCommandReactor", () => {
       const threadId = ThreadId.makeUnsafe("thread-1");
       const now = new Date().toISOString();
 
-      // A missing turn.started can leave a placeholder with either no runtime
-      // or a runtime that has not accepted a turn.
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.session.set",
@@ -3797,7 +3783,6 @@ describe("ProviderCommandReactor", () => {
         if (input.eventSequence !== event.sequence) return yield* getDelivery(input);
         reads += 1;
         if (reads === 2 && changedOwner) {
-          // Exercise a real retry/reclaim, not a fabricated extended lease.
           yield* repository.markRetryable({
             ...key,
             expectedClaimOwner: "owner-a",
@@ -3835,7 +3820,6 @@ describe("ProviderCommandReactor", () => {
               updatedAt: new Date().toISOString(),
             });
           } else {
-            // Missing records are defensive coverage; no normal deletion path is assumed.
             yield* harness.sql`DELETE FROM orchestration_event_deliveries WHERE consumer_name = ${key.consumerName} AND event_sequence = ${key.eventSequence}`.pipe(
               Effect.mapError(
                 (cause) =>
@@ -4323,10 +4307,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession).toHaveBeenCalledTimes(2);
   });
 
-  // The ambiguous command here is a conversation rollback whose provider
-  // interrupt cannot prove it landed. A bare `thread.turn.interrupt` never
-  // quarantines a thread on purpose: it escalates to a full session stop, so
-  // the stop button can never leave a thread blocked (see the exemption below).
+  // a rollback whose interrupt can't prove it landed quarantines; a bare interrupt escalates to a full session stop so the stop button can never leave a thread blocked
   it("REL-01B gate: quarantines one thread and resumes it after explicit safe retry", async () => {
     const failure = new ProviderAdapterRequestError({
       provider: "codex",
@@ -4430,9 +4411,7 @@ describe("ProviderCommandReactor", () => {
       attemptCount: 1,
     });
 
-    // Interrupts are the escape hatch out of a quarantined thread, so the
-    // blocked thread still runs its own interrupt; the unrelated thread is
-    // untouched by another thread's quarantine.
+    // interrupts are the escape hatch out of quarantine — the blocked thread still runs its own interrupt
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.interrupt",
@@ -4458,7 +4437,7 @@ describe("ProviderCommandReactor", () => {
       ThreadId.makeUnsafe("thread-1"),
       ThreadId.makeUnsafe("thread-2"),
     ]);
-    // The quarantined command itself never ran: no rollback reached the provider.
+    // the quarantined command never ran — no rollback reached the provider
     expect(harness.rollbackConversation.mock.calls.length).toBe(0);
     const unrelatedBlocker = await Effect.runPromise(
       harness.deliveryRepository.firstBlockingDeliveryForThread({
@@ -4468,8 +4447,7 @@ describe("ProviderCommandReactor", () => {
     );
     expect(Option.isNone(unrelatedBlocker)).toBe(true);
 
-    // A non-exempt side effect on the blocked thread is skipped while the
-    // quarantine holds, and must be replayed once the thread resumes.
+    // a non-exempt side effect on the blocked thread is skipped and must replay once the thread resumes
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.task.stop",
@@ -4509,8 +4487,7 @@ describe("ProviderCommandReactor", () => {
       ThreadId.makeUnsafe("thread-2"),
       ThreadId.makeUnsafe("thread-1"),
     ]);
-    // The authorized retry completed the previously blocked rollback and
-    // replayed the side effect the quarantine had skipped.
+    // the authorized retry completed the blocked rollback and replayed the skipped side effect
     expect(harness.rollbackConversation.mock.calls.length).toBe(1);
     await waitFor(() => harness.stopTask.mock.calls.length === 1);
     expect(harness.stopTask.mock.calls[0]?.[0]).toEqual({
@@ -4529,9 +4506,7 @@ describe("ProviderCommandReactor", () => {
     ).toBe(true);
   });
 
-  // Recovery contract behind the web "Unblock thread" action: abandoning the
-  // blocker never replays the ambiguous command itself, but the turn starts the
-  // quarantine skipped afterwards were provably never sent, so they are replayed.
+  // contract behind "Unblock thread": abandoning the blocker never replays the ambiguous command, but turn starts the quarantine skipped were provably never sent and replay
   it("REL-01B gate: abandoning a blocker replays turn starts skipped while quarantined", async () => {
     const harness = await createHarness({
       interruptTurn: () =>
@@ -4569,8 +4544,7 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
-    // A rollback whose provider interrupt cannot prove it landed is ambiguous,
-    // so it quarantines the thread instead of retrying itself.
+    // a rollback whose interrupt can't prove it landed is ambiguous — quarantines instead of retrying itself
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.conversation.rollback",
@@ -4592,7 +4566,7 @@ describe("ProviderCommandReactor", () => {
       ),
     );
 
-    // Settle the session so the follow-up message starts a turn instead of queueing.
+    // settle the session so the follow-up starts a turn instead of queueing
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -4657,7 +4631,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     expect(reconciled).toMatchObject({ outcome: "abandon", state: "succeeded" });
-    // The abandoned rollback is never retried; the skipped message is.
+    // the abandoned rollback is never retried; the skipped message is
     expect(harness.interruptTurn.mock.calls.length).toBe(1);
     expect(harness.rollbackConversation.mock.calls.length).toBe(0);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
@@ -4737,7 +4711,7 @@ describe("ProviderCommandReactor", () => {
       ),
     );
     expect(interruptAttempts).toBe(1);
-    // The ambiguous command stays unexecuted until an operator decides.
+    // the ambiguous command stays unexecuted until an operator decides
     expect(harness.rollbackConversation.mock.calls.length).toBe(0);
     const requested = (
       await Effect.runPromise(
@@ -5263,9 +5237,6 @@ describe("ProviderCommandReactor", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const messageId = asMessageId("message-deleted-thread-queued");
     const commandId = CommandId.makeUnsafe("cmd-deleted-thread-queued");
-    // Insert a real turn-queued source event WITHOUT live publication: a running
-    // reactor never observes it (so it cannot drain the promotion), but it gives
-    // the promotion row a valid FK target to reference.
     const persisted = await harness.persistWithoutLivePublication([
       {
         eventId: asEventId("evt-deleted-thread-turn-queued"),
@@ -5298,8 +5269,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // Deleting the thread must cancel its pending promotion so a stray drain can
-    // never dispatch a turn for a thread that no longer exists.
+    // deleting the thread must cancel its pending promotion so a stray drain can't dispatch for a dead thread
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.delete",
@@ -5355,8 +5325,6 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // Soft-delete the thread while the reactor is down (this projects deleted_at
-    // on the thread row so it resolves to undefined).
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.delete",
@@ -5365,8 +5333,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // Advance the delivery cursor past every event so live replay drains nothing
-    // on start: only startup recovery acts on the leftover promotion.
+    // advance the cursor past every event so live replay drains nothing — only startup recovery acts on the leftover
     const allEvents = await Effect.runPromise(
       Stream.runCollect(harness.engine.readEvents(0)).pipe(
         Effect.map((events) => Array.from(events)),
@@ -7003,7 +6970,6 @@ describe("ProviderCommandReactor", () => {
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
     expect(harness.stopRuntimeSession).toHaveBeenCalledWith({ threadId });
 
-    // Simulate residual cursor loss after the escalated stop (e.g. provider-side wipe).
     await Effect.runPromise(harness.clearSessionResumeCursor({ threadId }));
 
     await dispatchHarnessUserTurn(harness, {
@@ -7110,8 +7076,6 @@ describe("ProviderCommandReactor", () => {
         if (failure === "attachment") {
           const attachmentPath = await harness.stageAttachment(attachment);
           const startSession = harness.startSession.getMockImplementation()!;
-          // Initial command preflight succeeds; the file disappears while the
-          // replacement session starts, before dispatch resolves attachments again.
           harness.startSession.mockImplementationOnce((...args) =>
             startSession(...args).pipe(
               Effect.tap(() => Effect.sync(() => fs.rmSync(attachmentPath))),
@@ -7222,8 +7186,6 @@ describe("ProviderCommandReactor", () => {
                   eventId: "claude-early-completion",
                   turnId: asTurnId("claude-recovered"),
                 });
-                // Let the runtime consumer record completion while send still owns
-                // the attempt and has not returned its provider turn id.
                 await new Promise((resolve) => setTimeout(resolve, 20));
               }
               return { threadId, turnId: asTurnId("claude-recovered") };
@@ -8438,8 +8400,7 @@ describe("ProviderCommandReactor", () => {
     const thread = await readHarnessThread(harness);
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
-    // One scan rechecks the provider's live-turn race before dispatch; the
-    // session ensure then performs the only full lookup needed for startup.
+    // one scan rechecks the live-turn race before dispatch; the ensure then does the only full lookup needed
     expect(harness.listSessions).toHaveBeenCalledTimes(2);
   });
 
@@ -8548,7 +8509,7 @@ describe("ProviderCommandReactor", () => {
       providerThreadId: "tool-steer-1",
       input: "focus on the tests",
     });
-    // The subagent thread must never boot a provider session of its own.
+    // the subagent thread must never boot a provider session of its own
     expect(harness.startSession).not.toHaveBeenCalled();
     expect(harness.sendTurn).not.toHaveBeenCalled();
   });
@@ -8980,7 +8941,6 @@ describe("ProviderCommandReactor", () => {
   it("publishes a starting session status before the provider session is ready", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
-    // Gate provider init so the early status is observable while it is pending.
     let releaseStartSession: (() => void) | undefined;
     const startSessionGate = new Promise<void>((resolve) => {
       releaseStartSession = resolve;
@@ -9012,7 +8972,6 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // The slow-provider window: status is already "starting" while init blocks.
     await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "starting");
     expect(harness.sendTurn.mock.calls.length).toBe(0);
 
@@ -9038,8 +8997,7 @@ describe("ProviderCommandReactor", () => {
             "Claude Code returned an error result: No conversation found with session ID: b469168a-2625-4447-927f-d86d94bb7237",
         }),
       );
-    // Both the original send and the native-resume retry fail stale, so the
-    // reactor falls back to the transcript bootstrap.
+    // both the original send and native-resume retry fail stale — falls back to transcript bootstrap
     harness.sendTurn
       .mockImplementationOnce(staleResumeFailure)
       .mockImplementationOnce(staleResumeFailure);
@@ -9088,7 +9046,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 3);
-    // Native-resume retry first: stop only the runtime so the persisted cursor survives.
+    // native-resume retry first — stop only the runtime so the persisted cursor survives
     expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
@@ -9098,7 +9056,7 @@ describe("ProviderCommandReactor", () => {
     };
     expect(nativeRetrySendInput.input).not.toContain("<thread_context>");
     expect(nativeRetrySendInput.input?.split(PROVIDER_DEBUG_MODE_PROMPT_PREFIX)).toHaveLength(2);
-    // Second stale failure clears the cursor and bootstraps the transcript.
+    // second stale failure clears the cursor and bootstraps the transcript
     expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
@@ -9223,13 +9181,12 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-    // The session restarts once with the persisted cursor intact...
+    // the session restarts once with the persisted cursor intact, and the retry succeeds natively
     expect(harness.stopRuntimeSession).toHaveBeenCalledWith({
       threadId: ThreadId.makeUnsafe("thread-1"),
     });
     expect(harness.stopSession).not.toHaveBeenCalled();
     expect(harness.startSession.mock.calls.length).toBe(2);
-    // ...and the retry succeeds natively: no cursor clear, no bootstrap replay.
     expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
     const retrySendInput = harness.sendTurn.mock.calls[1]?.[0] as { readonly input?: string };
     expect(retrySendInput.input).not.toContain("<thread_context>");
@@ -9272,8 +9229,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
-    // Live background tasks own the runtime subprocess: the retry must not
-    // stop it, and recovery goes straight to the transcript bootstrap.
+    // live background tasks own the runtime subprocess — the retry must not stop it; recovery goes to transcript bootstrap
     expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
     expect(harness.stopSession).not.toHaveBeenCalled();
     expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({
@@ -10122,9 +10078,6 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  // Sets up a thread with one live turn and one durably queued follow-up, then
-  // returns the sequence of its `thread.turn-queued` event so the promotion row
-  // can be inspected directly.
   async function seedQueuedTurnBehindLiveTurn(
     harness: Awaited<ReturnType<typeof createHarness>>,
     input: {
@@ -10216,10 +10169,7 @@ describe("ProviderCommandReactor", () => {
       text: "promote me on the next settle",
     });
 
-    // A checkpoint revert in flight blocks promotion and is deliberately not
-    // retried — it clears through its own completion path. The failed drain
-    // must still release its per-thread in-flight guard, or every later
-    // terminal event for the thread would be ignored for the process lifetime.
+    // a revert in flight blocks promotion and is deliberately not retried — the failed drain must still release its guard or every later terminal event for the thread is ignored for the process lifetime
     let refusals = 0;
     harness.interceptEngineDispatch((command) => {
       if (command.type !== "thread.turn.dispatch-queued" || refusals > 0) {
@@ -10260,17 +10210,7 @@ describe("ProviderCommandReactor", () => {
 
   it("drains a session again after a promoted turn start failed before dispatch", async () => {
     const harness = await createHarness();
-    // The queued message carries a managed attachment whose file disappears
-    // between queueing and promotion (a real scenario: attachment GC, or the
-    // state dir being cleaned while a turn waits in the queue). The promoted
-    // turn start then fails in `resolveProviderDispatchAttachments`, which sits
-    // *before* `dispatchTurnForThread` — whose own `catchCause` is the only
-    // place that releases the reservation on a failure. The generator is
-    // abandoned while the session still holds its queued-dispatch reservation.
-    // That reservation gates `drainQueuedTurnsForThread` and makes
-    // `processQueueDrainEvent` absorb terminal events instead of draining, so
-    // leaking it strands every later queued message on this provider session
-    // for the rest of the process lifetime.
+    // the promoted turn fails in resolveProviderDispatchAttachments *before* dispatchTurnForThread — whose catchCause is the only place releasing the reservation; leaking it strands every later queued message for the process lifetime
     const attachment = {
       type: "image",
       id: `att_v2_${"a1b2c3d4".repeat(4)}`,
@@ -10291,7 +10231,6 @@ describe("ProviderCommandReactor", () => {
       turnId: asTurnId("turn-running-reservation"),
       eventId: "evt-turn-completed-reservation",
     });
-    // The promotion is consumed and then fails; nothing reaches the provider.
     await waitFor(async () => {
       const promotion = await Effect.runPromise(
         harness.queuedTurnPromotionRepository.getBySequence(queuedSequence),
@@ -10300,8 +10239,7 @@ describe("ProviderCommandReactor", () => {
     });
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
-    // Second call: a fresh queued message behind a fresh live turn must still
-    // promote when that turn settles.
+    // a fresh queued message behind a fresh live turn must still promote when it settles
     await seedQueuedTurnBehindLiveTurn(harness, {
       liveTurnId: asTurnId("turn-running-reservation-next"),
       messageId: asMessageId("msg-queue-reservation-next"),
@@ -10339,8 +10277,7 @@ describe("ProviderCommandReactor", () => {
       }
       return undefined;
     });
-    // Keep the first promotion in flight until closing the reactor scope
-    // interrupts it. The second message must remain durable queued work.
+    // keep the first promotion in flight until closing the scope interrupts it — the second message must remain durable queued work
     harness.sendTurn.mockImplementationOnce(() => Effect.never);
 
     await settleLiveTurn(harness, {
@@ -10532,9 +10469,7 @@ describe("ProviderCommandReactor", () => {
     });
     await harness.drain();
 
-    // A duplicate/late terminal event for the previous turn can arrive after
-    // the promoted turn has fully started. It must not release that promoted
-    // turn's session reservation or drain the next queued message.
+    // a duplicate/late terminal event for the previous turn must not release the promoted turn's reservation or drain the next message
     await harness.emitRuntimeEvent({
       type: "turn.aborted",
       eventId: asEventId("evt-late-turn-aborted-after-promotion-started"),
@@ -10675,7 +10610,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // The child shares the parent's provider session, which is mid-turn.
+    // the child shares the parent's provider session, mid-turn
     harness.setRuntimeSessionTurnState({
       threadId: "thread-1",
       status: "running",
@@ -10701,8 +10636,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await harness.drain();
-    // A raw child-id session lookup would miss the parent's live turn and
-    // dispatch immediately, overlapping the shared provider session.
+    // a raw child-id lookup would miss the parent's live turn and dispatch immediately
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
     harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
@@ -10964,8 +10898,6 @@ describe("ProviderCommandReactor", () => {
     await harness.drain();
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
-    // Make the provider idle without a terminal event. The child follow-up is
-    // still queued when the next parent start takes the direct path.
     harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -11026,9 +10958,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    // Projection still says the thread is running (stale), but the provider
-    // turn has already settled: its terminal event was consumed before this
-    // message was queued, so no future drain trigger will ever arrive.
+    // projection still says running but the provider turn settled — its terminal event was consumed before this message queued, so no drain trigger ever arrives
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -11066,8 +10996,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // No turn.completed/turn.aborted is emitted: the recovery drain alone
-    // must promote the queued message.
+    // no terminal event is emitted — the recovery drain alone must promote the queued message
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
@@ -11079,9 +11008,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    // The provider is mid-turn but the projection has no running session yet
-    // (e.g. the gap between a steer interrupt and the steered turn's start):
-    // the decider dispatches directly instead of queueing.
+    // provider mid-turn but no running session in the projection (the gap between a steer interrupt and the steered turn's start) — dispatch directly instead of queueing
     harness.setRuntimeSessionTurnState({
       threadId: "thread-1",
       status: "running",
@@ -11200,9 +11127,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    // Projection lags: it still says running, but the provider runtime has no
-    // live turn. The steer must not ride the native codex steer path (which
-    // would skip the turn-start checkpoint) — it dispatches as a normal turn.
+    // projection lags — says running but no live turn; the steer must not ride the native path (it would skip the turn-start checkpoint)
     harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -11734,7 +11659,7 @@ describe("ProviderCommandReactor", () => {
     });
     harness.startSession.mockClear();
 
-    // A context override is spawn-fixed and resumes the same conversation.
+    // a context override is spawn-fixed and resumes the same conversation
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
@@ -11761,7 +11686,6 @@ describe("ProviderCommandReactor", () => {
     });
     harness.startSession.mockClear();
 
-    // Effort is fixed at subprocess spawn, so an effort change still restarts.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
@@ -11797,8 +11721,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({ threadModelSelection: initialSelection });
     const threadId = ThreadId.makeUnsafe("thread-1");
 
-    // Mirrors native import: ProviderService owns the runtime start directly,
-    // while the reactor learns the original selection from thread.created.
+    // mirrors native import — ProviderService owns the runtime start while the reactor learns the selection from thread.created
     await harness.drain();
     const importedSession = await Effect.runPromise(
       harness.startSession(threadId, {
@@ -11962,7 +11885,7 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // No explicit selection: the persisted desired override must still apply.
+    // no explicit selection — the persisted desired override must still apply
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -12738,8 +12661,6 @@ describe("ProviderCommandReactor", () => {
       thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
     ).toBe(false);
 
-    // A repeated turn start with the same devin selection is accepted and
-    // reuses the established session.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -15008,7 +14929,7 @@ describe("ProviderCommandReactor", () => {
       );
       expect(resolvedActivity).toBeUndefined();
 
-      // Explicit invalidation is terminal, unlike an ambiguous delivery failure.
+      // explicit invalidation is terminal, unlike an ambiguous delivery failure
       harness.respondToUserInput.mockImplementation(() => Effect.void);
       await Effect.runPromise(
         harness.engine.dispatch({
@@ -15241,9 +15162,7 @@ describe("ProviderCommandReactor", () => {
         }),
       );
 
-      // A response carrying a lifecycle generation the durable row does not have
-      // can never claim it. This used to be dropped with no activity and no
-      // resolution, leaving the prompt permanently stuck.
+      // a response carrying a generation the row doesn't have can never claim it — used to be dropped with no resolution, leaving the prompt stuck forever
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.user-input.respond",
@@ -15322,7 +15241,6 @@ describe("ProviderCommandReactor", () => {
         goalStartBehavior: "defer",
       }),
     );
-    // Recovery has already settled its old turn. No adapter terminal event remains.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -15744,8 +15662,7 @@ describe("ProviderCommandReactor", () => {
       );
       return state.pipe(Option.getOrThrow).lastAckedSequence >= midTurn.sequence;
     });
-    // The in-flight turn must survive the mode change: ensuring the session
-    // now would restart the provider and kill the running turn.
+    // the in-flight turn must survive the mode change — ensuring the session now would restart the provider and kill it
     expect(harness.startSession.mock.calls.length).toBe(0);
     expect(harness.stopSession.mock.calls.length).toBe(0);
 
@@ -15781,7 +15698,6 @@ describe("ProviderCommandReactor", () => {
       );
       return state.pipe(Option.getOrThrow).lastAckedSequence >= settled.sequence;
     });
-    // With no active turn the same event applies by ensuring the session.
     expect(harness.startSession.mock.calls.length).toBe(1);
   });
 });

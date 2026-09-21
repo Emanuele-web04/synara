@@ -1,7 +1,3 @@
-// FILE: useFileLineCommenting.browser.tsx
-// Purpose: Browser regressions for file-line comment state resets.
-// Layer: Browser UI test
-
 import { useState } from "react";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it } from "vitest";

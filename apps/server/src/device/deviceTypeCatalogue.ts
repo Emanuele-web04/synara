@@ -1,21 +1,4 @@
-/**
- * deviceTypeCatalogue - screen geometry and product family, known before boot.
- *
- * The native helper reports a device's real geometry, but only once it has
- * attached to a booted simulator. That is far too late for the pane: picking an
- * iPad from the picker drew an iPhone-shaped chassis until the stream arrived,
- * then snapped to the right shape seconds later.
- *
- * Every simulator device type ships a `profile.plist` carrying `mainScreenWidth`
- * / `mainScreenHeight` / `mainScreenScale`, and `simctl list devicetypes` maps
- * each device to its bundle and product family. Both are readable with the
- * device shut down, so discovery can carry geometry from the first listing.
- *
- * The helper's attachment still wins when it disagrees: it measures the actual
- * framebuffer of the running boot, and that is what input is validated against.
- *
- * @module device/deviceTypeCatalogue
- */
+/** the helper reports real geometry only after attaching to a booted simulator — far too late for the picker; every device type ships a profile.plist readable while shut down; the helper's measurement still wins when it disagrees */
 import * as path from "node:path";
 
 import type { DeviceFamily, DeviceGeometry } from "@synara/contracts";
@@ -27,14 +10,10 @@ export interface DeviceTypeProfile {
   readonly geometry: DeviceGeometry;
 }
 
-/** Identifier -> profile, as read from the installed simulator device types. */
+/** identifier -> profile, read from the installed simulator device types */
 export type DeviceTypeCatalogue = ReadonlyMap<string, DeviceTypeProfile>;
 
-/**
- * Apple's product families, mapped onto the two chassis the pane draws. Anything
- * unrecognised (a watch, a TV) yields null and is drawn from the device name,
- * because guessing "phone" for an Apple TV is worse than the name heuristic.
- */
+/** unrecognised families (watch, TV) yield null and fall back to the device name — guessing "phone" for an Apple TV is worse */
 function familyFor(productFamily: unknown): DeviceFamily | null {
   switch (String(productFamily)) {
     case "iPhone":
@@ -59,11 +38,7 @@ export interface ParsedDeviceType {
   readonly profilePath: string;
 }
 
-/**
- * Parse `simctl list devicetypes --json` into the entries worth reading a
- * profile for. Entries missing an identifier, a bundle, or a family this pane
- * can draw are dropped rather than half-filled.
- */
+/** entries missing an identifier, bundle, or drawable family are dropped rather than half-filled */
 export function parseSimctlDeviceTypes(json: string): readonly ParsedDeviceType[] {
   let parsed: unknown;
   try {
@@ -89,14 +64,7 @@ export function parseSimctlDeviceTypes(json: string): readonly ParsedDeviceType[
   return entries;
 }
 
-/**
- * Pull geometry out of a device type profile.
- *
- * The plist reports the screen in pixels plus a scale; the contract carries
- * points, because that is the unit input is injected in. A profile missing any
- * of the three (or reporting nonsense) yields null, so a device keeps whatever
- * the helper later measures rather than inheriting a bad guess.
- */
+/** the plist reports pixels + scale; the contract carries points (the unit input is injected in); a missing/bogus field yields null so the device keeps whatever the helper measures */
 export function parseDeviceTypeProfile(json: string): DeviceGeometry | null {
   let parsed: unknown;
   try {
@@ -120,14 +88,7 @@ export function parseDeviceTypeProfile(json: string): DeviceGeometry | null {
   };
 }
 
-/**
- * Read every installed device type's family and geometry.
- *
- * Costs one `simctl list devicetypes` plus a `plutil` per type — around 120
- * short-lived processes on a full Xcode — so the caller caches it for the
- * process lifetime. Any single failure is skipped rather than failing the whole
- * catalogue: one unreadable profile must not cost the geometry of the other 120.
- */
+/** ~120 short-lived processes on a full Xcode, so callers cache for the process lifetime; any single failure is skipped rather than costing the other 119 */
 export async function readDeviceTypeCatalogue(input: {
   readonly run: typeof runProcess;
   readonly env?: NodeJS.ProcessEnv | undefined;

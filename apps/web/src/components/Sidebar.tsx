@@ -1,7 +1,4 @@
 import { useProjectImportDialogStore } from "~/projectImport/projectImportDialogStore";
-// FILE: Sidebar.tsx
-// Purpose: Renders the project/thread sidebar, including row status, sorting, and thread actions.
-// Exports: Sidebar
 
 import {
   AddPlusIcon,
@@ -442,7 +439,6 @@ import {
   resolveActiveSpaceId,
 } from "../lib/spaceGrouping";
 
-// Central glyphs for the sidebar section-header buttons (expand/collapse, sort, add).
 const ExpandAllIcon = createCentralIconComponent("expand-45");
 const CollapseAllIcon = createCentralIconComponent("minimize-45");
 const SortFilterIcon = createCentralIconComponent("filter-2");
@@ -454,10 +450,8 @@ const readGitHubProvisioningCapability = () =>
   readNativeApiServerCapability(WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY);
 const readGitHubProvisioningServerCapability = () => false;
 const THREAD_PREVIEW_LIMIT = 5;
-// Each "Show more" click reveals this many extra rows; "Show less" hides them again page by page.
 const THREAD_PREVIEW_PAGE_SIZE = 5;
-// Mouse clicks must not focus the paging buttons, or the focus ring lingers as a solid block
-// after the click; they should only light up on hover/press. Keyboard focus is unaffected.
+// clicks must not focus the paging buttons or the focus ring lingers as a solid block; they only light on hover/press — keyboard focus unaffected
 const preventFocusOnMouseDown = (event: React.MouseEvent) => {
   event.preventDefault();
 };
@@ -509,8 +503,7 @@ type ProjectContextMenuState = {
   position: { x: number; y: number };
 };
 
-// Sidebar right-click menus (project rows, Space tabs) share one chrome; see
-// sidebarContextMenuStyles.
+// Sidebar right-click menus (project rows, Space tabs) share one chrome; see sidebarContextMenuStyles.
 const PROJECT_CONTEXT_MENU_PANEL_CLASS_NAME = SIDEBAR_CONTEXT_MENU_PANEL_CLASS_NAME;
 const PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME = SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME;
 const PROJECT_CONTEXT_MENU_ICON_CLASS_NAME = SIDEBAR_CONTEXT_MENU_ICON_CLASS_NAME;
@@ -558,7 +551,6 @@ function threadJumpLabelMapsEqual(
   return true;
 }
 
-// Resolve the visible numbered-thread hints from the active keybinding config.
 function buildThreadJumpLabelMap(input: {
   keybindings: ResolvedKeybindingsConfig;
   platform: string;
@@ -619,8 +611,7 @@ function threadRowStatusSlotClassName(isSubagentThread: boolean, toneClassName?:
     sidebarHoverRevealHideClassName("thread-row"),
     isSubagentThread
       ? "text-ui-xs"
-      : // Nudge the timestamp a hair above the meta scale while still tracking the user's
-        // typography setting (the CSS var is always set; the 11px is just an SSR fallback).
+      : // a hair above the meta scale, still tracking the user's font-size setting (the 11px is just an SSR fallback)
         "text-[length:calc(var(--app-font-size-ui-meta,11px)+0.5px)]",
     toneClassName ?? (isSubagentThread ? "text-muted-foreground/26" : "text-muted-foreground/38"),
   );
@@ -809,12 +800,10 @@ function ProjectSortMenu({
 
 const SYNARA_DOCS_URL = "https://trysynara.com/docs";
 
-// Latest curated releases surfaced directly in the help menu. Static data, so
-// computed once at module scope rather than per render.
+// Latest curated releases surfaced directly in the help menu. Static data, so computed once at module scope rather than per render.
 const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).slice(0, 3);
 
-// Footer help menu; swapped out for the desktop-update pill while an update is
-// available (see SidebarFooter).
+// Footer help menu; swapped out for the desktop-update pill while an update is available (see SidebarFooter).
 function SidebarHelpMenu({
   onOpenShortcuts,
   onOpenFeedback,
@@ -825,9 +814,7 @@ function SidebarHelpMenu({
   /** Null hides the entry (e.g. on surfaces without the primary nav block). */
   onCustomizeSidebar: (() => void) | null;
 }) {
-  // `openCount` keys the dialog so each open remounts the accordion — its rows
-  // capture `defaultOpen` in mount state, so a stale mount would ignore a
-  // newly selected version.
+  // `openCount` keys the dialog so each open remounts the accordion — its rows capture `defaultOpen` in mount state, so a stale mount would ignore a newly selected version.
   const [releaseHistory, setReleaseHistory] = useState<{
     readonly open: boolean;
     readonly version: string | null;
@@ -996,8 +983,7 @@ function SidebarPrimaryAction({
   shortcutLabel?: string | null;
   badge?: SidebarActionBadge | null;
 }) {
-  // Defaults live in the body, not the destructuring pattern: an AssignmentPattern in
-  // the parameter list makes React Compiler bail out on the whole component.
+  // a default inside the destructuring pattern makes React Compiler bail on the whole component
   const active = activeProp ?? false;
   const disabled = disabledProp ?? false;
   const shortcutParts = shortcutLabel ? splitShortcutLabel(shortcutLabel) : [];
@@ -1343,8 +1329,7 @@ export function SidebarSurfacePicker({
               <MenuRadioItem
                 key={view}
                 value={view}
-                // Base UI radio items keep the menu open by default; this picker is a
-                // one-shot surface switch, so selecting an entry should dismiss it.
+                // Base UI radio items keep the menu open by default; this picker is a one-shot surface switch, so selecting an entry should dismiss it.
                 closeOnClick
                 className="items-center rounded-[10px] data-checked:bg-[var(--color-background-button-secondary-hover)]"
               >
@@ -1420,8 +1405,7 @@ export default function Sidebar() {
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
-  // Lightweight read of automations to drive the sidebar attention badge. Shares the
-  // ["automations"] query cache with the Automations route (and its live stream updates).
+  // Lightweight read of automations to drive the sidebar attention badge. Shares the ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
     queryKey: automationQueryKey,
     queryFn: () => ensureNativeApi().automation.list({}),
@@ -1461,15 +1445,13 @@ export default function Sidebar() {
     enabled: projects.some((project) => project.kind === "project"),
   });
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
-  // Heartbeat automations grouped by their target thread, so each thread row can show a
-  // clock chip indicating an automation is attached (mirrors the Environment panel section).
+  // Heartbeat automations grouped by their target thread, so each thread row can show a clock chip indicating an automation is attached (mirrors the Environment panel section).
   const automationsByThreadId = useMemo(
     () => groupAutomationsByContinuedThread(automationListQuery.data?.definitions ?? []),
     [automationListQuery.data],
   );
   const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
-  // Projects is always available; Studio and the standalone Chats footer can be hidden
-  // independently from Settings.
+  // Projects is always available; Studio and the standalone Chats footer can be hidden independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
   const studioSectionVisible = appSettings.showStudioSection;
   const { handleNewThread } = useHandleNewThread();
@@ -1500,8 +1482,7 @@ export default function Sidebar() {
     }
 
     let cancelled = false;
-    // The sidebar is the visible empty-state owner. If startup hydrated empty
-    // before the desktop projection caught up, ask the lightweight shell endpoint once.
+    // the sidebar owns the visible empty state — if startup hydrated empty before the desktop projection caught up, ask the lightweight shell endpoint once
     void api.orchestration
       .getShellSnapshot()
       .then((snapshot) => {
@@ -1566,8 +1547,7 @@ export default function Sidebar() {
   }, []);
   const setSplitFocusedPane = useSplitViewStore((store) => store.setFocusedPane);
   const openRightDockPane = useRightDockStore((store) => store.openPane);
-  // Query defaults are applied after destructuring: a default inside the destructuring
-  // pattern makes React Compiler bail out on the whole Sidebar component.
+  // Query defaults are applied after destructuring: a default inside the destructuring pattern makes React Compiler bail out on the whole Sidebar component.
   const keybindingsQuery = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
@@ -1580,10 +1560,7 @@ export default function Sidebar() {
   const serverCwd = serverCwdQuery.data ?? null;
   const providerStatuses = useProviderStatusesForLocalConfig();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
-  // Declared next to `keybindings` (rather than further down) because the project-row render
-  // helpers above read these labels. A const declared after the closure that captures it
-  // widens its inferred mutable range and makes React Compiler drop the memoization of every
-  // hook that depends on it. See Sidebar.compiler.test.ts.
+  // declared next to `keybindings` because render helpers above read these labels — a const declared after a closure that captures it widens its inferred mutable range and makes React Compiler drop memoization of every dependent hook (Sidebar.compiler.test.ts)
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
     shortcutLabelForCommand(keybindings, "chat.newLatestProject");
@@ -1614,7 +1591,6 @@ export default function Sidebar() {
   const [relocateProjectDialogId, setRelocateProjectDialogId] = useState<ProjectId | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
-  // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
   const [threadListExtraPagesByProjectCwd, setThreadListExtraPagesByProjectCwd] = useState<
     ReadonlyMap<string, number>
   >(() => new Map(Object.entries(readSidebarUiState().projectThreadListExtraPagesByCwd)));
@@ -1645,9 +1621,7 @@ export default function Sidebar() {
       return [...threadIds];
     });
   }, []);
-  // Sidebar UI state is stored as one blob. Adopt the complete external write
-  // so this tab cannot persist stale paging, dismissal, or route fields over a
-  // newer tab merely because the Activity toggle changed there.
+  // adopt the complete external write so this tab can't persist stale paging/dismissal/route fields over a newer tab merely because the Activity toggle changed there
   useEffect(
     () =>
       subscribeSidebarUiState((state) => {
@@ -1662,8 +1636,7 @@ export default function Sidebar() {
       }),
     [],
   );
-  // The swap unmounts one full surface and mounts the other; a transition keeps
-  // the click responsive instead of blocking the main thread on large sidebars.
+  // The swap unmounts one full surface and mounts the other; a transition keeps the click responsive instead of blocking the main thread on large sidebars.
   const setActivityViewEnabledSmoothly = useCallback((enabled: boolean) => {
     startTransition(() => {
       setActivityViewEnabled(enabled);
@@ -1683,8 +1656,7 @@ export default function Sidebar() {
   const [optimisticPinnedStateByProjectId, setOptimisticPinnedStateByProjectId] = useState<
     ReadonlyMap<ProjectId, boolean>
   >(() => new Map());
-  // Dedupes the manual-download fallback toast so a single failure surfaced by
-  // both the click handler and the install-watchdog push only notifies once.
+  // Dedupes the manual-download fallback toast so a single failure surfaced by both the click handler and the install-watchdog push only notifies once.
   const lastDesktopUpdateErrorToastSignatureRef = useRef<string | null>(null);
   const selectedThreadIds = useThreadSelectionStore((s) => s.selectedThreadIds);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
@@ -1720,8 +1692,7 @@ export default function Sidebar() {
       () => partitionSidebarThreadsByProjectIds(sidebarTreeThreads, studioProjectIdSet),
       [sidebarTreeThreads, studioProjectIdSet],
     );
-  // Activity view + unread bell read the same visibility-filtered list, so the
-  // bell can never point at a row the Activity list is hiding.
+  // Activity view + unread bell read the same visibility-filtered list, so the bell can never point at a row the Activity list is hiding.
   const visibleNonStudioSidebarThreads = useMemo(
     () =>
       nonStudioSidebarThreads.filter((thread) =>
@@ -1729,7 +1700,6 @@ export default function Sidebar() {
       ),
     [hideAutomationRunThreads, nonStudioSidebarThreads],
   );
-  // Drives the unread dot on the header Activity bell.
   const hasUnreadActivity = useMemo(
     () =>
       hasUnreadActivityOutsideActiveThread(visibleNonStudioSidebarThreads, activeSidebarThreadId),
@@ -1780,9 +1750,7 @@ export default function Sidebar() {
       return;
     }
     if (routeActiveSidebarThreadId === optimisticActiveThreadId) {
-      // The route caught up; drop the optimistic override on the next tick. Async
-      // setState keeps this out of render, and activeSidebarThreadId already resolves
-      // to the same thread via `optimistic ?? route`, so the deferral is invisible.
+      // The route caught up; drop the optimistic override on the next tick. Async setState keeps this out of render, and activeSidebarThreadId already resolves to the same thread via `optimistic ?? route`, so the deferral is invisible.
       const settle = window.setTimeout(() => {
         setOptimisticActiveThreadId((current) =>
           current === optimisticActiveThreadId ? null : current,
@@ -1880,9 +1848,7 @@ export default function Sidebar() {
     homeDir,
     chatWorkspaceRoot,
   });
-  // Resolve the active thread's project for real threads AND not-yet-persisted draft threads.
-  // Without the draft fallback, opening a fresh Studio chat (a draft at /$threadId) would drop
-  // out of the Studio surface and snap the segmented picker back to Projects.
+  // resolve the active thread's project for real AND draft threads — without the draft fallback a fresh Studio chat (draft at /$threadId) would drop out of the Studio surface and snap the picker back to Projects
   const activeRouteProjectId = routeThreadId
     ? (sidebarThreadSummaryById[routeThreadId]?.projectId ??
       draftThreadsByThreadId[routeThreadId]?.projectId ??
@@ -1891,9 +1857,7 @@ export default function Sidebar() {
   const activeRouteProject = activeRouteProjectId
     ? (projectById.get(activeRouteProjectId) ?? null)
     : null;
-  // Same predicate the Studio collectors use — trusting `kind` alone here would let a drifted
-  // studio-kind row (root outside the configured Studio root) activate the Studio segment while
-  // every Studio list excludes it, stranding the active thread in neither segment.
+  // trusting `kind` alone would let a drifted studio-kind row (root outside the configured Studio root) activate the Studio segment while every Studio list excludes it — stranding the thread in neither segment
   const isOnStudio =
     isOnStudioRoute ||
     isStudioContainerProject(activeRouteProject, {
@@ -1909,9 +1873,7 @@ export default function Sidebar() {
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
   );
 
-  // Only one segment's pinned threads are ever rendered at a time, so derive a single
-  // memo from the already-partitioned active list instead of computing both segments'
-  // pinned lists on every render (hooks can't be conditional, but the inputs can be).
+  // only one segment's pinned list is rendered at a time — derive one memo from the already-partitioned active list instead of computing both segments' pinned lists per render (hooks can't be conditional, inputs can)
   const activeSpaceNonStudioSidebarTreeThreads = useMemo(
     () =>
       nonStudioSidebarTreeThreads.filter((thread) => {
@@ -2092,9 +2054,7 @@ export default function Sidebar() {
     const serverPinnedStateByProjectId = new Map(
       projects.map((project) => [project.id, project.isPinned === true] as const),
     );
-    // Reconciliation drops optimistic entries the server has confirmed while syncing
-    // the mirror ref. Deferring the setState off render (async is allowed) leaves the
-    // derived pinned lists unchanged, since a confirmed entry is redundant either way.
+    // Reconciliation drops optimistic entries the server has confirmed while syncing the mirror ref. Deferring the setState off render (async is allowed) leaves the derived pinned lists unchanged, since a confirmed entry is redundant either way.
     const settle = window.setTimeout(() => {
       setOptimisticPinnedStateByProjectId((current) => {
         const reconciled = reconcileOptimisticPinState({
@@ -2111,8 +2071,7 @@ export default function Sidebar() {
   }, [optimisticPinnedStateByProjectId, projects]);
   const focusMostRecentThreadForProject = useCallback(
     (projectId: ProjectId) => {
-      // Only navigate to threads the sidebar actually shows — focusing a hidden
-      // automation-run thread would select a row the user can't see.
+      // Only navigate to threads the sidebar actually shows — focusing a hidden automation-run thread would select a row the user can't see.
       const latestThread = sortThreadsForSidebar(
         sidebarThreads.filter(
           (thread) =>
@@ -2217,9 +2176,7 @@ export default function Sidebar() {
     [],
   );
 
-  // Cancellation can arrive while the server is committing project.create. Give
-  // that durable commit and its read-model projection enough time to become
-  // observable before reporting the clone as cancelled.
+  // cancellation can arrive while the server is committing project.create — give the durable commit and its read-model projection time to become observable before reporting the clone cancelled
   const waitForCancelledGitHubProjectInSnapshot = useCallback(
     async (
       api: NonNullable<ReturnType<typeof readNativeApi>>,
@@ -2300,9 +2257,7 @@ export default function Sidebar() {
   const handleOpenProjectFromSearch = useCallback(
     (projectId: string) => {
       const typedProjectId = ProjectId.makeUnsafe(projectId);
-      // Match focusMostRecentThreadForProject's visibility filter: if a project's only
-      // threads are hidden automation runs, fall through to creating a fresh thread
-      // instead of focusing nothing.
+      // Match focusMostRecentThreadForProject's visibility filter: if a project's only threads are hidden automation runs, fall through to creating a fresh thread instead of focusing nothing.
       const hasProjectThread = sidebarThreads.some(
         (thread) =>
           thread.projectId === typedProjectId &&
@@ -2318,9 +2273,7 @@ export default function Sidebar() {
     [focusMostRecentThreadForProject, handleNewThread, hideAutomationRunThreads, sidebarThreads],
   );
 
-  // Shared resolver behind resolveBackToStudioTarget/resolveBackToThreadsTarget (and the
-  // settings-back path below) — differs only in which segment's thread list and draft ids are
-  // passed in.
+  // Shared resolver behind resolveBackToStudioTarget/resolveBackToThreadsTarget (and the settings-back path below) — differs only in which segment's thread list and draft ids are passed in.
   const resolveBackTargetForThreads = useCallback(
     (threads: readonly SidebarThreadSummary[], extraAvailableThreadIds?: ReadonlySet<string>) => {
       const latestThread =
@@ -2343,9 +2296,7 @@ export default function Sidebar() {
     [appSettings.sidebarThreadSortOrder, lastThreadRoute, splitViewsById],
   );
 
-  // Fresh unsent chats have a route id but no persisted sidebar summary yet. Keep those draft
-  // routes valid return targets — scoped to whichever segment the draft's project belongs to —
-  // for both the settings back button and the segment switcher.
+  // fresh unsent chats have a route id but no persisted sidebar summary — keep draft routes valid return targets, scoped to the draft's project segment, for the settings back button and segment switcher
   const studioDraftThreadIds = useMemo(() => {
     const draftThreadIds = new Set<string>();
     for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
@@ -2365,12 +2316,8 @@ export default function Sidebar() {
     return draftThreadIds;
   }, [draftThreadsByThreadId, studioProjectIdSet]);
 
-  // Where the Studio segment lands, resolved directly (remembered Studio route, else the latest
-  // Studio chat) instead of bouncing through the "/studio" splash route — that extra hop +
-  // async redirect is what made the segment switch feel sluggish. Mirrors
-  // resolveBackToThreadsTarget so both segments restore the thread you were last on.
-  // Archived chats are excluded, matching the /studio landing: the sidebar hides them, so
-  // neither the segment switch nor settings back may resurrect one.
+  // resolve the Studio landing directly (remembered route, else latest Studio chat) instead of bouncing through the /studio splash redirect — that extra hop is what made the segment switch feel sluggish
+  // resolve the Studio target directly instead of bouncing through "/studio" — that extra hop + async redirect made the switch feel sluggish; archived chats excluded, matching the /studio landing
   const activeStudioSidebarThreads = useMemo(
     () => studioSidebarThreads.filter((thread) => (thread.archivedAt ?? null) === null),
     [studioSidebarThreads],
@@ -2385,17 +2332,13 @@ export default function Sidebar() {
     [nonStudioDraftThreadIds, resolveBackTargetForThreads, visibleNonStudioSidebarThreads],
   );
 
-  // Navigates to a resolved settings-back / segment-switch target. Returns whether it navigated
-  // to a thread so callers can fall back to creating a fresh chat/home route otherwise.
+  // Navigates to a resolved settings-back / segment-switch target. Returns whether it navigated to a thread so callers can fall back to creating a fresh chat/home route otherwise.
   const navigateToBackTarget = useCallback(
     (target: SettingsBackTarget) => {
       if (target.kind !== "thread") {
         return false;
       }
-      // The route swap re-renders the whole sidebar surface plus the destination
-      // ChatView in one go; run it as a transition so urgent click feedback (the
-      // segmented picker's optimistic thumb) paints first instead of freezing
-      // until the heavy render commits.
+      // run the route swap as a transition so urgent click feedback paints first instead of freezing until the heavy render commits
       startTransition(() => {
         void navigate({
           to: "/$threadId",
@@ -2410,13 +2353,7 @@ export default function Sidebar() {
     [navigate],
   );
 
-  // Settings is reachable from either segment (Threads or Studio) and from routes outside the
-  // sidebar entirely (see EnvironmentPanel, __root, etc.), so we can't infer "which segment was
-  // active" from the route once we're already on /settings. Instead we remember the last active
-  // segment continuously (mirrors the lastThreadRoute tracking below) and use that on the way
-  // back. This keeps the back button from bouncing across segments when the remembered thread
-  // route is stale (e.g. its thread was deleted): the segment-scoped resolver falls back to that
-  // *same* segment's latest thread instead of the globally most-recent thread.
+  // settings is reachable from either segment and from routes outside the sidebar, so "which segment was active" can't be inferred from the route — remember it continuously so back lands in the same segment even when the remembered thread route is stale
   const lastActiveSidebarSegmentRef = useRef<"studio" | "threads">("threads");
   useEffect(() => {
     if (isOnSettings) {
@@ -2425,9 +2362,7 @@ export default function Sidebar() {
     lastActiveSidebarSegmentRef.current = isOnStudio ? "studio" : "threads";
   }, [isOnSettings, isOnStudio]);
 
-  // Shared Studio fallback: reopen/create via handleNewStudioChat and, on failure, land on
-  // /studio — its splash already displays the error with a retry. Swallowing the result here
-  // would make the segment click appear dead and hide the cross-kind conflict message.
+  // swallowing the result would make the segment click look dead and hide the cross-kind conflict message — /studio's splash displays the error with a retry
   const openStudioChatFallback = useCallback(() => {
     void handleNewStudioChat().then((result) => {
       if (!result.ok) {
@@ -2444,8 +2379,7 @@ export default function Sidebar() {
       return;
     }
 
-    // Segment-appropriate fallback, matching handleSidebarViewChange: leaving Settings from the
-    // Studio segment with nothing restorable lands back in Studio, not on a fresh home draft.
+    // Segment-appropriate fallback, matching handleSidebarViewChange: leaving Settings from the Studio segment with nothing restorable lands back in Studio, not on a fresh home draft.
     if (fromStudio) {
       openStudioChatFallback();
       return;
@@ -2462,10 +2396,7 @@ export default function Sidebar() {
   const handleSidebarViewChange = useCallback(
     (view: SidebarView) => {
       if (view === "studio") {
-        // Remembered route first — it already treats the stored Studio draft as a valid target
-        // (resolveBackToStudioTarget includes studioDraftThreadIds), so switching back to Studio
-        // returns to the thread you were on, not an old empty draft. handleNewStudioChat stays
-        // the fallback and reopens the stored draft when there is nothing to restore.
+        // remembered route first — it treats the stored Studio draft as valid; handleNewStudioChat stays the fallback
         if (navigateToBackTarget(resolveBackToStudioTarget())) {
           return;
         }
@@ -2477,9 +2408,7 @@ export default function Sidebar() {
         return;
       }
 
-      // Reuse the stored home-chat draft when one exists (same as the "New chat"
-      // button) so switching back to the Chats view never destroys an in-progress
-      // draft; only mint a fresh draft when there is nothing to resume.
+      // Reuse the stored home-chat draft when one exists (same as the "New chat" button) so switching back to the Chats view never destroys an in-progress draft; only mint a fresh draft when there is nothing to resume.
       void handleNewChat();
     },
     [
@@ -2491,9 +2420,7 @@ export default function Sidebar() {
     ],
   );
 
-  // Keep the user off optional tabs once hidden in Settings: viewing one
-  // (e.g. via a bookmark/deep link) jumps back to the always-visible Threads tab.
-  // Settings is its own route and is never redirected.
+  // Keep the user off optional tabs once hidden in Settings: viewing one (e.g. via a bookmark/deep link) jumps back to the always-visible Threads tab. Settings is its own route and is never redirected.
   useEffect(() => {
     if (isOnSettings) {
       return;
@@ -2505,8 +2432,7 @@ export default function Sidebar() {
   }, [handleSidebarViewChange, isOnSettings, isOnStudio, studioSectionVisible]);
 
   useEffect(() => {
-    // Same hydration gate as the Studio prewarm below: persisted paths make homeDir truthy
-    // immediately on reload, well before the first shell snapshot arrives.
+    // Same hydration gate as the Studio prewarm below: persisted paths make homeDir truthy immediately on reload, well before the first shell snapshot arrives.
     if (!threadsHydrated || !homeDir) {
       return;
     }
@@ -2519,13 +2445,9 @@ export default function Sidebar() {
     prewarmStudioProject({ homeDir, chatWorkspaceRoot, studioWorkspaceRoot });
   }, [chatWorkspaceRoot, homeDir, studioSectionVisible, studioWorkspaceRoot, threadsHydrated]);
 
-  // Opens a fresh home-chat draft directly on the draft thread route so the first send
-  // does not need a second route swap from "/" to "/$threadId".
+  // Opens a fresh home-chat draft directly on the draft thread route so the first send does not need a second route swap from "/" to "/$threadId".
   const handleCreateHomeChat = useCallback(async () => {
-    // Reuse the stored home-chat draft thread when one exists (matching the
-    // project "New thread" button), so a draft typed in a new chat survives
-    // switching to another thread and back. Only mint a fresh draft when there
-    // is no stored draft to resume.
+    // reuse the stored home-chat draft when one exists so a typed draft survives switching threads; only mint fresh when nothing to resume
     await handleNewChat();
   }, [handleNewChat]);
   const handleCreateStudioChat = useCallback(async () => {
@@ -2546,12 +2468,7 @@ export default function Sidebar() {
         throw new Error("The app server is unavailable.");
       }
 
-      // The flow lives in a nested function that the exclusive lock helper merely awaits: React
-      // Compiler's BuildHIR cannot lower a `throw` or a value block (`?.`, `??`, ternary,
-      // conditional spread) that sits directly inside a try block, and a single one of them
-      // makes the entire Sidebar bail out of compilation — silently, since `panicThreshold`
-      // is unset. Nested function bodies are lowered separately and are unaffected, and the
-      // catch below still sees every rejection. See Sidebar.compiler.test.ts.
+      // nested function: React Compiler can't lower a `throw` or value block directly inside try — one would bail the whole Sidebar silently; nested bodies are unaffected and catch still sees rejections
       const runAddProject = async () => {
         const existing = findWorkspaceRootMatch(projects, cwd, (project) => project.cwd);
         const existingRecovery = await recoverExistingAddProjectTarget({
@@ -2565,8 +2482,7 @@ export default function Sidebar() {
           return;
         }
         if (existing) {
-          // Local project state can briefly outlive a server-side project.deleted event.
-          // Continue to project.create so re-adding the folder revives it instead of opening a dead shell.
+          // Local project state can briefly outlive a server-side project.deleted event. Continue to project.create so re-adding the folder revives it instead of opening a dead shell.
         }
 
         const creationResult = await createOrRecoverProjectFromPath({
@@ -2598,8 +2514,7 @@ export default function Sidebar() {
             return;
           }
           if (creationResult.created) {
-            // The opener's draft navigation was superseded; retrying here
-            // would override the user's newer route.
+            // The opener's draft navigation was superseded; retrying here would override the user's newer route.
             throw new Error("Project creation was superseded before its chat opened.");
           }
         }
@@ -2612,9 +2527,7 @@ export default function Sidebar() {
           throw new Error(PROJECT_CREATE_EXISTING_SYNC_ERROR);
         }
 
-        // The command already committed successfully at this point. If the projection
-        // snapshot is just slow to catch up, continue with the local new-thread flow
-        // instead of surfacing a false-negative sidebar sync error.
+        // the command already committed; if the projection snapshot is slow, continue with the local new-thread flow instead of surfacing a false-negative sync error
         setProjectExpanded(creationResult.projectId, true);
         const threadId = await handleNewThread(creationResult.projectId).catch(() => null);
         if (!threadId) {
@@ -2667,8 +2580,7 @@ export default function Sidebar() {
     [currentProjectShortcutTargetId, latestUsableProjectId],
   );
 
-  // Warm model discovery before ChatView mounts so new-thread composers skip
-  // the "Loading models" skeleton when React Query already has a fresh cache hit.
+  // Warm model discovery before ChatView mounts so new-thread composers skip the "Loading models" skeleton when React Query already has a fresh cache hit.
   const prefetchModelsForProjectNewThread = useCallback(
     (projectId: ProjectId, options?: { includeDroid?: boolean }) => {
       const project = projects.find((candidate) => candidate.id === projectId);
@@ -2691,8 +2603,7 @@ export default function Sidebar() {
         projectCwd: project.cwd,
         draftWorktreePath: draftThread?.worktreePath ?? null,
         serverCwd,
-        // Match new-thread bootstrap: preserve existing drafts and apply project
-        // preferences only when creating a fresh one.
+        // Match new-thread bootstrap: preserve existing drafts and apply project preferences only when creating a fresh one.
         envMode:
           draftThread?.envMode ??
           useProjectEnvironmentStore.getState().envModeByProjectId[projectId] ??
@@ -2710,8 +2621,7 @@ export default function Sidebar() {
     if (!primaryNewThreadTarget) {
       return;
     }
-    // Idle hover/focus must not spin Droid's expensive per-model ACP discovery;
-    // only explicit new-thread intent (the click path below) warms Droid.
+    // idle hover/focus must not spin Droid's expensive per-model ACP discovery — only explicit new-thread intent warms it
     prefetchModelsForProjectNewThread(primaryNewThreadTarget.projectId);
   }, [prefetchModelsForProjectNewThread, primaryNewThreadTarget]);
 
@@ -2729,8 +2639,7 @@ export default function Sidebar() {
       return;
     }
 
-    // The projects snapshot can be temporarily empty during startup. Wait for hydration
-    // before treating a missing target as a genuine no-project state.
+    // The projects snapshot can be temporarily empty during startup. Wait for hydration before treating a missing target as a genuine no-project state.
     if (!threadsHydrated) {
       return;
     }
@@ -2902,10 +2811,7 @@ export default function Sidebar() {
     [prewarmThreadDetailForIntent],
   );
 
-  // Segment-switch counterpart of primeThreadActivation: hovering/clicking a
-  // segment resolves the thread the switch will land on and opens its detail
-  // subscription early, so the destination transcript is warm instead of popping
-  // in after a subscribe round-trip once the route has already swapped.
+  // hovering/clicking a segment resolves the landing thread and opens its detail subscription early so the destination transcript is warm
   const prewarmSidebarViewTarget = useCallback(
     (view: SidebarView) => {
       if (view !== "studio" && view !== "threads") {
@@ -3029,9 +2935,7 @@ export default function Sidebar() {
             : []),
           { id: "copy-thread-id", label: "Copy Thread ID", icon: THREAD_CONTEXT_MENU_ICONS.copy },
           ...(options?.extraItems ?? []),
-          // Subagent threads are archived and restored through their parent
-          // (thread.archive cascades); archiving one alone would strand it with
-          // no sidebar or Archived-panel row to restore it from.
+          // thread.archive cascades — archiving a subagent alone strands it with no sidebar/Archived-panel row to restore from
           ...(thread.parentThreadId
             ? []
             : [
@@ -3106,11 +3010,7 @@ export default function Sidebar() {
           threadId,
         );
 
-        // Reuse the active terminal when one is already open and idle so that
-        // repeatedly invoking "Open Path in Terminal" doesn't pile up tabs.
-        // Only spawn a fresh tab when there is no terminal yet, the active id
-        // is stale (no longer in the layout), or the active terminal is busy
-        // running a subprocess.
+        // reuse the active terminal when open and idle so "Open Path in Terminal" doesn't pile up tabs; spawn fresh only when absent, stale, or busy
         const candidateBaseTerminalId =
           currentTerminalState.activeTerminalId ||
           currentTerminalState.terminalIds[0] ||
@@ -3139,19 +3039,14 @@ export default function Sidebar() {
         const cdCommand = `cd ${quotePosixShellArgument(threadWorkspacePath)}\r`;
         try {
           if (shouldCreateNewTerminal) {
-            // A brand new PTY needs an explicit cwd so that the shell's first
-            // prompt already shows the workspace path. The follow-up `cd` write
-            // makes the navigation visible in the scrollback (it's effectively
-            // a no-op since the shell is already there, but it matches the
-            // user-typed-it experience).
+            // a new PTY needs explicit cwd so the first prompt shows the workspace; the follow-up `cd` write makes the navigation visible in scrollback (matches the user-typed-it experience)
             await api.terminal.open({
               threadId,
               terminalId: targetTerminalId,
               cwd: threadWorkspacePath,
             });
           }
-          // Existing PTYs keep their launch cwd/env on reattach; writing `cd`
-          // navigates in place without replacing shell state.
+          // Existing PTYs keep their launch cwd/env on reattach; writing `cd` navigates in place without replacing shell state.
           await api.terminal.write({
             threadId,
             terminalId: targetTerminalId,
@@ -3246,9 +3141,7 @@ export default function Sidebar() {
       }
 
       if (clicked === "archive") {
-        // Subagent threads follow their parent's archive cascade. Archiving one
-        // directly would strand it, and archiving it after its parent in this
-        // loop would fail the not-archived invariant.
+        // Subagent threads follow their parent's archive cascade. Archiving one directly would strand it, and archiving it after its parent in this loop would fail the not-archived invariant.
         const archiveIds = ids.filter(
           (id) => (getThreadFromState(useStore.getState(), id)?.parentThreadId ?? null) === null,
         );
@@ -3360,8 +3253,7 @@ export default function Sidebar() {
     splitViewsById,
     terminalStateByThreadId,
   });
-  // PR chip on a thread row behaves like a link: a plain click opens the PR in the thread's
-  // right dock, while cmd/ctrl/middle-click (or a non-GitHub URL) opens it on GitHub.
+  // PR chip on a thread row behaves like a link: a plain click opens the PR in the thread's right dock, while cmd/ctrl/middle-click (or a non-GitHub URL) opens it on GitHub.
   const openThreadPullRequest = useCallback(
     (
       event: MouseEvent<HTMLElement>,
@@ -3433,8 +3325,7 @@ export default function Sidebar() {
         value.source === "local"
           ? findWorkspaceRootMatch(projects, value.workspaceRoot, (project) => project.cwd)
           : null;
-      // Reopening an existing project must follow the Space where that project
-      // actually lives. New projects use the destination selected in the dialog.
+      // Reopening an existing project must follow the Space where that project actually lives. New projects use the destination selected in the dialog.
       const destinationSpaceId = existingProject
         ? (existingProject.spaceId ?? null)
         : value.spaceId;
@@ -3482,9 +3373,7 @@ export default function Sidebar() {
                   },
                   { signal: options.signal },
                 ),
-              // Cancellation can race the server's project.create commit. If that
-              // commit won, recover the durable project and report success instead
-              // of telling the user a registered project was cancelled.
+              // Cancellation can race the server's project.create commit. If that commit won, recover the durable project and report success instead of telling the user a registered project was cancelled.
               recoverCommittedProject: () =>
                 openProvisionedProject(
                   requestedProjectId,
@@ -3514,14 +3403,11 @@ export default function Sidebar() {
         }
       };
 
-      // Keep the compiler-sensitive try block free of value/throw statements.
-      // Land on the destination space before creating so the sidebar follows the
-      // new project's thread instead of bouncing back to the previous space.
+      // keep the compiler-sensitive try block free of value/throw statements; land on the destination space before creating so the sidebar follows the new project's thread instead of bouncing back
       try {
         await runCreateProject();
       } catch (error) {
-        // Project creation is one UI transaction: a failed command must not
-        // strand the sidebar in a Space unrelated to the current route.
+        // Project creation is one UI transaction: a failed command must not strand the sidebar in a Space unrelated to the current route.
         handleSelectSpaceForIncomingProject(previousSpaceId);
         throw error;
       }
@@ -3539,8 +3425,7 @@ export default function Sidebar() {
     ],
   );
 
-  // Tab index 0 is Void, then spaces in strip order — the same mapping the
-  // space.jump.N dispatch below uses, surfaced in each tab's tooltip.
+  // Tab index 0 is Void, then spaces in strip order — the same mapping the space.jump.N dispatch below uses, surfaced in each tab's tooltip.
   const jumpShortcutLabelForSpaceTab = useCallback(
     (tabIndex: number) => {
       const command = spaceJumpCommandForIndex(tabIndex);
@@ -3625,8 +3510,7 @@ export default function Sidebar() {
       );
       if (!confirmed) return;
 
-      // Nested function so the `try` body stays free of value blocks — see the comment on
-      // `runAddProject` above for why React Compiler requires this shape.
+      // Nested function so the `try` body stays free of value blocks — see the comment on `runAddProject` above for why React Compiler requires this shape.
       const runRemoveProject = async () => {
         // `project.delete` refuses non-empty folders, so `Remove` clears threads first.
         const deletionResult = await deleteProjectThreads(projectId, {
@@ -3755,7 +3639,6 @@ export default function Sidebar() {
     animatedProjectListsRef.current.add(node);
   }, []);
 
-  // --- Primary nav customization: persisted order + visibility, edited in a card. ---
   const sidebarNavOrder = useMemo(
     () => normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
     [appSettings.sidebarNavOrder],
@@ -3827,8 +3710,7 @@ export default function Sidebar() {
       pullRequestsReviewBadge,
     ],
   );
-  // A hidden item whose route is currently active stays visible so the current
-  // surface never loses its sidebar row (mirrors the hidden-provider rule).
+  // A hidden item whose route is currently active stays visible so the current surface never loses its sidebar row (mirrors the hidden-provider rule).
   const visibleSidebarNavIds = useMemo(
     () =>
       sidebarNavOrder.filter(
@@ -3871,8 +3753,7 @@ export default function Sidebar() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [isCustomizingNav]);
 
-  // Trees need child (subagent) threads too; the flat display list stays
-  // root-only for pinned rows and other non-tree consumers.
+  // Trees need child (subagent) threads too; the flat display list stays root-only for pinned rows and other non-tree consumers.
   const sidebarThreadsByProjectId = useMemo(
     () => groupSidebarThreadsByProjectId(sidebarTreeThreads),
     [sidebarTreeThreads],
@@ -3943,10 +3824,7 @@ export default function Sidebar() {
     () => visibleChatThreadRows.map((row) => row.thread.id),
     [visibleChatThreadRows],
   );
-  // Studio threads, flattened the same way the home Chats list is. Skipped entirely while the
-  // Studio surface is not showing so thread updates on Projects don't pay for an unused sort.
-  // Pinned threads are hidden here the same way `deriveSidebarProjectData` hides them from
-  // per-project lists, so a pinned Studio chat only ever renders once, inside the Pinned block.
+  // skipped entirely while Studio isn't showing so Projects-side thread updates don't pay for an unused sort; pinned threads hide here same as per-project lists so a pinned Studio chat renders only in the Pinned block
   const studioChatThreadRows = useMemo(() => {
     if (!isOnStudio) {
       return [];
@@ -4006,8 +3884,7 @@ export default function Sidebar() {
       previewLimit: paging.previewLimit,
     });
     return {
-      // Mirror deriveSidebarProjectData: the active-chat reveal can force rows past the page
-      // cap, so only offer "Show more" while rows are genuinely hidden.
+      // Mirror deriveSidebarProjectData: the active-chat reveal can force rows past the page cap, so only offer "Show more" while rows are genuinely hidden.
       canShowMoreChatThreads:
         paging.canShowMore && visibleEntries.length < visibleChatPreviewEntries.length,
       canShowLessChatThreads: paging.canShowLess,
@@ -4096,10 +3973,7 @@ export default function Sidebar() {
   const studioProjectSidebarDataById = useMemo<
     ReadonlyMap<ProjectId, SidebarDerivedProjectData>
   >(() => {
-    // Off-Studio this map is unused (surfaceProjectSidebarDataById picks the
-    // standard one), so skip the derivation instead of recomputing it on every
-    // Projects-side store change. Mirrors the isOnStudio gate on
-    // studioChatThreadRows.
+    // Off-Studio this map is unused (surfaceProjectSidebarDataById picks the standard one), so skip the derivation instead of recomputing it on every Projects-side store change. Mirrors the isOnStudio gate on studioChatThreadRows.
     if (!isOnStudio) {
       return EMPTY_PROJECT_SIDEBAR_DATA;
     }
@@ -4261,10 +4135,7 @@ export default function Sidebar() {
       }
     }
 
-    // The Studio surface's primary list is the flat studio tree, not project rows, so its
-    // rendered rows must join the visible ids too — otherwise jump shortcuts and detail
-    // prewarming would cover nothing but pinned rows on Studio. studioChatThreadIds is already
-    // empty off-Studio and in render order (pinned rows excluded, they were added above).
+    // Studio's primary list is the flat studio tree — its rendered rows must join the visible ids or jump shortcuts + detail prewarming would cover only pinned rows; studioChatThreadIds is already empty off-Studio and in render order
     for (const threadId of studioChatThreadIds) {
       addVisibleThreadId(threadId);
     }
@@ -4350,9 +4221,7 @@ export default function Sidebar() {
       visibleThreadIds: visibleSidebarThreadIds,
       activeThreadId: activeSidebarThreadId,
     });
-    // Retaining a thread without cached detail would open a full-history
-    // snapshot stream speculatively; only cursor-resumable threads are cheap
-    // enough to keep warm from scroll position alone.
+    // Retaining a thread without cached detail would open a full-history snapshot stream speculatively; only cursor-resumable threads are cheap enough to keep warm from scroll position alone.
     const releaseCallbacks = threadIdsToPrewarm
       .filter((threadId) => hasThreadDetailResumeCursor(threadId))
       .map((threadId) => retainThreadDetailSubscription(threadId));
@@ -4364,8 +4233,7 @@ export default function Sidebar() {
     };
   }, [activeSidebarThreadId, visibleSidebarThreadIds]);
 
-  // Pinned rows share the thread-container label rule (project name, or
-  // "Synara" for project-less chats) with the hover cards and Activity rows.
+  // Pinned rows share the thread-container label rule (project name, or "Synara" for project-less chats) with the hover cards and Activity rows.
   function resolvePinnedThreadProjectLabel(projectId: ProjectId): string {
     return resolveThreadProjectLabel(projectById.get(projectId));
   }
@@ -4430,8 +4298,7 @@ export default function Sidebar() {
     timestampToneClassName?: string;
     hoverActions: ReactNode;
   }) {
-    // The jump shortcut owns the slot while it is visible; otherwise the shared
-    // rule decides which status glyph shows here.
+    // The jump shortcut owns the slot while it is visible; otherwise the shared rule decides which status glyph shows here.
     const trailingStatus = resolveThreadStatusTrailingIndicator({
       status: input.threadStatus,
       slotOccupied: Boolean(input.threadJumpLabel),
@@ -4451,9 +4318,7 @@ export default function Sidebar() {
           </KbdGroup>
         ) : null}
         {trailingStatus ? (
-          // The relative time now lives in the row hover card, so the trailing
-          // slot only carries the live status/loader glyph; when idle it
-          // collapses and the hover action icons sit flush at the end.
+          // The relative time now lives in the row hover card, so the trailing slot only carries the live status/loader glyph; when idle it collapses and the hover action icons sit flush at the end.
           <span
             title={trailingStatus.label}
             className={threadRowStatusSlotClassName(
@@ -4469,8 +4334,7 @@ export default function Sidebar() {
     );
   }
 
-  // Section header (label + hover-revealed toolbar) shared by the Threads and Studio surfaces,
-  // so spacing/typography stay in lockstep; only the label and toolbar contents vary.
+  // Section header (label + hover-revealed toolbar) shared by the Threads and Studio surfaces, so spacing/typography stay in lockstep; only the label and toolbar contents vary.
   function renderListSectionHeader(label: string, toolbar: ReactNode) {
     return (
       <div className="group/project-header relative my-1">
@@ -4488,8 +4352,7 @@ export default function Sidebar() {
       </div>
     );
   }
-  // Identical "Pinned" header + rows block shared by the Threads and Studio surfaces.
-  // `pinnedThreads` is already the surface-appropriate list, so a single helper keeps both in sync.
+  // Identical "Pinned" header + rows block shared by the Threads and Studio surfaces. `pinnedThreads` is already the surface-appropriate list, so a single helper keeps both in sync.
   function renderPinnedThreadsSection() {
     if (pinnedThreads.length === 0) {
       return null;
@@ -4506,8 +4369,7 @@ export default function Sidebar() {
     );
   }
 
-  // Shared rich hover card for thread/chat rows. Worktree metadata is resolved
-  // once here so pinned and nested rows stay visually and semantically identical.
+  // Shared rich hover card for thread/chat rows. Worktree metadata is resolved once here so pinned and nested rows stay visually and semantically identical.
   function renderThreadHoverCardPopup(
     thread: SidebarThreadSummary,
     hoverAnchorId: string,
@@ -4525,9 +4387,7 @@ export default function Sidebar() {
     return (
       <TooltipPopup
         {...SIDEBAR_HOVER_CARD_POPUP_PROPS}
-        // Zero the viewport's px-2 py-1 inset so the card's own padding matches
-        // the project PreviewCard (which has no viewport). The var also drives
-        // the viewport width calc, so setting it to 0 keeps the content full-width.
+        // Zero the viewport's px-2 py-1 inset so the card's own padding matches the project PreviewCard (which has no viewport). The var also drives the viewport width calc, so setting it to 0 keeps the content full-width.
         viewportClassName="[--viewport-inline-padding:0px] py-0"
         anchor={createThreadHoverCardAnchor(hoverAnchorId)}
         className={cn(SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME, "whitespace-normal leading-tight")}
@@ -4549,9 +4409,7 @@ export default function Sidebar() {
     );
   }
 
-  // Interactive hover card for project/folder rows: name + pin toggle, chat
-  // count, path, and an "Edit project" action. Rendered inside a PreviewCard so
-  // its controls stay reachable when the pointer moves into the card.
+  // Interactive hover card for project/folder rows: name + pin toggle, chat count, path, and an "Edit project" action. Rendered inside a PreviewCard so its controls stay reachable when the pointer moves into the card.
   function renderProjectHoverCardPopup(
     project: (typeof sortedProjects)[number],
     chatCount: number,
@@ -4600,10 +4458,7 @@ export default function Sidebar() {
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
-    // The trailing cluster (meta chips + status glyph) is absolutely positioned; it
-    // only grows past the reserve when a live glyph (spinner/check/dot or jump label)
-    // occupies the status slot. In that state the right-aligned project label needs a
-    // hair of clearance so it stops kissing the worktree chip — see the margin below.
+    // the absolute trailing cluster grows past the reserve only when a live glyph occupies the status slot — the project label needs a hair of clearance then
     const hasTrailingStatusGlyph = Boolean(threadStatus) || Boolean(threadJumpLabel);
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: "pinned",
@@ -4633,10 +4488,7 @@ export default function Sidebar() {
             data-thread-item
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
-              // Match the normal thread row: a flex row whose title claims all free
-              // space, with a trailing reserve that grows only for the badges actually
-              // present — instead of a rigid grid that permanently fenced off a
-              // timestamp-era column and squeezed the title/project even when wide.
+              // title claims all free space with a trailing reserve that grows only for badges present — instead of a rigid grid that permanently fenced off a column
               "relative gap-1.5 transition-colors",
               leadingPr && "pl-8",
               resolveThreadRowTrailingReserveClass({
@@ -4681,13 +4533,7 @@ export default function Sidebar() {
               }
               suffix={
                 projectLabel ? (
-                  // Right-aligned project context for the flattened pinned list. The title
-                  // (flex-1) pushes it to the content edge, so it shows in full when the row
-                  // has room and only truncates under real pressure, shifting left as the
-                  // trailing reserve grows on hover/status. When a live status glyph occupies
-                  // the trailing slot (e.g. the running spinner), the absolute cluster reaches
-                  // a few px past the reserve — a small margin keeps the folder name from
-                  // touching the worktree chip. It costs no space when the row is idle.
+                  // title pushes project context to the content edge — full when there's room, truncating under pressure; a small margin keeps it off the worktree chip when a live status glyph sits in the trailing slot
                   <span
                     className={cn(
                       "max-w-[40%] shrink-0 truncate text-right text-ui-meta text-muted-foreground/38 transition-[margin] duration-150 ease-out",
@@ -4726,9 +4572,7 @@ export default function Sidebar() {
     thread: SidebarThreadSummary,
     orderedProjectThreadIds: readonly ThreadId[],
     depth = 0,
-    // Chat rows sit directly under the "Chats" header (no project nesting), so
-    // their top-level rows align flush like pinned rows instead of the indented
-    // column used for project-nested threads.
+    // Chat rows sit directly under the "Chats" header (no project nesting), so their top-level rows align flush like pinned rows instead of the indented column used for project-nested threads.
     topLevel = false,
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
@@ -4828,8 +4672,7 @@ export default function Sidebar() {
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
-                  // A right-click inside an active multi-selection acts on the whole
-                  // selection; anywhere else it drops the selection and targets the row.
+                  // A right-click inside an active multi-selection acts on the whole selection; anywhere else it drops the selection and targets the row.
                   if (selectedThreadIds.size > 0 && selectedThreadIds.has(thread.id)) {
                     void handleMultiSelectContextMenu({
                       x: event.clientX,
@@ -4926,16 +4769,10 @@ export default function Sidebar() {
       : sidebarHoverRevealHideClassName("project-header");
     const projectRun = projectRunsByProjectId[project.id] ?? null;
     const projectRunServer = projectRunServerByProjectId.get(project.id) ?? null;
-    // A project reads as "running" when Synara tracks a run for it or when a
-    // local server (possibly started outside Synara) is attributed by cwd.
+    // A project reads as "running" when Synara tracks a run for it or when a local server (possibly started outside Synara) is attributed by cwd.
     const isProjectRunning = projectRun !== null || projectRunServer !== null;
     const collapsedProjectStatus = project.expanded ? null : projectStatus;
-    // The "open dev server" affordance now lives in the project context menu, so
-    // the hover toolbar always reserves space for the three thread actions. The
-    // reserve lives on the *name* container (not the button) so only the truncating
-    // name yields to the overlay toolbar; the trailing run dot stays put and fades
-    // in place instead of sliding left. Focus is read from the group because the
-    // name container itself is not focusable — the row's button is.
+    // the reserve lives on the *name* container (not the button) so only the truncating name yields to the overlay toolbar; the run dot fades in place instead of sliding — focus read from the group because the name container isn't focusable
     const projectToolbarReserveClassName =
       "group-hover/project-header:pr-[4.75rem] group-has-[:focus-visible]/project-header:pr-[4.75rem]";
     // Configured display name only — folder identity lives in the hover card (#1000).
@@ -4965,9 +4802,7 @@ export default function Sidebar() {
               {...(isManualProjectSorting && dragHandleProps ? dragHandleProps.listeners : {})}
               {...(!isManualProjectSorting && spaces.length > 0
                 ? {
-                    // Native drag-to-file: drop the row on a space tab to move the
-                    // project. Manual sort mode is excluded because dnd-kit owns the
-                    // drag gesture there for reordering.
+                    // manual sort mode excluded — dnd-kit owns the drag gesture there for reordering
                     draggable: true,
                     onDragStart: (event: ReactDragEvent<HTMLButtonElement>) => {
                       event.dataTransfer.effectAllowed = "move";
@@ -5066,8 +4901,7 @@ export default function Sidebar() {
                 onClick={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  // Opens the in-app pull requests view scoped to this project (selecting a
-                  // row there opens the right-dock detail panel) instead of leaving for GitHub.
+                  // Opens the in-app pull requests view scoped to this project (selecting a row there opens the right-dock detail panel) instead of leaving for GitHub.
                   void navigate({
                     to: "/pull-requests",
                     search: { involvement: "all", state: "open", projectId: project.id },
@@ -5465,9 +5299,7 @@ export default function Sidebar() {
     };
   }, []);
 
-  // Single entry point for update error toasts. Attaches the manual-download
-  // fallback (copy link + "Download manually") whenever a release URL is known,
-  // and dedupes by error signature so the same failure is not toasted twice.
+  // Single entry point for update error toasts. Attaches the manual-download fallback (copy link + "Download manually") whenever a release URL is known, and dedupes by error signature so the same failure is not toasted twice.
   const surfaceDesktopUpdateError = useCallback(
     (input: { title: string; description: string; state: DesktopUpdateState | null }) => {
       const signature = getDesktopUpdateErrorSignature(input.state) ?? `adhoc:${input.description}`;
@@ -5500,14 +5332,10 @@ export default function Sidebar() {
     [],
   );
 
-  // The install watchdog (and any background-pushed failure) flips the update
-  // state to a download/install error without going through a click handler, so
-  // the fallback must also be surfaced reactively here. Dedup keeps it from
-  // doubling up with the click-handler toast for user-initiated failures.
+  // the install watchdog flips update state to error without a click handler, so the fallback must surface reactively too — dedup keeps it from doubling with the click-handler toast
   useEffect(() => {
     if (!getDesktopUpdateErrorSignature(desktopUpdateState)) {
-      // Returning to any non-error state (new download, success, up-to-date)
-      // clears the dedup key so the next distinct failure notifies again.
+      // Returning to any non-error state (new download, success, up-to-date) clears the dedup key so the next distinct failure notifies again.
       lastDesktopUpdateErrorToastSignatureRef.current = null;
       return;
     }
@@ -5646,16 +5474,14 @@ export default function Sidebar() {
         keywords: ["usage", "limits", "credits", "quota", "providers"],
         shortcutLabel: usageSettingsShortcutLabel,
       },
-      // Space jumps ride the palette so keyboard users can reach any space by name
-      // without learning the previous/next-space chords.
+      // Space jumps ride the palette so keyboard users can reach any space by name without learning the previous/next-space chords.
       ...(spaces.length > 0
         ? [
             {
               id: "switch-space-void",
               label: `Switch to ${voidSpace.name}`,
               description: "Jump to unassigned projects.",
-              // "void" stays a keyword after a rename: it is what the palette answered to
-              // before, and it is still the only word for this group in the docs.
+              // "void" stays a keyword after a rename: it is what the palette answered to before, and it is still the only word for this group in the docs.
               keywords: ["space", "switch", "void", "unassigned", voidSpace.name],
               requiresQuery: true,
               run: () => handleSelectSpace(null),
@@ -5851,8 +5677,7 @@ export default function Sidebar() {
     surfaceDesktopUpdateError,
   ]);
 
-  // Both handlers step from the *effective* (clamped) page count reported by the derived
-  // project data, so stale/oversized stored paging self-heals on the very next click.
+  // Both handlers step from the *effective* (clamped) page count reported by the derived project data, so stale/oversized stored paging self-heals on the very next click.
   const setThreadListExtraPagesForProject = useCallback(
     (projectCwd: string, nextExtraPages: number) => {
       const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);
@@ -5894,15 +5719,10 @@ export default function Sidebar() {
     setAllProjectsExpanded(true);
   }, [allProjectsExpanded, collapseProjectsExcept, focusedProjectId, setAllProjectsExpanded]);
 
-  // Only macOS draws the traffic lights in the renderer's top-left, so only there
-  // does the open-sidebar header need to reserve the gutter (mirrors the mac guard
-  // in useDesktopTopBarTrafficLightGutterClassName used by the closed-state surfaces).
+  // only macOS draws traffic lights in the renderer's top-left — only there does the open-sidebar header reserve the gutter (mirrors useDesktopTopBarTrafficLightGutterClassName)
   const isMacDesktop = isMacNavigatorPlatform();
 
-  // Open-sidebar (in-sidebar) and non-electron wordmark clusters share the one
-  // SidebarLeadingControls primitive with the closed-state host headers, so the
-  // toggle + arrows look identical whether the sidebar is open or collapsed; only
-  // the wrapper layout differs per host.
+  // open-sidebar and non-electron wordmark clusters share SidebarLeadingControls with closed-state headers — identical controls, only the wrapper layout differs per host
   const titlebarControls = <SidebarLeadingControls className="hidden md:flex" />;
 
   const headerControls = <SidebarLeadingControls className="ml-auto hidden md:flex" />;
@@ -6139,8 +5959,7 @@ export default function Sidebar() {
               )}
 
               {isOnStudio ? (
-                // Studio is "just chats": a labeled Studio block holding a flat list of threads
-                // rooted at the Studio workspace (no project-folder chrome).
+                // Studio is "just chats": a labeled Studio block holding a flat list of threads rooted at the Studio workspace (no project-folder chrome).
                 <SidebarGroup className="px-1.5 py-1.5">
                   {renderPinnedThreadsSection()}
                   {renderListSectionHeader(
@@ -6339,8 +6158,7 @@ export default function Sidebar() {
           </>
         )}
         {!isOnSettings && !isOnStudio && !activityViewEnabled && chatsSectionVisible ? (
-          // sidebar-surface-enter: mounts on the Studio -> Projects switch, so it
-          // animates in step with the keyed surface wrapper above.
+          // sidebar-surface-enter: mounts on the Studio -> Projects switch, so it animates in step with the keyed surface wrapper above.
           <SidebarGroup className="sidebar-surface-enter px-1.5 pt-1 pb-2">
             <div className="group/collapsible">
               <div className="group/project-header relative">
@@ -6950,8 +6768,7 @@ export default function Sidebar() {
           projects={searchPaletteProjects}
           projectById={projectById}
           onCreateChat={() =>
-            // Segment-aware, matching the sidebar's + action: "New chat" from the palette while
-            // on the Studio segment opens a Studio chat, not a home draft.
+            // Segment-aware, matching the sidebar's + action: "New chat" from the palette while on the Studio segment opens a Studio chat, not a home draft.
             void (isOnStudio ? handleCreateStudioChat() : handleCreateHomeChat())
           }
           onCreateThread={handlePrimaryNewThread}
@@ -6998,8 +6815,7 @@ function SidebarSearchPaletteController(props: {
   onOpenThread: (threadId: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
-  // Search keeps automation-run threads as an intent-driven escape hatch, while
-  // structurally nested side chats stay out of standalone thread results.
+  // Search keeps automation-run threads as an intent-driven escape hatch, while structurally nested side chats stay out of standalone thread results.
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const importProviderCapabilityQueries = useQueries({
     queries: (["codex", "claudeAgent", "cursor", "opencode"] as const).map((provider) =>

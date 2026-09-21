@@ -1,9 +1,3 @@
-// FILE: ComposerModelPickerRow.tsx
-// Purpose: One model row of the composer model picker — name, mod+digit hint, star toggle,
-//   and (for models with an effort ladder, in menu mode) a hover side block that picks model + effort at once.
-// Layer: Chat composer presentation
-// Depends on: composer trait resolution, starred model keys, and shared menu primitives.
-
 import { type ProviderModelDescriptor } from "@synara/contracts";
 
 import { type StarredModel, starredModelKey } from "~/lib/starredModels";
@@ -32,8 +26,7 @@ import { PICKER_PANEL_ROW_SELECTED_CLASS_NAME } from "./pickerPanelStyles";
 import { getProviderIconClassName } from "./ProviderModelPicker";
 import { resolveRuntimeModelDescriptor } from "./runtimeModelCapabilities";
 
-// Each row resolves its own traits, so a long catalog only recomputes the rows whose
-// inputs changed instead of the whole list on every keystroke.
+// Each row resolves its own traits, so a long catalog only recomputes the rows whose inputs changed instead of the whole list on every keystroke.
 export function ComposerModelPickerRow(props: {
   row: PickerRow;
   /** "⌘1"-style hint, or null beyond the addressable rows. */

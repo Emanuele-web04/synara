@@ -645,8 +645,7 @@ describe("external MCP gateway stdio flow", () => {
         expect(overviewJson).toContain(PROJECT_ID);
         expect(overviewJson).toContain("External MCP project");
         expect(overviewJson).toContain('\\"projectScope\\": \\"selected\\"');
-        // Thread titles stay behind tasks:read-project; projects:read alone
-        // gets counts only.
+        // thread titles stay behind tasks:read-project; projects:read gets counts only
         expect(overviewJson).not.toContain("recentThreads");
         const overviewPayload = toolPayload(overview.body as Record<string, unknown>);
         expect(overviewPayload.nextSteps).toEqual([

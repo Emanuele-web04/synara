@@ -1,7 +1,3 @@
-// FILE: browserUsePipeServer.ts
-// Purpose: Exposes the canonical high-level browser host over a private local RPC pipe.
-// Layer: Desktop browser automation bridge
-
 import * as Crypto from "node:crypto";
 import * as FS from "node:fs";
 import * as Net from "node:net";
@@ -18,12 +14,9 @@ import { BrowserAutomationHostError } from "./browserAutomation/hostErrors";
 import type { DesktopBrowserManager } from "./browserManager";
 
 const FRAME_HEADER_BYTES = 4;
-// 8 MiB PNG sidecars expand to about 10.7 MiB in base64; 12 MiB keeps the
-// contract maximum plus bounded structured content inside one correlated frame.
+// 8 MiB PNG sidecars expand to ~10.7 MiB base64 — 12 MiB keeps the contract maximum plus bounded structured content inside one correlated frame
 const MAX_MESSAGE_BYTES = 12 * 1024 * 1024;
-// The gateway accepts JSON-RPC batches of up to 50 messages and currently
-// opens one short-lived pipe connection per browser call. Keep enough room for
-// a full batch plus control traffic while retaining a finite local bound.
+// the gateway accepts JSON-RPC batches up to 50 over one short-lived pipe per call — room for a full batch plus control traffic, still finitely bounded
 const MAX_CLIENTS = 64;
 const MAX_IN_FLIGHT_REQUESTS = 16;
 const MAX_QUEUED_OUTPUT_BYTES = 1024 * 1024;
@@ -109,9 +102,7 @@ export function resolveDefaultBrowserHostPipePath(
   if (platform === "win32") {
     return `\\\\.\\pipe\\${PIPE_NAME_PREFIX}-${suffix}`;
   }
-  // Darwin limits sockaddr_un paths to roughly 104 bytes, while OS.tmpdir()
-  // normally expands to a long /var/folders/... path. /tmp keeps the address
-  // bounded; the per-user directory is still created and verified as 0700.
+  // Darwin limits sockaddr_un paths to ~104 bytes while os.tmpdir() expands to a long /var/folders path — /tmp keeps the address bounded; the per-user dir is still created and verified 0700
   const uid = process.getuid?.();
   const privateDirectory = uid === undefined ? PIPE_DIR : `${PIPE_DIR}-${uid}`;
   return Path.join("/tmp", privateDirectory, `${suffix}.sock`);

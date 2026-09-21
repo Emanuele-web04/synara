@@ -1,10 +1,5 @@
 "use client";
 
-// FILE: InstallerCount.tsx
-// Purpose: Shows the installer total and refreshes it in the browser without a full page reload.
-// Layer: Client component
-// Depends on: /api/installer-count route, React state/effects
-
 import { startTransition, useEffect, useState } from "react";
 
 const INSTALLER_COUNT_ENDPOINT = "/api/installer-count";
@@ -24,7 +19,6 @@ export default function InstallerCount({ initialCount }: InstallerCountProps) {
   useEffect(() => {
     let isActive = true;
 
-    // Keeps the hero copy aligned with the latest release download count.
     async function refreshCount() {
       try {
         const response = await fetch(INSTALLER_COUNT_ENDPOINT, {

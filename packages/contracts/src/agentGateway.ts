@@ -1,10 +1,4 @@
-/**
- * Public contracts for the Synara agent-control gateway.
- *
- * New gateway tools decode these schemas before doing any work. Keeping the
- * limits here ensures the MCP surface, server implementation, and tests share
- * the same definition of an exact creation/wait plan.
- */
+/** keeping the limits here ensures the MCP surface, server implementation, and tests share one definition of an exact plan */
 import { Schema } from "effect";
 
 import { ProjectId, ThreadId, TurnId } from "./baseSchemas";
@@ -72,8 +66,7 @@ export const SynaraCreateThreadSpec = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   environment: Schema.optional(Schema.Literals(["local", "worktree"])),
   baseRef: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
-  // Legacy inputs remain decodable for replay/backward compatibility, but the
-  // MCP catalog no longer advertises branch-backed worktree creation.
+  // legacy inputs stay decodable for replay/back-compat; the MCP catalog no longer advertises branch-backed creation
   baseBranch: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   branchName: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   runtimeMode: Schema.optional(Schema.Literals(["approval-required", "full-access"])),

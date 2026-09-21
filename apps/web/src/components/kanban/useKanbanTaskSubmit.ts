@@ -1,8 +1,3 @@
-// FILE: useKanbanTaskSubmit.ts
-// Purpose: Owns the kanban new-task dialog's draft/create/send lifecycle.
-// Layer: Kanban UI hook
-// Exports: useKanbanTaskSubmit
-
 import type {
   AssistantDeliveryMode,
   ModelSlug,
@@ -73,8 +68,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
   const navigate = useNavigate();
   const [isCreating, setIsCreating] = useState(false);
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
-  // Synchronous re-entry guard: repeated Cmd+Enter can fire before React flushes
-  // the loading state, and two passes here would create two tasks.
+  // synchronous re-entry guard: repeated Cmd+Enter can fire before React flushes the loading state — two passes would create two tasks
   const isCreatingRef = useRef(false);
 
   const canCreate =
@@ -98,8 +92,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     isCreatingRef.current = true;
     await waitForPendingImages();
     const truncatedPrompt = truncateKanbanTaskPreview(taskPreview);
-    // The scratch draft carries the full selection (model + reasoning effort +
-    // speed) set through the picker; fall back to a bare selection otherwise.
+    // the scratch draft carries the full selection (model + effort + speed); fall back to a bare selection otherwise
     const scratchState = useComposerDraftStore.getState().draftsByThreadId[scratchThreadId];
     const storedModelSelection = scratchState?.modelSelectionByProvider[selectedProvider];
     const storedModelSupportsAutoMode =
@@ -180,8 +173,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
           void navigate({ to: "/$threadId", params: { threadId } });
           return;
         }
-        // Promotion/dispatch could not complete faithfully; the draft still
-        // exists on the board, so surface the failure and keep the dialog open.
+        // promotion/dispatch couldn't complete faithfully — the draft still exists on the board, so surface the failure and keep the dialog open
         toastManager.add({
           type: "error",
           title: "Couldn't start the task",

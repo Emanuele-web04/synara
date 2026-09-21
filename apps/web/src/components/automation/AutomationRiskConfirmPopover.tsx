@@ -1,9 +1,4 @@
-// FILE: AutomationRiskConfirmPopover.tsx
-// Purpose: Anchored confirm popover for inline automation edits that need consent
-// (risky worktree modes, mode changes that claim or release a thread).
-// Layer: Web components (automation)
-// The popover is controlled and anchored to the row control that requested it: the
-// change is held as pending state by the caller and only patched on Confirm.
+// controlled popover anchored to the requesting row control; the change is held as pending state and only patched on Confirm
 
 import type * as React from "react";
 

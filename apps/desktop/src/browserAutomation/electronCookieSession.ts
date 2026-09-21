@@ -2,7 +2,6 @@ import { WebContentsView } from "electron";
 import type { CookieSessionBackend } from "./browserSessionRestore";
 
 export function createCookieSessionBackend(partition: string): CookieSessionBackend {
-  // This never navigates to a website, joins the UI, or accepts agent commands.
   const view = new WebContentsView({
     webPreferences: {
       partition,
@@ -18,8 +17,6 @@ export function createCookieSessionBackend(partition: string): CookieSessionBack
   return {
     async read() {
       await ready;
-      // Electron's browser-scoped Storage domain resolves the default profile,
-      // not this view's partition. Use the target-scoped Network commands.
       const result = await view.webContents.debugger.sendCommand("Network.getAllCookies");
       return result.cookies;
     },
@@ -33,8 +30,6 @@ export function createCookieSessionBackend(partition: string): CookieSessionBack
       changedListeners.add(listener);
     },
     dispose() {
-      // The partition session outlives this view; a stale listener would fire
-      // the restore path against a closed backend.
       for (const listener of changedListeners)
         contents.session.cookies.removeListener("changed", listener);
       changedListeners.clear();

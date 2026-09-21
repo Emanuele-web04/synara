@@ -130,8 +130,7 @@ describe("deriveMessageTrailItems", () => {
       messageEntry("a1", "assistant", "old reply"),
       messageEntry("u2", "user", "second question"),
     ]);
-    // New entries array with the middle message replaced by a new object — the
-    // store never mutates messages in place, so a text change means a new object.
+    // store never mutates messages in place — a text change means a new object
     const after = deriveMessageTrailItems([
       unchangedUser,
       messageEntry("a1", "assistant", "  corrected   reply "),

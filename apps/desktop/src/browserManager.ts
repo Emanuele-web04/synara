@@ -1,8 +1,3 @@
-// FILE: browserManager.ts
-// Purpose: Owns the desktop in-app browser runtime and maps thread/tab state onto Electron views.
-// Layer: Desktop runtime manager
-// Depends on: Electron BrowserWindow/WebContentsView, shared browser IPC contracts
-
 import * as Crypto from "node:crypto";
 
 import {
@@ -66,8 +61,7 @@ const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS = 400;
 const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 1;
 const BROWSER_MAX_BACKGROUND_AUTOMATION_RUNTIMES = 4;
-// Browser tools have a published maximum 30 second deadline. Keep a newly
-// acquired runtime out of the eviction pool until that action has drained.
+// keep a newly acquired runtime out of the eviction pool until the 30s browser-tool deadline has drained
 const BROWSER_AUTOMATION_RUNTIME_USE_GRACE_MS = 31_000;
 const BROWSER_THREAD_SUSPEND_DELAY_MS = 30_000;
 const BROWSER_AUTOMATION_WINDOW_OPEN_FALLBACK_MS = 2_000;
@@ -196,11 +190,7 @@ export interface BrowserAutomationVisibleRuntime {
   readonly threadId: ThreadId;
   readonly tabId: string;
   readonly webContents: WebContents;
-  /**
-   * Classifies one imminent native input as agent-generated. The returned
-   * disposer must be called once the dispatch has drained so a stale expected
-   * signal can never mask a later human action.
-   */
+  // the disposer must run once the dispatch drains — a stale expected signal must never mask a later human action
   readonly expectAgentInput?: (signal: BrowserAutomationExpectedInput) => () => void;
 }
 
@@ -462,8 +452,7 @@ export class DesktopBrowserManager {
   private readonly listeners = new Set<BrowserStateListener>();
   private readonly copyLinkListeners = new Set<BrowserCopyLinkListener>();
   private readonly annotations: BrowserAnnotationCoordinator;
-  // OAuth/sign-in popups opened by pages via `window.open`. Tracked so they can be sized over
-  // the panel and torn down cleanly without leaking native windows.
+  // OAuth/sign-in popups via window.open — tracked so they size over the panel and tear down without leaking native windows
   private readonly popupRuntimes = new Map<BrowserWindow, OAuthPopupRuntime>();
   private readonly previewThreadIds = new Set<ThreadId>();
   private readonly sessionPolicy: BrowserSessionPolicy;
@@ -509,8 +498,7 @@ export class DesktopBrowserManager {
   setWindow(window: BrowserWindow | null): void {
     const previousWindow = this.window;
     if (previousWindow && previousWindow !== window) {
-      // Detach while the old BrowserWindow is still addressable; clearing the
-      // field first leaves native child views orphaned over the next renderer.
+      // detach while the old BrowserWindow is still addressable — clearing the field first leaves native child views orphaned over the next renderer
       this.detachAttachedRuntime();
       this.destroyAllRuntimes();
       this.closeAllPopupWindows();
@@ -599,12 +587,7 @@ export class DesktopBrowserManager {
     );
   }
 
-  /**
-   * Correlates a page-created window with the agent input that caused it. The
-   * short-lived gesture lease stays active until the caller disposes it, so an
-   * Electron window-open callback delivered just after the input transport is
-   * acknowledged is still classified as agent-owned.
-   */
+  // the gesture lease stays active until disposed so a window-open callback delivered just after input ack still classifies as agent-owned
   trackAutomationWindowOpen(
     input: BrowserTabInput,
     listener: BrowserAutomationWindowOpenListener,
@@ -625,12 +608,7 @@ export class DesktopBrowserManager {
     };
   }
 
-  /**
-   * Observes downloads while a host action is live and records their runtime
-   * provenance. Releasing the observer ends host notification, while the
-   * provenance remains until human control or runtime teardown so a deferred
-   * page side effect still cannot write to disk.
-   */
+  // releasing the observer ends host notification, but provenance remains until human control or teardown — a deferred page side effect still can't write to disk
   trackAutomationDownload(
     input: BrowserTabInput,
     listener: BrowserAutomationDownloadListener,
@@ -644,10 +622,7 @@ export class DesktopBrowserManager {
     };
     listeners.add(lease);
     this.automationDownloadListenersByRuntimeKey.set(key, listeners);
-    // A page can defer the actual navigation/download beyond the native input
-    // acknowledgement and the host listener's lifetime. Retain one provenance
-    // marker per logical runtime until genuine human input advances the epoch
-    // or the runtime is destroyed.
+    // a page can defer navigation/download past the input ack and listener lifetime — retain one provenance marker per runtime until human input advances the epoch
     this.automationSideEffectProvenanceByRuntimeKey.set(key, {
       threadId: input.threadId,
       humanControlEpoch,
@@ -710,8 +685,7 @@ export class DesktopBrowserManager {
       webContents.removeListener("will-redirect", blockUnsafeMainFrameNavigation);
     });
 
-    // Auth providers can chain web popups (provider -> consent). Page-controlled custom
-    // schemes are denied here: browser content must never launch an OS handler implicitly.
+    // auth providers chain web popups; page-controlled custom schemes are denied — browser content must never launch an OS handler implicitly
     webContents.setWindowOpenHandler((details) => {
       const { url } = details;
       const automationGestureActive = this.isAutomationGestureActive(threadId, tabId);
@@ -744,8 +718,7 @@ export class DesktopBrowserManager {
             openedTabId: null,
           });
         }
-        // Adopt Electron's child contents instead of reopening its URL: OAuth
-        // needs the original opener, POST body and window.close semantics.
+        // adopt Electron's child contents instead of reopening the URL — OAuth needs the original opener, POST body, and window.close semantics
         return {
           action: "allow",
           overrideBrowserWindowOptions: this.sessionPolicy.buildOAuthPopupWindowOptions(
@@ -755,10 +728,7 @@ export class DesktopBrowserManager {
         };
       }
 
-      // Electron is waiting synchronously for this decision. Updating state here
-      // can make the renderer remove the source <webview> re-entrantly while its
-      // WebContents is still opening the window. Defer the canonical tab
-      // transition until after the handler has returned to Electron.
+      // Electron waits synchronously for this decision — a state update here can make the renderer remove the source <webview> re-entrantly; defer the tab transition until the handler returns
       this.scheduleWindowOpenTab({
         threadId,
         sourceTabId: tabId,
@@ -802,8 +772,7 @@ export class DesktopBrowserManager {
     popupEvents.on("close", close);
     runtime.listenerDisposers.push(() => popupEvents.removeListener("close", close));
 
-    // Never publish a tab transition synchronously inside Electron's window-open
-    // callback; a renderer-owned opener must survive until the callback returns.
+    // never publish a tab transition synchronously inside Electron's window-open callback — a renderer-owned opener must survive until the callback returns
     setImmediate(() => {
       if (this.disposed || this.runtimes.get(runtime.key) !== runtime) return;
       state.activeTabId = tab.id;
@@ -811,7 +780,6 @@ export class DesktopBrowserManager {
       const bounds = this.getVisibleBoundsForThread(opener.threadId);
       if (this.activeThreadId === opener.threadId && bounds) this.attachRuntime(runtime, bounds);
       this.emitState(opener.threadId);
-      // Background-tab requests may not supply an already navigating child.
       if (!options.webContents) {
         void runtime.webContents.loadURL(url).catch(() => {});
       }
@@ -869,14 +837,11 @@ export class DesktopBrowserManager {
     const currentHumanEpoch = this.getAutomationHumanControlEpoch(context.threadId);
     const provenance = this.automationSideEffectProvenanceByRuntimeKey.get(runtimeKey);
     if (!provenance || provenance.humanControlEpoch !== currentHumanEpoch) {
-      // A manual download after genuine user input remains native Electron
-      // behavior. In particular, no global partition policy blocks it.
+      // A manual download after genuine user input remains native Electron behavior. In particular, no global partition policy blocks it.
       return;
     }
 
-    // Electron guarantees that preventing `will-download` cancels before a
-    // target path is selected or bytes are written. Notify the host only after
-    // the side effect has been contained so listener failures cannot leak it.
+    // Electron guarantees preventing will-download cancels before a path is chosen or bytes written — notify the host only after the side effect is contained
     input.event.preventDefault();
     this.emitAutomationDownload({
       threadId: context.threadId,
@@ -902,8 +867,7 @@ export class DesktopBrowserManager {
   }): void {
     if (this.disposed) return;
     const key = buildRuntimeKey(input.threadId, input.sourceTabId);
-    // One native activation can surface duplicate callbacks in embedded guest
-    // runtimes. Only the first decision may create a canonical Synara tab.
+    // one native activation can surface duplicate callbacks in embedded runtimes — only the first decision may create a canonical tab
     if (
       this.pendingWindowOpenTasksByRuntimeKey.has(key) ||
       this.pendingAutomationWindowOpenCommitsByRuntimeKey.has(key)
@@ -1021,9 +985,7 @@ export class DesktopBrowserManager {
     );
     syncThreadLastError(state);
     this.markThreadStateChanged(pending.threadId);
-    // The host can now reconcile openedTabId from canonical state, but the
-    // renderer must not remove the source guest until Electron has completely
-    // unwound the native window-open activation and the click response.
+    // the renderer must not remove the source guest until Electron fully unwinds the window-open activation and the click response
     this.scheduleDeferredStatePublication(key, pending.threadId, true, undefined, pending.tab.id);
   }
 
@@ -1042,8 +1004,7 @@ export class DesktopBrowserManager {
       if (this.disposed || !this.states.has(threadId)) return;
       if (pending.rendererGuestToReset && !pending.rendererGuestToReset.isDestroyed()) {
         void pending.rendererGuestToReset.loadURL(ABOUT_BLANK_URL).catch(() => {
-          // The logical tab is already closed and unroutable. A guest destroyed
-          // concurrently by the renderer needs no further cleanup here.
+          // The logical tab is already closed and unroutable. A guest destroyed concurrently by the renderer needs no further cleanup here.
         });
       }
       this.emitState(threadId);
@@ -1057,10 +1018,7 @@ export class DesktopBrowserManager {
         this.attachActiveTab(threadId, bounds, { forceLoad: needsInitialNavigation });
       }
     }, BROWSER_DEFERRED_PUBLICATION_DELAY_MS);
-    // This timer is part of the observable close/window-open handshake. Keep it
-    // referenced: an unref'ed Node timer does not reliably wake Electron's main
-    // loop once the triggering IPC request has drained, which can leave the
-    // renderer displaying a WebView for a tab that is already closed.
+    // this timer is part of the close/window-open handshake — an unref'ed Node timer doesn't reliably wake Electron's main loop once the triggering IPC drains
     this.pendingStatePublicationsByKey.set(key, {
       handle,
       threadId,
@@ -1307,7 +1265,6 @@ export class DesktopBrowserManager {
     return this.humanBrowserOperations > 0;
   }
 
-  /** Cookie imports affect the shared session, so pause every agent until they drain. */
   beginHumanBrowserOperation(): () => void {
     this.humanBrowserOperations += 1;
     for (const threadId of this.states.keys()) this.markHumanControl(threadId);
@@ -1335,7 +1292,6 @@ export class DesktopBrowserManager {
     };
   }
 
-  /** Prepares an agent-owned tab whose native runtime can outlive the chat route. */
   prepareAutomationTab(input: BrowserAutomationPrepareTabInput): ThreadBrowserState {
     const hadExistingTab = (this.states.get(input.threadId)?.tabs.length ?? 0) > 0;
     const state = this.ensureWorkspace(input.threadId, input.url);
@@ -1362,7 +1318,6 @@ export class DesktopBrowserManager {
     return this.snapshotThreadState(input.threadId, state);
   }
 
-  /** Selects a scoped tab and keeps it available to background automation. */
   selectAutomationTab(input: BrowserTabInput): ThreadBrowserState {
     const state = this.states.get(input.threadId);
     const tab = state ? this.getTab(state, input.tabId) : null;
@@ -1384,7 +1339,6 @@ export class DesktopBrowserManager {
     return this.snapshotThreadState(input.threadId, state);
   }
 
-  /** Projects a navigation into the persistent agent-owned runtime state. */
   prepareAutomationNavigation(input: BrowserAutomationPrepareNavigationInput): ThreadBrowserState {
     const state = this.states.get(input.threadId);
     const tab = state ? this.getTab(state, input.tabId) : null;
@@ -1404,11 +1358,7 @@ export class DesktopBrowserManager {
     return this.snapshotThreadState(input.threadId, state);
   }
 
-  /**
-   * Returns the existing page currently displayed by the requested thread,
-   * whether it is a native agent view or a legacy renderer guest. Annotation
-   * callers rely on this method never constructing or revealing a runtime.
-   */
+  // annotation callers rely on this never constructing or revealing a runtime
   getVisibleAutomationRuntime(input: BrowserTabInput): BrowserAutomationVisibleRuntime {
     const state = this.states.get(input.threadId);
     const tab = state ? this.getTab(state, input.tabId) : null;
@@ -1440,10 +1390,7 @@ export class DesktopBrowserManager {
         expectAgentInput: (signal) => this.expectAutomationInput(input.threadId, tab.id, signal),
       };
     }
-    // A renderer guest can remain alive briefly while its panel is hidden or a
-    // different thread is becoming active. It is not the user-visible browser
-    // during that interval, so routing CDP to it would create exactly the split
-    // brain this boundary exists to prevent.
+    // a hidden renderer guest isn't the user-visible browser — routing CDP to it creates the split-brain this boundary prevents
     if (
       this.window &&
       (this.activeThreadId !== input.threadId ||
@@ -1461,7 +1408,6 @@ export class DesktopBrowserManager {
     };
   }
 
-  /** Owner dialogs cover the native view; import targets the selected tab, not its paint bounds. */
   async getCookieImportRuntime(input: BrowserTabInput): Promise<BrowserAutomationVisibleRuntime> {
     const state = this.states.get(input.threadId);
     const tab = state ? this.getTab(state, input.tabId) : null;
@@ -1479,11 +1425,7 @@ export class DesktopBrowserManager {
     };
   }
 
-  /**
-   * Returns the canonical agent runtime even when its thread is not visible.
-   * Agent tabs are native WebContentsViews: hiding a view changes only its
-   * bounds, never the page process, DOM, history, or in-flight navigation.
-   */
+  // hiding a WebContentsView changes only bounds — never the page process, DOM, history, or in-flight navigation
   async getAutomationRuntime(
     input: BrowserTabInput,
     options: { readonly restore?: boolean } = {},
@@ -1505,9 +1447,7 @@ export class DesktopBrowserManager {
     if ((options.restore ?? true) && (currentUrl.length === 0 || currentUrl !== expectedUrl)) {
       await this.loadTab(input.threadId, tab.id, { force: true, runtime });
     } else if (!(options.restore ?? true) && currentUrl.length === 0) {
-      // A fresh WebContentsView has no main frame until its first load. Bootstrap
-      // an inert document so the host's subsequent CDP Page.navigate can observe
-      // lifecycle events even while the view is parked outside the visible shell.
+      // a fresh view has no main frame until first load — bootstrap an inert document so CDP Page.navigate observes lifecycle while parked
       await runtime.webContents.loadURL(ABOUT_BLANK_URL);
       tab.url = expectedUrl;
       tab.title = defaultTitleForUrl(expectedUrl);
@@ -1528,7 +1468,6 @@ export class DesktopBrowserManager {
     };
   }
 
-  /** Closes a tab without selecting or constructing a native fallback. */
   closeAutomationTab(input: BrowserTabInput): ThreadBrowserState {
     const state = this.states.get(input.threadId);
     const tab = state ? this.getTab(state, input.tabId) : null;
@@ -1559,9 +1498,7 @@ export class DesktopBrowserManager {
     syncThreadLastError(state);
     this.markThreadStateChanged(input.threadId);
     if (defersFinalRendererRemoval) {
-      // Removing a live <webview> from an IPC state callback while the close
-      // request is still unwinding can deadlock Electron. Publish on the next
-      // frame after the debugger has detached and the tool response can drain.
+      // removing a live <webview> inside the IPC callback while close unwinds can deadlock Electron — publish next frame after the debugger detaches and the tool response drains
       this.scheduleDeferredStatePublication(
         buildRuntimeKey(input.threadId, input.tabId),
         input.threadId,
@@ -1586,10 +1523,7 @@ export class DesktopBrowserManager {
       nextInitialUrl !== null &&
       previousActiveTab !== null &&
       previousActiveTab.url !== nextInitialUrl;
-    // BrowserPanel mounts by hydrating state already prepared by browser_open.
-    // That renderer lifecycle is agent-caused, not a human takeover. Manual
-    // opens that change visibility still advance the epoch; URL changes flow
-    // through navigate(), which advances it exactly once.
+    // hydration mounting is agent-caused, not a human takeover — manual opens that change visibility still advance the epoch; navigate() advances it exactly once
     if (previousState?.open !== true && !willNavigateExistingTab) {
       this.markHumanControl(input.threadId);
     }
@@ -1665,8 +1599,7 @@ export class DesktopBrowserManager {
     if (!keepsAgentRuntimeAlive) {
       this.markHumanControl(input.threadId);
     }
-    // A hidden browser must never leave the miniature presentation zoom on a
-    // runtime that automation or a later screenshot can reacquire.
+    // a hidden browser must not leave miniature-presentation zoom on a runtime automation or a later screenshot can reacquire
     this.resetRuntimePageZoomForThread(input.threadId);
     if (this.activeThreadId === input.threadId) {
       this.detachAttachedRuntime();
@@ -1710,9 +1643,7 @@ export class DesktopBrowserManager {
     const requiresRenderer = activeRuntimeKey
       ? this.rendererOnlyRuntimeKeys.has(activeRuntimeKey)
       : false;
-    // Overlay occlusion used to send bounds:null, which dropped the renderer
-    // guest from the visible-automation boundary and made agent tools fail
-    // with BrowserHostUnavailable while the <webview> was still mounted.
+    // bounds:null used to drop the guest from the automation boundary — tools failed with BrowserHostUnavailable while the <webview> stayed mounted
     if (
       state.open &&
       nextBounds === null &&
@@ -1733,8 +1664,7 @@ export class DesktopBrowserManager {
         this.getVisiblePageZoomFactor(input.threadId) !== nextPageZoomFactor ||
         previewChanged)
     ) {
-      // browser_resize pins Chromium's layout even after the native view resizes.
-      // Restore panel sizing on a new presentation, while preserving overrides on moves.
+      // browser_resize pins Chromium layout past the native resize — restore panel sizing on a new presentation, preserve overrides on moves
       this.clearRuntimeViewportOverride(activeRuntime);
     }
     this.setActivePageZoomFactor(input.threadId, nextPageZoomFactor);
@@ -1746,8 +1676,7 @@ export class DesktopBrowserManager {
         this.detachAttachedRuntime();
         this.activeThreadId = null;
         if (state.open && input.occluded === true) {
-          // A menu is not a hidden chat. Keep the page's DOM and history alive
-          // until the overlay closes; hide() still suspends an unmounted panel.
+          // a menu is not a hidden chat — keep DOM and history alive until the overlay closes; hide() still suspends an unmounted panel
           this.clearSuspendTimer(input.threadId);
         } else {
           this.scheduleThreadSuspend(input.threadId);
@@ -1762,9 +1691,7 @@ export class DesktopBrowserManager {
       activeRuntimeKey &&
       activeRuntime?.ownsWebContents
     ) {
-      // Park the native view so the floating <webview> can paint, but keep the
-      // WebContents until attachWebview adopts the guest. Destroying here drops
-      // CDP and makes every in-flight agent tool miss the host.
+      // park the native view but keep the WebContents until attachWebview adopts the guest — destroying here drops CDP and every in-flight agent tool misses the host
       this.promoteTabToRendererSurface(input.threadId, activeTabId);
       this.activateThreadForPendingRenderer(input.threadId, nextBounds, 1);
       return;
@@ -1795,8 +1722,7 @@ export class DesktopBrowserManager {
       return;
     }
 
-    // Bounds sync fires often during panel motion. If the visible runtime and
-    // applied viewport are already current, avoid waking the browser stack again.
+    // bounds sync fires often during panel motion — skip waking the browser stack when runtime and viewport are already current
     if (
       this.activeThreadId === input.threadId &&
       this.attachedRuntimeKey === activeRuntimeKey &&
@@ -1824,8 +1750,7 @@ export class DesktopBrowserManager {
     this.activateThread(input.threadId, nextBounds, nextPageZoomFactor);
   }
 
-  // Adopts the renderer-owned <webview> so the visible page and browser host tools
-  // share one WebContents instead of racing a hidden native WebContentsView.
+  // adopt the renderer-owned <webview> so the visible page and browser tools share one WebContents instead of racing a hidden native view
   attachWebview(input: BrowserAttachWebviewInput, hostWebContentsId: number): ThreadBrowserState {
     const state = this.states.get(input.threadId);
     const tab = state ? this.getTab(state, input.tabId) : null;
@@ -1848,17 +1773,12 @@ export class DesktopBrowserManager {
       throw new Error("The browser webview does not belong to this Synara window and partition.");
     }
 
-    // A pane can mount from stale renderer state while an agent opens a native
-    // tab. Return the canonical surface so React removes that unused guest;
-    // adopting it would destroy the page underneath the in-flight tool.
+    // a pane can mount from stale state while an agent opens a native tab — return the canonical surface so React removes the unused guest; adopting would destroy the page under the in-flight tool
     if (this.isNativeAutomationTab(input.threadId, tab.id)) {
       return this.snapshotThreadState(input.threadId, state);
     }
 
-    // Promote before adopting. The floating panel's attach effect can run before
-    // setPanelBounds flips runtimeSurface; returning the still-native snapshot
-    // would let the UI treat the unused guest as attached while tools keep the
-    // hidden native page.
+    // promote before adopting — the attach effect can run before setPanelBounds flips runtimeSurface; returning the still-native snapshot would let the UI treat the unused guest as attached
     this.promoteTabToRendererSurface(input.threadId, tab.id);
 
     const key = buildRuntimeKey(input.threadId, tab.id);
@@ -1874,10 +1794,7 @@ export class DesktopBrowserManager {
     if (existing?.webContents.id !== webContents.id) {
       if (existing) {
         if (!existing.ownsWebContents && !existing.webContents.isDestroyed()) {
-          // Never let a late dom-ready/invoke from a duplicate hidden WebView
-          // steal a live logical tab from the guest already bound to it. A real
-          // renderer replacement first detaches the old guest (or Electron has
-          // destroyed it during a shell reload), after which retries may bind.
+          // never let a late dom-ready/invoke from a duplicate hidden WebView steal a live logical tab — a real replacement detaches the old guest first, then retries may bind
           throw new Error("This browser tab is already attached to another visible webview.");
         }
         this.destroyRuntime(input.threadId, tab.id, {
@@ -1933,8 +1850,7 @@ export class DesktopBrowserManager {
     return this.snapshotThreadState(input.threadId, state);
   }
 
-  // Drops main-process ownership of a renderer-owned <webview> that React removed.
-  // The webContents id guard keeps stale cleanup calls from tearing down a newly attached view.
+  // Drops main-process ownership of a renderer-owned <webview> that React removed. The webContents id guard keeps stale cleanup calls from tearing down a newly attached view.
   detachWebview(input: BrowserDetachWebviewInput): void {
     const state = this.states.get(input.threadId);
     const tab = state ? this.getTab(state, input.tabId) : null;
@@ -1979,8 +1895,7 @@ export class DesktopBrowserManager {
       this.activeThreadId === input.threadId &&
       !this.rendererOnlyRuntimeKeys.has(buildRuntimeKey(input.threadId, tab.id))
     ) {
-      // Load the target tab directly so we don't clobber its pending URL with a
-      // thread-wide runtime sync from the old live page state.
+      // load the target tab directly so a thread-wide runtime sync from the old live page can't clobber its pending URL
       const nextRuntime = this.ensureLiveRuntime(input.threadId, tab.id);
       this.clearSuspendTimer(input.threadId);
       const bounds = this.getVisibleBoundsForThread(input.threadId);
@@ -2065,13 +1980,10 @@ export class DesktopBrowserManager {
     this.rendererOnlyRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     this.automationRuntimeKeys.delete(buildRuntimeKey(input.threadId, input.tabId));
     state.tabs = state.tabs.filter((tab) => tab.id !== input.tabId);
-    // Closing an opener also removes its popup descendants.
     nextTabs = state.tabs;
 
     if (nextTabs.length === 0) {
-      // Closing the last tab keeps the browser open on a fresh blank tab (the same state
-      // as a brand-new browser session) so the user can type a new URL in the search box,
-      // instead of tearing the whole panel down.
+      // closing the last tab keeps the browser open on a fresh blank tab — same state as a new session — instead of tearing the panel down
       const replacementTab = createBrowserTab();
       state.tabs = [replacementTab];
       state.activeTabId = replacementTab.id;
@@ -2129,8 +2041,6 @@ export class DesktopBrowserManager {
     runtime.webContents.openDevTools({ mode: "detach" });
   }
 
-  // Ensures the requested tab is active/live, then returns a fresh PNG capture
-  // from the native browser surface for whichever destination needs it next.
   private async captureScreenshotPng(input: BrowserTabInput): Promise<{
     name: string;
     pngBytes: Buffer;
@@ -2167,8 +2077,6 @@ export class DesktopBrowserManager {
     };
   }
 
-  // Captures the current browser viewport as a PNG so the renderer can attach
-  // it directly to the composer without introducing temp-file disk churn.
   async captureScreenshot(input: BrowserTabInput): Promise<BrowserCaptureScreenshotResult> {
     const { name, pngBytes } = await this.captureScreenshotPng(input);
 
@@ -2206,16 +2114,11 @@ export class DesktopBrowserManager {
     return `data:image/jpeg;base64,${thumbnail.toJPEG(70).toString("base64")}`;
   }
 
-  // Copies the active tab's URL via the native clipboard and emits the copy-link
-  // event, mirroring the keyboard-chord path. The renderer's navigator.clipboard
-  // can reject with "Document is not focused" while the native page view holds
-  // focus, so the React toolbar button routes through here for reliability.
+  // navigator.clipboard rejects with "Document is not focused" while the native page view holds focus — the toolbar button routes through the native path for reliability
   copyLink(input: BrowserTabInput): void {
     this.copyTabLink(input.threadId, input.tabId);
   }
 
-  // Writes the current browser viewport screenshot straight to the native
-  // clipboard so the renderer does not have to ferry image payloads over IPC.
   async copyScreenshotToClipboard(input: BrowserTabInput): Promise<void> {
     const { pngBytes } = await this.captureScreenshotPng(input);
     const image = nativeImage.createFromBuffer(pngBytes);
@@ -2257,9 +2160,7 @@ export class DesktopBrowserManager {
     );
   }
 
-  // Marks a tab renderer-owned and parks any native view so a <webview> can
-  // attach without two pages racing. Does not destroy WebContents: in-flight
-  // agent tools keep CDP until attachWebview adopts the guest.
+  // mark renderer-owned and park the native view so a <webview> attaches without two pages racing — keep WebContents: in-flight tools hold CDP until attachWebview adopts
   private promoteTabToRendererSurface(threadId: ThreadId, tabId: string): void {
     const key = buildRuntimeKey(threadId, tabId);
     const runtime = this.runtimes.get(key);
@@ -2280,8 +2181,7 @@ export class DesktopBrowserManager {
     }
   }
 
-  // Renderer panels create their own <webview>; keep active-thread bookkeeping current while
-  // waiting for attachWebview so startup does not create a duplicate native WebContentsView.
+  // keep active-thread bookkeeping current while waiting for attachWebview so startup doesn't create a duplicate native view
   private activateThreadForPendingRenderer(
     threadId: ThreadId,
     bounds: BrowserPanelBounds,
@@ -2384,8 +2284,7 @@ export class DesktopBrowserManager {
     const activeTab = this.getActiveTab(state);
     let didChange = this.suspendInactiveTabs(threadId, activeTab?.id ?? null);
 
-    // Only resume the visible tab. Waking every tab can fan out into several
-    // Chromium renderer processes and background page activity at once.
+    // resume only the visible tab — waking every tab fans out several renderer processes and background page activity at once
     for (const tab of state.tabs) {
       if (tab.id !== activeTab?.id) {
         continue;
@@ -2428,13 +2327,7 @@ export class DesktopBrowserManager {
     this.enforceBackgroundAutomationRuntimeBudget();
   }
 
-  /**
-   * Keeps background agent pages useful without allowing one Chromium runtime
-   * per historical thread to accumulate for the lifetime of the app. A page
-   * currently displayed by the shell never counts against the background cap;
-   * expired hidden pages are evicted least-recently-used and restored from their
-   * canonical tab URL on the next browser tool call.
-   */
+  // background cap keeps agent pages useful without one Chromium runtime per historical thread forever; the displayed page never counts; expired pages restore from canonical URL on next tool call
   private enforceBackgroundAutomationRuntimeBudget(): void {
     if (this.disposed) return;
     if (this.backgroundAutomationEvictionTimer !== null) {
@@ -2442,8 +2335,7 @@ export class DesktopBrowserManager {
       this.backgroundAutomationEvictionTimer = null;
     }
 
-    // An OAuth popup is a live user interaction even when its opener's panel is
-    // hidden. Evicting that opener would sever window.opener and break sign-in.
+    // an OAuth popup is live user interaction even when its opener's panel is hidden — evicting the opener severs window.opener and breaks sign-in
     const popupOwnerRuntimeKeys = new Set(
       [...this.popupRuntimes.values()].map((popup) => buildRuntimeKey(popup.threadId, popup.tabId)),
     );
@@ -2701,7 +2593,6 @@ export class DesktopBrowserManager {
     }
 
     if (this.previewThreadIds.has(runtime.threadId) && runtime.view) {
-      // React paints the thumbnail; the native page remains hidden from hit testing.
       if (this.attachedRuntimeKey !== runtime.key) this.detachAttachedRuntime();
       this.parkHiddenRuntime(runtime, bounds);
       this.attachedRuntimeKey = runtime.key;
@@ -2711,8 +2602,7 @@ export class DesktopBrowserManager {
 
     const nextBoundsSignature = browserPresentationSignature(bounds, pageZoomFactor);
     this.runtimeLastActiveAtByKey.set(runtime.key, Date.now());
-    // Renderer-owned <webview> runtimes are already visible in React; keep any
-    // old native view detached so it cannot cover the real browser surface.
+    // keep the old native view detached so it can't cover the already-visible renderer-owned <webview>
     if (!runtime.ownsWebContents) {
       if (this.attachedRuntimeKey && this.attachedRuntimeKey !== runtime.key) {
         this.detachAttachedRuntime();
@@ -2804,8 +2694,7 @@ export class DesktopBrowserManager {
   private parkHiddenRuntime(runtime: LiveTabRuntime, bounds: BrowserPanelBounds): void {
     const window = this.window;
     if (!window || !runtime.view) return;
-    // A hidden in-bounds view can produce its first capture; an off-window view
-    // may never paint. Hide before attaching or moving to prevent a visible flash.
+    // an off-window view may never paint — hide before attaching or moving to prevent a visible flash
     runtime.view.setVisible(false);
     window.contentView.removeChildView(runtime.view);
     window.contentView.addChildView(runtime.view, 0);
@@ -2853,8 +2742,7 @@ export class DesktopBrowserManager {
       runtime && !runtime.ownsWebContents && !runtime.webContents.isDestroyed(),
     );
     if (rendererGuestAlive) {
-      // The floating/renderer guest is the page the user can see. Promoting to a
-      // native WebContentsView would destroy that CDP session mid-turn.
+      // the floating/renderer guest is the visible page — promoting it to a native view would destroy that CDP session mid-turn
       if (tab.runtimeSurface !== "renderer") {
         tab.runtimeSurface = "renderer";
         return true;
@@ -2862,9 +2750,7 @@ export class DesktopBrowserManager {
       return false;
     }
     if (runtime?.ownsWebContents && !runtime.webContents.isDestroyed()) {
-      // A parked native page remains canonical until attachWebview adopts the
-      // visible guest. Keep the pending-renderer flag so attachActiveTab does
-      // not paint that view over the mounting <webview>.
+      // a parked native page stays canonical until attachWebview adopts — keep the pending-renderer flag so attachActiveTab doesn't paint it over the mounting <webview>
       return false;
     }
 
@@ -2913,8 +2799,7 @@ export class DesktopBrowserManager {
       listenerDisposers: [],
     };
     if (this.window && !popupOptions?.webContents) {
-      // Size the new blank view before hiding it; initially hidden Electron
-      // views otherwise keep a zero-sized renderer. No site has loaded yet.
+      // size the new blank view before hiding it — initially-hidden Electron views keep a zero-sized renderer
       this.window.contentView.addChildView(view);
       view.setBounds({ ...BACKGROUND_AUTOMATION_BOUNDS });
     }
@@ -2930,15 +2815,12 @@ export class DesktopBrowserManager {
     const releaseObserver = this.options.onRuntimeReady?.({ threadId, tabId, webContents });
     if (releaseObserver) runtime.listenerDisposers.push(releaseObserver);
 
-    // Belt-and-suspenders alongside the session-level UA: also covers an adopted renderer
-    // <webview> for any navigation after it attaches.
+    // Belt-and-suspenders alongside the session-level UA: also covers an adopted renderer <webview> for any navigation after it attaches.
     this.sessionPolicy.applyUserAgent(webContents);
 
     this.configureWindowOpenHandling(webContents, runtime, runtime.listenerDisposers);
 
-    // The native page owns keyboard focus while browsing, so the renderer never sees the
-    // shell's physical zoom fallback or copy-link chord. Give the shell first refusal,
-    // then handle browser-local chords here.
+    // the native page owns keyboard focus so the renderer never sees shell chords — give the shell first refusal, then handle browser-local chords here
     const beforeInputEvent = (event: Electron.Event, input: Electron.Input) => {
       if (this.options.beforeInputEvent?.(event, input)) {
         return;
@@ -3113,10 +2995,7 @@ export class DesktopBrowserManager {
 
     let runtimeLossHandled = false;
     const handleRuntimeLoss = () => {
-      // Electron can report both a crashed process and the eventual
-      // WebContents destruction. Only the runtime that installed this handler
-      // may invalidate the logical tab; a late event from an old guest must not
-      // tear down a replacement already stored under the same runtime key.
+      // Electron reports both the crash and the eventual destruction — only the installing runtime may invalidate the tab; a late event from an old guest must not tear down a replacement under the same key
       if (runtimeLossHandled || this.runtimes.get(runtime.key) !== runtime) {
         return;
       }
@@ -3306,8 +3185,7 @@ export class DesktopBrowserManager {
     if (!runtime) {
       return;
     }
-    // Runtime teardown is also a zoom teardown. This covers tab close, suspension,
-    // renderer handoff, and background-runtime eviction—not just an explicit panel hide.
+    // runtime teardown is also zoom teardown — covers tab close, suspension, renderer handoff, and eviction, not just panel hide
     this.setRuntimePageZoomFactor(runtime, 1);
     this.annotations.handleRuntimeDetached(
       threadId,
@@ -3320,10 +3198,7 @@ export class DesktopBrowserManager {
       this.detachAttachedRuntime();
     }
 
-    // Bookkeeping should normally identify the attached native view, but an
-    // interrupted renderer transition must not be able to leave an untracked
-    // WebContentsView over the canonical renderer WebView. Remove it from the
-    // window hierarchy defensively before closing its WebContents.
+    // an interrupted renderer transition can leave an untracked WebContentsView over the canonical webview — detach defensively before closing its WebContents
     if (runtime.view && this.window) {
       this.setRuntimeViewHidden(runtime, true);
       try {
@@ -3353,11 +3228,7 @@ export class DesktopBrowserManager {
       if (runtime.ownsWebContents) {
         webContents.close({ waitForBeforeUnload: false });
       }
-      // A renderer-owned WebView may be rebound to another logical tab without
-      // replacing its physical WebContents. That explicit path preserves CDP.
-      // Final logical close detaches CDP and resets the pooled guest to blank in
-      // the deferred publication handshake; forcing physical destruction here
-      // can wedge Electron while the tool IPC is still unwinding.
+      // a renderer WebView may rebind to another tab keeping its WebContents; the deferred handshake detaches CDP — forcing destruction here can wedge Electron while tool IPC unwinds
     }
   }
 
@@ -3460,11 +3331,7 @@ export class DesktopBrowserManager {
         (entry) => entry.expiresAt > releaseTime,
       );
       if (remaining.includes(pending)) {
-        // debugger.sendCommand() resolves when CDP accepts the event, while
-        // Electron may publish the corresponding before-mouse-event on the
-        // following main-loop turn. Keep only this exact, one-shot signal alive
-        // for that bounded delivery gap. Gesture/window-open correlation still
-        // ends immediately below, so unrelated agent attribution cannot leak.
+        // sendCommand resolves when CDP accepts the event but Electron publishes before-mouse-event next main-loop turn — keep this one-shot signal alive for that gap only; correlation still ends below
         pending.expiresAt = Math.min(
           pending.expiresAt,
           releaseTime + BROWSER_AUTOMATION_INPUT_RELEASE_GRACE_MS,
@@ -3499,8 +3366,7 @@ export class DesktopBrowserManager {
       try {
         lease.listener(event);
       } catch {
-        // The download was already prevented. Observer failures must never
-        // destabilize the shared browser session or re-enable the side effect.
+        // the download was already prevented — observer failures must never destabilize the session or re-enable the side effect
       }
     }
   }
@@ -3637,8 +3503,7 @@ export class DesktopBrowserManager {
     return state.tabs.find((tab) => tab.id === tabId) ?? null;
   }
 
-  // Resolves the most accurate URL for a tab, preferring the live page over cached state and
-  // ignoring blank placeholders so the copy-link chord never yields "about:blank".
+  // prefer the live page URL and ignore blank placeholders so the copy-link chord never yields about:blank
   private resolveCopyableTabUrl(
     threadId: ThreadId,
     tabId: string,

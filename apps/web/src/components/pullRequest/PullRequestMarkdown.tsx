@@ -1,11 +1,3 @@
-// FILE: PullRequestMarkdown.tsx
-// Purpose: Shared renderer for PR descriptions and comment bodies — GitHub-flavored bodies
-//          pass through the pure preprocessing (template comments stripped, `<br>` tags
-//          resolved) and `<details>` blocks render as native closed disclosures instead of
-//          leaking literal tags and boilerplate walls into the view.
-// Layer: Pull request presentation
-// Exports: PullRequestMarkdown
-
 import { useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";

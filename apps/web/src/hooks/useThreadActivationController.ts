@@ -1,7 +1,3 @@
-// FILE: useThreadActivationController.ts
-// Purpose: Centralize sidebar thread activation side effects around the pure activation policy.
-// Exports: useThreadActivationController
-
 import type { useNavigate } from "@tanstack/react-router";
 import type { ThreadId } from "@synara/contracts";
 import type { LastThreadRoute } from "../chatRouteRestore";
@@ -45,7 +41,6 @@ export type ThreadActivationControllerInput = {
   terminalStateByThreadId: ThreadTerminalStateById;
 };
 
-// Runs the complete sidebar activation side-effect chain for one thread intent.
 export function activateThreadFromSidebarIntent(
   input: ThreadActivationControllerInput,
   threadId: ThreadId,
@@ -157,8 +152,7 @@ function resolveSidechatDockActivation(
   };
 }
 
-// Sidechat rows always target the source thread's dock, matching where sidechats
-// are created and avoiding a second, conflicting split-view navigation model.
+// Sidechat rows always target the source thread's dock, matching where sidechats are created and avoiding a second, conflicting split-view navigation model.
 function activateSidechatDock(
   input: ThreadActivationControllerInput,
   activation: {
@@ -192,7 +186,6 @@ function activateSidechatDock(
   });
 }
 
-// Opens the target as a single chat while preserving chat-vs-terminal entry point.
 function activateThreadSingle(input: ThreadActivationControllerInput, threadId: ThreadId): void {
   if (!input.sidebarThreadSummaryById[threadId]) return;
 

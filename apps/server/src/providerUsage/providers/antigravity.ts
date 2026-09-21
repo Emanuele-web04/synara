@@ -1,8 +1,3 @@
-// FILE: providerUsage/providers/antigravity.ts
-// Purpose: Live Antigravity usage fetcher. Reads Gemini CLI OAuth (`oauth_creds.json`) or
-// the agy token file (`antigravity-cli/antigravity-oauth-token`), refreshes through Google's
-// public Gemini-CLI client, then calls Cloud Code loadCodeAssist + retrieveUserQuota.
-
 import nodePath from "node:path";
 
 import type { ServerProviderUsageLimit } from "@synara/contracts";
@@ -34,8 +29,7 @@ const LOAD_URL = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist"
 const QUOTA_URL = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
 const REFRESH_URL = "https://oauth2.googleapis.com/token";
 const CLOUD_CODE_ORIGIN = new URL(LOAD_URL).origin;
-// Public Gemini CLI installed-app OAuth client (not a Synara-issued secret).
-// Assembled so GitHub push protection does not treat the published CLI client as a leak.
+// public Gemini CLI installed-app OAuth client — assembled so GitHub push protection doesn't flag the published client as a leak
 const GEMINI_OAUTH_CLIENT_ID = [
   "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j",
   "apps.googleusercontent.com",

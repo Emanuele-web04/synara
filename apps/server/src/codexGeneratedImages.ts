@@ -1,9 +1,3 @@
-// FILE: codexGeneratedImages.ts
-// Purpose: Normalizes Codex generated-image events into durable local-file references.
-// Layer: Server provider utilities
-// Exports: Codex image path, payload sanitization, and markdown helpers
-// Depends on: node path/os, image MIME allowlist, provider runtime artifact contract
-
 import path from "node:path";
 
 import {
@@ -66,26 +60,17 @@ export function isCodexGeneratedImageItemType(raw: unknown): boolean {
 
 export const isSupportedLocalImagePath = isSupportedLocalImagePathShared;
 
-/**
- * Resolves the home directory the codex app-server child process actually
- * writes images under for the current process env. Synara uses its isolated
- * Codex overlay, not the user's source `~/.codex` directory.
- */
+/** the home the codex app-server child actually writes under — Synara's isolated overlay, not the user's source ~/.codex */
 export function resolveCodexHomePath(homePath?: string): string {
   return resolveActiveCodexHomeWritePath(homePath?.trim() ? { homePath } : {});
 }
 
-/** The single generated-images directory we predict against (overlay-aware). */
+/** the single generated-images dir we predict against (overlay-aware) */
 export function resolveCodexGeneratedImagesRoot(homePath?: string): string {
   return path.join(resolveCodexHomePath(homePath), "generated_images");
 }
 
-/**
- * All generated-images directories the local-image route should treat as
- * legitimate. Includes both the source `~/.codex/generated_images` and the
- * overlay `<SYNARA_HOME>/codex-home-overlay/generated_images` so we serve
- * images regardless of which home Codex wrote them under.
- */
+/** both the source ~/.codex/generated_images and the overlay generated_images so images are served regardless of which home Codex used */
 export function resolveCodexGeneratedImagesRoots(homePath?: string): readonly string[] {
   const homes = resolveCodexHomeAllowlistCandidates(homePath?.trim() ? { homePath } : {});
   return homes.map((home) => path.join(home, "generated_images"));
@@ -128,7 +113,7 @@ export function predictedCodexGeneratedImagePath(input: {
   return path.join(resolveCodexGeneratedImagesRoot(input.codexHomePath), threadId, `${callId}.png`);
 }
 
-// Mirrors Remodex relay behavior: keep metadata, drop bulky inline image data.
+// mirrors Remodex relay behavior: keep metadata, drop bulky inline image data
 export function annotateCodexGeneratedImagePayload(input: {
   readonly value: unknown;
   readonly threadId: ThreadId | string | undefined;
@@ -175,8 +160,7 @@ export function sanitizeNestedCodexGeneratedImagePayloads(input: {
     return annotated;
   }
 
-  // Collect any nested replacements first, then build the result with a single
-  // Object.assign to avoid the O(n^2) spread-in-loop pattern oxlint flags.
+  // collect nested replacements first, single Object.assign — avoids the O(n²) spread-in-loop oxlint flags
   const overrides: Record<string, unknown> = {};
   let hasOverrides = false;
   for (const key of NESTED_PAYLOAD_KEYS) {
@@ -263,10 +247,6 @@ export function generatedImageMarkdown(filePath: string): string {
   return `![Generated image](${markdownImagePath(filePath)})`;
 }
 
-/**
- * Returns the local file path of a Codex-generated image carried by an
- * `item.completed` runtime event, or `undefined` for any other event shape.
- */
 export function generatedImagePathFromRuntimeEvent(
   event: ProviderRuntimeEvent,
 ): string | undefined {

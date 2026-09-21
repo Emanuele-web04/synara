@@ -1,7 +1,3 @@
-// FILE: threadDetailResumeCursors.test.ts
-// Purpose: Verifies resume-cursor bookkeeping behind delta-capable thread resubscribes.
-// Layer: Web subscription utility test
-
 import { ThreadId } from "@synara/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -39,8 +35,7 @@ describe("threadDetailResumeCursors", () => {
     advanceThreadDetailResumeCursor(thread, 3);
     expect(getThreadDetailResumeCursor(thread)).toBe(5);
 
-    // A fresh snapshot replaces cached detail wholesale, so a lower fence
-    // (server restored from backup) must win over the stale live cursor.
+    // A fresh snapshot replaces cached detail wholesale, so a lower fence (server restored from backup) must win over the stale live cursor.
     setThreadDetailResumeCursor(thread, 2);
     expect(getThreadDetailResumeCursor(thread)).toBe(2);
   });

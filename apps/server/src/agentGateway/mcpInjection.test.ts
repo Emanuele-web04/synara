@@ -78,16 +78,16 @@ describe("agent gateway MCP injection", () => {
     const merged = mergeShellEnvPolicyExclude(withExclude, SYNARA_AGENT_GATEWAY_TOKEN_ENV);
     assert.include(merged, `exclude = ["${SYNARA_AGENT_GATEWAY_TOKEN_ENV}", "AWS_*"]`);
 
-    // Idempotent: the var is not added twice.
+    // idempotent — the var is not added twice
     assert.equal(mergeShellEnvPolicyExclude(merged, SYNARA_AGENT_GATEWAY_TOKEN_ENV), merged);
 
-    // A policy table without an exclude key gains one.
+    // a policy table without an exclude key gains one
     const withoutExclude = ["[shell_environment_policy]", 'inherit = "core"'].join("\n");
     const gained = mergeShellEnvPolicyExclude(withoutExclude, SYNARA_AGENT_GATEWAY_TOKEN_ENV);
     assert.include(gained, `exclude = ["${SYNARA_AGENT_GATEWAY_TOKEN_ENV}"]`);
     assert.include(gained, 'inherit = "core"');
 
-    // No policy table: unchanged (the managed section appends its own).
+    // no policy table → unchanged (the managed section appends its own)
     assert.equal(
       mergeShellEnvPolicyExclude('[model]\nname = "gpt-5.5"', SYNARA_AGENT_GATEWAY_TOKEN_ENV),
       '[model]\nname = "gpt-5.5"',
@@ -164,7 +164,7 @@ describe("agent gateway MCP injection", () => {
     );
     assert.isFalse(configHasTomlTableHeader('["mcp_servers.synara"]', "[mcp_servers.synara]"));
     assert.isFalse(configHasTomlTableHeader('[mcp_servers."syn\\qara"]', "[mcp_servers.synara]"));
-    // A commented-out example block must not count as the table being present.
+    // a commented-out example block must not count as the table being present
     assert.isFalse(configHasTomlTableHeader("# [mcp_servers.synara]", "[mcp_servers.synara]"));
     assert.isFalse(
       configHasTomlTableHeader('note = "see [mcp_servers.synara] docs"', "[mcp_servers.synara]"),
@@ -181,8 +181,7 @@ describe("agent gateway MCP injection", () => {
       SYNARA_MANAGED_CODEX_CONFIG_END,
       "",
     ].join("\n");
-    // A rewrite without appendConfigToml recovers the block so concurrent env
-    // preps (version checks, text generation) don't strip the session's MCP entry.
+    // a rewrite without appendConfigToml recovers the block so concurrent env preps don't strip the session's MCP entry
     assert.equal(extractManagedCodexConfigSection(overlayConfig), section);
     assert.isUndefined(extractManagedCodexConfigSection('[model]\nname = "gpt-5.5"\n'));
   });

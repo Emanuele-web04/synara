@@ -38,8 +38,7 @@ export function createAntigravityPrintResultParser() {
     try {
       value = record(JSON.parse(trimmed));
     } catch {
-      // A truncated protocol header is not a legacy answer. Ordinary markdown
-      // and JSON answers still use the plain-text fallback.
+      // A truncated protocol header is not a legacy answer. Ordinary markdown and JSON answers still use the plain-text fallback.
       if (/^\{\s*"(?:event|status)"\s*:/.test(trimmed)) structured = true;
       if (structured) malformedRecord = true;
       return;

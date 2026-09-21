@@ -187,9 +187,7 @@ export function persistReservedManagedAttachment(input: {
           }
           await repairPrivateFile(temporaryPath);
           await fs.rename(temporaryPath, finalPath);
-          // The blob must be durable before the SQLite row can become staged.
-          // Flush the final entry and every managed ancestor that may have
-          // been created for this content-addressed path.
+          // the blob must be durable before the SQLite row can become staged; flush the final entry and every managed ancestor for this content-addressed path
           const attachmentsRoot = path.resolve(input.attachmentsDir);
           let directoryToSync = path.dirname(finalPath);
           while (true) {

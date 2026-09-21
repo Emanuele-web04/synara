@@ -1,11 +1,3 @@
-// FILE: useKanbanCardContextMenu.tsx
-// Purpose: Right-click context menu for kanban cards, mirroring the sidebar thread
-//          menu (rename / pin / copy path / copy id / archive / delete). Reuses the
-//          same shared primitives the sidebar uses (native contextMenu, clipboard,
-//          worktree cleanup, rename flow) instead of duplicating its action logic.
-// Layer: Kanban UI hook
-// Exports: useKanbanCardContextMenu
-
 import type { ThreadId } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -57,8 +49,7 @@ async function archiveCardThread(threadId: ThreadId) {
   if (!api) return;
   const thread = getThreadFromState(useStore.getState(), threadId);
   if (!thread) return;
-  // Archived threads leave the board's thread feed, so a live optimistic
-  // dispatch entry could never reconcile — drop it with the card.
+  // archived threads leave the board's thread feed — a live optimistic dispatch could never reconcile, drop it with the card
   useKanbanUiStore.getState().clearOptimisticDispatch(threadId);
   await archiveThreadFromClient(api.orchestration, threadId);
 }
@@ -90,8 +81,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
 
   const deleteCardThread = async (card: KanbanCard) => {
-    // A deleted thread can never reconcile its optimistic dispatch — drop the
-    // entry first so no phantom In Progress card survives the deletion.
+    // a deleted thread can never reconcile its optimistic dispatch — drop the entry first so no phantom In Progress card survives
     useKanbanUiStore.getState().clearOptimisticDispatch(card.threadId);
     // Local-only draft (never promoted): just drop it from the draft store.
     if (card.thread === null) {

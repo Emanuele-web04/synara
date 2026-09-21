@@ -1,7 +1,3 @@
-// FILE: decider.settle.test.ts
-// Purpose: Covers the thread settle/unsettle toggle: the decider stamps
-//          settledAt from the isSettled intent and the projector applies it.
-
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,

@@ -554,9 +554,7 @@ export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   error: WsRpcError,
 });
 
-// ── Device pane ──────────────────────────────────────────────────────
-// Grouped separately from WsFeatureRpcGroup: the device engine is macOS-only,
-// so the server merges this group in only where a backend can exist.
+// merged in only where a backend can exist — the device engine is macOS-only
 
 export const WsDeviceListRpc = Rpc.make(DEVICE_WS_METHODS.list, {
   payload: DeviceListInput,
@@ -816,8 +814,7 @@ export const WsPullRequestsActionRpc = Rpc.make(WS_METHODS.pullRequestsAction, {
   error: PullRequestsRpcError,
 });
 
-// Comments reuse the action acknowledgment shape: the mutation is confirmed independently of
-// the follow-up detail refetch that surfaces the new comment.
+// the mutation is confirmed independently of the follow-up refetch that surfaces the new comment
 export const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment, {
   payload: PullRequestCommentInput,
   success: PullRequestActionResult,
@@ -848,8 +845,7 @@ export const WsGitCreateWorktreeRpc = Rpc.make(WS_METHODS.gitCreateWorktree, {
   error: WsRpcError,
 });
 
-// Streams setup phases (branch → worktree → copy-changes) so the UI can show
-// real progress; the terminal `completed` event carries the created worktree.
+// streams real setup phases so the UI shows progress; the terminal `completed` event carries the worktree
 export const WsGitCreateDetachedWorktreeRpc = Rpc.make(WS_METHODS.gitCreateDetachedWorktree, {
   payload: GitCreateDetachedWorktreeInput,
   success: GitWorktreeSetupProgressEvent,

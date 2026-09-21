@@ -96,8 +96,7 @@ const makeProjectPullRequestPins = Effect.gen(function* () {
   };
 
   const setPinned: ProjectPullRequestPinsShape["setPinned"] = (input) => {
-    // Annotated because the two branches infer distinct Effect types that pipe() cannot
-    // reconcile; mapError below funnels every failure into ProjectPullRequestPinsError.
+    // annotated because the branches infer distinct Effect types pipe() can't reconcile; mapError funnels failures into ProjectPullRequestPinsError
     const operation: Effect.Effect<void | undefined, unknown> = input.isPinned
       ? sql.withTransaction(
           Effect.gen(function* () {

@@ -59,9 +59,7 @@ export const isProviderIntentEvent = (event: OrchestrationEvent): event is Provi
 export const isReplaySafeClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
   event.type === "thread.created" ||
   event.type === "thread.archived" ||
-  // The claimed handler only performs the idempotent durable enqueue. Queue
-  // draining runs after the delivery settles, so replay never repeats provider
-  // dispatch as part of this claim.
+  // the claimed handler only performs the idempotent enqueue — draining runs after the delivery settles so replay never repeats dispatch as part of this claim
   event.type === "thread.turn-queued";
 
 export const isProviderSideEffectIntent = (event: ProviderIntentEvent): boolean =>
@@ -73,11 +71,7 @@ export const isProviderSideEffectIntent = (event: ProviderIntentEvent): boolean 
 export const isClaimedProviderIntent = (event: ProviderIntentEvent): boolean =>
   isReplaySafeClaimedProviderIntent(event) || isProviderSideEffectIntent(event);
 
-/**
- * Intents that must still execute while a thread is quarantined by a blocking
- * delivery. Interrupt, stop and archive must still be able to tear down live
- * work; quarantining new work must never disable cancellation.
- */
+/** intents that must still execute while a thread is quarantined — interrupt/stop/archive must be able to tear down live work; quarantining new work must never disable cancellation */
 export const isQuarantineExemptProviderIntent = (event: ProviderIntentEvent): boolean =>
   event.type === "thread.turn-interrupt-requested" ||
   event.type === "thread.session-stop-requested" ||

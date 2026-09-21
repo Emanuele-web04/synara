@@ -1,10 +1,3 @@
-/**
- * Single Zustand store for terminal UI state keyed by threadId.
- *
- * Terminal transition helpers are intentionally private to keep the public
- * API constrained to store actions/selectors.
- */
-
 import { type TerminalActivityState, type TerminalCliKind } from "@synara/shared/terminalThreads";
 import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
@@ -461,8 +454,7 @@ function stripVolatileTerminalRuntimeState(state: ThreadTerminalState): ThreadTe
   ) {
     return normalized;
   }
-  // Runtime activity is replayed by live terminal events after startup; persisting
-  // it would make old attention states look like fresh notifications.
+  // runtime activity is replayed by live events after startup — persisting it would make old attention states look like fresh notifications
   return {
     ...normalized,
     terminalAttentionStatesById: {},
@@ -475,8 +467,7 @@ export function sanitizePersistedTerminalStateByThreadId(
 ): Record<ThreadId, ThreadTerminalState> {
   const next: Record<ThreadId, ThreadTerminalState> = {};
   for (const [threadId, state] of Object.entries(terminalStateByThreadId ?? {})) {
-    // Dedicated Workspace pages used synthetic `workspace:*` terminal scopes.
-    // Drop those retired entries while hydrating the shared terminal store.
+    // retired `workspace:*` terminal scopes are dropped during hydration
     if (threadId.startsWith("workspace:")) {
       continue;
     }
@@ -1270,9 +1261,7 @@ interface TerminalStateStoreState {
   removeOrphanedTerminalStates: (activeThreadIds: Set<ThreadId>) => void;
 }
 
-// Defers partialize + JSON.stringify off the hot set() path (terminal layout
-// changes, resizes, activity updates fire rapidly). Serialization now runs once
-// per debounce window at flush time instead of synchronously on every set().
+// partialize + stringify deferred off the hot set() path — serialization runs once per debounce flush
 const terminalPersistStorage = createDeferredPersistStorage<
   TerminalStateStoreState,
   Pick<TerminalStateStoreState, "terminalStateByThreadId">
@@ -1285,8 +1274,7 @@ const terminalPersistStorage = createDeferredPersistStorage<
   }),
 });
 
-// Flush pending terminal-state writes before the page goes away so at most one
-// debounce window of changes can be lost.
+// flush pending terminal-state writes before unload — at most one debounce window is lost
 flushStorageBeforePageHide(() => terminalPersistStorage.flush());
 
 export const useTerminalStateStore = create<TerminalStateStoreState>()(
@@ -1403,8 +1391,6 @@ export const useTerminalStateStore = create<TerminalStateStoreState>()(
     {
       name: TERMINAL_STATE_STORAGE_KEY,
       version: 1,
-      // partialize is owned by the deferred storage (runs at flush time, not
-      // eagerly on every set()).
       storage: terminalPersistStorage,
       merge: (persistedState, currentState) => ({
         ...currentState,

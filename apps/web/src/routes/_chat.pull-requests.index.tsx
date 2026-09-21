@@ -99,16 +99,14 @@ interface PullRequestsSearchPatch {
   q?: string | undefined;
 }
 
-// Every filter change and the panel close drop the current selection the same way; keep the
-// patch in one place so a new selection field can't be forgotten by one of the call sites.
+// Every filter change and the panel close drop the current selection the same way; keep the patch in one place so a new selection field can't be forgotten by one of the call sites.
 const CLEARED_SELECTION = {
   selectedProjectId: undefined,
   selectedRepo: undefined,
   number: undefined,
 } as const satisfies PullRequestsSearchPatch;
 
-// The route hosts a single dock pane; a stable id keeps the dock tab's identity across pull
-// request switches (the detail panel itself remounts via PullRequestDockPane's key).
+// The route hosts a single dock pane; a stable id keeps the dock tab's identity across pull request switches (the detail panel itself remounts via PullRequestDockPane's key).
 const PULL_REQUESTS_ROUTE_PANE_ID = "pull-requests-route:pull-request";
 const PullRequestDockPane = lazy(() => import("~/components/pullRequest/PullRequestDockPane"));
 
@@ -154,9 +152,7 @@ function PullRequestsRouteView() {
   const windowControlsGutter = useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((store) => store.projects);
   const queryClient = useQueryClient();
-  // One fetch per (state, project): the server returns the "all" involvement superset and the
-  // Reviewing/Authored tabs are derived below, so involvement switches never hit the network.
-  // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
+  // one fetch per (state, project): the "all" involvement superset is derived client-side so tab switches never hit the network. Manual memoization — this file does not compile under React Compiler
   const listInput = useMemo(
     () => ({ state: search.state, projectId: search.projectId ?? null }),
     [search.projectId, search.state],
@@ -197,10 +193,7 @@ function PullRequestsRouteView() {
   const scopedProjectName = search.projectId
     ? repositoryProjects.find(([projectId]) => projectId === search.projectId)?.[1]
     : undefined;
-  // Precise fallback for the filtered tabs: when a repository hit the per-repo entry cap, the
-  // client-side involvement filter over the truncated superset can miss older matches, so the
-  // active tab additionally fetches the server-filtered list. In the common (untruncated) case
-  // this query never runs; the exceptional loading/error states are surfaced explicitly below.
+  // when a repo hit the per-repo entry cap, the client-side filter over the truncated superset can miss older matches — the active tab also fetches the server-filtered list (never runs when untruncated)
   const supersetTruncated = (listQuery.data?.repositoryBatches ?? []).some(
     (batch) => batch.truncated,
   );
@@ -242,8 +235,7 @@ function PullRequestsRouteView() {
       ? exactInvolvementQuery.data
       : listQuery.data;
 
-  // Multi-project result sets can be large. Keep typing responsive while React catches the
-  // filtered rows up in a lower-priority render; virtualization can wait for measured need.
+  // Multi-project result sets can be large. Keep typing responsive while React catches the filtered rows up in a lower-priority render; virtualization can wait for measured need.
   const normalizedQuery = search.q?.trim().toLowerCase() ?? "";
   const query = useDeferredValue(normalizedQuery);
   const entries = useMemo(
@@ -267,8 +259,7 @@ function PullRequestsRouteView() {
         : null,
     [entries, listQuery.data?.viewer, search.involvement],
   );
-  // A crafted URL must not show Project A's list while opening Project B's PR: when the list
-  // is project-scoped, the selection must belong to that same project.
+  // A crafted URL must not show Project A's list while opening Project B's PR: when the list is project-scoped, the selection must belong to that same project.
   const selectionMatchesScope =
     search.projectId === undefined ||
     search.selectedProjectId === undefined ||
@@ -285,12 +276,10 @@ function PullRequestsRouteView() {
   const [renderedInput, setRenderedInput] = useState(selectedInput);
   useEffect(() => {
     if (!selectedInput) return;
-    // Timeout-0 keeps the state write asynchronous (compiler-eligible); the
-    // detail panel animates in over 300ms, so one macrotask is invisible.
+    // Timeout-0 keeps the state write asynchronous (compiler-eligible); the detail panel animates in over 300ms, so one macrotask is invisible.
     const timeout = window.setTimeout(() => setRenderedInput(selectedInput), 0);
     return () => window.clearTimeout(timeout);
-    // selectedInput is a fresh object literal every render; depend on its primitive
-    // fields instead so this only re-fires when the actual selection changes.
+    // selectedInput is a fresh object literal every render; depend on its primitive fields so it only re-fires when the actual selection changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search.selectedProjectId, search.selectedRepo, search.number]);
   useEffect(() => {
@@ -310,9 +299,7 @@ function PullRequestsRouteView() {
     }
   }, [selectedInput, updateSearch]);
 
-  // Ephemeral dock state derived from the URL selection, built with the same pure transitions
-  // as the chat thread dock (rightDockStore.logic) so the two hosts can't drift. `open` follows
-  // the live selection while the pane sticks around for the slide-out animation.
+  // same pure transitions as the chat thread dock (rightDockStore.logic) so the hosts can't drift; `open` follows the selection while the pane sticks for the slide-out
   const dockState = useMemo<RightDockThreadState>(() => {
     if (!renderedInput) return createDefaultRightDockState();
     const state = openPaneInState(createDefaultRightDockState(), {
@@ -394,8 +381,6 @@ function PullRequestsRouteView() {
           >
             <div className={cn("flex items-center gap-2", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
               <SidebarHeaderNavigationControls />
-              {/* The title rides the surface header like the automations detail route, so the
-                  scroll area opens straight onto the filters and the list. */}
               <h1 className="truncate font-heading text-ui-lg font-medium">Pull requests</h1>
               {scopedProjectName ? (
                 <>
@@ -429,8 +414,6 @@ function PullRequestsRouteView() {
           </header>
           <main className="min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-5 pb-12 pt-4 sm:px-7">
-              {/* Scope first, then search within it: the pills read as the view you are in and
-                  the field filters it, which is also the reference layout. */}
               <div className="flex flex-col gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <PullRequestFilterPillGroup
@@ -447,7 +430,6 @@ function PullRequestsRouteView() {
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="min-w-0 flex-1">
-                    {/* The long field list belonged in a spec, not a placeholder. */}
                     <SearchInput
                       placeholder="Search pull requests"
                       value={search.q ?? ""}
@@ -463,7 +445,6 @@ function PullRequestsRouteView() {
               </div>
 
               {listQuery.isPending || exactInvolvementPending ? (
-                // Mirrors the loaded list's row height and spacing so the switch doesn't jump.
                 <div className="space-y-0.5">
                   {Array.from({ length: 7 }, (_, index) => (
                     <Skeleton key={index} className="h-13 w-full rounded-lg" />

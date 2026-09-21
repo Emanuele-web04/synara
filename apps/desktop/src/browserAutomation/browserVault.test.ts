@@ -22,8 +22,6 @@ async function fixture() {
 const origin = "https://login.example.test";
 const page = (url = origin) => ({ getURL: () => url, isDestroyed: () => false });
 
-// These integration tests repeat production scrypt derivations and durable writes.
-// Allow for CPU contention when release preflight runs all workspace suites together.
 describe("browser vault", { timeout: 15_000 }, () => {
   it("defers OS key access for an empty vault until password saving is enabled", async () => {
     const home = await mkdtemp(join(tmpdir(), "synara-empty-vault-"));
@@ -100,9 +98,6 @@ describe("browser vault", { timeout: 15_000 }, () => {
         if (update) expect(id).toBe(originalId);
         expect((await vault.reveal({ id, password: master })).password).toBe("new-synthetic");
 
-        // Restore the last successfully written preferences, as after a
-        // transient filesystem failure. The encrypted record survives restart
-        // even if its first provenance write never reached disk.
         await rm(preferencesPath, { recursive: true });
         await writeFile(preferencesPath, preferences);
         restored = new BrowserVault(home);
@@ -172,7 +167,6 @@ describe("browser vault", { timeout: 15_000 }, () => {
     await vault.configure({ agentUse: true, offerSave: true, autosave: false });
     await vault.saveCaptured(origin, { username: "human", password: "synthetic-human" }, "user");
     await vault.saveCaptured(origin, { username: "agent", password: "synthetic-agent" }, "agent");
-    // A pending record created by an older release must remain owner-recoverable.
     const keys = new VaultKeyProtection(join(home, "vault"));
     await keys.authenticate(master);
     const legacyVault = createLocalCredentialVault({ home, keyProvider: () => keys.provide() });

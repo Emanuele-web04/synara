@@ -1,9 +1,3 @@
-// FILE: KanbanProjectBoardView.tsx
-// Purpose: Full 3-column board for one project — drag a Draft card onto In Progress to
-//          dispatch its prompt, or reorder drafts; other moves are derived-only.
-// Layer: UI component (owns the board DndContext)
-// Exports: KanbanProjectBoardView
-
 import {
   DndContext,
   DragOverlay,
@@ -77,8 +71,7 @@ export function KanbanProjectBoardView({
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const setDraftOrder = useKanbanUiStore((state) => state.setDraftOrder);
   const [activeCard, setActiveCard] = useState<KanbanCard | null>(null);
-  // A completed drag still emits a click on the source card; swallow exactly that one
-  // so dropping a card never also opens its chat.
+  // a completed drag still emits a click on the source card — swallow exactly that one so dropping never also opens its chat
   const suppressClickRef = useRef(false);
 
   const sensors = useSensors(
@@ -107,8 +100,7 @@ export function KanbanProjectBoardView({
       });
       return;
     }
-    // The dispatch marks the optimistic overlay synchronously, so the card jumps
-    // to In Progress before any round-trip; failure results revert it.
+    // the dispatch marks the optimistic overlay synchronously so the card jumps to In Progress before any round-trip; failures revert it
     const result = await dispatchKanbanDraftCard({
       card,
       defaultProvider: settings.defaultProvider,
@@ -160,8 +152,7 @@ export function KanbanProjectBoardView({
   };
 
   const releaseClickSuppression = () => {
-    // The trailing click (if any) fires synchronously after dragend; release on the
-    // next tick so regular clicks keep working when the drop happens off-card.
+    // the trailing click fires synchronously after dragend — release on the next tick so regular clicks keep working when the drop lands off-card
     window.setTimeout(() => {
       suppressClickRef.current = false;
     }, 0);
@@ -201,8 +192,7 @@ export function KanbanProjectBoardView({
       return;
     }
     if (targetColumn === "inProgress") {
-      // A drag that started before the board re-derived could re-drop a card whose
-      // dispatch is still settling; a second drop must not queue another turn.
+      // a drag started before the board re-derived could re-drop a card whose dispatch is still settling — a second drop must not queue another turn
       if (useKanbanUiStore.getState().optimisticDispatchByThreadId[card.threadId]) {
         return;
       }

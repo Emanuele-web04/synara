@@ -1,8 +1,3 @@
-// FILE: MessagesTimeline.logic.ts
-// Purpose: Owns the pure row-derivation helpers used by the transcript hot path.
-// Layer: Web chat presentation helpers
-// Exports: row derivation, structural sharing, copy/timer helpers
-
 import { type MessageId, type TurnId } from "@synara/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
@@ -32,16 +27,12 @@ export function canSubmitUserMessageEdit(input: {
   return (input.allowEmpty || input.draft.trim().length > 0) && !input.disabled;
 }
 
-// Ordered item folded into a settled turn's single "Worked for Xs" disclosure.
-// A turn can interleave tool work and intermediate assistant narration
-// (preambles), so the collapsed panel keeps both in chronological order.
+// Ordered item folded into a settled turn's single "Worked for Xs" disclosure. A turn can interleave tool work and intermediate assistant narration (preambles), so the collapsed panel keeps both in chronological order.
 export type CollapsedTurnItem =
   | { kind: "work"; id: string; entry: WorkLogEntry }
   | { kind: "narration"; id: string; message: ChatMessage };
 
-// A settled turn's collapsed items re-chunked for rendering: consecutive
-// summarizable tool rows fold into one "Ran N commands..." disclosure while
-// narration and rich rows pass through individually.
+// A settled turn's collapsed items re-chunked for rendering: consecutive summarizable tool rows fold into one "Ran N commands..." disclosure while narration and rich rows pass through individually.
 export type CollapsedTurnChunk =
   | { kind: "item"; item: CollapsedTurnItem }
   | { kind: "tool-group"; id: string; entries: WorkLogEntry[] };
@@ -100,10 +91,7 @@ export function chunkWorkEntries(entries: ReadonlyArray<WorkLogEntry>): WorkEntr
   });
 }
 
-// One renderable block of a work group: `summary` is non-null when the block
-// renders collapsed behind a "Ran N commands..." disclosure. `liveEntry` is
-// non-null while a tool run is still open: the run renders as one line wearing
-// the latest status description, falling back to the newest call.
+// `liveEntry` non-null while a tool run is open: the run renders one line wearing the latest status description
 export interface WorkEntryRenderPlanChunk {
   id: string;
   entries: WorkLogEntry[];
@@ -116,13 +104,7 @@ function pickLiveToolEntry(entries: ReadonlyArray<WorkLogEntry>): WorkLogEntry {
   return entries.findLast(isCodexActivityStatusWorkEntry) ?? entries.at(-1)!;
 }
 
-// Plans a work group's entries block by block. Boundaries are the entries a
-// summary can never absorb — thinking/info narration, errors, rich cards — so
-// each tool run between boundaries folds independently. A run stays expanded
-// only while it still has running work, or while it is the trailing block of
-// the live transcript tail (`tailIsLive`): the moment a new narration block
-// starts after it, it stops being the tail and collapses mid-turn. An expanded
-// run never lists its rows: it folds to a single line for its selected entry.
+// boundaries are entries a summary can never absorb (thinking/info narration, errors, rich cards) — each run between them folds independently; a run stays expanded only while it has running work or is the live tail, and never lists rows (folds to one line for its selected entry)
 export function planWorkEntryRenderChunks(
   entries: ReadonlyArray<WorkLogEntry>,
   options: { tailIsLive: boolean },
@@ -144,16 +126,12 @@ export function planWorkEntryRenderChunks(
   });
 }
 
-// A folded chunk renders as one line (settled summary or live newest call)
-// instead of listing its rows.
+// A folded chunk renders as one line (settled summary or live newest call) instead of listing its rows.
 export function isFoldedWorkEntryChunk(chunk: WorkEntryRenderPlanChunk): boolean {
   return chunk.summary !== null || chunk.liveEntry !== null;
 }
 
-// How a folded chunk renders: the line's summary, the rows its disclosure
-// reveals, and a suffix for the open-state key. A live line reveals only the
-// other entries, and keeps its own open state so the run
-// settles collapsed even when the live line was opened.
+// a live line reveals only the other entries and keeps its own open state so the run settles collapsed even when it was opened
 export function resolveWorkEntryChunkFold(
   chunk: WorkEntryRenderPlanChunk,
 ): { summary: ToolCallGroupSummary; entries: WorkLogEntry[]; keySuffix: string } | null {
@@ -164,8 +142,7 @@ export function resolveWorkEntryChunkFold(
   if (!liveSummary) return null;
   return {
     summary: liveSummary,
-    // A multi-file edit wears a count ("Edited 9 files"), so its own file rows
-    // still belong behind the line.
+    // A multi-file edit wears a count ("Edited 9 files"), so its own file rows still belong behind the line.
     entries: chunk.entries.filter(
       (entry) => entry !== chunk.liveEntry || workEntryRowCount(entry) > 1,
     ),
@@ -179,9 +156,7 @@ export interface CappedWorkEntryRenderPlan {
   hiddenEntryCount: number;
 }
 
-// Keeps collapsed summaries intact while bounding only the entries that still
-// render openly. Callers can exclude boundary/status rows from the budget when
-// those rows are rendered separately from tool calls.
+// Keeps collapsed summaries intact while bounding only the entries that still render openly. Callers can exclude boundary/status rows from the budget when those rows are rendered separately from tool calls.
 export function capOpenWorkEntryRenderChunks(
   chunks: ReadonlyArray<WorkEntryRenderPlanChunk>,
   options: {
@@ -226,8 +201,7 @@ export function capOpenWorkEntryRenderChunks(
   };
 }
 
-// The newest work group in the transcript — the one still allowed to render its
-// rows inline while the turn is live. Everything older collapses to a summary.
+// The newest work group in the transcript — the one still allowed to render its rows inline while the turn is live. Everything older collapses to a summary.
 export function findLastLiveWorkGroupId(rows: ReadonlyArray<MessagesTimelineRow>): string | null {
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]!;
@@ -284,15 +258,12 @@ export type MessagesTimelineRow =
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
-      // True while this row's turn is still running. The end-of-turn changes
-      // card (Undo / Review) is held back until the turn settles so it cannot
-      // pre-empt the composer's live changes strip mid-turn.
+      // the end-of-turn changes card (Undo/Review) is held back until the turn settles so it can't pre-empt the composer's live changes strip mid-turn
       assistantTurnInProgress?: boolean | undefined;
       revertTurnCount?: number | undefined;
     }
   | {
-      // One slice of a completed assistant message whose streamed text was
-      // interleaved with tool rows; rendered compactly at its own start time.
+      // One slice of a completed assistant message whose streamed text was interleaved with tool rows; rendered compactly at its own start time.
       kind: "message-segment";
       id: string;
       createdAt: string;
@@ -307,17 +278,13 @@ export type MessagesTimelineRow =
     }
   | { kind: "working"; id: string; createdAt: string | null }
   | {
-      // Live-turn header that mirrors the settled "Worked for Xs" disclosure
-      // (label + full-width divider), but is non-collapsible and counts up while
-      // the turn is still running. Sits at the top of the active turn.
+      // Live-turn header that mirrors the settled "Worked for Xs" disclosure (label + full-width divider), but is non-collapsible and counts up while the turn is still running. Sits at the top of the active turn.
       kind: "working-header";
       id: string;
       createdAt: string;
     }
   | {
-      // Transient "Preparing worktree..." step card shown during the New
-      // worktree first-send setup. `open` drives the shared disclosure close
-      // animation while the presentation hook keeps the row mounted.
+      // Transient "Preparing worktree..." step card shown during the New worktree first-send setup. `open` drives the shared disclosure close animation while the presentation hook keeps the row mounted.
       kind: "worktree-setup";
       id: string;
       steps: ReadonlyArray<WorktreeSetupStep>;
@@ -475,9 +442,7 @@ export function resolveAssistantMessageDisplayText(
   return hasVisibleGeneratedImage ? null : "(empty response)";
 }
 
-// Builds the "Files changed" lookup keyed by the last assistant row in the
-// user-visible response segment. Provider mini-turns can emit diffs before the
-// final answer, so the card follows the segment tail instead of the raw turn.
+// provider mini-turns can emit diffs before the final answer — the Files-changed card follows the last assistant row of the user-visible response segment, not the raw turn
 export function buildTurnDiffSummaryByAssistantMessageId(input: {
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
   messages: ReadonlyArray<TimelineDiffMessage>;
@@ -518,8 +483,7 @@ export function buildTurnDiffSummaryByAssistantMessageId(input: {
   return byMessageId;
 }
 
-// Keeps multi-turn provider responses from losing earlier "Files changed" rows
-// when several turn-diff summaries anchor to the same final assistant message.
+// Keeps multi-turn provider responses from losing earlier "Files changed" rows when several turn-diff summaries anchor to the same final assistant message.
 function mergeTurnDiffSummaries(
   existing: TurnDiffSummary | undefined,
   next: TurnDiffSummary,
@@ -598,9 +562,7 @@ export function deriveTerminalAssistantMessageIds(
   return terminalAssistantMessageIds;
 }
 
-// Derives transcript rows from timeline entries while keeping live narration and
-// tool rows in visual chronology. Work already waiting when assistant text
-// arrives renders above that text; trailing work renders below it.
+// Derives transcript rows from timeline entries while keeping live narration and tool rows in visual chronology. Work already waiting when assistant text arrives renders above that text; trailing work renders below it.
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   isWorking: boolean;
@@ -690,8 +652,7 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "proposed-plan") {
-      // A plan card is a visible mid-turn artifact. Keep adjacent work as its
-      // own row so final turn collapse can preserve the true chronology.
+      // A plan card is a visible mid-turn artifact. Keep adjacent work as its own row so final turn collapse can preserve the true chronology.
       flushPendingWorkGroup({ attachToPreviousAssistant: false });
       nextRows.push({
         kind: "proposed-plan",
@@ -703,9 +664,7 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "message-segment") {
-      // Interleaved slice of assistant text, already alternating with the tool
-      // rows in timeline order. Do not merge pending work into it: segment
-      // boundaries ARE tool interventions, so each segment stands alone.
+      // do not merge pending work into an interleaved text slice — segment boundaries ARE tool interventions, so each segment stands alone
       flushPendingWorkGroup({ attachToPreviousAssistant: false });
       nextRows.push({
         kind: "message-segment",
@@ -754,8 +713,7 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  // Keep any trailing work summary visually attached to the last answer so a
-  // completed chat does not end with a detached tool-log footer.
+  // Keep any trailing work summary visually attached to the last answer so a completed chat does not end with a detached tool-log footer.
   flushPendingWorkGroup();
 
   if (input.worktreeSetup) {
@@ -767,8 +725,7 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  // The generic Thinking shimmer remains the single live status. Provider work
-  // rows are transcript history and must never replace it.
+  // The generic Thinking shimmer remains the single live status. Provider work rows are transcript history and must never replace it.
   if (input.isWorking && !(input.worktreeSetup && input.worktreeSetupOpen)) {
     nextRows.push({
       kind: "working",
@@ -783,11 +740,7 @@ export function deriveMessagesTimelineRows(input: {
     activeTurnId: input.activeTurnId ?? null,
   });
 
-  // The live turn wears a "Working for Xs" header + divider — the counting-up
-  // twin of a settled turn's "Worked for Xs" disclosure. It anchors to the top
-  // of the active turn (right after the user message that opened it) and needs a
-  // real start time to count from; the trailing "Thinking" shimmer covers the
-  // gap before one exists. Inserted after collapse so folding is untouched.
+  // the live turn's counting-up "Working for Xs" anchors to the turn top and needs a real start time — the trailing "Thinking" shimmer covers the gap; inserted after collapse so folding is untouched
   if (
     input.isWorking &&
     input.activeTurnStartedAt &&
@@ -803,9 +756,7 @@ export function deriveMessagesTimelineRows(input: {
   return nextRows;
 }
 
-// The live turn starts at the most recent user message, so its header slots in
-// right after it. Absent any user message (degenerate transcripts) the header
-// leads the transcript so the "Working for" copy is never lost.
+// The live turn starts at the most recent user message, so its header slots in right after it. Absent any user message (degenerate transcripts) the header leads the transcript so the "Working for" copy is never lost.
 function findLiveTurnHeaderInsertIndex(rows: ReadonlyArray<MessagesTimelineRow>): number {
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index]!;
@@ -816,8 +767,7 @@ function findLiveTurnHeaderInsertIndex(rows: ReadonlyArray<MessagesTimelineRow>)
   return 0;
 }
 
-// Returns the terminal assistant only when it is still the transcript tail.
-// A newer user message means the next turn has begun but has not produced text yet.
+// Returns the terminal assistant only when it is still the transcript tail. A newer user message means the next turn has begun but has not produced text yet.
 function findTailTerminalAssistantMessageId(
   rows: ReadonlyArray<MessagesTimelineRow>,
   terminalAssistantMessageIds: ReadonlySet<string>,
@@ -834,12 +784,7 @@ function findTailTerminalAssistantMessageId(
   return null;
 }
 
-// Post-pass: collapse each *settled* turn into a single "Worked for Xs"
-// disclosure on the turn's terminal assistant message. Unlike a per-message
-// collapse, this folds every non-terminal assistant narration (preambles) AND
-// the turn's tool work into one ordered group, so the transcript shows a single
-// toggle + the final answer per turn (Remodex-style). The live turn stays
-// expanded/inline so streaming output is never hidden behind a toggle.
+// post-pass collapses each settled turn into one "Worked for Xs" disclosure on the terminal assistant message — folds preambles AND tool work into one group (Remodex-style); the live turn stays expanded
 function collapseSettledTurns(
   rows: MessagesTimelineRow[],
   options: {
@@ -874,8 +819,7 @@ function collapseSettledTurns(
     if (message.asyncUserInput) continue;
     // Only the terminal message of a turn owns the collapsed group.
     if (!terminalAssistantMessageIds.has(message.id)) continue;
-    // Never collapse the live turn: streaming text or the in-progress turn stays
-    // inline so the user sees output as it arrives.
+    // Never collapse the live turn: streaming text or the in-progress turn stays inline so the user sees output as it arrives.
     if (message.streaming) continue;
     const turnId = message.turnId ?? null;
     const turnIsActive =
@@ -886,9 +830,7 @@ function collapseSettledTurns(
         : message.id === lastTerminalAssistantMessageId);
     if (turnIsActive) continue;
 
-    // Scan back to the response boundary collecting rows to fold. Provider
-    // mini-turns can have distinct turnIds inside one assistant answer, so the
-    // user message boundary is the stable UI grouping point.
+    // provider mini-turns can have distinct turnIds inside one assistant answer — the user message boundary is the stable UI grouping point
     const foldIndices: number[] = [];
     for (let scan = pass - 1; scan >= 0; scan -= 1) {
       const prev = rows[scan]!;
@@ -901,17 +843,13 @@ function collapseSettledTurns(
         foldIndices.push(scan);
         continue;
       }
-      // A settled assistant message whose streamed text interleaved with tool
-      // rows renders as message-segment slices. They are still this turn's
-      // narration, so they fold too instead of stranding everything earlier
-      // outside the disclosure.
+      // A settled assistant message whose streamed text interleaved with tool rows renders as message-segment slices. They are still this turn's narration, so they fold too instead of stranding everything earlier outside the disclosure.
       if (prev.kind === "message-segment" && !prev.message.streaming) {
         foldIndices.push(scan);
         continue;
       }
       if (prev.kind === "proposed-plan") {
-        // The plan card stays visible, but it should not strand earlier
-        // narration/work outside the final "Worked for..." disclosure.
+        // The plan card stays visible, but it should not strand earlier narration/work outside the final "Worked for..." disclosure.
         continue;
       }
       break;
@@ -919,14 +857,9 @@ function collapseSettledTurns(
     foldIndices.reverse();
 
     const collapsedItems: CollapsedTurnItem[] = [];
-    // The disclosure folds everything back to the user boundary, so "Worked
-    // for" must start where the folded segment starts. The terminal row's own
-    // durationStart advances past intermediate *completed* assistant messages
-    // (e.g. a failed attempt before a retry), which would report only the tail
-    // of the turn instead of the full run.
+    // "Worked for" must start where the folded segment starts — the terminal row's durationStart advances past intermediate *completed* assistant messages (a failed attempt before a retry), which would report only the tail
     let collapsedStart = row.durationStart;
-    // All slices of one segmented message share the same ChatMessage, so the
-    // message folds once (at its first slice) to keep narration identity stable.
+    // All slices of one segmented message share the same ChatMessage, so the message folds once (at its first slice) to keep narration identity stable.
     const foldedSegmentMessageIds = new Set<string>();
     for (const index of foldIndices) {
       const folded = rows[index]!;
@@ -957,8 +890,7 @@ function collapseSettledTurns(
         if (folded.inlineWorkEntries) collectWorkItems(folded.inlineWorkEntries, collapsedItems);
       }
     }
-    // The terminal's own work rows are details around the final answer; fold
-    // them into the disclosure so completed chats do not end with tool-log rows.
+    // The terminal's own work rows are details around the final answer; fold them into the disclosure so completed chats do not end with tool-log rows.
     if (row.leadingWorkEntries) collectWorkItems(row.leadingWorkEntries, collapsedItems);
     if (row.inlineWorkEntries) collectWorkItems(row.inlineWorkEntries, collapsedItems);
 
@@ -979,8 +911,7 @@ function collapseSettledTurns(
   }
 }
 
-// Reuses stable row references so streaming updates only invalidate rows whose
-// visible content actually changed.
+// Reuses stable row references so streaming updates only invalidate rows whose visible content actually changed.
 export function computeStableMessagesTimelineRows(
   rows: MessagesTimelineRow[],
   previous: StableMessagesTimelineRowsState,

@@ -341,7 +341,7 @@ it.skipIf(process.platform !== "darwin")(
       expect(captured?.command).toBe("/bin/sleep 1");
       expect(captured?.startedAt).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) [A-Z][a-z]{2} /);
       if (!captured) throw new Error("Owned test child was not captured");
-      // Both probes must use the same stable locale, even if the parent changes it.
+      // both probes must use the same stable locale even if the parent changes it
       process.env.LC_ALL = "fr_FR.UTF-8";
       expect(killer.inspect?.({ descendants: [captured] })).toEqual({
         verified: true,

@@ -93,11 +93,6 @@ function calendarDaysBetween(from: Date, to: Date): number {
   return Math.round((toMidnight.getTime() - fromMidnight.getTime()) / DAY_IN_MS);
 }
 
-/**
- * Day-aware message timestamp: same-day messages show just the clock time;
- * messages from another day within the past week are prefixed with the weekday
- * name, and anything older with a short date (plus year once it differs).
- */
 export function formatDayAwareTimestamp(
   isoDate: string,
   timestampFormat: TimestampFormat,

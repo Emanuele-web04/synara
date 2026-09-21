@@ -1,8 +1,3 @@
-// FILE: providerUpdates.ts
-// Purpose: Shared provider-update filtering and refresh cadence for global toasts and settings.
-// Layer: Web settings/notification utility
-// Exports: update candidate helpers, notification keys, and auto-refresh timing.
-
 import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
@@ -12,8 +7,7 @@ import {
 
 export const PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS = 10_000;
 export const PROVIDER_UPDATE_REFRESH_INTERVAL_MS = 60 * 60 * 1_000;
-// The server stops provider commands after two minutes. This slightly longer
-// client watchdog also covers a stalled transport so loading UI always settles.
+// the server stops provider commands after two minutes — this slightly longer client watchdog covers a stalled transport so loading UI always settles
 export const PROVIDER_UPDATE_REQUEST_TIMEOUT_MS = 2 * 60_000 + 15_000;
 
 function formatUpdateTimeout(timeoutMs: number): string {
@@ -76,9 +70,7 @@ export function isProviderUpdateActive(provider: ServerProviderStatus): boolean 
   return provider.updateState?.status === "queued" || provider.updateState?.status === "running";
 }
 
-// A provider whose latest version Synara cannot look up (self-updating CLIs such as
-// `cursor-agent`) is permanently "unknown". Treating that as an update prompt made its
-// row nag forever, so those providers get the update offered as a manual action instead.
+// self-updating CLIs (cursor-agent) have no registry to read a latest version from — permanently "unknown"; prompting on that nagged forever, so the update is offered as a manual action
 export function isProviderLatestVersionKnowable(provider: ServerProviderStatus): boolean {
   return provider.versionAdvisory?.latestVersionKnowable !== false;
 }
@@ -93,7 +85,6 @@ export function shouldOfferProviderUpdateAction(provider: ServerProviderStatus):
   );
 }
 
-// Header affordance: reserved for providers Synara can actually assert are outdated.
 export function shouldPromptProviderUpdate(provider: ServerProviderStatus): boolean {
   return shouldOfferProviderUpdateAction(provider) && isProviderLatestVersionKnowable(provider);
 }
@@ -108,7 +99,6 @@ function isProviderEnabled(
   return serverSettings.providers[provider]?.enabled !== false;
 }
 
-// Central visibility gate used by both global toasts and Settings update rows.
 export function shouldShowProviderUpdateStatus(input: ProviderUpdateVisibilityInput): boolean {
   const advisory = input.provider.versionAdvisory;
   const hiddenProviderSet = input.hiddenProviderSet ?? new Set(input.hiddenProviders ?? []);

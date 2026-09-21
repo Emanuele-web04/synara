@@ -365,9 +365,7 @@ import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
 
-// The terminal drawer drags in xterm plus its addons (~223 KB gzip). Both mount points
-// are conditional, so loading it lazily keeps the terminal stack out of the initial
-// chat bundle and defers the cost to the first time a terminal is actually opened.
+// the terminal drawer drags in xterm+addons (~223KB gzip); both mount points are conditional so lazy-loading keeps the terminal stack out of the initial chat bundle until a terminal is actually opened
 const ThreadTerminalDrawer = lazy(() => import("./ThreadTerminalDrawer"));
 
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
@@ -377,7 +375,6 @@ const EMPTY_GOAL_ACHIEVEMENTS: readonly ThreadGoalAchievement[] = [];
 const EMPTY_PINNED_TEXT: ReadonlyMap<MessageId, string> = new Map();
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
-/** Ties the composer `+` trigger to the panel it opens above the editor. */
 const COMPOSER_EXTRAS_PANEL_ID = "composer-extras-panel";
 
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
@@ -482,9 +479,7 @@ interface ChatViewProps {
   onCloseThreadPane?: () => void;
 }
 
-// Builds an ephemeral transcript bubble for the conversational automation-setup
-// exchange. These never reach a provider and are not persisted; they render the
-// back-and-forth (user request, Synara's clarifying questions) inline like Codex.
+// ephemeral transcript bubbles for the conversational automation-setup exchange — never reach a provider, not persisted; render the back-and-forth inline like Codex
 
 export default function ChatView({
   threadId,
@@ -506,10 +501,7 @@ export default function ChatView({
   onChangeThreadInSplitPane,
   onCloseThreadPane,
 }: ChatViewProps) {
-  // Prop defaults are resolved here instead of in the destructuring pattern: an
-  // AssignmentPattern in the parameter list makes React Compiler bail out (silently —
-  // `panicThreshold` is unset) on this entire component, the hottest one in the app.
-  // See chatHotPath.compiler.test.ts.
+  // prop defaults resolved here, not in destructuring: an AssignmentPattern makes React Compiler bail (silently — panicThreshold unset) on this, the hottest component in the app; see chatHotPath.compiler.test.ts
   const paneScopeId = paneScopeIdProp ?? SINGLE_CHAT_PANE_SCOPE_ID;
   const hideHeader = hideHeaderProp ?? false;
   const surfaceMode = surfaceModeProp ?? "single";
@@ -529,8 +521,7 @@ export default function ChatView({
     (store) => store.setModelSelectionAndSticky,
   );
   const timestampFormat = settings.timestampFormat;
-  // The composer floats over the transcript; its measured height becomes the
-  // transcript's bottom content inset (see composerOverlay.ts).
+  // the composer floats over the transcript; its measured height becomes the transcript's bottom content inset (see composerOverlay.ts)
   const {
     overlayRef: composerOverlayRef,
     overlayHeightPx: composerOverlayHeightPx,
@@ -711,10 +702,7 @@ export default function ChatView({
   const [subagentStripCompact, setSubagentStripCompact] = useState(false);
   const [workflowRunCardCompact, setWorkflowRunCardCompact] = useState(false);
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
-  // Width-aware visibility for the footer picker cluster (context meter,
-  // model name, traits label). Inputs live in a ref so the resize observer
-  // can re-plan without re-subscribing; the sync function is exposed via ref
-  // so label changes can re-plan without a resize.
+  // width-aware visibility for the footer picker cluster — inputs in a ref so the resize observer re-plans without re-subscribing; sync exposed via ref so label changes re-plan without a resize
   const [composerFooterTier, setComposerFooterTier] = useState(0);
   const composerFooterTierRef = useRef(0);
   const composerFooterDemotionWidthsRef = useRef<ReadonlyArray<number | undefined>>([]);
@@ -723,14 +711,11 @@ export default function ChatView({
   const [composerCommandPicker, setComposerCommandPicker] = useState<
     null | "fork-target" | "review-target"
   >(null);
-  // The composer `+` panel shares the floating slot above the editor with the
-  // slash/mention command menu, so only one of the two is ever open.
+  // the composer + panel shares the floating slot above the editor with the slash/mention menu — only one is ever open
   const [isComposerExtrasPanelOpen, setIsComposerExtrasPanelOpen] = useState(false);
   const [secondaryChromePlaceholderHeight, setSecondaryChromePlaceholderHeight] = useState(88);
-  // Tracks whether the user explicitly dismissed the sidebar for the active turn.
+  // carries "open the sidebar" intent across thread navigation ("Implement in a new thread"): when set, the thread-change reset opens the sidebar instead of closing it
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
-  // When set, the thread-change reset effect will open the sidebar instead of closing it.
-  // Used by "Implement in a new thread" to carry the sidebar-open intent across navigation.
   const planSidebarOpenOnNextThreadRef = useRef(false);
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const [pullRequestDialogState, setPullRequestDialogState] =
@@ -764,8 +749,7 @@ export default function ChatView({
   };
 
   useEffect(() => {
-    // Async setState (post-paint) keeps this thread-change reset out of the
-    // render->effect->render cascade; the pickers already closed post-commit.
+    // async setState (post-paint) keeps this thread-change reset out of the render→effect→render cascade; the pickers already closed post-commit
     const settle = window.setTimeout(() => {
       setComposerCommandPicker(null);
       setIsComposerExtrasPanelOpen(false);
@@ -786,9 +770,7 @@ export default function ChatView({
   ]);
 
   const composerFormRef = useRef<HTMLFormElement>(null);
-  // Set by whichever mounted GitActionsControl instance (header quick-action or the
-  // Environment panel row) last registered — either performs the identical commit &
-  // push mutation for this thread's repo, so it doesn't matter which one is "current".
+  // set by whichever mounted GitActionsControl last registered — either performs the identical commit&push for this thread's repo so it doesn't matter which is current
   const commitAndPushTriggerRef = useRef<(() => void) | null>(null);
   const onRegisterCommitAndPushTrigger = useCallback(
     (trigger: (() => void) | null) => {
@@ -822,9 +804,7 @@ export default function ChatView({
     [draftThread, draftFallbackModelSelection, localDraftError, threadId],
   );
   const activeThread = serverThread ?? localDraftThread;
-  // Local threads reconcile their stored branch to the shared checkout as soon as the
-  // branch query resolves. Keep the branch seen when a thread becomes active so a settled
-  // thread can explain that change before the user's first resumed message.
+  // local threads reconcile their stored branch to the shared checkout as soon as the branch query resolves — keep the branch seen when a thread becomes active so a settled thread can explain that change before the user's first resumed message
   const [activeThreadBranchAtActivation, setActiveThreadBranchAtActivation] = useState<{
     threadId: ThreadId;
     branch: string | null;
@@ -863,8 +843,7 @@ export default function ChatView({
     ) {
       return;
     }
-    // Async setState (post-paint) keeps this settled-undo cleanup out of the
-    // render->effect->render cascade.
+    // Async setState (post-paint) keeps this settled-undo cleanup out of the render->effect->render cascade.
     const settle = window.setTimeout(() => {
       setPendingFileUndo(null);
       setIsRevertingCheckpoint(false);
@@ -885,9 +864,7 @@ export default function ChatView({
   const onRespondToAsyncUserInput = useAsyncUserInputResponse(threadId);
   const activeThreadId = activeThread?.id ?? null;
   const activeLatestTurn = activeThread?.latestTurn ?? null;
-  // Read once here so memo bodies depend on the turn id instead of the turn object: a
-  // `foo?.bar` read inside a memo makes React Compiler infer `foo` as the dependency, which
-  // no longer matches the hand-written `foo?.bar` dep and bails the whole component out.
+  // read once so memo bodies depend on the turn id instead of the turn object: a `foo?.bar` read inside a memo makes React Compiler infer `foo` as the dep, which no longer matches the hand-written `foo?.bar` dep and bails the whole component
   const activeLatestTurnId = activeLatestTurn?.turnId ?? null;
   const activeLatestTurnState = activeLatestTurn?.state ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
@@ -923,10 +900,7 @@ export default function ChatView({
     activeThread?.session ?? null,
   );
   const latestTurnSettled = latestTurnSettledByProvider && !hasLiveTurnTail;
-  // `latestTurnSettled` is also false when there is NO started turn (a brand-new
-  // chat), because `isLatestTurnSettled` treats a non-existent turn as unsettled.
-  // Gate live-turn UI on an actually-started turn so composer chrome cannot
-  // appear on a fresh chat just because the repo already has local edits.
+  // isLatestTurnSettled treats a non-existent turn as unsettled — gate live-turn UI on an actually-started turn so composer chrome can't appear on a fresh chat just because the repo has local edits
   const latestTurnLive = Boolean(activeLatestTurn?.startedAt) && !latestTurnSettled;
   const activeProjectId = activeThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
@@ -936,9 +910,7 @@ export default function ChatView({
     async (terminalThreadId: ThreadId) => {
       const api = readNativeApi();
       if (!api) return;
-      // Body kept in a nested function: React Compiler's BuildHIR cannot lower a value block
-      // (`?.`, `??`, ternary) that sits directly inside a `try`, and one of them makes the
-      // whole component bail out of compilation. The catch below still sees every rejection.
+      // body kept in a nested function: BuildHIR cannot lower a value block (`?.`, `??`, ternary) directly inside `try` and one makes the whole component bail; the catch still sees every rejection
       const deleteEmptyTerminalThread = async () => {
         await api.orchestration.dispatchCommand({
           type: "thread.delete",
@@ -1057,8 +1029,7 @@ export default function ChatView({
     () => buildThreadBreadcrumbs(threadLineageThreads, activeThread),
     [activeThread, threadLineageThreads],
   );
-  // Studio threads are always local. Their optional "Use a folder" cwd is stored separately
-  // from Git worktree metadata; the server migration repairs the legacy mixed representation.
+  // Studio threads are always local; their optional "Use a folder" cwd is stored separately from Git worktree metadata — the server migration repairs the legacy mixed representation
   const resolvedThreadEnvMode = isStudioContainer
     ? "local"
     : isServerThread
@@ -1288,8 +1259,7 @@ export default function ChatView({
     ? (agentActivityTimelineState.detailById.get(openAgentActivityId) ?? null)
     : null;
   useEffect(() => {
-    // Async setState (post-paint) keeps this thread-change reset out of the
-    // render->effect->render cascade.
+    // Async setState (post-paint) keeps this thread-change reset out of the render->effect->render cascade. The expanded image and timeline hook's optimistic messages clear before paint, so these residual resets can wait.
     const settle = window.setTimeout(() => {
       setOpenAgentActivityId(null);
     }, 0);
@@ -1299,8 +1269,7 @@ export default function ChatView({
     if (!openAgentActivityId || agentActivityTimelineState.detailById.has(openAgentActivityId)) {
       return;
     }
-    // Async setState (post-paint) keeps this stale-detail cleanup out of the
-    // render->effect->render cascade.
+    // Async setState (post-paint) keeps this stale-detail cleanup out of the render->effect->render cascade.
     const settle = window.setTimeout(() => {
       setOpenAgentActivityId(null);
     }, 0);
@@ -1418,10 +1387,7 @@ export default function ChatView({
       };
     }
 
-    // Only while a turn is live: deriveActiveTaskListState falls back to the latest
-    // unfinished prior-turn list (follow-up turns, reloads mid-turn), but once the
-    // thread is idle the card must clear — providers routinely end a turn without
-    // marking every task completed, and an unfinished list must not linger forever.
+    // only while a turn is live: deriveActiveTaskListState falls back to the latest unfinished prior-turn list, but once idle the card must clear — providers routinely end a turn without marking every task completed
     return latestTurnSettled
       ? null
       : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId);
@@ -1466,16 +1432,9 @@ export default function ChatView({
     activePendingUserInput,
   });
   const hasLiveTurn = phase === "running";
-  // Providers that clear `activeTurnId` on every terminal event (Claude) would
-  // otherwise leave the transcript with no active turn while work is still in
-  // progress, collapsing the newest answer into a closed "Worked for" disclosure.
-  // The latest turn is the transcript's own notion of "current", so fall back to it.
+  // providers that clear activeTurnId on every terminal event (Claude) would leave the transcript with no active turn while work continues, collapsing the newest answer into a closed disclosure — the latest turn is the transcript's own notion of current, so fall back to it
   const activeTurnIdForTranscript = activeThread?.session?.activeTurnId ?? activeLatestTurnId;
-  // The edit affordance must mirror the exact policy the server decider applies:
-  // resolve the editable target from the raw sequence-ordered thread messages and
-  // the running-session turn id — never from the createdAt-sorted timeline rows,
-  // whose optimistic/filtered entries can surface the button on a message the
-  // validators then reject.
+  // the edit affordance must mirror the server decider's exact policy: resolve the editable target from raw sequence-ordered thread messages + running-session turn id, never from createdAt-sorted timeline rows whose optimistic/filtered entries can surface the button on a message validators reject
   const editableUserMessageId = useMemo(() => {
     if (!activeThread || !isServerThread) {
       return null;
@@ -1489,10 +1448,7 @@ export default function ChatView({
     });
     return editTarget.editable ? (editTarget.messageId as MessageId) : null;
   }, [activeThread, isServerThread]);
-  // Defence in depth against a session stuck at "running" with no turn to
-  // complete: nothing would ever drain the composer queue, so messages routed
-  // into it would be swallowed. Server-side reconciliation settles these
-  // sessions; this keeps the composer usable until it does.
+  // defence in depth against a session stuck "running" with no turn: nothing would ever drain the composer queue; server-side reconciliation settles these, this keeps the composer usable until it does
   const hasQueueableLiveTurn = hasLiveTurn && activeThread?.session?.activeTurnId != null;
   const {
     automationProjects,
@@ -1527,8 +1483,7 @@ export default function ChatView({
     promptRef,
     setComposerDraftPrompt,
   });
-  // Keep Thinking through the post-ack gap where the server has the message /
-  // turn request but the provider session is not live yet (common on first send).
+  // keep Thinking through the post-ack gap where the server has the message/turn request but the provider session isn't live yet (common on first send)
   const isWorking =
     hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint || isAwaitingTurnStart;
   const hasStreamingAssistantText =
@@ -1615,8 +1570,7 @@ export default function ChatView({
     });
   const promptHistory = useMemo(() => {
     const activeMessages = activeThread?.messages ?? EMPTY_MESSAGES;
-    // Optimistic messages exist only briefly after a send; skip the full-transcript
-    // id Set on the common (streaming-flush) path where there is nothing to reconcile.
+    // optimistic messages exist only briefly after a send — skip the full-transcript id Set on the common streaming-flush path where there's nothing to reconcile
     if (optimisticUserMessages.length === 0) {
       return derivePromptHistoryFromMessages(activeMessages);
     }
@@ -1639,20 +1593,13 @@ export default function ChatView({
     () => new Set(optimisticUserMessages.map((message) => message.id)),
     [optimisticUserMessages],
   );
-  // The user message a local send anchored at the top of the transcript viewport.
-  // Set at the send sites and kept after the turn settles — collapsing the tail
-  // spacer when a turn ends would visibly yank the settled transcript. The next
-  // send replaces it, and thread switches reset it via the per-thread timeline
-  // remount plus the threadId guard at the render site.
+  // the user message a local send anchored at the top of the viewport — kept after the turn settles (collapsing the tail spacer would visibly yank the settled transcript); next send replaces it, thread switches reset via remount + threadId guard
   const [tailAnchor, setTailAnchor] = useState<{
     threadId: ThreadId;
     messageId: MessageId;
   } | null>(null);
-  // True from send until the tail-anchor hook finishes sliding the sent message
-  // to the viewport top. The auto-follow effect stays quiet while set so the
-  // anchored slide has exactly one scroll owner (see useTailAnchorScroll).
+  // true from send until the tail-anchor hook finishes sliding the message to viewport top — auto-follow stays quiet so the anchored slide has exactly one scroll owner
 
-  // --- Pinned messages & notes (per-thread, server-synced through sidepanel commands) ---
   const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;
   const goalAchievements = activeThread?.goalAchievements ?? EMPTY_GOAL_ACHIEVEMENTS;
   const threadNotes = activeThread?.notes ?? "";
@@ -1685,8 +1632,7 @@ export default function ChatView({
     },
     [handleTogglePinMessage, isPendingSetupBubbleId],
   );
-  // Stable identity: this is forwarded to the memoized MessagesTimeline, so an inline
-  // arrow here would defeat its `memo()` and re-derive every row on every keystroke.
+  // stable identity: forwarded to memoized MessagesTimeline — an inline arrow would defeat its memo() and re-derive every row on every keystroke
   const canPinMessage = useCallback(
     (messageId: MessageId) => !isPendingSetupBubbleId(messageId),
     [isPendingSetupBubbleId],
@@ -1720,17 +1666,13 @@ export default function ChatView({
     [timelineControllerRef],
   );
 
-  // Before treating an empty timeline as a genuinely new thread, wait for the
-  // detail snapshot: a server thread whose history has not synced yet must show
-  // a loading (or failed) transcript state instead of the empty landing.
+  // before treating an empty timeline as a genuinely new thread, wait for the detail snapshot — a server thread whose history hasn't synced must show loading/failed, not the empty landing
   const threadDetailHydration = resolveThreadDetailHydration({
     isServerThread,
     hasTimelineEntries: timelineEntries.length > 0,
     detailSyncState: threadDetailSyncState,
   });
-  // Turn/session updates can arrive before the first transcript row. An empty
-  // synced snapshot during startup must not restore the unstarted landing.
-  // Terminal turns can lack start timestamps after restore/import; their state wins.
+  // turn/session updates can arrive before the first transcript row — an empty synced snapshot during startup must not restore the unstarted landing; terminal turns can lack start timestamps after restore/import, their state wins
   const hasPendingThreadWork =
     isWorking || (activeLatestTurnState === "running" && !latestTurnSettled);
   const handleRetryThreadDetailSync = useCallback(() => {
@@ -1740,8 +1682,7 @@ export default function ChatView({
       .subscribeThread(buildThreadSubscribeInput(threadId))
       .catch(() => undefined);
   }, [threadId]);
-  // Stable identity: this element is forwarded to the memoized MessagesTimeline, so
-  // building it inline in JSX would defeat its `memo()` on every keystroke.
+  // Stable identity: this element is forwarded to the memoized MessagesTimeline, so building it inline in JSX would defeat its `memo()` on every keystroke.
   const transcriptEmptyStateContent = useMemo((): ReactNode => {
     if (isEditorRail) {
       return <span aria-hidden="true" />;
@@ -1756,9 +1697,7 @@ export default function ChatView({
     }
     return hasPendingThreadWork ? <span aria-hidden="true" /> : undefined;
   }, [handleRetryThreadDetailSync, hasPendingThreadWork, isEditorRail, threadDetailHydration]);
-  // Empty top-level threads render the centered landing composer instead of the transcript pane.
-  // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
-  // while project-scoped drafts reuse the same centered layout with folder-specific copy.
+  // empty top-level threads render the centered landing composer; Home-scoped chats get the global copy + project picker, project-scoped drafts reuse the layout with folder copy
   const isCenteredEmptyLanding =
     timelineEntries.length === 0 &&
     !hasPendingThreadWork &&
@@ -2019,9 +1958,7 @@ export default function ChatView({
       prompt: composerPromptWithoutActiveSlashTrigger,
       ...sideSlashCommandContext,
     });
-  // Export is hidden while the thread is running so archives cannot capture a
-  // partial assistant response. Same shared predicate as the server's 409
-  // guard, so the composer and the export route cannot drift.
+  // export hidden while the thread runs so archives can't capture a partial response — same shared predicate as the server's 409 guard so composer and export route can't drift
   const canOfferExportCommand =
     isServerThread &&
     activeThread !== undefined &&
@@ -2101,8 +2038,7 @@ export default function ChatView({
     normalComposerMenuItems,
   ]);
   const composerMenuOpen = Boolean(composerTrigger || composerCommandPicker);
-  // The `+` panel yields the floating slot to the slash/mention menu as soon as a
-  // trigger is typed, so the two can never render over each other.
+  // the + panel yields the floating slot to the slash/mention menu as soon as a trigger is typed — the two can never render over each other
   const composerExtrasPanelOpen = isComposerExtrasPanelOpen && !composerMenuOpen;
   const composerOverlayOpen = composerMenuOpen || composerExtrasPanelOpen;
   const activeComposerMenuItem = useMemo(
@@ -2189,10 +2125,7 @@ export default function ChatView({
       ) ?? false,
     [activeThread?.messages],
   );
-  // Left to React Compiler instead of a manual `useMemo`: the hand-written dep array could
-  // not be preserved (the compiler cannot prove `threadWorkspaceCwd` is never mutated), which
-  // bailed the whole component out of compilation. The empty case returns a module-level
-  // constant so its identity is stable no matter how the value is memoized.
+  // left to React Compiler instead of manual useMemo: the hand-written dep array couldn't be preserved (compiler can't prove threadWorkspaceCwd is never mutated) which bailed the whole component; the empty case returns a module-level constant for stable identity
   const terminalRuntimeProjectCwd = isStudioContainer ? threadWorkspaceCwd : activeProjectCwd;
   const threadTerminalRuntimeEnv = terminalRuntimeProjectCwd
     ? projectScriptRuntimeEnv({
@@ -2206,8 +2139,7 @@ export default function ChatView({
     isStudioContainer,
     queriedIsRepo: branchesQuery.data?.isRepo,
   });
-  // Studio never offers "Initialize Git": its reference folder is ordinary cwd context,
-  // so Git actions appear only when that selected folder is already a repository.
+  // Studio never offers "Initialize Git": its reference folder is ordinary cwd context, so Git actions appear only when the selected folder is already a repository
   const showGitActions = isStudioContainer
     ? Boolean(resolvedThreadWorkingDirectory) && isGitRepo
     : !isContainerLandingProject || Boolean(resolvedThreadWorktreePath);
@@ -2216,8 +2148,7 @@ export default function ChatView({
     isGitRepo,
     refetchInterval: repoDiffBadgeRefreshIntervalMs,
   });
-  // The composer live strip is turn-scoped; repoDiffTotals can include unrelated
-  // local edits that existed before the active agent turn started.
+  // the composer live strip is turn-scoped; repoDiffTotals can include unrelated local edits that existed before the turn started
   const activeTurnLiveDiffState = useMemo(
     () =>
       resolveActiveTurnLiveDiffState({
@@ -2433,9 +2364,7 @@ export default function ChatView({
   });
 
   const focusComposer = useCallback(() => {
-    // Secondary chrome is deferred during thread switches; replay focus once it
-    // mounts. A disabled editor (dispatch connecting, pending approval) cannot
-    // take focus either, so keep the request pending until it re-enables.
+    // secondary chrome is deferred during thread switches — replay focus once it mounts; a disabled editor (dispatch connecting, pending approval) can't take focus so keep the request pending until it re-enables
     const editor = composerEditorRef.current;
     if (!secondaryChromeReady || !editor || isComposerEditorDisabled) {
       pendingComposerFocusRef.current = true;
@@ -2459,8 +2388,7 @@ export default function ChatView({
       focusComposer();
     });
   }, [pendingComposerFocusRef, focusComposer]);
-  // External panels (diff headers, file explorer, preview) bump this nonce after
-  // inserting a reference so the composer visibly receives the text.
+  // External panels (diff headers, file explorer, preview) bump this nonce after inserting a reference so the composer visibly receives the text.
   const composerFocusRequestNonce = useComposerFocusRequestStore(
     (store) => store.requestsByThreadId[threadId] ?? 0,
   );
@@ -2590,11 +2518,9 @@ export default function ChatView({
       insertComposerDraftTerminalContext,
     ],
   );
-  // Terminal-only workspaces intentionally have no mounted composer. Do not
-  // publish a global-looking action with nowhere to insert the selection.
+  // terminal-only workspaces intentionally have no mounted composer — don't publish a global-looking action with nowhere to insert the selection
   const canAddTerminalContextToChat = activeThread !== undefined && shouldRenderChatPaneContent;
-  // Keep the published capability stable while cursor and draft state change;
-  // dock terminals should not rerender for ordinary composer edits.
+  // keep the published capability stable while cursor/draft change — dock terminals shouldn't rerender for ordinary composer edits
   const addTerminalContextToDraftRef = useRef(addTerminalContextToDraft);
   useLayoutEffect(() => {
     addTerminalContextToDraftRef.current = addTerminalContextToDraft;
@@ -2611,9 +2537,7 @@ export default function ChatView({
     }
     return registerTerminalContextComposerTarget(paneScopeId, addRegisteredTerminalContextToDraft);
   }, [addRegisteredTerminalContextToDraft, canAddTerminalContextToChat, paneScopeId]);
-  // Collapse an oversized paste into an attachment card above the composer instead
-  // of flooding the editor with raw text. The card holds the full content until the
-  // user sends or clicks "Show in text field".
+  // Collapse an oversized paste into an attachment card above the composer instead of flooding the editor with raw text. The card holds the full content until the user sends or clicks "Show in text field".
   const addPastedTextToDraft = useCallback(
     (text: string) => {
       if (!activeThread) {
@@ -2630,13 +2554,10 @@ export default function ChatView({
     },
     [activeThread, addComposerDraftPastedTexts, discardPromptHistoryNavigationForComposerMutation],
   );
-  // The terminal's panel toggle mirrors the right dock's collapse control: it shows
-  // or hides the side panel only when this thread already has a pane to show.
+  // The terminal's panel toggle mirrors the right dock's collapse control: it shows or hides the side panel only when this thread already has a pane to show.
   const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
   const isMobileViewport = useIsMobile();
-  // Temporary threads are visually identical to regular chats — they use the same
-  // Environment panel + header controls. "Temporary" is purely a sidebar badge +
-  // auto-delete-on-leave concern, never a stripped-down chat UI.
+  // temporary threads are visually identical to regular chats — "temporary" is purely a sidebar badge + auto-delete-on-leave concern, never a stripped-down UI
   const environmentEnabled = !isEditorRail && !hideHeader;
   const environmentUsesFloatingOverlay =
     isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
@@ -2647,9 +2568,7 @@ export default function ChatView({
     isConstrainedChatLayout: environmentUsesFloatingOverlay,
     settingsDefaultOpen: settings.environmentPanelDefaultOpen,
   });
-  // Every close (header toggle or panel action click) stores the cross-chat preference,
-  // so a dismissed panel stays closed when switching threads until it is toggled back on.
-  // The same toggle also persists to settings so the preference survives reloads.
+  // every close stores the cross-chat preference so a dismissed panel stays closed across thread switches until toggled back on; also persists to settings so it survives reloads
   const [environmentPanelPreferenceOpen, setEnvironmentPanelPreferenceOpen] = useState<
     boolean | null
   >(null);
@@ -2661,9 +2580,7 @@ export default function ChatView({
         updateSettings({ environmentPanelDefaultOpen: update.settingsDefaultOpen });
       }
     },
-    // The state setter is stable, so listing it changes nothing at runtime — but React
-    // Compiler infers it as a dependency here and refuses to compile the component when the
-    // hand-written array omits it.
+    // the state setter is stable so listing it changes nothing at runtime — but React Compiler infers it as a dep and refuses to compile when the hand-written array omits it
     [setEnvironmentPanelPreferenceOpen, updateSettings],
   );
   const setEnvironmentPanelOpenPreference = useCallback(
@@ -2932,15 +2849,11 @@ export default function ChatView({
         hasWideActions: composerFooterHasWideActions,
       });
       setIsComposerFooterCompact((previous) => (previous === nextCompact ? previous : nextCompact));
-      // Tier the footer controls by MEASURED overflow: demote one step while
-      // the footer row's content is wider than the row, promote back (with
-      // hysteresis) when the recorded overflow width is comfortably exceeded.
+      // tier the footer controls by MEASURED overflow: demote one step while content is wider than the row, promote back (with hysteresis) when the recorded overflow width is comfortably exceeded
       const footerRow = composerForm.querySelector<HTMLElement>("[data-chat-composer-footer]");
       if (footerRow) {
         const rowOverflows = footerRow.scrollWidth > footerRow.clientWidth + 1;
-        // The leading cluster clips (overflow-hidden) in compact mode instead
-        // of growing the row's scrollWidth, so check it directly — a clipped
-        // "+"/access-rules cluster must also demote the tier.
+        // the leading cluster clips (overflow-hidden) in compact mode instead of growing scrollWidth — check it directly; a clipped +/access-rules cluster must also demote the tier
         const leadingCluster = footerRow.querySelector<HTMLElement>("[data-chat-composer-leading]");
         const leadingClips =
           nextCompact &&
@@ -3006,9 +2919,7 @@ export default function ChatView({
   ]);
 
   useEffect(() => {
-    // Capture the carried sidebar-open intent synchronously (ref reads/writes stay
-    // in render->commit order); defer only the setState so this thread-change reset
-    // stays out of the render->effect->render cascade.
+    // capture the carried sidebar-open intent synchronously (ref reads stay in render→commit order); defer only the setState so this reset stays out of the render→effect→render cascade
     const openPlanSidebar = planSidebarOpenOnNextThreadRef.current;
     planSidebarOpenOnNextThreadRef.current = false;
     planSidebarDismissedForTurnRef.current = null;
@@ -3041,8 +2952,7 @@ export default function ChatView({
   }, [setComposerHighlightedItemId, composerMenuItems, composerMenuOpen]);
 
   useEffect(() => {
-    // Async setState (post-paint) keeps this thread-change reset out of the
-    // render->effect->render cascade.
+    // post-paint setState keeps the thread-change reset out of the render->effect->render cascade
     const settle = window.setTimeout(() => {
       setIsRevertingCheckpoint(false);
     }, 0);
@@ -3066,9 +2976,7 @@ export default function ChatView({
 
   useEffect(() => {
     dragDepthRef.current = 0;
-    // Async setState (post-paint) keeps this thread-change reset out of the
-    // render->effect->render cascade. The expanded image and timeline hook's
-    // optimistic messages clear before paint, so these residual resets can wait.
+    // async setState keeps this reset out of the render→effect→render cascade; the expanded image and timeline's optimistic messages clear before paint so these residual resets can wait
     const settle = window.setTimeout(() => {
       setLocalDispatch(null);
       setComposerHighlightedItemId(null);
@@ -3258,8 +3166,7 @@ export default function ChatView({
     });
   }, [activeThread]);
 
-  // A rejected interrupt (orchestration dispatch timeout, dead runtime) leaves the
-  // UI spinning with no explanation, so the stop affordances report it.
+  // a rejected interrupt (dispatch timeout, dead runtime) leaves the UI spinning with no explanation — the stop affordances report it
   const onInterruptFromStopControl = useCallback(() => {
     void onInterrupt().catch((error: unknown) => {
       toastManager.add({
@@ -3288,8 +3195,7 @@ export default function ChatView({
   const onBackgroundSubagentStripItem = useCallback(
     async (item: ComposerSubagentStripItem) => {
       const api = readNativeApi();
-      // The Task tool_use lives on the strip source thread (the parent while a
-      // subagent thread is open), so route the command there.
+      // The Task tool_use lives on the strip source thread (the parent while a subagent thread is open), so route the command there.
       if (!api || !stripSourceThreadId) return;
       await api.orchestration.dispatchCommand({
         type: "thread.task.background",
@@ -3302,11 +3208,7 @@ export default function ChatView({
     [stripSourceThreadId],
   );
 
-  // Stop goes through the interrupt seam: on a subagent thread the reactor
-  // resolves the tool_use_id and stops that task instead of the whole turn.
-  // Target the canonical child id derived from the strip source thread —
-  // item.threadId can still be the raw tool_use_id while client-side thread
-  // resolution lags, which the server would reject as an unknown thread.
+  // stop goes through the interrupt seam: on a subagent thread the reactor resolves the tool_use_id and stops that task — target the canonical child id from the strip source thread since item.threadId can still be the raw tool_use_id while resolution lags
   const onStopSubagentStripItem = useCallback(
     async (item: ComposerSubagentStripItem) => {
       const api = readNativeApi();
@@ -3327,16 +3229,13 @@ export default function ChatView({
     await Promise.all(running.map((item) => onStopSubagentStripItem(item)));
   }, [composerSubagentStripItems, onStopSubagentStripItem]);
 
-  // Ctrl+B parity with the native CLI: send every foreground running subagent to
-  // the background at once, fanning through the same per-row background dispatch.
+  // Ctrl+B parity with the native CLI: send every foreground running subagent to the background at once, fanning through the same per-row background dispatch.
   const onBackgroundAllForegroundSubagentStripItems = useCallback(async () => {
     const foreground = collectForegroundRunningSubagentStripItems(composerSubagentStripItems);
     await Promise.all(foreground.map((item) => onBackgroundSubagentStripItem(item)));
   }, [composerSubagentStripItems, onBackgroundSubagentStripItem]);
 
-  // Pause is the same stop command; the persisted flag makes the settled card
-  // read as paused (with a resume affordance) instead of plain stopped, across
-  // reloads too.
+  // pause is the same stop command; the persisted flag makes the settled card read as paused (with resume affordance) instead of stopped, across reloads
   const onPauseWorkflowRun = useCallback(async () => {
     if (!workflowRunState || !activeThreadId) return;
     const { workflowTaskId } = workflowRunState;
@@ -3384,8 +3283,7 @@ export default function ChatView({
         !providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus)
           ? "approval-required"
           : normalizeRuntimeModeForProvider(runtimeMode, provider);
-      // Commit the canonical downgrade before storing an incompatible model.
-      // On failure the Auto draft remains visible so compatibility checks can retry.
+      // commit the canonical downgrade before storing an incompatible model; on failure the Auto draft stays visible so compatibility checks can retry
       const didCommitSelection = await commitAfterRuntimeModePersistence({
         currentRuntimeMode: runtimeMode,
         nextRuntimeMode,
@@ -3475,8 +3373,7 @@ export default function ChatView({
     activeThread,
   });
 
-  // Preserve the original "single mic button" contract:
-  // first click starts recording, the next click submits/transcribes.
+  // preserve the "single mic button" contract: first click starts recording, next click submits/transcribes
   const toggleComposerVoiceRecording = useCallback(() => {
     if (isVoiceTranscribing) {
       return;
@@ -3493,7 +3390,6 @@ export default function ChatView({
     submitComposerVoiceRecording,
   ]);
 
-  // --- Composer attachment entry points -------------------------------------
   const addComposerImages = useCallback(
     (files: readonly File[]) => {
       if (!activeThreadId || files.length === 0 || isSidechatExpired) return;
@@ -3593,8 +3489,7 @@ export default function ChatView({
     setIsDragOverComposer,
   });
 
-  // Dropping a sidebar/activity chat row on the composer references it exactly
-  // like picking it from the `@` menu: token in the prompt + mention binding.
+  // dropping a sidebar/activity chat row on the composer references it exactly like picking it from the @ menu: token in the prompt + mention binding
   const { isThreadDragOverComposer, threadMentionDropzoneProps } = useComposerThreadMentionDrop({
     disabled: isSidechatExpired,
     currentThreadId: threadId,
@@ -3693,9 +3588,7 @@ export default function ChatView({
 
       setIsRevertingCheckpoint(true);
       setThreadError(activeThread.id, null);
-      // The card can merge several turns. The server refuses to undo a turn while
-      // newer file changes are still applied, so revert newest-first and stop at
-      // the first failure rather than leaving the card half-undone silently.
+      // the card can merge several turns and the server refuses to undo while newer file changes are applied — revert newest-first and stop at first failure rather than leaving the card half-undone silently
       const orderedTurnCounts = [...new Set(turnCounts)].toSorted((left, right) => right - left);
       const requestedAt = new Date().toISOString();
       setPendingFileUndo({
@@ -4098,9 +3991,7 @@ export default function ChatView({
     () => composerFooterPlanForTier(composerFooterTier, Boolean(runtimeUsageContextWindow)),
     [composerFooterTier, runtimeUsageContextWindow],
   );
-  // The displayed labels changed (model switch, effort change, picker layout):
-  // recorded overflow widths no longer apply, so reset to the richest tier and
-  // let the measured-overflow loop demote again before paint if needed.
+  // displayed labels changed (model/effort/picker layout): recorded overflow widths no longer apply — reset to the richest tier and let the measured-overflow loop demote again before paint
   const composerFooterModelLabel = resolveProviderModelLabel({
     provider: selectedProvider,
     lockedProvider,
@@ -4133,8 +4024,7 @@ export default function ChatView({
     composerFooterLayoutSyncRef,
     composerFooterPlanInputsKey,
   ]);
-  // After a tier renders, re-measure before paint: a still-overflowing footer
-  // demotes another step until it fits (bounded by COMPOSER_FOOTER_MAX_TIER).
+  // after a tier renders, re-measure before paint: a still-overflowing footer demotes another step until it fits (bounded by COMPOSER_FOOTER_MAX_TIER)
   useLayoutEffect(() => {
     composerFooterLayoutSyncRef.current?.();
   }, [composerFooterLayoutSyncRef, composerFooterTier]);
@@ -4352,8 +4242,7 @@ export default function ChatView({
     setComposerPromptValue(buildGoalSlashCommandPrompt(currentPrompt));
   }, [promptRef, scheduleComposerFocus, setComposerPromptValue]);
 
-  // Prefills a literal goal so editing reuses the same slash-command path
-  // that created the goal, mirroring how queued turns restore into the composer.
+  // prefills a literal goal so editing reuses the same slash-command path that created it, mirroring how queued turns restore into the composer
   const editThreadGoalInComposer = useCallback(() => {
     const currentGoal = activeThread?.goal?.trim();
     if (!activeThread || !currentGoal) {
@@ -4376,9 +4265,7 @@ export default function ChatView({
     setComposerDraftPrompt,
   ]);
 
-  // Refreshed on every commit, in a layout effect rather than a passive one: the queued
-  // dispatcher can run from the same commit's follow-up work, so there must be no window
-  // where it sees the previous render's handlers. See `LateComposerSendHandlers`.
+  // refreshed on every commit in a layout effect: the queued dispatcher can run from the same commit's follow-up work, so no window where it sees the previous render's handlers
   useLayoutEffect(() => {
     lateComposerSendHandlersRef.current = {
       send: onSend,
@@ -4514,8 +4401,7 @@ export default function ChatView({
     if (!activeProjectIdForNewChat) {
       return;
     }
-    // Keep the editor workspace view (and any open file) across the new-thread
-    // navigation; the default new-thread flow clears all search params.
+    // keep the editor workspace view (and any open file) across new-thread navigation; the default new-thread flow clears all search params
     void handleNewThread(activeProjectIdForNewChat, undefined, {
       search: (previous) => ({ ...stripDiffSearchParams(previous), view: "editor" }),
     });
@@ -4598,7 +4484,6 @@ export default function ChatView({
     setDismissedRateLimitBannerKey(activeRateLimitBannerDismissalKey);
   }, [setDismissedRateLimitBannerKey, activeRateLimitBannerDismissalKey]);
 
-  // Empty state: no active thread
   if (!activeThread) {
     return (
       <div
@@ -4693,10 +4578,7 @@ export default function ChatView({
     activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,
     pendingContextWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
   };
-  // The composer's leading controls (extras "+" menu, access-rules/runtime
-  // indicator). At the narrowest footer tier they relocate from the footer to
-  // the branch-toolbar row below the input instead of getting clipped; the
-  // relocated variant is icon-only since relocation means space is minimal.
+  // the composer's leading controls relocate from the footer to the branch-toolbar row at the narrowest tier instead of clipping; the relocated variant is icon-only
   const relocateComposerLeadingControls = composerFooterControlsPlan.relocateLeadingControls;
   const renderComposerLeadingControls = (options: { iconOnly: boolean }) => (
     <>
@@ -4705,8 +4587,7 @@ export default function ChatView({
         panelId={COMPOSER_EXTRAS_PANEL_ID}
         onToggle={() => {
           setIsComposerExtrasPanelOpen((open) => !open);
-          // The panel is keyboard-driven from the editor: keep the caret where the
-          // user left it so typing (and Escape) keep working while it is open.
+          // the panel is keyboard-driven from the editor — keep the caret where the user left it so typing (and Escape) keep working while open
           scheduleComposerFocus();
         }}
       />
@@ -4735,8 +4616,7 @@ export default function ChatView({
   };
   const showEmptyLandingBranchToolbar =
     isCenteredEmptyLanding && activeProject?.kind === "project" && !isHomeChatContainer;
-  // Temporary is chosen while starting a chat. Draft metadata covers local reloads;
-  // the in-memory marker keeps the badge + auto-delete alive through promotion.
+  // draft metadata covers local reloads; the in-memory marker keeps the badge + auto-delete alive through promotion
   const isThreadTemporary = draftThread?.isTemporary === true || hasTemporaryThreadMarker;
   const toggleDraftTemporary = () => {
     const next = !isThreadTemporary;
@@ -4774,11 +4654,7 @@ export default function ChatView({
   const emptyLandingControls = showEmptyLandingControls ? (
     <div
       data-empty-landing-controls="true"
-      // Tray sitting in normal flow directly above the composer, full composer width so
-      // the project / environment / branch chips sit near the shell edges. Unfilled in
-      // both themes (chips float over the page), rounded on top only and flush against
-      // the input shell below. No overlap/underlay tricks — in dark mode a slice tucked
-      // behind the composer's translucent corners reads as a visible cut along the seam.
+      // tray in normal flow above the composer, unfilled in both themes (chips float over the page), rounded top only — no overlap/underlay tricks: in dark mode a slice tucked behind the translucent corners reads as a visible cut along the seam
       className="chat-composer-shell mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
     >
       {showContainerChatWorkspacePicker ? (
@@ -4877,8 +4753,7 @@ export default function ChatView({
     activeThread.id,
   ).map((definition) => ({ definition }));
 
-  // Shared inputs for both Environment panel surfaces (the header Popover when the dock is
-  // open, and the docked right column when it is closed) so the two never drift.
+  // shared inputs for both Environment surfaces (header popover when dock open, docked column when closed) so the two never drift
   const environmentPanelProps: Omit<EnvironmentPanelProps, "open" | "variant"> = {
     gitCwd: threadWorkspaceCwd,
     openInTarget: threadWorkspaceCwd,
@@ -4925,9 +4800,7 @@ export default function ChatView({
     onClose: closeEnvironmentPanelAfterAction,
     onRegisterCommitAndPushTrigger,
   };
-  // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
-  // column is already narrow — right dock open or a split pane (same as header compact mode).
-  // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
+  // full-width single chat: overlay + transcript/composer inset; floating overlay when the column is already narrow (dock open or split pane); terminal surfaces always float so Environment never resizes the terminal workspace
   const environmentAppliesContentInset = environmentPanelVisible && !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled
@@ -4969,15 +4842,13 @@ export default function ChatView({
         });
       });
   };
-  // The workflow card already lists its run and member agents, so the generic
-  // "N background agents" footer only counts tasks outside the workflow.
+  // the workflow card already lists its run and member agents — the generic "N background agents" footer only counts tasks outside the workflow
   const composerBackgroundTaskCount = workflowRunState
     ? (activeBackgroundTasks?.taskIds.filter((taskId) => !workflowRunState.taskIds.includes(taskId))
         .length ?? 0)
     : (activeBackgroundTasks?.activeCount ?? 0);
 
-  // Composer layout keeps the task list and footer actions in one render path so
-  // follow-up prompts and normal chat mode stay visually in sync.
+  // Composer layout keeps the task list and footer actions in one render path so follow-up prompts and normal chat mode stay visually in sync.
   const renderActiveTaskListCard = (attachedToPrevious: boolean) =>
     activeTaskList && showComposerActiveTaskListCard ? (
       <ComposerActiveTaskListCard
@@ -5471,10 +5342,7 @@ export default function ChatView({
           "flex items-center",
           isEditorRail ? "h-10" : CHAT_SURFACE_HEADER_HEIGHT_CLASS,
           isElectron && "drag-region",
-          // The editor-rail chat header sits in the editor's second row (inside the
-          // right-side chat pane), not flush against the window edges — the editor's
-          // own top bar already reserves both desktop window-control gutters. Applying
-          // them here just leaves redundant empty space on the sides.
+          // the editor-rail chat header sits in the editor's second row, not flush against window edges — the editor's top bar already reserves both desktop window-control gutters; applying them here leaves redundant empty space
           !isEditorRail && desktopTopBarTrafficLightGutterClassName,
           !isEditorRail && desktopTopBarWindowControlsGutterClassName,
         )}
@@ -5632,9 +5500,7 @@ export default function ChatView({
           onSelectTab={setTerminalWorkspaceTab}
         />
       ) : null}
-      {/* Main content area with optional plan sidebar */}
       <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
-        {/* Chat column */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
             aria-hidden={terminalWorkspaceTerminalTabActive}
@@ -5824,8 +5690,7 @@ export default function ChatView({
                       ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
                       CHAT_COLUMN_GUTTER_CLASS_NAME,
                     )}
-                    // Match the transcript's right inset so the composer stays aligned with chat
-                    // content (and clear of the docked Environment overlay).
+                    // Match the transcript's right inset so the composer stays aligned with chat content (and clear of the docked Environment overlay).
                     style={
                       environmentAppliesContentInset
                         ? { paddingRight: ENVIRONMENT_DOCKED_CONTENT_INSET_PX }
@@ -5909,9 +5774,7 @@ export default function ChatView({
             />
           ) : null}
         </div>
-        {/* end chat column */}
 
-        {/* Plan sidebar */}
         {planSidebarOpen ? (
           <PlanSidebar
             activeTaskList={activeTaskList}
@@ -5930,7 +5793,6 @@ export default function ChatView({
           />
         ) : null}
       </div>
-      {/* end horizontal flex container */}
 
       {(() => {
         if (!terminalState.terminalOpen || terminalWorkspaceOpen) {

@@ -34,13 +34,12 @@ import { ServerConfig } from "../../config.ts";
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const OPEN_PR_LOOKUP_LIMIT = 10;
-// Any-state lookups scan more PRs so the newest merged/closed PR still surfaces.
+// any-state lookups scan more PRs so the newest merged/closed PR still surfaces
 const PR_LOOKUP_ALL_STATES_LIMIT = 20;
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
 type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 
-// GitManager's working PR shape: a GitHubPullRequestSummary whose state/updatedAt are
-// always resolved. Derived from the service summary so the shapes cannot drift field by field.
+// derived from the service summary so the shapes can't drift field by field
 interface PullRequestInfo extends Omit<GitHubPullRequestSummary, "state" | "updatedAt"> {
   readonly state: NonNullable<GitHubPullRequestSummary["state"]>;
   readonly updatedAt: string | null;
@@ -105,8 +104,7 @@ interface FailedWorktreeTransferRecovery extends FailedWorktreeHandoffRecovery {
   worktreeRemoved: boolean;
 }
 
-// Host + owner/repo extraction from a PR web URL. Used to query the repository that owns
-// the PR even when the local checkout's remotes point at a fork or a GitHub Enterprise host.
+// query the repo that owns the PR even when the checkout's remotes point at a fork or Enterprise host
 function parsePullRequestRepositoryFromUrl(
   url: string,
 ): { host: string; owner: string; repo: string } | null {
@@ -117,8 +115,7 @@ function parsePullRequestRepositoryFromUrl(
   return host.length > 0 && owner.length > 0 && repo.length > 0 ? { host, owner, repo } : null;
 }
 
-// github.com-only on purpose: callers use it to reconstruct `owner/repo` for fork heads,
-// which is only well-defined for PRs hosted on github.com.
+// github.com-only on purpose — fork-head owner/repo is only well-defined there
 function parseRepositoryNameFromPullRequestUrl(url: string): string | null {
   const trimmed = url.trim();
   if (!/^https:\/\//i.test(trimmed)) {
@@ -259,7 +256,6 @@ function matchesBranchHeadContext(
   return true;
 }
 
-// Normalizes `gh pr view/list` service output into the richer internal PR shape.
 function toPullRequestInfo(pullRequest: GitHubPullRequestSummary): PullRequestInfo {
   return {
     ...pullRequest,
@@ -268,7 +264,6 @@ function toPullRequestInfo(pullRequest: GitHubPullRequestSummary): PullRequestIn
   };
 }
 
-// Detects GitHub's duplicate-PR response from `gh pr create`.
 function isPullRequestAlreadyExistsError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -281,7 +276,6 @@ function isPullRequestAlreadyExistsError(error: unknown): boolean {
   );
 }
 
-// Pulls the existing PR URL out of GitHub's duplicate-PR error when present.
 function extractPullRequestUrlFromError(error: unknown): string | null {
   if (!(error instanceof Error)) {
     return null;
@@ -627,9 +621,7 @@ function toPullRequestHeadRemoteInfo(pr: {
   };
 }
 
-// Older gh versions omit the head-repository fields from `pr list` JSON; fall back to what
-// the head selector implies so cross-repo matching still works. Shared by the open-PR and
-// any-state PR lookups.
+// older gh omits the head-repository fields — fall back to what the head selector implies
 function withInferredHeadRemoteInfo(
   pr: PullRequestInfo,
   inferred: PullRequestHeadRemoteInfo,
@@ -1023,8 +1015,7 @@ export const makeGitManager = Effect.gen(function* () {
         }
       }
 
-      // `gh pr create` can race with an existing-PR probe. Treat GitHub's
-      // create-time duplicate response as success when the PR can be found.
+      // `gh pr create` can race an existing-PR probe — treat the create-time duplicate response as success when the PR is findable
       return yield* findOpenPr(cwd, headContext);
     });
 
@@ -1060,7 +1051,6 @@ export const makeGitManager = Effect.gen(function* () {
       cwd: string;
       branch: string | null;
       commitMessage?: string;
-      /** When true, also produce a semantic feature branch name. */
       includeBranch?: boolean;
       filePaths?: readonly string[];
     } & GitTextGenerationParams,
@@ -1453,9 +1443,7 @@ export const makeGitManager = Effect.gen(function* () {
     return yield* gitCore.readFileAtRev(input);
   });
 
-  // Same reason as summarizeDiff below: the badge surfaces need three integers, not the patch.
-  // Deriving them from the very patch readWorkingTreeDiff would have returned keeps the numbers
-  // identical to the ones a client-side parse produced, so no surface changes what it displays.
+  // derive the three integers from the patch itself so numbers match a client-side parse — no surface changes what it displays
   const readWorkingTreeDiffStats: GitManagerShape["readWorkingTreeDiffStats"] = Effect.fnUntraced(
     function* (input) {
       if (input.filePath !== undefined) {
@@ -1478,7 +1466,7 @@ export const makeGitManager = Effect.gen(function* () {
     },
   );
 
-  // Resolve the patch server-side so large repository data never makes a client→RPC round trip.
+  // resolve the patch server-side so large repo data never makes a client→RPC round trip
   const summarizeDiff: GitManagerShape["summarizeDiff"] = Effect.fnUntraced(function* (input) {
     const { patch, truncated } = yield* readWorkingTreeDiff({
       cwd: input.cwd,
@@ -1526,8 +1514,7 @@ export const makeGitManager = Effect.gen(function* () {
   const pullRequestSnapshot: GitManagerShape["pullRequestSnapshot"] = Effect.fnUntraced(
     function* (input) {
       const reference = normalizePullRequestReference(input.reference);
-      // Summary + checks ride one `gh pr view` call: one process/API round trip per poll,
-      // and no separate checks failure mode that could discard an otherwise-usable snapshot.
+      // summary+checks ride one `gh pr view` call — one round trip per poll, no separate checks failure mode
       const { summary, checks } = yield* gitHubCli.getPullRequestWithChecks({
         cwd: input.cwd,
         reference,
@@ -1858,11 +1845,7 @@ export const makeGitManager = Effect.gen(function* () {
           message: null,
         };
       }
-      // `git stash pop` requires a `stash@{N}` reference, but `stashRef` here is the
-      // commit SHA captured via `git rev-parse refs/stash` in `readStashRef`. Apply
-      // the stash by SHA (which `git stash apply` accepts for any stash-shaped
-      // commit) and then drop the matching list entry on success so callers still
-      // observe pop-style semantics.
+      // `git stash pop` needs stash@{N} but stashRef is a commit SHA — apply by SHA then drop the matching list entry for pop semantics
       const result = yield* gitCore
         .execute({
           operation: "GitManager.handoffThread.stashApply",
@@ -2478,7 +2461,7 @@ The local stash entry was kept for recovery.`,
       ("ref" in worktree.worktree ? worktree.worktree.ref : worktree.worktree.branch);
     const materializedWorktreeBranch = materializedWorktreeStatus.branch ?? null;
     if (materializedWorktreeBranch) {
-      // Publishing is best-effort: handoff should still succeed for local-only repositories.
+      // publishing is best-effort — handoff must still succeed for local-only repos
       yield* gitCore
         .publishBranch({ cwd: worktree.worktree.path, branch: materializedWorktreeBranch })
         .pipe(
@@ -2564,9 +2547,7 @@ The local stash entry was kept for recovery.`,
       yield* gitCore.createBranch({ cwd, branch: resolvedBranch });
       yield* Effect.scoped(gitCore.checkoutBranch({ cwd, branch: resolvedBranch }));
       if (options?.restoreOriginalBranchRef && branch) {
-        // Move the original branch back to its trusted remote/upstream ref so
-        // "create feature branch and continue" actually removes the commits
-        // from the source branch instead of leaving both branches pointing at them.
+        // move the original branch back to its trusted remote/upstream ref so "create feature branch and continue" actually removes the commits from the source branch
         yield* gitCore.execute({
           operation: "GitManager.runFeatureBranchStep.restoreOriginalBranch",
           cwd,

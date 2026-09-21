@@ -1,7 +1,3 @@
-// FILE: Testimonials.tsx
-// Purpose: Curated public posts from people using Synara.
-// Layer: Marketing UI section (server component)
-
 import { SiX } from "react-icons/si";
 import { FiHeart, FiGlobe } from "react-icons/fi";
 import { loadTestimonialCards, type TestimonialCard } from "@/lib/tweets";

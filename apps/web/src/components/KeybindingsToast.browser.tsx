@@ -48,24 +48,15 @@ interface TestFixture {
 let fixture: TestFixture;
 let serverConfigStreamClient: EffectRpcWebSocketClient | null = null;
 let serverConfigStreamRequestId: string | null = null;
-// Subscription budget stays generous: slow CI still needs tens of seconds for
-// WS sequencing after a cold start. Route-chunk warming happens in beforeAll
-// below, so this is a backstop, not the cold path.
+// Subscription budget stays generous: slow CI still needs tens of seconds for WS sequencing after a cold start. Route-chunk warming happens in beforeAll below, so this is a backstop, not the cold path.
 const COLD_MOUNT_SUBSCRIPTION_TIMEOUT_MS = 60_000;
 const SUBSCRIPTION_POLL_INTERVAL_MS = 16;
-// Warmup budget: absorbs the bulk of a cold chunk transform so the real
-// mounts start warm. Sized under the 90s hook budget with room for worker
-// start and the interception probe.
+// Warmup budget: absorbs the bulk of a cold chunk transform so the real mounts start warm. Sized under the 90s hook budget with room for worker start and the interception probe.
 const WARMUP_MOUNT_SUBSCRIPTION_TIMEOUT_MS = 80_000;
 
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
 
-// The mock Service Worker activates asynchronously after worker.start()
-// resolves. A WebSocket opened before activation bypasses the mock, so the
-// first mount's subscribeServerConfig request never arrives and no wait
-// budget can save it. Probing a dummy socket proves the interception path is
-// live before any mount. Full runs hide this because an earlier file warms
-// the origin's registration; a shard can run this file cold.
+// the mock SW activates asynchronously; a WebSocket opened before activation bypasses the mock — probing a dummy socket proves interception is live before any mount (a shard can run this file cold)
 const WS_INTERCEPTION_PROBE_PATH = "/__mock-interception-probe";
 const WS_MOCK_ACTIVATION_TIMEOUT_MS = 30_000;
 const WS_PROBE_SETTLE_MS = 1_000;
@@ -264,11 +255,7 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
         method === WS_METHODS.subscribeProjectDevServerEvents ||
         method === WS_METHODS.subscribeAutomationEvents ||
-        // Left open like the rest: these are infinite subscriptions, and the
-        // default below answers with an Exit, which a stream RPC reads as the
-        // socket dying and answers with a full reconnect. That loops forever
-        // and fills the run with schema errors about an Exit whose Success
-        // value is `{}` where Void was expected.
+        // left open: infinite subscriptions — the default Exit reads as socket death → reconnect loop and schema errors (Exit Success `{}` where Void expected)
         method === DEVICE_WS_METHODS.subscribeEvents
       ) {
         return;
@@ -311,8 +298,7 @@ async function probeWsMockInterception(): Promise<boolean> {
     );
     return true;
   } catch {
-    // The probe bypassed the mock: activation is still in flight. The caller
-    // retries until the activation budget runs out, then fails loudly.
+    // The probe bypassed the mock: activation is still in flight. The caller retries until the activation budget runs out, then fails loudly.
     return false;
   } finally {
     socket.close();
@@ -387,8 +373,7 @@ async function mountApp(
   };
 }
 
-// beforeAll worst case (30s activation + 80s warmup + worker start) exceeds the
-// 90s hookTimeout in vitest.browser.config.ts, so raise it for this file.
+// beforeAll worst case (30s activation + 80s warmup + worker start) exceeds the 90s hookTimeout in vitest.browser.config.ts, so raise it for this file.
 vi.setConfig({ hookTimeout: 150_000 });
 
 describe("Keybindings update toast", () => {
@@ -400,14 +385,7 @@ describe("Keybindings update toast", () => {
       serviceWorker: { url: "/mockServiceWorker.js" },
     });
     await waitForWsMockInterception();
-    // Warm the code-split thread route before any test mounts. On a cold dev
-    // cache the first mount suspends on chunk transform; warming it here pays
-    // that cost once in the hook budget instead of failing the first test.
-    // Full runs hide this because an earlier file warms the cache; a shard
-    // can run this file cold. The warmup mount shows no toasts (clean mount,
-    // no pushes) and beforeEach resets all module state, so it cannot leak
-    // into assertions. A warmup timeout is deliberately ignored: the chunks
-    // it did fetch stay cached, and a still-cold mount fails loudly below.
+    // warm the code-split thread route before any test mounts — a cold dev cache makes the first mount suspend on chunk transform and exceed the test budget; a shard can run this file cold
     try {
       const warmup = await mountApp(WARMUP_MOUNT_SUBSCRIPTION_TIMEOUT_MS);
       await warmup.cleanup();
@@ -489,12 +467,10 @@ describe("Keybindings update toast", () => {
       await sendServerConfigUpdatedPush([]);
       await waitForNoToast("Keybindings updated");
 
-      // Remount the app — onServerConfigUpdated replays the cached value
-      // synchronously on subscribe. This should NOT produce a toast.
+      // Remount the app — onServerConfigUpdated replays the cached value synchronously on subscribe. This should NOT produce a toast.
       await mounted.cleanup();
       const remounted = await mountApp();
 
-      // Give it a moment to process the replayed value
       await new Promise((resolve) => setTimeout(resolve, 500));
 
       const titles = queryToastTitles();

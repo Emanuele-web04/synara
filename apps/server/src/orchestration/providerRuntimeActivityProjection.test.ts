@@ -31,12 +31,7 @@ function runtimeEvent(input: Record<string, unknown> & { eventId: string }): Pro
   } as ProviderRuntimeEvent;
 }
 
-/**
- * The single invariant that matters: every activity this projection emits has to
- * survive the schema of the command that carries it. Server-built commands never
- * cross the WebSocket decode boundary, so nothing else enforces the schema-only
- * refinements (`TrimmedNonEmptyString`, `Schema.Json`) that TypeScript cannot express.
- */
+/** every activity this projection emits must survive the schema of the command carrying it — server-built commands never cross the WebSocket decode boundary so nothing else enforces the schema-only refinements TypeScript can't express */
 function decodeActivityAppendCommand(activity: OrchestrationThreadActivity): unknown {
   return Schema.decodeUnknownSync(OrchestrationCommand)({
     type: "thread.activity.append",
@@ -104,7 +99,7 @@ describe("projected activities satisfy the orchestration command schema", () => 
     );
     expect(Object.keys(opened?.payload as Record<string, unknown>)).not.toContain("requestId");
 
-    // `ApprovalRequestId.makeUnsafe` rejects untrimmed input instead of trimming it.
+    // makeUnsafe rejects untrimmed input instead of trimming
     const [padded] = projectProviderRuntimeActivities(
       runtimeEvent({
         type: "request.opened",
@@ -146,9 +141,7 @@ describe("projected activities satisfy the orchestration command schema", () => 
     );
   });
 
-  // `TurnId.makeUnsafe` validates: it rejects "" *and* untrimmed input rather than
-  // normalizing it, so an unnormalized runtime turn id throws inside the projection
-  // itself before it can even reach the command schema.
+  // makeUnsafe validates rather than normalizing — an unnormalized turn id throws inside the projection before reaching the command schema
   it("normalizes a blank or untrimmed runtime turn id instead of throwing", () => {
     expectSchemaValidActivities(
       runtimeEvent({
@@ -748,7 +741,6 @@ describe("provider runtime activity projection", () => {
     expect(activity).toMatchObject({
       tone: "info",
       kind: "provider.event.unmapped",
-      // Raw native type/label is the row title.
       summary: "item/agentMessage/completed",
       turnId: TURN_ID,
       payload: {
@@ -761,10 +753,10 @@ describe("provider runtime activity projection", () => {
     expect(serializedPayload.length).toBeLessThan(17_000);
     expect(serializedPayload).not.toContain("must-not-reach-the-activity-snapshot");
     expect(serializedPayload).not.toContain("another-secret");
-    // The activity must survive the schema of the command that carries it.
+    // the activity must survive the schema of the command carrying it
     expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 
-    // A passthrough event without a native type is the one case still dropped.
+    // a passthrough event without a native type is the one case still dropped
     expect(
       projectProviderRuntimeActivities(
         runtimeEvent({

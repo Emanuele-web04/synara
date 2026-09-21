@@ -311,7 +311,7 @@ describe("buildProjectImportCatalog", () => {
     const worktreeCwd = path.join(worktree, "apps", "api", "src");
     await fs.mkdir(subproject, { recursive: true });
     await fs.mkdir(worktreeCwd, { recursive: true });
-    // Provider order must not turn the declared subproject into a whole-repository project.
+    // provider order must not turn the declared subproject into a whole-repository project
     const projects = await buildProjectImportCatalog(
       [
         source("claudeAgent", home, [

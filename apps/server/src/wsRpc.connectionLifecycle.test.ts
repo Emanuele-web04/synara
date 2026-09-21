@@ -289,9 +289,7 @@ async function startTestServer(): Promise<RunningTestServer> {
       ),
     ),
   );
-  // The negotiation layer owns WS_BOOTSTRAP_PATH, which the compression tests
-  // also need: which underlying ws server (compressed vs uncompressed) handles
-  // an upgrade is decided by path in nodeHttpServer.
+  // which underlying ws server handles an upgrade is decided by path in nodeHttpServer
   const routeLayer = Layer.merge(
     makeWebsocketNegotiationRouteLayer(),
     makeWebsocketRpcRouteLayer(rpcHttpEffectSource),
@@ -497,8 +495,7 @@ describe("websocket RPC payload admission", () => {
   it("gates HTTP negotiation on trusted origins and reflects CORS for none else", async () => {
     const server = await startTestServer();
     try {
-      // An untrusted origin must be refused before any negotiation data is
-      // produced, and must never see an Access-Control-Allow-Origin header.
+      // an untrusted origin must be refused before any negotiation data is produced and must never see an Access-Control-Allow-Origin header
       const untrusted = await fetch(negotiateHttpUrl(server), {
         headers: { origin: "http://evil.example" },
       });
@@ -507,14 +504,14 @@ describe("websocket RPC payload admission", () => {
       expect(untrusted.headers.get("cache-control")).toBe("no-store");
       expect(untrusted.headers.get("vary")).toBe("Origin");
 
-      // A lookalike of the desktop scheme is not the desktop scheme.
+      // a lookalike of the desktop scheme is not the desktop scheme
       const lookalike = await fetch(negotiateHttpUrl(server), {
         headers: { origin: "synara://app.evil.com" },
       });
       expect(lookalike.status).toBe(403);
       expect(lookalike.headers.get("access-control-allow-origin")).toBeNull();
 
-      // The desktop origin is reflected, and only that origin.
+      // the desktop origin is reflected, and only that origin
       const desktop = await fetch(negotiateHttpUrl(server), {
         headers: { origin: "synara://app" },
       });
@@ -522,8 +519,7 @@ describe("websocket RPC payload admission", () => {
       expect(desktop.headers.get("access-control-allow-origin")).toBe("synara://app");
       expect(desktop.headers.get("vary")).toBe("Origin");
 
-      // No Origin at all (CLI clients) passes without reflection, matching
-      // the WS upgrade's own behavior.
+      // no Origin at all (CLI clients) passes without reflection, matching the WS upgrade's behavior
       const noOrigin = await fetch(negotiateHttpUrl(server));
       expect(noOrigin.status).toBe(200);
       expect(noOrigin.headers.get("access-control-allow-origin")).toBeNull();
@@ -535,8 +531,7 @@ describe("websocket RPC payload admission", () => {
   it("rejects numeric negotiation params the RPC schema would reject", async () => {
     const server = await startTestServer();
     try {
-      // Number() accepts hex and exponential notation; Schema.Int does not.
-      // The two transports must decode identically.
+      // Number() accepts hex/exponential; Schema.Int does not — the two transports must decode identically
       for (const raw of ["0x1", "1e0", " 1 ", "+1", "1.0"]) {
         const response = await fetch(
           negotiateHttpUrl(server, { [WS_NEGOTIATE_QUERY.minRevision]: raw }),
@@ -693,9 +688,7 @@ describe("websocket permessage-deflate negotiation", () => {
   it("never negotiates compression on the pre-auth bootstrap socket", async () => {
     const server = await startTestServer();
     try {
-      // Offer compression on the bootstrap path: the server must decline the
-      // extension (compression is a post-authentication privilege; pre-auth
-      // connections must not be able to multiply per-connection zlib memory).
+      // the server must decline compression on bootstrap — it's a post-auth privilege; pre-auth connections must not multiply per-connection zlib memory
       const bootstrapSocket = await connect(`${server.origin}/ws/bootstrap`, {
         perMessageDeflate: true,
       });
@@ -709,16 +702,13 @@ describe("websocket permessage-deflate negotiation", () => {
   it("declines compression on every spelling the router still routes to bootstrap", async () => {
     const server = await startTestServer();
     try {
-      // The router matches case-insensitively and normalizes duplicate
-      // slashes, percent-encoding, and `;params`; the upgrade dispatcher must
-      // use the same semantics or an alias would reach bootstrap compressed.
+      // the router matches case-insensitively and normalizes dup slashes, encoding, ;params — the dispatcher must use the same semantics or an alias reaches bootstrap compressed
       for (const alias of [
         "/WS/BOOTSTRAP",
         "/ws//bootstrap",
         "/ws/%62ootstrap",
         "/ws/bootstrap;sid=1",
-        // Absolute-form targets cannot be expressed through a ws:// client
-        // URL; nodeHttpServer.upgradePath.test.ts covers them directly.
+        // absolute-form targets can't be expressed through a ws:// client URL — upgradePath.test.ts covers them directly
       ]) {
         const socket = await connect(`${server.origin}${alias}`, { perMessageDeflate: true });
         expect(socket.extensions, alias).not.toContain("permessage-deflate");
@@ -791,7 +781,7 @@ describe("websocket permessage-deflate negotiation", () => {
       expect(connected.socket.extensions).toContain("permessage-deflate");
       const close = waitForCloseInfo(connected.socket);
 
-      // Highly compressible oversized frame: tiny on the wire, over the limit inflated.
+      // highly compressible oversized frame — tiny on the wire, over the limit inflated
       connected.socket.send(makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "203"), {
         binary: false,
         compress: true,
@@ -809,10 +799,7 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
   it("exposes the authenticated session to RPC handlers for the connection lifetime", async () => {
     const server = await startTestServer();
     try {
-      // Regression: RPC handlers run on fibers forked from the layer-build
-      // scope, so the upgrade's authenticated role/principal must travel via
-      // the connection-session registry, not fiber context (the owner-only
-      // external MCP methods failed for everyone when this broke).
+      // regression: RPC handlers run on fibers forked from the layer-build scope so the authenticated role/principal must travel via the connection-session registry, not fiber context
       const issued = await Effect.runPromise(server.sessions.issue({ role: "owner" }));
       const websocket = await Effect.runPromise(
         server.sessions.issueWebSocketToken(issued.sessionId),

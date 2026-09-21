@@ -29,14 +29,7 @@ export default Effect.gen(function* () {
     )
   `;
 
-  // Reinstall the capacity view for databases that ran an earlier development
-  // version. Compensating operations are claims independently of task rows;
-  // task registration can fail before compensation starts. Missing task
-  // projections are conservatively active so projector lag cannot over-admit
-  // work. Failed task rows remain active while durable compensation is
-  // non-terminal or a projected turn is still live. The latest-turn join avoids
-  // scanning/sorting checkpoint rows and makes checkpoint-only projections
-  // incapable of masking live agent state.
+  // reinstall the view for DBs that ran an earlier dev version — compensating ops are claims independently of task rows; missing projections conservatively active so projector lag can't over-admit; latest-turn join makes checkpoint-only projections unable to mask live agent state
   yield* sql`DROP VIEW IF EXISTS external_mcp_active_capacity_claims`;
   yield* sql`
     CREATE VIEW external_mcp_active_capacity_claims AS

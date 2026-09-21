@@ -1,8 +1,3 @@
-/**
- * DevinAdapter - Devin CLI ACP implementation of the generic provider contract.
- *
- * @module DevinAdapter
- */
 import { ServiceMap } from "effect";
 
 import type { ProviderAdapterError } from "../Errors.ts";

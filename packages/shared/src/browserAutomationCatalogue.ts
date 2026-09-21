@@ -335,7 +335,7 @@ function closeObjectSchemas(value: unknown): unknown {
   return object;
 }
 
-// Parameter descriptions stay: they are how the model learns what each field means.
+// parameter descriptions stay — they are how the model learns what each field means
 const TOOL_INPUT_DOCUMENTATION_KEYS = new Set(["examples", "title"]);
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -379,7 +379,7 @@ function unwrapSingleAllOf(schema: Record<string, unknown>): Record<string, unkn
   if (!Array.isArray(schema.allOf) || schema.allOf.length !== 1) return schema;
   const [onlyBranch] = schema.allOf;
   if (!isJsonObject(onlyBranch)) return schema;
-  // Moving object keywords across an allOf changes the scope of closure.
+  // moving object keywords across an allOf changes the scope of closure
   const objectKeywords = [
     "properties",
     "patternProperties",
@@ -401,7 +401,7 @@ export function compactToolInputSchema(value: unknown): unknown {
     .filter(([key]) => !TOOL_INPUT_DOCUMENTATION_KEYS.has(key))
     .map(([key, child]) => [
       key,
-      // Keys under `properties` are parameter names, not schema keywords.
+      // keys under `properties` are parameter names, not schema keywords
       ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"].includes(
         key,
       ) && isJsonObject(child)

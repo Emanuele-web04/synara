@@ -1,13 +1,3 @@
-// FILE: pullRequestDetail.logic.ts
-// Purpose: Pure helpers shared by every host of the pull request detail surface (the
-//          /pull-requests route overlay and the chat right-dock pane): the canonical
-//          pane identity key, the "PR #n" tab chip label, the plain-language state
-//          descriptor, and the flattened chronological timeline event list.
-// Layer: Web domain helpers (no React)
-// Exports: pullRequestDetailInputKey, pullRequestPaneTabLabel, pullRequestDetailInputFromPane,
-//          describePullRequestState, stripHtmlComments, PullRequestTimelineEvent,
-//          buildPullRequestTimelineEvents
-
 import type {
   PullRequestDetail,
   PullRequestDetailInput,
@@ -48,9 +38,7 @@ export function pullRequestDetailInputFromPane(pane: RightDockPane): PullRequest
   };
 }
 
-// Plain-language state descriptor shown next to the author line — the state color itself is
-// already conveyed by the PullRequestStateGlyph in the header, so this stays neutral text.
-// State only, matching git: conflicts are a merge signal and render as their own row.
+// plain-language state descriptor next to the author line — the color is already conveyed by the header glyph; state only, conflicts are a merge signal rendered as their own row
 export function describePullRequestState(state: PullRequestState, isDraft: boolean): string {
   if (isDraft && state === "open") return "Draft";
   if (state === "open") return "Ready for review";

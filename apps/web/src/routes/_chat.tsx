@@ -58,9 +58,7 @@ const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
 const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
 
-// Single source of truth for the thread sidebar resize behavior. Shared by <Sidebar>
-// and the detached content-seam <SidebarRail> (via SidebarInstanceProvider) so the
-// drag handle keeps working even though the rail lives outside <Sidebar> (above the card).
+// resize config shared by <Sidebar> and the detached seam <SidebarRail> via SidebarInstanceProvider so the drag handle keeps working outside <Sidebar>
 const THREAD_SIDEBAR_RESIZABLE: SidebarResizableOptions = {
   minWidth: THREAD_SIDEBAR_MIN_WIDTH,
   shouldAcceptWidth: ({ nextWidth, wrapper }) =>
@@ -262,9 +260,7 @@ function ChatRouteGlobalShortcuts() {
     presentationMode: activeThreadTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
-  // Shortcuts that target "a project" must stay inside the Space you are looking at, or
-  // mod+alt+arrow would switch Space and the next new-thread shortcut would drop you back
-  // out of it.
+  // Shortcuts that target "a project" must stay inside the Space you are looking at, or mod+alt+arrow would switch Space and the next new-thread shortcut would drop you back out of it.
   const activeSpaceProjects = useMemo(
     () =>
       projects.filter(
@@ -278,8 +274,7 @@ function ChatRouteGlobalShortcuts() {
     activeSpaceProjects,
     activeProject?.id ?? null,
   );
-  // The remembered project is global, so it is unusable the moment you switch Space. Fall
-  // back to this Space's most recently touched project rather than to nothing.
+  // The remembered project is global, so it is unusable the moment you switch Space. Fall back to this Space's most recently touched project rather than to nothing.
   const latestUsableProjectId = useMemo(
     () =>
       resolveLatestProjectTargetIdWithFallback(
@@ -289,8 +284,7 @@ function ChatRouteGlobalShortcuts() {
       ),
     [activeSpaceProjects, latestProjectId, projectLastActivityAt],
   );
-  // Deliberately unscoped: the persisted id is only cleared once the project is gone from
-  // the app entirely, not merely absent from the Space you happen to be in.
+  // Deliberately unscoped: the persisted id is only cleared once the project is gone from the app entirely, not merely absent from the Space you happen to be in.
   const persistedLatestProjectStillExists = resolveLatestProjectTargetId(projects, latestProjectId);
   const handleNewChatForActiveSurface = useCallback(
     () =>
@@ -459,8 +453,6 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command !== "chat.new") return;
-      // Fall back to the most recent project when none is focused and let the
-      // shared bootstrap apply that project's preferred environment.
       const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
       if (!target) return;
       event.preventDefault();
@@ -559,8 +551,7 @@ function ChatRouteLayout() {
     <Sidebar
       side="left"
       collapsible="offcanvas"
-      // Match the right dock's soft drawer slide (shared token) instead of the
-      // shell's default `ease-linear`. Applied to the container + gap in lockstep.
+      // Match the right dock's soft drawer slide (shared token) instead of the shell's default `ease-linear`. Applied to the container + gap in lockstep.
       className={cn("text-foreground", SIDEBAR_OFFCANVAS_MOTION_CLASS)}
       gapClassName={cn(SIDEBAR_GAP_CLASS, SIDEBAR_OFFCANVAS_MOTION_CLASS)}
       innerClassName={SIDEBAR_INNER_CLASS}
@@ -571,12 +562,7 @@ function ChatRouteLayout() {
     </Sidebar>
   );
 
-  // Chat column shell. The content-seam rail is the resize hit-area for the seam —
-  // the visible straight divider + depth shadow live on the route surface (see
-  // `.chat-content-card` in index.css). It sits OUTSIDE <Sidebar> so it stacks above
-  // the card, so SidebarInstanceProvider re-supplies the same resize config/side it
-  // would have gotten inside <Sidebar> (otherwise dragging to resize stops working).
-  // `data-sidebar-side` on the provider selects the seam geometry.
+  // the seam rail is the resize hit-area and sits OUTSIDE <Sidebar> to stack above the card — SidebarInstanceProvider re-supplies the same resize config so dragging still works; data-sidebar-side selects the seam geometry
   const mainContentShell = (
     <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
       {isEditorView ? null : (

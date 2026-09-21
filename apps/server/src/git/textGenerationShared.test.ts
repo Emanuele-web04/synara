@@ -1,8 +1,3 @@
-// FILE: textGenerationShared.test.ts
-// Purpose: Verifies shared structured text-generation parsing helpers.
-// Layer: Server git utility test
-// Depends on: Effect schema decoding and automation completion prompt schemas.
-
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 

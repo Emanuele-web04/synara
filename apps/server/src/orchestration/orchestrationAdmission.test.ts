@@ -44,8 +44,7 @@ describe("orchestration command admission", () => {
           reason: "overloaded",
         });
 
-        // Task stop/background share the interrupt reserve: draining one slot
-        // shows they are admitted past the normal-command limit.
+        // task stop/background share the interrupt reserve — draining one slot shows they admit past the normal limit
         yield* takeNextOrchestrationCommand(queues);
         expect(admit("task-stop", "thread.task.stop")).toEqual({ accepted: true });
         yield* takeNextOrchestrationCommand(queues);
@@ -73,8 +72,7 @@ describe("orchestration command admission", () => {
           commandType: Parameters<typeof tryAdmitOrchestrationCommand<string>>[0]["commandType"],
         ) => tryAdmitOrchestrationCommand({ queues, envelope, commandType, policy });
 
-        // Turn starts get lane priority but not the reserve, so a burst of them
-        // can never crowd out the stop that cancels them.
+        // turn starts get lane priority but not the reserve — a burst of them can never crowd out the stop that cancels them
         expect(admit("start-1", "thread.turn.start")).toEqual({ accepted: true });
         expect(admit("start-2", "thread.turn.start")).toEqual({ accepted: true });
         expect(admit("start-3", "thread.create")).toEqual({ accepted: true });
@@ -105,7 +103,7 @@ describe("orchestration command admission", () => {
         expect(admit("stop", "thread.turn.interrupt")).toEqual({ accepted: true });
 
         expect(yield* takeNextOrchestrationCommand(queues)).toBe("stop");
-        // FIFO is preserved within each lane.
+        // FIFO preserved within each lane
         expect(yield* takeNextOrchestrationCommand(queues)).toBe("start-1");
         expect(yield* takeNextOrchestrationCommand(queues)).toBe("revert");
         expect(yield* takeNextOrchestrationCommand(queues)).toBe("normal-1");

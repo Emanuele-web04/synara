@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-// FILE: verify-packaged-desktop-startup.ts
-// Purpose: Launches a packaged desktop payload from an isolated temporary tree before upload.
-// Layer: Release verification script
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
@@ -215,7 +212,7 @@ export function verifyPackagedRuntimeDependencies(
     "apps/server/dist/runtimeDependencySmoke.mjs",
   );
   const env: NodeJS.ProcessEnv = { ...isolatedEnvironment, ELECTRON_RUN_AS_NODE: "1" };
-  // A workspace loader or NODE_PATH could conceal a missing packaged dependency.
+  // a workspace loader or NODE_PATH could conceal a missing packaged dependency
   delete env.NODE_OPTIONS;
   delete env.NODE_PATH;
   const result = spawnSync(runtime.executable, [entry], {
@@ -283,8 +280,7 @@ export function createPackagedDesktopSmokeEnvironment(
   if (options.platform === "mac") {
     const userDataPath = join(env.HOME!, "Library", "Application Support", "synara");
     mkdirSync(userDataPath, { recursive: true });
-    // Prevent the packaged app's update-only icon repair from registering this
-    // temporary bundle in the runner's normal Launch Services database.
+    // keep the icon repair from registering this temporary bundle in the runner's Launch Services database
     const launchVersionPath = join(userDataPath, "last-launch-version.json");
     writeFileSync(launchVersionPath, `${JSON.stringify({ version: options.version }, null, 2)}\n`);
   }

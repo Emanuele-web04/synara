@@ -3,11 +3,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { columnExists, tableExists } from "./schemaHelpers.ts";
 
-/** Persist the exact command that owns an in-flight approval response. */
+/** persist the exact command owning an in-flight approval response */
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  // Migration 62 retires this table; on a replay of the 54.. range the settled
-  // state already lives on projection_pending_interactions.
+  // migration 62 retires this table — on a 54.. replay the settled state already lives on projection_pending_interactions
   if (!(yield* tableExists(sql, "projection_pending_approvals"))) {
     return;
   }
@@ -23,8 +22,7 @@ export default Effect.gen(function* () {
       ADD COLUMN response_requested_at TEXT
     `;
   }
-  // Naturally re-runnable: the rename is a one-way status projection and no row
-  // is left in the 'resolved' state once it has been applied.
+  // naturally re-runnable — the rename is one-way and no row is left 'resolved' once applied
   yield* sql`
     UPDATE projection_pending_approvals
     SET status = 'confirmed'

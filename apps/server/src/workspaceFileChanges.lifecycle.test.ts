@@ -1,4 +1,3 @@
-// Purpose: Verify watcher scope, burst coalescing, and native resource release.
 import { EventEmitter } from "node:events";
 import { watch, type FSWatcher } from "node:fs";
 import * as fs from "node:fs/promises";

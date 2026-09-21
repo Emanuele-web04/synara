@@ -1,6 +1,4 @@
-// FILE: 030_ProjectionThreadMessagesDispatchMode.ts
-// Purpose: Adds projected dispatch-mode metadata so user messages can render steer chips after reloads.
-// Layer: Server persistence migration
+// projected dispatch-mode metadata so user messages render steer chips after reloads
 
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";

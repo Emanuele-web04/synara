@@ -7,7 +7,7 @@ import { DeviceFrameTransport, type DeviceFrameSink } from "./deviceFrameTranspo
 
 const DEVICE = "FAKE-0001";
 
-/** A sink whose socket backlog and open state the test drives directly. */
+/** a sink whose socket backlog and open state the test drives directly */
 class RecordingSink implements DeviceFrameSink {
   readonly received: Uint8Array[] = [];
   buffered = 0;
@@ -184,8 +184,7 @@ describe("device frame transport backpressure", () => {
     transport.publish(DEVICE, frame({ sequence: 10, keyframe: true }));
     transport.publish(DEVICE, frame({ sequence: 11 }));
 
-    // Nothing between the overflow and the re-sync keyframe is delivered, and
-    // delivery resumes exactly at that keyframe.
+    // nothing between the overflow and the re-sync keyframe is delivered; delivery resumes exactly at that keyframe
     expect(sink.sequences).toEqual([1, 10, 11]);
     expect(transport.statsFor(DEVICE)[0]?.dropped).toBeGreaterThan(0);
   });

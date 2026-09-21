@@ -1,9 +1,3 @@
-// FILE: KeyboardShortcutsSettingsPanel.tsx
-// Purpose: Searchable Keybindings editor for the settings screen — the same command reference
-//          the Mod+/ sheet shows, with captured-key editing and new binding creation.
-// Layer: Settings UI components
-// Depends on: shared shortcut-sheet builder/filter, key capture, server keybindings config, and the Kbd pill.
-
 import type {
   KeybindingCommand,
   KeybindingRule,
@@ -39,9 +33,7 @@ import { SettingsCard, SettingsEmptyState } from "./SettingsPanelPrimitives";
 // Stable empty reference while the server config query is still loading.
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
-// The settings reference is intentionally context-free: it lists the chat/sidebar bindings
-// as "available now" plus the workspace-mode set, independent of the live terminal state, so
-// the page reads the same no matter which thread is focused.
+// the reference is intentionally context-free — reads the same no matter which thread is focused
 const SETTINGS_SHORTCUT_CONTEXT: ShortcutSheetContext = {
   terminalFocus: false,
   terminalOpen: false,
@@ -69,8 +61,7 @@ export function KeyboardShortcutsSettingsPanel() {
 
   const sections = buildShortcutSheetSections({
     keybindings,
-    // Project scripts are per-project and live only in the chat context; the settings
-    // reference stays project-agnostic, so the contextual Mod+/ sheet still owns them.
+    // project scripts live only in the chat context; the settings reference stays project-agnostic so the Mod+/ sheet owns them
     projectScripts: [],
     platform,
     context: SETTINGS_SHORTCUT_CONTEXT,

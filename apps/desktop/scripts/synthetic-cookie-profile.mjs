@@ -2,7 +2,6 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// A fresh HOME keeps native-reader tests away from personal browser profiles.
 const home = await mkdtemp(join(tmpdir(), "synara-cookie-fixture-"));
 const strings = ["127.0.0.1", "synara_synthetic_import", "/", "synthetic-only"];
 const header = Buffer.alloc(56);

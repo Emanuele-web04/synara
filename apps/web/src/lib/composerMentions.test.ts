@@ -1,7 +1,3 @@
-// FILE: composerMentions.test.ts
-// Purpose: Lock down composer mention token parsing plus outgoing skill/plugin reference filtering.
-// Layer: Web composer helper tests
-
 import { describe, expect, it } from "vitest";
 
 import {
@@ -139,8 +135,7 @@ describe("formatComposerMentionToken", () => {
   });
 
   it("parses an unclosed quote followed by a backslash run in linear time (no ReDoS)", () => {
-    // Regression guard: with an ambiguous escape alternation this backtracks
-    // exponentially and the test times out instead of finishing instantly.
+    // regression guard: an ambiguous escape alternation backtracks exponentially and the test times out instead of finishing instantly
     const attack = `@"${"\\".repeat(512)}x no closing quote`;
     const matches = [
       ...attack.matchAll(createComposerMentionTokenRegex({ includeTrailingTokenAtEnd: true })),

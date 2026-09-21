@@ -503,7 +503,6 @@ function resolveTextStreamKind(part: Part | undefined): "assistant_text" | "reas
 }
 
 function shouldProjectOpenCodeTextPart(part: Part): boolean {
-  // Synthetic/ignored text parts carry local UI progress rather than assistant output.
   return part.type !== "text" || (!part.synthetic && !part.ignored);
 }
 
@@ -584,10 +583,7 @@ function applyPendingTextDeltaToPart(context: OpenCodeSessionContext, part: Part
     return part;
   }
 
-  // A delta buffered before the first part snapshot may already be present in
-  // the later cumulative snapshot. A delta buffered after a known snapshot
-  // (for example while the message role is still unknown) is newer than that
-  // snapshot and must be appended even when its text matches the snapshot suffix.
+  // a delta buffered after a known snapshot is newer than it and must append even when its text matches the snapshot suffix
   const nextText =
     !pendingDelta.bufferedAfterKnownSnapshot && part.text.endsWith(pendingDelta.text)
       ? part.text
@@ -710,8 +706,7 @@ const clearActiveTurnState = Effect.fn("clearOpenCodeActiveTurnState")(function*
   if (context.activeTurnId) {
     forgetOpenCodePart(context, openCodeNextTextItemId(context.activeTurnId));
   }
-  // Child tool parts are only observed while the parent owns the related
-  // session. Release them before later child-removal events stop being routed.
+  // child tool parts are observable only while the parent owns the related session — release before removal events stop routing
   for (const [partId, part] of context.partById) {
     if (context.relatedSessionIds.has(part.sessionID)) {
       forgetOpenCodePart(context, partId);
@@ -732,11 +727,7 @@ const clearActiveTurnState = Effect.fn("clearOpenCodeActiveTurnState")(function*
   context.activeVariant = undefined;
   context.latestTurnCostUsd = undefined;
   context.relatedSessionIds.clear();
-  // Deliberately NOT cleared here: a permission resolved by policy or permission.list at the
-  // tail of a turn can have its permission.replied echo arrive after turn teardown. Dropping
-  // the id first would misclassify that echo as a real resolution (an orphaned "Approval
-  // resolved" in the UI). Ids are unique per request so stale entries are inert; the sets are
-  // freed with the session context when the session is removed.
+  // deliberately NOT cleared: a policy/list-resolved permission's replied echo can arrive after turn teardown — dropping the id would misclassify it as a real resolution; stale ids are inert
 });
 
 function markOpenCodeTurnProviderActivity(
@@ -1672,9 +1663,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         if (!context.activeTurnToolCallIdleWatchdogStarted) {
           context.activeTurnToolCallIdleWatchdogStarted = true;
           yield* Effect.gen(function* () {
-            // A normal final response only needs a short event-stream quiet
-            // window. Early idle with no completed part keeps the longer grace
-            // period used for delayed provider recovery.
+            // a normal final response needs a short quiet window; early idle with no completed part keeps the longer grace for delayed provider recovery
             const needsRecoveryGrace =
               idleBeforeAssistantActivity || idleAfterToolCalls || idleBeforeFinalAssistantParts;
             const initialQuietMs = needsRecoveryGrace
@@ -1684,12 +1673,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               return;
             }
 
-            // Some OpenCode versions emit idle before the final assistant event
-            // and never emit idle again. A completed assistant message is enough
-            // to settle that deferred idle instead of leaving the turn running.
+            // some versions emit idle before the final assistant event and never again — a completed message is enough to settle that deferred idle
             if (context.activeTurnSawFinalAssistant) {
-              // Re-read the id after the grace period: the final metadata may have
-              // arrived after the idle event that scheduled this watchdog.
               const deferredFinalAssistantMessageId = context.activeTurnFinalAssistantMessageId;
               if (
                 deferredFinalAssistantMessageId !== undefined &&
@@ -1708,9 +1693,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 deferredFinalAssistantMessageId !== undefined &&
                 isOpenCodeAssistantMessageTextSettled(context, deferredFinalAssistantMessageId)
               ) {
-                // The event stream can be ahead of session.messages. Completion
-                // activity has now stayed quiet for a full grace window, so all
-                // locally delivered parts belong to this final response.
                 yield* completeOpenCodeTurn(context, {
                   turnId,
                   raw: {
@@ -1722,9 +1704,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 return;
               }
 
-              // A final message snapshot may be visible before its parts. Keep
-              // one additional bounded window for the SSE part or a fresher
-              // snapshot instead of failing a response that is still arriving.
+              // a final message snapshot can precede its parts — keep one bounded window for the SSE part or a fresher snapshot
               if (
                 !(yield* waitForOpenCodeTurnCompletionQuiet(
                   context,
@@ -1891,8 +1871,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             if (entry.info.id !== input.messageId || entry.info.role !== "assistant") {
               return false;
             }
-            // The generated SDK response keeps `info` typed as the broad Message union
-            // even after its role discriminator is checked.
             return isOpenCodeCompletedAssistantMessage(entry as unknown as OpenCodeMessageSnapshot);
           });
           if (!assistantEntry || assistantEntry.info.role !== "assistant") {
@@ -2098,8 +2076,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         const turnId = context.activeTurnId;
         if (turnId) {
           context.activeTurnEventSerial += 1;
-          // User-message echoes should not disable prompt recovery; track provider-side
-          // activity separately for the "accepted but nothing started" watchdog.
+          // user-message echoes shouldn't disable prompt recovery — provider-side activity is tracked separately for the accepted-but-silent watchdog
           if (isOpenCodeTurnProviderActivityEvent(context, event)) {
             markOpenCodeHarnessPolicyDelivered(context, turnId);
             markOpenCodeTurnProviderActivity(context, turnId);
@@ -2280,9 +2257,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 context.activeTurnId === turnId &&
                 context.activeTurnFinalAssistantMessageId === part.messageID
               ) {
-                // Any final-message part restarts the deferred-idle quiet window.
-                // OpenCode may publish several completed text parts for one
-                // assistant message, especially around tool calls.
+                // Any final-message part restarts the deferred-idle quiet window. OpenCode may publish several completed text parts for one assistant message, especially around tool calls.
                 markOpenCodeTurnCompletionActivity(context, turnId);
               }
               yield* emitAssistantTextDelta(context, part, turnId, event);
@@ -2356,9 +2331,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             ) {
               break;
             }
-            // A permission recovered without an active turn has no trustworthy interaction
-            // mode. Fail closed so a request left by an interrupted Plan turn can never be
-            // reinterpreted as Full Access after a process restart or reconnect.
+            // a permission recovered with no active turn has no trustworthy mode — fail closed so an interrupted Plan turn's request can't become Full Access after restart
             const policyReply =
               context.activeInteractionMode === undefined ||
               context.activeInteractionMode === "plan"
@@ -2385,8 +2358,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 `${adapterConfig.displayName} permission policy reply failed`,
                 Cause.squash(replyExit.cause),
               );
-              // A Full-access or Plan turn must never degrade into a human approval. Abort the
-              // provider turn and surface an actionable failure instead.
+              // a Full-access or Plan turn must never degrade into a human approval — abort the provider turn with an actionable failure
               yield* runOpenCodeSdk("session.abort", () =>
                 context.client.session.abort({ sessionID: context.openCodeSessionId }),
               ).pipe(Effect.ignore({ log: true }));
@@ -2431,11 +2403,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           case "permission.replied": {
             if (context.policyResolvedPermissionIds.has(event.properties.requestID)) {
-              // Synara policy resolved this request; nothing was surfaced to the UI.
               break;
             }
             if (context.locallyResolvedPermissionIds.has(event.properties.requestID)) {
-              // permission.list already confirmed this reply and projected the resolution.
               break;
             }
             yield* settlePendingHumanPermission(context, {
@@ -2572,8 +2542,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             break;
           }
 
-          // Newer OpenCode servers can emit session.next.* events for the active
-          // agent loop. Mirror them into Synara's canonical transcript stream.
+          // newer servers emit session.next.* for the active agent loop — mirror into Synara's canonical transcript stream
           case "session.next.text.delta": {
             if (!turnId || event.properties.delta.length === 0) {
               break;
@@ -3109,8 +3078,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             } as const;
           }
 
-          // Without a pre-turn or remembered baseline, old completed assistant messages
-          // are indistinguishable from this turn's final response.
           yield* writeNativeEventBestEffort(context.session.threadId, {
             observedAt: nowIso(),
             event: {
@@ -3165,14 +3132,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
       });
 
-      // Completion backstop: the SSE stream can drop or delay the terminal
-      // `session.idle` event (child-session gating, reconnects, provider-specific
-      // final-message shapes), which leaves a turn stuck in "working" even though
-      // the provider already finished. This independent fiber polls session status
-      // and, once the session looks idle with a fresh final assistant message,
-      // synthesizes the idle event so the turn completes. Messages are only pulled
-      // once the session is no longer busy — fetching a large transcript every
-      // 500ms would be wasteful on big turns.
+      // completion backstop: SSE can drop/delay terminal session.idle, leaving a turn stuck "working" — poll status and synthesize idle once the session looks idle with a fresh final message; messages pulled only once not busy
       const startTurnSnapshotWatchdog = Effect.fn("startTurnSnapshotWatchdog")(function* (
         context: OpenCodeSessionContext,
         turnId: TurnId,
@@ -3381,9 +3341,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             sessions.delete(input.threadId);
           }
 
-          // OpenCode's MCP registry is process/directory scoped, not session
-          // scoped. Issue a gateway token only for a managed server isolated to
-          // this exact Synara thread.
+          // OpenCode's MCP registry is process/directory-scoped, not session-scoped — issue a gateway token only for a managed server isolated to this thread
           const agentGatewaySessionLease = serverUrl
             ? undefined
             : acquireAgentGatewaySessionLease(agentGatewayCredentials, input.threadId, provider);
@@ -3438,11 +3396,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                       );
                     }
                     const createSessionId = resumedSessionId
-                      ? // A resumed provider may still be executing an interrupted Plan turn.
-                        // Install the read-only ruleset until Synara dispatches a new turn with a
-                        // known interaction mode. This must succeed before the event pump starts:
-                        // otherwise an already-running Full Access session could mutate state
-                        // without ever emitting a permission request for Synara to reject.
+                      ? // a resumed provider may still execute an interrupted Plan turn — install the read-only ruleset before the event pump starts or a running Full Access session mutates state without a permission request to reject
                         runOpenCodeSdk("session.update", () =>
                           client.session.update({
                             sessionID: resumedSessionId,
@@ -3489,8 +3443,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                           ),
                         );
                     const modelContextLimitBySlug = new Map<string, number>();
-                    // Context metadata is optional. A slow discovery endpoint
-                    // must not hold a usable session behind the startup deadline.
                     yield* openCodeRuntime.loadOpenCodeInventory(client).pipe(
                       Effect.map(buildOpenCodeModelContextLimitMap),
                       Effect.timeoutOption("10 seconds"),
@@ -3530,8 +3482,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 }
 
                 const started = startedExit.value;
-                // A session id alone is not enough: policy revisions or a changed gateway
-                // capability require a fresh, truthful host-policy delivery.
+                // a session id alone isn't enough — policy revisions or changed gateway capability require fresh host-policy delivery
                 const harnessPolicyDelivered =
                   resumedSessionId === started.openCodeSessionId &&
                   isMatchingHarnessPolicyDelivery(persistedHarnessPolicyDelivery, {
@@ -3746,9 +3697,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         context.activeTurnFinalAssistantMessageId = undefined;
         context.activeTurnToolCallIdleWatchdogStarted = false;
         context.activeInteractionMode = interactionMode;
-        // Always pin Synara's interaction mode to OpenCode's primary agent.
-        // Otherwise a user config with default agent=plan (or a stale options.agent=plan
-        // after leaving Synara plan mode) can trap default turns in plan mode.
+        // always pin Synara's mode to OpenCode's primary agent — a user config or stale options.agent=plan can trap default turns in plan mode
         const modePinnedAgent =
           interactionMode === "plan" ? adapterConfig.planAgent : adapterConfig.defaultAgent;
         context.activeAgent =
@@ -3781,8 +3730,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           },
         });
 
-        // Capture the pre-turn message ids before submitting so the watchdog can
-        // distinguish this turn's final assistant message from prior ones.
         const snapshotWatchdogBaseline = yield* captureTurnSnapshotWatchdogBaseline(context);
         yield* submitOpenCodePromptAsync(context, {
           turnId,
@@ -3797,8 +3744,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             ],
           },
         });
-        // The completion backstop covers dropped/delayed idle events. Keep the
-        // poll cheap (status-first) so large turns are not penalized.
         if (snapshotWatchdogBaseline.canStartWatchdog) {
           yield* startTurnSnapshotWatchdog(context, turnId, snapshotWatchdogBaseline.messageIds);
         }
@@ -3892,7 +3837,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           for (let attempt = 0; attempt < attemptCount; attempt += 1) {
             if (!context.pendingPermissions.has(input.requestId)) {
-              // The subscription processed permission.replied while the reply was in flight.
               return;
             }
             if (attempt > 0) {
@@ -3940,7 +3884,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           if (!context.pendingPermissions.has(input.requestId)) {
-            // The final permission.list result was stale and the subscription won the race.
             return;
           }
 
@@ -4170,8 +4113,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const forkThread: NonNullable<OpenCodeAdapterShape["forkThread"]> = (input) =>
         Effect.gen(function* () {
           const sourceContext = sessions.get(input.sourceThreadId);
-          // Forking mid-turn would branch from incomplete in-flight state, so
-          // let the retained-transcript fallback handle busy sources.
           if (sourceContext?.activeTurnId !== undefined) {
             return yield* new ProviderAdapterValidationError({
               provider,
@@ -4252,10 +4193,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             });
           }
 
-          // Return only the cursor: ProviderService registers the binding under
-          // a committed lifecycle lease and the target's first turn resumes it
-          // there. Starting the runtime here would capture an undefined
-          // lifecycle generation, orphaning the fork's approval requests.
           return {
             threadId: input.threadId,
             resumeCursor: { openCodeSessionId: forkedSessionId, cwd: targetDirectory },
@@ -4439,8 +4376,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             };
           }
 
-          // Keep OpenCode's authoritative CLI list usable even if the local server
-          // cannot start; otherwise the web picker falls back to one static model.
+          // Keep OpenCode's authoritative CLI list usable even if the local server cannot start; otherwise the web picker falls back to one static model.
           if (cliModels.length > 0) {
             const models = mergeOpenCodeCliModelDescriptors({
               inventory: emptyOpenCodeModelInventory(),

@@ -105,10 +105,7 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
             timer.recordActivity(threadId, persistedActivityAtMs);
             return;
           }
-          // The in-memory clock can advance before its activity command commits
-          // (for example during a transient database failure). Preserve that real
-          // activity, retry its durable write, and avoid a zero-delay expiry loop
-          // against the older projection timestamp.
+          // the in-memory clock can advance before its command commits — preserve the real activity, retry its write, avoid a zero-delay expiry loop
           yield* recordActivity(threadId, expectedLastActivityAtMs);
           timer.retryExpiry(threadId, EXPIRY_RETRY_DELAY_MS);
           return;
@@ -293,9 +290,7 @@ export const makeSidechatExpiryReactor = <TimerHandle>(
           !updated &&
           (!knownThreadIds.has(threadId) || knownSidechatIds.has(threadId))
         ) {
-          // Shell publication and this reactor consume the same committed event on
-          // separate streams. A client can subscribe in that narrow gap, so seed
-          // from the authoritative read model instead of losing the view lease.
+          // shell publication and this reactor consume the same committed event on separate streams — a client can subscribe in the gap, so seed from the authoritative read model
           const readModel = yield* orchestrationEngine.getReadModel();
           const thread = readModel.threads.find((candidate) => candidate.id === threadId);
           knownThreadIds.add(threadId);

@@ -1,8 +1,3 @@
-// FILE: useKanbanTaskComposerMenu.ts
-// Purpose: Wires kanban composer menu discovery to editor insertion/key handling.
-// Layer: Kanban UI hook
-// Exports: useKanbanTaskComposerMenu
-
 import type {
   ModelSlug,
   ProviderAgentDescriptor,

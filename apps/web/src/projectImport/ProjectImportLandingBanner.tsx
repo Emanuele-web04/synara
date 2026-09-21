@@ -1,8 +1,3 @@
-// FILE: ProjectImportLandingBanner.tsx
-// Purpose: Dismissible empty-landing promo that opens the Codex/Claude Code project import dialog.
-// Layer: Web project-import UI
-// Exports: ProjectImportLandingBanner
-
 import { Schema } from "effect";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";

@@ -1,8 +1,3 @@
-// FILE: useKanbanTaskScratchDraft.ts
-// Purpose: Owns the throwaway composer-draft thread used by the kanban new-task dialog.
-// Layer: Kanban UI hook
-// Exports: useKanbanTaskScratchDraft
-
 import type { ModelSlug, ProviderKind } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -25,8 +20,7 @@ import { buildModelSelection } from "../../providerModelOptions";
 import { toastManager } from "../ui/toast";
 
 export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: ProviderKind }) {
-  // Scratch composer draft backing the dialog: model/effort/speed state lives in
-  // the composer draft store under this throwaway thread id, exactly like chat.
+  // scratch draft: model/effort/speed state lives in the composer draft store under this throwaway thread id, exactly like chat
   const [scratchThreadId] = useState(() => newThreadId());
   useEffect(() => {
     useComposerDraftStore.getState().applyStickyState(scratchThreadId);

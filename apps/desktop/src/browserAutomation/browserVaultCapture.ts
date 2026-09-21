@@ -4,12 +4,6 @@ import { installVaultCapture } from "betterwright/capture";
 import type { BrowserAutomationVisibleRuntime } from "../browserManager";
 import { BROWSER_VAULT_PROMPT_TTL_MS, BrowserVault } from "./browserVault";
 
-/**
- * Structural stand-ins for the Playwright surface the capture sensor calls:
- * context.pages/on("page")/off("page")/newCDPSession and page.isClosed/once("close").
- * Synara's Electron tabs are not Playwright objects, but the sensor only calls
- * those members, so the shim satisfies it at runtime.
- */
 export interface CapturePageShim {
   readonly id: string;
   isClosed(): boolean;
@@ -45,7 +39,6 @@ class NativeCapturePage extends EventEmitter implements CapturePageShim {
   }
 }
 
-/** Sensors run only in managed browser pages, never the application renderer. */
 export class BrowserVaultCapture {
   private readonly pages = new Set<NativeCapturePage>();
   private readonly pageListeners = new Set<(page: CapturePageShim) => void>();
@@ -92,9 +85,6 @@ export class BrowserVaultCapture {
           this.capture = undefined;
           return;
         }
-        // The public API requires a full Playwright context. Our narrower
-        // Electron adapter is exercised against the actual upstream sensor in
-        // browserVaultCapture.runtime.test.ts and the Electron smoke test.
         const context = this.context();
         this.capture = installVaultCapture(context as unknown as CaptureInstallationContext, {
           sessionForPage: (page) => page as unknown as NativeCapturePage,

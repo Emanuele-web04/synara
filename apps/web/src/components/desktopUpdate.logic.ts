@@ -1,8 +1,3 @@
-// FILE: desktopUpdate.logic.ts
-// Purpose: Maps desktop updater state into sidebar button actions and copy.
-// Layer: Web UI state helper
-// Depends on: Desktop update IPC contracts.
-
 import type { DesktopUpdateActionResult, DesktopUpdateState } from "@synara/contracts";
 
 export type DesktopUpdateButtonAction = "check" | "download" | "install" | "none";
@@ -46,9 +41,7 @@ export function resolveDesktopUpdateButtonAction(
 
 export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null): boolean {
   if (!state?.enabled) return false;
-  // Only show the button when there's actually something to do:
-  // a version being prepared, a downloaded update to install, or a retryable error.
-  // Update checks stay background-only so periodic polling never flashes sidebar UI.
+  // show the button only when there's something to do: a prepared version, a downloaded update, or a retryable error — update checks stay background-only so polling never flashes sidebar UI
   const action = resolveDesktopUpdateButtonAction(state);
   return (
     state.status === "available" ||
@@ -235,9 +228,7 @@ export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateAction
   return result.accepted && !result.completed;
 }
 
-// A download/install request can resolve to "up-to-date" when the offered version
-// turned out not to be newer (stale updater state). That is not an error, so the UI
-// should show an informational notice instead of silently resetting the button.
+// a request can resolve "up-to-date" when the offered version wasn't newer (stale updater state) — not an error, show an informational notice
 export function getDesktopUpdateAlreadyCurrentNotice(
   result: DesktopUpdateActionResult,
 ): string | null {
@@ -251,10 +242,7 @@ export function shouldRecommendManualDesktopDownload(state: DesktopUpdateState |
   return Boolean(state && state.installFailureCount >= 2 && state.releaseUrl);
 }
 
-// Stable identity for an in-app update failure, used to avoid toasting the same
-// download/install error twice (e.g. once from the click handler and again when
-// the install watchdog pushes the recovered state). Returns null for states that
-// have no actionable manual-download fallback (checks, successes, in-progress).
+// stable identity for an update failure to avoid toasting twice; null for states with no actionable manual-download fallback
 export function getDesktopUpdateErrorSignature(state: DesktopUpdateState | null): string | null {
   if (!state || (state.errorContext !== "download" && state.errorContext !== "install")) {
     return null;

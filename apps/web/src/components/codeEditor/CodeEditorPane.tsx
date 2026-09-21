@@ -75,11 +75,7 @@ export function useCodeEditorSessionOptions(input: {
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
-// Capture-phase save handling for the pierre editor: the editor hosts its own
-// key handling, so saves are dispatched from the container. The chord is
-// matched against the configured `editor.file.save` binding (not hard-coded
-// Mod+S) so rebinds are honored, while the browser save dialog stays
-// suppressed for the default chord regardless of the binding.
+// capture-phase save handling: the chord is matched against the configured `editor.file.save` binding (not hard-coded Mod+S) so rebinds are honored, while the browser save dialog stays suppressed
 export function useCodeEditorSaveKeyDownHandler(onSave: () => void) {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;

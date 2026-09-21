@@ -189,8 +189,7 @@ describe("buildActivityViewModel", () => {
         pinnedThreadIdSet: new Set(),
       }).active.map((thread) => thread.id);
 
-    // Whichever thread streamed most recently, the turn each one started still
-    // decides the order — the rows must not swap mid-run.
+    // Whichever thread streamed most recently, the turn each one started still decides the order — the rows must not swap mid-run.
     expect(order("2026-08-01T09:30:00.000Z", "2026-08-01T09:31:00.000Z")).toEqual([
       "run-a",
       "run-b",

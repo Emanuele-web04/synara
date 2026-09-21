@@ -1,11 +1,3 @@
-// FILE: RestoreOrCreateChatRoute.tsx
-// Purpose: Shared cold-start machinery for chat index routes — guards against briefly-empty
-//          bootstrap snapshots, then defers to a caller-supplied resolver to pick the thread
-//          route to restore, falling back to creating a fresh draft. Used by the home-chat index
-//          route and the Studio index route so both get identical empty-snapshot recovery.
-// Layer: Routing
-// Depends on: sidebar UI persistence plus caller-supplied restore/fresh-chat policy.
-
 import { ThreadId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
@@ -28,22 +20,18 @@ import { useSplitViewStore } from "../splitViewStore";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 
 export type RestoreRouteResolverInput = {
-  // Split views currently known to the client. Callers that support split-view restore should
-  // filter their resolved route's `splitViewId` against this set.
+  // Split views currently known to the client. Callers that support split-view restore should filter their resolved route's `splitViewId` against this set.
   readonly availableSplitViewIds: ReadonlySet<string>;
 };
 
-// Resolves which thread route (if any) this surface should restore to. Returning `null` defers
-// to `createFreshChat` (e.g. because there is a draft to reopen instead of an existing thread).
+// Resolves which thread route (if any) this surface should restore to. Returning `null` defers to `createFreshChat` (e.g. because there is a draft to reopen instead of an existing thread).
 export type RestoreRouteResolver = (input: RestoreRouteResolverInput) => LastThreadRoute | null;
 
 export function RestoreOrCreateChatRoute({
   resolveRestoreRoute,
   createFreshChat,
 }: {
-  // Surface-specific policy for picking the thread route to restore (e.g. the last-visited route
-  // for home chats, the latest Studio thread or draft for Studio). The remembered-route recovery
-  // below still keys off the total thread count, which is shared across surfaces.
+  // per-surface policy for the thread route to restore; the remembered-route recovery keys off total thread count, shared across surfaces
   readonly resolveRestoreRoute: RestoreRouteResolver;
   readonly createFreshChat: () => Promise<StartContainerChatResult>;
 }) {
@@ -61,8 +49,7 @@ export function RestoreOrCreateChatRoute({
     useState<EmptyRouteRestoreRecoveryState>("idle");
   const mountedRef = useRef(true);
   const emptyRestoreRecoveryRunRef = useRef(0);
-  // One fresh-chat creation at a time per mount: a dep change mid-create re-runs the effect,
-  // and without this guard the superseded run and the new run could both mint a draft.
+  // One fresh-chat creation at a time per mount: a dep change mid-create re-runs the effect, and without this guard the superseded run and the new run could both mint a draft.
   const createFreshChatInFlightRef = useRef(false);
 
   useEffect(() => {
@@ -75,8 +62,7 @@ export function RestoreOrCreateChatRoute({
     if (!(threadIds.length > 0 && emptyRestoreRecoveryState !== "idle")) {
       return;
     }
-    // Timeout-0 keeps the state write asynchronous (compiler-eligible); the
-    // recovery machine only gates async restore flows.
+    // Timeout-0 keeps the state write asynchronous (compiler-eligible); the recovery machine only gates async restore flows.
     const timeoutId = window.setTimeout(() => {
       emptyRestoreRecoveryRunRef.current += 1;
       setEmptyRestoreRecoveryState("idle");
@@ -92,8 +78,7 @@ export function RestoreOrCreateChatRoute({
     let cancelled = false;
 
     void (async () => {
-      // Yield one microtask so every state write below happens asynchronously
-      // (no wasted pre-paint render; keeps the component compiler-eligible).
+      // Yield one microtask so every state write below happens asynchronously (no wasted pre-paint render; keeps the component compiler-eligible).
       await Promise.resolve();
       if (cancelled) {
         return;
@@ -151,8 +136,7 @@ export function RestoreOrCreateChatRoute({
         return;
       }
       createFreshChatInFlightRef.current = true;
-      // .finally instead of try/finally: React Compiler does not yet support
-      // try/finally and would skip optimizing this whole component.
+      // .finally instead of try/finally: React Compiler does not yet support try/finally and would skip optimizing this whole component.
       const result: StartContainerChatResult = await createFreshChat().finally(() => {
         createFreshChatInFlightRef.current = false;
       });

@@ -34,8 +34,7 @@ function makeManager(
   const manager = new DeviceManager({
     backend,
     ...(options.bootOwnership ? { bootOwnership: options.bootOwnership } : {}),
-    // Attach retries are the default for cold boots; a test that is not about
-    // the retry loop wants the first failure to be final.
+    // attach retries are the default for cold boots; a test not about the retry loop wants the first failure final
     attachDeadlineMs: options.attachDeadlineMs ?? 0,
     attachRetryMs: options.attachRetryMs ?? 1,
   });
@@ -45,15 +44,8 @@ function makeManager(
 
 type ThreadDeviceSnapshot = Awaited<ReturnType<DeviceManager["getThreadState"]>>;
 
-/**
- * Wait for a thread's published state to satisfy a predicate.
- *
- * `attach` resolves once the attachment is recorded and opens the stream in the
- * background, so anything the stream determines — its error, its final phase —
- * settles a few turns later. Polling the published state observes that without
- * reaching into the manager's internals.
- */
-/** The stream is brought up after `attach` resolves, so wait for the swap. */
+/** `attach` resolves once the attachment is recorded and opens the stream in the background — polling the published state observes that without reaching into internals */
+/** the stream comes up after `attach` resolves, so wait for the swap */
 async function waitForStream(
   backend: FakeDeviceBackend,
   udid: string,
@@ -91,7 +83,7 @@ async function waitForThreadState(
   throw new Error(`Thread ${threadId} never reached the expected device state`);
 }
 
-/** Settle whatever the background attach is doing before asserting on it. */
+/** settle whatever the background attach is doing before asserting on it */
 async function settleAttach(manager: DeviceManager, threadId: string): Promise<void> {
   await waitForThreadState(manager, threadId, (state) => state.attachPhase == null);
 }
@@ -116,10 +108,7 @@ describe("DeviceManager attachment", () => {
     await manager.attach(THREAD_A, DEVICE_A);
     await settleAttach(manager, THREAD_A);
 
-    // Attaching used to press volume-up to force a repaint. On a headless boot
-    // that press reaches the app but paints no HUD, so it woke nothing up and
-    // only risked a stray button press landing in whatever was running; the
-    // helper primes the stream with the current framebuffer instead.
+    // attaching used to press volume-up to force a repaint; on a headless boot it painted no HUD and only risked a stray press — the helper primes the stream with the framebuffer instead
     expect(backend.callsOfKind("pressButton")).toHaveLength(0);
   });
 
@@ -167,8 +156,7 @@ describe("DeviceManager attachment", () => {
     const state = await manager.attach(THREAD_A, DEVICE_A);
     expect(state.attachedDeviceUdid).toBe(DEVICE_A);
 
-    // A permanent refusal is reported without waiting out the retry deadline:
-    // a missing helper will not build itself in the next sixty seconds.
+    // a permanent refusal is reported without waiting out the retry deadline — a missing helper will not build itself
     const settled = await waitForThreadState(manager, THREAD_A, (next) => next.lastError !== null);
     expect(settled.lastError).toBe("helper is not built");
     expect(settled.attachedDeviceUdid).toBe(DEVICE_A);
@@ -187,7 +175,6 @@ describe("DeviceManager attachment", () => {
 });
 
 describe("DeviceManager discovery before the helper exists", () => {
-  /** A fresh machine: simctl works, the helper has not been built yet. */
   const setupRequired = {
     kind: "setup-required" as const,
     steps: [
@@ -202,9 +189,7 @@ describe("DeviceManager discovery before the helper exists", () => {
 
     const result = await manager.list({ includeShutdown: true });
 
-    // The helper is only built on first attach, and attaching needs a udid from
-    // this list. Returning nothing here made that unreachable on a fresh
-    // machine: empty picker, so no attach, so no helper, forever.
+    // the helper is only built on first attach and attaching needs a udid from this list — returning nothing made that unreachable on a fresh machine
     expect(result.devices.map((device) => device.udid)).toContain(DEVICE_A);
     expect(result.availability).toEqual(setupRequired);
   });
@@ -225,8 +210,7 @@ describe("DeviceManager discovery before the helper exists", () => {
     });
     const { manager } = makeManager(backend);
 
-    // The user can still see and boot devices; the pane explains why input and
-    // video are unavailable.
+    // the pane explains why input and video are unavailable
     expect((await manager.list({ includeShutdown: true })).devices).not.toHaveLength(0);
   });
 
@@ -236,7 +220,7 @@ describe("DeviceManager discovery before the helper exists", () => {
     });
     const { manager } = makeManager(backend);
 
-    // The one case where discovery genuinely cannot run.
+    // the one case where discovery genuinely cannot run
     expect((await manager.list({ includeShutdown: true })).devices).toEqual([]);
     expect((await manager.getThreadState(THREAD_A)).devices).toEqual([]);
   });
@@ -267,8 +251,7 @@ describe("DeviceManager keyframe resync", () => {
 
     await manager.requestKeyframe(DEVICE_A);
 
-    // A fresh compression session is the only way to force an IDR: the helper
-    // has no "keyframe now" call and the natural interval is seconds away.
+    // a fresh compression session is the only way to force an IDR — the helper has no "keyframe now" call
     expect(backend.callsOfKind("detachStream")).toHaveLength(1);
     expect(backend.callsOfKind("attachStream")).toHaveLength(2);
     expect(backend.hasStream(DEVICE_A)).toBe(true);
@@ -281,8 +264,7 @@ describe("DeviceManager keyframe resync", () => {
 
     await manager.attach(THREAD_A, DEVICE_A);
 
-    // Re-attaching an already-attached device is a no-op, so a client cannot
-    // use it to recover a stalled decoder; requestKeyframe exists for that.
+    // re-attaching an already-attached device is a no-op — requestKeyframe exists for that
     expect(backend.callsOfKind("attachStream")).toHaveLength(1);
   });
 
@@ -413,10 +395,7 @@ describe("DeviceManager boot ownership", () => {
     await manager.boot(DEVICE_B);
     await manager.boot(DEVICE_C);
 
-    // `simctl shutdown all` from the agent's shell, Simulator.app quitting, a
-    // crashed runtime. Each used to leave a phantom holding a slot, so three of
-    // them refused every later boot and offered to shut down devices that were
-    // already off — including the one being asked for.
+    // `simctl shutdown all`, Simulator.app quitting, a crashed runtime — each left a phantom holding a slot
     backend.shutdownExternally(DEVICE_A);
     backend.shutdownExternally(DEVICE_B);
     backend.shutdownExternally(DEVICE_C);
@@ -431,8 +410,7 @@ describe("DeviceManager boot ownership", () => {
     await manager.boot(DEVICE_C);
     backend.shutdownExternally(DEVICE_B);
 
-    // Still at the cap on paper, but B is gone, so it must not be offered as
-    // something the user can free.
+    // still at the cap on paper, but B is gone — it must not be offered as something to free
     expect((await manager.synaraBootedDevices()).map((device) => device.udid)).toEqual([
       DEVICE_A,
       DEVICE_C,
@@ -542,8 +520,7 @@ describe("DeviceManager device switching", () => {
 
     await manager.attach(THREAD_A, DEVICE_B);
 
-    // Not after the idle window: the cap is three, and filling every slot with
-    // simulators nobody is watching is what made the fourth pick prompt.
+    // filling every slot with simulators nobody watches is what made the fourth pick prompt
     expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([DEVICE_A]);
   });
 
@@ -555,7 +532,7 @@ describe("DeviceManager device switching", () => {
 
     await manager.attach(THREAD_A, DEVICE_B);
 
-    // The user started this one; it outlives the session either way.
+    // the user started this one; it outlives the session either way
     expect(backend.callsOfKind("shutdown")).toHaveLength(0);
   });
 
@@ -568,10 +545,7 @@ describe("DeviceManager device switching", () => {
 
     await manager.attach(THREAD_A, DEVICE_B);
 
-    // The device stays up for the thread still watching it. Its stream does
-    // not: the helper holds one attachment, so B's stream replaces A's either
-    // way, and stopping A explicitly is what keeps the manager's record honest
-    // instead of leaving a pane frozen on a stream the helper already dropped.
+    // the helper holds one attachment so B's stream replaces A's — stopping A explicitly keeps the record honest
     expect(backend.callsOfKind("shutdown")).toHaveLength(0);
     await waitForStream(backend, DEVICE_B, true);
     await waitForStream(backend, DEVICE_A, false);
@@ -584,10 +558,7 @@ describe("DeviceManager device switching", () => {
     await manager.attach(THREAD_A, DEVICE_A);
     await waitForStream(backend, DEVICE_A, true);
 
-    // A second thread on a different device: the helper's startStream stops
-    // whatever it was streaming before binding the new one, so believing both
-    // were live left the first pane on a frozen last frame with nothing to
-    // explain it.
+    // the helper's startStream stops whatever it was streaming — believing both live left the first pane frozen
     await manager.attach(THREAD_B, DEVICE_B);
 
     await waitForStream(backend, DEVICE_B, true);
@@ -596,7 +567,6 @@ describe("DeviceManager device switching", () => {
 
   it("frees the slot for the next boot rather than refusing it", async () => {
     const { backend, manager } = makeManager();
-    // At the cap, with every slot held by this one thread's history.
     await manager.boot(DEVICE_A);
     await manager.attach(THREAD_A, DEVICE_A);
     await manager.boot(DEVICE_B);
@@ -606,15 +576,13 @@ describe("DeviceManager device switching", () => {
 
     const fourth = await manager.boot(DEVICE_D);
 
-    // Two slots were released by the switches, so trying a fourth simulator in
-    // a row just works instead of prompting for a shutdown.
+    // two slots released by the switches, so a fourth simulator just works
     expect(fourth.kind).toBe("booted");
     expect(backend.callsOfKind("shutdown").map((call) => call.udid)).toEqual([DEVICE_A, DEVICE_B]);
   });
 });
 
 describe("surviving a crash", () => {
-  /** An in-memory stand-in for the on-disk record. */
   const makeStore = () => {
     let saved: { pid: number; udids: readonly string[] } | null = null;
     return {
@@ -634,9 +602,7 @@ describe("surviving a crash", () => {
   };
 
   it("writes down every device it boots, so a crash leaves a trail", async () => {
-    // dispose() is the only thing that shuts these down, and a SIGKILL never
-    // reaches it; without this record the next run cannot tell our orphans from
-    // the user's own simulators.
+    // dispose() is the only shutdown path and a SIGKILL never reaches it — without this record the next run can't tell our orphans from the user's simulators
     const owner = makeStore();
     const { manager } = makeManager(new FakeDeviceBackend(), { bootOwnership: owner.store });
 
@@ -658,8 +624,7 @@ describe("surviving a crash", () => {
   });
 
   it("leaves an empty record after a clean quit", async () => {
-    // A clean quit already shut everything down, so the next start must not
-    // adopt these udids and kill whatever the user booted since.
+    // a clean quit already shut these down — the next start must not adopt the udids
     const owner = makeStore();
     const { manager } = makeManager(new FakeDeviceBackend(), { bootOwnership: owner.store });
     await manager.boot(DEVICE_A);
@@ -684,7 +649,7 @@ describe("surviving a crash", () => {
   });
 
   it("leaves the devices of a server that is still running", async () => {
-    // Two Synara processes can overlap; the record belongs to the live one.
+    // two Synara processes can overlap; the record belongs to the live one
     const owner = makeStore();
     const { backend, manager } = makeManager(new FakeDeviceBackend(), {
       bootOwnership: owner.store,
@@ -848,8 +813,7 @@ describe("DeviceManager agent auto-attach", () => {
 
     await manager.ensureThreadAttached(THREAD_A, DEVICE_A);
 
-    // Without this the pane auto-opens on the empty picker and the user
-    // watches a black phone while the agent works.
+    // without this the pane auto-opens on the empty picker and the user watches a black phone while the agent works
     const state = await manager.getThreadState(THREAD_A);
     expect(state.attachedDeviceUdid).toBe(DEVICE_A);
     expect(backend.hasStream(DEVICE_A)).toBe(true);
@@ -863,8 +827,7 @@ describe("DeviceManager agent auto-attach", () => {
 
     await manager.ensureThreadAttached(THREAD_A, DEVICE_A);
 
-    // The existing attachment reflects a deliberate user choice; the agent's
-    // device stays reachable through the picker.
+    // the existing attachment reflects a deliberate user choice; the agent's device stays reachable through the picker
     expect((await manager.getThreadState(THREAD_A)).attachedDeviceUdid).toBe(DEVICE_B);
     expect(backend.hasStream(DEVICE_A)).toBe(false);
   });
@@ -878,8 +841,7 @@ describe("DeviceManager agent auto-attach", () => {
     await manager.ensureThreadAttached(THREAD_A, DEVICE_A);
     await manager.ensureThreadAttached(THREAD_A, DEVICE_A);
 
-    // Repeated launches must not churn the stream or bump the version, which
-    // the pane uses to drop stale pushes.
+    // repeated launches must not churn the stream or bump the version the pane uses to drop stale pushes
     expect((await manager.getThreadState(THREAD_A)).version).toBe(before);
     expect(backend.callsOfKind("attachStream")).toHaveLength(1);
   });
@@ -891,8 +853,6 @@ describe("DeviceManager agent auto-attach", () => {
     await manager.surfaceDeviceForAgent(THREAD_A, DEVICE_A, "agent-tool");
 
     expect((await manager.getThreadState(THREAD_A)).attachedDeviceUdid).toBe(DEVICE_A);
-    // Matched rather than taken from the end: the attachment's stream comes up
-    // in the background and publishes its own state event after this one.
     expect(events).toContainEqual({
       type: "device.open-pane-requested",
       threadId: THREAD_A,
@@ -954,8 +914,7 @@ describe("DeviceManager device geometry", () => {
       (device) => device.udid === DEVICE_A,
     );
 
-    // Geometry comes from the helper attachment, so discovery alone cannot
-    // supply it; the pane needs it to map canvas pixels onto device points.
+    // geometry comes from the helper attachment — discovery alone cannot supply it
     expect(before?.geometry).toBeUndefined();
     expect(after?.geometry).toEqual({ pointWidth: 402, pointHeight: 874, scale: 3 });
   });
@@ -976,7 +935,7 @@ describe("DeviceManager device geometry", () => {
 
     const listed = await manager.list({ includeShutdown: true });
 
-    // Optional on the contract precisely so this case stays representable.
+    // optional on the contract precisely so this case stays representable
     expect(listed.devices.every((device) => device.geometry === undefined)).toBe(true);
   });
 });
@@ -988,8 +947,7 @@ describe("DeviceManager element targeting", () => {
 
     const match = await manager.tapElement(DEVICE_A, { label: "Fake Toggle" });
 
-    // The fake's toggle row spans x 24..369 (centre 196.5) with its control at
-    // x=340, mirroring a real UIKit settings row.
+    // the fake's toggle row spans x 24..369 with its control at x=340, mirroring a real UIKit settings row
     expect(match.point).toEqual({ x: 340, y: 222 });
     expect(backend.calls.at(-1)).toEqual({ kind: "tap", udid: DEVICE_A, x: 340, y: 222 });
   });
@@ -1000,8 +958,7 @@ describe("DeviceManager element targeting", () => {
 
     await manager.tapElement(DEVICE_A, { label: "Fake Toggle" });
 
-    // A cached frame is exactly how a tap lands on whatever scrolled into that
-    // position instead, so the describe must precede the tap every time.
+    // a cached frame is how a tap lands on whatever scrolled into that position — describe must precede the tap every time
     const kinds = backend.calls.map((call) => call.kind);
     expect(kinds.slice(-2)).toEqual(["describeUi", "tap"]);
   });
@@ -1024,11 +981,9 @@ describe("DeviceManager scrolling to an element", () => {
 
     const match = await manager.scrollToElement(DEVICE_A, { label: "Deep Row" });
 
-    // It arrives inside the safe band rather than merely on screen.
     const centre = match.node.frame.y + match.node.frame.height / 2;
     expect(centre).toBeGreaterThan(852 * 0.12);
     expect(centre).toBeLessThan(852 * 0.88);
-    // Several swipes were needed, and each was followed by a fresh read.
     const swipes = backend.callsOfKind("swipe").length;
     expect(swipes).toBeGreaterThan(1);
     expect(backend.callsOfKind("describeUi").length).toBe(swipes + 1);
@@ -1056,8 +1011,7 @@ describe("DeviceManager scrolling to an element", () => {
 
   it("stops when the list stops moving instead of burning the budget", async () => {
     const backend = new FakeDeviceBackend();
-    // A screen that ignores scrolling entirely: the target stays put however
-    // often it is swiped, which is what a list at its end looks like.
+    // a screen that ignores scrolling entirely is what a list at its end looks like
     backend.describeUi = (udid: string) =>
       Promise.resolve({
         udid,
@@ -1088,7 +1042,6 @@ describe("DeviceManager scrolling to an element", () => {
     await expect(manager.scrollToElement(DEVICE_A, { label: "Unreachable" })).rejects.toThrow(
       /appears to be at its end/,
     );
-    // Two swipes: one that could have moved it, one that proves it did not.
     expect(backend.callsOfKind("swipe")).toHaveLength(2);
   });
 
@@ -1098,7 +1051,6 @@ describe("DeviceManager scrolling to an element", () => {
 
     const match = await manager.tapElement(DEVICE_A, { label: "Deep Row" });
 
-    // The tap is the last thing that happens, at the post-scroll point.
     expect(backend.calls.at(-1)).toEqual({
       kind: "tap",
       udid: DEVICE_A,
@@ -1114,9 +1066,7 @@ describe("DeviceManager scrolling through a virtualized list", () => {
     const { backend, manager } = makeManager();
     await backend.boot(DEVICE_A);
 
-    // "Deep Row" is not rendered at all until scrolling brings it near, which
-    // is how real Settings behaves: the first describe has no such node, and a
-    // loop that treated absence as failure gave up here.
+    // "Deep Row" isn't rendered until scrolling brings it near — a loop treating absence as failure gave up here
     const first = await manager.describeUi(DEVICE_A);
     const labels = (function collect(node): string[] {
       return [node.label ?? "", ...node.children.flatMap(collect)];
@@ -1137,7 +1087,7 @@ describe("DeviceManager scrolling through a virtualized list", () => {
       .catch((cause: Error) => cause);
 
     expect(error?.message).toMatch(/No element labelled/);
-    // Naming the labels it did see is what turns a dead end into a next step.
+    // naming the labels it saw turns a dead end into a next step
     expect(error?.message).toMatch(/Fake Toggle|Continue|Deep Row/);
   });
 });

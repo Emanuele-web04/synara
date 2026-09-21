@@ -1,13 +1,3 @@
-// FILE: skillsCatalog.ts
-// Purpose: Generic Agent Skill discovery primitives (frontmatter parsing, SKILL.md
-//          walking) plus the unified cross-provider skills catalog backing Synara
-//          portable skills. Aggregates `~/.synara/skills` with every provider-native
-//          skills folder, deduping by name with provider-native copies winning for
-//          the active provider.
-// Layer: Server provider discovery helper
-// Exports: parseSkillFrontmatter, collectSkillsFromRoots, discoverSkillsCatalog,
-//          mergeSkillsIntoCatalog, filterDisabledSkills, ensureSynaraSkillsDir
-
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 
@@ -20,13 +10,10 @@ export interface SkillRoot {
   readonly path: string;
   readonly scope: string;
   readonly includeMarkdownFiles?: boolean;
-  /** Prefix used by plugin-provided skills whose native invocation is namespaced. */
   readonly namespace?: string;
   /** Provider-owned plugin caches should not traverse linked content outside the install. */
   readonly followSymlinks?: boolean;
 }
-
-// ── Frontmatter parsing ──────────────────────────────────────────────
 
 function stripYamlQuotes(value: string): string {
   const trimmed = value.trim();
@@ -47,7 +34,6 @@ function parseYamlScalar(value: string): FrontmatterValue {
   return unquoted;
 }
 
-// Parses the small scalar frontmatter subset used by Agent Skills without pulling in YAML.
 export function parseSkillFrontmatter(markdown: string): Record<string, FrontmatterValue> {
   const normalized = markdown.replace(/\r\n/g, "\n");
   const match = /^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/.exec(normalized);
@@ -101,8 +87,6 @@ function readBooleanField(
   return undefined;
 }
 
-// ── Filesystem walking ───────────────────────────────────────────────
-
 export function ancestorsFromDeepest(cwd: string): string[] {
   const resolved = nodePath.resolve(cwd);
   const ancestors: string[] = [];
@@ -143,10 +127,7 @@ async function isWalkableSkillDirectory(
   }
 }
 
-// Skills may be nested one namespace deep, e.g. `.cursor/skills/skills-sh/find-skills`.
-// Subdirectories are visited concurrently but results are flattened in sorted name
-// order so name-dedup always picks the same winner across runs. Provider skill
-// folders may be symlinked, so directory checks intentionally follow symlinks.
+// flatten in sorted name order so dedup picks the same winner every run; provider folders may be symlinked — follow them intentionally
 async function isReadableMarkdownFile(
   parentPath: string,
   dirent: import("node:fs").Dirent,
@@ -312,8 +293,7 @@ async function collectSkillDescriptorsFromRoots(
   return skillsPerRoot.flat();
 }
 
-// Scans all roots concurrently, then dedupes by name in root order so earlier
-// roots keep precedence. Within a root, SKILL.md path order is preserved.
+// concurrent root scans dedupe by name in root order — earlier roots win; within a root SKILL.md path order is preserved
 export async function collectSkillsFromRoots(
   roots: ReadonlyArray<SkillRoot>,
 ): Promise<ProviderSkillDescriptor[]> {
@@ -328,19 +308,12 @@ export async function collectSkillsFromRoots(
   return [...byName.values()];
 }
 
-// ── Unified cross-provider catalog ───────────────────────────────────
-
 export interface SkillsCatalogDiscoveryInput {
-  /** Optional workspace cwd; when present, project-level skill folders are included. */
   readonly cwd?: string | null;
   readonly homeDir: string;
-  /** Synara base dir (usually `~/.synara`); skills live in `{base}/skills`. */
   readonly synaraBaseDir: string;
-  /** Provider whose native copies should win when the same skill exists in several roots. */
   readonly provider?: ProviderKind | null;
-  /** Settings needs every origin; composer/provider pickers keep one winner by name. */
   readonly includeDuplicateOrigins?: boolean;
-  /** Bypass the short-lived discovery cache. */
   readonly forceReload?: boolean;
 }
 
@@ -363,8 +336,7 @@ const HOME_ORIGIN_ORDER = [
 ] as const;
 export type SkillsCatalogOrigin = (typeof HOME_ORIGIN_ORDER)[number] | "project";
 
-// Composer skill pickers refetch aggressively (per keystroke, per provider); a
-// short TTL absorbs that burst while still picking up new skill files quickly.
+// pickers refetch per keystroke/provider — a short TTL absorbs the burst while staying fresh
 const SKILLS_CATALOG_CACHE_TTL_MS = 15_000;
 const SKILLS_CATALOG_CACHE_MAX_ENTRIES = 64;
 
@@ -387,7 +359,6 @@ export function synaraSkillsDir(synaraBaseDir: string): string {
   return nodePath.join(synaraBaseDir, "skills");
 }
 
-// Creates the portable skills folder on first use so users have a drop-in target.
 export async function ensureSynaraSkillsDir(synaraBaseDir: string): Promise<string> {
   const dir = synaraSkillsDir(synaraBaseDir);
   if (ensuredSynaraSkillsDirs.has(dir)) {
@@ -415,8 +386,7 @@ const SKILL_ORIGIN_ROOTS = {
     projectRootNames: [".synara"],
   },
   codex: {
-    // Keep Synara's existing Codex-local root. Official Codex discovery uses
-    // `.agents/skills`, which is represented separately by the shared origin.
+    // Keep Synara's existing Codex-local root. Official Codex discovery uses `.agents/skills`, which is represented separately by the shared origin.
     homeRoots: (input) => [nodePath.join(input.homeDir, ".codex", "skills")],
     projectRootNames: [".codex"],
   },
@@ -494,8 +464,7 @@ function projectRootNamesForOrigin(origin: SkillsHomeOrigin): readonly string[] 
   return SKILL_ORIGIN_ROOTS[origin].projectRootNames;
 }
 
-// Native copies first so an agent keeps using its own skill, then Synara as the
-// portable fallback, then the remaining provider homes for cross-provider reuse.
+// Native copies first so an agent keeps using its own skill, then Synara as the portable fallback, then the remaining provider homes for cross-provider reuse.
 function preferredOriginsForProvider(
   provider: ProviderKind | null | undefined,
 ): ReadonlyArray<SkillsHomeOrigin> {
@@ -551,10 +520,7 @@ function rootsForOrderedOrigins(
           }
           seenRootNames.add(rootName);
           const rootPath = nodePath.join(ancestor, rootName, "skills");
-          // A cwd under the home dir reaches the home skill folders as
-          // "project ancestors"; skip them here so each folder is scanned once
-          // and keeps its true origin scope. Precedence is unchanged because
-          // project and home roots share the same origin ordering.
+          // a cwd under home reaches home skill folders as project ancestors — skip so each folder scans once with its true origin; precedence unchanged (shared origin ordering)
           if (homeRootPaths.has(nodePath.resolve(rootPath))) {
             continue;
           }

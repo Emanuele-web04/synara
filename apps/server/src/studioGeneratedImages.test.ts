@@ -43,7 +43,7 @@ function recordingEngine(
   };
 }
 
-/** Creates a trusted "codex home" images root plus one source image inside it. */
+/** creates a trusted codex-home images root plus one source image inside */
 async function trustedSourceImage(root: string, fileName: string, content: string) {
   const trustedRoot = path.join(root, "codex-home", "generated_images");
   const sourcePath = path.join(trustedRoot, fileName);
@@ -129,7 +129,7 @@ describe("copyGeneratedImageToStudioWorkspace", () => {
         trustedSourceRoots: [trustedRoot],
       }),
     );
-    // A replayed completion (server restart, provider replay) copies the same bytes.
+    // a replayed completion (restart, provider replay) copies the same bytes
     const second = await Effect.runPromise(
       copyGeneratedImageToStudioWorkspace({
         sourcePath,
@@ -165,8 +165,7 @@ describe("copyGeneratedImageToStudioWorkspace", () => {
     const root = await temporaryRoot();
     const trustedRoot = path.join(root, "codex-home", "generated_images");
     await mkdir(trustedRoot, { recursive: true });
-    // A crafted provider payload pointing at an arbitrary local image must not be
-    // copied into the user-visible Studio folder.
+    // a crafted provider payload pointing at an arbitrary local image must not be copied into the user-visible Studio folder
     const outsideSource = path.join(root, "elsewhere", "private.png");
     await mkdir(path.dirname(outsideSource), { recursive: true });
     await writeFile(outsideSource, "outside bytes");

@@ -9,15 +9,14 @@ type ProjectAwarePullRequestEntry = Pick<
   readonly projectContexts?: ReadonlyArray<PullRequestProjectContext> | undefined;
 };
 
-/** Remote identity for a pull request. A PR belongs to a GitHub repository, not to each local
- * project or worktree that happens to have that repository checked out. */
+/** a PR belongs to a GitHub repository, not to each local project/worktree that has it checked out */
 export function pullRequestListRepositoryIdentity(
   entry: Pick<PullRequestListEntry, "repository" | "number">,
 ): string {
   return `${entry.repository.trim().toLowerCase()}#${entry.number}`;
 }
 
-/** Project associations for a repository-level row, with a legacy fallback for older payloads. */
+/** project associations for a repository-level row, with a legacy fallback for older payloads */
 export function pullRequestListProjectContexts(
   entry: ProjectAwarePullRequestEntry,
 ): PullRequestProjectContext[] {
@@ -88,9 +87,7 @@ function preferredProjectContext(
   );
 }
 
-/** Collapse project/worktree fan-out into one visible row per GitHub PR while retaining every
- * local project association. The chosen top-level project is only the context used to open the
- * detail panel; remote identity and aggregate pin state remain repository-level. */
+/** one visible row per GitHub PR retaining every local association; the top-level project is only the context used to open the detail panel */
 export function coalescePullRequestListEntries(
   entries: readonly PullRequestListEntry[],
   options: { readonly preferredProjectId?: ProjectId | undefined } = {},
@@ -118,7 +115,7 @@ export function coalescePullRequestListEntries(
   });
 }
 
-/** Update one project-owned pin inside an aggregate row without changing its selected context. */
+/** update one project-owned pin without changing the row's selected context */
 export function updatePullRequestListEntryProjectPin<T extends ProjectAwarePullRequestEntry>(
   entry: T,
   projectId: ProjectId,

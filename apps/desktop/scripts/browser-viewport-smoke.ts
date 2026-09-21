@@ -1,5 +1,3 @@
-// Exercises real Chromium viewport recovery after browser_resize emulation.
-// Uses an isolated Electron profile and a synthetic page through DesktopBrowserManager.
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,7 +33,6 @@ async function smoke(): Promise<void> {
     webContents.debugger.attach("1.3");
     const viewport = () => webContents.executeJavaScript("({width:innerWidth,height:innerHeight})");
     const waitForViewport = async (expected: { width: number; height: number }) => {
-      // View resizing crosses Chromium processes; poll the resulting layout, not a mock.
       for (let attempt = 0; attempt < 100; attempt++) {
         const actual = await viewport();
         if (actual.width === expected.width && actual.height === expected.height) return;

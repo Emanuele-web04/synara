@@ -47,16 +47,10 @@ export interface ProviderModelOptionGroup {
   options: ProviderModelOption[];
 }
 
-// Normalize known families to their canonical casing, keeping the provider's
-// variant wording. Unknown or freeform names pass through unchanged.
 function normalizeCatalogModelName(name: string): string {
   return normalizeModelDisplayName(name);
 }
 
-/**
- * Returns the provider provenance shown when a model is detached from its
- * normal upstream-provider group (for example, inside Favourites).
- */
 export function providerModelOptionProvenanceLabel(input: {
   provider: ProviderKind;
   option: ProviderModelOption;
@@ -113,16 +107,12 @@ function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string
   return normalizeModelSlug(slug, provider) ?? slug;
 }
 
-// Claude discovery order comes from the CLI's own catalog, which interleaves
-// families (Haiku ahead of Opus) and shifts with every CLI release. Rank Claude
-// models by our curated catalog instead so the picker stays strongest-first and
-// static-only models land next to their family rather than after the list.
+// the CLI's own catalog interleaves families (Haiku ahead of Opus) and shifts per release — rank Claude by our curated catalog so the picker stays strongest-first
 const CLAUDE_CATALOG_RANK_BY_SLUG: ReadonlyMap<string, number> = new Map(
   MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((model, index) => [model.slug as string, index]),
 );
 
-// Models the CLI exposes but the catalog does not know yet (a release landing
-// before Synara updates) sort first so they stay visible at the top.
+// Models the CLI exposes but the catalog does not know yet (a release landing before Synara updates) sort first so they stay visible at the top.
 function orderClaudeModelOptions<T extends ProviderModelOption>(
   options: ReadonlyArray<T>,
 ): ReadonlyArray<T> {
@@ -153,7 +143,6 @@ export function mergeDynamicModelOptions(input: {
     upstreamProviderName?: string | null | undefined;
   }>;
 }): ReadonlyArray<ProviderModelOption & { isCustom?: boolean }> {
-  // Custom and selected-model placeholders have generated names, not curated metadata.
   const staticNameBySlug = new Map(
     input.staticOptions.filter((model) => !model.isCustom).map((model) => [model.slug, model.name]),
   );
@@ -201,8 +190,7 @@ export function mergeDynamicModelOptions(input: {
     });
   }
 
-  // Droid validates model values against its live ACP select options, so an
-  // arbitrary custom slug is guaranteed to fail at session configuration.
+  // Droid validates model values against its live ACP select options, so an arbitrary custom slug is guaranteed to fail at session configuration.
   const customOnlyModels =
     input.provider === "droid"
       ? []
@@ -306,7 +294,6 @@ export function groupProviderModelOptionsWithFavorites(input: {
   ];
 }
 
-/** Long grouped model lists collapse provider sections to keep submenus scannable. */
 export const COLLAPSIBLE_MODEL_GROUP_THRESHOLD = 3;
 
 export function shouldUseCollapsibleModelGroups(groupCount: number, isSearching: boolean): boolean {

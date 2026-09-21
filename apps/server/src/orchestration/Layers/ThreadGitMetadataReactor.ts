@@ -209,9 +209,7 @@ const make = Effect.gen(function* () {
     });
   });
 
-  // Mid-turn VCS transitions (commit/checkout/rebase) refresh the durable thread
-  // metadata immediately; long-running turns would otherwise leave the projected
-  // branch stale until the turn boundary reconciliation.
+  // mid-turn VCS transitions refresh durable metadata immediately — a long turn would otherwise leave the projected branch stale until turn-boundary reconciliation
   const captureVcsMetadata = Effect.fnUntraced(function* (event: VcsStateChangedEvent) {
     const context = yield* resolveWorkspaceContext(event.threadId);
     if (!context) return;
@@ -320,9 +318,7 @@ const make = Effect.gen(function* () {
   });
 
   const processProviderEvent = (event: ProviderRuntimeEvent) => {
-    // Native subagent lifecycle events carry the parent Synara thread id and the child identity
-    // in providerRefs. Treating them as parent turns would make shared-root ownership ambiguous
-    // and suppress reconciliation when the actual parent turn completes.
+    // native subagent lifecycle events carry the parent thread id — treating them as parent turns would make shared-root ownership ambiguous and suppress reconciliation when the parent turn completes
     if (event.providerRefs?.providerParentThreadId !== undefined) return Effect.void;
     if (event.type === "turn.started") return trackTurnStart(event);
     if (event.type === "vcs.state.changed") return captureVcsMetadata(event);

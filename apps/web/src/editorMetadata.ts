@@ -1,8 +1,3 @@
-// FILE: editorMetadata.ts
-// Purpose: Resolve the shared web-facing labels and icons for supported editors.
-// Layer: Web UI metadata
-// Exports: editor option builders used by the chat header and open-in picker.
-
 import { EDITORS, type EditorId } from "@synara/contracts";
 import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
 import { createElement, useState } from "react";
@@ -69,7 +64,6 @@ const EDITOR_ICONS: Partial<Record<EditorId, Icon>> = {
   datagrip: DataGripIcon,
   rustrover: JetBrainsIcon,
   "android-studio": AndroidStudioIcon,
-  // Reuse the sidebar's closed-project folder glyph so "Open in folder" matches.
   "file-manager": FolderClosed,
   "system-default": AppsIcon,
 };
@@ -116,30 +110,22 @@ function resolveNativeEditorIcon(editorId: EditorId): Icon {
   return EditorNativeIcon;
 }
 
-// Build labels from the shared catalog so newly supported editors appear without
-// duplicating the editor list across multiple UI components.
 export function resolveEditorLabel(editorId: EditorId, platform: string): string {
   if (editorId === "file-manager") {
     return isMacPlatform(platform) ? "Finder" : isWindowsPlatform(platform) ? "Explorer" : "Files";
   }
 
   if (editorId === "system-default") {
-    // macOS PDFs open in Preview by default; Windows/Linux use whatever viewer is
-    // registered as the system handler, so keep the label generic off-Mac.
     return isMacPlatform(platform) ? "Preview" : "Default app";
   }
 
   return EDITORS.find((editor) => editor.id === editorId)?.label ?? editorId;
 }
 
-// Keep the header/picker resilient even when a brand-specific icon does not exist yet.
 export function resolveEditorIcon(editorId: EditorId): Icon {
   return EDITOR_ICONS[editorId] ?? OpenCodeIcon;
 }
 
-// Build a single option for an editor id that may not appear in the platform's
-// installed-editor catalog (e.g. the always-available "system-default" opener that
-// surfaces opt into without it being part of `availableEditors`).
 export function resolveEditorOption(editorId: EditorId, platform: string): EditorOption {
   return {
     value: editorId,

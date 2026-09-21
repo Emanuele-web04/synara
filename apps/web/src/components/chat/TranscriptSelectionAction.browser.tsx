@@ -41,8 +41,7 @@ it("shows the three segmented actions and routes the quote to Side", async () =>
     await expect.element(toolbar).toBeVisible();
     expect(toolbar.element().textContent).toBe("Add to ChatAdd to SideAdd to new Chat");
     expect(toolbar.element().querySelectorAll("svg")).toHaveLength(0);
-    // Labels must never clip, and the rendered height must match the height the
-    // layout reserves when placing the toolbar above the selection.
+    // Labels must never clip, and the rendered height must match the height the layout reserves when placing the toolbar above the selection.
     for (const button of toolbar.element().querySelectorAll("button")) {
       expect(button.scrollWidth).toBeLessThanOrEqual(button.clientWidth);
     }

@@ -45,11 +45,6 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 
 export interface NewThreadNavigationOptions {
-  /**
-   * Search params applied when the hook navigates to the created thread.
-   * Lets callers keep view-level state (e.g. the editor workspace view)
-   * across the route change; default navigation clears all search params.
-   */
   search?: (previous: Record<string, unknown>) => Record<string, unknown>;
 }
 
@@ -76,8 +71,7 @@ export function useHandleNewThread() {
     options?: NewThreadOptions,
     navigation?: NewThreadNavigationOptions,
   ): Promise<ThreadId | null> => {
-    // Project/thread targets are not authoritative until hydration completes. Read the
-    // store at call time so a stale UI callback cannot mint a draft during hydration.
+    // Project/thread targets are not authoritative until hydration completes. Read the store at call time so a stale UI callback cannot mint a draft during hydration.
     if (!useStore.getState().threadsHydrated) {
       return Promise.resolve(null);
     }
@@ -191,7 +185,6 @@ export function useHandleNewThread() {
       projectId,
       routeThreadId: focusedThreadId,
     });
-    // Read from the store at call time so post-sync sidebar flows can use the latest project defaults.
     const projectDefaultModelSelection =
       useStore.getState().projects.find((project) => project.id === projectId)
         ?.defaultModelSelection ?? null;
@@ -253,8 +246,7 @@ export function useHandleNewThread() {
         projectDefaultModelSelection,
         projectId,
       });
-    // Terminal-first threads need a real orchestration thread immediately so
-    // the sidebar can render them as durable rows instead of draft-only routes.
+    // Terminal-first threads need a real orchestration thread immediately so the sidebar can render them as durable rows instead of draft-only routes.
     const createTerminalThread = async (
       threadId: ThreadId,
       creationState: ReturnType<typeof resolveCreationState>,
@@ -378,19 +370,14 @@ export function useHandleNewThread() {
         defaultEnvMode,
       });
       const committed = await stageDraftNavigation({
-        // Keep the previous routed draft alive while the destination loads. Replacing the
-        // project's primary slot earlier makes the route guard redirect the old URL to Home.
+        // Keep the previous routed draft alive while the destination loads. Replacing the project's primary slot earlier makes the route guard redirect the old URL to Home.
         stage: () => {
           registerDraftThread(threadId, { projectId, ...draftSeed });
           activateThreadEntryPoint(threadId);
-          // Seed the draft from the sticky (last-used) selection so a new chat
-          // reopens with the model and options used most recently.
           applyUsableStickyState(threadId);
           applyProviderOverride(threadId);
         },
-        // Mark the draft-landing navigation as a transition so the new route
-        // subtree renders interruptibly and the browser can paint the chat
-        // mount loader immediately instead of freezing on the synchronous commit.
+        // mark the draft-landing navigation as a transition so the route subtree renders interruptibly and the mount loader paints instead of freezing on the sync commit
         navigate: () =>
           new Promise<void>((resolve, reject) => {
             startTransition(() => {
@@ -401,8 +388,7 @@ export function useHandleNewThread() {
               }).then(resolve, reject);
             });
           }),
-        // TanStack resolves an older navigate() promise when a newer navigation supersedes it.
-        // Verify the committed route before deleting the previous project draft.
+        // TanStack resolves an older navigate() when a newer one supersedes it — verify the committed route before deleting the previous project draft
         isDestinationActive: () => router.state.location.pathname === `/${threadId}`,
         finalize: () => setProjectDraftThreadId(projectId, threadId, draftSeed),
         rollback: () => {

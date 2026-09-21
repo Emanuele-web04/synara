@@ -1,7 +1,3 @@
-// FILE: AcpSessionRuntime.epoch.test.ts
-// Purpose: Regression test for atomic session/update capture during the setSessionEpoch transition window.
-// Layer: Provider ACP runtime tests
-
 import * as OfficialAcp from "@agentclientprotocol/sdk";
 import { Deferred, Effect, Fiber, Layer, Option, Queue, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -12,11 +8,6 @@ import { AcpSessionRuntime } from "./AcpSessionRuntime.ts";
 const FINAL_SESSION_ID = "session-epoch-final";
 const PENDING_EVENT_CAPACITY = 2_048;
 
-/**
- * Bridges an in-memory OfficialAcp.agent() to the runtime through a fake
- * ChildProcessSpawner: the "child" stdin/stdout are Queue-bridged to the
- * agent's ReadableStream/WritableStream transport.
- */
 function makeInMemoryAgentSpawner() {
   const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
   const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
@@ -81,7 +72,6 @@ function makeInMemoryAgentSpawner() {
   };
 }
 
-/** Settles the in-memory transport and the client's session/update dispatch chain. */
 async function flushTransport(rounds = 20): Promise<void> {
   for (let i = 0; i < rounds; i++) {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -108,15 +98,10 @@ describe("AcpSessionRuntime session epoch transition", () => {
     const program = Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;
 
-      // Start the runtime in a fiber; it will block inside the transition window.
       const startFiber = yield* runtime.start().pipe(Effect.forkChild);
 
-      // Wait until setSessionEpoch has captured the pending buffer but has
-      // not yet installed the final epoch.
       yield* Deferred.await(transitionReached);
 
-      // Deliver a session/update for the final session id inside the window
-      // and let it settle into the pending buffer.
       yield* Effect.promise(() =>
         getAgentConnection().client.notify(OfficialAcp.methods.client.session.update, {
           sessionId: FINAL_SESSION_ID,
@@ -130,12 +115,10 @@ describe("AcpSessionRuntime session epoch transition", () => {
       );
       yield* Effect.promise(() => flushTransport());
 
-      // Resume the transition and join the start fiber.
       yield* Deferred.succeed(transitionPause, undefined);
       const started = yield* Fiber.join(startFiber);
       expect(started.sessionId).toBe(FINAL_SESSION_ID);
 
-      // Let any in-flight handler dispatch settle before asserting.
       yield* Effect.promise(() => flushTransport());
 
       const commands = yield* runtime.getAvailableCommands;
@@ -147,7 +130,6 @@ describe("AcpSessionRuntime session epoch transition", () => {
       expect(Option.isSome(epoch.activeSessionId)).toBe(true);
       expect(Option.getOrThrow(epoch.activeSessionId)).toBe(FINAL_SESSION_ID);
 
-      // No pending state may remain after the transition.
       const pending = yield* runtime.getPendingSessionNotificationCount();
       expect(pending).toBe(0);
     }).pipe(Effect.provide(runtimeLayer), Effect.scoped);

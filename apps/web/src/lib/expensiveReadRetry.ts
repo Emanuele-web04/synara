@@ -1,9 +1,4 @@
-// FILE: expensiveReadRetry.ts
-// Purpose: Shared retry policy for WebSocket RPC capacity backpressure.
-// Layer: Web data-fetching helpers
-// The server rejects saturated unary calls before the handler runs
-// (retryable: true, retryAfterMs: 250). Callers must honor that contract
-// instead of treating capacity as a hard failure.
+// the server rejects saturated unary calls before the handler runs (retryable, retryAfterMs: 250) — honor that contract instead of treating capacity as a hard failure
 
 const RPC_CAPACITY_EXCEEDED_CODES = new Set([
   "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
@@ -41,10 +36,6 @@ export function getRpcCapacityRetryAfterMs(error: unknown): number {
     : DEFAULT_RPC_CAPACITY_RETRY_MS;
 }
 
-/**
- * Delay for a bounded in-place unary retry. Returns null when the error is not
- * a retryable capacity rejection or the attempt budget is exhausted.
- */
 export function getUnaryRpcCapacityRetryDelayMs(
   error: unknown,
   previousAttempts: number,
@@ -55,8 +46,7 @@ export function getUnaryRpcCapacityRetryDelayMs(
 }
 
 export function shouldRetryExpensiveRead(failureCount: number, error: unknown): boolean {
-  // Capacity rejections are already retried in-place by wsTransport.request().
-  // A second query-level budget would multiply into 13×13 admission probes.
+  // capacity rejections are already retried in-place by wsTransport.request(); a second query-level budget would multiply into 13x13 admission probes
   if (isRetryableRpcCapacityExceededError(error)) return false;
   return failureCount < DEFAULT_GENERIC_RETRY_LIMIT;
 }

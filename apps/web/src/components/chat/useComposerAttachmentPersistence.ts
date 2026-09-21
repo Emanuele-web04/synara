@@ -8,10 +8,7 @@ import {
 import { composerImageBlobKey, persistComposerImageBlob } from "../../lib/composerImageBlobStore";
 import { readFileAsDataUrl } from "../../lib/composerSend";
 
-// Shared by the live-composer and prompt-history attachment sync effects:
-// AppSnap images persist their bytes as IndexedDB blobs (reusing an existing
-// blob key when valid), everything else inlines a data URL. Falls back to the
-// already-persisted attachments for images whose serialization fails.
+// AppSnap images persist bytes as IndexedDB blobs (reusing a valid key), everything else inlines a data URL; falls back to already-persisted attachments on failure
 async function stagePersistedComposerImageAttachments(input: {
   threadId: ThreadId;
   images: ReadonlyArray<ComposerImageAttachment>;

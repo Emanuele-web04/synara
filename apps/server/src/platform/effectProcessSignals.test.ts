@@ -1,4 +1,4 @@
-// Exercises the installed Effect patch, including its compiled runtime entrypoint.
+// exercises the installed Effect patch including its compiled runtime entrypoint
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -24,7 +24,7 @@ describe("Effect process signal guards", () => {
         stdio: [],
         kill: vi.fn(() => true),
       });
-      // No OS signals may leave this test, even when validating an unpatched runtime.
+      // no OS signals may leave this test, even when validating an unpatched runtime
       const kill = vi.spyOn(process, "kill").mockReturnValue(true);
       const spawn = vi.spyOn(nodeChildProcess, "spawn").mockImplementation(() => {
         queueMicrotask(() => fake.emit("spawn"));

@@ -1,7 +1,3 @@
-// FILE: DiffPanelFileList.tsx
-// Purpose: Multi-file diff list for the review panel, including per-file actions and previews.
-// Layer: Diff panel UI
-
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import {
   isSupportedLocalImagePath,
@@ -41,9 +37,7 @@ export interface DiffFileChatActions {
 
 const DIFF_FILE_ACTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
 
-// Per-file actions menu rendered in the custom header's trailing slot, left of
-// the collapse chevron. Marked with data-diff-header-menu so header clicks on
-// it do not toggle the file collapse state.
+// marked data-diff-header-menu so header clicks on it don't toggle the file collapse state
 function DiffFileHeaderActionsMenu(props: {
   filePath: string;
   canEditFile: boolean;
@@ -140,9 +134,7 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
   const { chatActions, isCollapsed } = props;
-  // A deleted file no longer exists in the working tree, binary previews
-  // (images, PDFs) are rejected by the text read, and symlinks or submodule
-  // entries cannot be written as the text shown here.
+  // a deleted file no longer exists in the working tree, binary previews are rejected by the text read, and symlinks/submodules can't be written as the text shown
   const canEditFile =
     props.fileDiff.type !== "deleted" &&
     !isSupportedLocalPreviewFilePath(filePath) &&
@@ -169,9 +161,7 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
   const { onBlameLine } = props;
   const handleLineClick = onBlameLine
     ? (line: DiffLineClickProps) => {
-        // Deletion lines blame the tree that still has the content: for a
-        // rename that is the old path, since the new name does not exist at
-        // the blame revision.
+        // deletion lines blame the tree that still has the content: for a rename that's the old path, since the new name doesn't exist at the blame revision
         const blamePath =
           line.lineType === "change-deletion"
             ? (resolveFileDiffPrevPath(props.fileDiff) ?? filePath)
@@ -254,8 +244,7 @@ export const DiffPanelFileList = function DiffPanelFileList(props: {
     <FileDiffSurface className="h-full min-h-0 overflow-auto px-2 pb-2">
       {props.renderableFiles.map((fileDiff) => {
         const fileKey = buildFileDiffRenderKey(fileDiff);
-        // Include render mode so @pierre/diffs remounts when stacked ↔ split changes
-        // (diffStyle is effectively mount-time config on FileDiff).
+        // include render mode so @pierre/diffs remounts when stacked↔split changes (diffStyle is effectively mount-time config on FileDiff)
         const themedFileKey = `${fileKey}:${props.resolvedTheme}:${props.diffRenderMode}`;
         return (
           <DiffPanelFileRow

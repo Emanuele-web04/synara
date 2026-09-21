@@ -1,14 +1,7 @@
-// FILE: platform.ts
-// Purpose: Detects the visitor's operating system and Mac CPU architecture from
-//          the browser, so download CTAs can recommend the right installer.
-// Layer: Shared client/server utility (pure, no React)
-// Depends on: browser navigator + WebGL (only when called in the browser)
-
 export type OS = "mac" | "windows" | "linux" | "unknown";
 export type MacArch = "arm64" | "x64";
 
-// Derives the OS from the user-agent/platform strings. Kept pure so it can run on
-// the server (for an initial guess) and the client (for the real detection).
+// kept pure so it can run on the server for an initial guess and on the client for real detection
 export function detectOS(userAgent: string, platform: string): OS {
   const fingerprint = `${userAgent} ${platform}`.toLowerCase();
 
@@ -22,8 +15,6 @@ export function detectOS(userAgent: string, platform: string): OS {
   return "unknown";
 }
 
-// Convenience wrapper that reads the live navigator. Returns "unknown" on the
-// server where navigator is undefined.
 export function detectCurrentOS(): OS {
   if (typeof navigator === "undefined") return "unknown";
   const withUaData = navigator as Navigator & {
@@ -32,11 +23,7 @@ export function detectCurrentOS(): OS {
   return detectOS(navigator.userAgent, withUaData.userAgentData?.platform ?? navigator.platform);
 }
 
-// Best-effort Apple Silicon vs Intel detection. Browsers don't expose the CPU
-// arch directly, so we sniff the WebGL renderer string: Apple Silicon reports an
-// "Apple" GPU, while Intel Macs report Intel/AMD/Radeon. When we can't tell, we
-// default to Apple Silicon since that's the overwhelming majority of new Macs —
-// and the UI always offers the Intel build as an alternative.
+// browsers don't expose CPU arch — sniff the WebGL renderer string (Apple GPU = Silicon, Intel/AMD/Radeon = Intel); default to Silicon since it's most new Macs and the UI offers Intel anyway
 export function detectMacArch(): MacArch {
   if (typeof document === "undefined") return "arm64";
 

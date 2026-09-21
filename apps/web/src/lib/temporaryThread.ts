@@ -1,8 +1,3 @@
-// FILE: temporaryThread.ts
-// Purpose: Isolates temporary-thread auto-delete decisions from route lifecycle effects.
-// Layer: Web route/domain helpers
-// Exports: switch-aware resolver for temporary thread cleanup
-
 import type { ThreadId } from "@synara/contracts";
 import type { DraftThreadState } from "../composerDraftStore";
 

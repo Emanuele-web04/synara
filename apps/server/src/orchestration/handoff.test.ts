@@ -1,8 +1,3 @@
-// FILE: handoff.test.ts
-// Purpose: Verifies bootstrap transcripts stay within the replay char budget.
-// Layer: Orchestration mapping tests
-// Depends on: handoff.
-
 import { MessageId, type OrchestrationMessage, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -121,12 +116,11 @@ describe("buildPriorTranscriptBootstrapText", () => {
     expect(text).not.toBeNull();
     expect(text!.length).toBeLessThanOrEqual(32_000);
     expect(text).toContain("omitted to fit the context budget");
-    // The most recent messages survive verbatim; the oldest summaries are gone.
+    // the most recent messages survive verbatim; oldest summaries are gone
     expect(text).toContain("marker-299");
     expect(text).toContain("marker-294");
     expect(text).not.toContain("marker-0 ");
     expect(text).not.toContain("marker-1 ");
-    // Kept summaries stay in chronological order.
     expect(text!.indexOf("marker-250")).toBeLessThan(text!.indexOf("marker-290"));
   });
 
@@ -143,14 +137,7 @@ describe("buildPriorTranscriptBootstrapText", () => {
   });
 
   it("never lets the omission header push the newest message past the budget", () => {
-    // Adversarial tight budget: without reserving room for the "Earlier
-    // conversation summary (...) omitted..." header before selecting
-    // summary lines, the budget accountant lets summary lines fill the
-    // entire remaining allowance, then tacks the header on top -- pushing
-    // the assembled text past maxChars. The final truncateText clips from
-    // the end, which is the recent-messages section, so the newest message
-    // (the one newest-first retention exists to protect) gets clipped
-    // instead of an older summary line.
+    // without reserving room for the omission header, summary lines fill the allowance then the header pushes past maxChars — truncateText clips the end, which is the recent-messages section
     const earlierMessages = Array.from({ length: 5 }, (_, index) =>
       message(index, index % 2 === 0 ? "user" : "assistant", `EARLY-${index} ${"e".repeat(60)}`),
     );
@@ -169,9 +156,7 @@ describe("buildPriorTranscriptBootstrapText", () => {
 
     expect(text).not.toBeNull();
     expect(text!.length).toBeLessThanOrEqual(600);
-    // The newest message must survive intact, including its trailing marker
-    // -- if the header overflow clips the tail, this substring is the first
-    // casualty.
+    // the newest message must survive intact — if the header overflow clips the tail this substring is the first casualty
     expect(text).toContain("NEWEST-START");
     expect(text).toContain("NEWEST-END-UNIQUE-MARKER");
     expect(text).toContain("omitted to fit the context budget");

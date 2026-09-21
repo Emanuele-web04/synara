@@ -45,8 +45,6 @@ import {
 } from "./ProviderHealth";
 import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance";
 
-// ── Test helpers ────────────────────────────────────────────────────
-
 const encoder = new TextEncoder();
 
 function mockHandle(
@@ -196,10 +194,6 @@ const cachedReadyCodexStatus = {
   message: "Codex CLI is installed and authenticated.",
 } satisfies ServerProviderStatus;
 
-/**
- * Create a temporary CODEX_HOME scoped to the current Effect test.
- * Cleanup is registered in the test scope rather than via Vitest hooks.
- */
 function withTempCodexHome(configContent?: string) {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -211,8 +205,6 @@ function withTempCodexHome(configContent?: string) {
 
     yield* Effect.acquireRelease(
       Effect.sync(() => {
-        // Override the runtime and source homes so ambient state cannot skew
-        // the resolved CODEX_HOME during this test.
         const overrides: Record<string, string> = {
           CODEX_HOME: tmpDir,
           SYNARA_HOME: runtimeDir,
@@ -1040,17 +1032,9 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     });
   });
 
-  // ── checkCodexProviderStatus tests ────────────────────────────────
-  //
-  // These tests control CODEX_HOME to ensure the custom-provider detection
-  // in checkCodexProviderStatus does not interfere with the auth-probe
-  // path being tested.
-
   describe("checkCodexProviderStatus", () => {
     it.effect("returns ready when codex is installed and authenticated", () =>
       Effect.gen(function* () {
-        // Point CODEX_HOME at an empty tmp dir (no config.toml) so the
-        // default code path (OpenAI provider, auth probe runs) is exercised.
         yield* withTempCodexHome();
         const status = yield* checkCodexProviderStatus;
         assert.strictEqual(status.provider, "codex");
@@ -1288,8 +1272,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     );
   });
 
-  // ── Custom model provider: checkCodexProviderStatus integration ───
-
   describe("checkCodexProviderStatus with custom model provider", () => {
     it.effect("skips auth probe and returns ready when a custom model provider is configured", () =>
       Effect.gen(function* () {
@@ -1313,8 +1295,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         );
       }).pipe(
         Effect.provide(
-          // The spawner only handles --version; if the test attempts
-          // "login status" the throw proves the auth probe was NOT skipped.
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
@@ -1347,7 +1327,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       Effect.gen(function* () {
         yield* withTempCodexHome('model_provider = "openai"\n');
         const status = yield* checkCodexProviderStatus;
-        // The auth probe runs and sees "not logged in" → error
         assert.strictEqual(status.status, "error");
         assert.strictEqual(status.authStatus, "unauthenticated");
       }).pipe(
@@ -1363,8 +1342,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
   });
-
-  // ── parseAuthStatusFromOutput pure tests ──────────────────────────
 
   describe("parseAuthStatusFromOutput", () => {
     it("exit code 0 with no auth markers is ready", () => {
@@ -1393,8 +1370,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(parsed.authStatus, "unknown");
     });
   });
-
-  // ── readCodexConfigModelProviderForEnv tests ─────────────────────────────
 
   describe("readCodexConfigModelProviderForEnv", () => {
     it.effect("returns undefined when config file does not exist", () =>
@@ -1464,8 +1439,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }),
     );
   });
-
-  // ── checkClaudeProviderStatus tests ──────────────────────────
 
   describe("checkClaudeProviderStatus", () => {
     it.effect("returns ready when claude is installed and authenticated", () =>
@@ -1798,8 +1771,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
                 }
                 if (joined === "auth status") {
                   authStatusCalls += 1;
-                  // First probe loses a refresh-token rotation race; the retry
-                  // observes the settled, rotated token.
                   return authStatusCalls === 1
                     ? {
                         stdout: '{"loggedIn":false,"authMethod":"none"}\n',
@@ -2651,8 +2622,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
   });
-
-  // ── parseClaudeAuthStatusFromOutput pure tests ────────────────────
 
   describe("parseClaudeAuthStatusFromOutput", () => {
     it("exit code 0 with no auth markers is ready", () => {

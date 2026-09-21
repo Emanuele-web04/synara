@@ -65,8 +65,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     ]);
     assert.equal(MAC_ICON_ASSETS_CAR_STAGE_PATH, "apps/desktop/resources/Assets.car");
     assert.equal(MAC_ICON_ASSETS_CAR_BUNDLE_PATH, "Resources/Assets.car");
-    // macOS 26 reads the layered icon out of Assets.car; without this key the
-    // bundle falls back to the flat ICNS and never gets the glass material.
+    // without this key macOS 26 falls back to the flat ICNS and never gets the glass material
     assert.equal(extendInfo.CFBundleIconName, MAC_ICON_ASSET_NAME);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
     assert.equal(extendInfo.NSScreenCaptureUsageDescription, undefined);

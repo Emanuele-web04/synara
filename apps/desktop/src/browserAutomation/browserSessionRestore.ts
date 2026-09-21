@@ -66,7 +66,6 @@ export function sessionCookieParameters(cookie: Cookie): Record<string, unknown>
     )
       return null;
   }
-  // URL-only preserves host-only cookies; domain cookies retain their leading dot.
   return {
     name: cookie.name,
     value: cookie.value,
@@ -83,7 +82,6 @@ export function sessionCookieParameters(cookie: Cookie): Record<string, unknown>
   };
 }
 
-/** No snapshot from an unclean run is replayed, including an interrupted logout. */
 export class BrowserSessionRestore {
   private keyProtection: VaultKeyProtection | undefined;
   private disposed = false;
@@ -142,7 +140,6 @@ export class BrowserSessionRestore {
       this.revision++;
       if (this.clean) this.invalidate();
     });
-    // Fresh installs have no sessions to decrypt. Defer OS key creation until an import.
     if (!existsSync(this.snapshotPath)) {
       this.available = true;
       return;
@@ -227,7 +224,6 @@ export class BrowserSessionRestore {
       const cookies = Schema.decodeUnknownSync(Schema.Array(Cookie))(
         await this.backend.read(),
       ).filter((cookie) => cookie.session && this.domains.has(cookie.domain));
-      // Refuse to claim continuity if isolation metadata cannot be replayed.
       if (cookies.some((cookie) => sessionCookieParameters(cookie) === null))
         throw new Error("Unsupported session cookie metadata.");
       const plaintext = Buffer.from(

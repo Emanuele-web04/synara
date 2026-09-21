@@ -1,8 +1,3 @@
-// FILE: composerMentions.ts
-// Purpose: Share parsing/formatting helpers for `@...` composer mentions, including quoted paths.
-// Layer: Web composer helper
-// Exports: mention token formatters plus regex helpers used by composer parsing and prompt sync.
-
 import type { ProviderMentionReference, ProviderSkillReference } from "@synara/contracts";
 import { isThreadMentionPath, threadIdFromThreadMentionPath } from "@synara/shared/threadMentions";
 
@@ -10,9 +5,7 @@ export function skillMentionPrefix(provider: string): string {
   return provider === "pi" ? "/skill:" : "/";
 }
 
-// The alternation must be unambiguous — a backslash may only match the escape
-// branch — or unclosed `@"` + a backslash run backtracks exponentially on the
-// per-keystroke composer parse (ReDoS).
+// the alternation must be unambiguous — a backslash may only match the escape branch — or unclosed @" + a backslash run backtracks exponentially on the per-keystroke parse (ReDoS)
 const QUOTED_MENTION_PATH_SOURCE = String.raw`((?:\\.|[^"\\])*)`;
 
 export function createComposerMentionTokenRegex(options: {

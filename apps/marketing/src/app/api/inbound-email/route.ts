@@ -1,8 +1,3 @@
-// FILE: api/inbound-email/route.ts
-// Purpose: Verifies Resend inbound webhooks and forwards the public feedback alias privately.
-// Layer: App Router route handler (Node.js runtime)
-// Depends on: Resend and server-only webhook/forwarding configuration.
-
 import { Resend } from "resend";
 
 export const runtime = "nodejs";

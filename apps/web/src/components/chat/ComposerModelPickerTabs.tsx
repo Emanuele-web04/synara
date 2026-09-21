@@ -1,9 +1,3 @@
-// FILE: ComposerModelPickerTabs.tsx
-// Purpose: Icon tab strip of the composer model picker — starred presets, one tab per
-//   offered provider, and a shortcut to provider settings.
-// Layer: Chat composer presentation
-// Depends on: provider icons/availability helpers and tooltip primitives.
-
 import { type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
 import { type ReactNode } from "react";
 

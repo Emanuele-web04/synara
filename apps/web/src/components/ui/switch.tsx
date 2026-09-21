@@ -1,10 +1,5 @@
 "use client";
 
-// FILE: switch.tsx
-// Purpose: Shared accent-colored on/off switch primitive used by settings, menus, and dialogs.
-// Layer: Base UI component
-// Exports: Switch plus track/thumb class names for compact switch-shaped controls
-
 import { Switch as SwitchPrimitive } from "@base-ui/react/switch";
 
 import { cn } from "~/lib/utils";

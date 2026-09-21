@@ -48,8 +48,7 @@ export function usePendingUserInputDrafts(
     [threadId],
   );
 
-  // Command acceptance is not delivery. Keep the answer through transient
-  // failures and only discard it after authoritative settlement.
+  // command acceptance is not delivery — keep the answer through transient failures, discard only after authoritative settlement
   useEffect(() => {
     const confirmed = new Set(
       (interactions ?? [])

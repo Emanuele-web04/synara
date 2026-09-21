@@ -1,7 +1,3 @@
-// FILE: providerUsage/providers/droid.test.ts
-// Purpose: Covers Factory CLI v2 credential decryption, live billing-limit parsing, and
-// FACTORY_API_KEY fallback without redeeming or modifying rotating Factory refresh tokens.
-
 import { createCipheriv, randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";

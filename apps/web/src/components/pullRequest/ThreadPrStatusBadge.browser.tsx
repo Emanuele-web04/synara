@@ -1,7 +1,3 @@
-// FILE: ThreadPrStatusBadge.browser.tsx
-// Purpose: Guards the icon-only PR badge, its accessible name, and its clickable destination.
-// Layer: Pull request presentation test
-
 import "../../index.css";
 
 import { page } from "vitest/browser";

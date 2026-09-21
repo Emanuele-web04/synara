@@ -1,6 +1,4 @@
-// Integration test for the production /api/local-image Effect-based route.
-// Boots the same `localImageEffectRouteLayer` that `makeEffectHttpRouteLayer` wires
-// into `effectServer.ts` and exercises it through a real HTTP listener.
+// boots the same localImageEffectRouteLayer effectServer wires in, exercised through a real HTTP listener
 import http from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -206,7 +204,7 @@ describe("localImageEffectRouteLayer", () => {
   });
 
   it("previews and downloads a simulator PNG outside the allowed roots only with its own grant", async () => {
-    // Keep this outside os.tmpdir(): temporary images are already allowlisted.
+    // keep this outside os.tmpdir() — temporary images are already allowlisted
     const externalRoot = mkdtempSync(path.join(process.cwd(), ".simulator-preview-"));
     tempDirs.push(externalRoot);
     const desktop = path.join(externalRoot, "Desktop");
@@ -257,16 +255,13 @@ describe("localImageEffectRouteLayer", () => {
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("application/pdf");
       expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-      // The in-app viewer fetches bytes cross-origin, but only trusted app
-      // origins should get a CORS-readable response.
+      // the viewer fetches bytes cross-origin but only trusted app origins should get a CORS-readable response
       expect(response.headers.get("access-control-allow-origin")).toBe("synara://app");
       expect(response.headers.get("vary")).toBe("Origin");
-      // Streamed responses must still advertise their size so the browser's
-      // PDF viewer can show load progress.
+      // streamed responses must still advertise size so the PDF viewer shows progress
       expect(response.headers.get("content-length")).toBe("8");
       await expect(response.arrayBuffer()).resolves.toHaveProperty("byteLength", 8);
-      // No Content-Disposition: the browser must render the PDF inline in the
-      // preview iframe rather than trigger a download.
+      // no Content-Disposition — the browser must render the PDF inline in the preview iframe, not download it
       expect(response.headers.get("content-disposition")).toBeNull();
     });
   });

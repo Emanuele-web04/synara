@@ -1,12 +1,3 @@
-/**
- * providerRuntimeReconciliation - Pure live runtime/projection convergence plan.
- *
- * Provider Adapter state is live evidence; the provider session directory is a
- * durable routing cache; orchestration is the UI read model. This planner finds
- * stale lifecycle divergence without inventing successful completion.
- *
- * @module providerRuntimeReconciliation
- */
 import {
   TurnId,
   type OrchestrationSession,
@@ -21,14 +12,7 @@ import type { ProviderRuntimeBinding } from "./Services/ProviderSessionDirectory
 
 export const DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS = 15_000;
 
-/**
- * Absolute upper bound on a single turn. Past this the turn is settled even
- * when the live runtime still claims to be running, because every other signal
- * this planner trusts (a settled session, a missing session, a failed binding)
- * can be absent when a provider wedges mid-turn. `thread.updatedAt` advances on
- * every appended message, so a legitimately long-running turn keeps resetting
- * this clock and is never affected.
- */
+// absolute turn bound: every other trusted signal can be absent on a mid-turn wedge; thread.updatedAt advances on appended messages so a legitimately long turn keeps resetting it
 export const RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS = 45 * 60_000;
 
 export type ProviderRuntimeReconciliationPlan =
@@ -71,15 +55,7 @@ type TerminalProjectedSession = Omit<OrchestrationSession, "status"> & {
   readonly status: "ready" | "interrupted" | "stopped" | "error";
 };
 
-/**
- * A turn id as `OrchestrationSession.activeTurnId` and activity `turnId` require
- * it: trimmed non-empty, or null.
- *
- * A blank id means "no turn"; it is not a turn named "". Both fields are branded
- * `TurnId`s whose schema rejects `""`, and every value fed to this planner
- * (projection rows, live Adapter sessions, durable binding payloads) is built in
- * code with `makeUnsafe` and never re-decoded, so nothing upstream guarantees it.
- */
+// blank id = "no turn", not a turn named "" — branded TurnIds reject "", and every input is built via makeUnsafe and never re-decoded so nothing upstream guarantees it
 function turnIdOrNull(value: TurnId | string | null | undefined): TurnId | null {
   const trimmed = nonEmptyTrimmed(value ?? undefined);
   return trimmed === undefined ? null : TurnId.makeUnsafe(trimmed);
@@ -96,9 +72,6 @@ function terminalProjectedSession(
     case "interrupted":
     case "stopped":
     case "error":
-      // Copied verbatim into `thread.session.set`, so it has to satisfy
-      // `OrchestrationSession` on the way out even when the persisted row does
-      // not: `providerName`/`lastError` are trimmed-non-empty-or-null.
       return {
         ...session,
         status: session.status,
@@ -115,8 +88,7 @@ function terminalProjectedSession(
 
 function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | null {
   const session = thread.session;
-  // A queued start has no provider turn yet. Falling back to latestTurn here
-  // can attach the new request to an older terminal (or ingestion-lagged) turn.
+  // A queued start has no provider turn yet. Falling back to latestTurn here can attach the new request to an older terminal (or ingestion-lagged) turn.
   if (
     session?.status === "starting" &&
     turnIdOrNull(session.activeTurnId) === null &&
@@ -124,8 +96,7 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
   ) {
     return null;
   }
-  // A blank projected id is an absent id, so it must fall through to the latest
-  // running turn exactly like a missing one rather than short-circuiting on "".
+  // A blank projected id is an absent id, so it must fall through to the latest running turn exactly like a missing one rather than short-circuiting on "".
   return (
     turnIdOrNull(session?.activeTurnId) ??
     (thread.latestTurn?.state === "running" ? turnIdOrNull(thread.latestTurn.turnId) : null)
@@ -133,10 +104,6 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
 }
 
 function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
-  // The later of the session lifecycle timestamp and the thread timestamp:
-  // `thread.updatedAt` advances on every appended message, so a turn that is
-  // actively streaming output never counts as stale even though its session
-  // row only moves on lifecycle transitions.
   const sessionObservedAt = Date.parse(thread.session?.updatedAt ?? thread.updatedAt);
   const threadObservedAt = Date.parse(thread.updatedAt);
   const observedAt = Number.isFinite(sessionObservedAt)
@@ -177,8 +144,7 @@ export function bindingActiveTurnId(binding: ProviderRuntimeBinding | undefined)
   if (typeof payload !== "object" || payload === null || !("activeTurnId" in payload)) {
     return null;
   }
-  // A binding advertising a blank turn id owns no turn, and comparing it against
-  // a normalized projected turn id must not report spurious divergence.
+  // A binding advertising a blank turn id owns no turn, and comparing it against a normalized projected turn id must not report spurious divergence.
   return typeof payload.activeTurnId === "string" ? turnIdOrNull(payload.activeTurnId) : null;
 }
 
@@ -187,10 +153,7 @@ export function planProviderRuntimeReconciliation(input: {
   readonly bindings: ReadonlyArray<ProviderRuntimeBinding>;
   readonly liveSessions: ReadonlyArray<ProviderSession>;
   readonly pumpHealth: ReadonlyArray<ProviderRuntimeEventPumpHealth>;
-  // True when the runtime journal still holds rows for these candidate threads
-  // that ingestion has not applied. A starved projection is indistinguishable
-  // from a stale one, so settle plans hold off until those rows catch up
-  // (abandoned turns excepted).
+  // journal rows not yet ingested make projection staleness manufactured, not real — settle plans hold off until they catch up (abandoned turns excepted)
   readonly runtimeJournalLagging?: boolean;
   readonly nowMs: number;
   readonly staleAfterMs?: number;
@@ -217,19 +180,14 @@ export function planProviderRuntimeReconciliation(input: {
 
     const binding = bindingByThreadId.get(thread.id);
     const liveSession = liveSessionByThreadId.get(thread.id);
-    // The binding row can be gone entirely (a stop that removed it, a crashed
-    // start) - which is precisely the thread most likely to be stuck with
-    // nothing left that could ever settle it - so fall back to the thread's own
-    // provider instead of dropping the candidate.
+    // a missing binding is precisely the thread most likely stuck with nothing left to settle it — fall back to the thread's own provider
     const provider = binding?.provider ?? thread.modelSelection.provider;
     const detail = pumpDetail(provider, healthByProvider);
     const abandoned =
       lifecycleAgeMs >= maxTurnAgeMs && threadActivityAgeMs(thread, input.nowMs) >= maxTurnAgeMs;
     const abandonedDetail = ` Nothing has progressed on this thread for over ${Math.round(maxTurnAgeMs / 60_000)} minutes.${detail}`;
 
-    // Native child threads share a parent session and intentionally have no
-    // directory binding of their own; their parent's terminal events settle
-    // them. Only step in once the turn is abandoned outright.
+    // native child threads share the parent session and have no binding — the parent's terminal events settle them; step in only once the turn is fully abandoned
     if (!binding && !abandoned) continue;
 
     const projectedTurnId = projectedInFlightTurnId(thread);
@@ -250,24 +208,12 @@ export function planProviderRuntimeReconciliation(input: {
       continue;
     }
 
-    // Every plan below settles the projection on the absence of runtime
-    // evidence. A pump that is not healthy means this planner is blind: a
-    // quiet projection and a settled-looking live session are exactly what a
-    // stalled event stream produces for a turn that is in fact progressing.
-    // Never settle on evidence the process admits it cannot observe; the
-    // abandoned clock remains the escape hatch for a pump that never recovers.
+    // every plan settles on absence of runtime evidence, but an unhealthy pump means this planner is blind — never settle on unobservable evidence; the abandoned clock is the escape hatch
     const pumpHealth = healthByProvider.get(provider);
     if (pumpHealth !== undefined && pumpHealth.status !== "healthy" && !abandoned) continue;
-    // The same blindness applies one stage later: rows persisted to the
-    // runtime journal but not yet ingested mean the projection's staleness is
-    // manufactured, not evidence. A completed turn whose terminal events are
-    // still queued would otherwise be "recovered" as interrupted.
     if (input.runtimeJournalLagging === true && !abandoned) continue;
 
-    // Settling a projection is normally only safe when it names a concrete
-    // in-flight turn; ProviderCommandReactor owns failures before a start
-    // acquires one. An abandoned lifecycle is the exception: a session pinned in
-    // `starting`/`running` with no turn to name hangs the UI just as hard.
+    // settling normally requires naming a concrete in-flight turn (the reactor owns pre-start failures) — an abandoned lifecycle pinned starting/running with no turn is the exception
     if (projectedTurnId === null) {
       const session = thread.session;
       if (!abandoned || session === null) continue;
@@ -316,9 +262,7 @@ export function planProviderRuntimeReconciliation(input: {
         });
         continue;
       }
-      // `lastError` is trimmed-non-empty-or-null on the session command, and `??`
-      // does not fall back on "". A provider that reported failure without a
-      // message still has to say so rather than settle with a blank error.
+      // `lastError` is trimmed-non-empty-or-null on the session command, and `??` does not fall back on "". A provider that reported failure without a message still has to say so rather than settle with a blank error.
       const errorMessage =
         nonEmptyTrimmed(liveSession?.lastError) ??
         bindingLastError(binding) ??

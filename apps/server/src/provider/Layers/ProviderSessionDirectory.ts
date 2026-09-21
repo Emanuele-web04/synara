@@ -74,9 +74,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
                   runtimePayload: value.runtimePayload,
                 }),
               ),
-              // A binding for a provider that no longer exists behaves like no
-              // binding at all: the thread starts a fresh session instead of the
-              // whole lookup failing.
+              // a binding for a provider that no longer exists behaves like no binding — the thread starts fresh instead of failing the lookup
               Effect.catchTag("ProviderSessionDirectoryPersistenceError", (error) =>
                 Effect.logDebug("provider session directory ignored unknown persisted provider", {
                   threadId: value.threadId,

@@ -30,10 +30,6 @@ export function resolveLatestProjectTargetId(
   return resolveUsableProjectId(projects, latestProjectId);
 }
 
-/**
- * Last time each project was used, keyed by project id (see
- * `createProjectLastActivityAtSelector`). Projects absent from the map have no threads yet.
- */
 export type ProjectLastActivityAt = ReadonlyMap<ProjectId, string>;
 
 /**
@@ -77,9 +73,7 @@ export interface NewThreadTarget {
   readonly inheritContext: boolean;
 }
 
-// Single rule for which project a global "new thread" action targets: the focused project
-// when one is usable, otherwise the most recently used project. Shared by click, palette,
-// and keyboard entry points so they never disagree on the fallback.
+// focused project when usable, else most recently used — shared by click, palette, and keyboard so they never disagree on the fallback
 export function resolveNewThreadTarget(input: {
   currentProjectId: ProjectId | null;
   latestUsableProjectId: ProjectId | null;

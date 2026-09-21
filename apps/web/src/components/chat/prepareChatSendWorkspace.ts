@@ -138,8 +138,7 @@ export async function prepareChatSendWorkspace({
   // Keep the optimistic label short while the server asks Codex for a better summary.
   const title = buildPromptThreadTitleFallback(titleSeed);
   const currentStoreState = useStore.getState();
-  // Keep an optimistically selected Space across the command/snapshot race. The server
-  // validates this best-effort target and degrades genuinely stale/deleted ids to Void.
+  // keep an optimistically selected Space across the command/snapshot race; the server validates this best-effort target and degrades stale ids to Void
   const activeSpaceIdForSend = readActiveSpaceId();
   const firstSendDefaultModelSelection = buildModelSelection(
     selectedModelSelectionForSend.provider,
@@ -158,8 +157,7 @@ export async function prepareChatSendWorkspace({
     isHomeChatContainer,
     isStudioContainer,
     projects: currentStoreState.projects,
-    // Studio reference folders change the thread cwd without moving the chat out of
-    // the managed Studio project. Home-chat folder selection keeps its project routing.
+    // Studio reference folders change the thread cwd without moving the chat out of the managed Studio project
     selectedWorkspaceRoot: isHomeChatContainer ? (resolvedThreadWorktreePath ?? null) : null,
     title,
     titleSeed,
@@ -206,10 +204,7 @@ export async function prepareChatSendWorkspace({
     if (firstSendTarget.kind === "create-project") {
       const projectId = newProjectId();
       const createdAt = firstSendCreatedAt.toISOString();
-      // Managed chat rows stay global; a folder mention creates an ordinary project and
-      // should inherit the Space where the first send originated. Resolved before the
-      // `try`: a value block inside a try body makes React Compiler bail out on the whole
-      // component.
+      // managed chat rows stay global; a folder mention creates an ordinary project inheriting the Space — resolved before `try` since a value block inside try makes React Compiler bail on the component
       const createProjectSpaceFields =
         firstSendTarget.creation.kind === "project" ? { spaceId: activeSpaceIdForSend } : {};
       try {
@@ -278,8 +273,7 @@ export async function prepareChatSendWorkspace({
     nextAssociatedWorktreeRef = null;
   }
 
-  // The branch query can finish just after the user chooses New worktree. Use the
-  // resolved active branch at send time instead of rejecting an otherwise valid fast send.
+  // the branch query can finish just after the user chooses New worktree; use the resolved active branch at send time instead of rejecting a valid fast send
   if (
     isFirstMessage &&
     nextThreadEnvMode === "worktree" &&
@@ -289,9 +283,7 @@ export async function prepareChatSendWorkspace({
     nextThreadBranch = activeRootBranch ?? null;
   }
 
-  // A settled local thread keeps its historical branch until the user resumes it, so the
-  // composer can explain the branch change. Refresh Git status before sending because the
-  // cached branch query may still be loading or may lag behind an out-of-band checkout.
+  // a settled local thread keeps its historical branch until resumed; refresh git status before sending since the cached branch query may lag an out-of-band checkout
   if (shouldResumeSettledLocalThread) {
     if (!gitBranchSourceCwd) {
       setStoreThreadError(threadIdForSend, "Unable to determine the current branch.");
@@ -322,8 +314,7 @@ export async function prepareChatSendWorkspace({
       ? nextThreadBranch
       : null;
 
-  // In worktree mode, require an explicit base branch so we don't silently
-  // fall back to local execution when branch selection is missing.
+  // worktree mode requires an explicit base branch — don't silently fall back to local execution
   const shouldCreateWorktree =
     isFirstMessage && nextThreadEnvMode === "worktree" && !nextThreadWorktreePath;
   if (shouldCreateWorktree && !nextThreadBranch) {
@@ -338,8 +329,7 @@ export async function prepareChatSendWorkspace({
     ? setupProjectScript(targetProjectScriptsForSend)
     : null;
   const worktreeSetupScriptName = setupScriptForWorktree?.name ?? null;
-  // Branching off the checkout's current branch also carries its uncommitted
-  // changes into the worktree, which the setup card surfaces as its own step.
+  // branching off the checkout's current branch carries its uncommitted changes into the worktree
   const worktreeCopiesLocalChanges =
     Boolean(baseBranchForWorktree) && baseBranchForWorktree === activeRootBranch;
   return {

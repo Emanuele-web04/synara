@@ -1,10 +1,4 @@
-/**
- * Resolve a provider adapter only while the provider is enabled in server settings.
- *
- * Voice entry points live on different transports, so this gate stays shared to
- * prevent either the WebSocket fallback or the primary HTTP upload path from
- * bypassing provider disablement.
- */
+// shared gate so neither the WebSocket fallback nor the HTTP upload path bypasses provider disablement
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { Effect } from "effect";
 

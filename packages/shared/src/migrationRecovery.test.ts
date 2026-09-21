@@ -65,8 +65,7 @@ describe("parseMigrationRecoveryResumeState", () => {
   const marker = (value: Record<string, unknown>) => JSON.stringify(value);
 
   it("gives markers written before the resume path existed a full budget", () => {
-    // Every install wedged by 0.6.0 carries a counter-less marker. Treating it
-    // as spent would deny the self-heal to exactly the population that needs it.
+    // every install wedged by 0.6.0 carries a counter-less marker — treating it as spent would deny the self-heal to exactly that population
     expect(parseMigrationRecoveryResumeState(marker({ phase: "migration-in-progress" }))).toEqual({
       attempts: 0,
       exhausted: false,
@@ -92,8 +91,7 @@ describe("parseMigrationRecoveryResumeState", () => {
   });
 
   it("refuses to guess at a marker it cannot trust", () => {
-    // Callers fail closed on null, so every unreadable shape must land here
-    // rather than silently resolving to a retryable zero.
+    // callers fail closed on null — every unreadable shape must land here rather than silently becoming a retryable zero
     expect(parseMigrationRecoveryResumeState("{ not json")).toBeNull();
     expect(parseMigrationRecoveryResumeState("null")).toBeNull();
     expect(parseMigrationRecoveryResumeState('"a string"')).toBeNull();

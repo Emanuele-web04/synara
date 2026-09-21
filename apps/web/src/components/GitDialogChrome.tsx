@@ -1,9 +1,3 @@
-// FILE: GitDialogChrome.tsx
-// Purpose: The shared shell of every git dialog (Create PR, Commit) — popup sizing and
-//          submit chord, the branch heading, the borderless message fields, and the
-//          bottom action rows with their "why is this unavailable" tooltip.
-// Layer: Git dialog UI primitive
-
 import type { ReactNode } from "react";
 import {
   Dialog,

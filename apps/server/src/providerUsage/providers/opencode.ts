@@ -1,8 +1,3 @@
-// FILE: providerUsage/providers/opencode.ts
-// Purpose: Live OpenCode usage fetcher. Finds auth.json on the XDG path OpenCode Go uses
-// even on Windows (`~/.local/share/opencode`), reads the `opencode-go` API key, and calls
-// GET https://opencode.ai/zen/go/v1/usage for the 5h / weekly / monthly Go plan windows.
-
 import type { ServerProviderUsageLimit } from "@synara/contracts";
 
 import { resolveOpenCodeCompatibleAuthPaths } from "../../provider/openCodeAuthPaths";

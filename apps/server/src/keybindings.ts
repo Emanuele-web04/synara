@@ -1,11 +1,3 @@
-/**
- * Keybindings - Keybinding configuration service definitions.
- *
- * Owns parsing, validation, merge, and persistence of user keybinding
- * configuration consumed by the server runtime.
- *
- * @module Keybindings
- */
 import {
   KeybindingRule,
   KeybindingsConfig,
@@ -66,8 +58,8 @@ type WhenToken =
   | { type: "rparen" };
 
 const SIDEBAR_SEARCH_DEFAULT_KEYBINDINGS = [
-  // Cmd-only on macOS so Ctrl+K stays available for kill-to-end-of-line.
-  // Keep Ctrl+K on Windows/Linux (where `mod` would otherwise be Ctrl).
+  // Cmd-only on macOS so Ctrl+K stays available for kill-to-end-of-line
+  // keep Ctrl+K on Windows/Linux where `mod` would otherwise be Ctrl
   { key: "cmd+k", command: "sidebar.search" },
   { key: "ctrl+k", command: "sidebar.search", when: "!isMac" },
 ] as const satisfies ReadonlyArray<KeybindingRule>;
@@ -80,10 +72,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+i", command: "sidebar.importThread", when: "!terminalFocus" },
   { key: "mod+alt+arrowleft", command: "space.previous", when: "!terminalFocus" },
   { key: "mod+alt+arrowright", command: "space.next", when: "!terminalFocus" },
-  // Numbered space jumps address tabs in the switcher's visual order, so mod+alt+1 is
-  // always Void. Same `|| isMac` escape hatch as the new-surface chords below: Cmd
-  // chords never reach the PTY on macOS, while Ctrl+Alt+digit is AltGr territory on
-  // Linux/Windows layouts and must keep yielding to focused terminals there.
+  // mod+alt+1 always hits the switcher's Void tab; same `|| isMac` escape hatch — Cmd chords never reach the PTY on macOS while Ctrl+Alt+digit is AltGr territory elsewhere
   { key: "mod+alt+1", command: "space.jump.1", when: "!terminalFocus || isMac" },
   { key: "mod+alt+2", command: "space.jump.2", when: "!terminalFocus || isMac" },
   { key: "mod+alt+3", command: "space.jump.3", when: "!terminalFocus || isMac" },
@@ -99,36 +88,27 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+arrowleft", command: "terminal.splitLeft", when: "terminalFocus" },
   { key: "mod+shift+arrowdown", command: "terminal.splitDown", when: "terminalFocus" },
   { key: "mod+shift+arrowup", command: "terminal.splitUp", when: "terminalFocus" },
-  // Reserve Cmd/Ctrl+T for the terminal workspace's "new tab" action while focused.
+  // reserve Cmd/Ctrl+T for the terminal workspace's "new tab" while focused
   { key: "mod+t", command: "terminal.new", when: "terminalFocus" },
   { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
   { key: "mod+shift+j", command: "terminal.workspace.newFullWidth" },
   { key: "mod+w", command: "terminal.workspace.closeActive", when: "terminalWorkspaceOpen" },
-  // Keep workspace tabs on literal Ctrl so Cmd+1…9 remains consistent app navigation
-  // on macOS even when a thread was opened directly as a full-width terminal.
+  // workspace tabs on literal Ctrl so Cmd+1…9 stays app navigation on macOS even when a thread opened as full-width terminal
   { key: "ctrl+1", command: "terminal.workspace.terminal", when: "terminalWorkspaceOpen" },
   { key: "ctrl+2", command: "terminal.workspace.chat", when: "terminalWorkspaceOpen" },
   { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
   { key: "mod+d", command: "diff.toggle", when: "!terminalFocus" },
   { key: "alt+arrowdown", command: "diff.change.next", when: "!terminalFocus" },
   { key: "alt+arrowup", command: "diff.change.previous", when: "!terminalFocus" },
-  // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
+  // Cmd-only instead of mod so Ctrl+L stays available to shells off macOS
   { key: "cmd+l", command: "composer.focus.toggle", when: "!terminalFocus" },
   { key: "mod+f", command: "chat.find", when: "!terminalFocus" },
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
-  // Cycle models within the active provider (favorites first, then remaining list).
   { key: "alt+]", command: "model.next", when: "!terminalFocus" },
   { key: "alt+[", command: "model.previous", when: "!terminalFocus" },
   { key: "mod+shift+e", command: "traitsPicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+u", command: "settings.usage", when: "!terminalFocus" },
-  // New thread (chat.new) is the primary create action; it falls back to the most
-  // recent project when no project is active.
-  //
-  // These new-surface chords use `!terminalFocus || isMac`: on macOS `mod` is Cmd and
-  // xterm never forwards a Cmd-chord to the PTY, so the bare `!terminalFocus` guard just
-  // dropped the chord while the terminal had focus (you couldn't open a new chat/terminal
-  // from the terminal). The `|| isMac` escape hatch fires them on macOS regardless of
-  // focus, while Linux/Windows keep `!terminalFocus` so Ctrl-chords still reach the shell.
+  // `!terminalFocus || isMac`: on macOS `mod` is Cmd and xterm never forwards Cmd-chords, so bare !terminalFocus silently dropped new-surface chords while the terminal had focus; the escape hatch fires them on macOS while Linux/Windows keep yielding Ctrl-chords to the shell
   { key: "mod+n", command: "chat.new", when: "!terminalFocus || isMac" },
   { key: "mod+shift+n", command: "chat.newLatestProject", when: "!terminalFocus || isMac" },
   { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus || isMac" },
@@ -137,9 +117,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+x", command: "chat.newCodex", when: "!terminalFocus || isMac" },
   { key: "mod+alt+r", command: "chat.newCursor", when: "!terminalFocus || isMac" },
   { key: "mod+\\", command: "chat.split", when: "!terminalFocus || isMac" },
-  // Recent-view switcher (Ctrl+Tab) is an installed-app feature only: Electron and
-  // standalone PWA windows have no tab strip, so the chord reaches the page. It remains
-  // app-level even with terminal focus; the web route captures it before xterm input.
+  // Ctrl+Tab switcher is installed-app only — Electron/PWA have no tab strip; stays app-level even with terminal focus since the route captures it before xterm
   { key: "ctrl+tab", command: "view.recent.next" },
   { key: "ctrl+shift+tab", command: "view.recent.previous" },
   {
@@ -187,8 +165,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
     command: "thread.jump.9",
     when: "(!terminalFocus && !terminalWorkspaceOpen) || isMac",
   },
-  // Copying the active thread id is not terminal input on macOS, but Ctrl+Shift+C is the
-  // terminal copy chord on Linux/Windows, so it keeps the same `|| isMac` escape hatch.
+  // copying the thread id isn't terminal input on macOS, but Ctrl+Shift+C is the terminal copy chord on Linux/Windows — same `|| isMac` escape hatch
   { key: "mod+shift+c", command: "thread.copyId", when: "!terminalFocus || isMac" },
   { key: "mod+shift+]", command: "chat.visible.next", when: "!terminalFocus" },
   { key: "mod+shift+[", command: "chat.visible.previous", when: "!terminalFocus" },
@@ -540,14 +517,7 @@ function encodeWhenAst(node: KeybindingWhenNode): string {
 
 const DEFAULT_RESOLVED_KEYBINDINGS = compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS);
 
-/**
- * Result of normalizing the raw on-disk keybindings config into a list of entries.
- *
- * `migratedShape: true` marks tolerated non-canonical top-level shapes (empty file,
- * `null`, `{}`, `{"keybindings": [...]}`, or a single rule object) so callers can
- * rewrite the file into the canonical JSON-array form instead of surfacing an error
- * on every startup.
- */
+/** `migratedShape: true` marks tolerated non-canonical top-level shapes (empty file, null, {}, {keybindings:[...]}, single rule) so callers rewrite to the canonical array instead of erroring every startup */
 type RawKeybindingsEntriesResult =
   | {
       readonly _tag: "success";
@@ -649,8 +619,7 @@ const LEGACY_KEYBINDING_COMMAND_ALIASES = {
   "thread.next": "chat.visible.next",
 } as const satisfies Record<string, KeybindingRule["command"]>;
 
-// Commands removed without a direct replacement are dropped during startup so
-// persisted configs from older releases do not produce validation warnings.
+// removed commands are dropped during startup so configs from older releases don't produce validation warnings
 const RETIRED_LEGACY_KEYBINDING_COMMANDS = new Set(["chat.newGemini"]);
 const RETIRED_LEGACY_KEYBINDING_COMMAND_PATTERN = /^(?:composer\.)?modelPicker\.jump\.[1-9]$/;
 const OUTDATED_RECENT_VIEW_TERMINAL_GUARD = "!terminalFocus";
@@ -660,11 +629,7 @@ const RECENT_VIEW_SHORTCUT_BY_COMMAND: Partial<Record<KeybindingRule["command"],
   "view.recent.previous": "ctrl+shift+tab",
 };
 
-// New-surface creation commands shipped guarded by a bare `!terminalFocus`. On macOS
-// `mod` is Cmd and xterm never forwards a Cmd-chord to the PTY, so that guard silently
-// dropped "new chat/terminal" chords whenever the terminal had focus. The relaxed guard
-// adds an `|| isMac` escape hatch (see DEFAULT_KEYBINDINGS) so the chord fires on macOS
-// regardless of focus while Linux/Windows keep yielding Ctrl-chords to the shell.
+// creation commands shipped with bare `!terminalFocus` which silently dropped the chords on macOS (xterm never forwards Cmd) — the relaxed guard adds `|| isMac`
 const OUTDATED_CREATION_TERMINAL_GUARD = "!terminalFocus";
 const RELAXED_CREATION_TERMINAL_GUARD = "!terminalFocus || isMac";
 const OUTDATED_THREAD_JUMP_GUARD = "!terminalFocus && !terminalWorkspaceOpen";
@@ -703,8 +668,7 @@ function isRetiredLegacyKeybindingCommand(command: string): boolean {
   );
 }
 
-// Cross-device configs can lag behind command renames; normalize known aliases
-// before schema validation so stale synced files do not become warning toasts.
+// cross-device configs can lag command renames — normalize known aliases before schema validation so stale synced files don't become warning toasts
 function normalizeLegacyKeybindingEntry(entry: unknown): {
   readonly entry: unknown;
   readonly migrated: boolean;
@@ -714,8 +678,6 @@ function normalizeLegacyKeybindingEntry(entry: unknown): {
     return { entry, migrated: false };
   }
 
-  // `readKeybindingEntryCommand` only yields a string command for non-null object
-  // entries, so the spread target is guaranteed to be an object here.
   return {
     entry: {
       ...(entry as Record<string, unknown>),
@@ -728,9 +690,7 @@ function normalizeLegacyKeybindingEntry(entry: unknown): {
   };
 }
 
-// Update exact old recent-view defaults so existing configs gain terminal-focus support
-// (drop the `!terminalFocus` guard). Per-rule because it never changes the key, so it
-// cannot collide with a sibling entry.
+// update exact old recent-view defaults so existing configs gain terminal-focus support — per-rule since it never changes the key, can't collide with siblings
 function migrateOutdatedDefaultKeybindingRule(rule: KeybindingRule): {
   readonly rule: KeybindingRule;
   readonly migrated: boolean;
@@ -753,9 +713,7 @@ function migrateOutdatedDefaultKeybindingRule(rule: KeybindingRule): {
   };
 }
 
-// The original sidebar search default used `mod+k`, which resolves to Ctrl+K on
-// Windows/Linux but also captures the native kill-to-end-of-line chord on macOS.
-// Expand only that exact shipped default so other user-defined search chords remain intact.
+// the original sidebar search default mod+k resolves to Ctrl+K on Windows/Linux but also captures macOS kill-to-end-of-line — expand only that exact shipped default so user-defined search chords stay intact
 function migrateOutdatedSidebarSearchDefault(rules: readonly KeybindingRule[]): {
   readonly rules: KeybindingRule[];
   readonly migratedCount: number;
@@ -776,12 +734,7 @@ function migrateOutdatedSidebarSearchDefault(rules: readonly KeybindingRule[]): 
   return { rules: next, migratedCount };
 }
 
-// Add the `|| isMac` escape hatch to new-surface creation commands still pinned to the
-// bare `!terminalFocus` guard, so existing configs gain the macOS terminal-focus fix the
-// shipped defaults already carry. Matched on command + exact old guard (not key) so it
-// also reaches a creation command the user rebound to a different chord — the guard, not
-// the key, is what was too aggressive. Idempotent: once relaxed the guard no longer
-// matches the old one.
+// add the `|| isMac` escape hatch to creation commands still pinned to bare `!terminalFocus` — matched on command + exact old guard (not key) so it reaches rebound commands too; the guard, not the key, was too aggressive; idempotent
 function relaxCreationCommandTerminalGuards(rules: readonly KeybindingRule[]): {
   readonly rules: KeybindingRule[];
   readonly migratedCount: number;
@@ -800,11 +753,7 @@ function relaxCreationCommandTerminalGuards(rules: readonly KeybindingRule[]): {
   return { rules: next, migratedCount };
 }
 
-// The original full-width workspace reused mod+1/mod+2 for its terminal/chat tabs and
-// disabled all numbered thread jumps while the workspace was open. That made Cmd+1…9
-// stop being app navigation when a macOS thread opened as a terminal. Move only the exact
-// shipped tab defaults to literal Ctrl, and relax only the exact shipped thread-jump guard;
-// custom keys and conditions remain untouched.
+// the original workspace reused mod+1/mod+2 for its tabs and disabled numbered thread jumps while open — Cmd+1…9 stopped being app navigation on macOS; move only the exact shipped tab defaults to literal Ctrl and relax only the exact shipped jump guard
 function migrateNumberedTerminalWorkspaceDefaults(rules: readonly KeybindingRule[]): {
   readonly rules: KeybindingRule[];
   readonly migratedCount: number;
@@ -850,70 +799,30 @@ function mergeWithDefaultKeybindings(custom: ResolvedKeybindingsConfig): Resolve
     return merged;
   }
 
-  // Keep the latest rules when the config exceeds max size; later rules have higher precedence.
+  // keep the latest rules when over max size — later rules have higher precedence
   return merged.slice(-MAX_KEYBINDINGS_COUNT);
 }
 
-/**
- * KeybindingsShape - Service API for keybinding configuration operations.
- */
 export interface KeybindingsShape {
-  /**
-   * Start the keybindings runtime and attach file watching.
-   *
-   * Safe to call multiple times. The first successful call establishes the
-   * runtime; later calls await the same startup.
-   */
   readonly start: Effect.Effect<void, KeybindingsConfigError>;
 
-  /**
-   * Await keybindings runtime readiness.
-   *
-   * Readiness means the config directory exists, the watcher is attached, the
-   * startup sync has completed, and the current snapshot has been loaded.
-   */
   readonly ready: Effect.Effect<void, KeybindingsConfigError>;
 
-  /**
-   * Ensure the on-disk keybindings file exists and includes all default
-   * commands so newly-added defaults are backfilled on startup.
-   */
   readonly syncDefaultKeybindingsOnStartup: Effect.Effect<void, KeybindingsConfigError>;
 
-  /**
-   * Load runtime keybindings state along with non-fatal configuration issues.
-   */
   readonly loadConfigState: Effect.Effect<KeybindingsConfigState, KeybindingsConfigError>;
 
-  /**
-   * Read the latest keybindings snapshot from cache/disk.
-   */
   readonly getSnapshot: Effect.Effect<KeybindingsConfigState, KeybindingsConfigError>;
 
-  /**
-   * Stream of keybindings config change events.
-   */
   readonly streamChanges: Stream.Stream<KeybindingsChangeEvent>;
 
-  /**
-   * Upsert a keybinding rule and persist the resulting configuration.
-   *
-   * When `replacing` is supplied, only that semantic rule is replaced so sibling
-   * conditions for the same command remain intact. Without it, the command keeps
-   * the existing command-wide replacement behavior.
-   *
-   * Writes config atomically and enforces the max rule count by truncating
-   * oldest entries when needed.
-   */
+  /** with `replacing`, only that semantic rule is replaced so sibling conditions for the same command survive; without it, command-wide replacement */
   readonly upsertKeybindingRule: (
     rule: KeybindingRule,
     replacing?: KeybindingRule,
   ) => Effect.Effect<ResolvedKeybindingsConfig, KeybindingsConfigError>;
 }
 
-/**
- * Keybindings - Service tag for keybinding configuration operations.
- */
 export class Keybindings extends ServiceMap.Service<Keybindings, KeybindingsShape>()(
   "synara/keybindings",
 ) {}

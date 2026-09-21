@@ -1,39 +1,13 @@
-// FILE: rendererCrashRecovery.ts
-// Purpose: Pure recovery policy for main-window renderer crashes: which exit reasons may
-//          be reloaded automatically, the reload backoff, and the cap that stops a loop.
-// Layer: Desktop window supervision
-// Exports: RendererCrashPolicy, rendererReloadDelayMs, isRecoverableRendererCrashReason
-
-/** First backoff step; doubles per crash inside the same streak. */
 export const RENDERER_RELOAD_BASE_DELAY_MS = 500;
 export const RENDERER_RELOAD_MAX_DELAY_MS = 4_000;
 
-/**
- * Automatic reloads allowed inside one crash streak before the user is asked instead.
- *
- * A renderer that dies deterministically (a crash on first paint, a leak that OOMs the
- * moment state is restored) would otherwise reload forever, burning CPU and rewriting
- * the same crash to disk. Three attempts across ~3.5s of backoff rides out a transient
- * GPU or OOM kill, and stops well short of a spin loop.
- */
+// a deterministic crash (instant re-crash, OOM on state restore) would reload forever — three attempts across ~3.5s rides out a transient GPU/OOM kill and stops well short of a spin loop
 export const RENDERER_MAX_AUTOMATIC_RELOADS = 3;
 
-/**
- * Crashes further apart than this are unrelated incidents, not a loop, so the streak
- * restarts. Bounded by time rather than cleared on a successful load: a reloaded window
- * always finishes loading, so clearing on load would refill the budget every attempt
- * and defeat the cap entirely.
- */
+// streak bounded by time, not cleared on load — a reloaded window always finishes loading, so clearing would refill the budget every attempt and defeat the cap
 export const RENDERER_CRASH_STREAK_WINDOW_MS = 60_000;
 
-/**
- * Only these reasons are reloaded without asking.
- *
- * "crashed" and "oom" are the recoverable ones: the renderer died on its own and a
- * fresh one usually comes back. "killed"/"abnormal-exit" are typically the OS or the
- * user acting on the process, "launch-failed"/"integrity-failure" repeat on every
- * attempt by construction, and "clean-exit" is not a failure at all.
- */
+// only crashed/oom auto-reload: killed/abnormal-exit is usually the OS or user acting, launch-failed/integrity-failure repeats by construction, clean-exit isn't a failure
 const RECOVERABLE_RENDERER_CRASH_REASONS: ReadonlySet<string> = new Set(["crashed", "oom"]);
 
 export function isRecoverableRendererCrashReason(reason: string): boolean {
@@ -46,10 +20,8 @@ export function rendererReloadDelayMs(attempt: number): number {
 }
 
 export type RendererCrashResponse =
-  /** Shutting down, or the renderer exited cleanly: the caller does nothing. */
   | { readonly kind: "ignore" }
   | { readonly kind: "reload"; readonly delayMs: number; readonly attempt: number }
-  /** Recovery needs a human: show the affordance instead of leaving a blank window. */
   | {
       readonly kind: "prompt";
       readonly cause: "unrecoverable" | "reload-budget-exhausted";
@@ -63,7 +35,6 @@ export interface RendererCrashInput {
   readonly nowMs: number;
 }
 
-/** Tracks a streak of renderer crashes and decides reload vs. ask-the-user. */
 export class RendererCrashPolicy {
   private crashes = 0;
   private lastCrashAtMs: number | null = null;
@@ -72,7 +43,6 @@ export class RendererCrashPolicy {
     return this.crashes;
   }
 
-  /** Clears the streak for a deliberate, user-driven reload. */
   reset(): void {
     this.crashes = 0;
     this.lastCrashAtMs = null;

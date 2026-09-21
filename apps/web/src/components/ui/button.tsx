@@ -12,30 +12,7 @@ import { extendButtonIconChildSelectors } from "~/lib/central-icons";
 const headerButtonDarkBorderClassName =
   "dark:border-[color:color-mix(in_srgb,var(--color-border)_80%,transparent)]";
 
-// Variant taxonomy (visual treatment) × size axis × content (icon / text / icon+text).
-//
-//   filled      → default (primary) | secondary | destructive | prominent
-//   outlined    → outline | primary-outline | secondary-outline | destructive-outline | chrome-outline
-//   ghostly     → ghost | chrome | subtle | link
-//
-// Sizes pair text variants (chip/xs/sm/default/lg/xl) with their square
-// icon-only counterparts (icon-chip/icon-xs/icon-sm/icon/icon-lg/icon-xl) at
-// matching heights, so a text button and an icon-only button sit on the same
-// baseline in a toolbar row. `chip`/`icon-chip` are for inline action pills
-// inside queued-message rows, badges, etc.
-//
-// Visual style is intentionally flat — no drop shadows, no inset highlights, no
-// pseudo-element edge glints. Buttons are solid color + border + hover-bg only.
-// If you need depth, add a single new variant rather than reintroducing shadows
-// piecewise; the flat look is the project default and what most surfaces expect.
-//
-// Adding a new variant? Mirror an existing one's border/focus treatment so the
-// family stays visually coherent. Prefer adding a variant over passing a
-// className override at the call site.
-//
-// The `shape` axis is orthogonal to variant × size: `capsule` turns any
-// variant into a fully rounded pill (dialog footers detect the `rounded-full`
-// class and skip their radius/sizing override for capsules).
+// variant taxonomy: text sizes pair with square icon-only counterparts at matching heights; visual style intentionally flat — add a variant rather than shadows or call-site overrides
 const buttonVariants = cva(
   extendButtonIconChildSelectors(
     "[&_svg]:-mx-0.5 relative inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg border font-medium text-ui outline-none pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-64 sm:text-ui [&_svg:not([class*='opacity-'])]:opacity-80 [&_svg:not([class*='size-'])]:size-4.5 sm:[&_svg:not([class*='size-'])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
@@ -128,10 +105,7 @@ interface ButtonProps extends useRender.ComponentProps<"button"> {
   shape?: VariantProps<typeof buttonVariants>["shape"];
 }
 
-// `ref` rides along in `...props` instead of going through `forwardRef`: React 19 passes it as a
-// plain prop, and `mergeProps` forwards it to the rendered element either way. Pulling it out into
-// a local made React Compiler read the whole component as a ref access during render and skip it —
-// which costs every button on screen its auto-memoization.
+// `ref` rides along in props: React 19 passes it as a plain prop, and pulling it into a local made React Compiler read the component as a ref access during render and skip memoization
 function Button({ className, variant, size, shape, render, ...props }: ButtonProps) {
   const typeValue: React.ButtonHTMLAttributes<HTMLButtonElement>["type"] = render
     ? undefined

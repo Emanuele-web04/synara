@@ -148,7 +148,7 @@ const SIMCTL_JSON = JSON.stringify({
         udid: "CCCC-3333",
         name: "iPhone 12",
         state: "Shutdown",
-        // Runtime was deleted; booting this would only fail.
+        // runtime was deleted — booting this would only fail
         isAvailable: false,
       },
     ],
@@ -174,8 +174,7 @@ describe("simctl device parsing", () => {
   });
 
   it("reports every discovered device as user-booted", () => {
-    // Discovery cannot attribute a boot; DeviceManager overrides the field for
-    // devices it booted itself.
+    // discovery cannot attribute a boot; DeviceManager overrides for devices it booted
     expect(parseSimctlDevices(SIMCTL_JSON).every((device) => device.bootSource === "user")).toBe(
       true,
     );
@@ -204,8 +203,7 @@ describe("simctl device parsing", () => {
       ]),
     );
 
-    // Known with the device shut down, which is what lets the pane draw an iPad
-    // the moment it is picked rather than an iPhone that resizes on first frame.
+    // known with the device shut down — the pane can draw an iPad the moment it is picked
     expect(devices[0]).toMatchObject({
       family: "tablet",
       geometry: { pointWidth: 820, pointHeight: 1180, scale: 2 },
@@ -238,8 +236,7 @@ describe("simctl device parsing", () => {
 
 describe("accessibility tree normalization", () => {
   it("fills in the attributes the helper omits rather than sending as null", () => {
-    // The helper leaves absent accessibility attributes out of the object
-    // entirely; the contract wants explicit nulls and a complete frame.
+    // the helper omits absent accessibility attributes; the contract wants explicit nulls and a complete frame
     expect(normalizeUiNode({ role: "Button" })).toEqual({
       role: "Button",
       subrole: null,
@@ -252,9 +249,7 @@ describe("accessibility tree normalization", () => {
   });
 
   it("keeps a switch's own activation point, which is not its row centre", () => {
-    // The exact shape of a UIKit settings row: one merged element whose frame
-    // spans the row, so tapping the frame centre (x=201) does nothing and only
-    // the activation point (x=336.5) flips the switch.
+    // a real UIKit settings row: the frame centre (x=201) does nothing, only the activation point (x=336.5) flips the switch
     const node = normalizeUiNode({
       role: "CheckBox",
       subrole: "Switch",
@@ -273,7 +268,7 @@ describe("accessibility tree normalization", () => {
   });
 
   it("drops an activation point that is not a complete pair of coordinates", () => {
-    // Half a point would aim taps at (0, y): worse than having none at all.
+    // half a point would aim taps at (0, y) — worse than having none
     expect(normalizeUiNode({ activationPoint: { x: 12 } }).activationPoint).toBeNull();
     expect(
       normalizeUiNode({ activationPoint: { x: Number.NaN, y: 4 } }).activationPoint,
@@ -339,7 +334,7 @@ describe("saving a screenshot", () => {
     "base64",
   );
 
-  /** A backend whose `simctl io screenshot` writes a real PNG to the given path. */
+  /** a backend whose `simctl io screenshot` writes a real PNG to the given path */
   async function makeScreenshotBackend() {
     const directory = await mkdtemp(path.join(tmpdir(), "synara-screenshot-test-"));
     const backend = new IosSimulatorBackend({
@@ -351,7 +346,7 @@ describe("saving a screenshot", () => {
           return successfulProcessResult(recordingDeviceList);
         }
         if (command === "xcrun" && args.includes("screenshot")) {
-          // `simctl io <udid> screenshot <path>`: the path is the last argument.
+          // the path is the last argument of `simctl io <udid> screenshot <path>`
           await writeFile(args.at(-1)!, SCREENSHOT_PNG);
         }
         return successfulProcessResult();
@@ -365,9 +360,7 @@ describe("saving a screenshot", () => {
 
     const shot = await backend.screenshot(RECORDING_DEVICE, { save: true });
 
-    // The pane's save button used to route through a browser download, which
-    // put the file wherever the browser chose — or nowhere at all. It has to
-    // land in the same directory the record button writes to.
+    // the save button used to route through a browser download — it has to land where the record button writes
     expect(shot.path).toBe(
       path.join(directory, "simulator-iphone-17-pro-2026-08-04T12-00-00-000Z.png"),
     );
@@ -388,8 +381,7 @@ describe("saving a screenshot", () => {
 
     const shot = await backend.screenshot(RECORDING_DEVICE);
 
-    // The composer attachment and the agent's own tool take this path; neither
-    // should litter the user's Desktop.
+    // the composer attachment and the agent's tool take this path; neither should litter the user's Desktop
     expect(shot.path).toBeUndefined();
     expect(await readdir(directory)).toEqual([]);
   });

@@ -1,8 +1,3 @@
-// FILE: composerProviderRegistry.tsx
-// Purpose: Normalizes provider-specific composer state for display and dispatch.
-// Layer: Chat composer orchestration
-// Depends on: shared model helpers and runtime model discovery metadata.
-
 import {
   type ModelSlug,
   type ProviderKind,
@@ -109,8 +104,7 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     case "droid": {
       const providerOptions = modelOptions?.droid;
       rawEffort = trimOrNull(providerOptions?.reasoningEffort);
-      // Droid's advertised "default" is the mutable current CLI preference.
-      // Once the user selects an effort, always dispatch it explicitly.
+      // Droid's advertised "default" is the mutable current CLI preference — once the user picks an effort, always dispatch it explicitly
       const reasoningEffort =
         rawEffort && hasEffortLevel(caps, rawEffort) ? providerOptions?.reasoningEffort : undefined;
       normalizedOptions = reasoningEffort ? { reasoningEffort } : undefined;

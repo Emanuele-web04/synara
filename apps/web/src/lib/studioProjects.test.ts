@@ -1,7 +1,3 @@
-// FILE: studioProjects.test.ts
-// Purpose: Verifies hidden Studio container detection and creation dispatches.
-// Layer: Web orchestration tests
-
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,8 +26,7 @@ vi.mock("../nativeApi", () => ({
           throw nativeApiMock.dispatchError;
         }
         nativeApiMock.dispatchedCommands.push(command);
-        // Mirror the real server: an accepted project.create shows up in later shell snapshots,
-        // which the post-create sync in ensureStudioProject waits on before resolving.
+        // Mirror the real server: an accepted project.create shows up in later shell snapshots, which the post-create sync in ensureStudioProject waits on before resolving.
         const typed = command as {
           type?: string;
           projectId?: string;
@@ -132,8 +127,7 @@ describe("studioProjects", () => {
         studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
       }),
     ).toBe(false);
-    // Before the welcome delivers the Studio root, the kind alone identifies the container so
-    // Studio threads aren't mis-partitioned during boot.
+    // Before the welcome delivers the Studio root, the kind alone identifies the container so Studio threads aren't mis-partitioned during boot.
     expect(isStudioContainerProject(makeProject(), { homeDir: "/Users/tester" })).toBe(true);
   });
 
@@ -343,8 +337,7 @@ describe("studioProjects", () => {
     await vi.waitFor(() => {
       expect(nativeApiMock.dispatchedCommands).toHaveLength(1);
     });
-    // The follow-up shell snapshot now includes the created container; ensureStudioProject must
-    // sync it into the store before resolving so no consumer sees an unknown project id.
+    // The follow-up shell snapshot now includes the created container; ensureStudioProject must sync it into the store before resolving so no consumer sees an unknown project id.
     const createCommand = nativeApiMock.dispatchedCommands[0] as { projectId: ProjectId };
     nativeApiMock.shellSnapshotProjects = [
       {

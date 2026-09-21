@@ -78,8 +78,7 @@ export function resolveFirstSendTarget(input: {
     };
   }
 
-  // Studio chats never leave the Studio container: a picked folder stays attached to the
-  // thread as its workspace root instead of becoming (or joining) a Projects entry.
+  // Studio chats never leave the Studio container: a picked folder stays attached as the thread's workspace root instead of becoming a Projects entry
   if (isStudioContainer) {
     return {
       kind: "current",
@@ -87,8 +86,7 @@ export function resolveFirstSendTarget(input: {
     };
   }
 
-  // Home-chat folder mentions intentionally escape the generic-chat workspace and become
-  // normal projects.
+  // home-chat folder mentions intentionally escape the generic-chat workspace and become normal projects
   if (!selectedWorkspaceRoot) {
     if (!chatWorkspaceRoot) {
       return {

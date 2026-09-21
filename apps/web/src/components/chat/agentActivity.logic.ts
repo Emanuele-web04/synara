@@ -1,8 +1,3 @@
-// FILE: agentActivity.logic.ts
-// Purpose: Derive compact transcript rows and full-detail models for agent activity.
-// Layer: Chat presentation helpers
-// Exports: agent activity detection, formatting, and timeline compaction
-
 import { normalizeCompactToolLabel } from "../../lib/toolCallLabel";
 import type { WorkLogEntry } from "../../session-logic";
 
@@ -44,9 +39,7 @@ export function isCodexActivityStatusWorkEntry(entry: WorkLogEntry): boolean {
   );
 }
 
-// Generic runtime notices (unhandled SDK messages, retries) render as quiet italic
-// text without a leading glyph; the tone checkmark made them read as completed work.
-// Notices with their own semantic icon keep it.
+// Generic runtime notices (unhandled SDK messages, retries) render as quiet italic text without a leading glyph; the tone checkmark made them read as completed work. Notices with their own semantic icon keep it.
 export function isPlainRuntimeNoticeWorkEntry(
   entry: Pick<WorkLogEntry, "activityKind" | "nativeEventType" | "providerContextLifecycle">,
 ): boolean {
@@ -77,8 +70,7 @@ export function formatAgentActivityEntryTitle(entry: WorkLogEntry): string {
     return capitalizePhrase(heading);
   }
   if (isUnmappedProviderEventWorkEntry(entry) && entry.nativeEventType) {
-    // The raw native type/label is the only title the event carries; use it
-    // verbatim instead of degrading to the generic "Activity" label.
+    // The raw native type/label is the only title the event carries; use it verbatim instead of degrading to the generic "Activity" label.
     return capitalizePhrase(entry.nativeEventType);
   }
   return entry.itemType === "collab_agent_tool_call" ? "Agent task" : "Activity";
@@ -157,9 +149,7 @@ export function deriveAgentActivityTimelineState(
   };
 
   for (const entry of entries) {
-    // Legacy providers emit free-standing reasoning updates with no item id;
-    // keep compacting those. Canonical Codex reasoning carries toolCallId, so
-    // each completed provider item remains its own visible row.
+    // legacy providers emit free-standing reasoning updates with no item id — keep compacting those; canonical Codex reasoning carries toolCallId so each completed item stays its own row
     if (isReasoningUpdateWorkEntry(entry) && !entry.toolCallId) {
       pendingReasoningEntries.push(entry);
       continue;
@@ -169,8 +159,7 @@ export function deriveAgentActivityTimelineState(
     const reasoningPreview = isReasoningUpdateWorkEntry(entry)
       ? formatAgentActivityEntryPreview(entry)
       : null;
-    // Old Synara builds persisted a literal placeholder for every empty Codex
-    // reasoning lifecycle. Match Codex history semantics and hide those rows.
+    // Old Synara builds persisted a literal placeholder for every empty Codex reasoning lifecycle. Match Codex history semantics and hide those rows.
     if (isReasoningUpdateWorkEntry(entry) && !reasoningPreview) {
       continue;
     }
@@ -233,9 +222,7 @@ function cleanReasoningProgressText(value: string | undefined): string | null {
     return null;
   }
 
-  // Codex summaries are Markdown blocks such as
-  // `**Planning the implementation**\n\n<!-- -->`. Its compact UI label is the
-  // last readable line, with comments and lightweight Markdown removed.
+  // Codex summaries are Markdown blocks such as `**Planning the implementation**\n\n<!-- -->`. Its compact UI label is the last readable line, with comments and lightweight Markdown removed.
   const readableLines = value
     .replace(/<!--[\s\S]*?-->/gu, "")
     .split(/\r?\n/u)

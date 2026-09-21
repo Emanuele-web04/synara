@@ -1,21 +1,11 @@
-/**
- * Console Go rejects recursive tool `inputSchema` schemas (400
- * "Recursive JSON schemas are not currently supported"). Only
- * `browser_webmcp_call.arguments` (Schema.Json) emits `$ref` cycles today.
- *
- * Acyclic local references are inlined with their true schema so clients
- * keep generating valid arguments. Only references that participate in a
- * `$defs` cycle (or point nowhere resolvable) become a permissive
- * free-form object. Runtime validation stays server-side (Effect decode,
- * depth 20 / 256 KiB).
- */
+/** Console Go rejects recursive inputSchemas (400); only browser_webmcp_call.arguments emits $ref cycles — cyclic/unresolvable refs become permissive objects; runtime validation stays server-side */
 export const FALLBACK_OBJECT_DESCRIPTION = "Free-form JSON object (depth 20, 256 KiB max).";
 const DEFS_PREFIX = "#/$defs/";
 
 const isRecord = (node: unknown): node is Record<string, unknown> =>
   node !== null && typeof node === "object" && !Array.isArray(node);
 
-/** Exact local pointer `#/$defs/<Name>`; anything else is not resolvable here. */
+/** exact local pointer `#/$defs/<Name>` only */
 const defNameOf = (ref: string): string | undefined => {
   if (!ref.startsWith(DEFS_PREFIX)) return undefined;
   const rest = ref.slice(DEFS_PREFIX.length);
@@ -26,7 +16,7 @@ const defNameOf = (ref: string): string | undefined => {
 const cloneJsonRecord = (value: Record<string, unknown>): Record<string, unknown> =>
   JSON.parse(JSON.stringify(value));
 
-/** Every `#/$defs/<Name>` target reachable inside a subtree. */
+/** every `#/$defs/<Name>` target reachable inside a subtree */
 const collectRefTargets = (node: unknown, into: Set<string>): void => {
   if (Array.isArray(node)) {
     for (const child of node) collectRefTargets(child, into);
@@ -40,7 +30,7 @@ const collectRefTargets = (node: unknown, into: Set<string>): void => {
   for (const value of Object.values(node)) collectRefTargets(value, into);
 };
 
-/** `$defs` entries that can reach themselves through local references. */
+/** `$defs` entries that can reach themselves through local refs */
 const findRecursiveDefNames = (defs: Record<string, unknown>): ReadonlySet<string> => {
   const edges = new Map<string, ReadonlySet<string>>();
   for (const [name, body] of Object.entries(defs)) {

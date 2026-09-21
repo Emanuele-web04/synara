@@ -1,7 +1,3 @@
-// FILE: WorkspaceFilePreview.capacity.browser.tsx
-// Purpose: Browser regressions for last-good file preview during capacity errors.
-// Layer: Focused component integration tests
-
 import "../index.css";
 
 import type { NativeApi, ProjectReadFileResult } from "@synara/contracts";

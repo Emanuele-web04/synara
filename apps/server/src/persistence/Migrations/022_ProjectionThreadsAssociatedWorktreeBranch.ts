@@ -1,7 +1,4 @@
-/**
- * Tracks the durable associated worktree branch for threads so handoff can
- * recreate or reattach the same workspace branch when possible.
- */
+/** durable branch so handoff can recreate/reattach the same workspace branch when possible */
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";
 

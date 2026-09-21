@@ -1,8 +1,3 @@
-// FILE: threadWorkspace.ts
-// Purpose: Share worktree and workspace-root helpers used across web and server flows.
-// Layer: Shared util
-// Exports: associated worktree helpers plus workspace-root comparison helpers
-
 export interface AssociatedWorktreeMetadata {
   associatedWorktreePath: string | null;
   associatedWorktreeBranch: string | null;
@@ -29,7 +24,7 @@ function isLikelyWindowsWorkspaceRoot(value: string, platform?: string): boolean
   return /^[a-z]:([\\/]|$)/i.test(value) || value.startsWith("\\\\") || value.startsWith("//");
 }
 
-// Normalizes import-path identity without changing the original stored display path.
+// normalizes import-path identity without changing the stored display path
 export function normalizeWorkspaceRootForComparison(
   value: string,
   options?: NormalizeWorkspaceRootForComparisonOptions,
@@ -52,10 +47,7 @@ export function normalizeWorkspaceRootForComparison(
       ? normalized
       : prefix;
 
-  // macOS commonly surfaces the same temp/workspace location through both
-  // `/var/...` and `/private/var/...` (likewise `/tmp/...` vs `/private/tmp/...`).
-  // Treat those aliases as identical so imported worktree paths still match
-  // their project workspace roots during resume/import flows.
+  // macOS surfaces the same location as /var/... and /private/var/... — treat aliases as identical so imported worktree paths match during resume/import
   if (
     options?.platform === "darwin" &&
     (finalValue.startsWith("/private/var/") || finalValue.startsWith("/private/tmp/"))
@@ -80,10 +72,7 @@ export function workspaceRootsEqual(
   );
 }
 
-// True when `candidate` is `ancestorRoot` itself or a path nested beneath it.
-// Comparison happens on normalized roots so trailing slashes, separator style,
-// and macOS `/private` aliasing never cause false negatives. The nesting check
-// is segment-aware, so `/a/app` is not treated as inside `/a/ap`.
+// normalized roots so trailing slashes, separator style, and /private aliasing never cause false negatives; segment-aware so /a/app isn't inside /a/ap
 export function isWorkspaceRootWithin(
   candidate: string,
   ancestorRoot: string,
@@ -101,15 +90,10 @@ export function isWorkspaceRootWithin(
   return normalizedCandidate.startsWith(prefix);
 }
 
-// Per-thread scratch working directories (under a per-user cache container)
-// used when a provider session starts before any project workspace exists,
-// e.g. a chat's first turn racing its workspace provisioning.
+// per-thread scratch dirs used when a session starts before any project workspace exists
 export const SCRATCH_WORKSPACES_DIRNAME = "synara-codex-workspaces";
 
-// True when an absolute path points inside a per-thread scratch workspace.
-// This is a string-level gate on purpose: the web client uses it to decide
-// whether an out-of-workspace file reference can still preview in-app, while
-// the server's local-preview allowlist enforces real (realpath) containment.
+// a string-level gate on purpose — the web decides whether an out-of-workspace reference can still preview; the server's allowlist enforces real containment
 export function isScratchWorkspacePath(filePath: string): boolean {
   const normalized = filePath.trim().replace(/\\/g, "/");
   const isAbsolute = normalized.startsWith("/") || /^[a-z]:\//i.test(normalized);
@@ -119,10 +103,7 @@ export function isScratchWorkspacePath(filePath: string): boolean {
 export function deriveAssociatedWorktreeMetadata(input: {
   branch?: string | null;
   worktreePath?: string | null;
-  // Checked with `!== undefined` below to distinguish "derive from worktreePath"
-  // (undefined) from "explicitly none" (null). The thread schema marks these
-  // Schema.optional, so the param type must admit an explicit undefined under
-  // exactOptionalPropertyTypes.
+  // `!== undefined` distinguishes "derive" (undefined) from "explicitly none" (null); Schema.optional admits an explicit undefined under exactOptionalPropertyTypes
   associatedWorktreePath?: string | null | undefined;
   associatedWorktreeBranch?: string | null | undefined;
   associatedWorktreeRef?: string | null | undefined;
@@ -152,7 +133,7 @@ export function deriveAssociatedWorktreeMetadata(input: {
 export function deriveAssociatedWorktreeMetadataPatch(input: {
   branch?: string | null;
   worktreePath?: string | null;
-  // Same undefined-aware semantics as deriveAssociatedWorktreeMetadata above.
+  // same undefined-aware semantics as above
   associatedWorktreePath?: string | null | undefined;
   associatedWorktreeBranch?: string | null | undefined;
   associatedWorktreeRef?: string | null | undefined;

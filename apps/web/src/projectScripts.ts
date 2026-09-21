@@ -51,7 +51,6 @@ export function nextProjectScriptId(name: string, existingIds: Iterable<string>)
     suffix += 1;
   }
 
-  // This last-resort fallback only triggers after exhausting thousands of suffixes.
   return `${baseId}-${Date.now()}`.slice(0, MAX_SCRIPT_ID_LENGTH);
 }
 

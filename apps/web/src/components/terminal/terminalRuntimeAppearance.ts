@@ -1,7 +1,3 @@
-// FILE: terminalRuntimeAppearance.ts
-// Purpose: Resolve terminal theme, font, and system-message styling from app chrome tokens.
-// Layer: Terminal runtime infrastructure
-
 import { Terminal, type ITheme } from "@xterm/xterm";
 
 const FALLBACK_MONO_FONT_FAMILY =

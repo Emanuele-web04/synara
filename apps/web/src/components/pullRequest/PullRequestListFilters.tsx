@@ -1,10 +1,3 @@
-// FILE: PullRequestListFilters.tsx
-// Purpose: The pull requests list's filter controls — the plain text pill group used for the
-//          involvement and state tabs (chip background on the active option only), and the
-//          project filter popover behind the header's filter icon.
-// Layer: Pull request presentation
-// Exports: PullRequestFilterPillGroup, PullRequestProjectFilterPopover
-
 import type { ProjectId } from "@synara/contracts";
 import { useState } from "react";
 
@@ -39,8 +32,7 @@ export function PullRequestFilterPillGroup<T extends string>({
   onIntent?: (value: T) => void;
 }) {
   return (
-    // Sized off the shared UI font var so the pills track the user's font-size setting like
-    // every Button-based control.
+    // sized off the shared UI font var so the pills track the user's font-size setting
     <div className={cn(PR_META_TEXT_CLASS_NAME, "flex items-center gap-1")}>
       {options.map((option) => (
         <button
@@ -50,8 +42,7 @@ export function PullRequestFilterPillGroup<T extends string>({
           onFocus={() => onIntent?.(option.value)}
           onPointerEnter={() => onIntent?.(option.value)}
           onClick={() => onChange(option.value)}
-          // Active uses the shared control-active token (real contrast in both modes) — the
-          // elevated-secondary tint is a 2–4% hover wash and disappears on dark surfaces.
+          // active uses the shared control-active token — the elevated-secondary tint is a 2–4% hover wash that disappears on dark surfaces
           className={cn(
             "rounded-md px-2.5 py-1 transition-colors",
             option.value === value

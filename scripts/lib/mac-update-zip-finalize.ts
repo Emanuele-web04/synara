@@ -1,8 +1,3 @@
-// FILE: mac-update-zip-finalize.ts
-// Purpose: Rebuilds and validates macOS Squirrel update zip artifacts before publishing.
-// Layer: Release/build helper
-// Exports: finalizeMacUpdateZip for build scripts and smoke checks.
-
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -77,9 +72,7 @@ function findFirstMacAppBundle(root: string): string | null {
   return null;
 }
 
-// A fully packaged Electron app lists thousands of zip entries, so raise the
-// stdout cap well past spawnSync's 1 MB default to avoid spurious ENOBUFS
-// failures when reading the archive listing.
+// a packaged app lists thousands of zip entries — raise the stdout cap past spawnSync's 1 MB default to avoid ENOBUFS
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 function runTextCommand(
@@ -142,8 +135,7 @@ function computeSha512Base64(filePath: string): Promise<string> {
   });
 }
 
-// Recreates the update zip with macOS-native metadata, then validates the same
-// extracted app shape Squirrel.Mac will hand to ShipIt during installation.
+// recreates the update zip with mac-native metadata, then validates the shape Squirrel.Mac hands to ShipIt
 export async function finalizeMacUpdateZip(
   options: FinalizeMacUpdateZipOptions,
 ): Promise<FinalizedMacUpdateZip> {

@@ -1,8 +1,3 @@
-// FILE: terminalPaneLayout.ts
-// Purpose: Pure helpers for terminal pane-tree normalization and split mutations.
-// Layer: Terminal domain helpers
-// Depends on: terminal layout types shared by the store and terminal UI.
-
 import {
   DEFAULT_THREAD_TERMINAL_ID,
   type ThreadTerminalGroup,

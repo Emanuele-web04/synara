@@ -19,7 +19,7 @@ const DEVICE_TYPES = JSON.stringify({
       productFamily: "iPad",
       bundlePath: "/Profiles/DeviceTypes/iPad (A16).simdevicetype",
     },
-    // A watch: no chassis to draw it in, so it is skipped rather than made a phone.
+    // a watch has no chassis to draw — skipped rather than made a phone
     {
       identifier: "com.apple.CoreSimulator.SimDeviceType.Apple-Watch",
       productFamily: "Apple Watch",
@@ -67,8 +67,7 @@ describe("parseDeviceTypeProfile", () => {
       JSON.stringify({ mainScreenWidth: 1206, mainScreenHeight: 2622, mainScreenScale: 3 }),
     );
 
-    // The exact iPhone 17 Pro geometry the helper reports once it attaches, so
-    // the pre-boot value never has to be corrected downward.
+    // the exact iPhone 17 Pro geometry the helper reports, so the pre-boot value never has to be corrected downward
     expect(profile).toEqual({ pointWidth: 402, pointHeight: 874, scale: 3 });
   });
 

@@ -1,8 +1,3 @@
-// FILE: activeThreadDelete.ts
-// Purpose: Owns the shared server-delete and worktree-cleanup sequence for active threads.
-// Layer: Web orchestration helper
-// Exports: deleteActiveThreadFromClient
-
 import type { ThreadId } from "@synara/contracts";
 import { terminalScopeIdsForThread } from "@synara/shared/terminalThreads";
 
@@ -15,12 +10,7 @@ import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "
 import { reconcileDeletedThreadFromClient } from "./deletedThreadClientReconciliation";
 import { newCommandId } from "./utils";
 
-// The terminal runtime pulls in xterm and its addons (~223 KB gzip). Importing it
-// statically here anchored the whole terminal stack into the eager sidebar/router
-// graph, so every page load paid for it. Deleting a thread is a rare, already
-// async user action, so the chunk is fetched on demand instead. The import is
-// awaited (never fire-and-forget) so disposal cannot race the rest of the delete
-// sequence, and the resolved module is cached by the module system afterwards.
+// the terminal runtime pulls in xterm+addons (~223KB gzip) — a static import anchored it into the eager graph; deleting a thread is rare+async so the chunk is fetched on demand and awaited (never fire-and-forget) so disposal can't race the delete sequence
 async function disposeThreadTerminalRuntimes(threadId: ThreadId): Promise<void> {
   try {
     const { terminalRuntimeRegistry } =
@@ -29,8 +19,7 @@ async function disposeThreadTerminalRuntimes(threadId: ThreadId): Promise<void> 
       terminalRuntimeRegistry.disposeThread(scopeId);
     }
   } catch (error) {
-    // A failed chunk fetch must not abort the delete sequence: the durable delete
-    // already landed server-side and the server owns provider/terminal teardown.
+    // a failed chunk fetch must not abort the delete — the durable delete already landed server-side and the server owns provider/terminal teardown
     console.error("Failed to dispose terminal runtimes for deleted thread", { threadId, error });
   }
 }
@@ -89,9 +78,7 @@ export async function deleteActiveThreadFromClient<TPrepared = undefined>(input:
     commandId: newCommandId(),
     threadId: input.threadId,
   });
-  // Provider and terminal cleanup are owned by the server-side lifecycle
-  // reactor. Dispose only the local renderer after the durable delete intent
-  // was accepted, so a rejected delete never tears down a live client session.
+  // provider/terminal cleanup is server-owned; dispose only the local renderer after the durable delete intent was accepted, so a rejected delete never tears down a live session
   await disposeThreadTerminalRuntimes(input.threadId);
   if (input.reconcileDeletedThread ?? true) {
     void reconcileDeletedThreadFromClient({

@@ -1,16 +1,5 @@
-// FILE: WorkspaceSearchPalette.tsx
-// Purpose: Minimal command-style palette for searching the current project's
-//          files/directories by name and its contents (grep-style snippets).
-//          Deliberately compact: a bare 44px input row, 28px result rows, 13px
-//          type, and a single 14px column inset shared by input, label, icons.
-// Layer: Web UI components
-//
-// Structure: the exported component is a thin dialog shell; all query state
-// lives in the inner content component mounted INSIDE the popup, so Base UI
-// unmounting it after the 200ms exit transition resets state for free (no
-// reset-on-close effect, no row teardown while the popup is fading out).
-// Result rows are memoized and receive only stable props, so a keystroke
-// re-render bails out at the row boundary.
+// all query state lives in the inner content component mounted INSIDE the popup — Base UI unmounts it after the exit transition, resetting state for free with no reset-on-close effect
+// query state lives in the inner content mounted INSIDE the popup, so Base UI unmounting after the exit transition resets state for free; rows are memoized on stable props
 
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -42,31 +31,24 @@ import { FileEntryIcon } from "./chat/FileEntryIcon";
 export type WorkspaceSearchPaletteMode = "files" | "snippets";
 
 const SEARCH_DEBOUNCE_MS = 100;
-// ~17 rows are visible at the list's max height; 30 keeps keyboard depth
-// without paying mount/layout for rows nobody scrolls to.
+// ~17 rows are visible at the list's max height; 30 keeps keyboard depth without paying mount/layout for rows nobody scrolls to.
 const SEARCH_LIMIT = 30;
 const SEARCH_STALE_TIME_MS = 10_000;
 
-// Stock dialog surface minus its hairline border and the 1px inner top
-// highlight — the palette reads as one clean slab. Only the width deviates
-// from other dialogs.
+// Stock dialog surface minus its hairline border and the 1px inner top highlight — the palette reads as one clean slab. Only the width deviates from other dialogs.
 const POPUP_CLASS = "max-w-lg border-transparent before:shadow-none dark:before:shadow-none";
 
-// Bare Base UI input: no Input-component chrome, min-heights, or wrapper
-// paddings to fight — the h-11 row IS the header. `font-system-ui` counters
-// the global `input { font-family: mono }` rule.
+// Bare Base UI input: no Input-component chrome, min-heights, or wrapper paddings to fight — the h-11 row IS the header. `font-system-ui` counters the global `input { font-family: mono }` rule.
 const INPUT_CLASS =
   "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-ui-lg text-zinc-800 outline-none placeholder:text-zinc-400 dark:text-zinc-200 dark:placeholder:text-zinc-500";
 
-// The list keeps AutocompleteList's built-in 4px frame; combined with the 10px
-// paddings below, every piece of text lands on the same 14px column.
+// The list keeps AutocompleteList's built-in 4px frame; combined with the 10px paddings below, every piece of text lands on the same 14px column.
 const LIST_CLASS = "max-h-[min(30rem,60vh)]";
 
 const GROUP_LABEL_CLASS =
   "px-2.5 pt-1.5 pb-1 font-normal text-ui-sm text-zinc-400 dark:text-zinc-500";
 
-// Row text sizes live on the inner spans (the item base carries a sm:text-sm
-// that would win over an item-level override).
+// Row text sizes live on the inner spans (the item base carries a sm:text-sm that would win over an item-level override).
 const ITEM_CLASS =
   "cursor-pointer gap-2 rounded-lg px-2.5 py-1 text-zinc-800 data-highlighted:bg-zinc-500/8 data-highlighted:text-zinc-900 dark:text-zinc-200 dark:data-highlighted:bg-zinc-400/10 dark:data-highlighted:text-zinc-100";
 
@@ -74,8 +56,7 @@ const ICON_CLASS = "size-3.5 text-zinc-500 dark:text-zinc-400";
 
 const MUTED_TEXT_CLASS = "text-zinc-400 dark:text-zinc-500";
 
-// Stable empty results: keeps the entries identity (and everything memoized
-// from it) unchanged across renders while a mode has no data.
+// Stable empty results: keeps the entries identity (and everything memoized from it) unchanged across renders while a mode has no data.
 const EMPTY_FILE_ENTRIES: readonly ProjectEntry[] = [];
 const EMPTY_SNIPPET_MATCHES: readonly ProjectContentMatch[] = [];
 
@@ -121,11 +102,7 @@ function splitPath(path: string): { base: string; dir: string } {
   return { base: path.slice(separatorIndex + 1), dir: path.slice(0, separatorIndex) };
 }
 
-// Minimal match emphasis: the matched characters read in the foreground color
-// while the rest of the text stays muted — including fuzzy subsequence hits,
-// where the matched runs are non-contiguous. When the query doesn't occur in
-// the text (e.g. it matched the directory instead), the whole text stays
-// readable instead of dimming.
+// matched characters read in foreground, the rest stays muted — including non-contiguous fuzzy hits; when the query isn't in the text (matched the directory), the text stays readable
 function FileNameText(props: { text: string; query: string }) {
   const segments = buildMatchSegments(props.text, props.query);
   if (!segments) {
@@ -164,11 +141,7 @@ function SnippetLineText(props: { text: string; query: string }) {
   );
 }
 
-// Parent directory, clipped at the head rather than the tail: the deepest
-// folder is what disambiguates two identically named files, so long paths read
-// as `…/public/central-icons-reversed` instead of `apps/web/public/central-…`.
-// The RTL container moves the ellipsis to the start while the `bdi` keeps the
-// path itself laid out left to right.
+// clipped at the head not the tail — the deepest folder disambiguates identically named files, so long paths read `…/public/central-icons-reversed`; the RTL container moves the ellipsis to start while `bdi` keeps the path LTR
 function DirectoryText(props: { dir: string; className?: string }) {
   return (
     <span
@@ -181,12 +154,7 @@ function DirectoryText(props: { dir: string; className?: string }) {
   );
 }
 
-// Memoized rows: every prop is referentially stable across keystrokes (entries
-// come from react-query's cache, query is a string, handlers are useCallback'd
-// upstream), so intermediate renders bail out here. Base UI's ComboboxItem
-// already prevents mousedown default (focus stays on the input) — no custom
-// handler needed. Semantic keys are supplied by the caller; the explicit
-// `index` prop lets Base UI skip DOM-position sorting of the composite list.
+// memoized rows: every prop is referentially stable across keystrokes so intermediate renders bail out; ComboboxItem already prevents mousedown default
 
 const FileResultRow = memo(function FileResultRow(props: {
   entry: ProjectEntry;
@@ -259,9 +227,7 @@ const SnippetResultRow = memo(function SnippetResultRow(props: {
   );
 });
 
-// Thin shell: dialog + popup only. All state lives in the content component
-// below, which Base UI keeps mounted through the exit transition and then
-// unmounts — resetting the palette without ever blanking it mid-animation.
+// Thin shell: dialog + popup only. All state lives in the content component below, which Base UI keeps mounted through the exit transition and then unmounts — resetting the palette without ever blanking it mid-animation.
 export function WorkspaceSearchPalette(props: WorkspaceSearchPaletteProps) {
   return (
     <CommandDialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -286,8 +252,7 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
   const trimmedQuery = query.trim();
   const [debouncedQuery] = useDebouncedValue(trimmedQuery, { wait: SEARCH_DEBOUNCE_MS });
 
-  // The content component mounts once per open, so this fires before the
-  // first keystroke — the server index build overlaps with the user typing.
+  // The content component mounts once per open, so this fires before the first keystroke — the server index build overlaps with the user typing.
   useEffect(() => {
     prewarmProjectSearchIndex(props.cwd);
   }, [props.cwd]);
@@ -329,10 +294,7 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
       ? (snippetSearchQuery.data?.matches ?? EMPTY_SNIPPET_MATCHES)
       : EMPTY_SNIPPET_MATCHES;
 
-  // Exact item registry for Base UI, mirroring the rendered CommandItem
-  // values in content and order. With it, the composite list clamps its
-  // index-based highlight when the result count shrinks instead of leaving
-  // the highlight pointing at a row that no longer exists.
+  // exact item registry mirroring rendered CommandItem values — with it, the composite list clamps index-based highlight when results shrink instead of pointing at a row that no longer exists
   const itemValues = useMemo(
     () =>
       props.mode === "files"
@@ -342,17 +304,11 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
   );
 
   const activeQuery = props.mode === "files" ? fileSearchQuery : snippetSearchQuery;
-  // While the debounce is pending or a fetch is in flight, the previous rows
-  // keep rendering (react-query placeholderData carries them across query-key
-  // changes). Only a settled response may claim "no results" — otherwise every
-  // keystroke would flash the no-results state before data lands.
+  // while debounce/fetch is pending the previous rows keep rendering (placeholderData); only a settled response may claim "no results" or every keystroke flashes it
   const isSettled = trimmedQuery === debouncedQuery && !activeQuery.isFetching;
   const hasRows = fileEntries.length > 0 || snippetMatches.length > 0;
 
-  // The server matches file entries against a normalized query (leading @ ./
-  // stripped); highlighting must normalize the same way or rows that matched
-  // server-side render with no emphasis. Content search does not strip
-  // prefixes, so snippet rows highlight the raw trimmed query.
+  // the server strips leading @ ./ before matching — highlighting must normalize the same way or server-matched rows render with no emphasis; snippet rows highlight the raw query
   const highlightQuery =
     props.mode === "files" ? normalizeWorkspaceEntrySearchQuery(debouncedQuery) : debouncedQuery;
 

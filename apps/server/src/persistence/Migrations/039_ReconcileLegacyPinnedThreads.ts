@@ -1,8 +1,4 @@
-/**
- * Repairs imported legacy DBs whose migration tracker already used ID 36 for
- * a pre-Synara migration, causing Synara's pinned thread column migration to
- * be skipped even though read-model queries now require the column.
- */
+/** repairs imports whose tracker used ID 36 for a foreign migration — our pinned column was skipped though queries require it */
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Effect from "effect/Effect";
 

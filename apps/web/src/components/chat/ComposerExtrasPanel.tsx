@@ -1,11 +1,3 @@
-// FILE: ComposerExtrasPanel.tsx
-// Purpose: Composer `+` panel — one flat "Add" list (files, frontmost app window, goal, and the
-//   plan / debug / fast toggles) rendered with the shared command-menu panel chrome above the
-//   composer. The window row captures the frontmost app directly; its trailing arrow (or
-//   ArrowRight) opens the full window list as a second view.
-// Layer: Chat composer presentation
-// Depends on: ComposerMenuPanel chrome, the AppSnap window picker hook, caller-owned composer state.
-
 import type {
   DesktopAppSnapWindowEntry,
   ProviderInteractionMode,
@@ -80,15 +72,13 @@ export function ComposerExtrasPanel(props: {
   const [view, setView] = useState<"root" | "windows">("root");
   const [activeRowId, setActiveRowId] = useState<string | null>(ROW_FILES);
 
-  // Listed while the panel is open (not only in the window view) so the root row can
-  // name the frontmost app and capture it in one click.
+  // Listed while the panel is open (not only in the window view) so the root row can name the frontmost app and capture it in one click.
   const appSnap = useAppSnapWindows({
     open: true,
     ...(props.threadId === undefined ? {} : { threadId: props.threadId }),
   });
   const firstWindow = appSnap.windows?.[0] ?? null;
-  // An app can place untitled auxiliary windows above its document. Stay within
-  // the first app's public identity; without it, do not guess from the app name.
+  // An app can place untitled auxiliary windows above its document. Stay within the first app's public identity; without it, do not guess from the app name.
   const frontmostWindow =
     (firstWindow?.bundleIdentifier
       ? appSnap.windows?.find(
@@ -248,9 +238,7 @@ export function ComposerExtrasPanel(props: {
     }
   };
 
-  // The composer editor keeps focus while the panel is open so the user can keep typing;
-  // the panel therefore claims only its own navigation keys, in capture phase, so Enter
-  // cannot reach the composer form and send the draft.
+  // the composer editor keeps focus while open — the panel claims only its own nav keys, in capture phase, so Enter can't reach the composer form and send the draft
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;

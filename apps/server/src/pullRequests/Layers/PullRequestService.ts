@@ -69,27 +69,19 @@ export interface PullRequestServiceDependencies {
   readonly homeDir: string;
   readonly github: GitHubCliShape;
   readonly pins: ProjectPullRequestPinsShape;
-  /**
-   * Live (non-soft-deleted) projects. Deliberately not the full read model: the PR
-   * service only ever reads `snapshot.projects`, and hydrating every thread body for a
-   * five-minute review-count poll blocked the whole SQLite connection for seconds.
-   */
+  /** not the full read model — hydrating every thread body for a five-minute poll blocked the whole SQLite connection for seconds */
   readonly listProjects: () => Effect.Effect<ReadonlyArray<OrchestrationProject>, unknown>;
   readonly resolveRepositories: (
     project: OrchestrationProject,
   ) => Effect.Effect<GitHubRepositoryInventory, unknown>;
 }
 
-/**
- * The shell snapshot already excludes soft-deleted projects, so the field it omits is
- * known to be null. Restoring it keeps the shared PR helpers on one project type.
- */
+/** the shell snapshot omits this field (known null) — restoring it keeps one project type */
 export function liveProjectFromShell(shell: OrchestrationProjectShell): OrchestrationProject {
   return { ...shell, deletedAt: null };
 }
 
-/** Exact gh error shape for a PR number that is known not to exist. Generic 404/auth failures are
- * deliberately not classified as absence, so permission and network failures remain visible. */
+/** exact gh shape for a known-missing PR only; generic 404/auth failures stay visible, never classified as absence */
 export function isDefinitivePullRequestNotFound(error: GitHubCliError): boolean {
   if (isGlobalGitHubCliError(error)) return false;
   const detail = error.detail.toLowerCase();
@@ -110,8 +102,7 @@ export function pullRequestCacheKeyBelongsToRepository(
   return cacheKey.startsWith(`${repository.trim().toLowerCase()}${separator}`);
 }
 
-// Boolean rather than a type predicate: it is called on values already typed
-// GitHubCliError, where a predicate would narrow the false branch to `never`.
+// boolean, not a type predicate — values here are already typed GitHubCliError and a predicate narrows the false branch to never
 function isGlobalGitHubCliError(error: unknown): boolean {
   return (
     error instanceof GitHubCliError &&
@@ -123,9 +114,7 @@ export const makePullRequestService = (
   dependencies: PullRequestServiceDependencies,
 ): Effect.Effect<PullRequestServiceShape, never, Scope.Scope> =>
   Effect.gen(function* () {
-    // One server-wide PR service can receive overlapping all-project requests. Keep GitHub reads
-    // bounded across requests and cache keys, while mutations bypass this queue so user actions do
-    // not wait behind background list warming.
+    // bound GitHub reads across overlapping requests; mutations bypass the queue so user actions don't wait behind list warming
     const githubReadSlots = yield* Semaphore.make(6);
     const withGitHubRead = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       githubReadSlots.withPermits(1)(effect);
@@ -210,8 +199,7 @@ export const makePullRequestService = (
         ).pipe(
           Effect.map((batch) => ({
             entries: batch.entries.slice(0, limit),
-            // Cardinality must be measured before tolerant decoding drops malformed entries.
-            // Otherwise a raw 51-item response can look complete and strand a pin at the cap.
+            // cardinality must be measured before tolerant decoding drops malformed entries
             truncated: batch.rawCount > limit,
           })),
         ),
@@ -320,9 +308,7 @@ export const makePullRequestService = (
         );
         const projectById = new Map(projects.map((project) => [project.id, project]));
         if (forceRefresh) {
-          // The viewer participates in involvement filtering and list cache keys. A manual refresh
-          // must observe a recent `gh auth switch/login` instead of retaining the previous account
-          // until the normal five-minute viewer TTL expires.
+          // a manual refresh must observe a recent `gh auth switch`, not sit on the previous account's viewer TTL
           yield* viewerCache.invalidateAll;
           yield* Effect.forEach(
             projects,
@@ -441,8 +427,7 @@ export const makePullRequestService = (
                       }),
                   ),
                 ),
-                // The list cap belongs to the remote repository. Reporting one batch per local
-                // worktree made the all-projects UI overcount truncated repositories.
+                // the list cap belongs to the remote repository — per-worktree batches overcounted truncated repos
                 repositoryBatches: repositoryProjects.slice(0, 1).map((project) => ({
                   projectId: project.id,
                   projectTitle: project.title,

@@ -80,7 +80,6 @@ export function isCompletedContextCompaction(activity: OrchestrationThreadActivi
   return payload?.state === "compacted" || payload?.status === "completed";
 }
 
-// Read the latest token-usage snapshot emitted by the runtime.
 export function deriveLatestContextWindowState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ContextWindowState {
@@ -89,8 +88,7 @@ export function deriveLatestContextWindowState(
     if (!activity) {
       continue;
     }
-    // A new configuration starts a new reporting epoch. Old usage cannot
-    // establish the effective threshold of a resumed or switched session.
+    // a new configuration starts a new reporting epoch — old usage cannot establish the effective threshold of a resumed/switched session
     if (activity.kind === "context-window.configured") {
       return { snapshot: null, invalidatedByCompaction: false };
     }
@@ -127,8 +125,7 @@ export function deriveLatestContextWindowState(
         claudeCache: readClaudeCacheObservation(payload?.claudeCache),
         usedTokens,
         usedPercent: payloadUsedPercent,
-        // Older Claude totals counted completed content blocks repeatedly.
-        // Keep the context meter, but withhold an unverifiable lifetime counter.
+        // older Claude totals counted completed blocks repeatedly; keep the context meter but withhold the unverifiable lifetime counter
         totalProcessedTokens:
           payload?.provider === "claudeAgent" && payload.tokenAccountingVersion !== 1
             ? null

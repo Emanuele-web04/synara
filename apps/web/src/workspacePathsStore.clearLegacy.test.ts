@@ -1,6 +1,3 @@
-// FILE: workspacePathsStore.clearLegacy.test.ts
-// Purpose: Verifies clearing cached workspace paths cannot resurrect the legacy fallback.
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const CURRENT_STORAGE_KEY = "synara:workspace-paths:v1";

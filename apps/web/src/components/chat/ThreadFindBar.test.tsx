@@ -1,6 +1,3 @@
-// FILE: ThreadFindBar.test.tsx
-// Purpose: The in-thread find surface is a compact floating top-right panel.
-
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -55,8 +52,7 @@ describe("ChatThreadFindHost", () => {
     expect(markup).toContain("Find in thread");
     expect(markup).toContain("absolute right-0 top-0");
     expect(markup).toContain("pr-[138px]!");
-    // Above the header and the docked Environment overlay (z-20) so find never
-    // slides with either.
+    // Above the header and the docked Environment overlay (z-20) so find never slides with either.
     expect(markup).toContain("z-40");
     expect(markup).toContain("grid-rows-[1fr]");
   });

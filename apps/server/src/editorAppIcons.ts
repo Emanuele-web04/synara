@@ -1,10 +1,3 @@
-// FILE: editorAppIcons.ts
-// Purpose: Extract native installed-app icons for editor integrations and cache
-//          the normalized image files on disk for cheap repeat HTTP requests.
-// Layer: Server HTTP utility
-// Exports: editor icon route constant plus cached icon resolver.
-// Depends on: editor metadata, platform app discovery, filesystem, and OS icon tools.
-
 import { execFile } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -29,14 +22,9 @@ const execFileAsync = promisify(execFile);
 const MAX_DESKTOP_FILES_TO_SCAN = 1_500;
 const MAX_ICON_FILES_TO_SCAN = 8_000;
 const MAX_WINDOWS_PACKAGE_ICON_FILES_TO_SCAN = 1_200;
-// Editors installed as CLI-only (no app bundle / desktop icon) never resolve a
-// native icon. Cache that "structural" miss long enough to avoid re-running the
-// subprocess + filesystem scans on every menu open, while still picking up a
-// freshly installed editor within a few minutes.
-const NEGATIVE_ICON_CACHE_TTL_MS = 300_000; // 5 min
-// Editor rows render at ~14px. Cap the cached raster so a 512-1024px .icns is not
-// served (and re-decoded) at full resolution on every menu open; 128px stays crisp
-// on hi-dpi while shrinking payloads by one to two orders of magnitude.
+// CLI-only editors (no app bundle) never resolve a native icon — cache that structural miss a few minutes to avoid re-running subprocess+fs scans on every menu open while still picking up a fresh install
+const NEGATIVE_ICON_CACHE_TTL_MS = 300_000;
+// rows render ~14px — cap the cached raster so a 512-1024px .icns isn't served/decoded at full res per menu open
 const ICON_MAX_DIMENSION_PX = 128;
 
 export interface CachedEditorIcon {
@@ -308,7 +296,7 @@ function identityValueMatchesCandidate(value: string, candidates: readonly strin
   const tokens = desktopIdentityTokens(value);
   return candidates.some((candidate) => {
     if (normalizedValue === candidate || tokens.includes(candidate)) return true;
-    // Keep suffix/contains matching for long product names while avoiding short false positives.
+    // keep suffix/contains matching for long product names while avoiding short false positives
     return (
       candidate.length >= 5 &&
       (normalizedValue.endsWith(candidate) || normalizedValue.includes(candidate))
@@ -608,18 +596,14 @@ async function materializeCachedIcon(input: {
 }): Promise<void> {
   await fs.mkdir(path.dirname(input.outputPath), { recursive: true });
 
-  // Build into a unique temp file, then atomically rename into place. This keeps
-  // HTTP readers and concurrent resolvers (distinct env keys can map to the same
-  // source/output) from ever observing a half-written icon file.
+  // build into a unique temp file then atomically rename — readers and concurrent resolvers (distinct env keys can map to the same source/output) never observe a half-written icon
   const tempPath = `${input.outputPath}.${crypto.randomUUID()}.tmp`;
   try {
     await writeIconArtifact({ source: input.source, outputPath: tempPath });
     await fs.rename(tempPath, input.outputPath);
   } catch (error) {
     await fs.rm(tempPath, { force: true }).catch(() => {});
-    // A concurrent resolver may have won the rename race (notably on Windows,
-    // where renaming onto an existing file throws). If the output now exists,
-    // the icon is materialized regardless of who wrote it.
+    // a concurrent resolver may have won the rename race (Windows throws renaming onto an existing file) — if output now exists the icon is materialized regardless
     if (await fileExists(input.outputPath)) return;
     throw error;
   }
@@ -635,7 +619,6 @@ async function writeIconArtifact(input: {
   }
 
   if (input.source.transform === "sips-icns") {
-    // Convert .icns -> png and downscale to the display cap in a single pass.
     await execFileAsync("sips", [
       "-s",
       "format",

@@ -1,9 +1,3 @@
-// FILE: useRepoDiffTotals.ts
-// Purpose: Resolve the working-tree diff totals (+additions / -deletions) for the
-//          currently selected repo diff scope. Shared by the chat-header diff toggle
-//          badge and the Environment panel "Changes" row so both read the same numbers.
-// Layer: Chat git data hook
-
 import { useQuery } from "@tanstack/react-query";
 
 import { gitWorkingTreeDiffStatsQueryOptions } from "~/lib/gitReactQuery";
@@ -12,9 +6,7 @@ import { useRepoDiffScope } from "~/repoDiffScopeStore";
 export interface RepoDiffTotals {
   additions: number;
   deletions: number;
-  /** Number of files touched in the selected scope. */
   fileCount: number;
-  /** True when the working tree has any insertions or deletions in the selected scope. */
   hasChanges: boolean;
 }
 
@@ -28,12 +20,8 @@ export function useRepoDiffTotals({
   refetchInterval?: number | false;
 }): RepoDiffTotals {
   const refetchInterval = refetchIntervalProp ?? false;
-  // Match the Diff panel source selector so every surface shows the selected scope.
   const { scope: repoDiffScope, compareRef: repoDiffCompareRef } = useRepoDiffScope(gitCwd);
-  // Counts only. These poll every few seconds during a live turn, and the patch they used to
-  // be derived from grows with the working tree, so fetching it here made a large diff cost
-  // megabytes of transfer plus a main-thread reparse per poll. The server counts the same
-  // patch it would have sent, so the displayed numbers are unchanged.
+  // counts only — the patch these used to be derived from grows with the tree and cost megabytes + a reparse per poll; the server counts the same patch it would have sent
   const { data: totals } = useQuery(
     gitWorkingTreeDiffStatsQueryOptions({
       cwd: gitCwd,

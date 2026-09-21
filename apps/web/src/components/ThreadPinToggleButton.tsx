@@ -1,10 +1,4 @@
-// FILE: ThreadPinToggleButton.tsx
-// Purpose: Shared pin/unpin icon button reused by sidebar thread rows.
-// Layer: Sidebar UI primitive
-// Exports: ThreadPinToggleButton
-// Note: Uses IconButton (ghost) for row-hover background/text transitions.
-//       SidebarIconButton is for section-header chrome; its flat `bg-transparent`
-//       override suppresses the pin hover affordance.
+// IconButton ghost on purpose: SidebarIconButton's flat bg-transparent override suppresses the pin hover affordance
 
 import type React from "react";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
@@ -41,8 +35,7 @@ export function ThreadPinToggleButton({
         presentation === "overlay"
           ? cn(
               "absolute left-1.5 top-1/2 z-30 -translate-y-1/2",
-              // Hover/focus-only: the idle far-left slot shows the merge-status glyph
-              // instead, and the pin only surfaces when the row is hovered/focused.
+              // Hover/focus-only: the idle far-left slot shows the merge-status glyph instead, and the pin only surfaces when the row is hovered/focused.
               "opacity-0 group-hover/thread-row:opacity-100 focus-visible:opacity-100",
             )
           : presentation === "leading"

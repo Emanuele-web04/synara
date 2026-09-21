@@ -1,8 +1,3 @@
-// FILE: chatThreadRoute.logic.ts
-// Purpose: Keep route-level chat panel state transitions and fallbacks deterministic.
-// Layer: Route UI logic helpers.
-// Exports: thread title fallback, deep-link bootstrap replay handling, and panel toggle helpers.
-
 import type { ProjectId, ThreadEnvironmentMode, ThreadId, TurnId } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 

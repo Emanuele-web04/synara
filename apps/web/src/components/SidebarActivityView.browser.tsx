@@ -1,7 +1,3 @@
-// FILE: SidebarActivityView.browser.tsx
-// Purpose: Browser regressions for Activity paging, stateful actions, scope fallback, and live PR data.
-// Layer: Sidebar Activity UI test
-
 import "../index.css";
 
 import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";

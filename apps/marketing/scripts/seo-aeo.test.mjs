@@ -156,7 +156,6 @@ test("every docs page emits complete metadata and structured data", () => {
   assert.ok(page.includes('type="application/ld+json"'));
   assert.ok(page.includes("page.data.lastModified"));
 
-  // Docs index is a website; every other docs page is an article.
   assert.ok(discovery.includes('type: path === "/docs" ? "website" : "article"'));
   assert.ok(discovery.includes('card: "summary_large_image"'));
   assert.ok(discovery.includes('"@type": "TechArticle"'));

@@ -31,7 +31,7 @@ const BASE_DEVICE = {
   bootSource: "synara",
 } as const;
 
-/** iPhone 17 Pro: the geometry that exposed the pixel-vs-point tap bug. */
+/** iPhone 17 Pro: the geometry that exposed the pixel-vs-point tap bug */
 const GEOMETRY = { pointWidth: 402, pointHeight: 874, scale: 3 } as const;
 
 describe("DeviceDescriptor geometry", () => {
@@ -41,8 +41,7 @@ describe("DeviceDescriptor geometry", () => {
   });
 
   it("accepts a device that has never been attached", () => {
-    // Geometry comes from the native helper's attachment, so a listing on a
-    // host where the helper is not built yet must still validate.
+    // geometry comes from the native helper's attachment — must still validate where the helper isn't built
     const decoded = decodeSync(DeviceDescriptor, BASE_DEVICE);
     expect(decoded.geometry).toBeUndefined();
   });

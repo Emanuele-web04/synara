@@ -77,15 +77,13 @@ function isArchiveUndoToast(toast: ToastObject<ThreadToastData>): boolean {
   return Boolean(toast.data?.archiveUndo);
 }
 
-// Archive undo uses the tooltip chrome from the original design, but keeps the
-// toast root no-drag so Electron titlebar hit testing cannot swallow clicks.
+// archive undo uses the tooltip chrome but keeps the toast root no-drag so Electron titlebar hit testing can't swallow clicks
 const ARCHIVE_UNDO_TOAST_SURFACE_CLASS_NAME = cn(
   APP_TOOLTIP_SURFACE_CLASS_NAME,
   "absolute w-max max-w-[min(calc(100vw-2rem),28rem)] rounded-2xl [--notification-fg:var(--popover-foreground)] [-webkit-app-region:no-drag]",
 );
 
-// Toast actions are ghost buttons on the notification foreground. They keep the
-// toast body's UI font size and family instead of the smaller `xs` button text.
+// toast actions keep the body's UI font size instead of the smaller xs button text
 const TOAST_ACTION_BUTTON_SIZE = "xs";
 const TOAST_ACTION_BUTTON_VARIANT = "ghost";
 const TOAST_ACTION_BUTTON_CLASS_NAME =
@@ -165,8 +163,7 @@ function ThreadToastVisibleAutoDismiss({
 }: {
   toast: ToastObject<ThreadToastData>;
   dismissAfterVisibleMs: number | undefined;
-  // While paused (e.g. an Undo is in flight) the visible timer holds so the
-  // toast can't auto-dismiss out from under an action the user just triggered.
+  // while paused (Undo in flight) the visible timer holds so the toast can't auto-dismiss out from under an action the user just triggered
   paused?: boolean;
 }) {
   const paused = pausedProp ?? false;
@@ -225,8 +222,7 @@ function ThreadToastVisibleAutoDismiss({
     };
 
     const syncTimer = () => {
-      // Focus events settle in a microtask, possibly after this effect was
-      // cleaned up by navigation or an in-flight Undo changing `paused`.
+      // focus events settle in a microtask, possibly after navigation or an in-flight Undo cleaned this effect up
       if (disposed) return;
       const shouldRun = shouldRunVisibleToastAutoDismiss({
         paused,
@@ -336,8 +332,7 @@ function ToastCloseButton({
     <Toast.Close
       aria-label="Dismiss toast"
       className={cn(
-        // pointer-events-auto keeps the X clickable even when a stacked/collapsed
-        // toast still gates its content with pointer-events-none.
+        // pointer-events-auto keeps the X clickable even when a stacked/collapsed toast gates its content with pointer-events-none
         "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-[var(--notification-fg)]/65 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35",
         compact ? "size-5" : "absolute top-2 right-2 size-6",
       )}
@@ -585,12 +580,10 @@ function Toasts({ position: positionProp }: { position: ToastPosition }) {
       <Toast.Viewport
         className={cn(
           "fixed z-[200] mx-auto flex w-[calc(100%-var(--toast-inset)*2)] max-w-sm [--toast-inset:--spacing(4)] sm:[--toast-inset:--spacing(8)]",
-          // Vertical positioning
           "data-[position=top-center]:top-4",
           "data-[position=top-left]:top-[calc(var(--toast-inset)+46px)]",
           "data-[position=top-right]:top-[calc(var(--toast-inset)+46px)]",
           "data-[position*=bottom]:bottom-(--toast-inset)",
-          // Horizontal positioning
           "data-[position*=left]:left-(--toast-inset)",
           "data-[position*=right]:right-(--toast-inset)",
           "data-[position*=center]:-translate-x-1/2 data-[position*=center]:left-1/2",
@@ -621,56 +614,43 @@ function Toasts({ position: positionProp }: { position: ToastPosition }) {
                       position.includes("center") ? "mx-auto" : "",
                     )
                   : toastRootClassName(position, compact, toastTone(toast.type)),
-                // Base positioning using data-position
                 "data-[position*=right]:right-0 data-[position*=right]:left-auto",
                 "data-[position*=left]:right-auto data-[position*=left]:left-0",
                 "data-[position*=center]:right-0 data-[position*=center]:left-0",
                 "data-[position*=top]:top-0 data-[position*=top]:bottom-auto data-[position*=top]:origin-top",
                 "data-[position*=bottom]:top-auto data-[position*=bottom]:bottom-0 data-[position*=bottom]:origin-bottom",
-                // Gap fill for hover
                 "after:absolute after:left-0 after:h-[calc(var(--toast-gap)+1px)] after:w-full",
                 "data-[position*=top]:after:top-full",
                 "data-[position*=bottom]:after:bottom-full",
-                // Define some variables
-                // Base UI exposes a shared front-most height for the collapsed stack.
-                // If that shared measurement is briefly stale, long content can render
-                // outside the card until hover expands the toast and swaps to its own height.
+                // a briefly stale shared front-most height lets long content render outside the card until hover swaps to its own height
                 "[--toast-calc-height:max(var(--toast-frontmost-height,var(--toast-height)),var(--toast-height))] [--toast-gap:--spacing(3)] [--toast-peek:--spacing(3)] [--toast-scale:calc(max(0,1-(var(--toast-index)*.1)))] [--toast-shrink:calc(1-var(--toast-scale))]",
                 // Top-center uses a flat banner stack without peek/shrink offsets.
                 "data-[position=top-center]:[--toast-peek:0px] data-[position=top-center]:[--toast-scale:1] data-[position=top-center]:[--toast-shrink:0]",
                 "data-[position=top-center]:transform-[translateX(var(--toast-swipe-movement-x))_translateY(var(--toast-swipe-movement-y))]",
                 "data-[position=top-center]:data-expanded:transform-[translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-offset-y)+var(--toast-swipe-movement-y)))]",
-                // Define offset-y variable
                 "data-[position*=top]:[--toast-calc-offset-y:calc(var(--toast-offset-y)+var(--toast-index)*var(--toast-gap)+var(--toast-swipe-movement-y))]",
                 "data-[position*=bottom]:[--toast-calc-offset-y:calc(var(--toast-offset-y)*-1+var(--toast-index)*var(--toast-gap)*-1+var(--toast-swipe-movement-y))]",
-                // Default state transform
                 "data-[position*=top]:transform-[translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)+(var(--toast-index)*var(--toast-peek))+(var(--toast-shrink)*var(--toast-calc-height))))_scale(var(--toast-scale))]",
                 "data-[position*=bottom]:transform-[translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)-(var(--toast-index)*var(--toast-peek))-(var(--toast-shrink)*var(--toast-calc-height))))_scale(var(--toast-scale))]",
-                // Limited state
                 "data-limited:opacity-0",
-                // Expanded state
                 "data-expanded:h-(--toast-height)",
                 "data-position:data-expanded:transform-[translateX(var(--toast-swipe-movement-x))_translateY(var(--toast-calc-offset-y))]",
-                // Starting and ending animations
                 "data-[position*=top]:data-starting-style:transform-[translateY(calc(-100%-var(--toast-inset)))]",
                 "data-[position=top-center]:data-ending-style:not-data-limited:not-data-swipe-direction:transform-[translateY(calc(var(--toast-swipe-movement-y)-100%-var(--toast-inset)))]",
                 "data-[position*=bottom]:data-starting-style:transform-[translateY(calc(100%+var(--toast-inset)))]",
                 "data-[position*=top]:data-[position*=right]:data-starting-style:transform-[translateX(calc(100%+var(--toast-inset)))_translateY(var(--toast-calc-offset-y))]",
                 "data-ending-style:opacity-0",
-                // Ending animations (direction-aware)
                 "data-ending-style:not-data-limited:not-data-swipe-direction:transform-[translateY(calc(100%+var(--toast-inset)))]",
                 "data-[position*=top]:data-[position*=right]:data-ending-style:not-data-limited:not-data-swipe-direction:transform-[translateX(calc(100%+var(--toast-inset)))_translateY(var(--toast-calc-offset-y))]",
                 "data-ending-style:data-[swipe-direction=left]:transform-[translateX(calc(var(--toast-swipe-movement-x)-100%-var(--toast-inset)))_translateY(var(--toast-calc-offset-y))]",
                 "data-ending-style:data-[swipe-direction=right]:transform-[translateX(calc(var(--toast-swipe-movement-x)+100%+var(--toast-inset)))_translateY(var(--toast-calc-offset-y))]",
                 "data-ending-style:data-[swipe-direction=up]:transform-[translateY(calc(var(--toast-swipe-movement-y)-100%-var(--toast-inset)))]",
                 "data-ending-style:data-[swipe-direction=down]:transform-[translateY(calc(var(--toast-swipe-movement-y)+100%+var(--toast-inset)))]",
-                // Ending animations (expanded)
                 "data-expanded:data-ending-style:data-[swipe-direction=left]:transform-[translateX(calc(var(--toast-swipe-movement-x)-100%-var(--toast-inset)))_translateY(var(--toast-calc-offset-y))]",
                 "data-expanded:data-ending-style:data-[swipe-direction=right]:transform-[translateX(calc(var(--toast-swipe-movement-x)+100%+var(--toast-inset)))_translateY(var(--toast-calc-offset-y))]",
                 "data-expanded:data-ending-style:data-[swipe-direction=up]:transform-[translateY(calc(var(--toast-swipe-movement-y)-100%-var(--toast-inset)))]",
                 "data-expanded:data-ending-style:data-[swipe-direction=down]:transform-[translateY(calc(var(--toast-swipe-movement-y)+100%+var(--toast-inset)))]",
-                // Closed/limited toasts stay mounted briefly for animation; they must
-                // never sit as invisible hit targets above a fresh interactive toast.
+                // closed/limited toasts stay mounted briefly for animation; they must never sit as invisible hit targets above a fresh interactive toast
                 "data-ending-style:pointer-events-none data-limited:pointer-events-none",
               )}
               data-position={position}

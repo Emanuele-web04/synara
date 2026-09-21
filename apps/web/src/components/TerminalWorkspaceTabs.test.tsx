@@ -1,8 +1,3 @@
-// FILE: TerminalWorkspaceTabs.test.tsx
-// Purpose: Guards the workspace-level terminal/chat tab visibility rules.
-// Layer: Component rendering tests
-// Depends on: TerminalWorkspaceTabs and React server rendering.
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 

@@ -253,10 +253,7 @@ export function useChatTurnExecution({
       let turnStartSucceeded = false;
       let settledLocalBranchUpdatedForSend = false;
       await (async () => {
-        // "Work locally" from the setup card: drop any prepared worktree and
-        // point the send (and the thread's metadata) back at the project
-        // checkout. Awaited before the turn dispatch so the session resolves the
-        // local cwd instead of the abandoned worktree.
+        // "Work locally": drop any prepared worktree and point the send back at the project checkout, awaited before dispatch so the session resolves the local cwd
         const applyWorkLocallySwitch = async () => {
           switchedToLocalCheckout = true;
           nextThreadEnvMode = "local";
@@ -302,9 +299,7 @@ export function useChatTurnExecution({
           clearLocalDispatchWorktreeSetup();
         };
 
-        // Honors a Cancel / Work locally choice at a step boundary. Cancel
-        // unwinds through the shared send-failure path below; the cancelled
-        // sentinel keeps that path from painting error state.
+        // honors Cancel / Work locally at a step boundary; the cancelled sentinel keeps the shared failure path from painting error state
         const consumeWorktreeSetupResolution = async () => {
           const action = worktreeSetupResolution?.action ?? null;
           if (action === null || switchedToLocalCheckout) {
@@ -318,9 +313,7 @@ export function useChatTurnExecution({
 
         // On first message: lock in branch + create worktree if needed.
         if (baseBranchForWorktree && worktreeSetupResolution) {
-          // The server streams each real setup phase (branch → worktree → copy
-          // changes); advance the card's rows from those events instead of
-          // letting one row spin through the whole creation.
+          // the server streams each real setup phase; advance the card's rows from those events instead of one row spinning through the whole creation
           const worktreeProgressId = randomUUID();
           const creationFlow = await runWorktreeCreationFlow({
             progressId: worktreeProgressId,
@@ -380,8 +373,7 @@ export function useChatTurnExecution({
                 associatedWorktreeBranch: nextAssociatedWorktree.associatedWorktreeBranch,
                 associatedWorktreeRef: nextAssociatedWorktree.associatedWorktreeRef,
               });
-              // Keep local thread state in sync immediately so terminal drawer opens
-              // with the worktree cwd/env instead of briefly using the project root.
+              // sync local thread state immediately so the terminal drawer opens with the worktree cwd/env instead of briefly using the project root
               setStoreThreadWorkspace(threadIdForSend, {
                 branch: result.worktree.branch,
                 worktreePath: result.worktree.path,
@@ -435,19 +427,15 @@ export function useChatTurnExecution({
             },
             api,
           );
-          // `thread.create` does not carry notes, so seed the freshly created
-          // server thread's notepad with the inherited project instructions via a
-          // dedicated meta update. Best-effort: a failure here must not abort the turn.
+          // `thread.create` doesn't carry notes — seed the new server thread's notepad via a dedicated meta update; best-effort, failure must not abort the turn
           if (inheritedThreadNotes !== threadNotes && inheritedThreadNotes.trim().length > 0) {
             try {
               await dispatchThreadNotes(threadIdForSend, inheritedThreadNotes);
             } catch {
-              // Seeding is non-critical; project instructions can still be copied
-              // into the notepad manually from the Environment panel.
+              // seeding is non-critical; instructions can still be copied from the Environment panel
             }
           }
-          // Same for a goal staged on the draft via /goal: persist it now so the
-          // decider stamps goalStartedAt when the thread actually starts working.
+          // persist a staged /goal now so the decider stamps goalStartedAt when the thread starts working
           const draftGoalForSend = activeThread.goal?.trim() ?? "";
           if (draftGoalForSend.length > 0) {
             try {
@@ -501,9 +489,7 @@ export function useChatTurnExecution({
                 terminalId: setupTerminal.terminalId,
                 signal: setupActivityAbortController.signal,
               });
-              // Setup scripts can run for minutes; let Cancel / Work locally win
-              // the wait. The script itself keeps running — a cancelled worktree
-              // is force-removed, a local switch just stops waiting on it.
+              // setup scripts can run for minutes — let Cancel / Work locally win the wait; the script itself keeps running
               await (
                 worktreeSetupResolution
                   ? Promise.race([setupActivityWait, worktreeSetupResolution.promise])
@@ -512,8 +498,7 @@ export function useChatTurnExecution({
             }
           }
         }
-        // Covers a resolution set while the thread was linked or the setup
-        // script ran (the creation-step race above only guards the first step).
+        // covers a resolution set while the thread was linked or the setup script ran
         await consumeWorktreeSetupResolution();
 
         if (isServerThread) {
@@ -556,12 +541,9 @@ export function useChatTurnExecution({
             associatedWorktreeRef: nextAssociatedWorktreeRef,
           });
         }
-        // Keep setup resolvable while attachment uploads are still preparing the
-        // turn. Once they settle, consume the last possible choice before the
-        // card advances to the non-resolvable "Starting session" step.
+        // keep setup resolvable while attachment uploads are preparing; once they settle, consume the last choice before the card advances
         await consumeWorktreeSetupResolution();
-        // Carry the expected message id so a snapshot rebuilt after an interim
-        // reset (thread switch, ack effect) keeps the message-echo ack signal.
+        // carry the expected message id so a snapshot rebuilt after an interim reset keeps the message-echo ack signal
         beginLocalDispatch({
           expectedUserMessageId: messageIdForSend,
           ...(baseBranchForWorktree && !switchedToLocalCheckout
@@ -629,11 +611,7 @@ export function useChatTurnExecution({
           setSettledThreadBranchWarningDismissedThreadId(threadIdForSend);
         }
         armLocalDispatchAckFallback(threadIdForSend);
-        // Steers on providers without native mid-turn steering interrupt the live
-        // turn before re-dispatching; hold queued auto-dispatch through that gap
-        // so it can't race the steer. The live session provider decides the
-        // interrupt path server-side, so the gate keys off it rather than the
-        // requested model selection.
+        // non-natively-steerable providers interrupt the live turn before re-dispatching; hold queued auto-dispatch through that gap — gate keys off the live session provider (server decides the interrupt path)
         const liveProviderForSteerGate =
           activeThread?.session?.provider ?? selectedModelSelectionForSend.provider;
         if (
@@ -656,23 +634,19 @@ export function useChatTurnExecution({
           setRestoredQueuedSourceProposedPlan(threadIdForSend, null);
         }
       })().catch(async (err: unknown) => {
-        // A user-cancelled worktree setup unwinds through this same rollback,
-        // but silently: no error styling on the step row, no thread error.
+        // a user-cancelled worktree setup unwinds through this same rollback, but silently: no error styling, no thread error
         const setupCancelled = err instanceof WorktreeSetupCancelledError;
-        // Uploads start in parallel with workspace/session preparation. If any
-        // earlier step fails, settle that promise and release every staged blob.
+        // uploads start in parallel with workspace/session prep; on earlier failure, settle that promise and release every staged blob
         await turnAttachmentsPromise.then(
           (staged) => staged.cleanup(),
           () => undefined,
         );
-        // Surface the failure on whichever setup step was active (no-op for
-        // sends without a worktree setup in flight).
+        // surface the failure on whichever setup step was active
         if (!setupCancelled) {
           failLocalDispatchWorktreeSetup();
         }
         if (!turnStartSucceeded) {
-          // The turn RPC never resolved, so no server turn exists for the
-          // watchdog to recover — drop the marker armed when the dispatch began.
+          // the turn RPC never resolved, so no server turn exists for the watchdog to recover — drop the marker
           clearPendingTurnDispatch(threadIdForSend);
         }
         if (settledLocalBranchUpdatedForSend && !turnStartSucceeded) {
@@ -750,9 +724,7 @@ export function useChatTurnExecution({
           }
         }
         if (queuedChatTurn !== null && !turnStartSucceeded) {
-          // The queued snapshot remains available for retry/edit after a rejected
-          // dispatch. Drop only this attempt's optimistic transcript row; its
-          // attachment preview URLs still belong to the queued snapshot.
+          // the queued snapshot stays available for retry/edit after a rejected dispatch; drop only this attempt's optimistic row
           setOptimisticUserMessages((existing) => {
             const next = existing.filter((message) => message.id !== messageIdForSend);
             return next.length === existing.length ? existing : next;
@@ -818,8 +790,7 @@ export function useChatTurnExecution({
         if (baseBranchForWorktree && (worktreeSetupResolution?.action ?? null) === null) {
           scheduleFailedWorktreeSetupDispatchReset();
         } else {
-          // A resolved setup (cancelled, or switched to local and then failed)
-          // has no error step to hold on screen — release the marker directly.
+          // a resolved setup has no error step to hold on screen — release the marker directly
           resetLocalDispatch();
         }
       }

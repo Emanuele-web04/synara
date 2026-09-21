@@ -1,8 +1,3 @@
-// FILE: composerTraits.ts
-// Purpose: Centralizes composer trait resolution so menu surfaces read the same model capability state.
-// Layer: Chat composer state helpers
-// Depends on: shared model capability helpers and provider model option types.
-
 import {
   type ProviderOptionDescriptor,
   type ProviderKind,
@@ -183,8 +178,7 @@ export function getComposerTraitSelection(
   };
 }
 
-// Human label for the currently selected reasoning/thinking trait, shared by the
-// composer trigger and any surface that summarizes a thread's model selection.
+// human label for the selected reasoning/thinking trait, shared by the composer trigger and any surface summarizing the model selection
 export function resolveComposerTraitStatusLabel(
   selection: Pick<
     ReturnType<typeof getComposerTraitSelection>,
@@ -206,8 +200,7 @@ export function resolveComposerTraitStatusLabel(
     : null;
 }
 
-// A model exposes a speed control either through an explicit descriptor or the
-// legacy capability flag; every surface must agree on that test.
+// a model exposes a speed control via explicit descriptor or the legacy capability flag; every surface must agree on that test
 export function supportsComposerFastModeControl(
   selection: Pick<ReturnType<typeof getComposerTraitSelection>, "caps" | "fastModeDescriptor">,
 ): boolean {
@@ -256,10 +249,7 @@ export type ComposerEffortChangePlan =
   | { readonly kind: "prompt"; readonly prompt: string }
   | { readonly kind: "options"; readonly patch: Record<string, unknown> };
 
-// Single decision point for "the user picked effort X": every effort surface
-// (radio menu, slider) turns its choice into the same prompt rewrite or option
-// patch here, so ultrathink handling and option ids can never drift apart.
-// Returns null when the change must be ignored (locked by the prompt, unknown value).
+// single decision point for "user picked effort X": every surface turns it into the same prompt rewrite or option patch so ultrathink handling and option ids can't drift
 export function planComposerEffortChange(input: {
   provider: ProviderKind;
   selection: Pick<
@@ -290,9 +280,7 @@ export function planComposerEffortChange(input: {
   return { kind: "options", patch: buildProviderOptionPatch(provider, optionId, nextOption.value) };
 }
 
-// Index of the effort the slider thumb should rest on. While Ultrathink is
-// pinned by the prompt the resolved `effort` falls back to the default, so the
-// thumb follows the prompt-injected level instead when the ladder exposes it.
+// while Ultrathink is pinned by the prompt, `effort` falls back to default — the slider thumb follows the prompt-injected level instead
 export function resolveComposerEffortLadderIndex(
   selection: Pick<
     ReturnType<typeof getComposerTraitSelection>,

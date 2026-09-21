@@ -1,8 +1,3 @@
-// FILE: runningChatsQuitConfirmation.ts
-// Purpose: Lists in-progress chats and builds the desktop quit confirmation copy.
-// Layer: UI logic helper
-// Depends on: Sidebar-equivalent "working" signals (running/connecting/live tail).
-
 export interface RunningChatQuitCandidate {
   readonly id: string;
   readonly title: string;
@@ -100,7 +95,6 @@ export function runningChatsQuitCopy(
   };
 }
 
-/** The ordinary user turn dispatched on each remembered chat at the next launch. */
 export function quitResumeContinuationPrompt(appName = "Synara"): string {
   return `${appName} was closed while this chat was still running. Continue where you left off.`;
 }
@@ -120,7 +114,6 @@ export interface StopRunningChatsForQuitInput {
 }
 
 export interface StopRunningChatsForQuitResult {
-  /** True when the server acknowledged the resume record (and owns the interrupts). */
   readonly resumeRecorded: boolean;
 }
 
@@ -142,16 +135,13 @@ export async function stopRunningChatsForQuit(
     }
   }
 
-  // Fire-and-forget: the window must close as soon as the outcome is known, and an
-  // interrupt RPC against an unresponsive server could otherwise hold quit for its
-  // full transport timeout.
+  // fire-and-forget — the window must close as soon as the outcome is known; an interrupt RPC on an unresponsive server could otherwise hold quit for its full transport timeout
   for (const threadId of threadIds) {
     void new Promise((resolve) => resolve(input.dispatchInterrupt(threadId))).catch(() => {});
   }
   return { resumeRecorded: false };
 }
 
-/** Resolves true only when `run` settles successfully within `timeoutMs`. */
 async function withBoundedWait(run: () => Promise<unknown>, timeoutMs: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<false>((resolve) => {

@@ -1,7 +1,3 @@
-// FILE: effectProcessRuntime.test.ts
-// Purpose: Verifies shared Windows launch decisions reach Effect child-process commands.
-// Layer: Server platform runtime test
-
 import { describe, expect, it } from "vitest";
 
 import { makeEffectProcessCommand } from "./effectProcessRuntime";

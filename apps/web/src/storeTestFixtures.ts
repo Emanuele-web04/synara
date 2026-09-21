@@ -1,7 +1,3 @@
-// FILE: storeTestFixtures.ts
-// Purpose: Shared builders for store facade, projection, and event reducer tests.
-// Exports: Minimal normalized-state and orchestration payload fixtures.
-
 import {
   EventId,
   ProjectId,

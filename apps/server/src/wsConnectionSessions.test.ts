@@ -69,7 +69,7 @@ describe("WsConnectionSessions", () => {
       principal: { ownerKind: "session", ownerId: "session-9" },
     });
 
-    // Without a session the conservative defaults must apply.
+    // without a session the conservative defaults must apply
     const withoutSession = await Effect.runPromise(provideWsConnectionSession(read, undefined));
     expect(withoutSession).toEqual({
       role: "client",

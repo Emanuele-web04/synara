@@ -300,9 +300,7 @@ $$
   });
 
   it("renders a table whose delimiter row is missing cells", async () => {
-    // Models regularly emit a delimiter row with fewer cells than the header;
-    // GFM rejects the whole block on the mismatch and the table degrades into
-    // one run-on paragraph of pipes. The repair pass pads the delimiter row.
+    // models regularly emit a delimiter row with fewer cells than the header; GFM rejects the whole block and the table degrades into a run-on paragraph of pipes — the repair pass pads the delimiter row
     const markup = await renderMarkdown(
       [
         "Studio vs. normal mode:",
@@ -506,8 +504,7 @@ describe("ChatMarkdown user variant", () => {
   });
 
   it("keeps Object.prototype member names as literal inline code", async () => {
-    // `inlineCodeFilePath` strips wrapping quotes, so the quoted forms reach the icon
-    // tables as the bare keys `constructor` / `__proto__`.
+    // `inlineCodeFilePath` strips wrapping quotes, so quoted forms reach the icon tables as bare keys `constructor`/`__proto__`
     for (const token of ["constructor", "__proto__", '"constructor"', '"__proto__"']) {
       const markup = await renderUserMarkdown(`what if a key is \`${token}\``);
 

@@ -1,9 +1,3 @@
-// FILE: localImageFiles.ts
-// Purpose: Resolves local preview-file (image/PDF) requests without exposing arbitrary files.
-// Layer: Server HTTP utility
-// Exports: local image route constants and allowlisted path resolver
-// Depends on: fs realpath/stat, Codex generated image roots, safe preview extensions
-
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -23,7 +17,7 @@ export { LOCAL_IMAGE_ROUTE_PATH };
 export interface ResolvedLocalPreviewFile {
   readonly path: string;
   readonly fileName: string;
-  /** From the allowlist stat, so responses can set Content-Length without re-statting. */
+  /** from the allowlist stat so responses set Content-Length without re-statting */
   readonly sizeBytes: number;
 }
 
@@ -90,9 +84,7 @@ async function findGitRoot(startPath: string): Promise<string | null> {
       if (stat.isDirectory() || stat.isFile()) {
         return current;
       }
-    } catch {
-      // Keep walking until we hit the filesystem root.
-    }
+    } catch {}
 
     const parent = path.dirname(current);
     if (parent === current) {
@@ -159,17 +151,13 @@ export async function resolveAllowedLocalPreviewFile(input: {
     sizeBytes: stat.size,
   };
 
-  // The workspace check covers the common case (file previews), so resolve it
-  // first and skip the broader root lookups entirely when it passes.
+  // the workspace check covers the common case — resolve it first and skip the broader root lookups when it passes
   const workspaceRoot = await resolveWorkspaceRoot(input.cwd);
   if (workspaceRoot !== null && isPathInside(realFilePath, workspaceRoot)) {
     return resolved;
   }
 
-  // Sessions that start before a project workspace exists run in per-thread
-  // scratch directories. Files agents create there are workspace-equivalent,
-  // so every preview type is servable from the configured private root. Keep
-  // the former temp roots readable for threads created before this migration.
+  // sessions starting before a workspace exists run in per-thread scratch dirs — files agents create there are workspace-equivalent; keep former temp roots readable for pre-migration threads
   const tempRoots = await temporaryDirectoryRoots();
   const configuredScratchRoot = await realpathOrNull(input.scratchWorkspacesRoot);
   const scratchWorkspaceRoots = [
@@ -180,9 +168,7 @@ export async function resolveAllowedLocalPreviewFile(input: {
     return resolved;
   }
 
-  // The in-app file panel may intentionally preview an absolute local path
-  // supplied by the agent (for example a file in Downloads). Keep this opt-in
-  // so other callers retain the narrower workspace/generated-image allowlist.
+  // the file panel may intentionally preview an absolute path supplied by the agent — opt-in so other callers keep the narrower allowlist
   if (
     input.allowAbsoluteLocalPreviewFile === true &&
     path.isAbsolute(requestedPath) &&
@@ -191,8 +177,7 @@ export async function resolveAllowedLocalPreviewFile(input: {
     return resolved;
   }
 
-  // The generated-image and temp-dir roots exist for agent-produced images in
-  // chat markdown; keep them image-only so they never serve documents.
+  // generated-image/temp roots exist for agent-produced images in markdown — keep them image-only so they never serve documents
   if (!isSupportedLocalImagePath(realFilePath)) {
     return null;
   }

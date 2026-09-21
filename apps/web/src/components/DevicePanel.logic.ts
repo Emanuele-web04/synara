@@ -1,9 +1,3 @@
-// FILE: DevicePanel.logic.ts
-// Purpose: Pure decision logic for the iOS Simulator dock pane (video gating, input mapping, picker/availability views).
-// Layer: Component logic helper
-// Exports: frame-gate state machine, canvas/device coordinate mapping, hardware-button and key translation, picker + availability view models
-// Depends on: device contracts and the shared frame envelope header only — no DOM, no React.
-
 import type {
   DeviceAvailability,
   DeviceCapabilityId,
@@ -22,13 +16,7 @@ import type {
 
 import { DEVICE_CAPABILITY_LABELS } from "@synara/contracts";
 
-// ── Frame gating ─────────────────────────────────────────────────────
-//
-// A WebCodecs VideoDecoder must be configured from a codec-config frame (SPS/PPS)
-// before it accepts any sample, and after configuring it must receive a keyframe
-// before any delta frame or it errors out. The stream is lossy by design (the
-// server drops frames under backpressure), so sequence gaps are expected and must
-// re-arm the keyframe requirement rather than kill the pane.
+// a VideoDecoder must be configured from a codec-config frame (SPS/PPS) before any sample, then receive a keyframe before any delta; the stream is lossy by design (server drops frames under backpressure) so sequence gaps must re-arm the keyframe requirement, not kill the pane
 
 export type DeviceFrameGatePhase =
   /** No codec config seen yet: nothing can be decoded. */
@@ -88,9 +76,7 @@ function forwardSequenceDistance(previous: number, next: number): number {
   return (next - previous + SEQUENCE_MODULUS) % SEQUENCE_MODULUS;
 }
 
-// Beyond this, a "forward" jump is far more likely a stale frame from a previous
-// stream generation than a real burst of drops, so it is discarded rather than
-// treated as a gap.
+// Beyond this, a "forward" jump is far more likely a stale frame from a previous stream generation than a real burst of drops, so it is discarded rather than treated as a gap.
 const MAX_PLAUSIBLE_SEQUENCE_GAP = 1_024;
 
 export function stepDeviceFrameGate(
@@ -102,8 +88,7 @@ export function stepDeviceFrameGate(
     return { state, action: { kind: "ignore" }, requestKeyframe: false };
   }
 
-  // Codec config re-arms the keyframe requirement: a new parameter set means the
-  // decoder is reconfigured, and a decoder cannot resume mid-GOP after that.
+  // Codec config re-arms the keyframe requirement: a new parameter set means the decoder is reconfigured, and a decoder cannot resume mid-GOP after that.
   if (header.codecConfig) {
     return {
       state: {
@@ -127,8 +112,7 @@ export function stepDeviceFrameGate(
   if (state.lastSequence !== null) {
     const distance = forwardSequenceDistance(state.lastSequence, header.sequence);
     if (distance === 0 || distance > MAX_PLAUSIBLE_SEQUENCE_GAP) {
-      // Reordered, duplicated, or from a previous stream generation. Dropping it
-      // keeps `lastSequence` monotonic so one stale frame cannot wedge the gate.
+      // Reordered, duplicated, or from a previous stream generation. Dropping it keeps `lastSequence` monotonic so one stale frame cannot wedge the gate.
       return {
         state: { ...state, droppedSinceResync: state.droppedSinceResync + 1 },
         action: { kind: "drop", reason: "stale-sequence" },
@@ -136,8 +120,7 @@ export function stepDeviceFrameGate(
       };
     }
     if (distance > 1 && !header.keyframe && state.phase === "streaming") {
-      // Frames were dropped mid-GOP. Decoding onward would render visible
-      // corruption, so hold until the next keyframe and ask for one now.
+      // Frames were dropped mid-GOP. Decoding onward would render visible corruption, so hold until the next keyframe and ask for one now.
       return {
         state: {
           phase: "awaiting-keyframe",
@@ -169,13 +152,9 @@ export function stepDeviceFrameGate(
   };
 }
 
-// ── Coordinate mapping ───────────────────────────────────────────────
-
 export interface DeviceCanvasGeometry {
-  /** Decoded frame size in pixels. */
   readonly frameWidth: number;
   readonly frameHeight: number;
-  /** Rendered canvas size in CSS pixels (its bounding box). */
   readonly displayWidth: number;
   readonly displayHeight: number;
 }
@@ -244,8 +223,7 @@ export function canvasPointToDevicePoint(
 
   const pointWidth = geometry.devicePointWidth ?? geometry.frameWidth;
   const pointHeight = geometry.devicePointHeight ?? geometry.frameHeight;
-  // Round to whole points: the helper injects integral HID coordinates, and a
-  // fractional point would be truncated inconsistently across the hop.
+  // Round to whole points: the helper injects integral HID coordinates, and a fractional point would be truncated inconsistently across the hop.
   return {
     x: clampToRange(Math.round((withinX / rect.width) * pointWidth), 0, pointWidth),
     y: clampToRange(Math.round((withinY / rect.height) * pointHeight), 0, pointHeight),
@@ -255,8 +233,6 @@ export function canvasPointToDevicePoint(
 function clampToRange(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
 }
-
-// ── Tap vs swipe ─────────────────────────────────────────────────────
 
 /**
  * Below this movement a drag is a tap: trackpads and touchscreens jitter a few
@@ -297,13 +273,10 @@ export function resolveDevicePointerGesture(input: {
     kind: "swipe",
     from,
     to,
-    // A zero-duration swipe is rejected by the helper as a flick with infinite
-    // velocity; clamp to a single frame's worth of time.
+    // A zero-duration swipe is rejected by the helper as a flick with infinite velocity; clamp to a single frame's worth of time.
     durationMs: Math.max(16, Math.round(input.durationMs)),
   };
 }
-
-// ── Hardware buttons and keyboard ────────────────────────────────────
 
 export interface DeviceShortcutEventLike {
   readonly key: string;
@@ -348,8 +321,7 @@ export function deviceKeyModifiers(event: DeviceShortcutEventLike): DeviceKeyMod
   return modifiers;
 }
 
-// HID usage codes (page 0x07) for the keys the pane forwards. Letters and digits
-// are computed; only the named keys need a table.
+// HID usage codes (page 0x07) for the keys the pane forwards. Letters and digits are computed; only the named keys need a table.
 const HID_USAGE_BY_KEY: Readonly<Record<string, number>> = {
   Enter: 0x28,
   Escape: 0x29,
@@ -398,8 +370,6 @@ export function deviceHidUsageForKey(key: string): number | null {
   return HID_USAGE_BY_KEY[key] ?? null;
 }
 
-// ── Device picker ────────────────────────────────────────────────────
-
 export type DevicePickerAction =
   /** Already booted: attaching is all that is needed. */
   | { readonly kind: "attach" }
@@ -412,7 +382,6 @@ export interface DevicePickerEntry {
   readonly device: DeviceDescriptor;
   readonly attached: boolean;
   readonly action: DevicePickerAction;
-  /** Secondary line, e.g. `iOS 18.2 · Booted`. */
   readonly detail: string;
 }
 
@@ -464,8 +433,6 @@ export function buildDevicePickerEntries(input: {
     }));
 }
 
-// ── Availability ─────────────────────────────────────────────────────
-
 export type DeviceAvailabilityView =
   | { readonly kind: "ready" }
   /**
@@ -483,9 +450,7 @@ export type DeviceAvailabilityView =
       readonly kind: "blocked";
       readonly title: string;
       readonly description: string;
-      /** Present only for setup-required; drives the live checklist. */
       readonly steps: readonly DeviceSetupStep[];
-      /** Whether the pane should keep polling/listening for a state change. */
       readonly retryable: boolean;
     };
 
@@ -540,11 +505,7 @@ export function resolveDeviceAvailabilityView(
         retryable: false,
       };
     case "setup-required":
-      // The helper is the one step the user cannot perform: it is built on
-      // first attach. Blocking on it hid the picker, so there was no way to
-      // attach, so it never built — the setup card asked for the one thing it
-      // prevented. When it is all that remains, show the picker and let
-      // choosing a device do the build.
+      // the helper build is the one step the user can't perform — blocking on it hid the picker so it could never build; when it's all that remains, show the picker and let choosing a device do the build
       if (onlyHelperBuildRemains(availability.steps)) return { kind: "ready" };
       return {
         kind: "blocked",
@@ -583,8 +544,7 @@ export function inferDeviceScaleFactor(framePixelWidth: number): number {
   if (!Number.isFinite(framePixelWidth) || framePixelWidth <= 0) return 1;
   if (framePixelWidth >= 1000 && framePixelWidth <= 1400) return 3;
   if (framePixelWidth > 1400) return 2;
-  // Below 1000px: a 2x phone (750-828px) or a 1x frame. Point widths under 320
-  // do not exist on shipping hardware, so anything that small is already points.
+  // Below 1000px: a 2x phone (750-828px) or a 1x frame. Point widths under 320 do not exist on shipping hardware, so anything that small is already points.
   return framePixelWidth >= 640 ? 2 : 1;
 }
 
@@ -628,8 +588,6 @@ export function resolveDevicePointSize(input: {
     height: Math.round(framePixelHeight / scale),
   };
 }
-
-// ── Screen recording ─────────────────────────────────────────────────
 
 /**
  * The pane's view of a recording.
@@ -687,7 +645,6 @@ export function stepDeviceRecording(
   }
 }
 
-/** Whether the toolbar's record button should read as active. */
 export function isDeviceRecordingActive(state: DeviceRecordingState): boolean {
   return state.kind === "recording" || state.kind === "stopping";
 }
@@ -714,8 +671,7 @@ export interface DeviceSetupAction {
  * or none, rather than a row of links that mostly go nowhere.
  */
 const DEVICE_SETUP_ACTIONS: Partial<Record<DeviceSetupStepId, DeviceSetupAction>> = {
-  // The https form rather than macappstore://: the shell bridge only forwards
-  // http(s), and macOS hands this link to the App Store app regardless.
+  // The https form rather than macappstore://: the shell bridge only forwards http(s), and macOS hands this link to the App Store app regardless.
   "install-xcode": {
     label: "Open Mac App Store",
     url: "https://apps.apple.com/app/xcode/id497799835",
@@ -739,8 +695,6 @@ export function deviceSetupCheckingLabel(steps: readonly DeviceSetupStep[]): str
   if (!next) return null;
   return next.id === "install-xcode" ? "Checking for Xcode…" : "Checking your setup…";
 }
-
-// ── Thread state helpers ─────────────────────────────────────────────
 
 export function attachedDeviceFromThreadState(
   state: ThreadDeviceState | undefined,
@@ -783,13 +737,10 @@ export function resolveDisplayedDevice(input: {
   if (!pending) return attached;
 
   const reported = input.threadState?.attachedDeviceUdid ?? null;
-  // The server has moved off the attachment this pick was made against, so its
-  // answer is the current truth even when it is not the device that was picked.
+  // The server has moved off the attachment this pick was made against, so its answer is the current truth even when it is not the device that was picked.
   if (reported !== pending.supersedes) return attached;
 
-  // Still pending. Prefer the thread's own copy of the descriptor where it has
-  // one: it carries the live runtime state and the helper's measured geometry,
-  // both fresher than the listing the pick came from.
+  // Still pending. Prefer the thread's own copy of the descriptor where it has one: it carries the live runtime state and the helper's measured geometry, both fresher than the listing the pick came from.
   const known = input.threadState?.devices.find((device) => device.udid === pending.device.udid);
   return known ?? pending.device;
 }

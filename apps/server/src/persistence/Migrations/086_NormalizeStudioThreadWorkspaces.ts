@@ -1,5 +1,4 @@
-// Purpose: Repairs Studio threads that older web clients encoded as worktrees when the
-//          composer "Use a folder" control selected an ordinary local directory.
+// repairs Studio threads older web clients encoded as worktrees when "Use a folder" picked an ordinary directory
 
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -16,8 +15,7 @@ export default Effect.gen(function* () {
     `;
   }
 
-  // Naturally re-runnable: a normalized Studio thread no longer matches the
-  // predicate, and COALESCE keeps an already-adopted working directory.
+  // naturally re-runnable — a normalized thread no longer matches the predicate and COALESCE keeps an adopted directory
   yield* sql`
     UPDATE projection_threads
     SET working_directory = COALESCE(working_directory, worktree_path),

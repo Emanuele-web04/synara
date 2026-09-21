@@ -1,6 +1,3 @@
-// FILE: chatProjects.test.ts
-// Purpose: Verifies home chat-container project recognition across new and legacy roots.
-
 import { ProjectId, type OrchestrationShellSnapshot } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -40,7 +37,7 @@ function makeShellSnapshot(
 }
 
 beforeEach(() => {
-  // ensureHomeChatProject waits for the first shell snapshot before deciding to create.
+  // ensureHomeChatProject waits for the first shell snapshot before deciding to create
   useStore.setState({ threadsHydrated: true });
 });
 
@@ -106,8 +103,7 @@ describe("isHomeChatContainerProject", () => {
   });
 
   it("trusts the chat kind before any server workspace path resolves", () => {
-    // Boot window: neither homeDir nor chatWorkspaceRoot known yet — the kind alone decides,
-    // mirroring isStudioContainerProject, so chat rows aren't mis-partitioned during startup.
+    // boot window: neither homeDir nor chatWorkspaceRoot known yet — kind alone decides (mirroring isStudioContainerProject) so chat rows aren't mis-partitioned during startup
     expect(
       isHomeChatContainerProject(
         {

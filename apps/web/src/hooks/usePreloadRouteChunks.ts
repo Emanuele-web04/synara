@@ -14,9 +14,7 @@ export function usePreloadRouteChunks() {
   const router = useRouter();
 
   useEffect(() => {
-    // New-task navigation is a primary startup action. Warm that route as soon
-    // as the root commits so an immediate click never waits for the browser's
-    // idle callback (which can be delayed for several seconds during hydration).
+    // New-task navigation is a primary startup action. Warm that route as soon as the root commits so an immediate click never waits for the browser's idle callback (which can be delayed for several seconds during hydration).
     router.preloadRoute({ to: "/$threadId", params: { threadId: "chunk-preload" } }).catch(() => {
       // Preloading is best-effort; navigation falls back to loading on demand.
     });

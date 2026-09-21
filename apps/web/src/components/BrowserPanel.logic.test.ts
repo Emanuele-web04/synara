@@ -247,8 +247,7 @@ describe("createBrowserRendererLossHandler", () => {
       recover,
     });
 
-    // Electron can surface both `render-process-gone` and `destroyed` for the
-    // same physical guest. Both events share this one-shot handler.
+    // Electron can surface both `render-process-gone` and `destroyed` for the same physical guest — both share this one-shot handler
     onRendererLoss();
     onRendererLoss();
 

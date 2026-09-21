@@ -145,16 +145,12 @@ export function useChatQueuedTurns({
 
   const autoDispatchingQueuedTurnRef = useRef(false);
 
-  // Holds queued-composer auto-dispatch through a non-natively-steerable
-  // provider steer's interrupt→re-dispatch gap; see
-  // resolveQueuedSteerGateTransition. Seed from the shared map so a remount
-  // during the interrupt gap still sees the gate the watcher has been holding.
+  // holds auto-dispatch through a non-steerable provider's interrupt→re-dispatch gap; seeded from the shared map so a remount still sees the held gate
 
   const [queuedSteerGate, setQueuedSteerGate] = useState<QueuedSteerGate | null>(() =>
     getQueuedComposerSteerGate(threadId),
   );
-  // Bumped to re-evaluate auto-dispatch when only non-reactive guards (refs)
-  // blocked it; nothing else re-triggers the effect once they reset.
+  // bumped to re-evaluate auto-dispatch when only non-reactive ref guards blocked it
   const [queuedAutoDispatchTick, setQueuedAutoDispatchTick] = useState(0);
 
   useEffect(() => {
@@ -344,8 +340,7 @@ export function useChatQueuedTurns({
     [removeQueuedComposerTurn, restoreQueuedTurnToComposer],
   );
 
-  // Advance/expire the steer gate as the session moves through the
-  // interrupt→steered-turn handoff (or fails out of it).
+  // advance/expire the steer gate as the session moves through the interrupt→steered-turn handoff
   const sessionErroredForSteerGate = activeThread?.session?.status === "error";
   const activeTurnIdForSteerGate = activeThread?.session?.activeTurnId ?? null;
 
@@ -422,9 +417,7 @@ export function useChatQueuedTurns({
       sendInFlightRef.current ||
       sendPreflightInFlightRef.current
     ) {
-      // These guards are refs, so nothing re-triggers this effect once they
-      // reset; poll until the in-flight send settles instead of leaving the
-      // queue stuck at the end of a turn.
+      // the guards are refs, so nothing re-triggers this effect once they reset — poll until the in-flight send settles
       const timer = window.setTimeout(() => setQueuedAutoDispatchTick((tick) => tick + 1), 250);
       return () => window.clearTimeout(timer);
     }
@@ -444,8 +437,7 @@ export function useChatQueuedTurns({
       return () => window.clearTimeout(timer);
     }
     if (!tryBeginQueuedComposerAutoDispatch(threadId)) {
-      // The watcher already owns this thread's queue head (background drain
-      // started before this ChatView claimed). Poll until that send settles.
+      // the watcher already owns this thread's queue head — poll until that send settles
       const timer = window.setTimeout(() => setQueuedAutoDispatchTick((tick) => tick + 1), 250);
       return () => window.clearTimeout(timer);
     }

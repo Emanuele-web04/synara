@@ -1,10 +1,3 @@
-// FILE: whatsNew/FeatureSection.tsx
-// Purpose: Render a single "What's new" feature card — title, description,
-// optional screenshot, and an optional longer technical blurb. Matches the
-// IndieDevs card layout so the post-update dialog and the Settings release
-// history share one visual vocabulary.
-// Layer: presentational — no state, no data fetching, no storage.
-
 import { cn } from "~/lib/utils";
 
 import type { WhatsNewFeature } from "./logic";
@@ -14,17 +7,7 @@ export interface FeatureSectionProps {
   readonly className?: string;
 }
 
-/**
- * A single feature card inside a release. Rendered inside the dialog's
- * primary view and the changelog accordion's expanded panels.
- *
- * Layout rules:
- *   - Title + description at the top, always visible.
- *   - Image below when provided; we frame it in a rounded border and let the
- *     natural aspect ratio dictate height (no cropping).
- *   - Details text sits tight under the image as a compact
- *     muted blurb — think "release note footnote", not body copy.
- */
+// IndieDevs feature-card layout: title+description always visible, image framed uncropped below, details as a compact footnote blurb
 export function FeatureSection({ feature, className }: FeatureSectionProps) {
   const hasMedia = feature.image !== undefined || feature.details !== undefined;
 

@@ -1,9 +1,3 @@
-// FILE: messageTrail.logic.ts
-// Purpose: Pure helpers for the left-edge message navigation trail — project the
-//   timeline into one tick per sent message and resolve which tick is active.
-// Layer: Chat transcript shell (presentation-adjacent logic, unit-tested)
-// Depends on: timeline entry shape only — no React, no DOM.
-
 import { type MessageId } from "@synara/contracts";
 import { type TimelineEntry } from "../../session-logic";
 
@@ -35,10 +29,7 @@ function normalizePreview(text: string): string {
     : collapsed;
 }
 
-// Store messages are immutable — a text change produces a new message object —
-// so the object itself keys its normalized preview. Without this, every
-// transcript render re-runs the whitespace regex over the full text of every
-// message, which is O(total transcript text) per streaming flush.
+// store messages are immutable, so the object keys its normalized preview — otherwise every render re-runs the whitespace regex over every message
 const previewByMessage = new WeakMap<object, string>();
 
 function normalizePreviewCached(message: { readonly text: string }): string {
@@ -51,8 +42,7 @@ function normalizePreviewCached(message: { readonly text: string }): string {
   return preview;
 }
 
-// The timeline entry array is itself immutable (rebuilt only when its inputs
-// change), so repeat renders off the same entries reuse the whole projection.
+// the timeline entry array is immutable, so repeat renders off the same entries reuse the whole projection
 const trailItemsByEntries = new WeakMap<readonly TimelineEntry[], MessageTrailItem[]>();
 
 /**
@@ -70,8 +60,7 @@ export function deriveMessageTrailItems(
     return cachedItems;
   }
   const items: MessageTrailItem[] = [];
-  // Index of the user item whose turn we're inside; every non-empty assistant row
-  // overwrites its response so the last one (the end-of-turn message) wins.
+  // every non-empty assistant row overwrites its response so the last (end-of-turn) message wins
   let currentTurnIndex = -1;
   for (const entry of timelineEntries) {
     if (entry.kind !== "message") {
@@ -119,8 +108,7 @@ export function resolveActiveTrailMessageId(
   if (anchors.length === 0) {
     return null;
   }
-  // Default to the first anchor so a viewport sitting above the first sent
-  // message (e.g. a leading system bubble) still highlights something sensible.
+  // default to the first anchor so a viewport above the first sent message still highlights something
   let activeId: MessageId = anchors[0]!.id;
   for (const anchor of anchors) {
     if (anchor.rowIndex <= topVisibleRowIndex) {
@@ -233,14 +221,7 @@ export function createActiveTrailStore(): ActiveTrailStore {
   };
 }
 
-// ---------------------------------------------------------------------------
-// macOS-Dock-style magnification math
-//
-// The rail magnifies the tick nearest the pointer and tapers neighbours off with
-// a Gaussian falloff. Everything here is pure and finite-safe so the same formula
-// works for 1 message or 1000: the component just feeds it measured geometry and
-// the pointer position. Each function is unit-tested in messageTrail.logic.test.ts.
-// ---------------------------------------------------------------------------
+// Dock-style magnification: nearest tick magnified, Gaussian falloff; pure and finite-safe for any count
 
 /** Clamp `value` into `[min, max]`, finite-safe (returns `min` if the range is inverted). */
 export function clampNumber(value: number, min: number, max: number): number {

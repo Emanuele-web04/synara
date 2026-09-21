@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-// FILE: node-pty-smoke.mjs
-// Purpose: Verifies that the native node-pty dependency can load and spawn a PTY.
-// Layer: Release/CI smoke check
 
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
@@ -48,9 +45,7 @@ try {
 
 try {
   if (isWindows) {
-    // Bun's ConPTY input/output wrappers are asynchronous and can miss a
-    // one-shot command's data. The native spawn itself is synchronous: a real
-    // child PID proves the binding loaded and created the Windows PTY process.
+    // Bun's ConPTY input/output wrappers are async and can miss a one-shot command's data; a real child PID proves the binding loaded
     if (!Number.isInteger(terminal.pid) || terminal.pid <= 0) {
       throw new Error("node-pty did not return a valid Windows process ID.");
     }
@@ -63,10 +58,7 @@ try {
     });
   }
   console.log("[node-pty-smoke] node-pty loaded and spawned successfully.");
-  // node-pty's Windows ConPTY reader owns a worker thread that may remain
-  // referenced after the child has naturally exited. This is a standalone
-  // smoke process, so terminate explicitly once output and exit status have
-  // both been verified instead of leaving CI waiting on that native handle.
+  // the ConPTY reader thread can outlive the child — terminate explicitly once output and exit are verified
   process.exit(0);
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));

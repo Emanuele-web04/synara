@@ -55,16 +55,10 @@ export const Route = createFileRoute("/_chat/automations/")({
 
 const selectAllThreads = createAllThreadsSelector();
 
-/** Unread successful result the user has not opened yet — surfaced as quiet row meta. */
 function hasUnreadResult(run: AutomationRun | null): boolean {
   return run?.status === "succeeded" && isUnresolvedTriageResult(run.result);
 }
 
-/**
- * Minimal automation list row: a leading status glyph, a two-line title/detail stack,
- * and optional right-aligned meta plus a hover delete. `dimmed` mutes the title for
- * paused rows.
- */
 function AutomationListRow({
   onClick,
   leading,
@@ -84,9 +78,7 @@ function AutomationListRow({
 }) {
   const dimmed = dimmedProp ?? false;
   return (
-    // A div with role="button" (not a real <button>) so inline controls like the hover delete
-    // can be nested buttons; the keydown guard lets those controls handle their own events
-    // without also firing the row's navigation.
+    // div with role="button" so inline controls can be nested buttons; the keydown guard lets them handle their own events without firing row navigation
     <div
       role="button"
       tabIndex={0}
@@ -148,13 +140,6 @@ function AutomationListRow({
 const AUTOMATION_STATUS_FILTERS = ["all", "active", "paused"] as const;
 type AutomationStatusFilter = (typeof AUTOMATION_STATUS_FILTERS)[number];
 
-/**
- * Second line of an automation row: the spelled-out cadence, then the live run status
- * while a run is in flight, the next-run countdown while the automation is active, or
- * "Done" once a one-shot has fired. When the latest run ended badly the warning
- * ("Last run failed", …) is appended so the amber glyph always has words next to it;
- * a warned one-shot skips the redundant "Done".
- */
 function rowSubtitle(
   definition: AutomationDefinition,
   latestRun: AutomationRun | null,
@@ -183,8 +168,7 @@ function rowSubtitle(
   return segments.join(" · ");
 }
 
-// Why the server stopped an automation on its own. "schedule" and "user" return null:
-// the row already reads "Done" / renders dimmed as paused for those.
+// Why the server stopped an automation on its own. "schedule" and "user" return null: the row already reads "Done" / renders dimmed as paused for those.
 function stoppedReasonLabel(definition: AutomationDefinition): string | null {
   switch (definition.disabledReason) {
     case "failures":
@@ -214,7 +198,6 @@ function AutomationsRouteView() {
     ReadonlySet<AutomationDraftWarningId>
   >(() => new Set());
   const [statusFilter, setStatusFilter] = useState<AutomationStatusFilter>("all");
-  // Coarse clock for the "Next run in …" countdowns; nothing else in the row is time-derived.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 30_000);

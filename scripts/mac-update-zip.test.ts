@@ -1,8 +1,3 @@
-// FILE: mac-update-zip.test.ts
-// Purpose: Locks down macOS update zip validation and latest-mac.yml patching.
-// Layer: Release/build tests
-// Depends on: scripts/lib/mac-update-zip.ts.
-
 import { assert, describe, it } from "@effect/vitest";
 
 import {

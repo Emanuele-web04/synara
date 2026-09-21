@@ -11,7 +11,7 @@ async function collectPartitions(config: string) {
     return specifications.map((specification) => ({
       file: specification.moduleId,
       project: specification.project.name,
-      // Vitest applies the root pattern as a runtime override of each project.
+      // vitest applies the root pattern as a runtime override per project
       pattern:
         vitest.getGlobalTestNamePattern() ?? specification.project.serializedConfig.testNamePattern,
       fileParallelism: specification.project.config.browser.fileParallelism,

@@ -184,7 +184,6 @@ describe("coalesceOrchestrationUiEvents", () => {
       ],
     ];
     for (const events of cases) {
-      // Hydration creates the sidebar summary before stream deltas arrive.
       const state = applyOrchestrationEvents(makeState(makeThread({ id: THREAD_A })), [
         delta(THREAD_A, MESSAGE_A, "seed", 0),
       ]);

@@ -1,7 +1,3 @@
-// FILE: browserAnnotations.ts
-// Purpose: Normalize browser DOM annotations and serialize them as hidden,
-// provider-agnostic prompt context.
-
 import {
   BROWSER_ANNOTATION_MAX_COMMENT_LENGTH,
   BROWSER_ANNOTATION_MAX_DOCUMENT_KEY_LENGTH,
@@ -44,7 +40,7 @@ const FIELD_LIMITS = {
 export interface BrowserAnnotationDraft extends BrowserAnnotation {
   ordinal: number;
   tabId: string;
-  /** Local-only exact-page affinity. It is persisted but never sent to providers. */
+  // local-only exact-page affinity — persisted but never sent to providers
   documentKey?: string;
 }
 

@@ -1,7 +1,4 @@
 import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
-// FILE: ProviderCommandReactor.ts
-// Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
-// Layer: Orchestration provider reactor
 
 import {
   type ChatAttachment,
@@ -189,8 +186,7 @@ export function classifyProviderAttemptOutcome(
 ): ProviderAttemptOutcome {
   if (Exit.isSuccess(exit)) return { _tag: "accepted" };
   const detail = Cause.pretty(exit.cause);
-  // A finalizer may add a failed cleanup/restoration after a safe rejection.
-  // Evidence for the first failure cannot establish the entire attempt's outcome.
+  // a finalizer may add a failed cleanup after a safe rejection — evidence for the first failure can't establish the whole attempt's outcome
   if (exit.cause.reasons.length !== 1) return { _tag: "uncertain", detail };
   const failure = Cause.findErrorOption(exit.cause);
   if (Option.isNone(failure)) return { _tag: "uncertain", detail };
@@ -225,12 +221,7 @@ type BoundedProviderCallResult<E> =
       readonly cause: Cause.Cause<E>;
     };
 
-/**
- * Runs a provider call under a hard deadline and reduces it to a decision.
- * A call that never returns cannot simply be awaited here: the caller holds the
- * reactor's single delivery permit, so waiting forever stalls every thread.
- * Interruption is re-raised untouched so shutdown still cancels cleanly.
- */
+/** the caller holds the reactor's single delivery permit — awaiting a never-returning call stalls every thread; interruption is re-raised untouched so shutdown cancels cleanly */
 const runBoundedProviderCall = <E, R>(input: {
   readonly label: string;
   readonly timeout: Duration.Duration;
@@ -263,8 +254,7 @@ const runBoundedProviderCall = <E, R>(input: {
                   const outcome = classifyProviderAttemptOutcome(exit);
                   return {
                     _tag: "failed",
-                    // classify only reports "accepted" for success exits, which
-                    // cannot reach this branch; normalize to keep the type honest.
+                    // classify only reports "accepted" for success exits which can't reach here — normalize to keep the type honest
                     outcome:
                       outcome._tag === "accepted"
                         ? { _tag: "uncertain", detail: Cause.pretty(exit.cause) }
@@ -286,7 +276,7 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
-// Codex app-server still expects `$skill` text next to the structured skill item.
+// Codex app-server still expects `$skill` text next to the structured skill item
 export function normalizeSkillMentionTextForProvider(input: {
   readonly provider: ProviderKind;
   readonly messageText: string;
@@ -397,8 +387,7 @@ const sameClaudeCacheContext = (
   left: ClaudeCacheObservation,
   right: ClaudeCacheObservation,
 ): boolean =>
-  // A newer local observation does not revoke consent. Changed size or native
-  // response evidence can change the expense the user agreed to and must match.
+  // a newer local observation doesn't revoke consent — changed size or response evidence changes the expense the user agreed to
   left.nativeSessionId === right.nativeSessionId &&
   left.lifecycleGeneration === right.lifecycleGeneration &&
   left.model === right.model &&
@@ -410,10 +399,7 @@ const claudeCacheReviewCoversObservation = (
   observation: ClaudeCacheObservation,
 ): boolean => {
   if (sameClaudeCacheContext(review.assessment, observation)) return true;
-  // Only the internal verified-compaction command emits Continue with the
-  // original compacting/uncertain review. Public choices carry pending/failed.
-  // Compact-and-send authorizes the reduced history in that same session, even
-  // when native cache timing still describes the expired pre-compaction prefix.
+  // only the internal verified-compaction command emits Continue with the original review; public choices carry pending/failed
   return (
     (review.status === "compacting" || review.status === "uncertain") &&
     review.compactionTurnId !== undefined &&
@@ -432,9 +418,7 @@ const LOST_CLAUDE_COMPACTION_ERROR =
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const PROVIDER_COMMAND_CLAIM_LEASE_MS = 30_000;
-// Poll granularity while waiting out another worker's claim (see
-// processClaimedProviderIntent): re-checking lets a turn proceed the moment
-// the prior attempt settles instead of sleeping blindly to lease expiry.
+// poll granularity while waiting out another worker's claim — lets a turn proceed the moment the prior attempt settles instead of sleeping to lease expiry
 const PROVIDER_COMMAND_CLAIM_SETTLEMENT_POLL_MS = 1_000;
 
 export interface ProviderCommandClaimSnapshot {
@@ -443,14 +427,7 @@ export interface ProviderCommandClaimSnapshot {
   readonly claimExpiresAt?: string | null;
 }
 
-/**
- * Waits out another worker's claim on the same delivery, waking early when the
- * record settles instead of sleeping to lease expiry. The wait never exceeds
- * the caller's deadline and never steals work: it only observes, returning the
- * latest snapshot for the caller to handle through the existing settled/
- * expired paths. Failed reads keep waiting on the last known snapshot so a
- * transient store error degrades to today's full-lease wait, not a wrong turn.
- */
+/** waits out another worker's claim, waking early when the record settles; never exceeds the caller's deadline and never steals work; failed reads keep waiting on the last snapshot so a transient store error degrades to the full-lease wait, not a wrong turn */
 export function awaitInflightClaimSettlement<TClaim extends ProviderCommandClaimSnapshot>(input: {
   readonly readClaim: () => Effect.Effect<TClaim | undefined, never>;
   readonly deadlineMs: number;
@@ -482,13 +459,7 @@ export function awaitInflightClaimSettlement<TClaim extends ProviderCommandClaim
 }
 const PROVIDER_COMMAND_SAFE_RETRY_LIMIT = 3;
 const PROVIDER_COMMAND_SAFE_RETRY_DELAY = Duration.millis(50);
-/**
- * Every provider intent runs under a single process-wide delivery lock, so an
- * unbounded provider call does not stall one thread — it stalls the reactor,
- * which back-pressures the orchestration event PubSub and eventually times out
- * every dispatched command. These deadlines make "hung" degrade into a normal
- * terminal delivery failure instead of a process-wide deadlock.
- */
+/** every intent runs under a single process-wide delivery lock — an unbounded provider call stalls the whole reactor and back-pressures the event PubSub; these deadlines make "hung" degrade into a terminal delivery failure instead of a process-wide deadlock */
 const PROVIDER_COMMAND_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const PROVIDER_COMMAND_STOP_TIMEOUT = Duration.seconds(15);
 const PROVIDER_COMMAND_EVENT_TIMEOUT = Duration.seconds(120);
@@ -803,15 +774,9 @@ const make = Effect.gen(function* () {
     );
 
   const threadProviderOptions = new Map<string, ProviderStartOptions>();
-  // The selection last applied to each live session. Keep this separate from
-  // projected thread metadata so an option changed mid-turn is still compared
-  // against the old subprocess configuration before the next turn starts.
+  // the selection last applied to each live session — separate from projected metadata so a mid-turn change is compared against the old spawn config next turn
   const threadSessionModelSelections = new Map<string, ModelSelection>();
-  // Seeded from the engine's in-memory command read model, not a second snapshot query.
-  // The engine loads that model once after the projection bootstrap and keeps it current
-  // as commands commit, so reading it here is both free and strictly fresher than
-  // re-running the eight-query snapshot load on the blocking startup path (~150ms on a
-  // large database). It cannot fail, so there is no failure mode left to log.
+  // seeded from the engine's command read model — loaded once post-bootstrap and kept current as commands commit; free and fresher than re-running the snapshot load (~150ms on a large db) on the blocking startup path
   const seedThreadModelSelections = orchestrationEngine.getReadModel().pipe(
     Effect.map((snapshot) => {
       for (const thread of snapshot.threads) {
@@ -852,22 +817,11 @@ const make = Effect.gen(function* () {
     Extract<ProviderIntentEvent, { type: "thread.goal-continuation-requested" }>["payload"],
     "goalStartedAt" | "trigger" | "sourceTurnId"
   >;
-  // A blocked continuation cannot keep its durable delivery open: approval,
-  // input, and queued-work intents behind it may be the only way to clear the
-  // blocker. Retry outside the single delivery lock; startup recovery recreates
-  // the request if the process exits while this transient retry is pending.
+  // a blocked continuation can't keep its delivery open — approval/input/queued intents behind it may be the only way to clear the blocker; startup recovery recreates the request if the process exits mid-retry
   const blockedGoalContinuations = new Map<string, BlockedGoalContinuation>();
   const queuedGoalContinuationRetries = new Set<string>();
   const goalContinuationRetryQueue = yield* Queue.unbounded<ThreadId>();
-  // Provider sessions with a drained queued turn whose promotion is in flight.
-  // The reservation survives provider startup and binds to the exact turn that
-  // must settle before another queue can drain, preventing late terminal events
-  // from promoting overlapping work.
-  // Keyed by the session-owning thread id (child subagent threads share the
-  // parent session, so per-child keys would allow overlapping promotions on
-  // one session); the queued thread + message pair identifies the promoted
-  // command, while object identity protects a replacement reservation for a
-  // retry of that same command.
+  // the reservation survives provider startup and binds to the exact turn that must settle — keyed by the session-owning thread (child threads share the parent session) with object identity protecting a replacement reservation
   type PendingQueuedDispatch = {
     readonly queuedThreadId: string;
     readonly messageId: string;
@@ -877,14 +831,10 @@ const make = Effect.gen(function* () {
   const pendingQueuedDispatchBySessionThread = new Map<string, PendingQueuedDispatch>();
   const queuedTurnPromotionOwner = `provider-queued-turn:${crypto.randomUUID()}`;
   const sidechatContextBootstrapThreadIds = new Set<string>();
-  // Fresh sessions that cannot inherit native conversation state need one
-  // transcript bootstrap (fork fallbacks and non-resumable Droid model changes).
+  // fresh sessions that can't inherit native state need one transcript bootstrap (fork fallbacks, non-resumable Droid model changes)
   const freshSessionContextBootstrapThreadIds = new Set<string>();
-  // Providers without native rewind restart after rollback and receive the
-  // retained projection transcript once on their next prompt.
   const rollbackContextBootstrapThreadIds = new Set<string>();
-  // Keep observed context loss until recovery is accepted: a failed dispatch
-  // can leave a replacement runtime alive without its previous history.
+  // keep observed context loss until recovery is accepted — a failed dispatch can leave a replacement runtime without its history
   type PendingInterruptEscalation = { evidence: ProviderContextLifecycleEvidence | null };
   const pendingInterruptEscalations = new Map<string, PendingInterruptEscalation>();
   const completeInterruptEscalation = (
@@ -895,8 +845,7 @@ const make = Effect.gen(function* () {
       pendingInterruptEscalations.delete(threadId);
     }
   };
-  // Retry state keeps only the bounded derived record; the full recap text is
-  // never retained here after the provider turn has been accepted.
+  // retry state keeps only the bounded derived record — the full recap text is never retained after the turn is accepted
   const pendingProviderContextLifecycleActivities = new Map<
     string,
     ProviderContextLifecycleActivityRecord
@@ -1001,8 +950,7 @@ const make = Effect.gen(function* () {
               .pipe(Effect.as(false)),
       ),
     );
-    // Thread deletion clears retained activity records. Do not let an
-    // in-flight initial append or retry resurrect work after that cleanup.
+    // thread deletion clears retained records — don't let an in-flight append or retry resurrect work
     if (pendingProviderContextLifecycleActivities.get(activityKey) !== input) {
       return "discarded" as const;
     }
@@ -1013,10 +961,7 @@ const make = Effect.gen(function* () {
       pendingProviderContextLifecycleActivities.delete(activityKey);
     }
     if (input.completeDurablePriorTranscript && providerService.completePriorTranscriptBootstrap) {
-      // The durable bootstrap marker is the process-restart recovery path for
-      // this evidence. Retire it only after the idempotent activity committed.
-      // A failed marker write deliberately keeps the recap pending for the next
-      // accepted turn instead of completing it later without another delivery.
+      // the durable marker is the restart recovery path — retire it only after the idempotent activity commits; a failed marker write keeps the recap pending for the next accepted turn
       return yield* providerService
         .completePriorTranscriptBootstrap({ threadId: input.threadId })
         .pipe(
@@ -1049,10 +994,7 @@ const make = Effect.gen(function* () {
             if (!pending) {
               return;
             }
-            // The provider already accepted this recap turn. Once its
-            // idempotent activity append succeeds, the same attempt may safely
-            // retire the durable marker. A marker failure itself is not queued:
-            // that keeps the recap pending for the next accepted turn.
+            // once the idempotent append succeeds the attempt may retire the marker; a marker failure itself isn't queued — keeps the recap pending for the next turn
             const persistence = yield* retainAndAppendProviderContextLifecycleActivity(pending, {
               retryExisting: true,
             });
@@ -1085,8 +1027,7 @@ const make = Effect.gen(function* () {
     readonly interruptEscalation?: PendingInterruptEscalation;
   };
   const pendingContextBootstrapAttempts = new Map<string, PendingContextBootstrapAttempt>();
-  // Explicit stop resets context once: the next successful session start must
-  // begin clean even if fork metadata would normally register a bootstrap.
+  // explicit stop resets context once — the next session start must begin clean even if fork metadata would register a bootstrap
   const suppressContextBootstrapOnNextStartThreadIds = new Set<string>();
   const clearPendingContextBootstraps = (threadId: string) => {
     sidechatContextBootstrapThreadIds.delete(threadId);
@@ -1145,16 +1086,12 @@ const make = Effect.gen(function* () {
     attempt: PendingContextBootstrapAttempt,
     event: ProviderQueueDrainEvent,
   ) {
-    // Keep bootstrap flags after cancellation or failure even though Droid may
-    // already have received the prompt. A bounded duplicate on retry is safer
-    // than dropping the only model-visible copy of the retained transcript.
+    // keep bootstrap flags after cancellation/failure even though Droid may have the prompt — a bounded duplicate beats dropping the only model-visible transcript copy
     if (event.type !== "turn.completed" || event.payload.state !== "completed") {
       return;
     }
     completeInterruptEscalation(threadId, attempt.interruptEscalation);
-    // Retain the bounded, idempotent evidence before retiring bootstrap state.
-    // Persistence retries independently so a marker write cannot block queue
-    // draining after the provider has already accepted this turn.
+    // retain bounded idempotent evidence before retiring bootstrap state; persistence retries independently so a marker write can't block queue draining after the provider accepted the turn
     let lifecyclePersistenceOwnsDurableBootstrap = false;
     if (attempt.lifecycleEvidence !== null && attempt.turnId !== undefined) {
       lifecyclePersistenceOwnsDurableBootstrap = true;
@@ -1169,9 +1106,7 @@ const make = Effect.gen(function* () {
         }),
       );
       if (lifecyclePersistence === "activity-pending") {
-        // The accepted provider turn already received this recap, so current
-        // in-memory state can advance while the durable marker remains as the
-        // crash-recovery source until the idempotent activity retry succeeds.
+        // the accepted turn already got the recap — in-memory state advances while the durable marker stays as crash recovery until the activity retry succeeds
         clearPendingContextBootstrapAttemptFlags(threadId, attempt);
         return;
       }
@@ -1250,8 +1185,7 @@ const make = Effect.gen(function* () {
       return threadTextGenerationInput;
     }
 
-    // Non-generating chat providers still get AI titles via the configured git-writing model.
-    // Skip the configured fallback when its provider is currently unavailable.
+    // non-generating providers still get AI titles via the configured git-writing model; skip the fallback when its provider is unavailable
     const settings = yield* serverSettings.getSettings;
     const statuses = yield* providerHealth.getStatuses;
     const fallbackStatus = statuses.find(
@@ -1351,13 +1285,7 @@ const make = Effect.gen(function* () {
     });
   });
 
-  /**
-   * Finalizes a turn the provider will never settle on its own. `Stop` is only
-   * trustworthy if every dead-end branch clears the projected active turn:
-   * `settleTurnStateFromSession` finalizes a running turn only when the session
-   * reports `activeTurnId: null`, so leaving it set renders as "Thinking"
-   * forever with no escape hatch left for the user.
-   */
+  /** finalizes a turn the provider will never settle — Stop is only trustworthy if every dead-end branch clears the projected active turn, since settlement only finalizes when activeTurnId is null */
   const settleInterruptedProviderTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly createdAt: string;
@@ -1375,8 +1303,7 @@ const make = Effect.gen(function* () {
       session: {
         ...session,
         threadId: input.threadId,
-        // Already-terminal statuses stay as they are; anything else becomes
-        // `interrupted` so the turn is never reported as a clean completion.
+        // already-terminal statuses stay; anything else becomes `interrupted` — never reported as a clean completion
         status:
           session.status === "stopped" || session.status === "error"
             ? session.status
@@ -1427,14 +1354,7 @@ const make = Effect.gen(function* () {
   const hasQueuedTurnStart = (threadId: ThreadId, messageId: string) =>
     queuedTurnPromotions.hasPendingMessage({ threadId, messageId });
 
-  // Live provider state, not the projection: the decider routes turn starts
-  // from a projected session snapshot that can lag the runtime in both
-  // directions (queueing after the turn already settled, or dispatching while
-  // a turn is still live). Adapters clear `activeTurnId` synchronously with
-  // emitting `turn.completed`/`turn.aborted`, so this check is authoritative.
-  // Child subagent threads share their parent's provider session, so the
-  // lookup must resolve to the session-owning thread — a raw child-id lookup
-  // would always miss and drain queued child messages into a live turn.
+  // live provider state, not the projection — it can lag in both directions; adapters clear activeTurnId synchronously with the terminal event so this check is authoritative; child threads share the parent session — the lookup must resolve to the session-owning thread
   const resolveLiveProviderTurnId = Effect.fnUntraced(function* (threadId: ThreadId) {
     const providerThread = yield* resolveProviderSessionThread(threadId);
     const sessionThreadId = providerThread?.id ?? threadId;
@@ -1472,10 +1392,7 @@ const make = Effect.gen(function* () {
       quarantinedThreads.delete(threadId);
       blockedGoalContinuations.delete(threadId);
       queuedGoalContinuationRetries.delete(threadId);
-      // NOTE: `drainingQueuedTurns` is intentionally NOT cleared here. It is a
-      // turn-scoped in-flight guard that each drain self-clears when it settles;
-      // deleting it here would let a concurrent second drain start for the same
-      // thread while the first is still running.
+      // drainingQueuedTurns is intentionally NOT cleared — it self-clears on settle; deleting it would let a concurrent drain start for the same thread
       suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
       clearPendingContextBootstraps(threadId);
       pendingInterruptEscalations.delete(threadId);
@@ -1562,12 +1479,7 @@ const make = Effect.gen(function* () {
     readonly targetTurnCount: number;
   }
 
-  /**
-   * Resolves and validates the workspace restore before the provider
-   * conversation rollback runs, so a missing checkpoint refuses the whole edit
-   * replay instead of leaving the conversation trimmed with the files intact.
-   * Returns `null` when there is legitimately nothing to restore.
-   */
+  /** validates the workspace restore before the provider rollback — a missing checkpoint refuses the whole edit replay instead of leaving the conversation trimmed with files intact */
   const planWorkspaceRestoreForEditReplay = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly removedTurnIds: ReadonlyArray<TurnId>;
@@ -1615,8 +1527,7 @@ const make = Effect.gen(function* () {
       );
     }
 
-    // Turn zero restores with `fallbackToHead`, so a missing baseline ref is
-    // tolerated there; every other turn must have its checkpoint on disk.
+    // turn zero restores with fallbackToHead so a missing baseline is tolerated; every other turn must have its checkpoint
     if (
       targetTurnCount !== 0 &&
       !(yield* checkpointStore.hasCheckpointRef({ cwd, checkpointRef: targetCheckpointRef }))
@@ -1685,10 +1596,7 @@ const make = Effect.gen(function* () {
       providerService
         .listSessions()
         .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
-    // The runtime-session lookup costs a provider round-trip. It can only change
-    // the binding decision when a session row exists but no turn has run yet
-    // (an optimistic placeholder) AND the turn contests the row's provider.
-    // Every other case resolves identically without it, so skip the lookup.
+    // the runtime-session lookup costs a provider round-trip — it can only change the binding when a placeholder session row exists AND the turn contests its provider; every other case resolves identically without it
     const activeSession =
       currentProvider !== undefined &&
       thread.latestTurn === null &&
@@ -1696,9 +1604,7 @@ const make = Effect.gen(function* () {
       requestedModelSelection.provider !== currentProvider
         ? yield* resolveActiveSession(threadId)
         : undefined;
-    // A session row alone can be an optimistic placeholder written before the
-    // first turn; only treat the provider as an immutable binding when a real
-    // runtime session exists or the thread has actually run a turn.
+    // a session row alone can be an optimistic placeholder — only treat the provider as an immutable binding when a real runtime session exists or the thread has run a turn
     const establishedProvider =
       currentProvider !== undefined && (activeSession !== undefined || thread.latestTurn !== null)
         ? currentProvider
@@ -1787,7 +1693,6 @@ const make = Effect.gen(function* () {
                 : session.status,
           providerName: session.provider,
           runtimeMode: desiredRuntimeMode,
-          // Provider turn ids are not orchestration turn ids.
           activeTurnId: null,
           lastError: session.lastError ?? null,
           updatedAt: session.updatedAt,
@@ -1795,13 +1700,12 @@ const make = Effect.gen(function* () {
         createdAt,
       });
 
-    // Only reuse projected session state when the runtime still has a live session to attach to.
+    // only reuse projected session state when the runtime still has a live session to attach to
     const activeSessionBeforeEnsure = yield* resolveActiveSession(threadId);
     const workspaceChanged =
       activeSessionBeforeEnsure !== undefined &&
       providerWorkspaceChanged(activeSessionBeforeEnsure.cwd, effectiveCwd);
-    // Background tasks may share the old process. Never kill them merely to
-    // apply a project relocation, including when metadata cleared the projection.
+    // background tasks may share the old process — never kill them merely to apply a project relocation
     if (
       workspaceChanged &&
       providerService.hasLiveRuntimeTasks &&
@@ -1831,11 +1735,8 @@ const make = Effect.gen(function* () {
         requestedModelSelection.model !== activeSessionBeforeEnsure?.model;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
       const previousModelSelection = threadSessionModelSelections.get(threadId);
-      // Spawn-fixed max effort and auto-compaction overrides resume the same
-      // conversation. Claude owns prefix caching; a resume does not guarantee a hit.
-      // When the dispatch cache has no entry (the session was started by a turn
-      // without a selection), compare against the projected thread selection the
-      // session was actually spawned from so spawn-fixed changes still restart.
+      // spawn-fixed max effort and auto-compaction overrides resume the same conversation; a resume doesn't guarantee a cache hit
+      // when the dispatch cache has no entry, compare against the projected selection the session was spawned from so spawn-fixed changes still restart
       const shouldRestartForModelSelectionChange =
         currentProvider === "claudeAgent"
           ? claudeSelectionRequiresRestart(
@@ -1891,9 +1792,7 @@ const make = Effect.gen(function* () {
         shouldRestartForModelSelectionChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
-      // Keep the provider cursor when only cwd changes. The existing lifecycle
-      // proves teardown before replacement and persists transcript fallback when
-      // a provider cannot restore its native context at the new location.
+      // keep the provider cursor when only cwd changes — the existing lifecycle proves teardown before replacement
       const restartedOutcome = yield* startProviderSessionWithOutcome(
         resumeCursor,
         workspaceChanged && shouldRegisterContextBootstrap,
@@ -1939,8 +1838,7 @@ const make = Effect.gen(function* () {
           preferredProvider === "droid" &&
           thread.sidechatSourceThreadId
         ) {
-          // Droid's ACP fork preserves the native session but does not guarantee
-          // that the imported sidechat transcript is model-visible on its first prompt.
+          // Droid's ACP fork preserves the native session but doesn't guarantee the imported sidechat transcript is model-visible on first prompt
           sidechatContextBootstrapThreadIds.add(threadId);
         }
         threadSessionModelSelections.set(threadId, desiredModelSelection);
@@ -1967,8 +1865,7 @@ const make = Effect.gen(function* () {
           nativeSessionRestarted: false,
         };
       }
-      // An existing fork also returns null: wait for its native resume result
-      // before treating the conversation as missing provider history.
+      // an existing fork returns null — wait for its native resume result before treating the conversation as missing
       bootstrapTranscriptIfResumeFails =
         shouldRegisterContextBootstrap && !thread.sidechatSourceThreadId;
     }
@@ -2027,9 +1924,7 @@ const make = Effect.gen(function* () {
         (preferredProvider === "opencode" || preferredProvider === "devin") &&
         providerService.completePriorTranscriptBootstrap
       ) {
-        // An explicit stop intentionally discards pending synthetic context.
-        // If its best-effort persistence cleanup was interrupted, finish that
-        // cleanup before starting the fresh session instead of resurrecting it.
+        // explicit stop discards pending synthetic context; if its cleanup was interrupted, finish it before starting fresh instead of resurrecting it
         const completed = yield* persistPriorTranscriptBootstrapCompletion(
           threadId,
           preferredProvider,
@@ -2038,9 +1933,7 @@ const make = Effect.gen(function* () {
       }
     }
     const startedSession = startOutcome.session;
-    // Record the exact selection the session was spawned with so later
-    // restart-necessity checks compare against the live spawn state even when
-    // the spawning dispatch carried no explicit model selection.
+    // record the exact spawn selection so restart-necessity checks compare against live spawn state even when the dispatch carried none
     threadSessionModelSelections.set(threadId, desiredModelSelection);
     yield* bindSessionToThread(startedSession);
     if (!retainContextBootstrapSuppression) {
@@ -2143,20 +2036,13 @@ const make = Effect.gen(function* () {
     });
     let mentionContextSuffix = threadMentionContextSuffix(threadMentionProjection.contextBlocks);
     const providerMentions = threadMentionProjection.providerMentions;
-    // Subagent threads have no provider session of their own: their messages
-    // steer the running child task through the parent session (mirrors the
-    // interrupt seam), never the session-bootstrap path below. Parent metadata
-    // may be absent on older/local-only rows, so synthetic ids use the same
-    // projection-backed parent inference as interrupt routing.
+    // subagent threads have no session of their own — messages steer through the parent session, never the bootstrap path; parent metadata may be absent on older rows so ids use the same projection-backed inference as interrupt routing
     const providerThread = yield* resolveProviderSessionThread(input.threadId);
     const subagentProviderThreadId = providerThread
       ? resolveSubagentProviderThreadId(thread.id, providerThread.id)
       : undefined;
     if (providerThread && subagentProviderThreadId) {
-      // Parity with the steerTurn path below: inline portable skill
-      // instructions, normalize skill/agent mentions, and forward the
-      // structured context so the adapter can project attachments into the
-      // text-only subagent steering channel.
+      // parity with steerTurn — inline skills, normalize mentions, forward context so the adapter projects attachments into the text-only steering channel
       const steerProvider = (providerThread.session?.providerName ??
         providerThread.modelSelection.provider) as ProviderKind;
       const steerSkillInlineText =
@@ -2268,8 +2154,6 @@ const make = Effect.gen(function* () {
             .getClaudeCacheObservation(input.threadId)
             .pipe(Effect.catch(() => Effect.succeed(undefined)))
         : undefined;
-      // In-session model controls run inside sendTurn, after this preflight.
-      // Assess the requested model now without changing the native session.
       const requestedSelection = input.modelSelection ?? thread.modelSelection;
       const observation = claudeCacheForModel(
         nativeObservation,
@@ -2316,8 +2200,7 @@ const make = Effect.gen(function* () {
             hold,
           );
         } else {
-          // Autonomous iterations have no user message to release. Pause the
-          // goal instead of silently spending a cold, large-context request.
+          // autonomous iterations have no user message to release — pause the goal instead of spending a cold large-context request
           yield* pauseActiveThreadGoal({
             threadId: input.threadId,
             expectedGoalStartedAt: thread.goalStartedAt ?? null,
@@ -2365,11 +2248,7 @@ const make = Effect.gen(function* () {
           )
         : "";
     mentionContextSuffix += completionContext;
-    // Bootstrap prompts wrap the user message in `<latest_user_message>` tags;
-    // mentioned-thread context is appended after the assembled provider input
-    // instead so it never reads as part of the user's own words. The budget
-    // text below still counts the suffix, keeping the total under the provider
-    // input limit regardless of where the suffix sits.
+    // bootstrap prompts wrap the message in <latest_user_message> — mentioned-thread context appends after so it never reads as the user's own words; the budget still counts it
     const boundaryMessageText = thread.sidechatSourceThreadId
       ? `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${input.messageText}\n</latest_user_message>`
       : input.messageText;
@@ -2516,8 +2395,7 @@ const make = Effect.gen(function* () {
     if (interruptEscalation && providerContextLifecycleEvidence !== null) {
       interruptEscalation.evidence = providerContextLifecycleEvidence;
     }
-    // The guards above make the three bootstrap flavors mutually exclusive, so
-    // a turn carries at most one context block.
+    // the guards above make the three bootstrap flavors mutually exclusive
     const selectedBootstrapContext: BootstrapContextSelection | null =
       handoffBootstrapText !== null
         ? { tag: "handoff_context", contextText: handoffBootstrapText, wrapLatestUserMessage: true }
@@ -2543,8 +2421,7 @@ const make = Effect.gen(function* () {
       goal: activeThreadGoal(thread),
       text: `${composeProviderInput(selectedBootstrapContext)}${mentionContextSuffix}`,
     });
-    // Portable skills fallback: providers that cannot load the referenced skill
-    // file natively get the skill instructions inlined into the prompt.
+    // providers that can't load a skill file natively get its instructions inlined into the prompt
     const skillInlineText =
       input.skills !== undefined && input.skills.length > 0
         ? yield* Effect.tryPromise(() =>
@@ -2568,7 +2445,7 @@ const make = Effect.gen(function* () {
           )
         : "";
     const finalizeProviderInput = (bootstrap: BootstrapContextSelection | null) => {
-      // Native control commands must remain the first token in every mode.
+      // native control commands must remain the first token in every mode
       if (
         selectedProvider === "claudeAgent" &&
         /^\/compact(?:\s|$)/.test(input.messageText.trim())
@@ -2658,9 +2535,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      // Capture before provider dispatch so the later turn diff is bounded by
-      // the user's submit moment, not early provider edits. skipIfExists keeps
-      // a backup baseline from CheckpointReactor as the first-writer winner.
+      // capture before provider dispatch so the turn diff is bounded by the submit moment; skipIfExists keeps a backup baseline first-writer
       yield* checkpointStore.captureCheckpoint({
         cwd,
         checkpointRef: checkpointRefForThreadMessageStart(
@@ -2679,9 +2554,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
-    // Both Git and non-Git Studio baselines must finish before provider execution
-    // starts. Otherwise a fast command can write a file while the baseline scan is
-    // still running and make that output look unchanged at turn completion.
+    // both Git and non-Git baselines must finish before execution starts — a fast command could otherwise write while the baseline scan runs and look unchanged at completion
     const capturePreTurnBaselines = Effect.all(
       [
         captureMessageStartCheckpoint,
@@ -2724,9 +2597,7 @@ const make = Effect.gen(function* () {
           (priorTranscriptBootstrapRetiresOnAcceptedTurn ||
             specializedBootstrapCompletesFreshSessionContext)) ||
           (hasPendingRollbackTranscriptBootstrap && priorTranscriptBootstrapRetiresOnAcceptedTurn));
-      // Only Codex awaits a provider turn/start acknowledgement. The other
-      // adapters enqueue/fork prompts or launch a process before acceptance;
-      // their matching terminal success confirms that recovery was consumed.
+      // only Codex awaits a turn/start acknowledgement — other adapters' matching terminal success confirms recovery was consumed
       const tracksEscalationAcceptance =
         interruptEscalation !== undefined && selectedProvider !== "codex";
       pendingContextBootstrapAttempt =
@@ -2760,8 +2631,7 @@ const make = Effect.gen(function* () {
         preserveActiveRuntime = false,
       ) =>
         Effect.gen(function* () {
-          // Claude cannot continue from a missing native session; clear the
-          // dead cursor and replay once with Synara transcript context.
+          // Claude can't continue from a missing native session — clear the dead cursor and replay once with transcript context
           yield* clearStaleProviderResumeState({
             threadId: input.threadId,
             cause,
@@ -2813,16 +2683,11 @@ const make = Effect.gen(function* () {
               return yield* Effect.fail(error);
             }
 
-            // Stale-resume errors can be transient CLI/session-file races, so
-            // retry the native resume id once before paying the transcript
-            // bootstrap. This must preserve the provider binding: startSession
-            // recovers the cursor from it when the fresh runtime is spawned.
+            // stale-resume errors can be transient CLI races — retry the native id once before paying the bootstrap; preserves the provider binding so startSession recovers the cursor
             if (!providerService.stopRuntimeSession) {
               return yield* replayWithTranscriptBootstrap(error);
             }
-            // Background tasks share the runtime subprocess with the parent
-            // turn; stopping it for a native-resume retry would silently kill
-            // them. Recover on the live runtime via transcript bootstrap.
+            // background tasks share the runtime subprocess — stopping it for a resume retry would kill them; recover via transcript bootstrap on the live runtime
             const liveBackgroundTasks = providerService.hasLiveRuntimeTasks
               ? yield* providerService.hasLiveRuntimeTasks({ threadId: input.threadId })
               : false;
@@ -2878,8 +2743,7 @@ const make = Effect.gen(function* () {
         completeInterruptEscalation(input.threadId, interruptEscalation);
       }
       if (pendingContextBootstrapAttempt) {
-        // Claude can replace recovery evidence while retrying a stale resume.
-        // Refresh it before reconciling a terminal event that preceded send's return.
+        // Claude can replace recovery evidence while retrying a stale resume — refresh before reconciling a terminal event that preceded send's return
         pendingContextBootstrapAttempt.lifecycleEvidence = providerContextLifecycleEvidence;
         pendingContextBootstrapAttempt.turnId = sentTurn.turnId;
         const terminalEvent = pendingContextBootstrapAttempt.terminalEvent;
@@ -2913,8 +2777,7 @@ const make = Effect.gen(function* () {
         );
       }
     }
-    // A native steer belongs to the still-pending recovery turn; its terminal
-    // event, not the steering acknowledgement, retires escalation evidence.
+    // a native steer belongs to the pending recovery turn — its terminal event, not the steering ack, retires the evidence
     if (input.reviewTarget !== undefined) {
       completeInterruptEscalation(input.threadId, interruptEscalation);
     }
@@ -2979,13 +2842,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Gateway-created threads: the creating operation's durable ownership
-    // proof records the temporary branch name. Renaming before the operation
-    // reaches a terminal state would make live compensation and startup
-    // recovery reject the worktree as tampered ("worktree branch changed"),
-    // stranding it. Wait for durable completion rather than dropping the
-    // first-turn rename; failed, compensating, missing, or unreadable
-    // operations never authorize the mutation.
+    // gateway threads: the creating operation's durable ownership proof records the temp branch — renaming before it terminalizes makes compensation reject the worktree as tampered; failed/compensating/missing operations never authorize the mutation
     if (input.gatewayOperationId !== null) {
       const completed = yield* waitForGatewayOperationCompletion(input.gatewayOperationId);
       if (!completed) {
@@ -3061,9 +2918,7 @@ const make = Effect.gen(function* () {
     const oldBranch = input.branch;
     const cwd = input.worktreePath;
     const attachments = input.attachments ?? [];
-    // Branch naming is a Git-writing concern, just like commit and PR text.
-    // Keep it on the dedicated configured model instead of coupling it to the
-    // conversation provider, which may not support structured text generation.
+    // branch naming is a Git-writing concern — keep it on the dedicated configured model, not the conversation provider which may not support structured generation
     const textGenerationInput = yield* resolveConfiguredTextGenerationInput();
     if (!textGenerationInput) {
       yield* Effect.logDebug(
@@ -3115,7 +2970,7 @@ const make = Effect.gen(function* () {
     );
   });
 
-  // Only auto-rename placeholder titles that still reflect the first-turn draft state.
+  // only auto-rename placeholder titles still reflecting the first-turn draft state
   const maybeGenerateAndRenameThreadTitleForFirstTurn = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly messageId: string;
@@ -3240,17 +3095,7 @@ const make = Effect.gen(function* () {
         yield* drainQueuedTurnsForSession(event.payload.threadId);
       }
     });
-    // Safety net for a promoted queued dispatch that never reaches a turn. While
-    // this reservation is present, `drainQueuedTurnsForThread` early-returns for
-    // every thread on this provider session, and an unbound reservation also
-    // absorbs terminal turn events instead of draining — so leaking it strands
-    // the thread's queued messages until the process restarts.
-    //
-    // `Effect.onExit`, never a JS `finally`: a generator driven by
-    // `Effect.fnUntraced` is not resumed when a yielded effect fails or is
-    // interrupted, so a `finally` here would simply never run on those paths.
-    // `onExit` rather than `ensuring` because this release is itself fallible
-    // and must keep propagating its errors, exactly as the `finally` did.
+    // safety net for a promoted dispatch that never reaches a turn — while present, drainQueuedTurns early-returns for every thread on this session and an unbound reservation absorbs terminal events; leaking it strands the thread's queue until restart; Effect.onExit, never a JS finally — an fnUntraced generator isn't resumed on failure/interruption; onExit rather than ensuring because this release is itself fallible
     const releaseOrphanedQueuedDispatchReservation = (redrain: boolean) =>
       Effect.gen(function* () {
         const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
@@ -3307,27 +3152,17 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      // The decider routes turn starts from the projected session, which can lag
-      // the runtime: a message dispatched right as another turn begins (e.g. the
-      // gap between a steer interrupt and the steered turn's start) would race a
-      // live provider turn. Steer-capable providers ride the live turn natively;
-      // everything else re-queues and is promoted when the live turn settles.
+      // the projection can lag the runtime — a dispatch right as another turn begins would race a live turn; steer-capable providers ride it natively, everything else re-queues
       const providerName = thread.session?.providerName ?? thread.modelSelection.provider;
       const liveTurnId = yield* resolveLiveProviderTurnId(event.payload.threadId);
       const hasLiveTurn = liveTurnId !== undefined;
-      // Steering is only meaningful against a live turn. The projection can
-      // lag the runtime in the other direction too (turn already settled but
-      // still projected as running), so recheck live state and dispatch a
-      // settled "steer" as a normal queued turn — the native steer path
-      // would skip the turn-start checkpoint.
+      // the projection can lag the other way too (settled but still running) — recheck live state and dispatch a settled "steer" as a normal queued turn; the native path would skip the turn-start checkpoint
       const isNativeSteer =
         event.payload.dispatchMode === "steer" &&
         providerSupportsNativeTurnSteering(providerName) &&
         hasLiveTurn;
       if (event.payload.dispatchMode === "steer") {
-        // The decider records its projected decision on the message immediately,
-        // then this runtime check corrects either race direction before delivery:
-        // only a genuinely live native steer continues the current turn.
+        // the decider records its projected decision immediately; this runtime check corrects either race direction — only a genuinely live native steer continues the turn
         yield* orchestrationEngine.dispatch({
           type: "thread.message.user.set-turn-boundary",
           commandId: CommandId.makeUnsafe(
@@ -3341,13 +3176,10 @@ const make = Effect.gen(function* () {
       }
       if (!isNativeSteer && hasLiveTurn) {
         yield* enqueueQueuedTurnStart(event);
-        // The promotion raced another live turn and was re-queued. Release
-        // only when that exact blocking turn settles, not on any late
-        // terminal event for the shared provider session.
+        // re-queued promotion releases only when that exact blocking turn settles — not any late terminal event on the shared session
         yield* bindPendingQueuedDispatchToTurn(liveTurnId);
         if (event.payload.dispatchMode === "steer") {
-          // Preserve steer semantics: jump the queue (enqueue unshifts steers)
-          // and ask the live turn to stop so the steer dispatches next.
+          // preserve steer semantics — jump the queue (unshift) and ask the live turn to stop so the steer dispatches next
           yield* interruptProviderTurn({
             threadId: event.payload.threadId,
             createdAt: event.payload.createdAt,
@@ -3356,17 +3188,8 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      // Surface the upcoming work immediately: provider session init can take
-      // seconds (e.g. Cursor), and without an early status the thread reads as
-      // idle until the runtime's first event. Mirrors the message-edit-resend
-      // path. Never touches a live session — a steer turn on a running provider
-      // session must keep its running state and activeTurnId. Keeps the existing
-      // session's runtimeMode: ensureSessionForThread detects mode changes by
-      // comparing against it, and adopting the requested mode here would mask
-      // the restart.
-      // The pre-turn session row can be an optimistic placeholder carrying a
-      // stale provider; only defer to it for a real established binding, and
-      // otherwise honor the turn's explicit requested selection.
+      // surface upcoming work immediately — session init can take seconds and the thread would read idle; never touches a live session or its runtimeMode (ensureSession detects mode changes by comparing against it)
+      // the pre-turn session row can be an optimistic placeholder with a stale provider — only defer to it for a real established binding
       const sessionProviderEstablished =
         thread.session != null && (thread.session.status === "ready" || thread.latestTurn !== null);
       const turnStartSession = deriveTurnStartSession({
@@ -3415,9 +3238,7 @@ const make = Effect.gen(function* () {
           ? { providerOptions: event.payload.providerOptions }
           : {}),
       }).pipe(Effect.forkScoped);
-      // Only a native steer against a genuinely live turn keeps steer
-      // semantics; anything else that reaches direct dispatch runs as a
-      // normal queued turn (with its turn-start checkpoint).
+      // only a native steer on a genuinely live turn keeps steer semantics — anything else runs as a normal queued turn with its checkpoint
       const immediateDispatchMode =
         event.payload.dispatchMode === "steer" && !isNativeSteer
           ? "queue"
@@ -3465,8 +3286,7 @@ const make = Effect.gen(function* () {
                   createdAt: event.payload.createdAt,
                 });
                 const failure = Option.getOrUndefined(Cause.findErrorOption(cause));
-                // A refused configuration change leaves the existing runtime and
-                // its live turn intact. Do not project a false terminal state.
+                // a refused config change leaves the existing runtime and live turn intact — don't project a false terminal state
                 if (
                   failure instanceof ProviderAdapterValidationError &&
                   failure.operation === "session/reconfigure"
@@ -3512,11 +3332,7 @@ const make = Effect.gen(function* () {
                   detail,
                   createdAt: event.payload.createdAt,
                 });
-                // A direct start has no provider turn and therefore cannot emit a
-                // terminal runtime event. Recover every queue sharing this
-                // provider session now; otherwise follow-ups queued before the
-                // failure remain stranded indefinitely (including child threads
-                // multiplexed onto their parent's provider session).
+                // a direct start has no provider turn and can't emit a terminal event — recover every queue sharing this session or follow-ups stay stranded (including child threads multiplexed on the parent session)
                 if (isPendingQueuedDispatch) {
                   yield* clearPendingQueuedDispatch;
                 }
@@ -3526,10 +3342,7 @@ const make = Effect.gen(function* () {
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
       );
-      // A requested steer can still become a separate queued turn (for
-      // providers without native steering, or if the live turn already
-      // settled). Persist that effective boundary while leaving native steer
-      // continuations unbound to a new turn.
+      // a requested steer can become a separate queued turn — persist that effective boundary while leaving native steers unbound
       if (startedTurn && event.payload.dispatchMode === "steer" && !isNativeSteer) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.user.bind-turn",
@@ -3565,9 +3378,7 @@ const make = Effect.gen(function* () {
   const processTurnQueued = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-queued" }>,
   ) {
-    // Keep the replay-safe claimed delivery limited to this idempotent durable
-    // write. The recovery drain can dispatch a later provider intent, so it
-    // runs only after this delivery has settled successfully.
+    // keep the claimed delivery limited to this idempotent write — the recovery drain can dispatch a later intent so it runs only after this delivery settles
     yield* enqueueQueuedTurnStart(event);
   });
 
@@ -3597,9 +3408,7 @@ const make = Effect.gen(function* () {
   const startupClaudeCompactionTurns = new Set<TurnId>();
   let isRecoveringClaudeCompactions = true;
 
-  // Execution evidence belongs to the event log, independently of the user's
-  // current send authorization. Stop/archive can revoke the latter while a
-  // native control request is still settling.
+  // execution evidence belongs to the log independently of send authorization — stop/archive can revoke the latter while a control request settles
   const readClaudeCompactionAttempt = Effect.fnUntraced(function* (
     threadId: ThreadId,
     responseEventSequence: number,
@@ -3664,18 +3473,13 @@ const make = Effect.gen(function* () {
       eventTypes: ["turn.completed", "turn.aborted"],
     });
     const terminalSequence = journalEvents[0]?.sequence;
-    // Production journals before publishing runtime events. A retained row can
-    // be absent here after acknowledgement-based pruning; it cannot disappear
-    // while the ingestion consumer still needs to apply that terminal event.
+    // a retained row can be absent after acknowledgement pruning; it can't disappear while ingestion still needs to apply that terminal event
     if (
       terminalSequence !== undefined &&
       (yield* runtimeEventRepository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER)) <
         terminalSequence
     ) {
-      // The raw provider subscriber can run ahead of transcript ingestion. A
-      // pending user row must not be restored while old control-turn events
-      // can still consume it. Wait on durable acknowledgement without holding
-      // the provider lease or the delivery source's permit.
+      // the raw subscriber can run ahead of ingestion — a pending user row must not be restored while old control-turn events can consume it; wait on durable acknowledgement without holding the lease or the source's permit
       if (!pendingClaudeCompactionIngestion.has(event.threadId)) {
         pendingClaudeCompactionIngestion.add(event.threadId);
         yield* Effect.gen(function* () {
@@ -3692,8 +3496,7 @@ const make = Effect.gen(function* () {
           ),
           Effect.tapCause((cause) =>
             Effect.gen(function* () {
-              // Shutdown must preserve durable recovery; a failed terminal
-              // release must not leave an unclickable in-progress review.
+              // shutdown must preserve durable recovery — a failed terminal release must not leave an unclickable in-progress review
               if (Cause.hasInterruptsOnly(cause)) return;
               yield* Effect.logError("Could not await Claude compaction ingestion", {
                 cause: Cause.pretty(cause),
@@ -3745,7 +3548,7 @@ const make = Effect.gen(function* () {
         });
       }
     }
-    // A terminal settles delivery, but never restores revoked send consent.
+    // a terminal settles delivery but never restores revoked send consent
     review = (yield* resolveThread(event.threadId))?.claudeCacheReview;
     if (
       !review ||
@@ -3773,8 +3576,7 @@ const make = Effect.gen(function* () {
       );
       return;
     }
-    // A terminal result is the only authority for automatic release. The
-    // internal command has a stable receipt, making duplicate events harmless.
+    // a terminal result is the only authority for automatic release — the internal command's stable receipt makes duplicates harmless
     yield* orchestrationEngine
       .dispatch({
         type: "thread.claude-cache.compacted",
@@ -4020,7 +3822,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  // Promote the next queued message only after the active provider turn settles.
+  // promote the next queued message only after the active turn settles
   const drainQueuedTurnsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     const sessionThreadId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
     if ((yield* resolveThread(sessionThreadId))?.claudeCacheReview) return;
@@ -4031,10 +3833,7 @@ const make = Effect.gen(function* () {
       return;
     }
     drainingQueuedTurns.add(threadId);
-    // `Effect.ensuring`, never a JS `finally`: a generator driven by
-    // `Effect.fnUntraced` does not resume to run `finally` blocks when a
-    // yielded effect fails, so a failed promotion dispatch would leak this
-    // in-flight guard and silently disable every later drain for the thread.
+    // Effect.ensuring, never a JS finally — an fnUntraced generator doesn't resume on failure, so a failed dispatch would leak the guard and silently disable every later drain
     yield* Effect.gen(function* () {
       const claimed = yield* queuedTurnPromotions.claimNext({
         threadId,
@@ -4335,8 +4134,7 @@ const make = Effect.gen(function* () {
           return;
         }
 
-        // User-authored queued work always wins. Its terminal event will ask for
-        // the next goal iteration if the goal is still active afterwards.
+        // user-authored queued work always wins — its terminal event asks for the next goal iteration if still active
         yield* drainQueuedTurnsForSession(thread.id);
         if (yield* hasPendingQueuedTurnForSession(thread.id)) {
           yield* deferGoalContinuation(event);
@@ -4402,9 +4200,7 @@ const make = Effect.gen(function* () {
         const latestThread = (yield* orchestrationEngine.getReadModel()).threads.find(
           (candidate) => candidate.id === thread.id,
         );
-        // Stop/pause can commit while provider dispatch is awaiting acceptance.
-        // Fence the accepted turn against the authoritative command model so it
-        // cannot escape the interrupt event that raced it with a stale turn id.
+        // stop/pause can commit while dispatch awaits acceptance — fence the accepted turn against the command model so it can't escape the interrupt with a stale turn id
         if (
           startedTurn &&
           (!latestThread ||
@@ -4429,11 +4225,7 @@ const make = Effect.gen(function* () {
     const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
     if (reservation) {
       if (event.turnId === undefined) {
-        // Some adapters can only report that a stopped turn aborted, not the
-        // provider turn id. Their live session state is authoritative and is
-        // cleared before the terminal event is emitted. Keep the reservation
-        // while a turn is genuinely live; otherwise release it so queued work
-        // cannot remain stranded behind an id-less terminal event.
+        // some adapters can only report that a turn aborted, not the provider turn id — keep the reservation while a turn is genuinely live, else release so queued work isn't stranded behind an id-less terminal event
         if (yield* hasLiveProviderTurn(event.threadId)) {
           return;
         }
@@ -4449,17 +4241,12 @@ const make = Effect.gen(function* () {
         pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
       }
     }
-    // Child subagent threads queue under their own id but share the parent's
-    // provider session, and terminal runtime events carry the session-owning
-    // thread id — drain every queue bound to this session.
+    // child threads queue under their own id but share the parent's session — terminal events carry the session-owning id; drain every queue bound to it
     yield* drainQueuedTurnsForSession(event.threadId);
   });
 
   const recoverQueuedTurnPromotionsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    // `resolveThread` filters `deleted_at IS NULL`, so a soft-deleted (or fully
-    // missing) thread returns undefined. Cancel instead of dispatching into an
-    // absent thread, including when an operator retries an older dead delivery
-    // after the corresponding thread deletion has already been consumed.
+    // resolveThread filters deleted_at — a deleted/missing thread returns undefined; cancel instead of dispatching into an absent thread
     const thread = yield* resolveThread(threadId);
     if (!thread || thread.deletedAt !== null) {
       yield* queuedTurnPromotions.cancelThread({
@@ -4492,9 +4279,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // The projection can lag a live turn. Only use session stop when neither
-    // side owns a turn to interrupt, and retire the runtime rather than just
-    // changing the UI state: a half-started session may still emit events.
+    // the projection can lag a live turn — use session stop only when neither side owns a turn, and retire the runtime since a half-started session may still emit events
     const interruptSession = thread.session;
     if (
       interruptSession !== null &&
@@ -4530,15 +4315,14 @@ const make = Effect.gen(function* () {
         return;
       }
       yield* reportInterruptFailure("No active provider session is bound to this thread.");
-      // Nothing is left that could ever emit a terminal event for this turn.
+      // nothing left could ever emit a terminal event for this turn
       return yield* settleInterruptedProviderTurn({
         threadId: input.threadId,
         createdAt: input.createdAt,
       });
     }
 
-    // Forward the observed turn only as an expectation. ProviderService owns the
-    // exact generation-scoped provider turn and rejects a stale mismatch.
+    // forward the observed turn only as an expectation — ProviderService owns the generation-scoped turn and rejects a stale mismatch
     const providerThreadId = resolveSubagentProviderThreadId(thread.id, providerThread.id);
     const liveTurnId = yield* resolveLiveProviderTurnId(input.threadId);
     const turnId = liveTurnId ?? input.turnId ?? thread.session?.activeTurnId ?? undefined;
@@ -4555,8 +4339,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Desktop quit also closes the provider. If that closure already settled
-    // successfully, a late interrupt rejection is an intentional stop, not a failure.
+    // desktop quit also closes the provider — if that closure already settled, a late interrupt rejection is an intentional stop, not a failure
     if (input.intentionalQuit) {
       const settled = (yield* resolveProviderSessionThread(input.threadId))?.session;
       if (
@@ -4568,10 +4351,7 @@ const make = Effect.gen(function* () {
       }
     }
 
-    // An interrupt that timed out or failed uncertainly is escalated to a full
-    // session stop rather than propagated: propagating would quarantine the
-    // thread, which suppresses every later side effect while still leaving the
-    // turn running. The stop path always settles the projection.
+    // a timed-out/uncertain interrupt escalates to a full session stop rather than propagating — propagating would quarantine the thread while the turn keeps running; the stop path always settles the projection
     if (result._tag === "timeout" || result.outcome._tag === "uncertain") {
       const detail =
         result._tag === "timeout"
@@ -4585,9 +4365,7 @@ const make = Effect.gen(function* () {
       });
     }
 
-    // Terminal rejections (validation and friends) would otherwise vanish
-    // silently and leave the stop button looking dead; surface them on the
-    // thread and settle locally, since the provider never accepted the request.
+    // terminal rejections would otherwise vanish silently and leave the stop button looking dead — surface them and settle locally
     if (result.outcome._tag === "rejected") {
       yield* reportInterruptFailure(result.outcome.detail);
       return yield* settleInterruptedProviderTurn({
@@ -4595,8 +4373,7 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
     }
-    // Safe retries (persistence faults) keep propagating so the durable delivery
-    // machinery can retry the whole command.
+    // safe retries (persistence faults) keep propagating so the durable machinery can retry the command
     return yield* Effect.failCause(result.cause);
   });
 
@@ -4741,17 +4518,14 @@ const make = Effect.gen(function* () {
     ) {
       const pendingRow = Option.getOrUndefined(pending);
       if (pendingRow?.status === "responding" || pendingRow?.status === "confirmed") {
-        // Another response command owns the claim (double-click dedup) or the
-        // interaction already settled; dropping the duplicate is the intended
-        // outcome and needs no user-visible settlement.
+        // another command owns the claim or the interaction settled — dropping the duplicate is intended and needs no user-visible settlement
         return null;
       }
       if (
         pendingRow?.lifecycleGeneration != null &&
         event.payload.lifecycleGeneration === undefined
       ) {
-        // An old client must refresh the request identity. A generation-less stale
-        // marker would also invalidate the replacement callback it never addressed.
+        // an old client must refresh the request identity — a generation-less stale marker would also invalidate the replacement callback it never addressed
         yield* appendInteractionResponseFailure(event, {
           interactionKind: input.interactionKind,
           detail:
@@ -4760,10 +4534,7 @@ const make = Effect.gen(function* () {
         });
         return null;
       }
-      // No durable row, or a row this command can never claim (e.g. a lifecycle
-      // generation mismatch). Silence here permanently stranded the prompt: the
-      // client saw neither a resolution nor a failure, so every retry was
-      // swallowed again. Fail loudly so the stale prompt gets cleared.
+      // no durable row, or a row this command can never claim — silence here permanently stranded the prompt; fail loudly so the stale prompt clears
       yield* Effect.logWarning("provider.interaction.response.unclaimable", {
         threadId: event.payload.threadId,
         interactionKind: input.interactionKind,
@@ -4785,8 +4556,7 @@ const make = Effect.gen(function* () {
     }
     const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
     if (!providerThread) {
-      // The claim above already marked the row `responding`; bailing without a
-      // settlement would orphan it and silently swallow every future response.
+      // the claim already marked the row `responding` — bailing without settlement would orphan it and swallow every future response
       yield* appendInteractionResponseFailure(event, {
         interactionKind: input.interactionKind,
         detail: buildStalePendingRequestFailureDetail(
@@ -4997,9 +4767,7 @@ const make = Effect.gen(function* () {
         ),
       );
     }
-    // Validate the workspace restore before the provider conversation rollback:
-    // once the provider trims its conversation there is no undo, so a missing
-    // checkpoint must refuse the edit replay while nothing has happened yet.
+    // validate the workspace restore before the provider rollback — once the provider trims there is no undo
     const workspaceRestorePlan = yield* planWorkspaceRestoreForEditReplay({
       threadId: payload.threadId,
       removedTurnIds: editTarget.removedTurnIds.map((turnId) => TurnId.makeUnsafe(turnId)),
@@ -5124,8 +4892,7 @@ const make = Effect.gen(function* () {
       providerThread.session.activeTurnId !== null &&
       !isQueuedMessageEdit
     ) {
-      // Edits should replay from the last stable cursor, not wait for each
-      // provider's interrupt lifecycle to settle.
+      // edits replay from the last stable cursor rather than waiting for each provider's interrupt lifecycle
       yield* stopActiveProviderRuntimeForEdit({ threadId: providerThread.id });
       yield* processMessageEditResendPayload(event.payload, {
         skipProviderRollback: true,
@@ -5189,9 +4956,7 @@ const make = Effect.gen(function* () {
       yield* clearEditResendTurnStartKeysForThread(queuedThreadId);
       drainingQueuedTurns.delete(queuedThreadId);
     }
-    // Reservations are keyed by session-owning thread but may belong to a
-    // stopping child's queued message. A provider-session stop clears every
-    // reservation for that session; a child-only interrupt clears its own.
+    // reservations key by session-owning thread but may belong to a stopping child — a session stop clears every reservation for it; a child-only interrupt clears its own
     for (const [sessionThreadId, reservation] of pendingQueuedDispatchBySessionThread) {
       if (
         (stopsProviderSession && sessionThreadId === stoppedSessionThreadId) ||
@@ -5235,8 +5000,7 @@ const make = Effect.gen(function* () {
     const isChildProviderRuntime =
       providerThread !== null && providerThread.id !== thread.id && providerThreadId !== undefined;
 
-    // Child subagents share the parent provider session, so stop requests need
-    // to interrupt the child turn rather than terminate the whole session.
+    // child subagents share the parent session — stop requests interrupt the child turn rather than terminate the whole session
     if (
       isChildProviderRuntime &&
       thread.session &&
@@ -5266,8 +5030,7 @@ const make = Effect.gen(function* () {
           createdAt: input.createdAt,
           settlementStatus: "uncertain",
         });
-        // The parent session was never told to end this child turn, so no
-        // terminal child event is coming: settle instead of waiting for one.
+        // the parent session was never told to end this child turn — no terminal event is coming, so settle instead of waiting
         yield* settleInterruptedProviderTurn({
           threadId: thread.id,
           createdAt: input.createdAt,
@@ -5282,7 +5045,7 @@ const make = Effect.gen(function* () {
           status: "interrupted",
           providerName: thread.session.providerName ?? null,
           runtimeMode: thread.session.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-          // Preserve the active turn until the provider emits the terminal child event.
+          // preserve the active turn until the provider emits the terminal child event
           activeTurnId: thread.session.activeTurnId,
           lastError: null,
           updatedAt: input.createdAt,
@@ -5294,8 +5057,7 @@ const make = Effect.gen(function* () {
 
     const ownsProviderSession = providerThread !== null && providerThread.id === thread.id;
     if (thread.session && thread.session.status !== "stopped" && ownsProviderSession) {
-      // A stop that cannot finish must still settle the projection: the session
-      // row below is the only thing that releases the turn in the UI.
+      // a stop that can't finish must still settle the projection — the session row is the only thing releasing the turn in the UI
       if (!providerService.stopRuntimeSession) {
         yield* Effect.logWarning(
           "provider command reactor skipped session stop: stopRuntimeSession is unavailable",
@@ -5349,8 +5111,7 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) =>
     Effect.gen(function* () {
-      // Explicit stop must pause even in a recovery gap with no live turn left
-      // to emit a cancellation. Internal session exits do not use this path.
+      // explicit stop must pause even in a recovery gap with no live turn to emit a cancellation — internal exits don't use this path
       const thread = yield* resolveThread(event.payload.threadId);
       if (thread) {
         yield* pauseActiveThreadGoal({
@@ -5446,9 +5207,7 @@ const make = Effect.gen(function* () {
           threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
           return;
         case "thread.deleted":
-          // Cancel any queued/promoting turns for the deleted thread BEFORE
-          // clearing runtime caches so a concurrent drain cannot resurrect them
-          // (see cancelThread). Best-effort: the event stays unclaimed either way.
+          // cancel queued/promoting turns BEFORE clearing runtime caches so a concurrent drain can't resurrect them; best-effort — the event stays unclaimed either way
           yield* queuedTurnPromotions.cancelThread({
             threadId: event.payload.threadId,
             updatedAt: event.payload.deletedAt,
@@ -5456,12 +5215,10 @@ const make = Effect.gen(function* () {
           yield* clearThreadRuntimeCaches(event.payload.threadId);
           return;
         case "thread.archived":
-          // Archive cleanup shares this durable, sequence-ordered provider
-          // source with later turn-start intents. An immediate unarchive/send
-          // therefore cannot race an older archive stop against the new turn.
+          // archive cleanup shares this durable ordered source with later turn-start intents — an unarchive/send can't race an older archive stop against the new turn
           yield* processThreadSessionStop({
             threadId: event.payload.threadId,
-            // Legacy thread.archived events may omit archivedAt; fall back like the projector.
+            // legacy thread.archived events may omit archivedAt — fall back like the projector
             createdAt: event.payload.archivedAt ?? event.payload.updatedAt ?? event.occurredAt,
           });
           return;
@@ -5494,9 +5251,7 @@ const make = Effect.gen(function* () {
           }
 
           if (thread.session.activeTurnId !== null) {
-            // The current runtime still owns the previous spawn profile. The
-            // projected thread now carries the desired selection; compare them
-            // when the next turn ensures the session.
+            // the runtime still owns the previous spawn profile; the thread carries the desired selection — compare when the next turn ensures the session
             return;
           }
 
@@ -5516,10 +5271,7 @@ const make = Effect.gen(function* () {
             return;
           }
           if (thread.session.activeTurnId !== null) {
-            // Ensuring now would restart the provider session and kill the
-            // in-flight turn. The projected thread already carries the desired
-            // runtime mode; the next turn's ensure compares it against the
-            // session's spawn mode and restarts between turns instead.
+            // ensuring now would restart the session and kill the in-flight turn — the next turn's ensure compares the desired mode and restarts between turns
             return;
           }
           const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
@@ -5655,19 +5407,14 @@ const make = Effect.gen(function* () {
       if (Option.isNone(delivery) || delivery.value.state !== "succeeded") {
         return;
       }
-      // Recovery drain: if the provider turn settled between the decider's
-      // (stale) running check and the durable enqueue, its terminal runtime
-      // event has already been consumed and cannot drain this queue. Re-check
-      // the projected thread and live provider state after delivery settlement.
+      // if the turn settled between the decider's (stale) running check and the enqueue, its terminal event was already consumed — recheck projection and live state after settlement
       yield* recoverQueuedTurnPromotionsForThread(event.payload.threadId);
     }).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
-        // The promotion row is already durable. Startup recovery or a later
-        // terminal provider event will retry the drain without replaying the
-        // settled enqueue delivery.
+        // the promotion row is already durable — startup recovery or a later terminal event retries the drain without replaying the enqueue
         return Effect.logWarning("provider command reactor failed queued-turn recovery drain", {
           eventSequence: event.sequence,
           threadId: event.payload.threadId,
@@ -5676,13 +5423,10 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  // One attach-before-replay source owns every provider intent. The claimed
-  // canary classes settle before cursor advancement. Remaining classes execute
-  // serially in the same source but do not acquire delivery claims yet.
+  // one attach-before-replay source owns every intent; claimed canary classes settle before cursor advancement, the rest execute serially without delivery claims yet
   const startProviderIntentSource = Effect.gen(function* () {
     const liveEventSource = yield* orchestrationEngine.subscribeDomainEvents;
-    // Preserve the source/consumer handoff without retaining an unbounded event
-    // mirror while startup or a provider call runs. The engine replays overflow.
+    // preserve the source/consumer handoff without an unbounded event mirror — the engine replays overflow
     const liveEventQueue = yield* Queue.bounded<OrchestrationEvent, Cause.Done>(1);
     yield* Stream.runIntoQueue(liveEventSource, liveEventQueue).pipe(Effect.forkScoped);
     const liveEvents = Stream.fromQueue(liveEventQueue);
@@ -5779,8 +5523,7 @@ const make = Effect.gen(function* () {
     const skipQuarantinedSideEffect = Effect.fnUntraced(function* (event: ProviderIntentEvent) {
       if (
         !isProviderSideEffectIntent(event) ||
-        // An interrupt is the escape hatch out of a quarantined thread; skipping
-        // it leaves the turn running with nothing left that could settle it.
+        // an interrupt is the escape hatch out of quarantine — skipping it leaves the turn running with nothing left to settle it
         isQuarantineExemptProviderIntent(event) ||
         !(yield* isThreadQuarantined(event.payload.threadId))
       ) {
@@ -5791,9 +5534,7 @@ const make = Effect.gen(function* () {
         eventSequence: event.sequence,
         threadId: event.payload.threadId,
       });
-      // A skipped turn start is a user-visible dead end: the projector has
-      // already shown the thread as "starting", so silence here reads as an
-      // infinite "Thinking". Surface the block and settle the session.
+      // a skipped turn start is a dead end — the projector already showed "starting", so silence reads as infinite Thinking; surface the block and settle
       if (
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.message-edit-resend-requested"
@@ -5886,9 +5627,7 @@ const make = Effect.gen(function* () {
                 },
               );
             }
-            // The wait budget is not a lease expiry. Re-read before classifying
-            // retry/missing records or another owner's renewed inflight claim.
-            // In particular, never settle from a cached snapshot after a failed read.
+            // the wait budget is not a lease expiry — re-read before classifying; never settle from a cached snapshot after a failed read
             existing = yield* deliveryRepository.getDelivery({
               consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
               eventSequence: event.sequence,
@@ -5920,8 +5659,7 @@ const make = Effect.gen(function* () {
           }
           if (event.type === "thread.turn-start-requested") {
             const review = (yield* resolveThread(threadId))?.claudeCacheReview;
-            // Persisting this review is the pre-enqueue boundary. A crash after
-            // parking the message must not quarantine a request we never sent.
+            // persisting this review is the pre-enqueue boundary — a crash after parking must not quarantine a request never sent
             if (
               review?.sourceEventSequence === event.sequence &&
               review.messageId === event.payload.messageId
@@ -5988,9 +5726,7 @@ const make = Effect.gen(function* () {
           call: processDomainEvent(event),
         });
         if (workerResult._tag === "timeout") {
-          // The delivery lock is single-permit and process-wide, so an attempt
-          // that never returns is a total outage. Settle it as uncertain and
-          // let the thread quarantine rather than block every other thread.
+          // the delivery lock is single-permit process-wide — a never-returning attempt is a total outage; settle as uncertain and let the thread quarantine rather than block every thread
           if (event.type === "thread.turn-start-requested") {
             yield* surfaceTimedOutTurnStart(event, workerResult.detail).pipe(
               Effect.catchCause((cause) =>
@@ -6098,10 +5834,7 @@ const make = Effect.gen(function* () {
       yield* requireCursorAdvance(event);
     });
 
-    // Every entry point that settles a claimed delivery must cross this
-    // boundary. In particular, operator-authorized safe retries bypass the
-    // ordered event stream, but a successfully retried queued-turn enqueue
-    // still needs its post-settlement recovery drain.
+    // every entry point settling a claimed delivery crosses this boundary — operator-authorized retries bypass the event stream but still need the post-settlement drain
     const processClaimedProviderIntentWithRecovery = Effect.fnUntraced(function* (
       event: ProviderIntentEvent,
     ) {
@@ -6125,8 +5858,7 @@ const make = Effect.gen(function* () {
                   review.compactionTurnId,
                 );
           if (terminal) {
-            // Reconciliation acquires the delivery lock itself. Never await it
-            // inside the source's permit, including after an ambiguous start.
+            // reconciliation acquires the lock itself — never await it inside the source's permit, including after an ambiguous start
             yield* processClaudeCompactionTerminal(terminal).pipe(
               Effect.catchCause((cause) =>
                 Effect.logError("Could not settle Claude compaction", {
@@ -6247,8 +5979,7 @@ const make = Effect.gen(function* () {
               review.compactionResponseEventSequence === input.eventSequence &&
               review.compactionTurnId !== undefined;
             if (abandonsCompaction) {
-              // Persist the hold before removing its delivery blocker. If the
-              // process exits between writes, startup can finish reconciliation.
+              // persist the hold before removing its blocker — if the process exits between writes, startup finishes reconciliation
               yield* setClaudeCacheReview(
                 reconciledEvent.payload.threadId,
                 { ...review, status: "failed", error: LOST_CLAUDE_COMPACTION_ERROR },
@@ -6299,8 +6030,7 @@ const make = Effect.gen(function* () {
                 reconciledEvent.type === "thread.claude-cache-response-requested" &&
                 reconciledEvent.payload.decision === "compact" &&
                 currentReview?.reviewId !== reconciledEvent.payload.review.reviewId;
-              // Settling a cancelled control is not permission to retry other
-              // sends that were rejected while this thread was quarantined.
+              // settling a cancelled control is not permission to retry other sends rejected while quarantined
               if (!revokedCompaction) {
                 yield* replayQuarantinedThreadSideEffects({
                   threadId: input.threadId,
@@ -6368,8 +6098,7 @@ const make = Effect.gen(function* () {
         return false;
       }
 
-      // Require durable stop evidence before the failed diagnostic, not a stop
-      // from some later session. Never infer provider exit from admission alone.
+      // require durable stop evidence, not a stop from a later session — never infer provider exit from admission alone
       const highWater = yield* orchestrationEngine.getEventHighWaterSequence;
       return yield* orchestrationEngine
         .readThreadEventsThrough(blocker.threadId, blocker.eventSequence, highWater, [
@@ -6399,10 +6128,7 @@ const make = Effect.gen(function* () {
         );
     });
 
-    // Recover only proven pre-write failures or quit interrupts whose provider
-    // had already stopped. Exit-unproven failures remain quarantined.
-    // Skipped prompts are not replayed at startup; instead, surface a durable
-    // activity asking the user to resend them.
+    // recover only proven pre-write failures or quit interrupts whose provider already stopped; exit-unproven failures stay quarantined; skipped prompts aren't replayed at startup — surface a durable activity asking the user to resend
     const startupRecoveryNotifiedThreads = new Set<ThreadId>();
     yield* Effect.gen(function* () {
       const pageSize = 100;
@@ -6533,8 +6259,7 @@ const make = Effect.gen(function* () {
         yield* processClaudeCompactionTerminal(terminal).pipe(
           Effect.catchCause((cause) => {
             const failure = Cause.findErrorOption(cause);
-            // The terminal handler already leaves this review failed. Isolate
-            // only that domain rejection; defects and cancellation still abort.
+            // the terminal handler already leaves this review failed — isolate only that domain rejection; defects and cancellation still abort
             if (
               cause.reasons.length !== 1 ||
               Option.isNone(failure) ||
@@ -6549,10 +6274,7 @@ const make = Effect.gen(function* () {
         );
         continue;
       }
-      // Replay may just have started a previously undispatched request. Its
-      // current runtime still owns the operation; wait for that terminal event.
-      // A turn accepted by this startup is not abandoned merely because the
-      // adapter has settled its live state before journaling the terminal.
+      // replay may have started an undispatched request — its current runtime owns the operation; a turn accepted by this startup isn't abandoned merely because the adapter settled live state before journaling
       if (
         startupClaudeCompactionTurns.has(review.compactionTurnId) ||
         (yield* resolveLiveProviderTurnId(thread.id)) === review.compactionTurnId
@@ -6576,8 +6298,7 @@ const make = Effect.gen(function* () {
             response.payload.review.reviewId === review.reviewId &&
             response.payload.decision === "compact"
           ) {
-            // Abandon only this lost control attempt, keeping the user message
-            // held. No provider command is retried or treated as successful.
+            // abandon only this lost control attempt, keeping the user message held — nothing is retried or treated as successful
             yield* reconcileDeliveryRuntime({
               threadId: thread.id,
               eventSequence: review.compactionResponseEventSequence,
@@ -6590,8 +6311,7 @@ const make = Effect.gen(function* () {
           }
         }
       }
-      // Uncertainty after the control delivery settled may concern sending the
-      // user's message. It must retain its separate delivery reconciliation.
+      // post-settlement uncertainty may concern sending the user's message — it keeps its separate delivery reconciliation
       if (review.status === "compacting") {
         yield* setClaudeCacheReview(
           thread.id,

@@ -1,11 +1,3 @@
-// FILE: PullRequestDetailPanel.tsx
-// Purpose: Orchestrator for the pull request detail surface — owns the queries, gh-backed
-//          actions (merge/ready/draft/close/reopen, fix findings, copy link), the header with
-//          its Summary/Timeline/Code tab switcher, the Code tab's diff viewport, and the
-//          confirm dialogs. Summary and Timeline rendering live in their own tab components.
-// Layer: Pull request presentation
-// Exports: PullRequestDetailPanel
-
 import type {
   PullRequestAction,
   PullRequestDetailInput,
@@ -93,19 +85,13 @@ const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "code", label: "Code" },
 ];
 
-// Header icon controls follow the chat-header recipe (chrome variant + fixed 28px square +
-// full-strength glyph) so they sit level with the Merge pill and the dock chips.
+// header icon controls follow the chat-header recipe (chrome variant + fixed 28px square) so they sit level with the Merge pill and dock chips
 const PR_HEADER_ICON_BUTTON_CLASS_NAME = cn(
   CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
   CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
 );
 
-// Filled header action pill (Merge / Ready for review): shared 28px control height, roomy
-// padding, and the label pinned to the ui size on every breakpoint — Button's xs size would
-// drop it to 10px on desktop, which reads shrunken inside a filled pill.
-//
-// `font-normal` overrides Button's base `font-medium`: the chips this pill sits beside are all
-// font-normal, so medium made the one filled control shout a weight heavier than its whole row.
+// filled action pill: label pinned to ui size on every breakpoint (Button's xs would drop to 10px); `font-normal` overrides Button's font-medium so it doesn't shout a weight heavier than its row
 const PR_HEADER_ACTION_BUTTON_CLASS_NAME = cn(
   CHAT_HEADER_CONTROL_CLASS_NAME,
   "px-3 text-ui font-normal sm:text-ui",
@@ -143,8 +129,7 @@ export function PullRequestDetailPanel({
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
-  // Panel state keyed to the PR it belongs to: switching PRs (or landing tab)
-  // derives straight back to the defaults with no state-resetting effect.
+  // panel state keyed to the PR it belongs to: switching PRs derives back to defaults with no state-resetting effect
   const panelKey = `${input.projectId}\u0000${input.repository}\u0000${input.number}\u0000${initialTab}`;
   const [panelState, setPanelState] = useState<{
     key: string;
@@ -176,8 +161,7 @@ export function PullRequestDetailPanel({
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
   const detail = detailQuery.data;
   const detailErrorState = pullRequestQueryErrorState(detailQuery);
-  // Shared git prepare mutation (instead of a raw native call) so Git status/snapshot caches
-  // invalidate exactly like every other prepare-thread flow in the app.
+  // shared git prepare mutation so Git status/snapshot caches invalidate exactly like every other prepare-thread flow
   const prepareThreadMutation = useMutation(
     gitPreparePullRequestThreadMutationOptions({
       cwd: detail?.workspaceRoot ?? null,
@@ -185,9 +169,7 @@ export function PullRequestDetailPanel({
     }),
   );
 
-  // Promise chains instead of async/try-finally in the two runners below:
-  // React Compiler does not yet support try/finally and would skip this
-  // component entirely.
+  // promise chains instead of async/try-finally: React Compiler doesn't support try/finally
   const runAction = (action: PullRequestAction, method?: PullRequestMergeMethod) => {
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
@@ -220,9 +202,7 @@ export function PullRequestDetailPanel({
       });
   };
 
-  // "Fix findings" and "Resolve conflicts" hand the PR to a fresh thread the same way:
-  // prepare a worktree on the PR branch, create the thread, and attach the task as a
-  // context card in its composer for the user to review and send.
+  // "Fix findings"/"Resolve conflicts" hand the PR to a fresh thread: prepare a worktree on the PR branch, create the thread, attach the task as a composer context card
   const startPullRequestThread = (
     kind: "findings" | "conflicts",
     card: PullRequestContextDraft,
@@ -239,9 +219,7 @@ export function PullRequestDetailPanel({
             branch: prepared.branch,
             worktreePath: prepared.worktreePath,
             envMode: mode,
-            // This action is an explicit handoff from the PR browser. Reusing the project's
-            // existing draft can leave the user on the PR route and insert the prompt into a
-            // hidden composer, making the button appear inert.
+            // reusing the project's existing draft can leave the user on the PR route and insert the prompt into a hidden composer — the button would appear inert
             fresh: true,
           }),
         ).then((threadId) => {
@@ -314,9 +292,7 @@ export function PullRequestDetailPanel({
     ? mergeMethod
     : (allowedMethods[0] ?? "merge");
   const actionPending = actionMutation.isPending;
-  // Which action is in flight — drives the in-flight labels. Optimistic transitions
-  // (draft/ready/close/reopen) flip the UI instantly via the mutation's cache patch, so
-  // only the pessimistic merge needs a visible progress state.
+  // optimistic transitions flip the UI instantly via the cache patch, so only the pessimistic merge needs a visible progress state
   const pendingAction = actionMutation.isPending
     ? (actionMutation.variables?.action ?? null)
     : null;
@@ -338,8 +314,7 @@ export function PullRequestDetailPanel({
               type="button"
               aria-pressed={tab === item.value}
               onClick={() => setTab(item.value)}
-              // Same chip skin as the dock tab strip ("PR #357") and the header diff toggle:
-              // one 28px rounded-lg family for every flat control in these header rows.
+              // same chip skin as the dock tab strip ("PR #357") and header diff toggle: one 28px rounded-lg family for every flat control in these header rows
               className={cn(
                 CHAT_SURFACE_CHIP_CLASS_NAME,
                 "inline-flex items-center px-2.5",
@@ -472,8 +447,7 @@ export function PullRequestDetailPanel({
                 </ComposerPickerMenuPopup>
               </Menu>
               {detail.state === "open" && detail.isDraft ? (
-                // A draft's primary action is publishing it for review — merge/conflicts
-                // only become relevant once it leaves draft.
+                // a draft's primary action is publishing for review — merge/conflicts only matter once it leaves draft
                 <Button
                   size="xs"
                   className={PR_HEADER_ACTION_BUTTON_CLASS_NAME}
@@ -483,15 +457,7 @@ export function PullRequestDetailPanel({
                   Ready for review
                 </Button>
               ) : detail.state === "open" && mergeBlocker !== null ? (
-                // Non-draft only (a draft's next step is "Ready for review"). The header keeps
-                // saying Merge — the action the PR is heading for — but the pill is inert until
-                // the branch is reconciled, and hovering it says why. No method chevron: there
-                // is nothing to choose while every method would fail. "Resolve conflicts" moved
-                // into the "…" menu with the other thread-starting actions.
-                //
-                // aria-disabled, not disabled: Button's disabled state sets
-                // `pointer-events-none`, which would swallow the hover the tooltip needs. With
-                // no onClick attached there is no action to guard against.
+                // header keeps saying Merge but the pill is inert until the branch reconciles; aria-disabled (not disabled) since Button's disabled sets pointer-events-none which would swallow the tooltip's hover
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -519,11 +485,7 @@ export function PullRequestDetailPanel({
                   <TooltipPopup side="bottom">{mergeBlocker}</TooltipPopup>
                 </Tooltip>
               ) : detail.state === "open" && !detail.isDraft && allowedMethods.length > 0 ? (
-                // One pill, no method chevron beside it: a split button's label can never sit
-                // on the group's centre (it lands half the chevron's width to the left) and its
-                // inner corners are pinned to radius 0, so Merge read as a different control
-                // from the identically-purposed "Ready for review". The method choice lives in
-                // the "…" menu instead, beside the other merge-adjacent actions.
+                // one pill, no method chevron: a split button's label can never sit on the group's centre and its inner corners pin to radius 0; the method choice lives in the "…" menu
                 <Button
                   size="xs"
                   className={PR_HEADER_ACTION_BUTTON_CLASS_NAME}

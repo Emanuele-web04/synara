@@ -1,8 +1,3 @@
-// FILE: automationForm.test.ts
-// Purpose: Locks down the inline schedule-field validators — the structural cron check and
-// the IANA timezone check that gate commit-on-blur edits on the automation detail page.
-// Layer: Web lib test
-
 import { describe, expect, it } from "vitest";
 
 import { automationCronExpressionError, automationTimezoneError } from "./automationForm";
@@ -26,8 +21,7 @@ describe("automationCronExpressionError", () => {
     expect(automationCronExpressionError("0 0 * * MON")).not.toBeNull();
   });
 
-  // Range semantics (minute 0-59, month 1-12, …) are deliberately left to the server's
-  // parser — the client check is structural only, so in-range enforcement lives in one place.
+  // range semantics (minute 0-59, month 1-12) deliberately stay with the server's parser — the client check is structural only so it can't drift
   it("does not enforce value ranges", () => {
     expect(automationCronExpressionError("99 99 99 99 99")).toBeNull();
   });

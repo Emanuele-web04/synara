@@ -1,8 +1,3 @@
-// FILE: providerReactQuery.ts
-// Purpose: Builds React Query options for provider-backed orchestration RPC calls.
-// Layer: Web data fetching helpers
-// Depends on: native API bridge, orchestration contracts, and React Query.
-
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
@@ -35,7 +30,6 @@ export const providerQueryKeys = {
     ] as const,
 };
 
-/** Keep polling while placeholder checkpoints are still being written. */
 export const CHECKPOINT_DIFF_PENDING_REFETCH_INTERVAL_MS = 2_000;
 export const CHECKPOINT_DIFF_PENDING_REFETCH_MAX_ATTEMPTS = 12;
 

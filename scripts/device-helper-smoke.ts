@@ -1,13 +1,3 @@
-// FILE: device-helper-smoke.ts
-// Purpose: End-to-end smoke test for the native device helper against a real iOS Simulator.
-// Layer: Release/CI smoke check (macOS + Xcode only; not part of normal CI).
-// Depends on: apps/server/native/device-helper/build.sh and `xcrun simctl`.
-//
-// Compiles the helper with the user's toolchain, boots (or reuses) a simulator,
-// attaches, streams frames, injects input, dumps the accessibility tree and
-// takes a screenshot. Any simulator this script booted is shut down again; one
-// that was already running is left alone.
-
 import {
   execFile,
   execFileSync,
@@ -35,9 +25,7 @@ const execFileAsync = promisify(execFile);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const helperDir = join(repoRoot, "apps/server/native/device-helper");
 
-/** Minimum frames the stream must deliver before the run is considered healthy. */
 const REQUIRED_FRAMES = 30;
-/** Preferred simulator device types, most modern first. */
 const PREFERRED_DEVICE_TYPES = ["iPhone 17 Pro", "iPhone 16 Pro", "iPhone 15 Pro", "iPhone"];
 
 let stepIndex = 0;
@@ -63,8 +51,6 @@ function assert(condition: boolean, message: string): asserts condition {
   if (!condition) fail(message);
 }
 
-// ── Environment ──────────────────────────────────────────────────────
-
 interface SimctlDevice {
   readonly udid: string;
   readonly name: string;
@@ -73,11 +59,7 @@ interface SimctlDevice {
   readonly runtime: string;
 }
 
-/**
- * The Xcode this run targets. `DEVELOPER_DIR` wins over the machine-wide
- * selection, matching how `xcrun` and the helper resolve it, so a sweep can
- * point successive runs at different toolchains without `sudo xcode-select`.
- */
+/** DEVELOPER_DIR wins over the machine-wide selection, matching how xcrun and the helper resolve it — a sweep can target toolchains without `sudo xcode-select`. */
 function resolveDeveloperDirectory(): string {
   const override = process.env.DEVELOPER_DIR?.trim();
   if (override) return override;
@@ -96,7 +78,7 @@ function listDevices(env: NodeJS.ProcessEnv): SimctlDevice[] {
   const parsed = JSON.parse(raw) as { devices: Record<string, Omit<SimctlDevice, "runtime">[]> };
   const devices: SimctlDevice[] = [];
   for (const [runtime, entries] of Object.entries(parsed.devices)) {
-    // iOS only: the pane targets iPhone/iPad simulators.
+    // iOS only: the pane targets iPhone/iPad simulators
     if (!runtime.includes("iOS")) continue;
     for (const entry of entries) {
       devices.push({ ...entry, runtime });
@@ -105,7 +87,6 @@ function listDevices(env: NodeJS.ProcessEnv): SimctlDevice[] {
   return devices;
 }
 
-/** Prefers an already-booted device so a developer's session is reused. */
 function chooseDevice(devices: SimctlDevice[]): { device: SimctlDevice; wasBooted: boolean } {
   const booted = devices.find((device) => device.state === "Booted");
   if (booted) {
@@ -121,14 +102,11 @@ function chooseDevice(devices: SimctlDevice[]): { device: SimctlDevice; wasBoote
   fail("no available iOS simulators; install a runtime via Xcode > Settings > Components");
 }
 
-// ── Helper process ───────────────────────────────────────────────────
-
 interface PendingRequest {
   readonly resolve: (value: Record<string, unknown>) => void;
   readonly reject: (error: Error) => void;
 }
 
-/** A JSON-RPC client over the helper's stdio. */
 class HelperClient {
   private readonly pending = new Map<number, PendingRequest>();
   private buffer = "";
@@ -169,7 +147,7 @@ class HelperClient {
         continue;
       }
       const id = message["id"];
-      if (typeof id !== "number") continue; // A notification.
+      if (typeof id !== "number") continue;
       const request = this.pending.get(id);
       if (!request) continue;
       this.pending.delete(id);
@@ -208,7 +186,6 @@ class HelperClient {
   }
 }
 
-/** Collects length-prefixed frames from the helper's Unix socket. */
 class FrameCollector {
   readonly frames: {
     keyframe: boolean;
@@ -262,7 +239,6 @@ class FrameCollector {
 
 const sleep = (ms: number) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 
-/** The NAL unit types present in an Annex B payload. */
 function naluTypes(payload: Uint8Array): number[] {
   const types: number[] = [];
   for (let index = 0; index + 4 < payload.length; index += 1) {
@@ -278,8 +254,6 @@ function naluTypes(payload: Uint8Array): number[] {
   return types;
 }
 
-// ── Main ─────────────────────────────────────────────────────────────
-
 async function main(): Promise<void> {
   if (process.platform !== "darwin") {
     fail("the device helper is macOS only");
@@ -288,11 +262,7 @@ async function main(): Promise<void> {
   const probeOnly = process.argv.includes("--probe-only");
 
   step("Checking Xcode");
-  // DEVELOPER_DIR is how the whole toolchain is redirected: xcode-select,
-  // xcodebuild, xcrun and the helper itself all honour it, so pointing it at
-  // another Xcode.app is enough to build and probe against that toolchain
-  // without touching the machine-wide selection. This is what lets the sweep
-  // and the CI matrix cover several Xcodes in one run.
+  // DEVELOPER_DIR redirects the whole toolchain (xcode-select, xcodebuild, xcrun, helper) — one override covers every Xcode
   const developerDir = resolveDeveloperDirectory();
   if (!developerDir.endsWith("/Contents/Developer")) {
     fail(
@@ -300,16 +270,12 @@ async function main(): Promise<void> {
         "run 'sudo xcode-select -s /Applications/Xcode.app' or set DEVELOPER_DIR",
     );
   }
-  // Every toolchain invocation from here inherits the same override, so the
-  // build, the probe and the simulator all agree on which Xcode is in play.
   const toolchainEnv = { ...process.env, DEVELOPER_DIR: developerDir };
   const xcodeVersion = execFileSync("xcodebuild", ["-version"], {
     encoding: "utf8",
     env: toolchainEnv,
   }).trim();
-  // Same key the server derives: toolchain plus a digest of the helper sources.
-  // Deriving it from the toolchain alone here would build into a directory the
-  // server never reads, so a passing smoke run would prove nothing about it.
+  // same key the server derives (toolchain + sources digest); toolchain-only would build into a directory the server never reads
   const sourceRevision = await readDeviceHelperSourceRevision(helperDir, {
     listSources: (dir) => readdir(dir),
     readFile: (file) => readFile(file, "utf8"),
@@ -320,13 +286,7 @@ async function main(): Promise<void> {
   info(`${xcodeVersion.replace("\n", " / ")} (${developerDir})`);
 
   step("Compiling the helper");
-  // Cached by Xcode version: private API surface moves with the toolchain, so a
-  // binary built against one Xcode must not be reused after an upgrade. The key
-  // comes from @synara/shared so this build lands in the same directory the
-  // server reads; deriving it here separately meant a passing smoke run
-  // populated a directory the server never looked in. Because the key is
-  // derived from the *overridden* toolchain, sweeping Xcodes fills one cache
-  // directory per toolchain instead of overwriting a single one.
+  // cached by Xcode version: private API moves with the toolchain, and the shared key lands where the server reads
   const cacheDir = join(homedir(), ...DEVICE_HELPER_CACHE_SEGMENTS, cacheKey);
   mkdirSync(cacheDir, { recursive: true });
   const buildStarted = Date.now();
@@ -344,10 +304,7 @@ async function main(): Promise<void> {
   info(`${helperPath} (${Date.now() - buildStarted}ms)`);
 
   step("Preflighting the helper");
-  // A probe that finds a missing symbol exits non-zero, and its JSON body names
-  // which capability broke — exactly the signal this check exists to surface.
-  // Reading stdout off the thrown error keeps that detail instead of letting it
-  // die inside a child_process stack trace.
+  // a failed probe exits non-zero and its JSON names the broken capability — read stdout off the thrown error
   let probeRaw: string;
   try {
     probeRaw = execFileSync(helperPath, ["--probe"], {
@@ -359,8 +316,7 @@ async function main(): Promise<void> {
     if (!stdout) fail("helper preflight produced no output", error);
     probeRaw = stdout;
   }
-  // Written before the assertion so a failing probe is still uploaded as the
-  // CI artifact; that JSON is the whole diagnostic for a broken toolchain.
+  // written before the assertion so a failing probe still uploads as the CI artifact
   const probeJsonPath = process.env.DEVICE_HELPER_PROBE_JSON;
   if (probeJsonPath) {
     writeFileSync(probeJsonPath, `${probeRaw}\n`);
@@ -374,9 +330,7 @@ async function main(): Promise<void> {
     toolchain?: { xcodeVersion?: string; xcodeBuild?: string; macOS?: string };
   };
 
-  // Every capability is printed, passing or not: a green run is the record of
-  // which symbols still resolve on this toolchain, which is what makes the next
-  // Xcode's regression obvious by comparison.
+  // every capability prints pass or fail: a green run is the record of what resolved, making the next Xcode's regression obvious
   const capabilities = Object.entries(probe.capabilities ?? {});
   if (capabilities.length === 0) {
     info("helper reported no per-capability detail (older helper)");
@@ -391,9 +345,7 @@ async function main(): Promise<void> {
     info(`toolchain: Xcode ${xcodeVersion ?? "?"} (${xcodeBuild ?? "?"}), macOS ${macOS ?? "?"}`);
   }
 
-  // The smoke run is strict where the app is forgiving: the app degrades around
-  // a broken capability, but a release check that tolerated one would let the
-  // regression ship.
+  // strict where the app is forgiving: a release check that tolerated a broken capability would ship the regression
   const broken = capabilities.filter(([, status]) => status !== "ok").map(([name]) => name);
   if (broken.length > 0) {
     fail(`helper capabilities unavailable: ${broken.join(", ")}`);
@@ -403,10 +355,7 @@ async function main(): Promise<void> {
   }
   info(`CoreSimulator reachable, ${probe.deviceCount} devices`);
 
-  // Compile + probe is the symbol tripwire: it catches a private API that moved
-  // under a new Xcode, which is the failure this whole matrix exists to find,
-  // and it needs no simulator runtime. CI runs this first and on every runner;
-  // the booted-simulator run below is the expensive part.
+  // compile+probe is the symbol tripwire and needs no simulator; the booted-simulator run below is the expensive part
   if (probeOnly) {
     console.log("\n[device-smoke] PASS (probe only; no simulator was booted)");
     return;
@@ -434,14 +383,12 @@ async function main(): Promise<void> {
         stdio: "inherit",
         env: toolchainEnv,
       });
-      // SpringBoard needs a moment past bootstatus before accessibility answers.
+      // SpringBoard needs a moment past bootstatus before accessibility answers
       await sleep(3000);
     }
 
     step("Starting the helper");
-    // Through the same wrapper the server uses: a smoke run that spawned the
-    // helper directly would exercise none of the confinement it is meant to
-    // validate, and the sandbox is exactly the thing that fails as a hang.
+    // through the same wrapper the server uses: spawning the helper directly would exercise none of the confinement it validates
     const launch = await sandboxedHelperCommand([helperPath], {
       binaryPath: helperPath,
       helperSourceDir: helperDir,
@@ -477,8 +424,7 @@ async function main(): Promise<void> {
     const stream = await client.call("stream.start", { socketPath });
     info(`codec=${stream["codec"]} ${stream["pixelWidth"]}x${stream["pixelHeight"]}`);
 
-    // The display only posts damage callbacks when something changes, so the
-    // stream is driven with swipes rather than waiting on an idle home screen.
+    // the display only posts damage callbacks on change, so the stream is driven with swipes
     const deadline = Date.now() + 60_000;
     while (collector.frames.length < REQUIRED_FRAMES && Date.now() < deadline) {
       await client.call("swipe", {
@@ -515,8 +461,7 @@ async function main(): Promise<void> {
     assert(keyframes.length >= 1, "stream contained no keyframe");
     assert(codecConfigs.length >= 1, "stream contained no codec-config (SPS/PPS) message");
 
-    // Structural check: every payload must be Annex B, and a codec-config
-    // message must actually carry an SPS (NAL type 7).
+    // every payload must be Annex B; a codec-config message must carry an SPS (NAL type 7)
     for (const frame of collector.frames) {
       const [b0, b1, b2, b3] = frame.payload;
       assert(
@@ -526,8 +471,7 @@ async function main(): Promise<void> {
     }
     const sps = codecConfigs.find((frame) => naluTypes(frame.payload).includes(7));
     assert(Boolean(sps), "no codec-config message carried an SPS NAL unit");
-    // A keyframe usually leads with SEI, so every NAL unit is scanned rather
-    // than only the first.
+    // keyframes usually lead with SEI, so every NAL unit is scanned
     const idr = keyframes.find((frame) => naluTypes(frame.payload).includes(5));
     assert(Boolean(idr), "no keyframe carried an IDR NAL unit");
     info("NAL structure verified (Annex B start codes, SPS present, IDR present)");
@@ -578,7 +522,7 @@ async function main(): Promise<void> {
     for (const path of cleanupPaths) {
       rmSync(path, { recursive: true, force: true });
     }
-    // Only shut down what this script started; a developer's own simulator stays up.
+    // shut down only what this script started; a developer's own simulator stays up
     if (bootedByUs) {
       console.log("[device-smoke] shutting down the simulator this run booted");
       try {

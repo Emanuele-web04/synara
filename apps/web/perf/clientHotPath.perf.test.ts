@@ -1,8 +1,4 @@
-// Perf probe: client store hot path under N concurrently streaming threads, plus the cost of
-// re-applying a real thread-detail snapshot (the periodic projection reconcile).
-//   SYNARA_PERF=1 bunx vitest run perf/clientHotPath.perf.test.ts
-// Snapshot fixtures come from apps/server/perf/threadDetailSnapshot.perf.test.ts
-// (/tmp/synara-perf/snapshot-{p50,p90,max}.json).
+// perf probe: client store hot path under N streaming threads + snapshot reconcile cost; SYNARA_PERF=1 bunx vitest run perf/clientHotPath.perf.test.ts; fixtures from apps/server/perf/threadDetailSnapshot.perf.test.ts
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import {
   MessageId,
@@ -24,8 +20,7 @@ const ENABLED = process.env.SYNARA_PERF === "1";
 const FIXTURE_DIR = process.env.SYNARA_PERF_DIR ?? "/tmp/synara-perf";
 const THREAD_COUNTS = [1, 4, 8];
 const FLUSHES = Number(process.env.SYNARA_PERF_FLUSHES ?? 40);
-// Per thread per 100ms flush: a busy Codex/Claude turn interleaves text deltas with tool
-// activity. Real DB averages: ~66 chars per delta, ~1.8KB per tool.updated payload.
+// real DB averages: ~66 chars per delta, ~1.8KB per tool.updated payload
 const DELTAS_PER_THREAD_PER_FLUSH = 6;
 const ACTIVITIES_PER_THREAD_PER_FLUSH = 3;
 const DELTA_TEXT = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod ";
@@ -150,8 +145,7 @@ describe.skipIf(!ENABLED)("client hot path perf", () => {
       throw new Error(`No snapshot fixtures in ${FIXTURE_DIR}; run the server probe first.`);
     }
 
-    // 1. Snapshot reconcile cost: JSON.parse + schema decode + merge into a store that already
-    //    holds the identical thread (the steady-state "nothing changed" reconcile).
+    // snapshot reconcile cost: parse+decode+merge an identical thread (steady-state no-change reconcile)
     const snapshotReport: Record<string, unknown>[] = [];
     for (const { label, json } of snapshots) {
       const parseMs: number[] = [];
@@ -184,8 +178,7 @@ describe.skipIf(!ENABLED)("client hot path perf", () => {
     }
     report.snapshotReconcile = snapshotReport;
 
-    // 2. Per-flush reducer cost with N threads streaming concurrently (interleaved deltas),
-    //    legacy adjacent-only coalescing vs keyed coalescing.
+    // per-flush reducer cost with N threads streaming, legacy adjacent-only vs keyed coalescing
     const base = snapshots.find((entry) => entry.label === "p90") ?? snapshots[0]!;
     const baseThread = decodeSnapshot(base.json).decoded.thread;
     const flushReport: Record<string, unknown>[] = [];

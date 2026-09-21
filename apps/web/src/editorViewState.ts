@@ -1,8 +1,3 @@
-// FILE: editorViewState.ts
-// Purpose: Persists per-thread editor workspace view state (expanded explorer
-//          directories, center mode) so re-entering the editor view restores it.
-// Layer: Web UI state persistence
-
 import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
 import { isProviderKind } from "./providerOrdering";
 
@@ -76,9 +71,7 @@ export function storeEditorViewState(threadId: string, snapshot: EditorViewState
         });
     }
     window.localStorage.setItem(EDITOR_VIEW_STATE_STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    // Best-effort preference persistence only.
-  }
+  } catch {}
 }
 
 function normalizeEditorRailChatTabs(
@@ -176,7 +169,5 @@ export function storeEditorRailChatTabs(
       map[projectId] = normalizedTabs;
     }
     window.localStorage.setItem(EDITOR_RAIL_CHAT_TABS_STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    // Best-effort preference persistence only.
-  }
+  } catch {}
 }

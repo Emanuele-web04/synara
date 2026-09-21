@@ -669,10 +669,7 @@ describe("buildTurnDiffSummaryByAssistantMessageId", () => {
   });
 
   it("does not leak a summary to an unrelated message even when ids look similar", () => {
-    // Regression for the "Files changed on wrong thread" bug: before the fix,
-    // the server synthesized `assistant:<turnId>` ids that could collide with
-    // the real message id of a different turn. Anchoring by the matching turn's
-    // response segment prevents the card from attaching to unrelated rows.
+    // regression for "Files changed on wrong thread": synthesized `assistant:<turnId>` ids could collide with another turn's real message id — anchoring by the matching turn's response segment prevents wrong attachment
     const result = buildTurnDiffSummaryByAssistantMessageId({
       turnDiffSummaries: [makeSummary({ turnId: "turn-files-changed" })],
       messages: [
@@ -1001,10 +998,7 @@ describe("deriveMessagesTimelineRows", () => {
   });
 
   it("folds settled message-segments into the collapsed group instead of stranding the turn", () => {
-    // Streaming delivery splits a settled assistant message whose deltas were
-    // interleaved with tool rows into message-segment slices. Those slices must
-    // not stop the fold scan, or everything earlier in the turn renders above
-    // the "Worked for..." disclosure.
+    // message-segment slices from interleaved deltas must not stop the fold scan, or earlier rows render above the "Worked for..." disclosure
     const segmented: ChatMessage = {
       id: MessageId.makeUnsafe("seg-msg"),
       role: "assistant",
@@ -1145,9 +1139,7 @@ describe("deriveMessagesTimelineRows", () => {
   });
 
   it("times the collapsed disclosure from the turn start, not the last intermediate assistant message", () => {
-    // Mirrors a provider failure + retry: the first attempt's assistant message
-    // completes 22m20s in, the retry answers 40s later. The disclosure folds
-    // the whole run, so the timer must cover it too — not just the retry tail.
+    // Mirrors a provider failure + retry: the first attempt's assistant message completes 22m20s in, the retry answers 40s later. The disclosure folds the whole run, so the timer must cover it too — not just the retry tail.
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
       timelineEntries: [

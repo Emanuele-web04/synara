@@ -1,8 +1,3 @@
-// FILE: AcpAdapterSessionSupport.ts
-// Purpose: Shares ACP adapter bookkeeping that is independent of a provider's transport details.
-// Layer: Provider ACP adapter support
-// Exports: provider-independent ACP session bookkeeping and turn-local item scoping helpers.
-
 import * as nodePath from "node:path";
 
 import type {
@@ -186,14 +181,7 @@ export function finalizeAcpActiveTurnCost(context: { latestSessionCostUsd: numbe
     : {};
 }
 
-// Holds the active-turn window open until session/update events that were
-// already enqueued when the prompt response resolved have been fully handled
-// by the adapter's notification consumer, so they settle with their turn
-// attribution (and recorded failed-tool detail) intact. Snapshotting the
-// runtime's enqueued count and waiting for the adapter's processed count to
-// catch up is immune to stream chunk buffering and in-flight handlers, unlike
-// a queue-size probe. Returns immediately when the consumer kept up; bounded
-// so a chatty stream cannot stall settlement past the cap.
+// hold the active-turn window open until events enqueued before the prompt response are fully handled — count-based, immune to chunk buffering and in-flight handlers; bounded so a chatty stream can't stall settlement
 export function waitForAcpQueuedTurnEventsDrained(input: {
   readonly sessionUpdatesEnqueuedCount: Effect.Effect<number>;
   readonly sessionUpdatesProcessed: () => number;

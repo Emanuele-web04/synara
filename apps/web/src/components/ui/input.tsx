@@ -8,8 +8,7 @@ import { SOFT_SURFACE_FILL_CLASS_NAME } from "~/surfaceStyles";
 
 type InputProps = Omit<ComponentPropsWithoutRef<typeof InputPrimitive>, "size"> & {
   size?: "sm" | "default" | "lg" | number;
-  // "soft" gives the field a faint filled background instead of the default
-  // surface-matching fill, so it reads as an input even on a flush card.
+  // "soft" gives a faint filled background so it reads as an input even on a flush card
   variant?: "default" | "soft";
   unstyled?: boolean;
   nativeInput?: boolean;
@@ -42,8 +41,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       "text-muted-foreground file:me-3 file:bg-transparent file:font-medium file:text-ui-sm file:text-foreground",
   );
 
-  // `cn` always returns a string; an empty one must become `undefined` so the
-  // wrapper renders without a `class` attribute at all (unstyled callers).
+  // `cn` always returns a string; an empty one must become undefined so the wrapper renders no `class` attribute at all
   const controlClassName = cn(
     !unstyled &&
       "relative inline-flex w-full min-h-9 items-center rounded-lg border border-border bg-background text-ui text-foreground has-aria-invalid:border-destructive/30 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:border-foreground/30 has-autofill:bg-foreground/4 has-disabled:opacity-64 sm:min-h-8 sm:text-ui dark:bg-input/32 dark:has-autofill:bg-foreground/8",

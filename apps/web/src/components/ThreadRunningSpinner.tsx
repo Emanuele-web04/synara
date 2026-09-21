@@ -1,21 +1,9 @@
-// FILE: ThreadRunningSpinner.tsx
-// Purpose: Shared inline running/pulse spinner for sidebar thread status slots.
-// Layer: Sidebar UI primitive
-// Exports: ThreadRunningSpinner
-
 import { useRef } from "react";
 
 import { useTimelineSynchronizedAnimations } from "~/lib/animationTimelineSync";
 import { cn } from "~/lib/utils";
 
-// Geometry mirrors Remodex's RunningThreadSpinner (with a thinner stroke and
-// slower spin): a full track ring at 22% opacity (stroke ×0.7) and a rounded
-// arc trimmed 0.16→0.72. The rotation uses the stepped `animate-spin-stepped`
-// token (index.css) rather than `animate-spin`: this glyph is always on while a
-// thread runs, and a continuous 60 fps spin inside the translucent sidebar forced
-// the whole backdrop-filtered surface + window vibrancy to re-render every frame.
-// Every instance is also pinned to the document timeline origin: N running threads
-// then step in the same frame (one sidebar repaint per step) instead of N frames.
+// stepped animate-spin-stepped token, not animate-spin: the glyph is always on while a thread runs and a continuous 60fps spin forced the backdrop-filtered sidebar + window vibrancy to re-render every frame; pinned to document timeline so N threads step in the same frame
 const CANVAS = 15;
 const LINE_WIDTH = 2;
 const RADIUS = (CANVAS - LINE_WIDTH) / 2;

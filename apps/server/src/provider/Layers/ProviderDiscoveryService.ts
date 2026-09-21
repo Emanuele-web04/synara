@@ -94,9 +94,7 @@ const make = Effect.gen(function* () {
   const registry = yield* ProviderAdapterRegistry;
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
-  // One catalog cache for every provider: adapters that spawn a CLI/ACP process
-  // per listModels call share stale-while-revalidate, single-flight, and
-  // failure-replay behaviour with adapters that reuse a running process.
+  // one catalog cache for every provider — adapters spawning a process per listModels share stale-while-revalidate, single-flight, and failure-replay
   const modelDiscoveryCache = makeProviderModelDiscoveryCache<ProviderDiscoveryError>();
   const providerIsEnabled = Effect.fn("providerIsEnabled")(function* (
     provider: ProviderGetComposerCapabilitiesInput["provider"],
@@ -123,8 +121,6 @@ const make = Effect.gen(function* () {
       const capabilities = adapter.getComposerCapabilities
         ? yield* adapter.getComposerCapabilities()
         : disabledCapabilitiesForProvider(parsed.provider);
-      // The unified Synara skills catalog backs skill discovery for every
-      // provider, including ones without native skill support.
       return {
         ...capabilities,
         supportsSkillMentions: true,
@@ -214,8 +210,7 @@ const make = Effect.gen(function* () {
       if (parsed.provider !== "claudeAgent") {
         return yield* adapter.listCommands(parsed);
       }
-      // Server-owned like the session start options, so discovery lists the
-      // same commands a new Claude session will actually have.
+      // Server-owned like the session start options, so discovery lists the same commands a new Claude session will actually have.
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.orElseSucceed(() => DEFAULT_SERVER_SETTINGS),
       );

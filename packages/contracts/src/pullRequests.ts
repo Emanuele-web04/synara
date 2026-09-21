@@ -114,10 +114,7 @@ export const PullRequestStackEntry = Schema.Struct({
 });
 export type PullRequestStackEntry = typeof PullRequestStackEntry.Type;
 
-/**
- * GitHub orders stack entries from the ultimate base branch upwards. `position` is the selected
- * pull request's one-based position, so merging that PR affects entries `1...position` atomically.
- */
+/** GitHub orders stack entries from the ultimate base upward — merging the selected PR affects entries 1..position atomically */
 export const PullRequestStack = Schema.Struct({
   number: PositiveInt,
   size: PositiveInt,
@@ -127,7 +124,7 @@ export const PullRequestStack = Schema.Struct({
 });
 export type PullRequestStack = typeof PullRequestStack.Type;
 
-/** Compact stack identity used by list rows; full entries stay detail-only. */
+/** compact stack identity for list rows; full entries stay detail-only */
 export const PullRequestStackSummary = Schema.Struct({
   number: PositiveInt,
   size: PositiveInt,
@@ -162,17 +159,15 @@ export const PullRequestListEntry = Schema.Struct({
   reviewDecision: Schema.NullOr(Schema.String),
   viewerReviewRequested: Schema.Boolean,
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
-  // A repository-level row can belong to several local projects/worktrees. The fallback keeps a
-  // newer client compatible with a server that still sends one project-local row at a time.
+  // a repo-level row can belong to several projects — the fallback keeps a newer client compatible with per-project rows
   projectContexts: Schema.optional(Schema.Array(PullRequestProjectContext)).pipe(
     Schema.withDecodingDefault(() => []),
   ),
-  // Decoding default keeps a newer client compatible with an older server that predates
-  // the field (brief version skew during dev restarts must not reject whole payloads).
+  // decoding default keeps a newer client working with a pre-field server (brief skew during dev restarts)
   mergeability: Schema.optional(GitPullRequestMergeability).pipe(
     Schema.withDecodingDefault(() => "unknown"),
   ),
-  // Stack support is additive and the server may briefly be on an older build during restarts.
+  // stack support is additive — the server may briefly be older during restarts
   stack: Schema.optional(Schema.NullOr(PullRequestStackSummary)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -217,7 +212,7 @@ export type PullRequestReviewRequestCountInput = typeof PullRequestReviewRequest
 
 export const PullRequestReviewRequestCountResult = Schema.Struct({
   count: NonNegativeInt,
-  /** True means at least one repository could not be counted or reached the search cap. */
+  /** true when at least one repository couldn't be counted or hit the cap */
   incomplete: Schema.Boolean,
 });
 export type PullRequestReviewRequestCountResult = typeof PullRequestReviewRequestCountResult.Type;
@@ -242,8 +237,7 @@ export const PullRequestDetail = Schema.Struct({
   state: PullRequestState,
   isDraft: Schema.Boolean,
   mergeable: Schema.NullOr(Schema.String),
-  // Decoding default keeps a newer client compatible with an older server that predates
-  // the field (brief version skew during dev restarts must not reject whole payloads).
+  // decoding default for pre-field servers
   mergeability: Schema.optional(GitPullRequestMergeability).pipe(
     Schema.withDecodingDefault(() => "unknown"),
   ),
@@ -267,12 +261,11 @@ export const PullRequestDetail = Schema.Struct({
   commentsIncomplete: Schema.Boolean,
   commits: Schema.Array(PullRequestCommit),
   mergeCapabilities: PullRequestMergeCapabilities,
-  // A missing field is a standalone PR or a brief older-server/newer-client version skew.
+  // missing = standalone PR or brief version skew
   stack: Schema.optional(Schema.NullOr(PullRequestStack)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
-  // Stack lookup is optional for rendering detail, but merge UX must distinguish an unavailable
-  // lookup from a confirmed standalone pull request.
+  // merge UX must distinguish an unavailable lookup from a confirmed standalone PR
   stackMetadataIncomplete: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
@@ -298,8 +291,7 @@ export const PullRequestCommentInput = Schema.Struct({
   projectId: ProjectId,
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
-  // GitHub rejects comment bodies past 65536 characters; enforcing it here keeps oversized
-  // payloads off the wire and out of subprocess plumbing entirely.
+  // GitHub rejects bodies past 65536 chars — enforcing here keeps oversized payloads off the wire
   body: TrimmedNonEmptyString.check(Schema.isMaxLength(65536)),
 });
 export type PullRequestCommentInput = typeof PullRequestCommentInput.Type;
@@ -320,15 +312,13 @@ export const PullRequestSetPinnedResult = Schema.Struct({
 });
 export type PullRequestSetPinnedResult = typeof PullRequestSetPinnedResult.Type;
 
-// Actions acknowledge the mutation independently from the follow-up detail refetch. This keeps
-// a successful GitHub mutation from being reported as failed when a later read is unavailable.
+// the mutation is acked independently of the follow-up refetch — a successful mutation isn't reported failed when the read is unavailable
 export const PullRequestActionResult = Schema.Struct({
   projectId: ProjectId,
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   workspaceRoot: TrimmedNonEmptyString,
-  // Async merges may finish immediately or be handed to GitHub's merge queue. Older servers and
-  // non-merge actions omit the field, which decodes as null for rolling dev restarts.
+  // async merges may land in the merge queue; older servers/non-merge actions omit the field → null
   mergeOutcome: Schema.optional(Schema.NullOr(Schema.Literals(["merged", "enqueued"]))).pipe(
     Schema.withDecodingDefault(() => null),
   ),

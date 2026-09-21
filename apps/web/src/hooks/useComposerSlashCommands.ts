@@ -272,9 +272,7 @@ export function useComposerSlashCommands(input: {
   const persistThreadGoal = useCallback(
     async (goal: string): Promise<boolean> => {
       if (!isServerThread && activeThread) {
-        // Draft threads have no server row yet: stage the goal locally so the
-        // header shows it immediately, then the first send persists it right
-        // after `thread.create` promotes the draft.
+        // draft threads have no server row — stage the goal locally so the header shows it, then the first send persists it after thread.create promotes the draft
         const draftStore = useComposerDraftStore.getState();
         if (draftStore.getDraftThread(activeThread.id)) {
           draftStore.setDraftThreadContext(activeThread.id, { goal });
@@ -614,8 +612,7 @@ export function useComposerSlashCommands(input: {
     ],
   );
 
-  // Publish a stable host capability. Composer drafts, attachments, and modes only
-  // affect whether `/side` is offered; they must not make the dock action disappear.
+  // Publish a stable host capability. Composer drafts, attachments, and modes only affect whether `/side` is offered; they must not make the dock action disappear.
   useEffect(() => {
     if (!activeProject || !activeThread || !isServerThread || activeThread.sidechatSourceThreadId) {
       return;
@@ -661,8 +658,7 @@ export function useComposerSlashCommands(input: {
         associatedWorktreeRef: activeThread.associatedWorktreeRef ?? null,
       });
 
-      // Hoisted out of the `try` below: React Compiler cannot lower `??`/`?:` inside a try block and
-      // would skip this whole hook, so the composer would lose its memoization on every keystroke.
+      // hoisted out of the try below — React Compiler cannot lower `??`/`?:` inside a try block and would skip compiling this whole hook
       const nextEnvMode =
         activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local");
       const nextWorkingDirectory = activeThread.workingDirectory ?? null;
@@ -773,8 +769,7 @@ export function useComposerSlashCommands(input: {
     [runForkThread],
   );
 
-  // Footer fork action: stays in the current environment (a worktree-backed thread
-  // reuses its worktree) and carries the transcript up to the clicked turn.
+  // Footer fork action: stays in the current environment (a worktree-backed thread reuses its worktree) and carries the transcript up to the clicked turn.
   const handleForkFromMessage = useCallback(
     (messageId: MessageId) => {
       void runForkThread({ target: "local", throughMessageId: messageId });
@@ -830,8 +825,7 @@ export function useComposerSlashCommands(input: {
   }, [editorActions, providerCommandDiscoveryCwd, threadId]);
 
   const runExportSlashCommand = useCallback(() => {
-    // Re-validate at call time (mirrors /compact): menu selections and stale
-    // highlights can outlive the availability computed at render time.
+    // Re-validate at call time (mirrors /compact): menu selections and stale highlights can outlive the availability computed at render time.
     if (!canOfferExportCommand) {
       toastManager.add({
         type: "warning",
@@ -1027,8 +1021,7 @@ export function useComposerSlashCommands(input: {
         return true;
       }
       if (slashInvocation.command === "side") {
-        // Execute allows `/side <provider> [prompt]` even though the menu offer still
-        // requires an otherwise-empty composer (the args are meaningful prompt text).
+        // Execute allows `/side <provider> [prompt]` even though the menu offer still requires an otherwise-empty composer (the args are meaningful prompt text).
         if (!canExecuteSideCommand) {
           toastManager.add({
             type: "warning",
@@ -1052,8 +1045,7 @@ export function useComposerSlashCommands(input: {
           });
           return true;
         }
-        // Hoisted out of the `try` below: React Compiler cannot lower `?:` inside
-        // a try block and would bail out of compiling this whole hook.
+        // hoisted out of the try below — React Compiler cannot lower `?:` inside a try block and would bail on the whole hook
         const sidechatOptions = targetProvider
           ? { initialPrompt: prompt, targetProvider }
           : { initialPrompt: prompt };

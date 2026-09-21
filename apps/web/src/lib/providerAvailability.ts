@@ -90,7 +90,6 @@ export function normalizeProviderStatusForLocalConfig(input: {
 
 export function isProviderUsable(status: ServerProviderStatus | null | undefined): boolean {
   if (!status) {
-    // Missing status means the health check has not confirmed an installed provider yet.
     return false;
   }
   return status.available && status.authStatus !== "unauthenticated";

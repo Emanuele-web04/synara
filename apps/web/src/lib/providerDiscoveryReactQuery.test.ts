@@ -1,8 +1,3 @@
-// FILE: providerDiscoveryReactQuery.test.ts
-// Purpose: Locks provider model discovery query semantics — admission, retry policy,
-//          stale-catalog preservation, and initial-vs-background pending (#103).
-// Layer: Web data fetching tests
-
 import type { NativeApi, ProviderListModelsResult } from "@synara/contracts";
 import { hashKey, QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -217,8 +212,7 @@ describe("providerModelsQueryOptions", () => {
       const releaseAbandoned = prioritizeProviderModelDiscovery(abandoned.queryKey);
       const releaseSharedA = prioritizeProviderModelDiscovery(shared.queryKey);
       const releaseSharedB = prioritizeProviderModelDiscovery(shared.queryKey);
-      // Ownership predates enqueue: a prefetch for the shared key still belongs
-      // to the active pane even if its fetch options say background.
+      // Ownership predates enqueue: a prefetch for the shared key still belongs to the active pane even if its fetch options say background.
       const requests = [
         active,
         client.fetchQuery(abandoned),

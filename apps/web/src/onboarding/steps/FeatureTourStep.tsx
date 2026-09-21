@@ -1,9 +1,3 @@
-// FILE: FeatureTourStep.tsx
-// Purpose: "What Synara can do" tour built from TOUR_CARDS: a vertical list of topics on the
-//          left, the selected topic's text on the right, with a docs link per topic and live
-//          shortcut chips on the shortcuts topic.
-// Layer: Web UI component
-
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";

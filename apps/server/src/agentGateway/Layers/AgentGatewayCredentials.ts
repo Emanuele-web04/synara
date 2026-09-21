@@ -1,12 +1,3 @@
-/**
- * AgentGatewayCredentialsLive - Live layer for agent gateway credentials.
- *
- * Issues opaque in-memory credentials. Tokens live for the provider session,
- * can be revoked independently, and intentionally do not survive a Synara
- * restart.
- *
- * @module agentGateway/Layers/AgentGatewayCredentials
- */
 import { randomUUID } from "node:crypto";
 
 import { Effect, Layer } from "effect";
@@ -69,9 +60,7 @@ export function makeAgentGatewayStdioBootstrapRegistry(input: {
   };
 }
 
-// Providers run as local child processes, so they must target a host the HTTP
-// server actually listens on. Wildcard binds cover loopback; an explicit host
-// (e.g. `::1` or a LAN address) does not, so reuse it verbatim.
+// providers are local children and must target a host the server listens on — wildcard binds cover loopback, an explicit host doesn't, so reuse it verbatim
 export function resolveAgentGatewayEndpointHost(configHost: string | undefined): string {
   if (configHost === undefined || isWildcardHost(configHost)) {
     return "127.0.0.1";
@@ -145,8 +134,7 @@ export const makeAgentGatewayCredentials = Effect.gen(function* () {
   const retireSessionTurn: AgentGatewayCredentialsShape["retireSessionTurn"] = (token, turnId) => {
     const session = sessionRegistry.verify(token);
     if (!session) return Promise.resolve();
-    // Retire synchronously before exposing the asynchronous drain barrier.
-    // Requests racing the terminal event can no longer bind this bearer to B.
+    // retire synchronously before exposing the async drain barrier — racing requests can't bind this bearer to B
     sessionRegistry.retireWriteAuthority(token, turnId);
     return inFlightRequests.cancelTurn(session.sessionKey, turnId).settled;
   };
@@ -184,6 +172,5 @@ export const AgentGatewayCredentialsLive = Layer.effect(
   makeAgentGatewayCredentials,
 ).pipe(Layer.provide(AgentGatewaySessionRegistryLive));
 
-// Single shared composition so every consumer (HTTP gateway, provider
-// adapters) reuses the same memoized in-memory session registry.
+// single shared composition so every consumer reuses the same memoized session registry
 export const AgentGatewayCredentialsWithSecretsLive = AgentGatewayCredentialsLive.pipe(Layer.orDie);

@@ -18,8 +18,6 @@ export const WORKSPACE_EDITOR_AUTOSAVE_MS = 400;
 
 const sessions = new WeakMap<QueryClient, Map<string, WorkspaceEditorSession>>();
 
-/** One buffer and one writer per file, shared by all editor surfaces. Failed
- * drafts survive panel unmounts; clean, unused sessions are released. */
 export class WorkspaceEditorSession {
   private state = INITIAL_WORKSPACE_FILE_EDITOR_STATE;
   private listeners = new Set<() => void>();
@@ -128,8 +126,7 @@ export class WorkspaceEditorSession {
               lineEnding: format.lineEnding,
               ...(guarded ? { expectedVersion: format.expectedVersion } : {}),
             });
-            // Cancel reads that predate the write, including aliases resolved to
-            // this file, before publishing the new disk version to all surfaces.
+            // Cancel reads that predate the write, including aliases resolved to this file, before publishing the new disk version to all surfaces.
             const queries = this.client.getQueryCache().findAll({
               queryKey: ["projects", "read-file", this.cwd],
               predicate: (query) =>
@@ -152,8 +149,7 @@ export class WorkspaceEditorSession {
               contents: value,
               expectedVersion: result.version,
             });
-            // Git latency or refresh failure must never change a successful save
-            // into a failed write. Existing refresh queues serialize detail reads.
+            // Git latency or refresh failure must never change a successful save into a failed write. Existing refresh queues serialize detail reads.
             void refreshGitAfterFileWrite(this.client, this.cwd).catch(() => undefined);
             guarded = true;
           } catch (error) {

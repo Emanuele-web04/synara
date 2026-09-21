@@ -44,8 +44,7 @@ async function closeElectronApplication(application: ElectronApplication): Promi
     closeError = error;
   });
   if (!(await waitForSettlement(closing, 5_000))) {
-    // A failed browser command must not obscure its own assertion by leaving a
-    // wedged Electron process in Playwright teardown forever.
+    // a failed browser command must not leave a wedged Electron process in Playwright teardown
     application.process().kill("SIGKILL");
     await waitForSettlement(closing, 2_000);
   }
@@ -297,9 +296,7 @@ test("production MCP controls one persistent Electron page across visibility cha
           'await human.click(page.getByRole("link",{name:"Download fixture",exact:true})); return true;',
         ),
       ).rejects.toThrow(/BrowserDownloadApprovalRequired/);
-      // Give a broken block time to write the file before asserting it never
-      // appeared; an immediate check would pass a regression that downloads
-      // slightly late.
+      // give a broken block time to write the file — an immediate check would pass a late regression
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(existsSync(join(home, "Downloads", "fixture-download.txt"))).toBe(false);
     });
@@ -354,7 +351,7 @@ test("production MCP controls one persistent Electron page across visibility cha
         mcp.call("browser_navigate", { tabId, url: "file:///etc/passwd" }),
       ).rejects.toThrow(/BrowserNavigationBlocked/);
       await mcp.call("browser_navigate", { tabId, url: site.appUrl });
-      // Locator clicks enforce actionability; human.click is a lower-level pointer operation.
+      // locator clicks enforce actionability; human.click is a lower-level pointer op
       for (const name of ["Disabled action", "Covered action"]) {
         await expect(
           run(

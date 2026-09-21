@@ -1,7 +1,3 @@
-// FILE: ChatMarkdown.find.browser.tsx
-// Purpose: Browser regression for parse-free in-thread find decoration updates.
-// Layer: Vitest browser tests
-
 import { useState } from "react";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";

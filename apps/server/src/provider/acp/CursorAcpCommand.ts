@@ -1,11 +1,4 @@
-/**
- * CursorAcpCommand - shared command resolution for Cursor's ACP-capable CLI.
- *
- * Keeps the ambiguous legacy `agent` default from colliding with Grok's `agent`
- * executable while still honoring explicit custom Cursor binary paths.
- *
- * @module CursorAcpCommand
- */
+// the ambiguous legacy `agent` default collides with Grok's `agent` executable — explicit custom paths still honored
 import { existsSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 
@@ -235,7 +228,6 @@ function wrapPowerShellCommand(command: string, args: ReadonlyArray<string>): Cu
   };
 }
 
-// Resolves persisted/default Cursor binary settings into the executable Synara should spawn.
 export function resolveCursorAgentBinaryPath(
   binaryPath: string | null | undefined,
   options: ProviderBinaryResolutionOptions = {},
@@ -257,7 +249,6 @@ export function resolveCursorAgentBinaryPath(
   );
 }
 
-// Builds Cursor Agent invocations from either `cursor-agent` or the `cursor` editor launcher.
 export function buildCursorAgentCommand(
   binaryPath: string | null | undefined,
   args: ReadonlyArray<string>,

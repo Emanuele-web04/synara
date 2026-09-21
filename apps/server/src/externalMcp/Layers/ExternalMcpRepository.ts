@@ -534,11 +534,7 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
           `;
           if (completed.length > 0) return "completed" as const;
 
-          // Revocation or expiry must still reject the final commit. Keep the
-          // task non-terminal until the coordinator has attempted cleanup; the
-          // capacity view conservatively owns its slot throughout compensation.
-          // Returning the failure after the transaction commits lets the
-          // coordinator compensate already-created resources.
+          // revocation or expiry must still reject the final commit — keep the task non-terminal until cleanup is attempted
           const compensating = yield* sql<{ readonly operationId: string }>`
             UPDATE external_mcp_operations
             SET status = 'compensating', result_json = NULL,

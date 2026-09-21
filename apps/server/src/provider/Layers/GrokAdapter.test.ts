@@ -1,8 +1,3 @@
-// FILE: GrokAdapter.test.ts
-// Purpose: Covers Grok-specific adapter guards that keep resumed ACP replay out of live turns.
-// Layer: Provider adapter tests
-// Depends on: GrokAdapter helper exports and shared contract ids.
-
 import { TurnId } from "@synara/contracts";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";

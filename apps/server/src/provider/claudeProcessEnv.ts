@@ -1,7 +1,3 @@
-// FILE: claudeProcessEnv.ts
-// Purpose: Builds Claude subprocess environments that prefer valid local Claude CLI OAuth.
-// Layer: Provider utility shared by Claude runtime sessions and provider health probes.
-// Exports: Claude credentials parsing, path resolution, and env sanitization helpers.
 import { readFileSync } from "node:fs";
 import OS from "node:os";
 import nodePath from "node:path";
@@ -140,26 +136,20 @@ export function buildClaudeProcessEnv(input?: {
     return buildProviderChildEnvironment({ provider: "claude", baseEnv: env });
   }
 
-  // Claude gives direct request credentials precedence over local OAuth. Drop stale
-  // app-process keys when a real Claude CLI login can satisfy the subprocess.
+  // direct request credentials take precedence over local OAuth — drop stale process keys when a real CLI login can satisfy the subprocess
   for (const key of CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS) {
     delete env[key];
   }
   return buildProviderChildEnvironment({ provider: "claude", baseEnv: env });
 }
 
-/**
- * Claude Code turns the Artifact tool (and the `/design` and `/slides` commands
- * built on it) off by default for Agent SDK entrypoints. `CLAUDE_CODE_ARTIFACT`
- * is the binary's own opt-in; plan, login and organization policy still apply.
- */
+// Artifact (and /design, /slides) is off by default for Agent SDK entrypoints — CLAUDE_CODE_ARTIFACT is the binary's own opt-in
 export function withClaudeArtifactOptIn(
   env: NodeJS.ProcessEnv,
   enableArtifacts: boolean | undefined,
 ): NodeJS.ProcessEnv {
   if (enableArtifacts === true) return { ...env, CLAUDE_CODE_ARTIFACT: "1" };
-  // The setting is authoritative: a value inherited from the shell that launched
-  // Synara must not publish while Settings and discovery report Artifacts as off.
+  // the setting is authoritative — an env value inherited from the launching shell must not publish while Settings reports off
   if (env.CLAUDE_CODE_ARTIFACT === undefined) return env;
   const { CLAUDE_CODE_ARTIFACT: _inherited, ...rest } = env;
   return rest;

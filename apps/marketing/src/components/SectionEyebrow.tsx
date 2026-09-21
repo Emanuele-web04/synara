@@ -1,11 +1,4 @@
-// FILE: SectionEyebrow.tsx
-// Purpose: The small mono uppercase label that heads a page or a section on the
-//          sponsor pages — "SPONSORS", "TOP DONORS", "MONTHLY TIERS".
-// Layer: Presentational component
-// Depends on: lib/utils (cn), design tokens in globals.css
-// Note: `as` exists because the same treatment is a page eyebrow (a <p> above
-//       the <h1>) in one spot and a real section heading (<h2>) in another —
-//       the styling is shared, the document outline shouldn't be.
+// `as` exists because the same treatment is a page eyebrow <p> in one spot and a real <h2> in another — shared styling, different document outline
 
 import { cn } from "@/lib/utils";
 

@@ -1,9 +1,3 @@
-// FILE: cursorSkillsDiscovery.ts
-// Purpose: Finds Cursor-compatible Agent Skill folders from project and user skill roots,
-//          mirroring the roots cursor-agent scans natively.
-// Layer: Server provider discovery helper
-// Exports: discoverCursorSkills (generic primitives live in skillsCatalog.ts).
-
 import * as nodePath from "node:path";
 
 import type { ProviderSkillDescriptor } from "@synara/contracts";

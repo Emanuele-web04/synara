@@ -1,8 +1,3 @@
-// FILE: threadRecap.ts
-// Purpose: Build compact, low-churn inputs and browser persistence for AI-generated chat recaps.
-// Layer: Client utility
-// Exports: recap source derivation plus per-thread localStorage cache helpers.
-
 import type { ThreadId } from "@synara/contracts";
 import type { Thread, ChatMessage } from "~/types";
 import { isPlainObject, sanitizeStringKeyedRecord } from "~/persistedRecord";

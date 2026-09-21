@@ -1,12 +1,4 @@
-// FILE: DeviceControlRail.tsx
-// Purpose: Slim icon toolbar of device actions below the phone bezel.
-// Layer: Device pane presentation
-// Exports: DeviceControlRail, DEVICE_RAIL_HEIGHT_CLASS, DEVICE_RAIL_GROUPS
-//
-// The rail carries the actions that have no home on the hardware itself:
-// lock and volume moved onto the drawn side buttons of the bezel, where the
-// real ones are, leaving this row for Home, capture, and the two session
-// actions.
+// lock and volume live on the drawn bezel buttons; this row is Home, capture, and the two session actions
 
 import {
   DeviceDetachIcon,
@@ -116,8 +108,7 @@ export function DeviceControlRail(props: {
                         "hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
                         "focus-visible:ring-1 focus-visible:ring-ring/60",
                         "disabled:pointer-events-none disabled:opacity-40",
-                        // A recording in progress is the one state worth
-                        // colouring: it keeps costing disk until it is stopped.
+                        // a recording in progress keeps costing disk until stopped — the one state worth colouring
                         isRecordStop
                           ? "bg-destructive/12 text-destructive hover:bg-destructive/20 hover:text-destructive"
                           : pressed

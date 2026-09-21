@@ -1,8 +1,3 @@
-// FILE: ThreadDetailHydrationState.tsx
-// Purpose: Render the transcript placeholder while thread history syncs (or after it fails).
-// Layer: Chat presentation
-// Depends on: shared Spinner and Button primitives.
-
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 

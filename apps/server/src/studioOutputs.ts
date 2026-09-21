@@ -1,38 +1,20 @@
-// FILE: studioOutputs.ts
-// Purpose: Resolve the files a single Studio chat produced anywhere under the Studio
-//          workspace root, from checkpoint summaries (Git roots), persisted file-change
-//          activities, and captured per-turn output activities (non-Git roots). Also owns
-//          the bounded workspace tree scan the StudioOutputReactor diffs per turn.
-// Layer: Server workspace helper
-// Exports: Pure attribution/scan-diff helpers + listStudioThreadOutputs (Effect I/O).
-
 import type { StudioOutputEntry } from "@synara/contracts";
 import { Effect, FileSystem, Path } from "effect";
 
-// Managed Studio subtrees that hold inputs or infrastructure, never produced content.
-// Compared case-insensitively so an agent-created "logs"/"TMP" variant is excluded too.
+// managed Studio subtrees holding inputs or infrastructure, never produced content — case-insensitive so an agent-created "logs"/"TMP" variant is excluded too
 const EXCLUDED_TOP_LEVEL_DIRECTORY_NAMES = new Set(["tmp", "logs", "inbox", "context", "skills"]);
 
-// Managed provider instruction files live at the workspace root. They are
-// infrastructure even when the self-healing scaffold creates them mid-turn.
+// managed provider instruction files at the workspace root are infrastructure even when the self-healing scaffold creates them mid-turn
 const EXCLUDED_ROOT_FILE_NAMES = new Set(["agents.md", "claude.md"]);
 
-// Never treated as outputs (or descended into) at any depth.
 const EXCLUDED_NESTED_DIRECTORY_NAMES = new Set(["node_modules"]);
 
-// Upper bound on how many distinct files a single request will stat. Checkpoint file
-// lists are deduplicated, so a realistic chat stays far below this; the cap only guards
-// a pathological thread whose turns touched thousands of files. Newest turns are
-// collected first, so when the cap bites it drops the OLDEST outputs.
+// checkpoint file lists are deduplicated so a realistic chat stays far below; the cap guards a pathological thread whose turns touched thousands of files — newest turns collected first so it drops the OLDEST outputs
 export const MAX_THREAD_OUTPUT_FILES = 500;
 
-// How many `stat` calls run concurrently. Bounded so a large output list doesn't open
-// hundreds of file descriptors at once.
 export const STAT_CONCURRENCY = 16;
 
-// Bounds for the per-turn workspace scan: the Studio root is a content folder, not a
-// codebase, so realistic trees stay far below these limits. They only guard pathological
-// content (an agent cloning a repository into the root).
+// the Studio root is a content folder not a codebase — the caps only guard pathological content like an agent cloning a repo into the root
 export const MAX_SCAN_DEPTH = 8;
 export const MAX_SCAN_FILES = 4_000;
 export const MAX_SCAN_ENTRIES = 20_000;
@@ -61,9 +43,7 @@ function isExcludedRootFileName(fileName: string): boolean {
   return EXCLUDED_ROOT_FILE_NAMES.has(fileName.toLowerCase());
 }
 
-// Rejects empty/dot segments so a crafted or malformed path can never escape the
-// workspace root, and skips hidden files (e.g. .DS_Store, .git) plus nested
-// infrastructure folders like node_modules.
+// rejects empty/dot segments so a crafted path can never escape the root; skips hidden files and nested infra folders like node_modules
 function isSafeVisibleSegments(segments: readonly string[]): boolean {
   return segments.every(
     (segment) =>
@@ -75,7 +55,6 @@ function isSafeVisibleSegments(segments: readonly string[]): boolean {
   );
 }
 
-/** Whether a workspace-root-relative POSIX path counts as produced Studio output. */
 export function isStudioOutputRelativePath(relativePath: string): boolean {
   const segments = relativePath.split("/");
   const first = segments[0];
@@ -91,7 +70,6 @@ export function isStudioOutputRelativePath(relativePath: string): boolean {
   return isSafeVisibleSegments(segments);
 }
 
-/** Pulls path-shaped fields from one bounded file-change activity payload. */
 function collectActivityPathValues(value: unknown, paths: string[], depth = 0): void {
   if (depth > 6 || value === null || value === undefined) {
     return;
@@ -114,10 +92,7 @@ function collectActivityPathValues(value: unknown, paths: string[], depth = 0): 
   }
 }
 
-/**
- * Extracts newest-first file paths from completed file-change activities. Providers use
- * different nested payload shapes, so only explicit path keys are accepted.
- */
+/** providers use different nested payload shapes — only explicit path keys are accepted */
 export function collectFileChangeActivityPathCandidates(
   payloadsNewestFirst: ReadonlyArray<unknown>,
 ): string[] {
@@ -147,11 +122,7 @@ export function collectFileChangeActivityPathCandidates(
   return paths;
 }
 
-/**
- * Checkpoint diff paths are git-style POSIX paths relative to the thread cwd (the Studio
- * root). Keep only safe output paths (excluded/hidden subtrees dropped) and return them
- * relative to the workspace root, newest checkpoint first, deduplicated.
- */
+/** checkpoint diff paths are git-style POSIX paths relative to the thread cwd (the Studio root); keep only safe output paths, newest checkpoint first, deduplicated */
 export function collectThreadOutputRelativePaths(
   checkpoints: ReadonlyArray<CheckpointLike>,
 ): string[] {
@@ -178,21 +149,14 @@ export function collectThreadOutputRelativePaths(
   return relativePaths;
 }
 
-/** One scanned file's identity for turn-boundary diffing. */
 export interface StudioWorkspaceFileStat {
   readonly mtimeMs: number;
   readonly size: number;
 }
 
-/** Workspace-root-relative POSIX path -> file identity, for one scan pass. */
 export type StudioWorkspaceScan = ReadonlyMap<string, StudioWorkspaceFileStat>;
 
-/**
- * Bounded walk of the Studio workspace root collecting candidate output files.
- * Managed input/infra subtrees, hidden entries, and symlinked directories are skipped;
- * depth, entry-count, and file-count caps keep a pathological tree from stalling the reactor.
- * Unreadable entries are skipped instead of failing the scan.
- */
+/** managed/hidden subtrees and symlinked dirs skipped; depth/entry/file caps keep a pathological tree from stalling the reactor; unreadable entries skipped not failed */
 export const scanStudioWorkspaceFiles = Effect.fnUntraced(function* (input: {
   readonly workspaceRoot: string;
 }) {
@@ -234,8 +198,7 @@ export const scanStudioWorkspaceFiles = Effect.fnUntraced(function* (input: {
         if (entryName === undefined) {
           continue;
         }
-        // Count every directory entry, including excluded and unreadable ones. A
-        // file-only cap does not bound a tree containing thousands of directories.
+        // count every dir entry incl. excluded/unreadable — a file-only cap doesn't bound a tree of thousands of directories
         scannedEntryCount += 1;
         const segments = [...directory.segments, entryName];
         if (!isSafeVisibleSegments([entryName])) {
@@ -261,8 +224,7 @@ export const scanStudioWorkspaceFiles = Effect.fnUntraced(function* (input: {
               if (info.type !== "Directory" || entry.segments.length >= MAX_SCAN_DEPTH) {
                 return Effect.succeed({ ...entry, info, isLinkedDirectory: false });
               }
-              // stat() follows symlinks, so a linked directory reports as
-              // "Directory"; readLink distinguishes it without following it.
+              // stat() follows symlinks so a linked dir reports "Directory" — readLink distinguishes without following
               return fileSystem.readLink(entry.entryPath).pipe(
                 Effect.match({
                   onFailure: () => ({ ...entry, info, isLinkedDirectory: false }),
@@ -299,10 +261,7 @@ export const scanStudioWorkspaceFiles = Effect.fnUntraced(function* (input: {
   return files as StudioWorkspaceScan;
 });
 
-/**
- * Files present in `after` that are new or changed since `before`, i.e. the outputs a
- * turn produced. Deletions are ignored: a removed file is no longer a listable output.
- */
+/** deletions ignored — a removed file is no longer a listable output */
 export function diffStudioWorkspaceScans(
   before: StudioWorkspaceScan,
   after: StudioWorkspaceScan,
@@ -317,11 +276,7 @@ export function diffStudioWorkspaceScans(
   return changed;
 }
 
-/**
- * Canonical payload persisted whenever the server attributes workspace files to a
- * Studio turn. Both the turn-boundary scanner and out-of-workspace generated-image
- * capture use this shape so the listing query has one path extraction contract.
- */
+/** canonical attribution payload shared by the turn-boundary scanner and out-of-workspace image capture so the listing query has one extraction contract */
 export function studioOutputsCapturedActivityPayload(
   relativePaths: readonly string[],
   options?: {
@@ -340,10 +295,7 @@ export function studioOutputsCapturedActivityPayload(
   };
 }
 
-/**
- * Stats the thread-attributed output files and returns the ones that still exist, most
- * recently modified first. Missing or unreadable files are omitted instead of failing.
- */
+/** stats attributed files, returns the ones that still exist newest-first; missing/unreadable omitted instead of failing */
 export const listStudioThreadOutputs = Effect.fnUntraced(function* (input: {
   readonly workspaceRoot: string;
   readonly checkpoints: ReadonlyArray<CheckpointLike>;

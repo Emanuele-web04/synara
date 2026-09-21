@@ -1,7 +1,3 @@
-// FILE: composerDraftStore.ts
-// Purpose: Public Zustand facade for composer drafts, model choices, attachments, and persistence.
-// Exports: Stable composer draft API, hooks, and promotion helpers.
-
 import { type ModelSelection, type ProviderKind, type ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
@@ -77,8 +73,7 @@ const composerPersistStorage = createDeferredPersistStorage<
   debounceMs: COMPOSER_PERSIST_DEBOUNCE_MS,
 });
 
-// Flush pending composer draft writes before the page goes away so at most one
-// debounce window of changes can be lost.
+// flush pending draft writes before unload so at most one debounce window is lost
 flushStorageBeforePageHide(() => composerPersistStorage.flush());
 
 export const useComposerDraftStore = create<ComposerDraftStoreState>()(
@@ -87,8 +82,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
     {
       name: COMPOSER_DRAFT_STORAGE_KEY,
       version: COMPOSER_DRAFT_STORAGE_VERSION,
-      // Partialization is owned by deferred storage so serialization does not run
-      // on each keystroke and instead happens once per 300ms flush window.
+      // partialization is owned by deferred storage — serialization runs once per 300ms flush, not per keystroke
       storage: composerPersistStorage,
       migrate: migratePersistedComposerDraftStoreState,
       merge: (persistedState, currentState) => {
@@ -140,7 +134,6 @@ export function useEffectiveComposerModelState(input: {
   });
 }
 
-// Mark drafts as promoted first; route/composer cleanup happens after the server thread starts.
 export function markPromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>): void {
   const store = useComposerDraftStore.getState();
   const draftThreadIds = Object.keys(store.draftThreadsByThreadId) as ThreadId[];

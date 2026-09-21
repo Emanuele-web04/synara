@@ -1,9 +1,3 @@
-// FILE: composerStackedPanelStyles.ts
-// Purpose: Shared layout, typography, and chrome tokens for panels stacked above the
-// composer (plan activity, queued follow-ups, live file changes).
-// Layer: Chat composer styling
-// Exports: stacked panel row/header tokens and divider class name
-
 import { COMPACT_CHAT_MARKDOWN_TIGHT_CLASS_NAME } from "~/components/chatMarkdownSpacing";
 import { COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyles";
 

@@ -1,8 +1,3 @@
-// FILE: providerUsage/providers/droid.ts
-// Purpose: Read Factory CLI credentials and fetch the same standard/core limits shown by Droid's
-// `/limits` command. Credential access is read-only. An explicit FACTORY_API_KEY selects its own
-// account; otherwise use the local CLI login without refreshing or modifying its credentials.
-
 import type {
   ServerProviderUsageLimit,
   ServerProviderUsageLine,
@@ -153,7 +148,7 @@ const droidResilience = createRateLimitResilience({
     `Factory usage is temporarily unavailable — showing the last values, retrying in ~${retryMins}m.`,
 });
 
-// Identity lookup failures never reuse billing data: the account/region has not been verified.
+// identity lookup failures never reuse billing data — the account/region hasn't been verified
 const droidIdentityResilience = createRateLimitResilience({
   provider: "droid",
   source: SOURCE,
@@ -161,7 +156,7 @@ const droidIdentityResilience = createRateLimitResilience({
     `Factory account lookup is temporarily unavailable — retrying in ~${retryMins}m.`,
 });
 
-/** Test-only: clear remembered last-good usage and cooldowns. */
+/** test-only: clear remembered last-good usage and cooldowns */
 export function __resetDroidUsageRateLimitState(): void {
   droidResilience.reset();
   droidIdentityResilience.reset();
@@ -195,8 +190,7 @@ function authKey(ctx: ProviderUsageContext, auth: DroidAuth): string {
   )}`;
 }
 
-// The orchestrator passes one context object to cacheKey/fetch. Consume the same credential
-// snapshot, then let its post-fetch cacheKey call re-read storage. No A -> B -> A cache poisoning.
+// consume the same credential snapshot, then let post-fetch cacheKey re-read storage — no A→B→A cache poisoning
 const preparedCredentials = new WeakMap<
   ProviderUsageContext,
   {
@@ -220,7 +214,7 @@ export const droidUsageFetcher: ProviderUsageFetcher = {
   async cacheKey(ctx) {
     const selection = await resolveSelection(ctx);
     preparedCredentials.set(ctx, selection);
-    // API-key residency is resolved by whoami, so do not reuse the outer cache before it.
+    // API-key residency is resolved by whoami — don't reuse the outer cache before it
     return selection.apiKey ? null : droidCredentialCacheKey(ctx, selection.resolution, undefined);
   },
   async fetch(ctx) {
@@ -230,8 +224,7 @@ export const droidUsageFetcher: ProviderUsageFetcher = {
     let auth: DroidAuth | undefined;
     const local = resolution.credential;
     if (apiKey) {
-      // Factory's CLI validates API keys at the global whoami endpoint and uses that
-      // principal's org/region. Never copy a local WorkOS account's org or region.
+      // Factory's CLI validates API keys at the global whoami endpoint — never copy a WorkOS account's org/region
       const identityKey = `${ctx.homeDir}:api:${credentialFingerprint(apiKey)}`;
       const identityCooldown = droidIdentityResilience.serveDuringCooldown(identityKey, ctx.nowMs);
       if (identityCooldown) return identityCooldown;

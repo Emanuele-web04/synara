@@ -1,10 +1,3 @@
-// FILE: skillPromptInjection.ts
-// Purpose: Inlines portable skill instructions into the outgoing prompt for providers
-//          that cannot natively load the referenced skill files. This is the fallback
-//          that makes Synara catalog skills usable on every provider.
-// Layer: Server provider helper
-// Exports: shouldInlineSkillForProvider, buildInlineSkillInstructions
-
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 
@@ -41,13 +34,10 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
     case "antigravity":
       return true;
     case "codex":
-      // Codex loads .codex and .agents skills natively, plus ~/.synara/skills
-      // registered via skills/extraRoots/set. Only foreign provider roots
-      // need inline instructions alongside their structured skill reference.
+      // Codex loads .codex/.agents and ~/.synara/skills natively — only foreign provider roots need inlined instructions
       return [".claude", ".cursor"].some((dir) => segments.has(dir));
     case "cursor":
-      // cursor-agent natively scans .cursor/.agents/.claude/.codex skill roots;
-      // only Synara-owned paths need inlining.
+      // cursor-agent natively scans .cursor/.agents/.claude/.codex skill roots; only Synara-owned paths need inlining.
       return segments.has(".synara");
     case "claudeAgent":
       // Claude Code only loads skills from .claude/skills folders.
@@ -61,8 +51,6 @@ export function shouldInlineSkillForProvider(provider: ProviderKind, skillPath: 
           (segments.has("devin") || segments.has("cognition")))
       );
     case "pi":
-      // Pi loads its own skill set; anything resolved from a cross-provider
-      // folder is portable and must be inlined.
       return CROSS_PROVIDER_SKILL_DIR_NAMES.some((dir) => segments.has(dir));
     default:
       // Antigravity/Grok/Droid/OpenCode have no native skill support.

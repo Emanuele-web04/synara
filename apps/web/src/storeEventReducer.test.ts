@@ -1,6 +1,3 @@
-// FILE: storeEventReducer.test.ts
-// Purpose: Exercises orchestration domain-event reduction and batching.
-
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -1098,9 +1095,7 @@ describe("store event reducer", () => {
       }),
     ]);
 
-    // latestTurn is only replaced when turnIds match, so turn-1 stays intact
-    // and its real assistantMessageId is preserved (no bleed-through from the
-    // turn-2 null payload).
+    // latestTurn is only replaced when turnIds match — turn-1 stays intact with its real assistantMessageId
     expect(threadsOf(next)[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
     expect(threadsOf(next)[0]?.latestTurn?.assistantMessageId).toBe(existingAssistantMessageId);
 
@@ -2324,8 +2319,7 @@ describe("store event reducer", () => {
     ]);
 
     expect(threadsOf(next)[0]?.messages.at(-1)?.text).toBe("Hello world");
-    // Only the streamed message is rewritten; every untouched message keeps its identity so
-    // memoized message rows do not re-render on each delta.
+    // Only the streamed message is rewritten; every untouched message keeps its identity so memoized message rows do not re-render on each delta.
     for (const id of olderIds) {
       expect(next.messageByThreadId?.[threadId]?.[id]).toBe(
         initialState.messageByThreadId?.[threadId]?.[id],

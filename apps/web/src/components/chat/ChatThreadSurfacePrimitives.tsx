@@ -141,12 +141,7 @@ export function DeferredChatView(props: {
     if (!props.deferMount) {
       return;
     }
-    // readyMountKey is keyed by mountKey, so a changed mountKey already makes
-    // canMountChatView false (loader) without an eager reset here; the double
-    // rAF then stamps the new key once the paint has settled. Chromium can
-    // suppress animation frames while an Electron window is starting or being
-    // background-throttled, so keep a bounded fallback: a deferred draft must
-    // never remain on the mount loader forever just because frames did not run.
+    // readyMountKey is keyed by mountKey so a changed key already forces the loader; Chromium can suppress rAF while an Electron window starts or is background-throttled — keep a bounded fallback so a deferred draft never sits on the mount loader forever
     return scheduleDeferredChatMount(window, () => setReadyMountKey(mountKey));
   }, [mountKey, props.deferMount]);
 

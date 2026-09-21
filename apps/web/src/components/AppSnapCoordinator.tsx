@@ -1,8 +1,3 @@
-// FILE: AppSnapCoordinator.tsx
-// Purpose: Routes native macOS AppSnaps into the correct Synara composer draft.
-// Layer: Root web coordinator
-// Depends on: Desktop bridge, focused chat context, and existing composer attachment intake.
-
 import {
   type DesktopAppSnapCapture,
   type DesktopAppSnapShortcut,
@@ -81,9 +76,7 @@ function rememberCaptureId(captureIds: Map<string, true>, captureId: string): bo
   return true;
 }
 
-// Kept at module scope so its try/finally stays out of the compiled coordinator.
-// `blobHydrationInFlight` and `isDisposed` are the coordinator's mutable cells,
-// passed in so the routine can dedupe in-flight blobs and bail after unmount.
+// module scope so its try/finally stays out of the compiled coordinator; the mutable cells are passed in so the routine can dedupe in-flight blobs and bail after unmount
 async function hydratePersistedAppSnaps(
   captureId: string | undefined,
   blobHydrationInFlight: Set<string>,
@@ -202,8 +195,7 @@ export function AppSnapCoordinator() {
       ) => Promise<"persisted" | "unverified">)
     | null
   >(null);
-  // Read through a ref so toggling the sound preference doesn't resubscribe the
-  // capture listener (which would re-deliver pending captures).
+  // read through a ref so toggling the sound preference doesn't resubscribe the capture listener (which would re-deliver pending captures)
   const playCaptureSoundRef = useRef(settings.appSnapPlaySound);
   const enableAppSnapRef = useRef(settings.enableAppSnap);
   useEffect(() => {
@@ -272,8 +264,7 @@ export function AppSnapCoordinator() {
     };
   }, []);
 
-  // Settings objects are re-decoded from localStorage on every write, so key
-  // this effect on the chord's primitive fields rather than object identity.
+  // settings objects are re-decoded from localStorage on every write — key this effect on the chord's primitive fields, not object identity
   const shortcutModifier =
     settings.appSnapShortcut.kind === "key-chord" ? settings.appSnapShortcut.modifier : null;
   const shortcutKey =
@@ -286,10 +277,7 @@ export function AppSnapCoordinator() {
       shortcutModifier && shortcutKey
         ? { kind: "key-chord", modifier: shortcutModifier, key: shortcutKey }
         : { kind: "both-option-keys" };
-    // The opt-in preference lives in the renderer settings store. This root
-    // coordinator is mounted for the full UI lifetime and owns the native listener.
-    // AppSnap is macOS-only, so unsupported desktop platforms must not attempt
-    // shortcut registration or log the expected platform availability result.
+    // the opt-in preference lives in the renderer settings store; this root coordinator is mounted for the UI lifetime and owns the native listener; AppSnap is macOS-only so unsupported platforms must not attempt registration or log the expected unavailability
     void bridge
       .getState()
       .then((state) => {
@@ -309,8 +297,7 @@ export function AppSnapCoordinator() {
   const activateExistingTarget = useCallback(
     async (target: AppSnapThreadTarget) => {
       openChatThreadPage(target.threadId);
-      // Same thread is only "already active" when the split pane matches too;
-      // a capture aimed at another pane still needs activation below.
+      // same thread is only "already active" when the split pane matches too; a capture aimed at another pane still needs activation below
       const focused = focusedTargetRef.current;
       if (
         focused?.threadId === target.threadId &&
@@ -362,9 +349,7 @@ export function AppSnapCoordinator() {
           target = { threadId: result.threadId };
           openChatThreadPage(target.threadId);
         } else {
-          // A null threadId means a concurrent navigation superseded the
-          // fresh-thread creation: the user actively went somewhere else, so
-          // follow them there instead of failing the capture.
+          // a null threadId means a concurrent navigation superseded the fresh-thread creation — the user actively went elsewhere, so follow them instead of failing the capture
           const focused = focusedTargetRef.current;
           if (!focused) throw new Error("Synara could not create a task for this AppSnap.");
           target = focused;
@@ -381,9 +366,7 @@ export function AppSnapCoordinator() {
     },
     [activateExistingTarget, handleNewChat, openChatThreadPage],
   );
-  // Keep the native subscription stable while navigation callbacks change.
-  // Pending captures can then never cross a cleanup/re-subscribe dedupe gap.
-  // (Mirrored in an effect: capture events only arrive post-commit.)
+  // keep the native subscription stable while navigation callbacks change so pending captures never cross a cleanup/re-subscribe dedupe gap
   useEffect(() => {
     attachCaptureRef.current = attachCapture;
   }, [attachCapture]);
@@ -399,17 +382,13 @@ export function AppSnapCoordinator() {
         .then(async () => {
           const drafts = Object.values(useComposerDraftStore.getState().draftsByThreadId);
           if (hasPersistedAppSnapCapture(drafts, capture.id)) {
-            // Draft metadata alone is not proof the screenshot survived: only
-            // acknowledge (which deletes the desktop pending file) once the
-            // persisted blob bytes are actually readable. Otherwise fall
-            // through and attach the capture again from the pending bytes.
+            // durable metadata isn't proof the screenshot survived: acknowledge (deleting the desktop pending file) only once the persisted blob bytes are readable, else re-attach from the pending bytes
             const blobKeys = persistedAppSnapCaptureBlobKeys(drafts, capture.id);
             const blobs = await Promise.all(
               blobKeys.map((blobKey) => readComposerImageBlob(blobKey).catch(() => null)),
             );
             if (blobs.some((file) => file !== null)) {
-              // Durable metadata is not enough: wait until its blob has become
-              // a visible image chip before deleting the desktop recovery copy.
+              // durable metadata is not enough: wait until its blob has become a visible image chip before deleting the desktop recovery copy
               await hydratePersistedAppSnapsRef.current(capture.id);
               const hydratedDrafts = Object.values(
                 useComposerDraftStore.getState().draftsByThreadId,
@@ -423,9 +402,7 @@ export function AppSnapCoordinator() {
             }
           }
           try {
-            // Missing blob bytes make the old metadata unusable. Purge every
-            // row for this capture (including prompt-history snapshots) before
-            // rebuilding it from the desktop pending copy.
+            // missing blob bytes make the old metadata unusable — purge every row for this capture (incl. prompt-history snapshots) before rebuilding from the pending copy
             useComposerDraftStore.getState().removeAppSnapCapture(capture.id);
             const attach = attachCaptureRef.current;
             if (!attach) throw new Error("The AppSnap composer is not ready yet.");
@@ -451,9 +428,7 @@ export function AppSnapCoordinator() {
     };
 
     const unsubscribeCaptured = bridge.onCaptured((capture) => {
-      // Shutter cue for live captures only; captures restored from the pending
-      // store on mount, or replayed after a did-finish-load reload, were
-      // already handled and should land silently.
+      // shutter cue for live captures only; restored/replayed captures were already handled and must land silently
       if (playCaptureSoundRef.current && !captureIdsRef.current.has(capture.id)) {
         void playAppSnapCaptureSound();
       }

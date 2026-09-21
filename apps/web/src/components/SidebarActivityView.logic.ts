@@ -1,7 +1,3 @@
-// FILE: SidebarActivityView.logic.ts
-// Purpose: Pure grouping/sorting model for the sidebar Activity view (threads as tasks).
-// Exports: eligibility, stable ordering, settle helpers, and the view-model builder.
-
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import type { SidebarThreadSummary } from "../types";
 import { hasUnseenCompletion, isThreadActivelyWorking } from "./Sidebar.logic";
@@ -105,8 +101,7 @@ export function buildActivityViewModel(input: {
   pinned.sort(compareRecency);
   active.sort(compareRecency);
   settled.sort((left, right) => {
-    // Optimistically settled threads have no settledAt yet; their latest
-    // activity stands in so they surface at the top of the section.
+    // Optimistically settled threads have no settledAt yet; their latest activity stands in so they surface at the top of the section.
     const leftSettledMs = parseTimestampMs(left.settledAt) || resolveActivityRecencyMs(left);
     const rightSettledMs = parseTimestampMs(right.settledAt) || resolveActivityRecencyMs(right);
     return rightSettledMs - leftSettledMs || compareThreadIds(left, right);
@@ -200,8 +195,7 @@ export function groupActivityThreadsByProject(
           },
     );
   }
-  // Precomputed so the comparator stays O(1) per call instead of rescanning
-  // every thread of both groups on each comparison.
+  // Precomputed so the comparator stays O(1) per call instead of rescanning every thread of both groups on each comparison.
   const recencyByKey = new Map<string, number>();
   for (const group of groupByKey.values()) {
     let recencyMs = 0;
@@ -283,11 +277,7 @@ export function resolveActivityScope(
 
 export const ACTIVITY_RECENT_LIMIT = 5;
 
-/**
- * Recent turns over at 4am, not midnight: a session that runs past midnight is
- * still the same working day, and resetting the section out from under a live
- * session is worse than carrying it a few hours longer.
- */
+// recent turns over at 4am, not midnight — a session running past midnight is still the same working day; resetting the section under a live session is worse than carrying it a few hours
 export const ACTIVITY_DAY_START_HOUR = 4;
 
 /** Start of the working day `nowMs` belongs to, in local time. */

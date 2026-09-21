@@ -1,18 +1,3 @@
-/**
- * AgentGatewayLive - Synara app-control MCP tool surface.
- *
- * Implements the `synara_*` tools served over `POST /mcp` (streamable HTTP,
- * stateless JSON responses). Every provider session gets this endpoint plus a
- * thread-bound bearer token injected at session start, so any agent running in
- * a Synara thread can list/read/create/steer threads and manage heartbeat
- * automations - the same host-tool pattern the Codex desktop app uses.
- *
- * All tools delegate to existing services (OrchestrationEngine dispatch,
- * ProjectionSnapshotQuery reads, AutomationService, GitCore); no orchestration
- * state lives here.
- *
- * @module agentGateway/Layers/AgentGateway
- */
 import { randomUUID } from "node:crypto";
 
 import {
@@ -84,10 +69,7 @@ import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 
-// Providers already receive the versioned host policy exactly once in their
-// private prompt. MCP clients prepend initialize.instructions to every exposed
-// tool definition, so repeating the full policy here adds tens of thousands of
-// context characters per round without adding authority or safety.
+// providers already get the versioned host policy in their private prompt — repeating it per tool adds tens of thousands of context chars per round
 const AGENT_GATEWAY_INSTRUCTIONS =
   "Synara tools are thread-scoped. Use browser_* only for Synara's shared in-app browser runtime; follow the provider-delivered <synara_host_context> for full policy.";
 
@@ -132,9 +114,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     yield* Effect.serviceOption(BrowserAutomationHost),
     () => makeBrowserAutomationHost({}),
   );
-  // Optional and platform-gated: off macOS (and in tests that do not provide
-  // it) the agent never sees the device_* tools at all, rather than being
-  // offered eleven tools that can only report an unsupported platform.
+  // platform-gated: off macOS the agent never sees device_* tools rather than 11 tools that only report unsupported
   const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
   const loadProviderAvailabilities = Effect.gen(function* () {
     const [settings, statuses] = yield* Effect.all([
@@ -196,8 +176,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       ),
     );
 
-  // Automation targets resolve like thread-creation targets: live provider availability
-  // and model discovery, against the workspace of the project the automation belongs to.
+  // automation targets resolve like thread-creation targets: live availability + discovery against the automation project's workspace
   const resolveAutomationTarget = (input: {
     readonly target: ModelSelection;
     readonly projectId: ProjectId;
@@ -223,10 +202,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       });
     });
 
-  // Privilege boundary shared by every tool that makes another thread execute
-  // work or mutates another thread's state: a caller must not drive a thread
-  // that runs with more privileges than the user granted the caller itself —
-  // otherwise an approval-required or worktree-isolated agent escalates by proxy.
+  // privilege boundary: a caller must not drive a thread running with more privileges than it was granted — no escalation by proxy
   const assertCallerMayDriveThread = (
     caller: { readonly runtimeMode: RuntimeMode; readonly envMode?: string | null | undefined },
     target: {
@@ -271,8 +247,6 @@ export const makeAgentGateway = Effect.gen(function* () {
     eventDeliveries,
     requireThreadShell,
   });
-
-  // --- write tools ----------------------------------------------------------
 
   const runCreateThreads = yield* makeCreateThreadsHandler({
     snapshotQuery,
@@ -493,9 +467,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         const caller = yield* requireThreadShell(context.callerThreadId);
         const target = yield* requireThreadShell(threadId);
         yield* assertCallerMayDriveThread(caller, target);
-        // Pass the requested mode through unchanged: the reactor checks live
-        // provider state (authoritative, unlike this projection snapshot) and
-        // already downgrades steers whose turn is not actually live.
+        // pass the requested mode through — the reactor checks live provider state and downgrades steers whose turn isn't live
         const dispatchMode: TurnDispatchMode = modeArg;
         const suffix = randomUUID();
         yield* orchestrationEngine
@@ -541,7 +513,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
         const caller = yield* requireThreadShell(context.callerThreadId);
         const target = yield* requireThreadShell(threadId);
-        // Stopping a higher-privileged thread's work is still driving it.
+        // stopping a higher-privileged thread's work is still driving it
         yield* assertCallerMayDriveThread(caller, target);
         const activeTurnId = target.session?.activeTurnId ?? null;
         const hadActiveTurn = activeTurnId !== null || target.latestTurn?.state === "running";
@@ -553,9 +525,7 @@ export const makeAgentGateway = Effect.gen(function* () {
             createdAt: isoNow(),
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-        // The interrupt is only *requested* here: the provider settles the turn
-        // asynchronously. Reporting a constant `interrupted: true` told callers
-        // the turn had stopped even when there was no turn to stop.
+        // the interrupt is only requested here — the provider settles asynchronously; a constant `interrupted: true` lied when there was no turn
         return mcpToolResultJson({
           threadId: target.id,
           interruptRequested: true,

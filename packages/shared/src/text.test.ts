@@ -1,8 +1,3 @@
-// FILE: text.test.ts
-// Purpose: Verifies the shared count-pluralization helper used across server and web.
-// Layer: Shared runtime utility tests
-// Depends on: Vitest and text helpers
-
 import { describe, expect, it } from "vitest";
 import {
   pluralize,

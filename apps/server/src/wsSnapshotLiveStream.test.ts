@@ -74,9 +74,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
   });
 
   it("emits the snapshot before an event published during snapshot IO, losing nothing", async () => {
-    // Regression: the live subscription must attach before snapshot IO starts,
-    // so an event published while the (delayed) snapshot loads is delivered
-    // after the snapshot instead of being dropped or duplicated.
+    // regression: the live subscription must attach before snapshot IO starts so an event published while the (delayed) snapshot loads is delivered after it instead of dropped or duplicated
     const items = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -102,9 +100,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
       { kind: "snapshot", snapshot: { snapshotSequence: 1 } },
       { kind: "event", event: event(2) },
     ]);
-    // A short deadline: when the attach ordering regresses, this test fails by
-    // losing the mid-snapshot event and would otherwise stall for the suite's
-    // full 90s default before reporting.
+    // when the attach ordering regresses this fails by losing the mid-snapshot event — otherwise it would stall for the suite's full 90s default
   }, 15_000);
 
   it("resumes from a cursor by replaying exactly the gap without a snapshot", async () => {
@@ -148,12 +144,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
   });
 
   it("does not lose an event published while the resume path reads the durable head", async () => {
-    // The resume branch must share the snapshot path's attach-before-IO
-    // discipline: the live subscription attaches before the durable head is
-    // read, so an event published during that read lands in the live queue and
-    // is delivered after the gap replay instead of being lost. Moving the
-    // attach after the head read passes every other test in this file — only
-    // this probe catches it.
+    // the resume branch must share attach-before-IO: the live subscription attaches before the durable head read so a mid-read event lands in the live queue and is delivered after the gap replay; moving attach after the head read passes every other test here — only this probe catches it
     const items = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -202,7 +193,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
       ),
     );
 
-    // Only the snapshot-fence replay ran; the overflowing cursor gap was never replayed.
+    // only the snapshot-fence replay ran — the overflowing cursor gap was never replayed
     expect(replayRanges).toEqual([[highWaterSequence, highWaterSequence]]);
     expect(Array.from(items)).toEqual([
       { kind: "snapshot", snapshot: { snapshotSequence: highWaterSequence } },
@@ -210,9 +201,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
   });
 
   it("falls back to the snapshot when the cursor is ahead of the durable head", async () => {
-    // A negative gap means the client cursor comes from a different event
-    // journal (restored backup / reset DB); resuming from it would silently
-    // skip history, so it must reset with a full snapshot.
+    // a negative gap means the client cursor comes from a different journal (restored backup/reset db) — resuming would silently skip history, so reset with a full snapshot
     const replayRanges: Array<readonly [number, number]> = [];
     const items = await Effect.runPromise(
       Effect.scoped(
@@ -230,15 +219,12 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
       ),
     );
 
-    // Only the snapshot-fence replay ran; the untrusted cursor was never replayed from.
     expect(replayRanges).toEqual([[2, 2]]);
     expect(Array.from(items)).toEqual([{ kind: "snapshot", snapshot: { snapshotSequence: 2 } }]);
   });
 
   it("falls back to the snapshot when the resume subject no longer exists", async () => {
-    // A hard-purged thread leaves an in-range gap (unrelated events keep the
-    // journal head above the cursor) but nothing to replay, so the resume
-    // shortcut would stream silence forever instead of surfacing the deletion.
+    // a hard-purged thread leaves an in-range gap but nothing to replay — the resume shortcut would stream silence forever instead of surfacing the deletion
     const replayRanges: Array<readonly [number, number]> = [];
     const items = await Effect.runPromise(
       Effect.scoped(
@@ -257,7 +243,6 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
       ),
     );
 
-    // The snapshot fence replayed, not the cursor gap.
     expect(replayRanges).toEqual([[40, 40]]);
     expect(Array.from(items)).toEqual([{ kind: "snapshot", snapshot: { snapshotSequence: 40 } }]);
   });
@@ -323,10 +308,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
   });
 
   it("escalates to a non-retryable failure when a restart re-demands the same fence", async () => {
-    // Regression for the permanent resnapshot loop: a stalled or missing
-    // projector froze the snapshot fence, so every stream restart demanded the
-    // same unsatisfiable resnapshot forever. The second demand at a
-    // non-advancing fence must be a distinguishable, non-retryable failure.
+    // regression for the permanent resnapshot loop — a stalled projector froze the fence so every restart demanded the same unsatisfiable resnapshot; a repeat demand at a non-advancing fence must be a distinguishable non-retryable failure
     const tracker = makeResnapshotEscalationTracker();
     const start = () =>
       Effect.runPromise(
@@ -353,9 +335,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
   });
 
   it("tracks escalation per stream key so concurrent subscribers get independent chains", async () => {
-    // Two clients demanding the same stale stream concurrently are two first
-    // offenses: the caller keys the tracker per subscriber, and the tracker
-    // must not bleed one subscriber's demand into another's restart chain.
+    // two clients demanding the same stale stream concurrently are two first offenses — keyed per subscriber so one demand can't bleed into another's restart chain
     const tracker = makeResnapshotEscalationTracker();
     const start = (streamKey: string) =>
       Effect.runPromise(
@@ -375,12 +355,10 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
       code: "ORCHESTRATION_RESNAPSHOT_REQUIRED",
       retryable: true,
     });
-    // A different subscriber's first demand stays retryable.
     await expect(start("client-2:orchestration.shell")).rejects.toMatchObject({
       code: "ORCHESTRATION_RESNAPSHOT_REQUIRED",
       retryable: true,
     });
-    // Each chain escalates independently on its own repeat.
     await expect(start("client-1:orchestration.shell")).rejects.toMatchObject({
       code: "ORCHESTRATION_SNAPSHOT_STALLED",
       retryable: false,
@@ -388,8 +366,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
   });
 
   it("keeps the retryable resnapshot demand while the fence advances between restarts", async () => {
-    // An advancing fence means the projector is catching up: each restart is
-    // making progress, so the demand must stay retryable.
+    // an advancing fence means the projector is catching up — each restart is making progress so the demand stays retryable
     const tracker = makeResnapshotEscalationTracker();
     const start = (snapshotSequence: number) =>
       Effect.runPromise(
@@ -435,7 +412,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
       code: "ORCHESTRATION_RESNAPSHOT_REQUIRED",
     });
 
-    // A healthy start (fence caught up) resets the loop detection.
+    // a healthy start (fence caught up) resets the loop detection
     await Effect.runPromise(
       Effect.scoped(
         makeCursorSafeSnapshotLiveStream({
@@ -449,7 +426,7 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
       ),
     );
 
-    // The next stale demand is a fresh first offense, retryable again.
+    // the next stale demand is a fresh first offense, retryable again
     await expect(failingStart()).rejects.toMatchObject({
       code: "ORCHESTRATION_RESNAPSHOT_REQUIRED",
       retryable: true,

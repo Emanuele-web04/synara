@@ -1,7 +1,3 @@
-// FILE: desktopStorageMigration.ts
-// Purpose: Reads and acknowledges a validated browser-storage handoff from older desktop builds.
-// Layer: Desktop main-process utility
-
 import * as FS from "node:fs";
 import * as Path from "node:path";
 

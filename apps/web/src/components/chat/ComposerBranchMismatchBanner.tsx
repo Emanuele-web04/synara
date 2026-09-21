@@ -1,9 +1,3 @@
-// FILE: ComposerBranchMismatchBanner.tsx
-// Purpose: Floating Codex-style notice explaining that sending from a settled
-//          local thread will resume on the directory's current branch.
-// Layer: Chat composer UI
-// Exports: ComposerBranchMismatchBanner
-
 import { ArrowRightIcon, TriangleAlertIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";

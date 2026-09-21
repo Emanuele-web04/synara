@@ -35,7 +35,7 @@ import {
   ThreadSidechatExpiredPayload as ContractsThreadSidechatExpiredPayloadSchema,
 } from "@synara/contracts";
 
-// Server-internal alias surface, backed by contract schemas as the source of truth.
+// server-internal alias surface backed by contract schemas
 export const SpaceCreatedPayload = ContractsSpaceCreatedPayloadSchema;
 export const SpaceMetaUpdatedPayload = ContractsSpaceMetaUpdatedPayloadSchema;
 export const SpaceOrderUpdatedPayload = ContractsSpaceOrderUpdatedPayloadSchema;

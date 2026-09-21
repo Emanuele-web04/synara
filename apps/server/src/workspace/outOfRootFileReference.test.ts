@@ -138,7 +138,7 @@ describe("resolveOutOfRootFileReference", () => {
   });
 
   it("never walks above the home directory", async () => {
-    // A root directly under home has only home itself as an in-home ancestor.
+    // a root directly under home has only home itself as an in-home ancestor
     const shallowRoot = path.join(homeDir, "workspace");
     fs.mkdirSync(shallowRoot, { recursive: true });
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-outside-home-"));

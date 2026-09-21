@@ -7,13 +7,7 @@ const BoundedRepositoryInput = TrimmedNonEmptyString.check(Schema.isMaxLength(51
 const BoundedPath = TrimmedNonEmptyString.check(Schema.isMaxLength(4_096));
 const BoundedDirectoryName = TrimmedNonEmptyString.check(Schema.isMaxLength(255));
 
-/**
- * One server-owned GitHub checkout + project-registration operation.
- *
- * `destinationParent` is deliberately a parent directory. The server derives and
- * validates the final workspace root from it and `directoryName`, so the UI never
- * presents a parent path while the server interprets it as the clone target.
- */
+/** destinationParent is deliberately a parent directory — the server derives the workspace root so the UI never presents a parent path as the clone target */
 export const GitHubProjectProvisionInput = Schema.Struct({
   operationId: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
   repository: BoundedRepositoryInput,
@@ -21,7 +15,7 @@ export const GitHubProjectProvisionInput = Schema.Struct({
   directoryName: BoundedDirectoryName,
   commandId: CommandId,
   projectId: ProjectId,
-  /** Destination for a newly registered project; reusing an existing project preserves its Space. */
+  /** reusing an existing project preserves its Space */
   newProjectSpaceId: Schema.NullOr(SpaceId),
   defaultModelSelection: ModelSelection,
   createdAt: IsoDateTime,

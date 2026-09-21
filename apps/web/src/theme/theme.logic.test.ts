@@ -1,8 +1,3 @@
-// FILE: theme.logic.test.ts
-// Purpose: Locks down Codex-style theme parsing, normalization, and CSS token derivation.
-// Layer: Web appearance domain tests
-// Exports: Vitest coverage for theme.logic.
-
 import { describe, expect, it } from "vitest";
 import {
   CODE_THEME_OPTIONS,
@@ -356,9 +351,9 @@ describe("buildThemeCssVariables", () => {
     expect(codex.variables["--codex-base-accent"]).toBe("#0169cc");
     expect(vercel.variables["--color-text-foreground"]).toBe("#171717");
     expect(codex.variables["--color-text-foreground"]).toBe("#0d0d0d");
-    // These two presets intentionally share a white surface in light mode.
+    // intentional: these presets share a white surface in light mode
     expect(vercel.variables["--codex-base-surface"]).toBe(codex.variables["--codex-base-surface"]);
-    // Editing a slot must not change the user's system-mode or other-slot choices.
+    // editing a slot must not change the user's system-mode or other-slot choices
     expect(state.mode).toBe("system");
     expect(state.chromeThemes.dark).toEqual(DEFAULT_THEME_STATE.chromeThemes.dark);
   });
@@ -415,11 +410,10 @@ describe("buildThemeCssVariables", () => {
     expect(tokens.derived.textForegroundSecondary).toBe("rgba(227, 228, 230, 0.645)");
     expect(tokens.derived.buttonSecondaryBackground).toBe("rgba(227, 228, 230, 0.039)");
     expect(tokens.derived.iconAccent).toBe("rgb(143, 150, 219)");
-    // Dark primary button label is the surface color (dark) on the white (ink) button.
+    // dark primary button label is the surface color on the white (ink) button
     expect(tokens.derived.textButtonPrimary).toBe("#0f0f11");
     expect(tokens.derived.buttonPrimaryBackground).toBe("#e3e4e6");
-    // Codex maps the sidebar token to the PRIMARY surface (same as main-surface-primary),
-    // not the darker under-surface; mirror that so the sidebar color matches Codex.
+    // Codex maps the sidebar token to the PRIMARY surface, not the darker under-surface — mirror it
     expect(tokens.aliases["--color-token-side-bar-background"]).toBe("#0f0f11");
     expect(tokens.aliases["--color-token-list-hover-background"]).toBe(
       tokens.derived.buttonSecondaryBackgroundHover,
@@ -492,8 +486,7 @@ describe("buildThemeCssVariables", () => {
       "dark",
     );
 
-    // Dark mode mirrors light mode's high-contrast primary: bg = ink (white),
-    // label = surface (dark), so the primary action reads as a filled button.
+    // dark mirrors light's high-contrast primary: bg = ink (white), label = surface (dark)
     expect(tokens.derived.buttonPrimaryBackground).toBe(DEFAULT_THEME_STATE.chromeThemes.dark.ink);
     expect(tokens.derived.textButtonPrimary).toBe(DEFAULT_THEME_STATE.chromeThemes.dark.surface);
     expect(tokens.derived.textButtonPrimary).not.toBe(tokens.derived.buttonPrimaryBackground);

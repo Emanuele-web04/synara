@@ -1,10 +1,3 @@
-// FILE: ComposerSubagentStrip.logic.ts
-// Purpose: Derives the subagent rows shown in the composer strip from enriched work
-// log entries, mirroring the active-task-list scoping (live turn wins; a prior set
-// stays visible only while some subagent is still working).
-// Layer: Chat composer logic
-// Exports: deriveComposerSubagentStripItems and the strip row types
-
 import { ThreadId, type TurnId } from "@synara/contracts";
 
 import type { WorkLogEntry, WorkLogSubagent } from "../../session-logic";
@@ -29,8 +22,7 @@ export interface ComposerSubagentStripItem {
   statusLabel: string | undefined;
   statusKind: SubagentStatusKind | null;
   isActive: boolean;
-  // True when this row is the thread currently open in the chat pane (viewing a
-  // sibling from inside a subagent thread).
+  // True when this row is the thread currently open in the chat pane (viewing a sibling from inside a subagent thread).
   isViewed: boolean;
   isBackground: boolean;
   accentColor: string;
@@ -46,14 +38,12 @@ export interface ComposerSubagentStripParentItem {
 
 export type ComposerSubagentStripRow = ComposerSubagentStripItem | ComposerSubagentStripParentItem;
 
-// The provider thread id is present on every snapshot of a subagent, unlike
-// resolvedThreadId/agentId which can appear only once resolution catches up.
+// The provider thread id is present on every snapshot of a subagent, unlike resolvedThreadId/agentId which can appear only once resolution catches up.
 function subagentKey(subagent: WorkLogSubagent): string {
   return subagent.threadId;
 }
 
-// Later snapshots carry the freshest status, but may omit identity fields the spawn
-// snapshot had; keep identity via fallback while taking the status fields verbatim.
+// Later snapshots carry the freshest status, but may omit identity fields the spawn snapshot had; keep identity via fallback while taking the status fields verbatim.
 function mergeSubagentSnapshots(previous: WorkLogSubagent, next: WorkLogSubagent): WorkLogSubagent {
   return {
     threadId: next.threadId ?? previous.threadId,
@@ -111,8 +101,7 @@ function toStripItem(
     statusKind,
     isActive: statusKind === "running",
     isViewed: viewedThreadId !== null && threadId === viewedThreadId,
-    // Confirmed patches key by the Task tool_use_id — the same handle the
-    // background command dispatches with — which can differ from the row key.
+    // Confirmed patches key by the Task tool_use_id — the same handle the background command dispatches with — which can differ from the row key.
     isBackground:
       subagent.background === true ||
       backgroundedThreadIds.has(subagent.providerThreadId ?? subagent.threadId),
@@ -147,8 +136,7 @@ export function collectRunningSubagentStripItems(
   );
 }
 
-// Rows the per-row background action and Ctrl+B target: running rows not yet
-// backgrounded by either the spawn hint or a confirmed task_updated patch.
+// Rows the per-row background action and Ctrl+B target: running rows not yet backgrounded by either the spawn hint or a confirmed task_updated patch.
 export function collectForegroundRunningSubagentStripItems(
   rows: ReadonlyArray<ComposerSubagentStripRow>,
 ): ComposerSubagentStripItem[] {
@@ -216,8 +204,7 @@ export function deriveComposerSubagentStripItems(input: {
     return withParentRow(visibleItems, input.parentRow);
   }
 
-  // No subagents spawned by the live turn: keep the latest known set visible only
-  // while some subagent is still running or queued, then let the strip retire.
+  // No subagents spawned by the live turn: keep the latest known set visible only while some subagent is still running or queued, then let the strip retire.
   const items = collectStripItems(entriesWithSubagents, backgroundedThreadIds, viewedThreadId);
   return items.some((item) => item.statusKind === "running" || item.statusKind === "queued")
     ? withParentRow(items, input.parentRow)

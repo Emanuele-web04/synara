@@ -1,9 +1,3 @@
-// FILE: DebouncedSettingTextInput.tsx
-// Purpose: Text input that keeps keystrokes in local state and commits to global settings on a
-//          debounce (and on blur/unmount). Avoids a full settings commit + monolithic settings
-//          route re-render on every keystroke for fields with no live-preview semantics.
-// Layer: Settings UI components
-
 import { type ComponentProps, useCallback, useEffect, useRef, useState } from "react";
 
 import { Input } from "~/components/ui/input";
@@ -32,9 +26,7 @@ export function DebouncedSettingTextInput({
   const focusedRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestDraftRef = useRef(value);
-  // Read latest committed value / callback without re-subscribing the commit
-  // timer. Mirrored in an effect (not during render) so the component stays
-  // eligible for React Compiler; the timer only fires post-commit anyway.
+  // mirrored in an effect (not during render) so the component stays React Compiler-eligible; the timer only fires post-commit anyway
   const valueRef = useRef(value);
   const onCommitRef = useRef(onCommit);
   useEffect(() => {
@@ -42,8 +34,7 @@ export function DebouncedSettingTextInput({
     onCommitRef.current = onCommit;
   }, [value, onCommit]);
 
-  // Sync the field when the committed value changes from elsewhere (e.g. Restore defaults),
-  // but never clobber what the user is actively typing.
+  // sync when the committed value changes elsewhere (Restore defaults), but never clobber what the user is typing
   useEffect(() => {
     if (!focusedRef.current) {
       setDraft(value);

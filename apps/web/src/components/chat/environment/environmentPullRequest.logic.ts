@@ -1,10 +1,3 @@
-// FILE: environmentPullRequest.logic.ts
-// Purpose: Pure display/prompt helpers for the Environment panel "Pull request" section —
-//          check-rollup summaries, review-comment display models, the repair prompts that
-//          hand comments / failing checks / conflicts to the agent, and the composer
-//          context cards ("Repair", "Add to chat") that carry those prompts.
-// Layer: Web domain helpers (no React)
-
 import type {
   GitPullRequestCheck,
   GitPullRequestComment,
@@ -26,8 +19,7 @@ export interface PullRequestChecksSummary {
   tone: PullRequestChecksTone;
 }
 
-// Single tone → status-color contract for the check rollup, shared by the Environment section
-// icon and the detail panel's summary text so both agree on what "failing"/"pending" looks like.
+// single tone → status-color contract for the check rollup, shared by the section icon and detail summary text
 export const PULL_REQUEST_CHECKS_TONE_TEXT_CLASS: Record<PullRequestChecksTone, string> = {
   failure: "text-destructive",
   pending: "text-warning",
@@ -70,8 +62,7 @@ export const PULL_REQUEST_CHECK_STATUS_LABELS: Record<GitPullRequestCheck["statu
   cancelled: "Cancelled",
 };
 
-// Check names alone can collide (matrix jobs, re-runs, a check run named like an old commit
-// status), so list keys combine name + url and disambiguate exact duplicates by occurrence.
+// check names can collide (matrix jobs, re-runs), so list keys combine name + url and disambiguate exact duplicates by occurrence
 export function withStableCheckKeys(
   checks: ReadonlyArray<GitPullRequestCheck>,
 ): Array<{ key: string; check: GitPullRequestCheck }> {
@@ -91,8 +82,7 @@ export interface PullRequestDiffStat {
   filesLabel: string | null;
 }
 
-// Null when gh reported no diff sizes at all, so the panel can omit the row instead of
-// showing a misleading "+0 −0".
+// null when gh reported no diff sizes, so the panel omits the row instead of showing a misleading "+0 −0"
 export function summarizePullRequestDiffStat(pr: {
   additions: number | null;
   deletions: number | null;
@@ -128,14 +118,10 @@ function truncate(text: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
 }
 
-// Bots (and humans) often lead with markdown/HTML noise — severity badges like
-// `<sub>![P2 Badge](https://img.shields.io/…)</sub>`, headings, bold, links; strip it so the
-// popup reads like the GitHub review list. Badge images keep their alt label minus the
-// "Badge" suffix ("P2 Badge" → "P2") because the severity is real signal.
+// bots often lead with markdown/HTML noise (severity badges, headings); strip it so the popup reads like the GitHub review list — badge images keep alt minus "Badge" since severity is real signal
 function stripInlineMarkdown(line: string): string {
   const codeSpans: string[] = [];
-  // Inline code may contain JSX/generic syntax like `<Button>` or `Promise<T>`.
-  // Protect it before stripping HTML wrapper tags so the display text keeps the code.
+  // inline code may contain JSX/generic syntax — protect it before stripping HTML wrapper tags
   const protectedLine = line.replace(/`([^`]*?)`/g, (_match, code: string) => {
     const index = codeSpans.push(code) - 1;
     return `\u0000code-span-${index}\u0000`;
@@ -156,8 +142,7 @@ function stripInlineMarkdown(line: string): string {
   );
 }
 
-// True for lines that are nothing but images/HTML (e.g. a shields.io severity badge on its
-// own line). Their stripped remnant ("P2") is a prefix, not a standalone title.
+// lines that are nothing but images/HTML leave a stripped prefix ("P2"), not a standalone title
 function isDecorationOnlyLine(line: string): boolean {
   if (line.trim().length === 0) {
     return false;
@@ -173,9 +158,7 @@ function isDecorationOnlyLine(line: string): boolean {
 export function describePullRequestComment(
   comment: GitPullRequestComment,
 ): PullRequestCommentDisplay {
-  // Strip markup per line before picking the title so a leading badge line cannot shadow
-  // the real summary line below it. Bot description markers can span lines, so remove them
-  // from the whole body first without hiding unrelated HTML comments quoted as code.
+  // strip markup per line before picking the title so a leading badge line can't shadow the real summary; bot markers can span lines
   const lines = comment.body
     .replace(DESCRIPTION_METADATA_MARKER_PATTERN, "")
     .split("\n")
@@ -185,8 +168,7 @@ export function describePullRequestComment(
   if (!first) {
     return { title: "(empty comment)", snippet: null };
   }
-  // A badge-only first line folds into the next line: "P2" + "Missing null check" reads as
-  // one title instead of a cryptic "P2" row.
+  // a badge-only first line folds into the next: "P2" + "Missing null check" reads as one title
   const second = lines[1];
   const titleText = first.decorationOnly && second ? `${first.text} ${second.text}` : first.text;
   const snippetStart = first.decorationOnly && second ? 2 : 1;
@@ -222,8 +204,7 @@ function formatFixPromptCommentHeading(comment: GitPullRequestComment): string {
   return context.length > 0 ? `Comment ${context.join(" ")}` : "Comment";
 }
 
-// Numbered, quoted review comments (bounded) shared by the comments-only and the
-// "everything" repair prompts so both quote a comment identically.
+// numbered, quoted comments shared by the comments-only and "everything" repair prompts so both quote identically
 function formatReviewCommentItems(input: {
   prUrl: string;
   comments: ReadonlyArray<GitPullRequestComment>;
@@ -270,8 +251,7 @@ function formatFailingCheckItems(checks: ReadonlyArray<GitPullRequestCheck>): st
     });
 }
 
-// Handed to the agent by Repair → Failing checks. The git snapshot only knows check names
-// and URLs, so the prompt asks the agent to reproduce the failure locally first.
+// the git snapshot only knows check names and URLs, so the prompt asks the agent to reproduce the failure locally first
 export function buildFixFailingChecksPrompt(input: {
   prNumber: number;
   prUrl: string;
@@ -403,9 +383,7 @@ export function buildFixFindingsPrompt(input: {
   ].join("\n\n");
 }
 
-// Handed to the agent by the conflicts row's "Fix" button. The prompt names the PR branch
-// as it exists on GitHub but points the agent at the current checkout: fork threads check
-// the PR out under a different local branch name (e.g. `synara/pr-N/<branch>`).
+// the prompt names the GitHub branch but points the agent at the current checkout — fork threads check the PR out under `synara/pr-N/<branch>`
 export function buildResolveConflictsPrompt(input: {
   prNumber: number;
   prUrl: string;
@@ -511,8 +489,7 @@ export function createPullRequestContextDraft(input: {
   };
 }
 
-// Builds the composer card for one Repair / Add to chat choice, or null when the snapshot
-// has nothing for that scope (the menu disables those entries, so null is a guard).
+// builds the composer card for one Repair/Add choice, or null when the snapshot has nothing (menu disables those entries)
 export function buildPullRequestContextCard(input: {
   scope: PullRequestContextScope;
   pr: PullRequestCardSource;

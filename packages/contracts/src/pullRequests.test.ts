@@ -77,7 +77,7 @@ function listEntry() {
 
 describe("PullRequestListEntry", () => {
   it("defaults legacy payloads missing pin and mergeability metadata", () => {
-    // The fixture deliberately omits both fields — this is what an older server sends.
+    // what an older server sends
     const decoded = decodeListEntry(listEntry());
     expect(decoded.isPinned).toBe(false);
     expect(decoded.projectContexts).toEqual([]);

@@ -1,8 +1,3 @@
-// FILE: SidebarSectionToolbar.tsx
-// Purpose: Cluster of header actions beside a sidebar section or project title.
-// Layer: Sidebar UI primitive
-// Exports: SidebarSectionToolbar
-
 import type { ReactNode } from "react";
 import { cn } from "~/lib/utils";
 

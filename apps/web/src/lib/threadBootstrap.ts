@@ -1,8 +1,3 @@
-// FILE: threadBootstrap.ts
-// Purpose: Pure helpers for draft reuse and terminal-thread promotion payloads.
-// Layer: Web bootstrap/domain helpers
-// Exports: draft patching, reuse checks, and terminal creation state resolution.
-
 import {
   DEFAULT_RUNTIME_MODE,
   type ModelSelection,
@@ -41,9 +36,7 @@ export interface InheritedThreadContext {
   envMode: DraftThreadEnvMode;
 }
 
-// Carry the active surface's branch/worktree/env into a new thread bootstrap.
-// A pending draft wins outright; otherwise we derive the env mode from the
-// active thread's worktree so a fresh thread inherits the same workspace shape.
+// a pending draft wins outright; otherwise derive env mode from the active thread's worktree so a fresh thread inherits the same workspace shape
 export function resolveInheritedThreadContext(input: {
   activeThread:
     | Pick<Thread, "branch" | "worktreePath" | "workingDirectory" | "envMode">
@@ -123,7 +116,6 @@ export interface TerminalThreadCreationState {
   workingDirectory: string | null;
 }
 
-// Normalize the currently active server thread into a stable snapshot for pure helpers.
 export function createActiveThreadSnapshot(
   activeThread:
     | {
@@ -151,7 +143,6 @@ export function createActiveThreadSnapshot(
   };
 }
 
-// Normalize the currently active draft thread into a stable snapshot for pure helpers.
 export function createActiveDraftThreadSnapshot(
   activeDraftThread: DraftThreadState | null | undefined,
   projectId: ProjectId,
@@ -174,7 +165,6 @@ export function createActiveDraftThreadSnapshot(
   };
 }
 
-// Decide whether we should reuse a stored draft, the current route draft, or create a fresh one.
 export function resolveThreadBootstrapPlan(input: {
   entryPoint: ThreadPrimarySurface;
   latestActiveDraftThread: DraftThreadState | null;
@@ -206,7 +196,6 @@ export function resolveThreadBootstrapPlan(input: {
   return { kind: "fresh" };
 }
 
-// Build the initial draft-thread metadata for a brand new thread bootstrap.
 export function createFreshDraftThreadSeed(input: {
   createdAt: string;
   entryPoint: ThreadPrimarySurface;
@@ -227,7 +216,6 @@ export function createFreshDraftThreadSeed(input: {
   };
 }
 
-// Detect whether the caller wants to override stored draft context before reuse.
 export function hasDraftContextOverrides(options?: NewThreadOptions): boolean {
   return (
     options?.branch !== undefined ||
@@ -237,7 +225,6 @@ export function hasDraftContextOverrides(options?: NewThreadOptions): boolean {
   );
 }
 
-// Build the exact patch we should apply to an existing draft before reusing it.
 export function buildDraftThreadContextPatch(
   entryPoint: ThreadPrimarySurface,
   options?: NewThreadOptions,
@@ -322,8 +309,7 @@ export function resolveTerminalThreadCreationState(
         : null) ??
       DEFAULT_RUNTIME_MODE,
     interactionMode:
-      // Plan mode is an explicit composer/thread choice. Do not copy it from
-      // the previously active thread into a fresh session bootstrap.
+      // plan mode is an explicit composer/thread choice — don't copy it from the previously active thread into a fresh bootstrap
       input.draftThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
     lastKnownPr:
       input.draftThread?.lastKnownPr ??

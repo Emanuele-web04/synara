@@ -1,8 +1,3 @@
-// FILE: 046_AutomationCompletionPolicy.ts
-// Purpose: Adds first-class heartbeat stop policy storage to automation definitions.
-// Layer: Server persistence migration
-// Depends on: 044_Automations and schemaHelpers.columnExists.
-
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

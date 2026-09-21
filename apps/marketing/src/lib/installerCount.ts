@@ -1,8 +1,3 @@
-// FILE: installerCount.ts
-// Purpose: Fetches, summarizes, and falls back for installer download totals.
-// Layer: Server utility
-// Depends on: GitHub Releases API, src/data/installer-downloads.json, optional GITHUB_TOKEN
-
 import "server-only";
 
 import storedInstallerDownloads from "@/data/installer-downloads.json";

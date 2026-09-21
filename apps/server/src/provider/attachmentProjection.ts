@@ -1,8 +1,3 @@
-// FILE: attachmentProjection.ts
-// Purpose: Builds provider prompt text for attachments that a provider must read from disk.
-// Layer: Provider adapter utility
-// Depends on: attachmentStore path resolution and shared byte formatting.
-
 import type { ChatAttachment, ChatFileAttachment, ChatImageAttachment } from "@synara/contracts";
 import { formatBytes } from "@synara/shared/formatBytes";
 
@@ -29,7 +24,6 @@ function quotePromptValue(value: string): string {
   return JSON.stringify(value);
 }
 
-// Produces a stable path-reference block for regular files and selected non-native image types.
 export function buildFileAttachmentsPromptBlock(input: {
   readonly attachments: ReadonlyArray<ChatAttachment> | undefined;
   readonly attachmentsDir: string;

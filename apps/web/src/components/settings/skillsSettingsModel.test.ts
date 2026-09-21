@@ -1,7 +1,3 @@
-// FILE: skillsSettingsModel.test.ts
-// Purpose: Locks down Settings -> Skills grouping for duplicate provider skill copies.
-// Layer: Web settings logic tests
-
 import type { ProviderSkillDescriptor } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 

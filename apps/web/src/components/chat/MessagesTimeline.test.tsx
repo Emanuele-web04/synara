@@ -1,8 +1,3 @@
-// FILE: MessagesTimeline.test.tsx
-// Purpose: Covers transcript row rendering and SSR-safe presentation contracts.
-// Layer: Web chat component tests
-// Depends on: renderToStaticMarkup and a mocked LegendList.
-
 import { CheckpointRef, MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -74,8 +69,7 @@ vi.mock("@legendapp/list/react", async () => {
   return { LegendList };
 });
 
-// Baseline MessagesTimeline props shared across render tests; spread the
-// result and override individual props (or pass them as JSX after the spread).
+// Baseline MessagesTimeline props shared across render tests; spread the result and override individual props (or pass them as JSX after the spread).
 function makeTimelineBaseProps() {
   return {
     hasMessages: true,
@@ -131,8 +125,7 @@ beforeAll(() => {
       classList,
       offsetHeight: 0,
     },
-    // flushStorageBeforePageHide registers visibilitychange at module load of
-    // the MessagesTimeline import chain (via composerDraftStore).
+    // flushStorageBeforePageHide registers visibilitychange at module load of the MessagesTimeline import chain (via composerDraftStore).
     addEventListener: () => {},
     removeEventListener: () => {},
     visibilityState: "visible",
@@ -143,18 +136,13 @@ beforeAll(() => {
   });
 });
 
-// Warm the component module once: the first dynamic import pays the whole
-// component-graph transform, which exceeds the 5s per-test timeout on slow CI
-// runners (observed >10s under a full parallel suite). beforeAll keeps that
-// cost off any single test's clock; the explicit timeout keeps it off the
-// default 10s hook clock too.
+// warm the component module once: the first dynamic import pays the whole component-graph transform (>10s observed on slow CI); beforeAll keeps it off any single test's clock
 beforeAll(async () => {
   await import("./MessagesTimeline");
 }, 120_000);
 
 describe("MessagesTimeline", () => {
-  // The first test pays the full dynamic-import cost of the MessagesTimeline
-  // module graph, which can exceed 10s under CI thread contention.
+  // The first test pays the full dynamic-import cost of the MessagesTimeline module graph, which can exceed 10s under CI thread contention.
   it("renders an accent deep link to the immediate fork source", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -997,8 +985,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Show more");
-    // The full text stays rendered; collapsing is a visual max-height clamp with
-    // a fade mask, so markdown structures are never sliced mid-syntax.
+    // The full text stays rendered; collapsing is a visual max-height clamp with a fade mask, so markdown structures are never sliced mid-syntax.
     expect(markup).toContain(hiddenTail);
     expect(markup).toContain('data-user-message-clamp="true"');
     expect(markup).toContain("max-height:");
@@ -1564,8 +1551,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Worked for");
     expect(markup).toContain(">done</p>");
-    // Completed turns fold all tool work behind the single collapsed disclosure,
-    // which stays unmounted until expanded, so no inline tool rows leak out.
+    // Completed turns fold all tool work behind the single collapsed disclosure, which stays unmounted until expanded, so no inline tool rows leak out.
     expect(markup).not.toContain("+2 more tool calls");
     expect(markup).not.toContain("Tool 1");
     expect(markup).not.toContain("Tool 5");
@@ -1830,8 +1816,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // The assistant's text block already follows the run, so it compacts
-    // behind the summary row even while the turn is still live.
+    // The assistant's text block already follows the run, so it compacts behind the summary row even while the turn is still live.
     expect(markup).toContain("Ran 6 tool calls");
     expect(markup).not.toContain("Tool 1");
     expect(markup).not.toContain("Tool 6");
@@ -2194,8 +2179,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Worked for");
     expect(markup).toContain(">done</p>");
-    // Trailing work folds into the terminal reply's collapsed disclosure rather
-    // than leaving a detached work row at the end of the transcript.
+    // Trailing work folds into the terminal reply's collapsed disclosure rather than leaving a detached work row at the end of the transcript.
     expect(markup).not.toContain("Tool 1");
     expect(markup).not.toContain("Tool 2");
     expect(markup).not.toContain('data-timeline-row-kind="work"');
@@ -2210,8 +2194,7 @@ describe("MessagesTimeline", () => {
         activeTurnInProgress
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
         timelineEntries={[
-          // The message comes first so the tools are the turn's live inline
-          // tail: the run renders as one line for its newest call, uncapped.
+          // The message comes first so the tools are the turn's live inline tail: the run renders as one line for its newest call, uncapped.
           {
             id: "entry-assistant-inline-tools-expanded",
             kind: "message",
@@ -2498,8 +2481,7 @@ describe("MessagesTimeline", () => {
 
   it("uses the GitHub logo for git and GitHub CLI command rows", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    // A thinking boundary keeps the two commands in separate singleton runs:
-    // consecutive command rows fold into one line and leave the markup.
+    // A thinking boundary keeps the two commands in separate singleton runs: consecutive command rows fold into one line and leave the markup.
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
@@ -2932,8 +2914,7 @@ describe("MessagesTimeline", () => {
     expect(claudeMarkup).toContain("Synara is creating a thread");
     expect(claudeMarkup).not.toContain("Synara__synara_create_thread");
 
-    // A provider may misclassify an MCP action containing "create" or "list"
-    // as a file change. Tool identity still wins over that transport category.
+    // A provider may misclassify an MCP action containing "create" or "list" as a file change. Tool identity still wins over that transport category.
     const codexMarkup = renderToStaticMarkup(
       <MessagesTimeline
         {...baseProps}
@@ -2986,8 +2967,7 @@ describe("MessagesTimeline", () => {
     expect(failedMarkup).toContain("Claude rejected reasoningEffort");
   });
 
-  // Browser calls get the globe rather than the generic Synara mark: a browsing
-  // row is about a page, and the surface it acted on is the first thing to read.
+  // Browser calls get the globe rather than the generic Synara mark: a browsing row is about a page, and the surface it acted on is the first thing to read.
   it("uses the browser icon and action name for Synara browser calls", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -3112,8 +3092,7 @@ describe("MessagesTimeline", () => {
     expect(dynamicToolMarkup).toContain("ToolSearch");
     expect(dynamicToolMarkup).not.toContain("&quot;query&quot;");
 
-    // Failed calls are exempt: the JSON-shaped detail may be the only place
-    // the error surfaces, so it stays visible inline.
+    // Failed calls are exempt: the JSON-shaped detail may be the only place the error surfaces, so it stays visible inline.
     const failedArgsMarkup = renderSingleToolRow({
       id: "work-synara-failed-args",
       createdAt: "2026-03-17T19:12:28.000Z",
@@ -3224,8 +3203,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // The original MCP tool call is preserved inside the settled turn's
-    // "Worked for..." disclosure; the recap is an additional final artifact.
+    // The original MCP tool call is preserved inside the settled turn's "Worked for..." disclosure; the recap is an additional final artifact.
     expect(markup).toContain("Worked for");
     expect(markup).toContain('data-synara-thread-creation-card="true"');
     expect(markup).toContain("2 threads created");
@@ -3318,8 +3296,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // The tool work collapses, but the changed-files summary stays anchored at
-    // the end of the turn with every file from the turn diff.
+    // The tool work collapses, but the changed-files summary stays anchored at the end of the turn with every file from the turn diff.
     expect(markup).toContain("Worked for");
     expect(markup).toContain("Edited 2 files");
     expect(markup).toContain("apps/web/src/components/chat/MessagesTimeline.test.tsx");

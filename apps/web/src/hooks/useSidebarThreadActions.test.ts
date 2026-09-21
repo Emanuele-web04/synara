@@ -1,7 +1,3 @@
-// FILE: useSidebarThreadActions.test.ts
-// Purpose: Characterizes Sidebar pin races, archive serialization/undo, and batch deletion.
-// Layer: Web hook tests
-
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

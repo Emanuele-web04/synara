@@ -1,8 +1,3 @@
-// FILE: projectCreation.test.ts
-// Purpose: Verifies shared project creation and duplicate-project recovery.
-// Layer: Web helper tests
-// Depends on: projectCreation helper plus mocked NativeApi orchestration calls.
-
 import {
   type NativeApi,
   type OrchestrationShellSnapshot,

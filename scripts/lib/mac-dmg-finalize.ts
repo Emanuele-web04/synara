@@ -1,8 +1,3 @@
-// FILE: mac-dmg-finalize.ts
-// Purpose: Notarizes, staples, and validates the final signed macOS disk image.
-// Layer: Release/build helper
-// Exports: signed DMG finalization plus pure command construction for tests.
-
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";

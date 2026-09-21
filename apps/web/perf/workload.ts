@@ -1,8 +1,3 @@
-// FILE: perf/workload.ts
-// Purpose: Deterministic transcript workload builders shared by the perf harnesses,
-//          so paired runs replay identical bytes at identical cadence.
-// Exports: isoAt, assistantText, buildStreamCorpus
-
 const BASE_TIME_MS = Date.parse("2026-08-08T12:00:00.000Z");
 
 export function isoAt(index: number): string {

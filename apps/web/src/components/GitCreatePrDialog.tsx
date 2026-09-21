@@ -1,9 +1,3 @@
-// FILE: GitCreatePrDialog.tsx
-// Purpose: Render the Create PR dialog: branch summary, optional PR title/description,
-//          local-changes toggle with diff stats, and create/draft/browser actions.
-// Layer: Header action control
-// Depends on: GitActionsControl.logic resolvers and the shared git dialog chrome.
-
 import { useEffect, useMemo, useState } from "react";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DiffStat } from "~/components/ui/diff-stat";

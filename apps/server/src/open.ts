@@ -1,11 +1,3 @@
-/**
- * Open - Browser/editor launch service interface.
- *
- * Owns process launch helpers for opening URLs in a browser and workspace
- * paths in a configured editor.
- *
- * @module Open
- */
 import { resolveExecutable } from "@synara/shared/executable";
 import { spawnProcess } from "@synara/shared/processRuntime";
 import { statSync } from "node:fs";
@@ -23,10 +15,6 @@ import {
   resolveWindowsStorePackageInstallLocation,
   type EditorDefinition,
 } from "./editorAppDiscovery";
-
-// ==============================
-// Definitions
-// ==============================
 
 export class OpenError extends Schema.TaggedErrorClass<OpenError>()("OpenError", {
   message: Schema.String,
@@ -92,7 +80,6 @@ function resolveCommandEditorArgs(
   }
 }
 
-// Converts the shared launch metadata into `open -a` arguments for macOS-only apps.
 function resolveMacApplicationArgs(
   editor: EditorDefinition,
   target: string,
@@ -162,7 +149,7 @@ function resolveFileManagerLaunch(target: string, platform: NodeJS.Platform): Ed
   return { command, args: shouldReveal ? ["-R", target] : [target] };
 }
 
-// Terminal integrations should receive a directory even when the source target is file:line:column.
+// terminal integrations get a directory even when the source target is file:line:column
 function resolveTerminalWorkingDirectory(target: string): string {
   const targetPath = parseTargetPathAndPosition(target)?.path ?? target;
 
@@ -206,7 +193,6 @@ const TERMINAL_ARGS_BY_COMMAND: Readonly<Record<string, TerminalArgsBuilder>> = 
   kitty: (workingDirectory) => ["--directory", workingDirectory],
   wezterm: (workingDirectory) => ["start", "--cwd", workingDirectory],
   ghostty: DEFAULT_TERMINAL_ARGS,
-  // Muxy's CLI opens a project from a bare path, matching its `muxy .` flow.
   muxy: (workingDirectory) => [workingDirectory],
   warp: DEFAULT_TERMINAL_ARGS,
 };
@@ -252,7 +238,7 @@ function resolveWindowsEditorUri(scheme: string, target: string): string {
   const parsedTarget = parseTargetPathAndPosition(target);
   const targetPath = parsedTarget?.path ?? target;
   const encodedPath = encodeWindowsEditorUriPath(targetPath);
-  // UNC paths normalize to //server/share; adding another slash changes the network path.
+  // UNC paths normalize to //server/share — adding another slash changes the network path
   const filePathSeparator = encodedPath.startsWith("//") ? "" : "/";
   const directorySuffix =
     !parsedTarget && statSync(targetPath, { throwIfNoEntry: false })?.isDirectory() === true
@@ -328,31 +314,13 @@ export function resolveAvailableEditors(
   return available;
 }
 
-/**
- * OpenShape - Service API for browser and editor launch actions.
- */
 export interface OpenShape {
-  /**
-   * Open a URL target in the default browser.
-   */
   readonly openBrowser: (target: string) => Effect.Effect<void, OpenError>;
 
-  /**
-   * Open a workspace path in a selected editor integration.
-   *
-   * Launches the editor as a detached process so server startup is not blocked.
-   */
   readonly openInEditor: (input: OpenInEditorInput) => Effect.Effect<void, OpenError>;
 }
 
-/**
- * Open - Service tag for browser/editor launch operations.
- */
 export class Open extends ServiceMap.Service<Open, OpenShape>()("synara/open") {}
-
-// ==============================
-// Implementations
-// ==============================
 
 export const resolveEditorLaunch = Effect.fnUntraced(function* (
   input: OpenInEditorInput,
@@ -487,10 +455,7 @@ const make = Effect.gen(function* () {
         catch: (cause) => new OpenError({ message: "Browser auto-open failed", cause }),
       }),
     openInEditor: (input) =>
-      // The "system-default" pseudo-editor opens the target with the OS default
-      // application (Preview for PDFs on macOS, the registered viewer elsewhere).
-      // Reuse the already-loaded cross-platform `open` package instead of guessing
-      // per-platform launch commands.
+      // the "system-default" pseudo-editor opens with the OS default application — reuse the cross-platform `open` package instead of guessing per-platform commands
       input.editor === "system-default"
         ? Effect.tryPromise({
             try: () => open.default(input.cwd),

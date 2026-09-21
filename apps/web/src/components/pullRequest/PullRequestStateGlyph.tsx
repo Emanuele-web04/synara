@@ -1,11 +1,3 @@
-// FILE: PullRequestStateGlyph.tsx
-// Purpose: State glyph for a pull request (open/draft/closed/merged), shared by the list rows,
-//          the detail panel header, and the dock tab chip. Icon and color both come from
-//          resolvePrStatePresentation — the same mapping the sidebar thread badge and kanban
-//          chip use — so every surface renders a given PR state identically.
-// Layer: Pull request presentation
-// Exports: PullRequestStateGlyph
-
 import type { GitPullRequestMergeability, PullRequestState } from "@synara/contracts";
 
 import { cn } from "~/lib/utils";
@@ -31,9 +23,7 @@ function pullRequestStateLabel(
   return "Closed";
 }
 
-// Draft always shows as draft (a draft isn't heading for a merge); an open non-draft PR
-// with conflicts shows the conflict glyph — precedence lives in resolvePrStatePresentation
-// so the thread badge, kanban chip, and every PR surface agree.
+// draft always shows as draft; conflicts show the conflict glyph — precedence lives in resolvePrStatePresentation so every surface agrees
 export function PullRequestStateGlyph({
   state,
   isDraft,

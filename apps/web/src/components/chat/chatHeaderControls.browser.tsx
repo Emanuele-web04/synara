@@ -1,7 +1,3 @@
-// FILE: chatHeaderControls.browser.tsx
-// Purpose: Browser regressions for interactive versus static shared surface-tab chips.
-// Layer: Chat header controls test
-
 import "../../index.css";
 
 import { page } from "vitest/browser";

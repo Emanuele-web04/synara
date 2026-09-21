@@ -1,7 +1,3 @@
-// FILE: providerChildEnvironment.ts
-// Purpose: Builds provider child environments without Synara control-plane authority.
-// Layer: Server provider process security
-
 export type ProviderChildKind =
   | "acp"
   | "antigravity"
@@ -60,7 +56,7 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   devin: new Set(["DEVIN_API_KEY", "WINDSURF_API_KEY"]),
   droid: new Set(["FACTORY_API_KEY"]),
   grok: new Set(["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]),
-  // These profiles deliberately support arbitrary upstream model providers.
+  // these profiles deliberately support arbitrary upstream model providers
   acp: "all",
   codex: "all",
   opencode: "all",

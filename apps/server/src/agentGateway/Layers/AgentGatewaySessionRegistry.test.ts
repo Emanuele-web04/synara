@@ -52,8 +52,7 @@ describe("AgentGatewaySessionRegistry", () => {
     assert.isTrue(registry.retireWriteAuthority(outgoing.token, "turn-a"));
     assert.isNull(registry.bindWriteAuthority(outgoing.token, "turn-a"));
     assert.isNull(registry.bindWriteAuthority(outgoing.token, "turn-b"));
-    // Retirement is idempotent for the same terminal turn but cannot be
-    // reassigned to a different one.
+    // retirement is idempotent for the same terminal turn but can't be reassigned to a different one
     assert.isTrue(registry.retireWriteAuthority(outgoing.token, "turn-a"));
     assert.isFalse(registry.retireWriteAuthority(outgoing.token, "turn-b"));
 

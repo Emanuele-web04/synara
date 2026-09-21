@@ -82,8 +82,7 @@ describe("resolveRightDockLauncherItems", () => {
   });
 
   it("offers the simulator only when the server can host one", () => {
-    // Off macOS there is nothing the user could do from this machine to make
-    // simulators work, so the entry is hidden rather than shown disabled.
+    // off macOS there's nothing the user could do to make simulators work — hidden rather than disabled
     expect(
       resolveRightDockLauncherItems({
         hasWorkspace: true,

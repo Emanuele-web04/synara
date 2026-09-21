@@ -198,9 +198,7 @@ function whenOr(left: KeybindingWhenNode, right: KeybindingWhenNode): Keybinding
   return { type: "or", left, right };
 }
 
-// Mirrors the production `whenModChordAllowed` guard: app-level mod chords fire outside the
-// terminal everywhere, and also from the terminal on macOS (where Cmd-chords never reach
-// the shell). `isMac` is derived from the platform inside resolveContext.
+// mirrors the production guard: mod chords fire from the terminal on macOS (Cmd never reaches the shell), everywhere outside it
 const whenModChordAllowed = whenOr(
   whenNot(whenIdentifier("terminalFocus")),
   whenIdentifier("isMac"),
@@ -220,7 +218,6 @@ function compile(bindings: TestBinding[]): ResolvedKeybindingsConfig {
   }));
 }
 
-// Mirror the server defaults here so frontend shortcut resolution stays aligned.
 const DEFAULT_BINDINGS = compile([
   {
     shortcut: modShortcut("b"),
@@ -1115,8 +1112,7 @@ describe("chat/editor shortcuts", () => {
       }),
       "chat.new",
     );
-    // macOS: Cmd+N still creates a new chat even from terminal focus — xterm never
-    // forwards the Cmd-chord to the shell, so the old `!terminalFocus` block just lost it.
+    // macOS: Cmd+N still creates a new chat even from terminal focus — xterm never forwards the Cmd-chord to the shell, so the old `!terminalFocus` block just lost it.
     assert.equal(
       resolveShortcutCommand(event({ key: "n", metaKey: true }), DEFAULT_BINDINGS, {
         platform: "MacIntel",
@@ -1254,7 +1250,6 @@ describe("chat/editor shortcuts", () => {
     const macTerminal = { platform: "MacIntel", context: { terminalFocus: true } } as const;
     const linuxTerminal = { platform: "Linux", context: { terminalFocus: true } } as const;
 
-    // macOS: Cmd-chords never reach the shell, so creating a new surface still works.
     assert.strictEqual(
       resolveShortcutCommand(
         event({ key: "t", metaKey: true, shiftKey: true }),
@@ -1288,7 +1283,6 @@ describe("chat/editor shortcuts", () => {
       "chat.newClaude",
     );
 
-    // Linux/Windows: the same chords are real shell input, so terminal focus blocks them.
     assert.isNull(
       resolveShortcutCommand(
         event({ key: "t", ctrlKey: true, shiftKey: true }),

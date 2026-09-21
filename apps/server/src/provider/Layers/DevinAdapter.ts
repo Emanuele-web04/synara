@@ -1,12 +1,4 @@
 import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
-/**
- * DevinAdapterLive — Devin CLI (`devin acp`) via ACP.
- *
- * A thin adapter around `AcpSessionRuntime` that reuses the shared ACP
- * lifecycle, permission, and event-stream plumbing.
- *
- * @module DevinAdapterLive
- */
 import {
   ApprovalRequestId,
   type ChatAttachment,
@@ -164,11 +156,7 @@ const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   defaultMs: 30 * 60 * 1000,
 });
 
-// Wedge recovery: the devin child can deadlock while staying alive (observed
-// twice in its exec session_manager: a hung sandbox_manager lock acquisition,
-// and a PTY spawn that never reached "waiting for shell ready"). A wedged
-// child emits no ACP events, so the idle budgets alone leave the turn hanging
-// for up to an hour; the child announces both shapes on its mirrored stderr.
+// wedge recovery: the devin child can deadlock while alive (hung sandbox_manager lock, PTY spawn never reaching shell-ready) and emits no ACP events; it announces both shapes on mirrored stderr
 const DEVIN_STALL_WATCH_LOG_PATTERN = "affogato::stall_watch";
 const DEVIN_SPAWN_START_LOG_PATTERN = /session_id=([0-9a-f]+) \[create_session\] starting/;
 const DEVIN_SPAWN_READY_LOG_PATTERN =
@@ -181,22 +169,14 @@ const DEVIN_WEDGE_RECOVERY_WINDOW_MS = 30 * 60 * 1000;
 const DEVIN_WEDGE_SUPERVISOR_INTERVAL_MS = 5_000;
 
 export interface DevinWedgeRecoveryOptions {
-  /** Silence required after a child stall warning before recovering. */
   readonly stallFuseMs: number;
-  /** How long a command spawn may stay un-ready before recovering. */
   readonly spawnStallTimeoutMs: number;
-  /** How often the wedge supervisor re-evaluates. */
   readonly checkIntervalMs: number;
-  /** Automatic recoveries allowed per thread inside the window. */
   readonly maxPerThread: number;
-  /** Rolling window for the per-thread recovery budget. */
   readonly windowMs: number;
 }
 
-/**
- * Like {@link resolveAcpTurnIdleTimeoutMs} but `0` is meaningful: it disables
- * the wedge detector instead of falling back to the default.
- */
+// `0` is meaningful here: it disables the wedge detector rather than falling back to the default
 export function resolveDevinOptionalTimeoutMs(input: {
   readonly envVar: string;
   readonly defaultMs: number;
@@ -233,11 +213,7 @@ export type DevinWedgeSignal =
   | { readonly kind: "stall-watch"; readonly silentMs: number }
   | { readonly kind: "spawn-stall"; readonly spawnSessionId: string; readonly stalledMs: number };
 
-/**
- * Pure wedge decision for one supervisor tick. A signal exists only while a
- * turn is active, no human input is pending, and the child has announced a
- * failure shape that has persisted past its fuse.
- */
+// wedge signal = active turn + no pending human input + a child-announced failure shape persisted past its fuse
 export function evaluateDevinWedgeSignal(input: {
   readonly activeTurnId: string | undefined;
   readonly awaitingHuman: boolean;
@@ -265,7 +241,6 @@ export function evaluateDevinWedgeSignal(input: {
   return undefined;
 }
 
-/** Rolling per-thread budget for automatic wedge recoveries. */
 export function canRecoverDevinWedge(input: {
   readonly recoveryAt: ReadonlyArray<number>;
   readonly now: number;
@@ -285,35 +260,19 @@ const DEVIN_ACP_TRANSPORT_DEBUG_MARKER = "devin-acp-meta-stripper-v2";
 const DEVIN_ACP_LOG_PAYLOAD_LIMIT = 4_000;
 const DEVIN_ACP_DEBUG_ENV = "SYNARA_DEVIN_ACP_DEBUG";
 const LEGACY_DEVIN_ACP_DEBUG_ENV = "DP_DEVIN_ACP_DEBUG";
-// On session/load, Devin can replay old ACP updates after the session reports
-// ready; suppression stays active until that stream goes quiet.
+// session/load can replay old ACP updates after "ready" — suppression stays until the stream goes quiet; the hard cap only guards a replay that never settles
 const DEVIN_RESUME_REPLAY_QUIET_MS = 200;
-// Longest that startSession blocks waiting for the resume replay to settle.
-// Suppression stays active past this point; only the startup path is unblocked.
 const DEVIN_RESUME_REPLAY_MAX_WAIT_MS = 1_500;
-// Absolute cap on replay suppression. A replay still streaming after this long
-// is treated as pathological: give up, warn, and unblock turns rather than
-// gating the thread forever.
 const DEVIN_RESUME_REPLAY_HARD_TIMEOUT_MS = 30_000;
-// Backstop for an alive-but-silent devin child: if a turn produces no ACP
-// activity for this long, force-fail it instead of showing "Working" forever.
+// backstop for an alive-but-silent devin child; compactions stream well under it — override via SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS
 const DEVIN_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
 const DEVIN_TURN_SETTLE_DRAIN_POLL_MS = 25;
-// Reuses the turn idle timeout value as a generous ceiling (compactions stream
-// activity well under it); override it with SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS.
 const DEVIN_COMPACT_TIMEOUT_MS = DEVIN_TURN_IDLE_TIMEOUT_MS;
-// After a timed-out /compact the cancel is only best-effort: the child may
-// still stream stale compaction updates for a moment. Hold new turns for this
-// long so those events cannot be attributed to the next active turn.
+// a timed-out /compact's cancel is best-effort — the child may still stream stale updates, so hold new turns until it quiets
 const DEVIN_COMPACT_ABANDON_QUIET_MS = 5_000;
-// Bounded wait for the forked post-timeout cancel to be written before the
-// next prompt is dispatched. stdio delivers in order, so once the cancel is
-// on the wire it cannot cancel a prompt written after it; a fully wedged
-// child never confirms, hence the cap.
+// bounded wait for the forked cancel to reach the wire — stdio ordering then guarantees it can't cancel a later prompt; a wedged child never confirms, hence the cap
 const DEVIN_COMPACT_CANCEL_WAIT_MS = 10_000;
-// The compaction outcome (failed tool detail) is recorded by the notification
-// consumer, which can lag the /compact response; wait for inbound activity to
-// go quiet (bounded) before deciding success.
+// compaction outcome is recorded by the notification consumer which can lag the /compact response — wait (bounded) for inbound quiet before deciding
 const DEVIN_COMPACT_OUTCOME_QUIET_MS = 200;
 const DEVIN_COMPACT_OUTCOME_MAX_WAIT_MS = 2_000;
 
@@ -383,81 +342,37 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   readonly activeAssistantItemsWithContent: Set<string>;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
-  // True once ctx.acp.prompt has returned for the current turn (success or
-  // failure). The prompt outcome is then settled; an interrupt that lands
-  // while the post-prompt drain is still running must not reclassify the turn
-  // as cancelled, so interruptTurn stops interrupting the fiber here and the
-  // onInterrupt branch refuses to emit a cancelled completion.
+  // once ctx.acp.prompt has returned the outcome is settled — an interrupt during post-prompt drain must not reclassify the turn as cancelled
   activePromptResolved: boolean;
-  // Id of the most recently settled (cleared) turn, captured at the settle
-  // boundary. Preserved until the next turn dispatches so
-  // pruneDevinToolCallTurnIds can keep the just-settled turn's tool-call
-  // mappings for in-place resolution of trailing ToolCallUpdated events even
-  // when the turn already cleared activeTurnId (the dispatch cannot read the
-  // settled turn from activeTurnId once it is undefined). Reset at dispatch
-  // after pruning so only one previous turn's mappings survive.
+  // lastSettledTurnId survives until the next dispatch so trailing ToolCallUpdated events still resolve the settled turn's rows in place after activeTurnId is cleared
   lastSettledTurnId: TurnId | undefined;
   lastPlanFingerprint: string | undefined;
   lastTurnActivityAt: number | undefined;
-  // Provider tool-call ids seen during a turn, mapped to that turn. A
-  // backlogged consumer can process a queued ToolCallUpdated after the prompt
-  // response cleared activeTurnId or after the next turn dispatched; the
-  // mapping keeps the event attributed to its originating turn instead of
-  // being re-associated with — and allowed to set failure state on — a newer
-  // turn. Pruned to the just-settled turn on each dispatch (a straggler can
-  // lag by at most one turn on the FIFO session/update stream).
+  // tool-call→turn map: a backlogged ToolCallUpdated can arrive after activeTurnId cleared or the next turn dispatched — keep attribution to the originating turn, pruned to the last settled turn (FIFO stream ⇒ ≤1 turn lag)
   readonly turnToolCallIds: Map<string, TurnId>;
   readonly devinToolCallLifecycleById: Map<string, "active" | "terminal">;
-  // Wedge detection state, fed by the child's mirrored stderr log stream and
-  // consumed by the per-session wedge supervisor. stallWatchDetectedAt records
-  // the child's own stall confession (first warning wins; any turn progress
-  // clears it). spawnStalls tracks exec create_session starts that have not
-  // reached "waiting for shell ready", keyed by the child's session id.
+  // wedge state fed by the child's mirrored stderr: stallWatchDetectedAt = child's own stall confession (first wins, progress clears); spawnStalls = create_session starts never reaching shell-ready
   devinStallWatchDetectedAt: number | undefined;
   readonly devinSpawnStalls: Map<string, number>;
-  // Turn id the wedge supervisor already auto-recovered, so a recovered turn
-  // cannot trigger a second recovery if its replacement also stalls.
+  // one auto-recovery per turn — a recovered turn can't trigger another if its replacement also stalls
   devinWedgeRecoveryAttemptedFor: string | undefined;
-  // True while a forked wedge recovery for this session is still running; the
-  // supervisor skips forking duplicates and retries after it settles (a bail —
-  // e.g. a pending approval landed — is retried on a later tick).
   devinWedgeRecoveryInFlight: boolean;
-  // Original start inputs, replayed verbatim when a wedge recovery restarts the
-  // session so the replacement child keeps the thread's model selection
-  // (including variant/effort options) and per-thread provider options.
+  // original start inputs replayed verbatim so the replacement child keeps the thread's model selection and provider options
   readonly devinStartModelSelection: ProviderSessionStartInput["modelSelection"];
   readonly devinStartProviderOptions: ProviderSessionStartInput["providerOptions"];
-  // Compared against acp.sessionUpdatesEnqueuedCount to detect when queued
-  // session updates have been fully handled by the notification consumer.
   sessionUpdatesProcessed: number;
-  // Pending until startSession has completed its post-registration setup.
-  // The session is registered first so replay keeps draining, which means
-  // sendTurn/compactThread can route to it mid-startup; they await this gate
-  // until the remaining startup work has settled. Resolved by
-  // stopSessionInternal too, like resumeReplayReady, so a failed startup never
-  // strands waiters.
+  // session registers before post-registration setup settles, so sendTurn/compactThread can route mid-startup — they await this gate; stopSessionInternal resolves it too so failed startup never strands waiters
   sessionConfigReady: Deferred.Deferred<void> | undefined;
   resumeReplayReady: Deferred.Deferred<void> | undefined;
   resumeReplayLastSuppressedAt: number | undefined;
-  // True while sendTurn is between its compaction check and settling the turn;
-  // compactThread reads it so a compaction prompt cannot slip into the gap
-  // before ctx.activeTurnId is assigned.
+  // set between compaction check and turn settle so compactThread can't slip a prompt into the gap before activeTurnId is assigned
   turnStarting: boolean;
-  // Set by interruptTurn while a turn is still starting (no prompt fiber to
-  // interrupt yet, e.g. gated on resume replay); startDevinTurn re-checks it
-  // before dispatching so a cancelled turn is never prompted.
+  // set by interruptTurn while no prompt fiber exists yet — startDevinTurn re-checks so a cancelled turn is never prompted
   pendingTurnInterrupted: boolean;
   compactingThread: boolean;
-  // Failed compaction tool-call detail recorded while compactingThread is set;
-  // runDevinCompaction reads it so a failed compaction tool call is not
-  // persisted as a completed one.
+  // failed-compaction tool detail recorded while compactingThread — a failed tool call must not persist as a completed compaction
   compactionFailedToolDetail: string | undefined;
-  // Epoch-ms until which an abandoned (timed-out) /compact may still stream
-  // stale updates; new turns wait it out so they cannot pollute the next turn.
   compactionQuietUntil: number | undefined;
-  // Forked best-effort cancel from a timed-out /compact. The next prompt
-  // waits (bounded) for it so the cancel is on the wire first — stdio
-  // ordering then guarantees it cannot cancel the new turn.
   compactionCancelFiber: Fiber.Fiber<void> | undefined;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
@@ -561,8 +476,7 @@ export function resolveRequestedModeId(input: {
           ? ACP_APPROVAL_MODE_ALIASES
           : ACP_FULL_ACCESS_MODE_ALIASES;
 
-    // For plan mode, only an exact normalized id or name match is considered
-    // safe; whole-token matching is too permissive for a fail-closed gate.
+    // plan mode accepts only an exact normalized id/name match — whole-token matching is too permissive for a fail-closed gate
     const targetMode =
       interactionMode === "plan"
         ? findModeByExactNormalizedAliases(modeState.availableModes, aliases)
@@ -841,8 +755,7 @@ function collectDevinModelDescriptors(
   const family = parseDevinModelFamily(value);
   if (family) {
     models.push(family);
-    // A family owns its variants. Do not recurse into them as if they were
-    // independent model families; doing so loses the effort matrix.
+    // a family owns its variants — recursing into them as independent families loses the effort matrix
     for (const [key, nested] of Object.entries(value)) {
       if (key === "variants") {
         continue;
@@ -854,9 +767,6 @@ function collectDevinModelDescriptors(
     return;
   }
 
-  // Tolerate older/alternate flat lists that contain concrete model UIDs but
-  // no family wrapper. They remain selectable even though no controls can be
-  // inferred for them.
   const concreteModel = readDevinModelString(value, ["model_uid", "modelUid", "uid"]);
   if (concreteModel) {
     const name = readDevinModelString(value, ["label", "name", "displayName", "title"]);
@@ -889,9 +799,7 @@ export function parseDevinCliModelList(stdout: string): DevinModelDescriptorSeed
       const models: DevinModelDescriptorSeed[] = [];
       collectDevinModelDescriptors(parsed, models, new Set());
       return models;
-    } catch {
-      // Try the next tolerant JSON boundary; CLI diagnostics are ignored.
-    }
+    } catch {}
   }
   return [];
 }
@@ -1084,9 +992,7 @@ export function buildDevinStaticModelDescriptors(): ReadonlyArray<ProviderModelD
 export function buildDevinPromptMeta(interactionMode: ProviderInteractionMode): {
   readonly mode: "plan" | "agent";
 } {
-  // Devin ACP reconciles its native Plan tracker from session/prompt `_meta.mode`.
-  // This is idempotent, so reconnects cannot invert the provider state when
-  // Synara sends the desired mode again.
+  // Devin reconciles its native Plan tracker from session/prompt _meta.mode — idempotent, so reconnects can't invert state on resend
   return { mode: interactionMode === "plan" ? "plan" : "agent" };
 }
 
@@ -1144,11 +1050,7 @@ function buildDevinPromptParts(input: {
   });
 }
 
-// Devin's ACP process accepts a concrete model UID as its `--model` value, not
-// a separate effort/context flag. Both web and server resolve current traits
-// through the shared resolver. Concrete variants, selection slugs, and explicit
-// config remain candidates; reasoning-effort labels are never used as model
-// identifiers.
+// the ACP process takes a concrete model UID as --model, not effort/context flags; reasoning-effort labels are never model identifiers
 export function resolveDevinStartModel<E, R>(input: {
   readonly explicitModel: string | undefined;
   readonly modelSelection:
@@ -1209,12 +1111,7 @@ export function resolveDevinStartModel<E, R>(input: {
   );
 }
 
-// Which turn a ToolCallUpdated belongs to. A tool call already mapped to a
-// previous turn keeps that provenance even while a newer turn is active, so a
-// trailing update resolves the older turn's row in place instead of being
-// re-associated with the current turn. The caller applies current-turn failure
-// state only when the resolved turn is the active turn, so a reroute can never
-// set the active turn's failed-tool detail. Resume replay stays suppressed.
+// a tool call mapped to an older turn keeps that provenance even while a newer turn is active — current-turn failure state applies only when the resolved turn is active
 export function resolveDevinToolCallUpdatedTurnId(input: {
   readonly toolCallId: string;
   readonly activeTurnId: TurnId | undefined;
@@ -1231,10 +1128,6 @@ export function resolveDevinToolCallUpdatedTurnId(input: {
   return input.activeTurnId;
 }
 
-// Prunes tool-call provenance to a single keep turn: a trailing ToolCallUpdated
-// can lag by at most one turn (the session/update stream is FIFO), so the
-// just-settled turn's mappings survive into the next active turn for in-place
-// resolution; anything older is dropped (bounded to one turn of tool-call ids).
 export function pruneDevinToolCallTurnIds(
   toolCallTurnIds: Map<string, TurnId>,
   keepTurnId: TurnId | undefined,
@@ -1246,11 +1139,6 @@ export function pruneDevinToolCallTurnIds(
   }
 }
 
-// Settles the active turn and records it as the last settled turn. Returns
-// whether the turn was actually cleared (false when it already settled,
-// keeping the call sites idempotent). lastSettledTurnId is what the next
-// dispatch prunes tool-call provenance against: clearAcpActiveTurn wipes
-// activeTurnId, so the dispatch cannot recover the settled turn from it.
 function settleDevinActiveTurn(ctx: DevinSessionContext, turnId: TurnId): boolean {
   if (!clearAcpActiveTurn(ctx, turnId)) {
     return false;
@@ -1334,11 +1222,8 @@ export function makeDevinAdapter(
     }
 
     const sessions = new Map<ThreadId, DevinSessionContext>();
-    // Rolling per-thread budget for automatic wedge recoveries. Lives at the
-    // adapter level so the budget survives session restarts (each recovery
-    // replaces the session context).
+    // recovery budget lives at adapter level so it survives session restarts (each recovery replaces the session context)
     const wedgeRecoveryAtByThread = new Map<ThreadId, number[]>();
-    // Ownership survives the gap where restart has removed the old session.
     const wedgeRecoveries = new Map<
       ThreadId,
       { turnId: TurnId; cancelled: Deferred.Deferred<void> }
@@ -1351,9 +1236,7 @@ export function makeDevinAdapter(
         yield* Deferred.succeed(recovery.cancelled, undefined);
         return true;
       });
-    // Recoveries fork here instead of the session scope: a recovery stops the
-    // wedged session, and a fiber running inside that session's scope would be
-    // interrupted mid-recovery when the scope closes.
+    // recoveries fork outside the session scope — a fiber inside it would be interrupted mid-recovery when the scope closes
     const wedgeRecoveryScope = yield* Scope.make("sequential");
     const commandDiscoveryCache = new Map<
       string,
@@ -1629,24 +1512,14 @@ export function makeDevinAdapter(
         });
       });
 
-    // Waits until the notification consumer has been quiet briefly so state it
-    // records from queued events (e.g. compactionFailedToolDetail) is visible
-    // before the compaction outcome is decided. Bounded — a chatty session
-    // cannot hold the /compact RPC open past the cap.
+    // wait (bounded) for the notification consumer to go quiet so state from queued events is visible before deciding the outcome
     const settleDevinCompactionOutcome = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
-        // First drain events that were already enqueued when the /compact
-        // response resolved — a backlogged consumer may not have applied a
-        // failed compaction tool update yet, and the quiet window below only
-        // covers in-transit stragglers, not the existing backlog.
+        // drain events already enqueued at prompt-resolve first — the quiet window covers in-transit stragglers, not the existing backlog
         yield* waitForDevinQueuedTurnEventsDrained(ctx);
         const startedAt = Date.now();
         while (true) {
           const now = Date.now();
-          // Seed the quiet measurement from startedAt: a backlogged consumer
-          // may not have bumped lastTurnActivityAt yet, so always wait at
-          // least one full quiet interval after the prompt response before
-          // deciding the outcome.
           const lastActivityAt = Math.max(ctx.lastTurnActivityAt ?? 0, startedAt);
           if (
             now - lastActivityAt >= DEVIN_COMPACT_OUTCOME_QUIET_MS ||
@@ -1658,11 +1531,6 @@ export function makeDevinAdapter(
         }
       });
 
-    // After a timed-out /compact, hold new prompts until the forked cancel is
-    // on the wire (bounded — a fully wedged child never confirms) and the
-    // stale update stream has had its quiet window. stdio ordering then
-    // guarantees the cancel cannot cancel the new prompt, and stragglers
-    // cannot be attributed to the new turn.
     const waitForAbandonedDevinCompaction = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
         const cancelFiber = ctx.compactionCancelFiber;
@@ -1672,9 +1540,6 @@ export function makeDevinAdapter(
             Effect.timeoutOption(DEVIN_COMPACT_CANCEL_WAIT_MS),
           );
           ctx.compactionCancelFiber = undefined;
-          // The cancel wait can outlive the quiet window armed at the original
-          // compaction timeout; restart it from now so stragglers arriving
-          // just after the cancel drains are still held off (and dropped).
           if (ctx.compactionQuietUntil !== undefined) {
             ctx.compactionQuietUntil = Math.max(
               ctx.compactionQuietUntil,
@@ -1692,10 +1557,7 @@ export function makeDevinAdapter(
         }
       });
 
-    // On session/load, Devin can replay old ACP updates after the session is "ready".
-    // Keep suppression active until that stream actually goes quiet — clearing it
-    // on a fixed timeout lets late historical deltas leak into the first turn as
-    // its content. The hard cap only guards against a replay that never settles.
+    // keep suppression until the replay stream is genuinely quiet — a fixed timeout lets historical deltas leak into the first turn
     const settleDevinResumeReplayWhenQuiet = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
         const ready = ctx.resumeReplayReady;
@@ -1874,10 +1736,7 @@ export function makeDevinAdapter(
             binaryPath: effectiveDevinSettings.binaryPath ?? "devin",
           });
 
-          // Wedge detection tap on the child's mirrored stderr log stream.
-          // Runs before ctx is assigned (startup logs arrive early), so every
-          // access guards on the binding. Startup-time lines carry no active
-          // turn and are recorded nowhere.
+          // stderr wedge tap runs before ctx is assigned — every access guards on the binding; startup lines carry no active turn
           const onChildStderrLine = (line: string) => {
             if (line.includes(DEVIN_STALL_WATCH_LOG_PATTERN)) {
               if (ctx?.activeTurnId !== undefined && ctx.devinStallWatchDetectedAt === undefined) {
@@ -2071,10 +1930,7 @@ export function makeDevinAdapter(
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
-            // Keep the logical family slug in the session projection. The
-            // concrete variant is a process-start detail; reporting it here
-            // would make the reactor compare the family slug to the variant
-            // UID and restart Devin on every subsequent turn.
+            // keep the family slug in the session projection — reporting the variant UID would make the reactor restart Devin on every turn
             model: devinModelSelection?.model ?? effectiveDevinSettings.model,
             threadId: input.threadId,
             resumeCursor: {
@@ -2134,14 +1990,11 @@ export function makeDevinAdapter(
           const nf = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
-                // Only genuine turn-progress events keep the idle watchdog at
-                // bay; mode/config/usage heartbeats must not mask a hung turn.
+                // only genuine turn-progress events reset the watchdog — mode/config/usage heartbeats must not mask a hung turn
                 if (event._tag !== "ToolCallUpdated" && isAcpTurnProgressEventTag(event._tag)) {
                   ctx.lastTurnActivityAt = Date.now();
                   ctx.devinStallWatchDetectedAt = undefined;
-                  // A wedged create_session emits no ACP events, so progress
-                  // proves any recorded spawn stall is a failed (not hung)
-                  // spawn; drop it before its timeout can misfire later.
+                  // a wedged create_session emits no ACP events, so progress proves a recorded spawn stall is failed-not-hung — drop it before its timeout misfires
                   ctx.devinSpawnStalls.clear();
                 }
                 switch (event._tag) {
@@ -2213,12 +2066,6 @@ export function makeDevinAdapter(
                         }
                         return;
                       }
-                      // A tool call already mapped to an older turn keeps that
-                      // provenance even while a newer turn is active: emit under
-                      // the recorded turn so its row resolves in place, and never
-                      // let a trailing update mutate the current turn's failure
-                      // state. Resume replay stays suppressed like every other
-                      // event.
                       const recordedTurnId = resolveDevinToolCallUpdatedTurnId({
                         toolCallId: event.toolCall.toolCallId,
                         activeTurnId: ctx.activeTurnId,
@@ -2327,9 +2174,7 @@ export function makeDevinAdapter(
                     return;
                 }
               }).pipe(
-                // Bump the processed count only after the handler fully ran, so
-                // waitForDevinQueuedTurnEventsDrained cannot observe an event as
-                // consumed while its state updates are still being applied.
+                // bump the processed count only after the handler fully ran so drain-waiters can't observe an event as consumed mid-apply
                 Effect.ensuring(
                   Effect.sync(() => {
                     ctx.sessionUpdatesProcessed += 1;
@@ -2338,37 +2183,24 @@ export function makeDevinAdapter(
                 ),
               ),
             ),
-            // The drain's lifetime is the session's, not the caller's: forking it as
-            // a child of the fiber that called startSession kills it as soon as that
-            // fiber returns, silently dropping every session/update.
           ).pipe(Effect.forkIn(sessionScope));
 
           ctx.notificationFiber = nf;
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
-          // Startup finalization runs after the consumer fork so replay emitted
-          // while it is in flight keeps draining. The session is already registered,
-          // and the start-scope finalizer no longer owns the session scope, so any failure
-          // OR interruption of the remaining startup steps must tear the session
-          // down explicitly instead of leaking a live child.
+          // startup finalization runs after the consumer fork while replay keeps draining — any failure/interruption of remaining steps must tear the session down explicitly
           yield* Effect.gen(function* () {
             yield* applyDevinSessionConfiguration({
               runtime: acp,
               runtimeMode: input.runtimeMode,
               interactionMode: undefined,
             });
-            // Startup configuration has settled; turns gated on this deferred
-            // can now prompt. Devin model options are process-start settings.
             yield* Deferred.succeed(sessionConfigReady, undefined);
             ctx.sessionConfigReady = undefined;
 
             if (resumeReplayReady !== undefined) {
-              // Settle the replay in the background: suppression stays active until
-              // the stream is genuinely quiet, while startup only blocks briefly so
-              // a long replay cannot hold session startup hostage. sendTurn and
-              // compactThread await the deferred, so the first turn stays gated
-              // until the replay has actually finished.
+              // settle replay in the background: suppression stays until quiet while startup blocks briefly; sendTurn/compactThread await the deferred so the first turn stays gated
               yield* settleDevinResumeReplayWhenQuiet(ctx).pipe(Effect.forkIn(ctx.scope));
               yield* Deferred.await(resumeReplayReady).pipe(
                 Effect.timeoutOption(DEVIN_RESUME_REPLAY_MAX_WAIT_MS),
@@ -2406,10 +2238,6 @@ export function makeDevinAdapter(
         }).pipe(Effect.scoped),
       );
 
-    // Idle-progress watchdog escape hatch: force-fail a turn whose devin child
-    // is alive but has gone completely silent. Mirrors the prompt-fiber
-    // onFailure branch and stays idempotent via settleDevinActiveTurn, so it is
-    // a no-op if the turn settled normally first (whichever fires first wins).
     const failDevinTurnAsTimedOut = (ctx: DevinSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
@@ -2451,30 +2279,17 @@ export function makeDevinAdapter(
             ...completedCost,
           },
         });
-        // Best-effort: tell the child to abandon the turn, then unwind the
-        // pending prompt fiber (its onInterrupt no-ops, the turn is cleared).
-        // The cancel is forked, not awaited — this path only runs because the
-        // child went silent, and a hung session/cancel must not block the
-        // prompt-fiber interrupt or leak the watchdog fiber.
+        // best-effort abandon + unwind the prompt fiber; the cancel is forked not awaited — a hung session/cancel must not block the interrupt
         yield* Effect.ignore(ctx.acp.cancel).pipe(Effect.forkIn(ctx.scope));
         if (promptFiber) {
           yield* Fiber.interrupt(promptFiber);
         }
       });
 
-    // Auto-recovery for a wedged (alive-but-silent) child: settle the stuck
-    // turn as cancelled, restart the session from its resume cursor, and
-    // dispatch a continuation prompt — the interrupt -> resend flow that was
-    // previously manual. Bounded per turn and per thread; once the budget is
-    // exhausted the supervisor fails the turn instead. Every destructive step
-    // re-validates against live adapter state first: a user stop, interrupt,
-    // or fresh turn that lands mid-recovery always wins.
+    // auto-recovery: settle the wedged turn cancelled, restart from resume cursor, dispatch a continuation — every destructive step re-validates first; user stop/interrupt/new turn always wins
     const recoverDevinWedgedTurn = (ctx: DevinSessionContext, signal: DevinWedgeSignal) =>
       Effect.gen(function* () {
         const turnId = ctx.activeTurnId;
-        // The wedged turn must still be the active one on the registered
-        // session; a settled or replaced turn means the child recovered (or the
-        // user acted) and this recovery is obsolete.
         const stillOwnsTurn = () =>
           !ctx.stopped && sessions.get(ctx.threadId) === ctx && ctx.activeTurnId === turnId;
         if (turnId === undefined || ctx.stopped) return;
@@ -2520,16 +2335,12 @@ export function makeDevinAdapter(
             turnId,
             payload: { message: DEVIN_WEDGE_RECOVERY_WARNING },
           });
-          // Capture restart inputs before the session context is torn down.
           const resumeCursor = ctx.session.resumeCursor;
           const cwd = ctx.session.cwd;
           const runtimeMode = ctx.session.runtimeMode;
           const interactionMode = ctx.activeInteractionMode;
           if (!stillOwnsTurn() || wedgeRecoveries.get(ctx.threadId) !== recovery) return;
           yield* interruptDevinTurn(ctx.threadId, turnId);
-          // The interrupt settled the wedged turn. Bail if the user stopped the
-          // session, replaced it with their own restart, or already dispatched a
-          // new turn — none of those may be overridden by an automatic continue.
           if (
             wedgeRecoveries.get(ctx.threadId) !== recovery ||
             ctx.stopped ||
@@ -2648,13 +2459,7 @@ export function makeDevinAdapter(
     ) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
-        // compactThread holds the thread lock but sendTurn intentionally does not
-        // (turns are long-running); reject instead of racing a second prompt whose
-        // events the compaction suppression would silently drop. Setting
-        // turnStarting in the same synchronous block as this check closes the
-        // reverse gap: startDevinTurn awaits config/attachment work before it
-        // assigns ctx.activeTurnId, and compactThread checks turnStarting so a
-        // compaction prompt cannot slip into that window.
+        // compactThread holds the thread lock but sendTurn doesn't — reject a second prompt whose events suppression would drop; setting turnStarting in the same sync block closes the reverse gap
         if (ctx.compactingThread) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -2662,9 +2467,7 @@ export function makeDevinAdapter(
             issue: "Cannot start a turn while Devin context compaction is in progress.",
           });
         }
-        // A second sendTurn entering while another turn is still starting would
-        // clear that turn's pendingTurnInterrupted flag (letting a cancelled
-        // turn dispatch anyway) and race two ACP prompts; reject it instead.
+        // a second sendTurn while one is starting would clear pendingTurnInterrupted (dispatching a cancelled turn) and race two ACP prompts — reject it
         if (ctx.turnStarting) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -2679,8 +2482,7 @@ export function makeDevinAdapter(
             issue: "Another Devin turn is already active for this thread.",
           });
         }
-        // An accepted user turn owns this session. Let ongoing startup finish
-        // for it, but prevent recovery from dispatching an automatic continuation.
+        // an accepted user turn owns the session — let startup finish for it but block recovery's automatic continuation
         if (userInitiated) wedgeRecoveries.delete(input.threadId);
         ctx.turnStarting = true;
         ctx.pendingTurnInterrupted = false;
@@ -2698,8 +2500,6 @@ export function makeDevinAdapter(
       input: Parameters<DevinAdapterShape["sendTurn"]>[0],
     ) =>
       Effect.gen(function* () {
-        // Startup registers the session before post-registration setup settles;
-        // a turn routed in during that window must wait for setup to finish.
         if (ctx.sessionConfigReady !== undefined) {
           yield* Deferred.await(ctx.sessionConfigReady);
         }
@@ -2707,10 +2507,7 @@ export function makeDevinAdapter(
           yield* Deferred.await(ctx.resumeReplayReady);
         }
         yield* waitForAbandonedDevinCompaction(ctx);
-        // The gates above are resolved by stopSessionInternal too (a failed or
-        // stopped startup must not strand waiters); a turn that was blocked on
-        // them must fail here instead of emitting lifecycle events for a dead
-        // session.
+        // the setup gates resolve on stop too — a turn unblocked by failed/stopped startup must fail here, not emit lifecycle events for a dead session
         if (ctx.stopped) {
           return yield* new ProviderAdapterSessionNotFoundError({
             provider: PROVIDER,
@@ -2721,8 +2518,7 @@ export function makeDevinAdapter(
         const model =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection.model : undefined;
         const interactionMode = resolveAcpTurnInteractionMode(input.interactionMode);
-        // Model selection rides the process-start `--model` flag; only the
-        // fail-closed mode gate applies per turn.
+        // Model selection rides the process-start `--model` flag; only the fail-closed mode gate applies per turn.
         yield* applyDevinSessionConfiguration({
           runtime: ctx.acp,
           runtimeMode: ctx.session.runtimeMode,
@@ -2753,25 +2549,14 @@ export function makeDevinAdapter(
           promptParts.unshift(harnessPolicy);
         }
 
-        // A stop can land while the pre-prompt work or attachment reads above were
-        // in flight; opening the turn now would publish turn.started (and a
-        // phantom cancelled completion) for a session that already exited.
+        // a stop landing during pre-prompt work must not publish turn.started (and a phantom cancelled) for a session that already exited
         if (ctx.stopped) {
           return yield* new ProviderAdapterSessionNotFoundError({
             provider: PROVIDER,
             threadId: input.threadId,
           });
         }
-        // Interrupts that landed during the pre-prompt waits (resume replay,
-        // mode configuration, attachment reads) are honored by the prompt fiber's
-        // dispatch guard below, so the turn completes through the normal
-        // cancelled path instead of surfacing as a provider turn-start failure.
-        // A trailing ToolCallUpdated can lag by at most one turn (the
-        // session/update stream is FIFO), so keep the last settled turn's
-        // tool-call mapping for in-place resolution of its stragglers; anything
-        // older is dropped (bounded to one turn of tool-call ids). The settled
-        // turn is read from lastSettledTurnId (captured at the settle boundary),
-        // not activeTurnId, which clearAcpActiveTurn already wiped.
+        // interrupts during pre-prompt waits are honored by the dispatch guard — the turn completes via the normal cancelled path, not a turn-start failure
         const keptTurnId = ctx.lastSettledTurnId;
         ctx.lastSettledTurnId = undefined;
         ctx.activeTurnId = turnId;
@@ -2779,8 +2564,7 @@ export function makeDevinAdapter(
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
         ctx.activeTurnFailedToolDetail = undefined;
-        // A new turn starts with an unresolved prompt; a late interrupt must be
-        // free to cancel it until ctx.acp.prompt actually returns.
+        // a new turn starts with an unresolved prompt — a late interrupt stays free to cancel until ctx.acp.prompt returns
         ctx.activePromptResolved = false;
         pruneDevinToolCallTurnIds(ctx.turnToolCallIds, keptTurnId);
         ctx.activeInteractionMode = interactionMode;
@@ -2808,13 +2592,7 @@ export function makeDevinAdapter(
         });
 
         const runPrompt = Effect.suspend(() =>
-          // interruptTurn during the pre-prompt waits (resume replay, mode
-          // configuration, attachment reads) or between turn.started publishing
-          // and this fiber being registered sets pendingTurnInterrupted; honor
-          // it (and a concurrent stop) here so a cancelled turn is never
-          // prompted. Self-interrupting routes through the onInterrupt branch
-          // below, which completes the turn as cancelled rather than as a
-          // provider failure.
+          // interrupts during pre-prompt waits or before fiber registration set pendingTurnInterrupted — honor it (and concurrent stop) so a cancelled turn is never prompted; self-interrupt completes as cancelled
           ctx.pendingTurnInterrupted || ctx.stopped
             ? Effect.interrupt
             : ctx.acp.prompt({
@@ -2856,17 +2634,14 @@ export function makeDevinAdapter(
                     ...completedCost,
                   },
                 });
-                // Transport/prompt failures make the ACP child unusable. Remove
-                // it from routing immediately so ProviderService can recover on
-                // the next send instead of reusing a dead session forever.
+                // transport/prompt failures make the ACP child unusable — unroute immediately so ProviderService recovers on next send
                 yield* stopSessionInternal(ctx);
               }),
             onSuccess: (result) =>
               Effect.gen(function* () {
                 if (ctx.activeTurnId !== turnId) return;
                 ctx.activePromptResolved = true;
-                // Drain BEFORE snapshotting turn state: queued events may still
-                // set activeTurnFailedToolDetail or assistant-content flags.
+                // Drain BEFORE snapshotting turn state: queued events may still set activeTurnFailedToolDetail or assistant-content flags.
                 yield* waitForDevinQueuedTurnEventsDrained(ctx);
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
@@ -2917,10 +2692,6 @@ export function makeDevinAdapter(
           }),
           Effect.onInterrupt(() =>
             Effect.gen(function* () {
-              // User interruption leaves a resolved prompt fiber alive. If
-              // teardown interrupts it while the turn remains active, settle
-              // it here before session.exited. settleDevinActiveTurn makes
-              // watchdog and prior-settlement races no-ops.
               if (!settleDevinActiveTurn(ctx, turnId)) return;
               const completedCost = finalizeAcpActiveTurnCost(ctx);
               ctx.turns.push({
@@ -2942,8 +2713,6 @@ export function makeDevinAdapter(
                 turnId,
                 payload: {
                   state: "cancelled",
-                  // Public stop/interrupt revokes ownership before cancelling.
-                  // Keep technical recovery distinct from a user's goal pause.
                   stopReason:
                     wedgeRecoveries.get(input.threadId)?.turnId === turnId
                       ? "synara.devin.wedge-recovery"
@@ -2959,9 +2728,6 @@ export function makeDevinAdapter(
 
         ctx.activePromptFiber = yield* runPrompt;
 
-        // Backstop the forked prompt: if the child goes silent, fail the turn
-        // instead of leaving it "Working" forever. Self-terminates when the
-        // turn settles; pauses while a human approval is pending.
         yield* forkAcpAdapterTurnIdleWatchdog({
           context: ctx,
           turnId,
@@ -2982,7 +2748,6 @@ export function makeDevinAdapter(
       Effect.gen(function* () {
         const cancelledRecovery = yield* cancelWedgeRecovery(threadId, turnId);
         const ctx = sessions.get(threadId);
-        // The caller may still know only the original turn during restart.
         if (cancelledRecovery && (!ctx || (turnId !== undefined && ctx.activeTurnId !== turnId)))
           return;
         yield* interruptDevinTurn(threadId, turnId);
@@ -3000,9 +2765,6 @@ export function makeDevinAdapter(
           return;
         }
         const activeTurnId = turnId ?? ctx.activeTurnId;
-        // A turn that is still starting has no prompt fiber to interrupt yet
-        // (it may be gated on resume replay); flag it so startDevinTurn aborts
-        // before prompting instead of running the cancelled turn anyway.
         if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
           ctx.pendingTurnInterrupted = true;
         }
@@ -3020,8 +2782,6 @@ export function makeDevinAdapter(
                 ),
               ),
             );
-            // A resolved prompt is already draining or settling its result.
-            // Leave that fiber alive so onInterrupt cannot reclassify it.
             if (activePromptFiber !== undefined && !ctx.activePromptResolved) {
               yield* Fiber.interrupt(activePromptFiber);
             }
@@ -3134,8 +2894,6 @@ export function makeDevinAdapter(
           ? undefined
           : `${input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin"}\u0000${cwd}`;
       const cached = cacheKey === undefined ? undefined : commandDiscoveryCache.get(cacheKey);
-      // Fast path: serve a fresh cached result without serializing behind the
-      // discovery lock.
       if (
         cacheKey !== undefined &&
         input.forceReload !== true &&
@@ -3161,8 +2919,6 @@ export function makeDevinAdapter(
           const binaryPath =
             input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin";
           const cacheKey = `${binaryPath}\u0000${cwd}`;
-          // Recheck under the lock: a concurrent discovery may have populated
-          // the cache while this fiber waited for the permit.
           const cached = commandDiscoveryCache.get(cacheKey);
           if (input.forceReload !== true && cached && cached.expiresAt > Date.now()) {
             return { ...cached.result, cached: true };
@@ -3221,10 +2977,7 @@ export function makeDevinAdapter(
 
     const compactThread: NonNullable<DevinAdapterShape["compactThread"]> = (threadId) =>
       Effect.gen(function* () {
-        // Wait for a settling resume replay before taking the thread lock:
-        // stopSession/startSession need that lock, and stopping the session is
-        // what resolves the deferred early, so awaiting under the lock would
-        // stall stop/restart until the replay quiets or the hard timeout fires.
+        // wait for settling replay before taking the thread lock — stopping resolves the deferred early, so awaiting under the lock would stall stop/restart
         const preLockCtx = yield* requireSession(threadId);
         if (preLockCtx.sessionConfigReady !== undefined) {
           yield* Deferred.await(preLockCtx.sessionConfigReady);
@@ -3232,16 +2985,10 @@ export function makeDevinAdapter(
         if (preLockCtx.resumeReplayReady !== undefined) {
           yield* Deferred.await(preLockCtx.resumeReplayReady);
         }
-        // Claim the compaction slot under the thread lock, but run the
-        // (potentially long) /compact prompt outside it: stopSession/restart
-        // take the same lock, and a hung compaction must never block
-        // stopSessionInternal from cancelling or killing the child.
+        // claim the slot under the lock but run /compact outside it — a hung compaction must never block stopSessionInternal's cancel/kill
         const ctx = yield* withThreadLock(threadId, claimDevinCompactionSlot(threadId, preLockCtx));
         return yield* runDevinCompaction(ctx).pipe(
-          // compactingThread stays set until this clears it: sendTurn only
-          // rejects while the flag is true, so clearing before the
-          // completion/thread-state events publish would let a new turn start
-          // and then be trailed by stale compaction bookkeeping.
+          // compactingThread stays set until this clears it — clearing early would let a new turn start then be trailed by stale compaction bookkeeping
           Effect.ensuring(
             Effect.sync(() => {
               ctx.compactingThread = false;
@@ -3253,9 +3000,7 @@ export function makeDevinAdapter(
     const claimDevinCompactionSlot = (threadId: ThreadId, preLockCtx: DevinSessionContext) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        // The pre-lock replay wait resolves early when the session is stopped;
-        // if a restart won the lock first, this thread id now maps to a fresh
-        // session that the original compaction request never targeted.
+        // the pre-lock wait resolves early on stop — if a restart won the lock, this thread now maps to a session the compaction never targeted
         if (ctx !== preLockCtx) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -3265,16 +3010,13 @@ export function makeDevinAdapter(
           });
         }
         if (ctx.resumeReplayReady !== undefined) {
-          // The session was restarted while waiting above and its new replay
-          // window is still settling; reject instead of blocking the lock.
+          // the session restarted while waiting and its new replay window is still settling — reject instead of blocking the lock
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "compactThread",
             issue: "Cannot compact while the resumed Devin thread is still replaying history.",
           });
         }
-        // The prompt runs outside the thread lock, so a concurrent /compact can
-        // reach this point while one is already in flight; reject it here.
         if (ctx.compactingThread) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -3282,9 +3024,6 @@ export function makeDevinAdapter(
             issue: "A Devin context compaction is already in progress.",
           });
         }
-        // turnStarting covers a sendTurn that is past its compaction check but
-        // has not assigned ctx.activeTurnId yet; the check and the flag write
-        // below stay in one synchronous block so the two paths cannot interleave.
         if (ctx.activeTurnId !== undefined || ctx.turnStarting) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -3297,8 +3036,6 @@ export function makeDevinAdapter(
         return ctx;
       });
 
-    // Every compaction failure path records the same terminal failed event
-    // and surfaces the same request error; only the title/detail differ.
     const failDevinCompaction = (ctx: DevinSessionContext, title: string, detail: string) =>
       Effect.gen(function* () {
         yield* emitDevinContextCompactionRuntimeEvent(ctx, {
@@ -3318,8 +3055,6 @@ export function makeDevinAdapter(
 
     const runDevinCompaction = (ctx: DevinSessionContext) =>
       Effect.gen(function* () {
-        // A previous timed-out /compact may still be cancelling; preserve the
-        // same ordering requirement as new turns.
         yield* waitForAbandonedDevinCompaction(ctx);
         yield* emitDevinContextCompactionRuntimeEvent(ctx, {
           lifecycle: "item.updated",
@@ -3347,12 +3082,7 @@ export function makeDevinAdapter(
 
         const promptResponse = Option.getOrUndefined(compactResult.value);
         if (promptResponse === undefined) {
-          // Timed out: tell the child to abandon the prompt (best effort) and
-          // surface the failure instead of leaving compactingThread wedged.
-          // The cancel may take a moment to drain; suppress stragglers so the
-          // next turn cannot inherit stale compaction updates. The cancel is
-          // forked, not awaited: the child just proved it can go silent, and a
-          // hung session/cancel would keep compactingThread set forever.
+          // timed out: fork a best-effort cancel and suppress stragglers so the next turn can't inherit stale updates — the child just proved it can go silent, so a hung cancel must not wedge compactingThread
           ctx.compactionQuietUntil = Date.now() + DEVIN_COMPACT_ABANDON_QUIET_MS;
           ctx.compactionCancelFiber = yield* Effect.ignore(ctx.acp.cancel).pipe(
             Effect.forkIn(ctx.scope),
@@ -3365,31 +3095,21 @@ export function makeDevinAdapter(
           return yield* failDevinCompaction(ctx, "Context compaction timed out", detail);
         }
 
-        // The failed-tool detail below is recorded by the notification
-        // consumer, which can lag the prompt response (the update may still
-        // sit in the event queue); wait for inbound activity to go quiet
-        // before deciding the outcome.
         yield* settleDevinCompactionOutcome(ctx);
 
-        // ACP can answer a /compact prompt successfully with stopReason
-        // "cancelled" (user interrupt via session/cancel); that is not a
-        // completed compaction and must not be persisted as one.
+        // ACP can answer /compact successfully with stopReason "cancelled" — not a completed compaction, must not persist as one
         if (promptResponse.stopReason === "cancelled") {
           const detail = "Devin context compaction was cancelled before it completed.";
           return yield* failDevinCompaction(ctx, "Context compaction cancelled", detail);
         }
 
-        // A compaction tool call can fail while the /compact prompt itself
-        // still resolves successfully; honor the recorded failure instead of
-        // persisting the compaction as completed.
+        // a compaction tool call can fail while /compact resolves — honor the recorded failure instead of persisting completion
         const failedToolDetail = ctx.compactionFailedToolDetail;
         if (failedToolDetail !== undefined) {
           return yield* failDevinCompaction(ctx, "Context compaction failed", failedToolDetail);
         }
 
-        // Success: thread.state.changed is the single terminal signal —
-        // ingestion projects it into the "Context compacted manually" row, so
-        // emitting an item.completed row here too would duplicate it.
+        // success: thread.state.changed is the single terminal signal — an item.completed row here would duplicate it
         yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "thread.state.changed",
           ...(yield* makeEventStamp()),
@@ -3422,9 +3142,7 @@ export function makeDevinAdapter(
         Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
       ),
     );
-    // Registered after the stopAll finalizer so LIFO teardown closes the
-    // recovery scope first: an in-flight recovery must not restart a session
-    // after stopAll has already torn every session down.
+    // registered after the stopAll finalizer so LIFO closes the recovery scope first — an in-flight recovery must not restart a session after stopAll
     yield* Effect.addFinalizer(() => Scope.close(wedgeRecoveryScope, Exit.void));
 
     const streamEvents = Stream.fromPubSub(runtimeEventPubSub);

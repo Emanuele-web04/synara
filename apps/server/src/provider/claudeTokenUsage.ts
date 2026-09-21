@@ -162,8 +162,7 @@ export function resolveClaudeApiModelIdContextWindowMaxTokens(
   if (!apiModelId) {
     return undefined;
   }
-  // Bootstrap estimate only: the live SDK response takes precedence.
-  // Opus/Sonnet 4.6 need extended-context opt-in; capacity remains 1M.
+  // bootstrap estimate only — the live SDK response takes precedence; Opus/Sonnet 4.6 need extended-context opt-in for 1M
   return (
     claudeContextWindowTokensForOption(getClaudeContextWindowSuffix(apiModelId)) ??
     (/^claude-(?:opus|sonnet)-4-6$/u.test(apiModelId) ? 200_000 : undefined) ??
@@ -180,8 +179,7 @@ export function resolveSelectedClaudeAutoCompactWindow(
 ): number | undefined {
   const caps = getModelCapabilities("claudeAgent", model);
   const selected = trimOrNull(selectedAutoCompactWindow);
-  // Only an explicit override is pinned; the model-native window is left to
-  // Claude Code's own resolution (server tuning, settings.json, env override).
+  // Only an explicit override is pinned; the model-native window is left to Claude Code's own resolution (server tuning, settings.json, env override).
   if (
     !selected ||
     selected === getDefaultAutoCompactWindow(caps) ||
@@ -198,8 +196,7 @@ export function resolveEffectiveClaudeContextWindow(input: {
 }): number | undefined {
   const { reportedContextWindow, lastKnownContextWindow } = input;
   if (reportedContextWindow !== undefined && lastKnownContextWindow !== undefined) {
-    // Some SDK result payloads still report the historical 200k window for
-    // native-1M models. Never downgrade a known model capacity from that field.
+    // some SDK payloads still report the historical 200k window for native-1M models — never downgrade a known capacity from it
     return Math.max(reportedContextWindow, lastKnownContextWindow);
   }
   return reportedContextWindow ?? lastKnownContextWindow;

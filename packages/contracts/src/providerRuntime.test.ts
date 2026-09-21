@@ -202,9 +202,7 @@ describe("ProviderRuntimeEvent", () => {
   });
 
   it("decodes item.completed with raw (untrimmed) tool output in detail", () => {
-    // Tool output legitimately carries leading/trailing whitespace; the durable
-    // journal must not reject it (previously quarantined with
-    // "Expected a string with no leading or trailing whitespace").
+    // tool output legitimately carries leading/trailing whitespace — the journal must not reject it (was quarantined with TrimmedNonEmptyString)
     const rawOutput = "COMMAND   PID  USER   FD   TYPE\nbun.exe 33263 zachz   10u  IPv4\ndone\n";
     const parsed = decodeRuntimeEvent({
       type: "item.completed",

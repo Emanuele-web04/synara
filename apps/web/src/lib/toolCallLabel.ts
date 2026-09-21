@@ -1,9 +1,3 @@
-// FILE: toolCallLabel.ts
-// Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
-// Layer: UI utility
-// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveFriendlyCommandTarget, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
-// Depends on: @synara/contracts tool lifecycle item types
-
 import type { ToolLifecycleItemType } from "@synara/contracts";
 import { BROWSER_TOOL_TITLES } from "@synara/shared/browserAutomationPresentation";
 import { basenameOfPath } from "../file-icons";
@@ -16,9 +10,7 @@ export function normalizeCompactToolLabel(value: string): string {
     .trim();
 }
 
-// Canonical form for comparing tool display strings (heading vs preview vs
-// label): ignores case, whitespace runs, and trailing status words so dedup
-// decisions behave identically in the work-log builder and the timeline rows.
+// canonical form for comparing tool display strings: ignores case, whitespace runs, and trailing status words so dedup behaves identically in the work-log builder and timeline rows
 export function normalizeToolTextForComparison(value: string | undefined): string {
   return normalizeCompactToolLabel(value ?? "")
     .toLowerCase()
@@ -26,10 +18,7 @@ export function normalizeToolTextForComparison(value: string | undefined): strin
     .trim();
 }
 
-// Web-fetch tool calls (e.g. Claude's `WebFetch`) arrive as generic dynamic tool
-// calls whose detail is the raw `ToolName: {json}` argument summary. Recognizing
-// them lets the timeline surface the target site (favicon + URL) instead of the
-// raw JSON arguments.
+// WebFetch arrives as a generic dynamic call whose detail is the raw `ToolName: {json}` summary — recognizing it lets the timeline surface favicon+URL instead of raw JSON
 const WEB_FETCH_TOOL_NAMES = new Set(["webfetch", "fetch", "urlfetch", "fetchurl", "httpfetch"]);
 
 function isWebFetchToolName(toolName: string | null | undefined): boolean {
@@ -46,11 +35,7 @@ function isWebFetchToolName(toolName: string | null | undefined): boolean {
   );
 }
 
-// Pulls the first http(s) URL out of a web-fetch tool call's argument summary.
-// Prefers the JSON `url`/`uri` field (the actual shape) and falls back to a bare
-// URL token so a slightly different summary still resolves. Returns null for
-// non-fetch tools or when no usable URL is present, so callers fall back to the
-// generic tool-call rendering.
+// prefer the JSON url/uri field, fall back to a bare URL token; null for non-fetch so callers use generic rendering
 export function extractWebFetchUrl(input: {
   readonly toolName?: string | null | undefined;
   readonly detail?: string | null | undefined;
@@ -71,7 +56,6 @@ export function extractWebFetchUrl(input: {
   return null;
 }
 
-// Turns internal MCP identifiers into readable inline labels for timeline rows.
 function humanizeMcpToolIdentifier(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed.startsWith("mcp__")) {
@@ -388,9 +372,7 @@ function resolveSynaraMcpToolPresentation(
     if (knownPresentation) {
       return knownPresentation;
     }
-    // Free-text summaries (e.g. reconciler activity lines) can begin with the
-    // word "Synara" and normalize into a fake tool identifier; only
-    // identifier-shaped candidates may take an invented fallback presentation.
+    // free-text summaries can begin with "Synara" and normalize into a fake tool identifier — only identifier-shaped candidates may take an invented fallback
     if (/\s/.test(candidate.trim())) {
       continue;
     }
@@ -430,9 +412,7 @@ export function isSynaraBrowserToolCall(input: SynaraMcpToolTitleInput): boolean
   return resolveSynaraBrowserToolName([input.toolName, input.title, input.fallbackLabel]) !== null;
 }
 
-// Every provider exposes Synara's MCP tools differently: MCP, dynamic, and even
-// file-change rows can all represent the same gateway action. Normalize by tool
-// identity instead of provider item type so transport details never reach the UI.
+// every provider exposes Synara's MCP tools differently — normalize by tool identity not provider item type so transport details never reach the UI
 export function deriveSynaraMcpToolTitle(input: SynaraMcpToolTitleInput): string | null {
   const presentation = resolveSynaraMcpToolPresentation([
     input.toolName,
@@ -481,14 +461,12 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
     : null;
   const commandLike = input.itemType === "command_execution" || input.requestKind === "command";
 
-  // Derive a verbal label from requestKind when the title is generic
   const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType);
 
   if (normalizedTitle.length > 0 && !isGenericToolTitle(normalizedTitle)) {
     return normalizedTitle;
   }
 
-  // Use verbal requestKind label before falling back to raw descriptors
   if (requestKindLabel) {
     return requestKindLabel;
   }
@@ -718,10 +696,7 @@ function collectDescriptorCandidates(
   }
 }
 
-// Read-only inspection commands surfaced with the search/magnifying-glass icon in
-// the timeline (reads, searches, finds, listings), as opposed to commands that
-// mutate or execute, which keep the terminal icon. These sets are the single
-// source of truth for both the command labels below and the icon decision.
+// single source for both the command labels and the icon decision — read-only inspection commands get the search icon, mutating ones keep the terminal icon
 const READ_FILE_COMMAND_TOOLS = new Set(["cat", "nl", "head", "tail", "sed", "less", "more"]);
 const SEARCH_COMMAND_TOOLS = new Set(["rg", "grep", "ag", "ack"]);
 const FIND_COMMAND_TOOLS = new Set(["find", "fd"]);
@@ -736,7 +711,6 @@ function isInspectCommandTool(tool: string): boolean {
   );
 }
 
-// Derives the compact command sentence shown inline while preserving the full command for hover/detail UI.
 export function deriveReadableCommandDisplay(
   rawCommand: string,
   isRunning = false,
@@ -836,9 +810,7 @@ function firstCommandExecutable(rawCommand: string): string {
   return executable.split(/[\\/]/u).at(-1)?.toLowerCase() ?? "";
 }
 
-// The object half of a command row's sentence ("Searched <for foo in src>"),
-// kept short enough to read inline. Shell wrappers that carry no meaning for a
-// human (a full pwsh.exe path) collapse to the shell's friendly name.
+// shell wrappers carrying no meaning (a full pwsh.exe path) collapse to the shell's friendly name
 export function deriveFriendlyCommandTarget(rawCommand: string): string {
   const executable = firstCommandExecutable(rawCommand);
   if (
@@ -857,8 +829,7 @@ export function deriveFriendlyCommandTarget(rawCommand: string): string {
   return target.length <= 72 ? target : `${target.slice(0, 69).trimEnd()}…`;
 }
 
-// Classifies command rows for transcript glyphs after peeling away shell/env wrappers.
-// This keeps `git -C`, `env ... gh`, and `/bin/zsh -lc "cd ... && git ..."` visually branded.
+// peel away shell/env wrappers so `git -C`, `env ... gh`, `/bin/zsh -lc "cd && git"` stay visually branded
 export function resolveCommandVisualKind(rawCommand: string): CommandVisualKind {
   const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
   const [tool] = splitToolAndArgs(firstShellCommandSegment(command));

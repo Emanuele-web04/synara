@@ -1,8 +1,3 @@
-// FILE: FactoryPluginDiscovery.ts
-// Purpose: Reads Factory's local plugin marketplaces into Synara's provider discovery contracts.
-// Layer: Provider filesystem discovery
-// Exports: listFactoryPlugins and readFactoryPlugin.
-
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 
@@ -163,7 +158,6 @@ async function pluginDescriptor(input: {
   };
 }
 
-// Lists locally registered Factory marketplaces without mutating or refreshing them.
 export async function listFactoryPlugins(
   homeDir: string,
   cwd?: string,
@@ -213,7 +207,6 @@ export async function listFactoryPlugins(
   };
 }
 
-// Reads one marketplace plugin plus its bundled skills for the plugin detail panel.
 export async function readFactoryPlugin(input: {
   readonly homeDir: string;
   readonly marketplacePath: string;

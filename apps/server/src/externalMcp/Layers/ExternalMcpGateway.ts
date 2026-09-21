@@ -143,7 +143,7 @@ function createdThreadIds(result: McpToolCallResult) {
       return payload.threadIds.filter((value): value is string => typeof value === "string");
     }
   } catch {
-    // Audit extraction is deliberately best-effort and never stores prompt text.
+    // audit extraction is deliberately best-effort and never stores prompt text
   }
   return [];
 }
@@ -329,9 +329,7 @@ export const makeExternalMcpGateway = Effect.gen(function* () {
       Effect.gen(function* () {
         const snapshot = yield* snapshotQuery.getShellSnapshot();
         const availabilities = yield* loadProviderAvailabilities;
-        // Thread titles are metadata about tasks the integration did not
-        // create, so they stay behind the explicit tasks:read-project scope;
-        // counts alone are safe under projects:read.
+        // titles are metadata about foreign tasks — behind tasks:read-project; counts alone are safe under projects:read
         const includeThreadMetadata = context.client.capabilities.has("tasks:read-project");
         const projects = buildExternalMcpOverviewProjects({
           projects: snapshot.projects,

@@ -166,8 +166,7 @@ describe("ChatTranscriptPane", () => {
 
   it("expands collapsed user messages from the Show more control", async () => {
     const hiddenTail = "TAIL_SHOULD_APPEAR_AFTER_EXPAND";
-    // Well past the visual line clamp so the collapsed message measures as
-    // overflowing regardless of viewport width.
+    // Well past the visual line clamp so the collapsed message measures as overflowing regardless of viewport width.
     const longUserText = `${Array.from({ length: 40 }, (_, index) => `line ${index}`).join("\n")}\n${hiddenTail}`;
     const host = document.createElement("div");
     host.style.cssText = "display:flex;width:600px;height:520px;overflow:hidden;";
@@ -228,8 +227,7 @@ describe("ChatTranscriptPane", () => {
       { container: host },
     );
     try {
-      // Collapsing is a visual clamp: the tail stays in the DOM but the clamp
-      // wrapper is overflowing (cut off) until the message is expanded.
+      // Collapsing is a visual clamp: the tail stays in the DOM but the clamp wrapper is overflowing (cut off) until the message is expanded.
       await vi.waitFor(() => {
         const clampWrapper = screen.container.querySelector('[data-user-message-clamp="true"]');
         expect(clampWrapper).not.toBeNull();

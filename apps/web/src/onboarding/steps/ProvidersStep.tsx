@@ -1,10 +1,3 @@
-// FILE: ProvidersStep.tsx
-// Purpose: Provider grid for the welcome tour: one card per runtime with its detection
-//          status, an enable/disable checkbox bound to the server-backed `disabledProviders`
-//          setting, inline sign-in for detected-but-unauthenticated CLIs, and a setup-guide
-//          link for missing ones.
-// Layer: Web UI component
-
 import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { useQuery } from "@tanstack/react-query";
@@ -79,9 +72,7 @@ function useDisabledProvidersDraft(): {
     () => new Set(settings.disabledProviders),
   );
   const draftRef = useRef(draft);
-  // State, not a ref: a rejected write refetches settings *before* the count drops, so the
-  // resync must run again once the final write settles or the draft would stay rolled
-  // forward on the rejected value.
+  // State, not a ref: a rejected write refetches settings *before* the count drops, so the resync must run again once the final write settles or the draft would stay rolled forward on the rejected value.
   const [pendingWrites, setPendingWrites] = useState(0);
   const serverDisabledProviders = settings.disabledProviders;
 
@@ -163,8 +154,7 @@ export function ProvidersStep() {
     setConnectingProvider(provider);
   };
 
-  // The terminal mounts below the provider grid in a fixed-height dialog; bring it into
-  // view so the sign-in prompt is not left under the scroll fold.
+  // The terminal mounts below the provider grid in a fixed-height dialog; bring it into view so the sign-in prompt is not left under the scroll fold.
   const terminalRegionRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!connectingProvider) return;

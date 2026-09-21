@@ -17,9 +17,7 @@ document.title = APP_DISPLAY_NAME;
 
 if (isElectron) {
   document.documentElement.dataset.runtime = "electron";
-  // macOS desktop windows are transparent vibrancy windows (see getWindowMaterialOptions
-  // in apps/desktop), and Chromium cannot render `backdrop-filter` inside transparent
-  // windows — frosted surfaces must fall back to a more opaque fill (see index.css).
+  // macOS desktop windows are transparent vibrancy surfaces and Chromium cannot render backdrop-filter inside them — frosted surfaces fall back to a more opaque fill (index.css)
   if (isMacPlatform(navigator.platform)) {
     document.documentElement.dataset.windowTransparent = "true";
   }

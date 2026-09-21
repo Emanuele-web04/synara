@@ -1,7 +1,3 @@
-// FILE: platformProcess.ts
-// Purpose: Plans shell-free child-process launches behind one cross-platform boundary.
-// Layer: Shared platform runtime
-
 import { statSync } from "node:fs";
 import { win32 } from "node:path";
 
@@ -19,7 +15,7 @@ export interface ProcessLaunchInput {
   readonly platform?: NodeJS.Platform;
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
-  /** Fail before spawn when the native executable cannot be resolved. */
+  /** fail before spawn when the native executable can't be resolved */
   readonly requireExecutable?: boolean;
 }
 
@@ -43,11 +39,7 @@ export class ExecutableNotFoundError extends Error {
 const WINDOWS_COMMAND_NOT_FOUND_EXIT_CODE = 9009;
 const WINDOWS_COMMAND_NOT_FOUND_PATTERN = /is not recognized as an internal or external command/iu;
 
-/**
- * True when a finished process reported "command not found" through its exit
- * rather than a spawn error. cmd.exe does this for a `.cmd` shim whose target
- * is missing, so a batch-wrapped launch can only be diagnosed after exit.
- */
+/** cmd.exe reports "command not found" via exit, not a spawn error — a batch-wrapped launch can only be diagnosed after exit */
 export function isCommandNotFoundExit(input: {
   readonly code: number | null;
   readonly stderr: string;
@@ -88,11 +80,7 @@ function nativeExecutable(
   );
 }
 
-/**
- * Converts one logical command into the exact executable/argv pair the host
- * runtime must use. Application and provider code must not reproduce the
- * Windows `.cmd`, `cmd.exe`, PATHEXT, or WSL rules represented here.
- */
+/** application/provider code must not reproduce the Windows .cmd/cmd.exe/PATHEXT/WSL rules represented here */
 export function prepareProcess(
   command: string,
   args: ReadonlyArray<string>,

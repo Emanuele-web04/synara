@@ -1,14 +1,3 @@
-// FILE: WorkflowRunCard.logic.ts
-// Purpose: Derives the workflow run panel (Claude dynamic workflows) from task
-// activities: the workflow header plus one row per member agent with status and
-// elapsed-time snapshots. Workflow agents surface through the workflow task's own
-// progress descriptions ("<phase>: <label>"); phases parsed from the script meta
-// build the phase rail, and the persisted runId/scriptPath from the launch result
-// drive pause/resume on settled runs.
-// Layer: Chat composer logic
-// Exports: deriveWorkflowRunState, WorkflowRunState, WorkflowAgentRow,
-// workflowElapsedMs, and buildWorkflowResumePrompt
-
 import { ThreadId, type OrchestrationThreadActivity } from "@synara/contracts";
 
 import { orderedActivities } from "../../session-logic";
@@ -30,8 +19,7 @@ export interface WorkflowAgentRow {
   // Raw model id (live transcript > final snapshot > planned script opts).
   model: string | null;
   modelLabel: string | undefined;
-  // Reasoning effort, same precedence as model (live transcript > final
-  // snapshot > planned script opts).
+  // Reasoning effort, same precedence as model (live transcript > final snapshot > planned script opts).
   effortLabel: string | null;
   promptPreview: string | null;
   recentToolNames: string[];
@@ -62,8 +50,7 @@ export interface WorkflowRunState {
   phases: WorkflowPhaseSummary[] | null;
   runningCount: number;
   agents: WorkflowAgentRow[];
-  // Workflow task id plus member ids, so callers can dedupe the generic
-  // background-agent count against rows this panel already shows.
+  // Workflow task id plus member ids, so callers can dedupe the generic background-agent count against rows this panel already shows.
   taskIds: string[];
 }
 
@@ -74,8 +61,7 @@ export interface WorkflowSubagentThreadRef {
   effort?: string | undefined;
 }
 
-// One composer turn re-invokes the Workflow tool against the persisted script;
-// completed agent() calls replay from cache, so stop-then-resume behaves as pause.
+// completed agent() calls replay from cache on re-invocation, so stop-then-resume behaves as pause
 export function buildWorkflowResumePrompt(scriptPath: string, runId: string): string {
   return `Resume the workflow by invoking the Workflow tool with {"scriptPath": ${JSON.stringify(scriptPath)}, "resumeFromRunId": ${JSON.stringify(runId)}}. Do not modify the script.`;
 }
@@ -274,8 +260,7 @@ function readLiveAgents(value: unknown): WorkflowLiveAgent[] | null {
   return agents.length > 0 ? agents : null;
 }
 
-// Workflow progress descriptions arrive as "<phase title>: <agent label>"; a
-// description without the separator is treated as a bare label.
+// Workflow progress descriptions arrive as "<phase title>: <agent label>"; a description without the separator is treated as a bare label.
 function parseProgressDescription(description: string): Omit<WorkflowProgressEntry, "at"> | null {
   const separator = description.indexOf(": ");
   const phase = separator > 0 ? description.slice(0, separator).trim() : null;
@@ -287,8 +272,7 @@ function completionStatus(status: string | null): TaskSnapshot["status"] {
   return status === "failed" ? "failed" : status === "stopped" ? "stopped" : "completed";
 }
 
-// Folds the task lifecycle activities into one snapshot per task id. Later
-// activities win on status/usage; identity fields stick from task.started.
+// Folds the task lifecycle activities into one snapshot per task id. Later activities win on status/usage; identity fields stick from task.started.
 function collectTaskSnapshots(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): Map<string, TaskSnapshot> {
@@ -342,8 +326,7 @@ function collectTaskSnapshots(
       const usage = readUsage(payload);
       snapshot.totalTokens = usage.totalTokens ?? snapshot.totalTokens;
       snapshot.durationMs = usage.durationMs ?? snapshot.durationMs;
-      // Poller-emitted snapshot events: their description is synthetic, not a
-      // "<phase>: <label>" progress entry.
+      // Poller-emitted snapshot events: their description is synthetic, not a "<phase>: <label>" progress entry.
       const liveAgents = readLiveAgents(payload.workflowAgents);
       if (liveAgents) {
         snapshot.liveAgents = liveAgents;
@@ -426,8 +409,7 @@ function finalAgentStatus(
   }
 }
 
-// Duration for settled live snapshots; running rows return null so the card's
-// ticking wall clock takes over.
+// Duration for settled live snapshots; running rows return null so the card's ticking wall clock takes over.
 function liveDurationMs(agent: WorkflowLiveAgent | null | undefined): number | null {
   if (!agent || agent.state !== "completed" || !agent.startedAt || !agent.lastActivityAt) {
     return null;
@@ -437,8 +419,7 @@ function liveDurationMs(agent: WorkflowLiveAgent | null | undefined): number | n
   return Number.isNaN(startedMs) || Number.isNaN(lastMs) ? null : Math.max(0, lastMs - startedMs);
 }
 
-// Wall-clock fallback used by the card's ticking labels when usage has not
-// reported a duration yet (or the row is still live).
+// Wall-clock fallback used by the card's ticking labels when usage has not reported a duration yet (or the row is still live).
 export function workflowElapsedMs(
   row: Pick<WorkflowAgentRow, "durationMs" | "statusKind" | "startedAt">,
   nowMs: number,
@@ -461,8 +442,7 @@ export function deriveWorkflowRunState(input: {
 }): WorkflowRunState | null {
   const snapshots = collectTaskSnapshots(input.activities);
 
-  // The panel tracks the latest workflow run. Settled runs stay visible while
-  // they can still be resumed (or were paused by the user) until dismissed.
+  // The panel tracks the latest workflow run. Settled runs stay visible while they can still be resumed (or were paused by the user) until dismissed.
   const workflow = [...snapshots.values()].findLast(
     (snapshot) => snapshot.taskType === "local_workflow",
   );
@@ -477,8 +457,7 @@ export function deriveWorkflowRunState(input: {
     return null;
   }
 
-  // Script-parsed label -> planned opts; a fallback for phase placement and the
-  // only source for planned model/effort before live data arrives.
+  // Script-parsed label -> planned opts; a fallback for phase placement and the only source for planned model/effort before live data arrives.
   const planForLabel = (label: string): WorkflowAgentPlanEntry | null => {
     const plans = workflow.agentPlans;
     if (!plans) {
@@ -493,8 +472,7 @@ export function deriveWorkflowRunState(input: {
     return match ? match[1] : null;
   };
 
-  // Script-parsed label -> phase pairs; only a fallback for placing rows when
-  // live progress carries no phase.
+  // Script-parsed label -> phase pairs; only a fallback for placing rows when live progress carries no phase.
   const phaseForLabel = (label: string): string | null => {
     const planned = planForLabel(label)?.phase;
     if (planned) {
@@ -514,8 +492,7 @@ export function deriveWorkflowRunState(input: {
     return match ? match[1] : null;
   };
 
-  // Progress phase titles are normalized onto the meta phase list so casing
-  // differences cannot split a phase into two rail entries.
+  // Progress phase titles are normalized onto the meta phase list so casing differences cannot split a phase into two rail entries.
   const canonicalPhase = (phase: string | null): string | null => {
     if (phase === null) {
       return null;
@@ -524,11 +501,7 @@ export function deriveWorkflowRunState(input: {
     return workflow.phases?.find((entry) => entry.title.toLowerCase() === lower)?.title ?? phase;
   };
 
-  // Member-task rows: plain background tasks tagged onto the run. Workflow
-  // agents themselves emit no task events, so these are usually empty.
-  // Ambient shell tasks (every Bash call surfaces as a local_bash task) are
-  // not agents, and Task-tool subagents already render in the subagent strip;
-  // drop both here too so already-persisted runs render clean.
+  // workflow agents emit no task events; ambient shell tasks (every Bash call → local_bash) aren't agents and Task-tool subagents already render in the subagent strip — drop both here too
   const memberSnapshots = [...snapshots.values()].filter(
     (snapshot) =>
       snapshot.workflowTaskId === workflow.taskId &&
@@ -568,8 +541,7 @@ export function deriveWorkflowRunState(input: {
     };
   });
 
-  // Progress rows: one per distinct label from the workflow's own progress
-  // events; the latest entry decides the run's current phase.
+  // Progress rows: one per distinct label from the workflow's own progress events; the latest entry decides the run's current phase.
   const progressByLabel = new Map<string, { phase: string | null; firstAt: string }>();
   for (const entry of workflow.progress) {
     const existing = progressByLabel.get(entry.label);
@@ -586,9 +558,7 @@ export function deriveWorkflowRunState(input: {
   const finalAgentPhase = (agent: WorkflowFinalAgent): string | null =>
     canonicalPhase(agent.phaseTitle) ??
     (agent.phaseIndex !== null ? (workflow.phases?.[agent.phaseIndex - 1]?.title ?? null) : null);
-  // Live snapshots join by label when the server zipped one on; unlabeled
-  // snapshots fall back to first-seen order (progress labels arrive in agent
-  // start order, the same order journal starts are recorded in).
+  // Live snapshots join by label when the server zipped one on; unlabeled snapshots fall back to first-seen order (progress labels arrive in agent start order, the same order journal starts are recorded in).
   const liveAgents = workflow.liveAgents ?? [];
   const liveByLabel = new Map(
     liveAgents.flatMap(
@@ -656,8 +626,7 @@ export function deriveWorkflowRunState(input: {
       };
     });
 
-  // Settled runs backfill agents the live stream never mentioned (e.g. a phase
-  // that finished between progress ticks) from the final progress file.
+  // Settled runs backfill agents the live stream never mentioned (e.g. a phase that finished between progress ticks) from the final progress file.
   const seenLabels = new Set(
     [...progressRows, ...memberRows].map((row) => row.description.toLowerCase()),
   );
@@ -692,9 +661,7 @@ export function deriveWorkflowRunState(input: {
         })
     : [];
 
-  // Live rows: transcript-poller snapshots for agents the progress stream never
-  // named (or before their first progress event lands). Hidden once settled --
-  // the final progress file is authoritative then.
+  // transcript-poller snapshots for agents the progress stream never named — hidden once settled (the final progress file is authoritative then)
   const liveOnlyRows = settled
     ? []
     : liveAgents
@@ -733,17 +700,14 @@ export function deriveWorkflowRunState(input: {
 
   const agents = [...memberRows, ...progressRows, ...backfilledRows, ...liveOnlyRows];
 
-  // Once any phase information exists, unplaced rows land in a trailing "Other"
-  // bucket; with none at all every phase stays null and the flat phase-less
-  // rendering is preserved.
+  // Once any phase information exists, unplaced rows land in a trailing "Other" bucket; with none at all every phase stays null and the flat phase-less rendering is preserved.
   if (workflow.phases !== null || agents.some((row) => row.phase !== null)) {
     for (const row of agents) {
       row.phase ??= OTHER_PHASE_TITLE;
     }
   }
 
-  // Phase rail: meta phases in declared order, then phases only seen live, with
-  // the "Other" bucket trailing.
+  // Phase rail: meta phases in declared order, then phases only seen live, with the "Other" bucket trailing.
   const orderedPhases: Array<{ title: string; detail: string | null }> = [
     ...(workflow.phases ?? []),
   ];

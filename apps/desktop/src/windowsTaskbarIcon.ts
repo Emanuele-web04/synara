@@ -1,16 +1,9 @@
-// FILE: windowsTaskbarIcon.ts
-// Purpose: Bind a shell-visible ICO to the Windows taskbar and force Explorer to re-read it.
-// Layer: Desktop-native preference logic
-
 import Crypto from "node:crypto";
 import Path from "node:path";
 
 import type { BrowserWindow } from "electron";
 
-// Explorer coalesces a synchronous setSkipTaskbar(true) -> setSkipTaskbar(false)
-// toggle and keeps rendering its cached button icon, so the button must stay
-// detached long enough for the shell to process the removal before it is
-// re-registered and re-reads the window icon and AppUserModel properties.
+// Explorer coalesces a synchronous skip-taskbar true→false toggle and keeps rendering its cached icon — the button must stay detached long enough for the shell to process the removal before re-registering
 export const WINDOWS_TASKBAR_ICON_REFRESH_DELAY_MS = 400;
 
 export interface WindowsTaskbarIconIdentity {
@@ -44,18 +37,14 @@ export function resolveWindowsShellIconCacheDirectory(input: {
   readonly executablePath: string;
   readonly fallbackDirectory: string;
 }): string {
-  // Packaged installs: put the live ICO next to the exe so Explorer and the
-  // pinned shortcut load it from the same directory as the process identity.
-  // The Electron dev binary is not that identity, so keep using userdata.
+  // packaged installs put the live ICO next to the exe so Explorer and the pinned shortcut load it from the process-identity dir; the dev binary isn't that identity, so use userdata
   if (/^electron(?:\.exe)?$/i.test(Path.basename(input.executablePath))) {
     return input.fallbackDirectory;
   }
   return Path.dirname(input.executablePath);
 }
 
-// Explorer caches taskbar artwork by path. Keep the same file while the
-// preference is unchanged, but change the path whenever the user switches
-// default <-> custom so reverting is not a stale cache hit.
+// Explorer caches taskbar artwork by path — keep the same file while the preference is unchanged but change the path on a default↔custom switch so reverting isn't a stale cache hit
 export function nextWindowsShellIconCacheKey(iconKey: string): string {
   if (lastMaterializedIconKey !== iconKey) {
     windowsShellIconGeneration += 1;
@@ -202,16 +191,11 @@ export function applyWindowsTaskbarIcon(input: ApplyWindowsTaskbarIconInput): vo
 }
 
 function bindWindowsTaskbarIcon(window: BrowserWindow, input: ApplyWindowsTaskbarIconInput): void {
-  // Pass a real filesystem path. NativeImage flattening and asar-backed paths
-  // update window chrome, but Explorer's taskbar button reads an ICO from disk
-  // through the window's AppUserModel properties.
+  // the taskbar button reads an ICO from disk through AppUserModel properties — NativeImage flattening and asar-backed paths only update window chrome
   window.setIcon(input.iconPath);
   const updates = windowsTaskbarIconPropertyUpdates(input);
   try {
-    // Microsoft requires RelaunchIconResource (and relaunch command/name) to be
-    // on the window before AppUserModelID is set. Chromium's setAppDetails writes
-    // the ID first and notifies Explorer immediately, so a single call publishes
-    // the exe icon. Write the icon without an ID, then set the ID to notify.
+    // Microsoft requires RelaunchIconResource on the window before AppUserModelID — setAppDetails writes the ID first and notifies immediately, so write the icon without an ID, then set the ID to notify
     window.setAppDetails(updates.iconOnly);
     window.setAppDetails(updates.withAppId);
   } catch {
@@ -230,8 +214,7 @@ function scheduleWindowsTaskbarReregister(
     taskbarReregisterTimer = null;
     if (window.isDestroyed()) return;
     bindWindowsTaskbarIcon(window, input);
-    // Restoring the button only when the window is actually visible keeps a
-    // hidden window (close-to-tray) off the bar.
+    // restore the button only when the window is actually visible — keeps a hidden close-to-tray window off the bar
     window.setSkipTaskbar(!window.isVisible());
     if (window.isVisible()) {
       bindWindowsTaskbarIcon(window, input);

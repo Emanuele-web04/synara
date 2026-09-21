@@ -44,11 +44,8 @@ const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
   cached: false,
 };
 
-// The server admits at most two expensive reads at once, and agent discovery
-// uses the same budget. Keep model discovery to one request at a time so opening
-// the provider picker cannot reject most catalogs before their CLIs even run.
-// Foreground requests may move ahead of queued warming, but never interrupt the
-// discovery that already owns the single model slot.
+// the server admits at most two expensive reads and agent discovery shares that budget — keep model discovery to one at a time so opening the picker can't reject catalogs before their CLIs run
+// the server admits two expensive reads and agent discovery shares that budget — keep model discovery to one at a time so opening the picker cannot reject catalogs before their CLIs run; foreground may jump the queue but never interrupts the in-flight slot
 type ProviderModelDiscoveryPriority = "background" | "prefetch" | "foreground";
 
 interface ProviderModelDiscoveryTask {
@@ -137,9 +134,7 @@ export function prioritizeProviderModelDiscovery(
   for (const task of providerModelDiscoveryQueue) {
     const matches = queryKeysMatch(task.queryKey, queryKey);
     if (!matches && priority === "prefetch" && task.priority === "prefetch") {
-      // Only the newest hover target remains prefetch-priority. Foreground
-      // catalogs are not exclusive: split-view panes can observe distinct
-      // selected providers at the same time.
+      // Only the newest hover target remains prefetch-priority. Foreground catalogs are not exclusive: split-view panes can observe distinct selected providers at the same time.
       task.priority = "background";
     } else if (matches) {
       if (
@@ -148,8 +143,7 @@ export function prioritizeProviderModelDiscovery(
       ) {
         task.priority = priority;
       }
-      // A newly selected pane goes first without demoting catalogs selected
-      // in other active panes below speculative prefetch work.
+      // A newly selected pane goes first without demoting catalogs selected in other active panes below speculative prefetch work.
       task.priorityOrder = ++providerModelDiscoveryPriorityOrder;
     }
   }
@@ -204,9 +198,7 @@ function requireDiscoveredModels(
   result: ProviderListModelsResult,
   previous: ProviderListModelsResult | undefined,
 ): ProviderListModelsResult {
-  // Initial degraded discovery can still expose an adapter's usable static
-  // fallback. During a background refresh, however, keep a previously good
-  // dynamic catalog and let React Query retry the transient failure.
+  // initial degraded discovery can expose an adapter's usable static fallback; during a background refresh keep a previously good dynamic catalog and let React Query retry
   if (
     provider === "devin" &&
     result.error &&
@@ -244,8 +236,7 @@ export const providerDiscoveryQueryKeys = {
     agentDir: string | null,
     connectionKey: string | null,
   ) => ["provider-discovery", "commands", provider, cwd, agentDir, connectionKey] as const,
-  // The skill list is query-independent (filtering is client-side), so the key
-  // deliberately excludes the typed filter to avoid a refetch per keystroke.
+  // the skill list is query-independent (filtering client-side) so the key excludes the typed filter — no refetch per keystroke
   skills: (provider: ProviderKind, cwd: string | null, agentDir: string | null) =>
     ["provider-discovery", "skills", provider, cwd, agentDir] as const,
   skillsCatalog: (cwd: string | null) => ["provider-discovery", "skills-catalog", cwd] as const,
@@ -314,9 +305,7 @@ export function providerSkillsQueryOptions(input: {
   });
 }
 
-// Unified cross-provider skills catalog (settings page); not filtered by toggles.
-// Keep prior data during refetches so Settings does not flicker back to "Scanning..."
-// while the server refreshes filesystem discovery in the background.
+// keep prior data during refetches so Settings doesn't flicker back to Scanning while the server refreshes
 export function skillsCatalogQueryOptions(input?: { cwd?: string | null; enabled?: boolean }) {
   const cwd = input?.cwd ?? null;
   return queryOptions({
@@ -346,8 +335,7 @@ export function providerCommandsQueryOptions(input: {
     binaryPath: input.binaryPath ?? null,
     serverUrl: input.serverUrl ?? null,
     experimentalWebSockets: input.experimentalWebSockets ?? null,
-    // A Claude session fixes its Artifact opt-in at spawn, so two threads can report
-    // different commands and `artifacts` states; other providers answer per workspace.
+    // a Claude session fixes its Artifact opt-in at spawn — two threads can report different commands/artifacts states; other providers answer per workspace
     threadId: input.provider === "claudeAgent" ? (input.threadId ?? null) : null,
   });
   return queryOptions({
@@ -376,9 +364,7 @@ export function providerCommandsQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: 30_000,
-    // Keeps the menu populated while refetching. `artifacts` is dropped because the
-    // previous entry can belong to another Claude thread, whose session may have a
-    // different Artifact opt-in; the warning waits for this thread's own answer.
+    // `artifacts` is dropped on refetch because the previous entry can belong to another Claude thread with a different opt-in — the warning waits for this thread's own answer
     placeholderData: (previous) => {
       if (!previous) return EMPTY_COMMANDS_RESULT;
       const { artifacts: _previousArtifacts, ...rest } = previous;
@@ -438,9 +424,7 @@ export function providerModelsQueryOptions(input: {
         },
       ),
     enabled: input.enabled ?? true,
-    // Cached catalogs paint immediately while stale entries revalidate in the
-    // background. Droid discovery starts a disposable ACP session, so retain its
-    // longer cache and never repeat that work merely because the window regained focus.
+    // Droid discovery starts a disposable ACP session — retain its longer cache and never repeat that work on window focus
     retry: providerModelDiscoveryRetry(input.provider),
     staleTime:
       input.provider === "devin"
@@ -448,10 +432,7 @@ export function providerModelsQueryOptions(input: {
         : input.provider === "droid"
           ? 5 * 60_000
           : 30_000,
-    // Devin deliberately returns a usable static catalog when CLI discovery
-    // fails. Keep it visible, but retry while observed instead of treating the
-    // degraded result as a successful 30-minute cache entry. A failed refresh
-    // retains healthy data, so the query error must also keep recovery polling alive.
+    // Devin returns a usable static catalog on CLI failure — keep it visible but retry while observed; a failed refresh retains healthy data so the query error must keep recovery polling alive
     ...(input.provider === "devin"
       ? {
           refetchInterval: (query) =>
@@ -459,8 +440,7 @@ export function providerModelsQueryOptions(input: {
         }
       : {}),
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
-    // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
-    // providerModelPrefetch.ts (not imported: that module imports from here).
+    // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in providerModelPrefetch.ts (not imported: that module imports from here).
     gcTime: 30 * 60_000,
     placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
   });

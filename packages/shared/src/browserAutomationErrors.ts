@@ -8,7 +8,7 @@ import {
 } from "@synara/contracts";
 import { Schema } from "effect";
 
-// Classify known fields without exposing parser issues, code or credential values.
+// classify known fields without exposing parser issues, codes, or credential values
 export const browserInputErrorCode = (argumentsValue: unknown) => {
   if (
     argumentsValue !== null &&

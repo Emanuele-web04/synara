@@ -44,8 +44,7 @@ describe("buildMatchSegments", () => {
   });
 
   it("emphasises queries the server matched after prefix normalization", () => {
-    // The server strips leading @ ./ before matching file entries; highlighting
-    // must receive the same normalized query or matched rows lose emphasis.
+    // The server strips leading @ ./ before matching file entries; highlighting must receive the same normalized query or matched rows lose emphasis.
     expect(render("Composer.tsx", normalizeWorkspaceEntrySearchQuery("./comp"))).toBe(
       "[Comp]oser.tsx",
     );

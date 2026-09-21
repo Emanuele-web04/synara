@@ -1,27 +1,10 @@
-// FILE: backendSupervisionPolicy.ts
-// Purpose: Pure crash-supervision policy for the desktop backend: restart backoff,
-//          the give-up circuit breaker, and the output tail used to explain it.
-// Layer: Desktop backend supervision
-// Exports: BackendSupervisionPolicy, BackendOutputTailDetector, summarizeBackendFailureOutput
-
-/** First backoff step; doubles per consecutive failed start. */
 export const BACKEND_RESTART_BASE_DELAY_MS = 500;
 export const BACKEND_RESTART_MAX_DELAY_MS = 10_000;
 
-/**
- * Consecutive failed backend starts — with no readiness signal in between — after
- * which the desktop stops respawning and asks the user what to do.
- *
- * A backend that dies *during* startup can do expensive work before it fails
- * (v0.6.0 wrote a full pre-migration database backup on every attempt), so an
- * unbounded respawn loop turns one broken start into gigabytes of disk churn.
- * Five attempts spans ~7.5s of backoff: long enough to ride out a transient port
- * or filesystem race, short enough that a deterministic startup failure is
- * reported to the user almost immediately instead of never.
- */
+// breaker for consecutive failed starts: an unbounded respawn loop turns one broken start into gigabytes of disk churn (v0.6.0 wrote a full db backup per attempt); five tries spans ~7.5s backoff
 export const BACKEND_MAX_CONSECUTIVE_START_FAILURES = 5;
 
-/** Retained backend output used to explain a give-up; bounded so a chatty crash loop cannot grow it. */
+// bounded output tail retained to explain a give-up — a chatty crash loop can't grow it
 export const BACKEND_FAILURE_OUTPUT_TAIL_CHARS = 8_192;
 const BACKEND_FAILURE_SUMMARY_MAX_LINES = 8;
 
@@ -31,37 +14,23 @@ export function backendRestartDelayMs(attempt: number): number {
 }
 
 export type BackendCrashResponse =
-  /** Shutting down, or a restart is already armed: the caller does nothing. */
   | { readonly kind: "ignore" }
-  /**
-   * A migration-recovery marker appeared (usually written mid-session by the very
-   * migration that just killed the backend). Recovery owns the process from here.
-   */
+  // a migration-recovery marker (usually written mid-session by the migration that just killed the backend) means recovery owns the process from here
   | { readonly kind: "recover-migration" }
   | { readonly kind: "retry"; readonly delayMs: number; readonly attempt: number }
   | { readonly kind: "give-up"; readonly failures: number };
 
 export interface BackendStartFailureInput {
   readonly quitting: boolean;
-  /** A restart timer is already armed for an earlier failure in this cycle. */
   readonly restartPending: boolean;
-  /** The server-owned migration-recovery marker exists right now. */
   readonly migrationRecoveryMarkerPresent: boolean;
 }
 
-/**
- * Tracks consecutive backend start failures.
- *
- * Spawning a child process practically always succeeds — the failures we care
- * about happen afterwards, while the backend boots — so the counter is cleared by
- * readiness (or by a deliberate lifecycle start), never by a successful spawn.
- * Clearing it on spawn is what pins the backoff at its first step forever.
- */
+// failures that matter happen after spawn while the backend boots — the counter is cleared by readiness, never by spawn, or the backoff pins at step 1 forever
 export class BackendSupervisionPolicy {
   private failures = 0;
   private givenUp = false;
-  // Deliberately not cleared by reset(): the recovery prompt is shown once per app
-  // run, not once per restart attempt.
+  // deliberately survives reset(): the recovery prompt shows once per app run, not once per restart attempt
   private migrationRecoveryPrompted = false;
 
   get consecutiveFailures(): number {
@@ -76,13 +45,11 @@ export class BackendSupervisionPolicy {
     return this.migrationRecoveryPrompted;
   }
 
-  /** Clears the backoff and the breaker for a deliberate (non-crash) backend start. */
   reset(): void {
     this.failures = 0;
     this.givenUp = false;
   }
 
-  /** The backend actually reached readiness, so the previous failures are history. */
   recordReadiness(): void {
     this.reset();
   }
@@ -92,8 +59,7 @@ export class BackendSupervisionPolicy {
       return { kind: "ignore" };
     }
 
-    // Re-checked on every crash: the marker is written mid-session by the first
-    // failing migration, long after desktop bootstrap read it.
+    // re-checked every crash — the marker is written mid-session by the first failing migration, long after bootstrap read it
     if (input.migrationRecoveryMarkerPresent && !this.migrationRecoveryPrompted) {
       this.migrationRecoveryPrompted = true;
       return { kind: "recover-migration" };
@@ -117,7 +83,6 @@ export class BackendSupervisionPolicy {
   }
 }
 
-/** Keeps the tail of a backend session's output so a give-up can quote the real error. */
 export class BackendOutputTailDetector {
   private tail = "";
 
@@ -134,10 +99,7 @@ export class BackendOutputTailDetector {
   }
 }
 
-/**
- * Reduces captured backend output to the few lines worth putting in a dialog:
- * the last reported error and whatever followed it, else the final lines.
- */
+// reduces captured output to the last reported error plus what followed it, else the final lines
 export function summarizeBackendFailureOutput(
   output: string,
   maxLines: number = BACKEND_FAILURE_SUMMARY_MAX_LINES,

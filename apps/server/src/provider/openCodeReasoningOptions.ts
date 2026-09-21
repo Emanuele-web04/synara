@@ -1,7 +1,3 @@
-// FILE: openCodeReasoningOptions.ts
-// Purpose: Normalize models.dev/OpenCode reasoning option metadata.
-// Layer: Server provider discovery utility
-
 export interface OpenCodeReasoningDescriptor {
   readonly value: string;
   readonly label?: string;
@@ -23,12 +19,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-/**
- * Reads the effort-shaped entries from models.dev's `reasoning_options` field.
- * Toggle and budget entries are intentionally ignored because the OpenCode
- * picker can only dispatch discrete effort variants through its `variant`
- * option. A null effort value is OpenCode's documented spelling for `none`.
- */
+// only effort-shaped entries — toggle/budget entries can't dispatch through OpenCode's `variant`; null is OpenCode's spelling for `none`
 export function parseOpenCodeReasoningOptions(
   value: unknown,
 ): ReadonlyArray<OpenCodeReasoningDescriptor> {

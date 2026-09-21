@@ -1,9 +1,3 @@
-// FILE: kanbanDispatch.ts
-// Purpose: Sends a kanban Draft card to In Progress — promotes local draft threads when
-//          needed and dispatches the drafted prompt as a queued turn.
-// Layer: Web orchestration helper
-// Exports: dispatchKanbanDraftCard, dispatchKanbanDraftThread, KanbanDraftDispatchResult
-
 import type {
   AssistantDeliveryMode,
   ProjectId,
@@ -56,9 +50,7 @@ import { promoteThreadCreate } from "./threadCreatePromotion";
 import { newCommandId, newMessageId } from "./utils";
 
 export type KanbanDraftDispatchResult =
-  /** The drafted prompt is on its way; runtime events move the card to In Progress. */
   | { kind: "dispatched" }
-  /** The board cannot dispatch this card faithfully — open the chat instead. */
   | { kind: "open-thread"; reason: KanbanDraftOpenThreadReason }
   | { kind: "unavailable" }
   | { kind: "error"; message: string };
@@ -89,17 +81,13 @@ export async function dispatchKanbanDraftCard(input: {
 interface KanbanDraftDispatchInput {
   threadId: ThreadId;
   projectId: ProjectId;
-  /** Backing summary; null for local-only draft threads not yet promoted. */
   thread: SidebarThreadSummary | null;
   defaultProvider: ProviderKind;
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
 }
 
-// Racing callers (a re-drop before the board re-derives, drag + send-now) must
-// not queue two turns for the same thread — the server accepts duplicate
-// thread.turn.start commands while the session is still starting. Same pattern
-// as threadCreatePromotion's inFlightThreadCreateById.
+// racing callers (re-drop before the board re-derives, drag+send-now) must not queue two turns — the server accepts duplicate thread.turn.start while the session is still starting; same pattern as threadCreatePromotion
 const inFlightDispatchByThreadId = new Map<ThreadId, Promise<KanbanDraftDispatchResult>>();
 
 /**
@@ -132,8 +120,7 @@ async function dispatchKanbanDraftThreadOnce(
     return { kind: "unavailable" };
   }
 
-  // Re-read the composer at drop time: the card snapshot may lag behind edits made
-  // in an open chat, and a stale prompt must never be dispatched.
+  // re-read the composer at drop time — the card snapshot may lag edits made in an open chat; a stale prompt must never be dispatched
   const composerStore = useComposerDraftStore.getState();
   const draftComposerState = composerStore.draftsByThreadId[threadId] ?? null;
   const liveSnapshot = buildKanbanComposerDraftSnapshot(draftComposerState);
@@ -152,8 +139,7 @@ async function dispatchKanbanDraftThreadOnce(
     defaultProvider: input.defaultProvider,
   });
   const draftThread = composerStore.getDraftThread(threadId);
-  // Worktree creation is owned by the full chat composer path. Kanban stays a
-  // control surface and opens chat when a draft still needs that preflight.
+  // worktree creation is owned by the full chat composer path — kanban stays a control surface and opens chat when preflight is needed
   const dispatchEnvironment = {
     envMode: (thread?.envMode ??
       existingThread?.envMode ??
@@ -200,8 +186,7 @@ async function dispatchKanbanDraftThreadOnce(
     "New task";
   const fallbackTitle = buildPromptThreadTitleFallback(titleSeed);
   const messageId = newMessageId();
-  // Browser annotations serialize outermost so display extraction can validate
-  // their message-bound transport before unwrapping the remaining context blocks.
+  // annotations serialize outermost so display extraction validates their transport before unwrapping the rest
   const messageText = appendBrowserAnnotationsToPrompt(
     appendFileCommentsToPrompt(
       appendTerminalContextsToPrompt(
@@ -231,15 +216,11 @@ async function dispatchKanbanDraftThreadOnce(
     files: composerFiles,
     assistantSelections: composerAssistantSelections,
   });
-  // The same instant feeds both the command timestamps and the optimistic entry:
-  // a server-side failure stamps the session with this createdAt, and the
-  // failure check compares it against droppedAtMs with >=.
+  // the same instant feeds command timestamps and the optimistic entry — a server-side failure stamps the session with this createdAt which the failure check compares against droppedAtMs
   const droppedAtMs = Date.now();
   const createdAt = new Date(droppedAtMs).toISOString();
 
-  // Optimistic move: show the card In Progress before any round-trip. Provider
-  // session init can take seconds; runtime events confirm the move (reconciliation
-  // clears the entry) or the failure paths below revert it.
+  // optimistic move: provider session init can take seconds; runtime events confirm (reconciliation clears) or the failure paths revert
   const kanbanUi = useKanbanUiStore.getState();
   kanbanUi.markOptimisticDispatch(threadId, {
     projectId,
@@ -251,8 +232,7 @@ async function dispatchKanbanDraftThreadOnce(
 
   try {
     if (thread === null) {
-      // Local-only draft thread: create the durable thread first, reusing the same
-      // workspace resolution the terminal-first promotion path uses.
+      // local-only draft: create the durable thread first, reusing the terminal-first promotion path's workspace resolution
       const creationState = resolveTerminalThreadCreationState({
         activeDraftThread: null,
         activeThread: null,
@@ -335,8 +315,7 @@ async function dispatchKanbanDraftThreadOnce(
     };
   }
 
-  // The prompt was consumed by the dispatched turn; an open composer for this
-  // thread should not keep offering it.
+  // the prompt was consumed by the dispatched turn — an open composer shouldn't keep offering it
   useComposerDraftStore.getState().clearComposerContent(threadId);
   return { kind: "dispatched" };
 }

@@ -1,6 +1,3 @@
-// FILE: useLocalStorage.browser.tsx
-// Purpose: Verifies fresh schema-validated storage reads and cross-window hook synchronization.
-
 import * as Schema from "effect/Schema";
 import { flushSync } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

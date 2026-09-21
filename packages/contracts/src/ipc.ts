@@ -282,16 +282,14 @@ import type { BrowserAnnotationMethods } from "./browserAnnotations";
 export interface ContextMenuItem<T extends string = string> {
   id: T;
   label: string;
-  /** Starts a new visual group before this actionable row. */
   separatorBefore?: boolean;
   destructive?: boolean;
-  /** Central icon basename from the reversed set (e.g. `"pencil"`) or inline `<svg>` markup. */
+  /** icon basename from the reversed set or inline `<svg>` markup */
   icon?: string;
 }
 
-/** Context menu row sent over the desktop bridge with its icon pre-rasterized by the renderer. */
 export interface DesktopContextMenuItem<T extends string = string> extends ContextMenuItem<T> {
-  /** `data:image/png;base64,` template image rendered at 2x for a 16pt menu icon. */
+  /** template image rendered at 2x for a 16pt menu icon */
   iconDataUrl?: string;
 }
 
@@ -329,10 +327,7 @@ export interface DesktopUpdateState {
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
   installFailureCount: number;
-  // Public URL where the user can manually download the release when the
-  // in-app updater cannot apply it (silent installer failure, unsigned build,
-  // read-only install location, unsupported platform). Null when no GitHub
-  // update source is configured.
+  // when the in-app updater can't apply the release (silent installer failure, unsigned build, read-only location, unsupported platform); null when no update source is configured
   releaseUrl: string | null;
 }
 
@@ -343,16 +338,12 @@ export interface DesktopUpdateActionResult {
 }
 
 export interface BrowserTabState {
-  /** Live popup relationship; not restored as an OAuth session after restart. */
+  /** live popup relationship; not restored as an OAuth session after restart */
   openerTabId?: string;
   id: string;
   url: string;
   title: string;
-  /**
-   * Agent-owned tabs use a main-process WebContentsView so the exact page can
-   * stay alive while its chat route is not mounted. Older snapshots omit this
-   * field and are treated as renderer-owned by the web app.
-   */
+  /** agent tabs live in a main-process WebContentsView so the page survives the chat route unmounting; older snapshots decode as renderer-owned */
   runtimeSurface?: "native" | "renderer";
   status: "live" | "suspended";
   isLoading: boolean;
@@ -409,11 +400,11 @@ export interface BrowserSetPanelBoundsInput {
   threadId: ThreadId;
   bounds: BrowserPanelBounds | null;
   surface?: "native" | "renderer";
-  /** A DOM overlay temporarily covers a still-mounted browser panel. */
+  /** a DOM overlay temporarily covers a still-mounted browser panel */
   occluded?: boolean;
-  /** Keep the live native page offscreen and show a non-interactive thumbnail. */
+  /** live native page offscreen, non-interactive thumbnail shown */
   preview?: boolean;
-  /** Guest page zoom for a presentation surface; omitted/1 keeps the normal 100% viewport. */
+  /** omitted/1 keeps the normal 100% viewport */
   pageZoomFactor?: number;
 }
 
@@ -452,7 +443,7 @@ export type DesktopAppSnapShortcutModifier = "command" | "control" | "option" | 
 export interface DesktopAppSnapKeyChord {
   kind: "key-chord";
   modifier: DesktopAppSnapShortcutModifier;
-  /** A physical DOM KeyboardEvent.code, such as `KeyS` or `Space`. */
+  /** a physical DOM KeyboardEvent.code, e.g. `KeyS` */
   key: string;
 }
 
@@ -506,16 +497,13 @@ export interface DesktopAppSnapWindowEntry {
   appIconDataUrl: string | null;
 }
 
-// Pushed from the desktop main process when the in-app browser copy-link chord fires
-// while the native page (not the React chrome) holds keyboard focus.
+// pushed when the in-app browser copy-link chord fires while the native page (not the React chrome) holds focus
 export interface BrowserCopyLinkEvent {
   threadId: ThreadId;
   url: string;
 }
 
-// Pushed after the desktop browser host has accepted an agent request. Keeping
-// the requested thread in the event prevents whichever chat happens to be
-// visible from stealing the browser session.
+// carrying the requested thread prevents whichever chat is visible from stealing the browser session
 export interface BrowserUseOpenPanelRequest {
   threadId: ThreadId;
 }
@@ -557,7 +545,7 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
-/** Main → renderer: ask whether quit should proceed while chats are running. */
+/** ask whether quit should proceed while chats are running */
 export type DesktopQuitConfirmationPresentation = "native" | "in-app";
 
 export interface DesktopQuitConfirmationRequest {
@@ -570,10 +558,7 @@ export interface DesktopQuitConfirmationChat {
   readonly title: string;
 }
 
-/**
- * Renderer → main: first ack that the UI received the request, then the user's
- * Stay / Quit decision. `ready` with `runningCount === 0` is treated as allow.
- */
+/** `ready` with runningCount === 0 is treated as allow */
 export type DesktopQuitConfirmationResponse =
   | {
       readonly requestId: string;
@@ -587,7 +572,7 @@ export type DesktopQuitConfirmationResponse =
       readonly allow: boolean;
     };
 
-/** Windows/Linux frameless title bar preference vs the live BrowserWindow frame. */
+/** title-bar preference vs the live BrowserWindow frame */
 export interface DesktopCustomTitleBarState {
   supported: boolean;
   preference: boolean;
@@ -615,10 +600,7 @@ export interface DesktopBridge {
     revealApp: () => Promise<boolean>;
   };
   getWsUrl: () => string | null;
-  /**
-   * Absolute filesystem path for a File from drag/drop or file inputs.
-   * Electron only (`webUtils.getPathForFile`). Returns null when unavailable.
-   */
+  /** Electron only (webUtils.getPathForFile); null when unavailable */
   getPathForFile?: (file: File) => string | null;
   pickFolder: () => Promise<string | null>;
   saveFile?: (input: {
@@ -649,10 +631,7 @@ export interface DesktopBridge {
     getState: () => Promise<DesktopWindowState>;
     onState: (listener: (state: DesktopWindowState) => void) => () => void;
   };
-  /**
-   * Windows/Linux only. `frame` is fixed at BrowserWindow creation, so changing
-   * the preference requires a relaunch before `active` catches up.
-   */
+  /** `frame` is fixed at BrowserWindow creation — changing the preference requires relaunch before `active` catches up */
   customTitleBar?: {
     getState: () => Promise<DesktopCustomTitleBarState>;
     setPreference: (enabled: boolean) => Promise<DesktopCustomTitleBarState>;
@@ -663,7 +642,7 @@ export interface DesktopBridge {
     listener: (request: DesktopQuitConfirmationRequest) => void,
   ) => () => void;
   replyQuitConfirmation: (response: DesktopQuitConfirmationResponse) => void;
-  /** Current `webContents` page zoom (1 = 100%). Used to keep macOS traffic-light gutter aligned. */
+  /** used to keep the macOS traffic-light gutter aligned */
   getZoomFactor: () => number;
   onZoomFactorChange: (listener: (zoomFactor: number) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
@@ -784,7 +763,6 @@ export interface NativeApi {
     showInFolder: (path: string) => Promise<void>;
   };
   git: {
-    // Existing branch/worktree API
     githubRepository: (input: GitHubRepositoryInput) => Promise<GitHubRepositoryResult>;
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
     listRecentCommits: (input: GitListRecentCommitsInput) => Promise<GitListRecentCommitsResult>;
@@ -810,7 +788,6 @@ export interface NativeApi {
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Promise<GitPreparePullRequestThreadResult>;
-    // Stacked action API
     pull: (input: GitPullInput) => Promise<GitPullResult>;
     status: (input: GitStatusInput) => Promise<GitStatusResult>;
     readWorkingTreeDiff: (
@@ -979,9 +956,7 @@ export interface NativeApi {
     annotations: BrowserAnnotationMethods;
     onCopyLink: (callback: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
-  // macOS-only in practice: off darwin the server answers `list`/`getThreadState`
-  // with an `unsupported-platform` availability and refuses the rest, so the pane
-  // renders its blocked state rather than the client guessing at capabilities.
+  // off darwin the server answers `unsupported-platform` and refuses the rest, so the pane renders its blocked state rather than the client guessing
   device: {
     list: (input: DeviceListInput) => Promise<DeviceListResult>;
     boot: (input: DeviceBootInput) => Promise<DeviceBootResult>;

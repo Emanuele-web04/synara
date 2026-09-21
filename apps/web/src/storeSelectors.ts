@@ -1,7 +1,3 @@
-// FILE: storeSelectors.ts
-// Purpose: Stable Zustand selectors for entity lookups and lightweight sidebar projections.
-// Exports: Selector factories used by routes and sidebar-heavy components.
-
 import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 import { isAutomationRunThread } from "@synara/shared/automationMode";
 
@@ -167,8 +163,6 @@ export function createAccountRateLimitThreadsSelector(): (
       }
     }
 
-    // Rate-limit activities are rare, so nearly every activity append lands here with an
-    // element-wise identical result; keep the previous reference to spare subscribers.
     const unchanged =
       nextResult.length === previousResult.length &&
       nextResult.every((entry, entryIndex) => {
@@ -367,7 +361,6 @@ export function createComposerThreadMentionSourcesSelector(): (
 }
 
 export interface SidebarThreadVisibilityOptions {
-  /** Drop the per-run threads standalone automations create (pinned ones stay). */
   readonly hideAutomationRunThreads?: boolean;
 }
 
@@ -441,10 +434,7 @@ export function createSidebarDisplayThreadsSelector(
   };
 }
 
-// Sidebar tree source: unlike the flat display selector above, this keeps
-// child (subagent) threads so buildProjectThreadTree can nest them under
-// their parent row behind the "N subagents" expand toggle. Flat consumers
-// (pinned rows, search palette) should keep using the display selector.
+// unlike the flat display selector, this keeps child (subagent) threads so the tree can nest them under the parent row; flat consumers keep using the display selector
 export function createSidebarTreeThreadsSelector(
   options?: SidebarThreadVisibilityOptions,
 ): (state: AppState) => readonly SidebarThreadSummary[] {

@@ -103,8 +103,7 @@ export function isUpdateVersionNewer(currentVersion: string, candidateVersion: s
   if (candidate.minor !== current.minor) return candidate.minor > current.minor;
   if (candidate.patch !== current.patch) return candidate.patch > current.patch;
 
-  // Treat stable as newer than the same prerelease, but never reinstall the
-  // exact same stable version from a stale updater cache.
+  // treat stable as newer than the same prerelease, but never reinstall the exact same stable from a stale updater cache
   return current.prerelease !== null && candidate.prerelease === null;
 }
 

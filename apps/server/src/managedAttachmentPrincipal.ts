@@ -9,11 +9,7 @@ export const LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL: ManagedAttachmentPrincipal = {
   ownerId: "local-loopback",
 };
 
-/**
- * Request-scoped identity used only for managed binary staging and claim.
- * It is inherited by RPC handler fibers and never enters public commands or
- * persisted orchestration events.
- */
+/** request-scoped identity used only for managed binary staging/claim — inherited by RPC handler fibers, never enters public commands or persisted events */
 export const CurrentManagedAttachmentPrincipal = ServiceMap.Reference<ManagedAttachmentPrincipal>(
   "synara/attachments/CurrentManagedAttachmentPrincipal",
   { defaultValue: () => LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL },

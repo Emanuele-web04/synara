@@ -1,26 +1,4 @@
-// FILE: chatHotPath.compiler.test.ts
-// Purpose: Regression guard — the chat hot-path modules must stay fully
-//          compilable by React Compiler. The compiler runs with the default
-//          `panicThreshold`, so a bailout is silent: the module keeps
-//          rendering but loses *all* auto-memoization. Everything listed below
-//          renders (or gates) a message row, a sidebar row, or a keystroke, so a
-//          silent bailout here costs whole-tree re-renders while typing.
-//
-//          Four triggers have actually shipped in this repo, all of them cheap to
-//          avoid once known:
-//            1. a default value inside a parameter destructuring pattern
-//               (BuildHIR AssignmentPattern) — apply defaults in the body;
-//            2. a ref-typed prop read off a `props` object (`ref={props.itemRef}`),
-//               which spreads the ref verdict to every later `props.x` read —
-//               destructure the props instead;
-//            3. any value block (`??`, `&&`, `?.`, a ternary, a conditional
-//               spread) or a `throw` inside a `try` — hoist it out, or move the
-//               whole block to module scope;
-//            4. a hand-written `useCallback`/`useMemo` dependency list the
-//               compiler cannot match to its own inferred scope — drop the manual
-//               memoization and let the compiler own it.
-// Layer: Web build-integrity test
-// Depends on: babel-plugin-react-compiler (same plugin the Vite build uses).
+// panicThreshold default makes bailouts silent (all auto-memoization lost); known triggers: default value in destructuring, ref read off props, value block or throw inside try, manual memo deps the compiler can't match
 
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -30,8 +8,7 @@ import { compileReactModule } from "../test/reactCompiler";
 interface HotPathModule {
   readonly relativePath: string;
   readonly requiredFunction?: string;
-  // Exact multiset of bailout reasons that are deliberate and reviewed. Anything
-  // else — including a second copy of an allowed reason — fails the test.
+  // exact multiset of deliberate, reviewed bailout reasons — anything else (including a second copy of an allowed reason) fails the test
   readonly allowedBailoutReasons: readonly string[];
 }
 
@@ -160,28 +137,22 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
   { relativePath: "Sidebar.tsx", allowedBailoutReasons: [] },
   {
     relativePath: "chat/MessagesTimeline.tsx",
-    // `useStableRows` deliberately reads and rewrites a previous-state ref inside
-    // its memo to reuse row identities across streaming updates. That pattern is
-    // documented in place and costs memoization only for that one small hook.
+    // `useStableRows` deliberately reads/rewrites a previous-state ref in its memo to reuse row identities across streaming updates
     allowedBailoutReasons: ["Cannot access refs during render"],
   },
   { relativePath: "chat/TimelineWorkEntryRow.tsx", allowedBailoutReasons: [] },
   { relativePath: "chat/ChatTranscriptPane.tsx", allowedBailoutReasons: [] },
-  // The composer surface: these three render or re-render on keystrokes while a
-  // picker or the slash-command menu is open.
+  // the composer surface: these render or re-render on keystrokes while a picker or slash menu is open
   { relativePath: "chat/ComposerCommandMenu.tsx", allowedBailoutReasons: [] },
   { relativePath: "chat/ComposerMenuPanel.tsx", allowedBailoutReasons: [] },
   { relativePath: "chat/TraitsPicker.tsx", allowedBailoutReasons: [] },
   { relativePath: "chat/ProjectPicker.tsx", allowedBailoutReasons: [] },
   // Not chat-specific, but rendered inside every message row and sidebar row.
   { relativePath: "ui/button.tsx", allowedBailoutReasons: [] },
-  // One per running thread in the sidebar; its ref + layout-effect timeline sync must
-  // not cost it memoization.
+  // one per running thread in the sidebar; its ref + layout-effect timeline sync must not cost it memoization
   { relativePath: "ThreadRunningSpinner.tsx", allowedBailoutReasons: [] },
   { relativePath: "../lib/animationTimelineSync.ts", allowedBailoutReasons: [] },
-  // Hooks called from the chat and sidebar render paths. A bailing hook does not
-  // stop its caller from compiling, but it does lose its own memoization, and
-  // these run on every composer keystroke and every sidebar action.
+  // a bailing hook doesn't stop its caller from compiling but loses its own memoization — these run on every composer keystroke and sidebar action
   { relativePath: "../hooks/useComposerSlashCommands.ts", allowedBailoutReasons: [] },
   { relativePath: "../hooks/useLocalStorage.ts", allowedBailoutReasons: [] },
   { relativePath: "../hooks/useSidebarThreadActions.ts", allowedBailoutReasons: [] },

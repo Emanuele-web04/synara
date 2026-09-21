@@ -1,7 +1,3 @@
-// FILE: composerPickerStyles.test.ts
-// Purpose: Pins shared composer picker and toolbar styling contracts.
-// Layer: Chat composer regression test
-
 import { describe, expect, it } from "vitest";
 
 import {

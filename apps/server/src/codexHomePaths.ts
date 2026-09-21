@@ -1,12 +1,3 @@
-// FILE: codexHomePaths.ts
-// Purpose: Pure helpers that mirror how codexAppServerManager.ts decides which
-//          CODEX_HOME directory the codex app-server child process runs against.
-//          Centralizing this lets consumers outside the manager (the local image
-//          allowlist, image-path predictions, etc.) stay in sync with the actual
-//          runtime so they don't 404 paths Codex legitimately wrote.
-// Layer: Server utility (no IO; safe to import from anywhere)
-// Exports: overlay constants, base/overlay home resolvers, write-home + allowlist helpers.
-
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -33,11 +24,7 @@ export function resolveSynaraCodexHomeOverlayPath(
   return path.join(overlayRoot, SYNARA_CODEX_HOME_OVERLAY_DIR);
 }
 
-/**
- * Returns the home directory that the codex app-server child process actually
- * writes under. Synara keeps its generated config isolated from the user's
- * source Codex home while linking shared state such as authentication.
- */
+/** the home the codex app-server child actually writes under — isolated from the user's source home while linking shared state like auth */
 export function resolveActiveCodexHomeWritePath(input: CodexHomePathsInput = {}): string {
   const env = input.env ?? process.env;
   const source = resolveBaseCodexHomePath(env, input.homePath);
@@ -45,14 +32,7 @@ export function resolveActiveCodexHomeWritePath(input: CodexHomePathsInput = {})
   return path.resolve(source) === path.resolve(overlay) ? source : overlay;
 }
 
-/**
- * Returns every Codex home directory we should treat as legitimate when
- * allowlisting locally-generated image files: the source home and the overlay
- * home if they are distinct. Callers pre-`realpath`-resolve these as needed.
- *
- * The overlay candidate remains included so generated images from earlier
- * sessions stay serveable until they are removed.
- */
+/** the overlay candidate stays included so images from earlier sessions remain serveable until removed */
 export function resolveCodexHomeAllowlistCandidates(
   input: CodexHomePathsInput = {},
 ): readonly string[] {

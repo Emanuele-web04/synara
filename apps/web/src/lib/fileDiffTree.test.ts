@@ -1,8 +1,3 @@
-// FILE: fileDiffTree.test.ts
-// Purpose: Guards flat-to-tree conversion, single-chain compression, ordering,
-//          and the search → tree pipeline used by the review file tree panel.
-// Layer: Web diff utilities tests
-
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { describe, expect, it } from "vitest";
 
@@ -46,11 +41,9 @@ describe("buildFileDiffTree", () => {
       createFileDiff("README.md"),
     ]);
 
-    // Top level: directory "apps" sorts before the root-level file.
     expect(names(tree)).toEqual(["apps", "README.md"]);
 
     const apps = asDirectory(tree[0]);
-    // "server" and "web" each have a single child "src", so they compress.
     expect(names(apps.children)).toEqual(["server/src", "web/src"]);
 
     const serverSrc = asDirectory(apps.children[0]);
@@ -75,17 +68,13 @@ describe("buildFileDiffTree", () => {
       createFileDiff("src/feature/nested/two.ts"),
     ]);
 
-    // "src/feature" compresses (single child until the branch), then forks.
     const root = asDirectory(tree[0]);
     expect(root.name).toBe("src/feature");
     expect(names(root.children)).toEqual(["nested", "one.ts"]);
   });
 
   it("keeps a same-named file and directory as distinct sibling nodes", () => {
-    // A diff that deletes file `foo` while adding `foo/bar.ts` yields a directory
-    // and a file that share the path "foo"; both must survive as siblings so the
-    // replacement renders faithfully (the panel disambiguates their React keys
-    // by node kind).
+    // deleting file `foo` while adding `foo/bar.ts` yields a directory and file sharing path "foo" — both must survive as siblings (panel disambiguates keys by node kind)
     const tree = buildFileDiffTree([createFileDiff("foo"), createFileDiff("foo/bar.ts")]);
     expect(tree).toHaveLength(2);
 

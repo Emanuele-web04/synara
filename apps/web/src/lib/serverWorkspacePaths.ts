@@ -1,8 +1,3 @@
-// FILE: serverWorkspacePaths.ts
-// Purpose: Normalize server-provided home, chat, and Studio workspace paths.
-// Layer: Web domain helper
-// Exports: ServerWorkspacePaths plus normalization and fallback helpers.
-
 import { resolveChatContainerWorkspaceRoot } from "@synara/shared/projectContainers";
 
 export interface ServerWorkspacePaths {

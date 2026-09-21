@@ -1,8 +1,3 @@
-// FILE: dockPaneActivation.ts
-// Purpose: Decide when a persisted right-dock pane should hydrate its expensive runtime.
-// Layer: Web UI lifecycle helper
-// Depends on: rightDockStore pane kind taxonomy
-
 import type { ThreadId } from "@synara/contracts";
 
 import type { RightDockPaneKind } from "~/rightDockStore.logic";
@@ -11,11 +6,7 @@ export type DockPaneActivationReason = "explicit" | "restore";
 export type DockPaneRuntimeMode = "live" | "preview";
 
 export const DOCK_PANE_DEFERRED_HYDRATION_FRAMES = 2;
-// requestAnimationFrame is intentionally suspended by Chromium for hidden or
-// offscreen documents. A route transition can commit a restored dock while its
-// subtree is still offscreen, so frame-only promotion can leave a heavy pane in
-// preview forever even after the route becomes visible. Keep the paint-friendly
-// frame path, but cap it with a task-based fallback.
+// rAF is suspended by Chromium for hidden/offscreen documents — a route transition can commit a restored dock while its subtree is still offscreen, so frame-only promotion could leave a heavy pane in preview forever; cap it with a task-based fallback
 export const DOCK_PANE_DEFERRED_HYDRATION_TIMEOUT_MS = 250;
 
 export interface DeferredDockPaneHydrationScheduler {
@@ -25,11 +16,6 @@ export interface DeferredDockPaneHydrationScheduler {
   readonly clearTimer: (timerId: number) => void;
 }
 
-/**
- * Promotes a restored heavy pane after the requested number of paint frames,
- * with a bounded timeout for Electron/Chromium states where rAF is paused.
- * Completion and cancellation are both exactly-once.
- */
 export function scheduleDeferredDockPaneHydration(input: {
   readonly onHydrate: () => void;
   readonly scheduler: DeferredDockPaneHydrationScheduler;
@@ -86,8 +72,7 @@ export function scheduleDeferredDockPaneHydration(input: {
   };
 }
 
-// The device pane holds a WebCodecs decoder and a frame socket, so a restored
-// tab must stay in preview until the user actually looks at it.
+// the device pane holds a WebCodecs decoder + frame socket — a restored tab must stay in preview until the user actually looks at it
 const DEFERRED_RUNTIME_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<RightDockPaneKind>([
   "browser",
   "device",
@@ -95,16 +80,8 @@ const DEFERRED_RUNTIME_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<Righ
   "terminal",
 ]);
 
-// Pane kinds whose React subtree must stay mounted while inactive instead of
-// being torn down when another tab is selected. Unmounting a terminal detaches
-// its xterm DOM (terminalRuntime.detach -> wrapper.remove) and re-running attach
-// triggers a double FitAddon pass, which the user sees as a slow open plus a
-// multi-line reflow flicker. Keeping it mounted and toggling visibility makes
-// tab switches instant and flicker-free while preserving scrollback/runtime.
-// The explorer pane keeps its browse state (selected file, expanded directories,
-// search query, sidebar visibility) in local component state, so keep it mounted
-// while another tab is active — otherwise switching tabs would tear the subtree
-// down and reset the explorer to its workspace root on return.
+// unmounting a terminal detaches xterm DOM and re-running attach triggers a double FitAddon pass (slow open + reflow flicker); staying mounted keeps tab switches instant and preserves scrollback
+// the explorer keeps browse state in component state — unmounting on tab switch would reset it to workspace root on return
 const KEEP_MOUNTED_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set<RightDockPaneKind>([
   "terminal",
   "explorer",
@@ -128,10 +105,7 @@ export function isKeepMountedPaneKind(kind: RightDockPaneKind): boolean {
 
 export const EMPTY_PANE_ID_SET: ReadonlySet<string> = new Set<string>();
 
-// Compute the next set of pane ids that must stay mounted in the dock: every
-// previously kept-mounted pane that still exists, plus the active pane when it is
-// a keep-mounted kind. Pure (no React) so the keep-mount policy is unit-testable
-// and the caller can persist the result across renders via a ref.
+// next keep-mounted set: previously kept panes that still exist, plus the active pane when it is a keep-mounted kind; pure so the policy is unit-testable and persistable via ref
 export function reconcileKeepMountedPaneIds(input: {
   previous: ReadonlySet<string>;
   panes: readonly { id: string; kind: RightDockPaneKind }[];

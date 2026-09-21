@@ -1,8 +1,3 @@
-// FILE: threadArchive.test.ts
-// Purpose: Verifies client helpers for archive/unarchive orchestration commands.
-// Layer: Web lib test
-// Exports: Vitest cases for threadArchive helpers
-
 import { ThreadId } from "@synara/contracts";
 import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@synara/shared/errorMessages";
 import { assert, describe, expect, it, vi } from "vitest";
@@ -40,8 +35,7 @@ describe("threadArchive client helpers", () => {
   });
 
   it("recognizes the already-unarchived invariant returned by the server", () => {
-    // Build the message from the shared marker so this stays coupled to the
-    // exact phrase the server embeds (see commandInvariants.requireThreadArchived).
+    // Build the message from the shared marker so this stays coupled to the exact phrase the server embeds (see commandInvariants.requireThreadArchived).
     const error = new Error(
       `Orchestration command invariant failed (thread.unarchive): Thread '${THREAD_ID}' ${THREAD_NOT_ARCHIVED_INVARIANT_MARKER} 'thread.unarchive'.`,
     );

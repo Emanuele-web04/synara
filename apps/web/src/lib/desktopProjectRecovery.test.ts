@@ -1,6 +1,3 @@
-// FILE: desktopProjectRecovery.test.ts
-// Purpose: Verifies desktop startup detects snapshots where threads outlive visible project rows.
-
 import {
   ProjectId,
   ThreadId,

@@ -1,13 +1,3 @@
-// FILE: ThreadHoverCardContent.tsx
-// Purpose: Rich hover-card body shown when hovering a sidebar thread/chat row —
-//          the title with a relative time on the header line, then project,
-//          source folder, git branch, worktree identity, pull request, and the chat's current
-//          model rows when available.
-// Layer: Sidebar UI component
-// Exports: ThreadHoverCardContent
-// Why: Shared by both the pinned and the nested thread-row tooltips so the two
-//      surfaces cannot drift apart.
-
 import type { OrchestrationThreadPullRequest } from "@synara/contracts";
 import type { MouseEvent, ReactNode } from "react";
 
@@ -60,8 +50,7 @@ function MetaRow({ icon, children }: { icon: ReactNode; children: string }) {
   );
 }
 
-// Model row: provider glyph, model name, then the reasoning/effort label so the
-// line reads like the composer's model trigger.
+// Model row: provider glyph, model name, then the reasoning/effort label so the line reads like the composer's model trigger.
 function ModelRow({ model }: { model: ThreadModelSummary }) {
   return (
     <span className={META_ROW_CLASS_NAME}>

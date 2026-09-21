@@ -16,7 +16,6 @@ import {
 import { useStore } from "../store";
 import type { Project, ProjectScript, Thread } from "../types";
 
-/** Success toast for one handoff. Module scope: its ternaries live outside the caller's `try`. */
 function reportThreadHandoffSuccess(
   targetMode: "local" | "worktree",
   result: { conflictsDetected: boolean; message?: string | null },
@@ -64,8 +63,7 @@ export function useThreadWorkspaceHandoff(input: {
         return false;
       }
 
-      // The whole payload is resolved before the `try`: React Compiler cannot lower `??` inside a
-      // try block, and this hook backs the local/worktree switch on every thread.
+      // payload resolved before the try — React Compiler cannot lower `??` inside a try block, and this hook backs the local/worktree switch on every thread
       const handoffPayload = {
         commandId: newCommandId(),
         threadId: input.activeThread.id,
@@ -87,15 +85,10 @@ export function useThreadWorkspaceHandoff(input: {
       try {
         await input.stopActiveThreadSession();
         const result = await handoffThreadMutation.mutateAsync(handoffPayload);
-        // The RPC returns only after the Git result and metadata command are
-        // durable. Apply that result locally as well so cwd-bound surfaces
-        // (file preview, explorer, terminal) do not wait for the asynchronous
-        // domain-event round trip and briefly keep targeting the old checkout.
+        // the RPC resolves only after the Git result + metadata are durable; apply it locally too so cwd-bound surfaces don't target the old checkout until the domain event lands
         setThreadWorkspace(input.activeThread.id, resolveWorktreeHandoffWorkspaceMetadata(result));
 
-        // Nested `if`s rather than `&&`, and the toast assembled outside: every value block —
-        // `&&`, `??`, a ternary, a conditional spread — is one React Compiler refuses to lower
-        // inside a `try`, and one is enough to drop the whole hook's memoization.
+        // nested ifs and the toast assembled outside: every value block (`&&`, `??`, ternary, conditional spread) inside a try is one React Compiler refuses to lower — one is enough to drop the whole hook's memoization
         if (targetMode === "worktree") {
           const worktreePath = result.worktreePath;
           if (worktreePath) {

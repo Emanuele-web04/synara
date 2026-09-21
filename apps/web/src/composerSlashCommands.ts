@@ -101,9 +101,7 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
     command === "automation" ||
     command === "export" ||
     command === "feedback" ||
-    // /fork is app-owned everywhere: it creates a Synara thread with fork
-    // lineage (native session forking per provider), which a provider-native
-    // "fork" text command cannot do.
+    // /fork is app-owned: it creates a Synara thread with fork lineage, which a provider-native "fork" text command cannot do
     command === "fork" ||
     command === "goal" ||
     command === "rename" ||
@@ -131,10 +129,6 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
   );
 }
 
-/**
- * True when a discovered native "review" command should be sent as plain
- * `/review` text. Codex/OpenCode use the app review UX instead (#218).
- */
 export function providerSupportsTextNativeReviewCommand(
   provider: ProviderKind,
   nativeCommandNames: ReadonlyArray<{ readonly name: string } | string>,
@@ -328,9 +322,7 @@ export function canOfferForkSlashCommand(input: {
   );
 }
 
-// Structural Side availability: attachments/mode/thread kind. Prompt emptiness is only
-// required when offering `/side` in the composer menu — executing `/side <provider>
-// [prompt]` intentionally carries args in the composer text.
+// prompt emptiness is only required when offering `/side` in the menu — executing `/side <provider> [prompt]` intentionally carries args
 export function canExecuteSideSlashCommand(input: {
   imageCount: number;
   terminalContextCount: number;
@@ -513,12 +505,7 @@ export function getAvailableComposerSlashCommands(input: {
           "automation",
         ]
       : [
-          // Claude owns most slash-command UX natively; sidechat remains app-level because it
-          // creates a Synara split/context clone before the provider sees the first turn.
-          // /fork is app-level for the same reason — it creates a Synara thread with fork
-          // lineage (native session forking under the hood), not a provider text command.
-          // /export is app-level too — Synara owns the thread transcript, so the download
-          // happens in the app rather than being forwarded to Claude's native /export.
+          // Claude owns slash UX natively; sidechat and /fork stay app-level (they create Synara thread clones/lineage), /export too (Synara owns the transcript)
           ...(input.canOfferForkCommand ? (["fork"] as const) : []),
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           ...(input.canOfferExportCommand ? (["export"] as const) : []),
@@ -576,8 +563,6 @@ function matchSideProviderToken(token: string): ProviderKind | null {
   );
 }
 
-// `/side [provider] [prompt]`: an optional leading provider token (kind or
-// display name) starts the sidechat on that provider.
 export function parseSideSlashCommandArgs(
   args: string,
   input: {
@@ -601,7 +586,6 @@ export function parseSideSlashCommandArgs(
   return { targetProvider: matchedProvider, prompt, unavailableProvider: null };
 }
 
-// `/fork` optionally accepts only an explicit target shorthand like `/fork local`.
 export function parseForkSlashCommandArgs(args: string): {
   target: ForkSlashCommandTarget | null;
   invalid: boolean;

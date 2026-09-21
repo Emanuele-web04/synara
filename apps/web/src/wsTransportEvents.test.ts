@@ -1,7 +1,3 @@
-// FILE: wsTransportEvents.test.ts
-// Purpose: Locks down transport-state replay used for projection reconciliation.
-// Layer: Web transport utility unit tests
-
 import { describe, expect, it, vi } from "vitest";
 
 import { addWsTransportStateListener, emitWsTransportState } from "./wsTransportEvents";

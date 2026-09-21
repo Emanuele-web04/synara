@@ -1,8 +1,3 @@
-// FILE: OpenCodeTextGeneration.ts
-// Purpose: Runs OpenCode-compatible one-shot text generation for titles, branches, recaps, and release text.
-// Layer: Server git/text-generation adapter
-// Depends on: OpenCode SDK runtime, prompt builders, attachment projection, and server config.
-
 import { Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import * as Semaphore from "effect/Semaphore";
 

@@ -24,8 +24,7 @@ describe("092_BackfillAutomationRunThreadSource", () => {
           '2026-08-01T10:00:00.000Z', '2026-08-01T10:00:00.000Z'
         )
       `;
-      // A dedicated automation still references its home thread; that thread is a
-      // persistent conversation and must survive the backfill unmarked.
+      // a dedicated automation still references its home thread — a persistent conversation that must survive unmarked
       yield* sql`
         INSERT INTO automation_definitions (
           automation_id, project_id, name, prompt, schedule_json, enabled,

@@ -1,10 +1,4 @@
-// FILE: profileStats.ts
-// Purpose: Compute Profile-page stats from Synara's local projection DB only.
-// The share card never reads provider archives or cloud services for metrics.
-// Stats are lifetime numbers: deleting a thread purges its rows but snapshots
-// the aggregates into profile_stats_deleted_* first (profileStatsArchive.ts),
-// and every query here merges live projections with those archived aggregates.
-// Layer: server stats query service (SqlClient + ServerConfig).
+// stats are lifetime numbers: deleting a thread purges rows but snapshots aggregates into profile_stats_deleted_* first (profileStatsArchive.ts); every query merges live projections with archived aggregates
 
 import nodePath from "node:path";
 
@@ -23,7 +17,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ServerConfig } from "./config";
 import { claudeTokenActivityCtes } from "./claudeTokenStats";
 
-const HEATMAP_WINDOW_DAYS = 274; // ~9 months, GitHub-style contribution grid.
+const HEATMAP_WINDOW_DAYS = 274;
 const SKILL_RESULT_LIMIT = 12;
 const PROVIDER_KINDS = new Set<ProviderKind>([
   "codex",
@@ -64,7 +58,6 @@ interface SkillUsageMessageRow {
   readonly mentionsJson: string | null;
 }
 
-// Pre-aggregated usage snapshotted from purged threads (profile_stats_deleted_skills).
 interface ArchivedSkillUsageRow {
   readonly name: string | null;
   readonly kind: string | null;
@@ -96,10 +89,6 @@ interface UsageCount {
   runCount: number;
 }
 
-// ── Pure helpers ───────────────────────────────────────────────────────
-
-// SQLite DATETIME() modifier that shifts UTC timestamps into the caller's LOCAL
-// wall-clock time (for example "+02:00" / "-05:00").
 export function sqliteModifierFromUtcOffsetMinutes(offsetMinutes: number): string {
   const safe = Number.isFinite(offsetMinutes) ? Math.trunc(offsetMinutes) : 0;
   const sign = safe < 0 ? "-" : "+";
@@ -218,8 +207,7 @@ function extractTextSkillNames(text: string | null): string[] {
     const leadingBoundary = match[1] ?? "";
     const prefix = match[2] ?? "";
     const rawName = match[3] ?? "";
-    // Serialized prompt blocks end with XML-style tags like </pasted_text>.
-    // Those slashes are structural delimiters, not user-invoked slash skills.
+    // serialized prompt blocks end with tags like </pasted_text> — structural delimiters, not user-invoked slash skills
     if (leadingBoundary === "<" && prefix === "/") {
       continue;
     }
@@ -233,8 +221,7 @@ function extractTextSkillNames(text: string | null): string[] {
       : rawName;
     const name = normalizeUsageName(normalizedRawName);
     if (name) {
-      // `$...` also appears in shell snippets and prices. Keep the legacy
-      // text backfill, but avoid the most common non-skill dollar tokens.
+      // `$...` also appears in shell snippets and prices — keep the legacy text backfill but avoid the most common non-skill dollar tokens
       if (prefix === "$" && !hasExplicitSkillPrefix && isObviousNonSkillDollarToken(name)) {
         continue;
       }
@@ -244,9 +231,7 @@ function extractTextSkillNames(text: string | null): string[] {
   return names;
 }
 
-// Builds profile skill rows from every stored Synara user message, plus the
-// pre-aggregated counts snapshotted from purged threads. Structured references
-// stay authoritative, while text tokens backfill older or partial rows.
+// structured references stay authoritative while text tokens backfill older or partial rows
 export function aggregateProfileSkillUsageRows(
   rows: ReadonlyArray<SkillUsageMessageRow>,
   archivedRows: ReadonlyArray<ArchivedSkillUsageRow> = [],
@@ -299,8 +284,7 @@ export function aggregateProfileSkillUsageRows(
     }
 
     for (const usage of messageSkillCounts.values()) {
-      // Selected skills can appear both as structured refs and visible text.
-      // Count repeated user tokens, but do not double-count the structured echo.
+      // selected skills can appear as both structured refs and visible text — count repeated tokens but don't double-count the structured echo
       const increment = Math.max(usage.structuredCount, usage.textCount);
       if (increment <= 0) {
         continue;
@@ -366,20 +350,14 @@ function weekdayOf(day: string): number {
   return new Date(Date.UTC(year, month - 1, date)).getUTCDay();
 }
 
-// Number of non-empty intensity levels (1–4); level 0 is reserved for empty days.
 const HEATMAP_LEVELS = 4;
 
-// Rank a day against the distribution of active days instead of against the window
-// max. Percent-of-max bucketing collapses on skewed data — token counts routinely
-// span orders of magnitude, so one spike day drops every other day below 25% of the
-// max and flattens the entire grid to level 1. Ranking spreads active days across
-// all four levels regardless of scale, and ties share a level (a window where every
-// active day is identical renders uniformly at level 4).
+// rank each day against the active-day distribution, not the window max — percent-of-max collapses on skewed data (one spike flattens the grid to level 1); ranking spreads days across all four levels, ties share a level
 export function heatmapIntensity(count: number, sortedActiveCounts: readonly number[]): number {
   if (count <= 0 || sortedActiveCounts.length === 0) {
     return 0;
   }
-  // Days with a count <= this one, i.e. this day's rank in the active-day distribution.
+  // days with count <= this one — the day's rank in the active-day distribution
   let low = 0;
   let high = sortedActiveCounts.length;
   while (low < high) {
@@ -504,8 +482,7 @@ function computeStreaks(
     previous = day;
   }
 
-  // Keep the streak alive through the current local day: if yesterday was active
-  // but today is still empty, the user still has today to extend it.
+  // keep the streak alive through today — if yesterday was active but today is empty, the user still has today to extend it
   let anchor: string | null = set.has(todayKey)
     ? todayKey
     : set.has(addDaysIso(todayKey, -1))
@@ -520,7 +497,6 @@ function computeStreaks(
   return { current, longest };
 }
 
-// Rolling 6-month window ending today.
 function buildHeatmap(countByDay: ReadonlyMap<string, number>, todayKey: string): HeatmapCell[] {
   const windowStart = addDaysIso(todayKey, -(HEATMAP_WINDOW_DAYS - 1));
 
@@ -581,13 +557,7 @@ function buildMostWorkedProject(row: MostWorkedProjectRow | undefined): MostWork
   };
 }
 
-// ── Shared SQL ─────────────────────────────────────────────────────────
-
-// Maps every turn to the provider/model selected when it was started: turn-start
-// events carry the pending messageId, which projection_turns links back to the
-// turn_id that token activities reference. Shared by the live token stats query
-// and the delete-time archive snapshot so both attribute token deltas the same
-// way. Pass `scope` to restrict the CTE to a single thread (archive path).
+// maps every turn to the provider/model selected at start: turn-start events carry the pending messageId linking back to the turn_id token activities reference; shared by the live query and the delete-time archive so both attribute deltas the same way
 export function turnModelSelectionCte(
   sql: SqlClient.SqlClient,
   scope?: { readonly threadId: string },
@@ -616,8 +586,6 @@ export function turnModelSelectionCte(
   `;
 }
 
-// ── Service ────────────────────────────────────────────────────────────
-
 export interface ProfileStatsQueryShape {
   readonly getProfileStats: (
     input: StatsGetProfileStatsInput,
@@ -644,9 +612,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
     return /\bno such column\b/iu.test(profileStatsErrorMessage(error));
   }
 
-  // Imported legacy databases can briefly miss columns added after their original
-  // lineage. Only that compatibility case degrades; real SQL failures should reach
-  // the UI retry path instead of producing believable zero-stats.
+  // imported legacy databases can briefly miss columns added after their lineage — only that case degrades; real SQL failures reach the UI retry path instead of producing believable zero-stats
   const legacyCompatibleQuery = <T>(
     operation: string,
     query: Effect.Effect<ReadonlyArray<T>, unknown>,
@@ -660,15 +626,9 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       ),
     );
 
-  // Profile history counts all work ever done. Active and archived thread rows
-  // feed these queries directly; explicit deletes purge the thread's rows AFTER
-  // snapshotting the aggregates that matter into the profile_stats_deleted_*
-  // tables (see profileStatsArchive.ts), so every query below merges current
-  // projections with those deleted-thread aggregates.
-  // ── SQL helpers ──────────────────────────────────────────────────────
+  // deletes purge thread rows AFTER snapshotting aggregates into profile_stats_deleted_* — every query merges current projections with deleted-thread aggregates
 
-  // Activity = days/hours the user actually sent a Synara prompt. One day-hour
-  // grouping gives day totals, hour totals, and lifetime prompt count in TS.
+  // activity = days/hours the user actually sent a prompt — one day-hour grouping gives day totals, hour totals, lifetime count
   const queryPromptActivity = (tz: string) =>
     legacyCompatibleQuery(
       "profileStats.promptActivity",
@@ -697,19 +657,9 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       `,
     );
 
-  // Claude uses versioned turn results (including subagents once), with retained
-  // main-loop results as a partial historical fallback; see claudeTokenStats.ts.
-  // Other providers' token usage comes straight from Synara's own DB (no external
-  // ~/.codex/~/.claude archives, so it is provider-agnostic AND per-instance). Each
-  // `context-window.updated` activity carries a running per-thread token counter;
-  // the positive delta is the tokens processed in that step, bucketed by the
-  // caller's local day. Deltas are attributed to the provider/model selected for
-  // the turn that processed them (activity turn_id → turn's pending message →
-  // turn-start modelSelection); the thread's current selection is only a fallback
-  // for legacy rows, so switching models mid-thread keeps history accurate.
-  // Counter scale: totalProcessedTokens is the preferred cumulative counter.
-  // Some provider/model groups only emit usedTokens; keep those as separate
-  // fallback series so a mixed-provider thread does not drop their tokens.
+  // Claude uses versioned turn results (subagents once) with retained main-loop results as partial fallback — see claudeTokenStats.ts
+  // other providers' usage comes from Synara's own db — each context-window.updated carries a running per-thread counter, the positive delta bucketed by local day, attributed to the turn-start modelSelection; the thread's current selection is only a fallback for legacy rows so mid-thread switches keep history accurate
+  // some provider/model groups only emit usedTokens — keep those as separate fallback series so a mixed-provider thread doesn't drop their tokens
   const queryTokenActivity = (tz: string) =>
     legacyCompatibleQuery(
       "profileStats.tokenActivity",
@@ -1084,8 +1034,6 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       `,
     );
 
-  // ── Result builders ─────────────────────────────────────────────────
-
   const getProfileStats = (
     input: StatsGetProfileStatsInput,
   ): Effect.Effect<ProfileStats, unknown> =>
@@ -1100,7 +1048,6 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       const archivedSkillRows = yield* queryArchivedSkillUsage();
       const mostWorkedProjectRows = yield* queryMostWorkedProject(tz);
 
-      // ── Activity / heatmap / streaks ──
       const countByDay = new Map<string, number>();
       const hourCounts = Array.from({ length: 24 }, () => 0);
       let totalPromptsSent = 0;
@@ -1124,7 +1071,6 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         todayKey,
       );
 
-      // ── Peak hour (single highest local-hour bucket) ──
       const totalHourTurns = hourCounts.reduce((sum, value) => sum + value, 0);
       let bestHour: number | null = null;
       let bestHourCount = 0;
@@ -1147,7 +1093,6 @@ const makeProfileStatsQuery = Effect.gen(function* () {
               label: `${formatHour(bestHour)} · ${arcName(bestHour)}`,
             };
 
-      // ── Provider / model mix ──
       const providerModelCounts = new Map<
         string,
         { readonly provider: string | null; readonly model: string | null; count: number }
@@ -1195,8 +1140,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       });
 
       const providerTurnCounts = new Map<ProviderKind, number>();
-      // Turn-based ranking: the token-based one lives on ProfileTokenStats so the
-      // heavy token query runs once, and clients prefer it when available.
+      // turn-based ranking lives here; the token-based one is on ProfileTokenStats so the heavy token query runs once
       for (const row of providerModelRows) {
         const provider = normalizeProviderKind(row.provider);
         if (provider === "unknown") {
@@ -1217,7 +1161,6 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         }
       }
 
-      // ── Insights (top provider, top reasoning) ──
       const topProviderPercent =
         topProvider && totalKnownProviderTurns > 0
           ? percent1(topProviderTurns, totalKnownProviderTurns)
@@ -1230,18 +1173,15 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       const totalReasonedSelections = reasoningRows.reduce((sum, row) => sum + num(row.count), 0);
       const topReasoningRow = reasoningRows[0];
       const topReasoning = topReasoningRow?.reasoning ?? null;
-      // Denominator excludes null reasoning values; those turns had no reasoning option set.
       const topReasoningPercent =
         topReasoningRow && totalReasonedSelections > 0
           ? percent1(num(topReasoningRow.count), totalReasonedSelections)
           : null;
 
-      // ── Skills and agent mentions ──
       const allSkillUsages = aggregateProfileSkillUsageRows(skillMessageRows, archivedSkillRows);
       const skills = allSkillUsages.slice(0, SKILL_RESULT_LIMIT);
       const totalSkillsUsed = allSkillUsages.reduce((sum, row) => sum + row.runCount, 0);
 
-      // ── Identity ──
       const homeDirBasename = nodePath.basename(config.homeDir) || "synara";
 
       return {
@@ -1304,9 +1244,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         .map(([provider]) => provider);
       const available = lifetime > 0;
 
-      // Providers the user actually ran turns with but whose adapters never emit
-      // token telemetry — they cannot participate in token-based rankings, and the
-      // UI uses this list to say so instead of silently under-reporting them.
+      // providers whose adapters never emit token telemetry can't participate in token rankings — the UI uses this list to say so instead of silently under-reporting
       const providersWithTurns = new Set<ProviderKind>();
       for (const row of turnInsightRows) {
         const provider = normalizeProviderKind(row.provider);
@@ -1318,8 +1256,6 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         .filter((provider) => !tokensByProvider.has(provider))
         .toSorted();
 
-      // "Most used provider" by tokens processed: one heavy turn is more work than
-      // many tiny ones. Percent is the share among providers with token telemetry.
       const totalProviderTokens = [...tokensByProvider.values()].reduce(
         (sum, tokens) => sum + tokens,
         0,
@@ -1330,9 +1266,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           ? percent1(tokensByProvider.get(topProvider) ?? 0, totalProviderTokens)
           : null;
 
-      // Token-based model mix, same shape/cap as the turn-based providerModels.
-      // Percent is the share of ALL counted tokens (lifetime), unknowns included,
-      // so the list always sums to ~100%.
+      // percent is the share of ALL counted tokens, unknowns included, so the list sums to ~100%
       const models = [...tokensByProviderModel.values()]
         .filter((row) => row.tokens > 0)
         .toSorted(

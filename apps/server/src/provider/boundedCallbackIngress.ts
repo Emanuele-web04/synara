@@ -1,11 +1,4 @@
-/**
- * boundedCallbackIngress - A synchronous admission bridge for callback APIs.
- *
- * Callback-style providers cannot await Effect Queue backpressure. Starting one
- * Promise per Queue.offer only moves an unbounded backlog outside the queue.
- * This bridge admits synchronously into a fixed count/byte budget and runs one
- * serial Effect consumer. Reserved capacity protects terminal lifecycle events.
- */
+// callback-style providers can't await Queue backpressure — admit synchronously into a fixed count/byte budget with one serial consumer; reserved capacity protects terminal lifecycle events
 import { Cause, Effect, Fiber, Option, Scope } from "effect";
 
 export type BoundedCallbackIngressOfferResult =
@@ -26,11 +19,8 @@ export interface BoundedCallbackIngressStatus {
 }
 
 export interface BoundedCallbackIngress<A> {
-  /** Synchronous and allocation-bounded; safe to call from EventEmitter/SDK callbacks. */
   readonly offer: (item: A) => BoundedCallbackIngressOfferResult;
-  /** Stop admission and wait until every accepted item has been processed. */
   readonly stop: Effect.Effect<void>;
-  /** Release queued work when the owning scope and downstream consumer are closing. */
   readonly abort: Effect.Effect<void>;
   readonly status: () => BoundedCallbackIngressStatus;
 }
@@ -102,7 +92,6 @@ export const makeBoundedCallbackIngress = <A, E, R>(
                 Effect.catchCause((cause) =>
                   Cause.hasInterruptsOnly(cause)
                     ? // An interrupts-only cause carries no E failures, so it is safe to
-                      // repropagate from a never-error consumer.
                       Effect.failCause(cause as Cause.Cause<never>)
                     : Effect.logError("bounded callback ingress item failed", {
                         cause: Cause.pretty(cause),

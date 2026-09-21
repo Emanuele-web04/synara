@@ -1,8 +1,3 @@
-// FILE: ProjectPicker.tsx
-// Purpose: Folder selector beneath the new-chat composer that groups active folders and home
-//          folders while always creating chats as rows inside the shared Chats container.
-// Layer: Chat / empty-state entrypoint
-
 import {
   Fragment,
   memo,
@@ -394,8 +389,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     ) {
       return;
     }
-    // Timeout-0 keeps every state write asynchronous (no wasted pre-paint
-    // render), which also keeps this component eligible for React Compiler.
+    // Timeout-0 keeps every state write asynchronous (no wasted pre-paint render), which also keeps this component eligible for React Compiler.
     let cancelled = false;
     const timeoutId = window.setTimeout(() => {
       if (cancelled) return;
@@ -479,8 +473,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       if (onCreateProjectFromPath) {
         await onCreateProjectFromPath(pickedPath);
       } else if (onSelectWorkspaceRoot) {
-        // Spelled out instead of `onSelectWorkspaceRoot?.(…)`: an optional call is a value block,
-        // which React Compiler cannot lower inside a `try`.
+        // an optional call (onSelect?.()) is a value block React Compiler can't lower inside a try
         onSelectWorkspaceRoot(pickedPath);
       }
       setIsPicking(false);
@@ -498,8 +491,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     resetInFlightRef.current = true;
     setErrorMessage(null);
     try {
-      // Statement form, not `onResetToHome?.()` or a ternary, for the same reason as
-      // `handleAddNewProject`: any value block inside a `try` is one the compiler rejects.
+      // Statement form, not `onResetToHome?.()` or a ternary, for the same reason as `handleAddNewProject`: any value block inside a `try` is one the compiler rejects.
       let reset: void | Promise<void> | undefined;
       if (onResetToHome) {
         reset = onResetToHome();

@@ -51,9 +51,8 @@ export const terminalExternalMcpSessionStateForRun = (
   },
   runId: string | null,
 ): Extract<ExternalMcpWaitState, "error" | "interrupted"> | null => {
-  // Session state has no durable run id. Once a run is pinned, its projected
-  // turn is authoritative; a session failure can belong to a later startup.
-  // A visible live turn is also more specific than uncorrelated session state.
+  // no durable run id in session state — once pinned, the projected turn is authoritative
+  // a visible live turn is more specific than uncorrelated session state
   if (runId !== null || (thread.latestTurn !== null && isLiveWaitState(thread.latestTurn.state))) {
     return null;
   }
@@ -63,13 +62,7 @@ export const terminalExternalMcpSessionStateForRun = (
     : null;
 };
 
-/**
- * Long-poll durable turn state while preserving an immediate revocation boundary.
- *
- * Authority is checked after every sleep (so revocation during the sleep wins
- * before another read) and once more at the response boundary. The caller
- * performs one final check after any terminal-detail read as well.
- */
+/** long-poll durable turn state; authority re-checked after each sleep and once more at the response boundary */
 export const waitForExternalMcpTaskState = Effect.fn(function* (input: {
   readonly threadId: string;
   readonly runId: string | null;

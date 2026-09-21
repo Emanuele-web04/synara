@@ -1,9 +1,3 @@
-// FILE: SkillsSettingsPanel.tsx
-// Purpose: Settings → Skills panel. Lists every skill from the unified cross-provider
-// catalog (~/.synara/skills plus each provider's skills folder), shows which provider
-// a skill comes from, and lets the user enable/disable each one. Disabled skills are
-// hidden from the composer skill picker on every provider.
-
 import type { ProviderKind, ServerSettings } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -62,8 +56,7 @@ export function SkillsSettingsPanel() {
   const skillSections = buildSettingsSkillSections(catalogQuery.data?.skills ?? []);
 
   const setSkillEnabled = (skillName: string, enabled: boolean) => {
-    // Read through the query cache (not the render closure) so rapid toggles
-    // build on each other instead of clobbering the previous patch.
+    // read through the query cache (not the render closure) so rapid toggles build on each other instead of clobbering the previous patch
     const latestSettings = queryClient.getQueryData<ServerSettings>(serverQueryKeys.settings());
     const currentDisabled = latestSettings?.skills.disabled ?? [...disabledSkillNames];
     const key = settingsSkillNameKey(skillName);

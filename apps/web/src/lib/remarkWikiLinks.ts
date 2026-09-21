@@ -15,8 +15,7 @@ function advancePoint(start: Point, raw: string): Point {
   };
 }
 
-// Keep decoded escapes/entities in separate spans: following text must use its
-// source offset, rather than an index into the shorter, decoded display string.
+// decoded escapes/entities live in separate spans — following text must use its source offset, not an index into the shorter decoded string
 function sourceTextNodes(raw: string, start: Point): Text[] {
   const nodes: Text[] = [];
   let cursor = 0;
@@ -42,8 +41,7 @@ function isEscaped(raw: string, index: number): boolean {
   return slashCount % 2 === 1;
 }
 
-// Shared with dollar protection so filenames cannot be consumed as TeX before
-// the Markdown parser and this transformer get to see them.
+// shared with dollar protection so filenames can't be consumed as TeX before the parser and transformer see them
 export function matchWikiLinkAt(source: string, index: number): RegExpExecArray | null {
   if (!source.startsWith("[[", index) || source[index - 1] === "!" || isEscaped(source, index))
     return null;
@@ -54,8 +52,7 @@ export function matchWikiLinkAt(source: string, index: number): RegExpExecArray 
   return match;
 }
 
-// mdast omits blockquote/list continuation prefixes from displayed text. Split
-// these multiline nodes at source line boundaries before calculating offsets.
+// mdast omits blockquote/list continuation prefixes from displayed text — split multiline nodes at source line boundaries before calculating offsets
 function splitContinuationLines(
   node: Text,
   raw: string,
@@ -107,8 +104,7 @@ function splitWikiLinks(
     return null;
   }
   const raw = source.slice(start.offset, endOffset);
-  // Custom Markdown transforms may have already rewritten this node. Leave it
-  // alone when its source no longer describes the displayed text reliably.
+  // Custom Markdown transforms may have already rewritten this node. Leave it alone when its source no longer describes the displayed text reliably.
   if (decodeString(raw) !== node.value) return splitContinuationLines(node, raw, source, root);
   const parts: RootContent[] = [];
   let cursor = 0;
@@ -118,8 +114,7 @@ function splitWikiLinks(
     if (!match) continue;
     index += match[0].length - 2;
     const target = decodeString(match[1]!).trim();
-    // Basic file links only. Heading/block navigation is not implemented by
-    // the workspace viewer, so keep that syntax visibly literal.
+    // heading/block navigation isn't implemented by the workspace viewer — keep that syntax visibly literal
     if (!target || target.includes("#")) continue;
     if (!isLocalAbsolutePath(target) && /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
     const path = /\.[^/\\]+$/.test(target) ? target : `${target}.md`;
@@ -148,7 +143,6 @@ function splitWikiLinks(
   return parts;
 }
 
-/** Basic Wiki file links use the workspace root; regular links stay file-relative. */
 export function remarkWikiLinks(options: { root?: string | undefined } = {}) {
   return (tree: Root, file: { value: unknown }) => {
     const source = String(file.value);

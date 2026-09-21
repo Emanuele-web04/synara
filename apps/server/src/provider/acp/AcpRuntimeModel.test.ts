@@ -407,8 +407,7 @@ describe("AcpRuntimeModel", () => {
       },
     });
 
-    // Cursor's completion update carries only bookkeeping output; the merged state
-    // must keep the subagent kind/title and not surface that output as detail.
+    // Cursor's completion update carries bookkeeping only — merged state must keep the subagent kind/title and not surface that output as detail
     const completed = parseSessionUpdateEvent({
       sessionId: "session-1",
       update: {

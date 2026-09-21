@@ -1,6 +1,3 @@
-// FILE: SpaceEditorDialog.tsx
-// Purpose: Shared create/edit dialog for a Space name and curated Central icon.
-
 import { SPACE_NAME_MAX_LENGTH } from "@synara/contracts";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
@@ -74,9 +71,7 @@ export function SpaceEditorDialog(props: {
   const iconLegendId = `${fieldId}-icon-legend`;
 
   useEffect(() => {
-    // Seed on the closed -> open transition only. `initialValue` is recomputed from the
-    // live snapshot every render, so seeding whenever it changes would let a rename from
-    // another window overwrite the name the user is part-way through typing here.
+    // seed on closed→open only — initialValue is recomputed from the live snapshot every render, so seeding on change would let a rename from another window overwrite mid-typing input
     if (props.open === openedRef.current) return;
     openedRef.current = props.open;
     if (!props.open) return;
@@ -85,8 +80,7 @@ export function SpaceEditorDialog(props: {
     setIconPinned(props.mode !== "create");
     setSubmitting(false);
     setSubmitError(null);
-    // Deferred a frame: the dialog moves focus itself on open, so selecting the name
-    // has to happen after that lands or it is immediately undone. Matches PickerPanelShell.
+    // Deferred a frame: the dialog moves focus itself on open, so selecting the name has to happen after that lands or it is immediately undone. Matches PickerPanelShell.
     const frame = requestAnimationFrame(() => nameInputRef.current?.select());
     return () => cancelAnimationFrame(frame);
   }, [defaultIcon, props.initialValue?.icon, props.initialValue?.name, props.mode, props.open]);
@@ -100,7 +94,6 @@ export function SpaceEditorDialog(props: {
       ? "Enter a name."
       : duplicateName
         ? // Deliberately not "a space with this name": the taken name may be Void's, which
-          // is not a space, and either way the user's next move is the same.
           "That name is already taken."
         : null;
   // An empty field is a starting point, not a mistake — only speak up once there is input.
@@ -119,8 +112,7 @@ export function SpaceEditorDialog(props: {
     }
   };
 
-  // The grid reflows between 10 and 5 columns, so the icons are driven as one linear
-  // radio group: either axis steps to the neighbouring icon and selects it.
+  // The grid reflows between 10 and 5 columns, so the icons are driven as one linear radio group: either axis steps to the neighbouring icon and selects it.
   const handleIconKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     const stepByKey: Record<string, number | "first" | "last"> = {
       ArrowLeft: -1,

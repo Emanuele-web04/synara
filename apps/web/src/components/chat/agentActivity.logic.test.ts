@@ -263,8 +263,7 @@ describe("unmapped provider events", () => {
       nativeEventType: "done",
       tone: "info",
     });
-    // normalizeCompactToolLabel strips the trailing "done", which previously
-    // fell through to the generic "Activity" label.
+    // normalizeCompactToolLabel strips the trailing "done", which previously fell through to the generic "Activity" label.
     expect(formatAgentActivityEntryTitle(entry)).toBe("Done");
   });
 });

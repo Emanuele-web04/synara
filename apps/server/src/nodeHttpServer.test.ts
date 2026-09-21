@@ -45,8 +45,7 @@ function openPendingUpgrade(port: number, server: http.Server) {
     server.once("upgrade", (_request, socket) => resolve(socket));
   });
   const client = net.createConnection({ host: "127.0.0.1", port });
-  // A reset is expected in these tests and must not become a client-side
-  // unhandled event either.
+  // a reset is expected in these tests and must not become a client-side unhandled event
   client.on("error", () => undefined);
   return waitForConnect(client).then(() => {
     client.write(
@@ -108,8 +107,6 @@ describe("bounded Node HTTP server socket lifecycle", () => {
       if (!server) throw new Error("Expected the Node HTTP server");
       serverForCleanup = server;
 
-      // Exercise an actual TCP RST from a client while the Effect upgrade
-      // handler is waiting and `ws.handleUpgrade()` has not run yet.
       const first = await withTimeout(openPendingUpgrade(port, server), "first upgrade");
       activeSockets.add(first.client);
       activeSockets.add(first.socket);
@@ -117,8 +114,7 @@ describe("bounded Node HTTP server socket lifecycle", () => {
       first.client.resetAndDestroy();
       await withTimeout(firstClosed, "first reset close");
 
-      // Make the failure deterministic across kernels: this is the exact
-      // EventEmitter condition that previously terminated the Node process.
+      // the exact EventEmitter condition that previously terminated the Node process — deterministic across kernels
       const second = await withTimeout(openPendingUpgrade(port, server), "second upgrade");
       activeSockets.add(second.client);
       activeSockets.add(second.socket);
@@ -132,7 +128,6 @@ describe("bounded Node HTTP server socket lifecycle", () => {
       await withTimeout(waitForClose(second.socket), "synthetic reset close");
       second.client.destroy();
 
-      // The transport remains healthy after both resets.
       const response = await fetch(`http://127.0.0.1:${port}/health`, {
         signal: AbortSignal.timeout(1_000),
       });

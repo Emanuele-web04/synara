@@ -67,7 +67,7 @@ function collectOpenPaneRequests(manager: DeviceManager): Array<Record<string, u
   return events;
 }
 
-/** Every tool that drives or reads the device the user is watching. */
+/** every tool that drives or reads the device the user is watching */
 const INTERACTION_CALLS = [
   ["device_tap", { udid: DEVICE, x: 10, y: 10 }],
   ["device_swipe", { udid: DEVICE, fromX: 0, fromY: 0, toX: 10, toY: 10 }],
@@ -186,7 +186,7 @@ describe("agent gateway device tool handlers", () => {
       label: "Fake Toggle",
     })) as { x: number; element: { subrole: string; valueBeforeTap: string } };
 
-    // The switch, not the row centre at x=196.
+    // the switch, not the row centre
     expect(result.x).toBe(340);
     expect(result.element).toMatchObject({ subrole: "Switch", valueBeforeTap: "0" });
     expect(backend.callsOfKind("tap")[0]).toMatchObject({ x: 340, y: 222 });
@@ -202,7 +202,7 @@ describe("agent gateway device tool handlers", () => {
 
     expect(result.element.label).toBe("Deep Row");
     expect(backend.callsOfKind("swipe").length).toBeGreaterThan(0);
-    // Landed somewhere tappable rather than merely on screen.
+    // landed somewhere tappable, not merely on screen
     expect(result.tapPoint.y).toBeGreaterThan(0);
     expect(result.tapPoint.y).toBeLessThan(852);
   });
@@ -215,8 +215,7 @@ describe("agent gateway device tool handlers", () => {
     const entry = result.content.find((item) => item.type === "text");
     const message = entry && entry.type === "text" ? entry.text : "";
     expect(result.isError).toBe(true);
-    // A dead-end error is one that names no alternative; the real labels have
-    // to survive into the message the agent reads.
+    // a dead-end error names no alternative — the real labels must survive into what the agent reads
     expect(message).toMatch(/No element labelled/);
     expect(message).toMatch(/Fake Toggle/);
   });
@@ -385,7 +384,7 @@ describe("agent gateway device tools auto-attach", () => {
 
     await structured("device_launch", { udid: DEVICE, bundleId: "com.example.Demo" });
 
-    // The open-pane request is only useful if the pane has a device to stream.
+    // the open-pane request is only useful if the pane has a device to stream
     expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe(DEVICE);
   });
 
@@ -403,8 +402,7 @@ describe("agent gateway device tools auto-attach", () => {
 
     await structured("device_boot", { udid: "FAKE-0002" });
 
-    // Booting alone has nothing to watch yet, and the first real interaction
-    // surfaces the pane anyway.
+    // booting alone has nothing to watch — the first real interaction surfaces the pane anyway
     expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe("FAKE-0002");
     expect(opened).toHaveLength(0);
   });
@@ -428,14 +426,13 @@ describe("agent gateway device tools auto-attach", () => {
       bundleId: "com.example.Demo",
     })) as { bundleId?: string };
 
-    // A stream failure must not turn a successful launch into a tool error.
+    // a stream failure must not turn a successful launch into a tool error
     expect(result.bundleId).toBe("com.example.Demo");
   });
 });
 
 describe("agent gateway device tools surface the pane on any interaction", () => {
-  // The demo failure: an Expo app already running on a booted simulator, so the
-  // agent never installs or launches and goes straight to describe/tap.
+  // the demo failure: an Expo app already running — agent goes straight to describe/tap
   for (const [name, args] of INTERACTION_CALLS) {
     it(`attaches and opens the pane on ${name}`, async () => {
       const { manager, call } = await setup();
@@ -463,8 +460,7 @@ describe("agent gateway device tools surface the pane on any interaction", () =>
       await call(name, { ...args });
       await call(name, { ...args });
 
-      // An agent taps every few seconds; re-requesting per call would spam the
-      // UI and could yank back a user who navigated away.
+      // an agent taps every few seconds — per-call requests would spam the UI
       expect(opened).toHaveLength(1);
     });
 
@@ -477,8 +473,7 @@ describe("agent gateway device tools surface the pane on any interaction", () =>
       await call(name, { ...args });
 
       expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe("FAKE-0002");
-      // The attachment the user chose survives; the request names the agent's
-      // device, which stays reachable from the picker.
+      // the user's chosen attachment survives; the request names the agent's device
       expect(opened.map((event) => event.udid)).toEqual([DEVICE]);
     });
   }
@@ -489,7 +484,7 @@ describe("agent gateway device tools surface the pane on any interaction", () =>
 
     await structured("device_list", { includeShutdown: true });
 
-    // Pure discovery, usually called before the agent has picked a device.
+    // pure discovery, usually called before the agent picks a device
     expect(opened).toHaveLength(0);
     expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBeNull();
   });
@@ -511,7 +506,7 @@ describe("agent gateway device tools surface the pane on any interaction", () =>
     for (const [name, args] of INTERACTION_CALLS) await call(name, { ...args });
 
     expect(opened).toHaveLength(1);
-    // One attach, so no duplicate stream for the pane to reconcile.
+    // one attach — no duplicate stream for the pane to reconcile
     expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe(DEVICE);
   });
 });

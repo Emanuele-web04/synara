@@ -9,10 +9,6 @@ export function betterwrightExpectedInputs(
     method === "Input.dispatchKeyEvent" &&
     ["keyDown", "rawKeyDown"].includes(String(params.type))
   ) {
-    // The keyboard policy accepts key, code, text and virtual-key forms; the
-    // takeover signal must register for every one of them or a valid dispatch
-    // reads as an unexpected synthetic key. Normalize the supplied key so it
-    // matches the lower-cased form the browser manager expects.
     const key = normalizedKeyEventKey(params);
     if (!key) return [];
     const modifiers = typeof params.modifiers === "number" ? params.modifiers : 0;

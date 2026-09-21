@@ -7,9 +7,7 @@ import {
   pathLooksLikeKnownFile,
 } from "./file-icons";
 
-// Object.prototype member names, which lookup keys can collide with because they are
-// derived from untrusted text. Only `constructor` and `__proto__` survive the lowercased
-// basename (`toString` becomes `tostring` and misses by luck), so pin them all.
+// Object.prototype member names collide with lookup keys derived from untrusted text — pin constructor/__proto__ explicitly
 const PROTOTYPE_MEMBER_TOKENS = [
   "constructor",
   "__proto__",
@@ -56,7 +54,6 @@ describe("getFileIconName", () => {
   });
 
   it("falls back to the bracket glyph for unknown or icon-less types", () => {
-    // Swift/Go/Ruby have no dedicated Central icon, so they use the bracket.
     assert.equal(getFileIconName("App.swift"), "code-brackets");
     assert.equal(getFileIconName("main.go"), "code-brackets");
     assert.equal(getFileIconName("server.rb"), "code-brackets");
@@ -108,7 +105,6 @@ describe("getAttachmentIconName", () => {
   });
 
   it("falls back to the MIME type when the filename has no extension", () => {
-    // A download named only by its Content-Type (e.g. a UUID with a calendar body).
     assert.equal(
       getAttachmentIconName({ name: "99247298-78c2-44ba-a1f6", mimeType: "text/calendar" }),
       "calendar-days",

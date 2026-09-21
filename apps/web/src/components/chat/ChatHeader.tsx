@@ -1,8 +1,3 @@
-// FILE: ChatHeader.tsx
-// Purpose: Renders the chat top bar with project actions and panel toggles.
-// Layer: Chat shell header
-// Depends on: project action controls, git actions, and panel toggle callbacks
-
 import {
   type EditorId,
   type ProjectId,
@@ -85,9 +80,7 @@ interface ChatHeaderProps {
   className?: string;
   hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
-  // Empty-draft landings hide all thread-scoped chrome (title, Hand off, project
-  // scripts, git/open-in) — the chat hasn't started yet — keeping only the sidebar
-  // cluster plus the Environment and right-panel toggles.
+  // Empty-draft landings hide all thread-scoped chrome (title, Hand off, project scripts, git/open-in) — the chat hasn't started yet — keeping only the sidebar cluster plus the Environment and right-panel toggles.
   minimalChrome?: boolean;
   isGitRepo: boolean;
   openInTarget: string | null;
@@ -112,9 +105,7 @@ interface ChatHeaderProps {
   onToggleRightDock?: () => void;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
-  // When provided, the header collapses the
-  // Open-in-editor + git-actions + diff-toggle cluster into one Environment button that
-  // drives the Environment panel; otherwise the legacy cluster is rendered.
+  // When provided, the header collapses the Open-in-editor + git-actions + diff-toggle cluster into one Environment button that drives the Environment panel; otherwise the legacy cluster is rendered.
   environment?: EnvironmentToggleState | null;
   chatLayoutAction?: {
     kind: "split" | "maximize";
@@ -126,8 +117,7 @@ interface ChatHeaderProps {
     label: string;
     onClick: () => void;
   } | null;
-  // Editor-rail chat controls rendered beside the title: a "new chat" button and
-  // a project chat-history menu. Provided only by the editor workspace chat pane.
+  // Editor-rail chat controls rendered beside the title: a "new chat" button and a project chat-history menu. Provided only by the editor workspace chat pane.
   editorChatControls?: {
     projectId: ProjectId;
     activeSurface: "chat" | "terminal";
@@ -167,8 +157,7 @@ function updateStoredEditorRailChatTabs(
   });
 }
 
-// Compact recent-chats picker for the editor rail; selecting a thread keeps the
-// editor view because the caller's navigation preserves the `view` search param.
+// Compact recent-chats picker for the editor rail; selecting a thread keeps the editor view because the caller's navigation preserves the `view` search param.
 function EditorChatHistoryMenu(props: {
   projectId: ProjectId;
   activeThreadId: ThreadId;
@@ -276,9 +265,7 @@ function EditorRailTabs(props: {
   ) => {
     updateStoredEditorRailChatTabs(setOpenChatTabs, props.projectId, updater);
   };
-  // Timeout-0 in the three sync effects below keeps every state write
-  // asynchronous (no wasted pre-paint render), which also keeps this component
-  // eligible for React Compiler; tab seeding/mirroring is invisible at a tick.
+  // Timeout-0 in the three sync effects below keeps every state write asynchronous (no wasted pre-paint render), which also keeps this component eligible for React Compiler; tab seeding/mirroring is invisible at a tick.
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       const storedTabs = readEditorRailChatTabs(props.projectId);
@@ -443,9 +430,7 @@ function EditorRailTabs(props: {
         />
       </div>
       {shouldShowTabs ? (
-        // Same chip tabs as the right dock's pane strip so every tab row in the
-        // app reads identically. Pushed to the header's right edge (ml-auto) so the
-        // title and new/history controls stay grouped on the left.
+        // Same chip tabs as the right dock's pane strip so every tab row in the app reads identically. Pushed to the header's right edge (ml-auto) so the title and new/history controls stay grouped on the left.
         <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {chatTabs.map((thread, index) => (
             <SurfaceTabChip
@@ -572,9 +557,7 @@ export function ChatHeader({
     hasChanges: showDiffTotals,
   } = diffTotals;
 
-  // Own the open-favorite editor shortcut here so it survives regardless of which editor UI
-  // is mounted (the legacy Open-in button, the Environment panel's Editor section, or
-  // neither while the panel is closed). The header is always present for a project thread.
+  // the header is always present for a project thread — owning the shortcut here survives whichever editor UI is mounted
   useOpenFavoriteEditorShortcut({
     keybindings,
     availableEditors,
@@ -583,8 +566,7 @@ export function ChatHeader({
   });
 
   const isSplitPane = surfaceMode === "split";
-  // Split-chat creation moved to a shortcut only; the header keeps just the inline
-  // "maximize" affordance for an already-split focused pane.
+  // Split-chat creation moved to a shortcut only; the header keeps just the inline "maximize" affordance for an already-split focused pane.
   const inlineChatLayoutAction = chatLayoutAction?.kind === "maximize" ? chatLayoutAction : null;
   const threadIconKind = resolveChatHeaderThreadIconKind(activeThreadEntryPoint, activeThreadTitle);
   const showSidechatTitleChip = isSidechat && compact;
@@ -610,9 +592,7 @@ export function ChatHeader({
     );
   };
 
-  // Single-chat surfaces use this as a true right-dock visibility toggle. Hosts
-  // without a multi-pane dock (split/editor surfaces) keep the legacy diff-only
-  // behavior until they gain their own launcher surface.
+  // Single-chat surfaces use this as a true right-dock visibility toggle. Hosts without a multi-pane dock (split/editor surfaces) keep the legacy diff-only behavior until they gain their own launcher surface.
   const togglesRightDock = onToggleRightDock !== undefined;
   const rightPanelToggleControl = showDiffToggle ? (
     <Tooltip>

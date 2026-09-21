@@ -1,8 +1,3 @@
-// FILE: useRecentViewSwitcher.ts
-// Purpose: Own the Ctrl+Tab recent-primary-view MRU wiring for the chat shell.
-// Layer: UI hook
-// Exports: useRecentViewSwitcher
-
 import { ThreadId } from "@synara/contracts";
 import type { ResolvedTerminalVisualIdentity } from "@synara/shared/terminalThreads";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
@@ -49,7 +44,6 @@ interface UseRecentViewSwitcherInput {
   projects: NewThreadContext["projects"];
 }
 
-// Encapsulates recent-view persistence, pruning, prewarm, and activation.
 export function useRecentViewSwitcher(input: UseRecentViewSwitcherInput) {
   const navigate = useNavigate();
   const pathname = useLocation({ select: (location) => location.pathname });

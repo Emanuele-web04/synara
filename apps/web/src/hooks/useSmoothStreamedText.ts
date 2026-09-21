@@ -1,37 +1,17 @@
-// FILE: useSmoothStreamedText.ts
-// Purpose: Reveal streamed assistant text at a steady, adaptive cadence so tokens appear
-//          fluidly instead of in the ~100ms network clumps that land in the store.
-// Layer: Web UI streaming primitive
-// Exports: useSmoothStreamedText, stepSmoothReveal (pure stepper, unit-tested)
-// Why: The transport coalesces deltas into one store update per ~100ms
-//      (apps/web/src/routes/__root.tsx Throttler), so rendering each clump verbatim looks
-//      choppy. This hook drains the already-delivered buffer on requestAnimationFrame at a
-//      velocity that adapts to the backlog, low-pass-smooths that velocity so there are
-//      no jarring speed jumps, and sleeps between bursts once it catches up. It feeds the
-//      same text ChatMarkdown already defers, so the markdown re-parse stays coalesced by
-//      useDeferredValue: this hook governs *cadence*, not parse cost.
-//      The reveal position advances every frame, but React commits are quantized to
-//      MIN_EMIT_INTERVAL_MS: one setState per frame (~120/s on a 120Hz display, each
-//      re-rendering the growing message) is the dominant CPU cost of a streaming turn,
-//      while a ~25/s multi-character reveal is visually equivalent.
+// the transport coalesces deltas into ~100ms clumps; this drains them on rAF at a smoothed adaptive velocity — React commits are quantized to MIN_EMIT_INTERVAL_MS since one setState per frame is the dominant CPU cost of a streaming turn and a ~25/s multi-char reveal is visually equivalent
 
 import { useEffect, useRef, useState } from "react";
 import { useMediaQuery } from "./useMediaQuery";
 
-// Drain the current backlog over this window. Kept above the ~100ms network flush so a
-// small backlog cushion always remains and the reveal tracks inflow without running dry.
+// drain window kept above the ~100ms network flush so a cushion remains and the reveal tracks inflow without running dry
 const DRAIN_WINDOW_SECONDS = 0.16;
-// Hard ceiling so a single huge flush (e.g. a pasted code block) reveals fast but bounded
-// rather than snapping in all at once.
+// hard ceiling so a huge flush reveals fast but bounded rather than snapping in
 const MAX_CHARS_PER_SECOND = 2000;
-// Low-pass factor: how aggressively the live velocity chases the target velocity each
-// frame. Smaller is smoother but laggier; ~0.15 ≈ a ~110ms time constant at 60fps.
+// low-pass factor: ~0.15 ≈ a ~110ms time constant at 60fps
 const VELOCITY_LERP = 0.15;
-// Clamp per-frame delta so returning from a backgrounded tab (rAF paused) does not dump
-// the whole backlog in a single frame.
+// per-frame clamp so returning from a backgrounded tab (rAF paused) doesn't dump the whole backlog in one frame
 const MAX_FRAME_SECONDS = 0.05;
-// Minimum spacing between React commits. The reveal float still advances every frame at
-// the smoothed velocity; this only batches how often the grown prefix is pushed to state.
+// the reveal float advances every frame; this only batches how often the grown prefix is pushed to state
 export const MIN_EMIT_INTERVAL_MS = 40;
 
 /**
@@ -39,13 +19,9 @@ export const MIN_EMIT_INTERVAL_MS = 40;
  * mutates it in place so the rAF loop allocates nothing per frame.
  */
 export interface SmoothRevealState {
-  /** Revealed character count, accumulated as a float across frames. */
   shown: number;
-  /** Smoothed reveal velocity in chars/second. */
   velocity: number;
-  /** Timestamp (ms) of the previous frame; 0 marks the start of a fresh burst. */
   lastFrameAt: number;
-  /** Timestamp (ms) of the last emitted commit; 0 forces the next emit immediately. */
   lastEmitAt: number;
 }
 
@@ -54,9 +30,7 @@ export function createSmoothRevealState(shown: number): SmoothRevealState {
 }
 
 export interface SmoothRevealStep {
-  /** Floored character count to commit this frame, or null when no commit is due. */
   emitCount: number | null;
-  /** True when the backlog is drained and the loop should sleep until the next flush. */
   done: boolean;
 }
 
@@ -91,9 +65,7 @@ export function stepSmoothReveal(
   const targetVelocity = Math.min(MAX_CHARS_PER_SECOND, backlog / DRAIN_WINDOW_SECONDS);
   state.velocity += (targetVelocity - state.velocity) * VELOCITY_LERP;
   state.shown = Math.min(targetLength, state.shown + state.velocity * dt);
-  // At high refresh rates the damped tail can approach the target without ever
-  // reaching it, leaving the last character hidden and rAF running indefinitely.
-  // Settle a remainder below 1/1000 character; preserve the reveal cadence.
+  // at high refresh rates the damped tail can approach the target without reaching it — settle a remainder below 1/1000 char so rAF doesn't run indefinitely
   if (targetLength - state.shown < 0.001) {
     state.shown = targetLength;
   }
@@ -126,9 +98,7 @@ export function stepSmoothReveal(
  */
 export function useSmoothStreamedText(text: string, isStreaming: boolean): string {
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-  // Testable env (jsdom/vitest) has no rAF or has mocked timers – smooth reveal would
-  // jank and never settle. Fall back to immediate text so streaming tests stay
-  // deterministic and the main thread isn't blocked by rAF loops.
+  // Testable env (jsdom/vitest) has no rAF or has mocked timers – smooth reveal would jank and never settle. Fall back to immediate text so streaming tests stay deterministic and the main thread isn't blocked by rAF loops.
   const isTestableEnv =
     typeof window === "undefined" ||
     typeof (window as unknown as { requestAnimationFrame?: unknown }).requestAnimationFrame !==
@@ -139,12 +109,9 @@ export function useSmoothStreamedText(text: string, isStreaming: boolean): strin
 
   const [revealed, setRevealed] = useState(text);
 
-  // Latest full text, mirrored post-commit so the rAF loop always reads the current value
-  // without re-subscribing the animation effect on every ~100ms delta.
+  // latest text mirrored post-commit so the rAF loop reads current without re-subscribing the effect on every delta
   const targetRef = useRef(text);
   const stateRef = useRef<SmoothRevealState>(createSmoothRevealState(text.length));
-  // Character count last pushed to React state — guards against redundant setState when the
-  // floored count has not advanced.
   const emittedRef = useRef(text.length);
   const rafRef = useRef<number | null>(null);
   const tickRef = useRef<(now: number) => void>(() => undefined);
@@ -166,9 +133,7 @@ export function useSmoothStreamedText(text: string, isStreaming: boolean): strin
     });
   };
 
-  // Installed in an effect (not during render — that write would make the
-  // whole hook ineligible for React Compiler). The tick reads everything
-  // through refs, so a mount-time install stays permanently fresh.
+  // installed in an effect (a render-time write would kill Compiler eligibility); the tick reads refs so a mount-time install stays fresh
   useEffect(() => {
     tickRef.current = (now: number) => {
       const target = targetRef.current;

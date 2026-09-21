@@ -1,7 +1,3 @@
-// FILE: providerCredentials.ts
-// Purpose: Owns server-only credentials used to connect to external provider servers.
-// Layer: Server provider security boundary
-
 import { Effect, Layer, ServiceMap } from "effect";
 
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";

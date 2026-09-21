@@ -228,7 +228,6 @@ describe("coordinate mapping", () => {
   });
 
   it("accounts for letterboxing when the aspect ratios differ", () => {
-    // A tall 400x800 frame in a 800x800 box leaves 200px bars left and right.
     const letterboxed = { ...geometry, displayWidth: 800, displayHeight: 800 };
     const rect = deviceContainRect(letterboxed);
     expect(rect).toEqual({ offsetX: 200, offsetY: 0, width: 400, height: 800 });
@@ -260,12 +259,9 @@ describe("coordinate mapping", () => {
 });
 
 describe("device point size", () => {
-  // Regression: the pane shipped sending frame *pixels* as tap coordinates. On a
-  // 3x phone that put every tap ~3x off the right edge of the screen, where the
-  // backend clamps silently — clicks appeared to do nothing at all.
+  // regression: the pane sent frame *pixels* as tap coordinates — on a 3x phone every tap landed ~3x off the right edge where the backend clamps silently, so clicks appeared to do nothing
   it("prefers the contract geometry over everything else", () => {
-    // The helper's own attachment geometry is what the backend validates input
-    // against, so a coordinate derived from it can never be rejected.
+    // The helper's own attachment geometry is what the backend validates input against, so a coordinate derived from it can never be rejected.
     expect(
       resolveDevicePointSize({
         framePixelWidth: 1206,
@@ -277,8 +273,7 @@ describe("device point size", () => {
   });
 
   it("falls back to the measured size when the descriptor has no geometry", () => {
-    // A server that predates the geometry field, or a device nothing has
-    // attached to yet, still has to produce landable taps.
+    // A server that predates the geometry field, or a device nothing has attached to yet, still has to produce landable taps.
     expect(
       resolveDevicePointSize({
         framePixelWidth: 1206,
@@ -330,8 +325,7 @@ describe("device point size", () => {
       816 * 0.365,
     );
     expect(point?.x).toBeCloseTo(340, 0);
-    // Short of 0.365 * 874: the 1206x2622 frame letterboxes 8px top and bottom
-    // in the 368x816 box, and the mapping accounts for the bars.
+    // Short of 0.365 * 874: the 1206x2622 frame letterboxes 8px top and bottom in the 368x816 box, and the mapping accounts for the bars.
     expect(point?.y).toBeCloseTo(317, 0);
   });
 
@@ -359,9 +353,9 @@ describe("device point size", () => {
   });
 
   it("identifies each Apple scale factor from the frame width", () => {
-    expect(inferDeviceScaleFactor(1206)).toBe(3); // iPhone 17 Pro
-    expect(inferDeviceScaleFactor(1170)).toBe(3); // iPhone 13 Pro
-    expect(inferDeviceScaleFactor(1640)).toBe(2); // iPad Air
+    expect(inferDeviceScaleFactor(1206)).toBe(3);
+    expect(inferDeviceScaleFactor(1170)).toBe(3);
+    expect(inferDeviceScaleFactor(1640)).toBe(2);
   });
 
   it("ignores a degenerate or missing measurement", () => {
@@ -376,8 +370,7 @@ describe("device point size", () => {
   });
 
   it("maps a canvas click to points, not pixels, end to end", () => {
-    // The exact failure from the live repro: a click 84.5% across a 3x screen
-    // must send ~340, not the ~1019 the pane was sending.
+    // The exact failure from the live repro: a click 84.5% across a 3x screen must send ~340, not the ~1019 the pane was sending.
     const size = resolveDevicePointSize({ framePixelWidth: 1206, framePixelHeight: 2622 });
     const point = canvasPointToDevicePoint(
       {
@@ -454,8 +447,7 @@ describe("hardware button shortcuts", () => {
   });
 
   it("leaves Simulator.app's rotate chord unclaimed, since the backend cannot honour it", () => {
-    // Rotation is a window command with no HID usage and no simctl equivalent.
-    // Claiming ⌘→ would swallow the keystroke and then surface an error.
+    // Rotation is a window command with no HID usage and no simctl equivalent. Claiming ⌘→ would swallow the keystroke and then surface an error.
     expect(resolveDeviceHardwareButtonShortcut({ ...base, key: "ArrowRight" })).toBeNull();
   });
 
@@ -575,9 +567,7 @@ describe("availability", () => {
   });
 
   it("shows the picker when only the helper build is left", () => {
-    // The deadlock this prevents: the helper is built on first attach, so
-    // blocking the picker on it means the user is shown a checklist whose one
-    // remaining step is the thing the checklist itself makes impossible.
+    // The deadlock this prevents: the helper is built on first attach, so blocking the picker on it means the user is shown a checklist whose one remaining step is the thing the checklist itself makes impossible.
     const view = resolveDeviceAvailabilityView({
       kind: "setup-required",
       steps: [
@@ -590,8 +580,7 @@ describe("availability", () => {
   });
 
   it("still blocks when a step the user must perform is outstanding", () => {
-    // Only the helper is self-healing; anything the user has to install keeps
-    // the checklist up.
+    // Only the helper is self-healing; anything the user has to install keeps the checklist up.
     const view = resolveDeviceAvailabilityView({
       kind: "setup-required",
       steps: [
@@ -778,8 +767,7 @@ describe("optimistic device selection", () => {
   it("shows the device the user just picked before the server confirms it", () => {
     const picked = device({ udid: OTHER_UDID, name: "iPad Pro 13-inch", state: "shutdown" });
 
-    // A cold boot takes most of a minute; until this, the picker read "Choose a
-    // simulator" and the screen stayed blank for the whole of it.
+    // A cold boot takes most of a minute; until this, the picker read "Choose a simulator" and the screen stayed blank for the whole of it.
     expect(
       resolveDisplayedDevice({
         threadState: threadState(),
@@ -792,9 +780,7 @@ describe("optimistic device selection", () => {
     const picked = device({ udid: OTHER_UDID, name: "iPhone SE" });
     const old = device({ name: "iPad Air 13-inch" });
 
-    // The thread still names the device being switched away from, so nothing
-    // has happened yet. Preferring it here is what made a switch show the old
-    // simulator's name and chassis for the length of the new one's boot.
+    // The thread still names the device being switched away from, so nothing has happened yet. Preferring it here is what made a switch show the old simulator's name and chassis for the length of the new one's boot.
     expect(
       resolveDisplayedDevice({
         threadState: threadState({ attachedDeviceUdid: UDID, devices: [old] }),
@@ -815,8 +801,7 @@ describe("optimistic device selection", () => {
       pending: { device: picked, supersedes: null },
     });
 
-    // The server's copy carries the live runtime state and the helper's
-    // measured geometry, both fresher than the listing the pick came from.
+    // The server's copy carries the live runtime state and the helper's measured geometry, both fresher than the listing the pick came from.
     expect(shown?.state).toBe("booted");
     expect(shown?.geometry).toEqual({ pointWidth: 402, pointHeight: 874, scale: 3 });
   });
@@ -825,8 +810,7 @@ describe("optimistic device selection", () => {
     const picked = device({ udid: OTHER_UDID, name: "iPad Pro 13-inch" });
     const attached = device({ name: "iPhone 16 Pro" });
 
-    // An agent claimed the thread while the pick was in flight: the server has
-    // spoken, so its answer wins over the optimistic one.
+    // An agent claimed the thread while the pick was in flight: the server has spoken, so its answer wins over the optimistic one.
     expect(
       resolveDisplayedDevice({
         threadState: threadState({ attachedDeviceUdid: UDID, devices: [attached] }),
@@ -846,8 +830,7 @@ describe("attach status label", () => {
       deviceAttachStatusLabel({ phase, deviceState: "booted", pendingSelection: false });
 
     expect(label("booting")).toBe("Starting up…");
-    // The distinction that matters on a cold boot: the device is up, the screen
-    // is not, and a bare spinner for that whole window reads as a hang.
+    // The distinction that matters on a cold boot: the device is up, the screen is not, and a bare spinner for that whole window reads as a hang.
     expect(label("waiting-for-display")).toBe("Waiting for the screen…");
     expect(label("connecting")).toBe("Connecting…");
   });
@@ -882,8 +865,7 @@ describe("device recording state machine", () => {
 
     state = stepDeviceRecording(state, { kind: "start-requested" });
     expect(state.kind).toBe("starting");
-    // Mid-transition a second click must send nothing: the backend refuses a
-    // concurrent start, so the UI has to swallow it rather than surface an error.
+    // Mid-transition a second click must send nothing: the backend refuses a concurrent start, so the UI has to swallow it rather than surface an error.
     expect(deviceRecordingClickIntent(state)).toBeNull();
 
     state = stepDeviceRecording(state, {
@@ -897,8 +879,7 @@ describe("device recording state machine", () => {
 
     state = stepDeviceRecording(state, { kind: "stop-requested" });
     expect(state).toEqual({ kind: "stopping", path: "/tmp/sim.mp4" });
-    // Still "active" while stopping: the button must not flip back to an idle
-    // record affordance before the file has actually been finalised.
+    // Still "active" while stopping: the button must not flip back to an idle record affordance before the file has actually been finalised.
     expect(isDeviceRecordingActive(state)).toBe(true);
     expect(deviceRecordingClickIntent(state)).toBeNull();
 

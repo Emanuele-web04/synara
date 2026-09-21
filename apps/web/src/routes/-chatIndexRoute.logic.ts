@@ -1,9 +1,3 @@
-// FILE: chatIndexRoute.logic.ts
-// Purpose: The "/" landing's restore policy — which remembered thread route the home-chat
-//          surface may reopen, and under which Space.
-// Layer: Route UI logic helpers
-// Exports: home-chat restore-route resolution.
-
 import type { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
 
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
@@ -57,15 +51,12 @@ export function resolveChatIndexRestoreRoute(input: {
 
   const availableThreadIds = new Set<string>();
   for (const threadId of [...input.threadIds, ...draftProjectIdByThreadId.keys()]) {
-    // Fail closed: a thread we can't classify is not restorable from "/". Summaries are built
-    // from the same snapshot as threadIds, so this only ever excludes a thread if that invariant
-    // breaks — and then a fresh draft beats restoring into the wrong segment.
+    // fail closed: an unclassifiable thread is not restorable from "/" — a fresh draft beats restoring into the wrong segment
     const threadSummary = sidebarThreadSummaryById[threadId];
     if (threadSummary?.sidechatSourceThreadId) continue;
     const projectId = threadSummary?.projectId ?? draftProjectIdByThreadId.get(threadId);
     if (projectId === undefined) continue;
-    // Studio threads belong to the /studio surface; restoring one from "/" would silently
-    // switch the user into that segment.
+    // Studio threads belong to the /studio surface; restoring one from "/" would silently switch the user into that segment.
     if (studioProjectIds.has(projectId)) continue;
     if (
       landingSpace &&

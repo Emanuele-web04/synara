@@ -1,8 +1,3 @@
-// FILE: exportThreadArchive.test.ts
-// Purpose: Verifies thread export archives stay readable and preserve transcript content.
-// Layer: Orchestration utility tests
-// Depends on: exportThreadArchive ZIP writer and node:zlib for round-trip reads.
-
 import zlib from "node:zlib";
 
 import type { OrchestrationThread } from "@synara/contracts";
@@ -14,9 +9,7 @@ import {
   threadArchiveFileName,
 } from "./exportThreadArchive.ts";
 
-// Minimal ZIP reader: walks the central directory, inflates each raw-deflate
-// entry. Enough to prove the writer emits a valid archive without depending on
-// a host `unzip` binary in CI.
+// minimal ZIP reader — proves the writer emits a valid archive without depending on a host `unzip` in CI
 interface ZipEntry {
   readonly name: string;
   readonly data: Buffer;
@@ -26,7 +19,7 @@ const LOCAL_HEADER_SIG = 0x04034b50;
 const CENTRAL_HEADER_SIG = 0x02014b50;
 
 function readZip(buffer: Buffer): ZipEntry[] {
-  // EOCD is the last record; scan backwards for its signature.
+  // EOCD is the last record — scan backwards for its signature
   let eocdOffset = -1;
   for (let i = buffer.length - 22; i >= 0; i -= 1) {
     if (buffer.readUInt32LE(i) === 0x06054b50) {
@@ -181,7 +174,7 @@ describe("exportThreadArchive", () => {
       chunks.push(chunk);
     }
 
-    // One chunk per entry, then central directory, then end record.
+    // one chunk per entry, then central directory, then end record
     expect(chunks.length).toBe(4);
 
     const entries = readZip(Buffer.concat(chunks));

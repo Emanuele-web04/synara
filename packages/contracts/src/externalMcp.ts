@@ -30,8 +30,7 @@ export const ExternalMcpClientKind = Schema.Literals([
 ]);
 export type ExternalMcpClientKind = typeof ExternalMcpClientKind.Type;
 
-// "all" grants every current AND future project; the effective project set is
-// recomputed on every request, so newly added projects are visible immediately.
+// "all" grants current AND future projects — recomputed on every request
 export const ExternalMcpProjectScope = Schema.Literals(["all", "selected"]);
 export type ExternalMcpProjectScope = typeof ExternalMcpProjectScope.Type;
 
@@ -74,8 +73,7 @@ export type ExternalMcpIntegration = typeof ExternalMcpIntegration.Type;
 
 export const ExternalMcpCreateIntegrationInput = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(120)),
-  // With projectScope "all" the project list is ignored; with "selected"
-  // (the default) the service requires at least one project id.
+  // with "selected" (the default) the service requires at least one project id
   projectScope: Schema.optional(ExternalMcpProjectScope),
   projectIds: Schema.optional(Schema.Array(ProjectId).check(Schema.isMaxLength(100))),
   capabilities: Schema.Array(ExternalMcpCapability)

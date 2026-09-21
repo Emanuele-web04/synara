@@ -37,9 +37,7 @@ async function waitForServer() {
     try {
       const response = await fetch(`${ORIGIN}/`, { signal: AbortSignal.timeout(5_000) });
       if (response.ok) return;
-    } catch {
-      // The server is still starting.
-    }
+    } catch {}
     await delay(500);
   }
   throw new Error(`Timed out waiting for ${ORIGIN}.\n${output}`);

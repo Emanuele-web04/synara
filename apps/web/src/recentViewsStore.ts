@@ -1,8 +1,3 @@
-// FILE: recentViewsStore.ts
-// Purpose: Persist the Ctrl+Tab recent primary views MRU used by the chat shell.
-// Layer: UI state store
-// Exports: useRecentViewsStore
-
 import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";

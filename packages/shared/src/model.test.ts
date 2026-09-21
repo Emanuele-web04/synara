@@ -1114,8 +1114,7 @@ describe("claudeSelectionRequiresRestart", () => {
   });
 
   it("does not restart for a non-max effort change", () => {
-    // Non-max effort rides in the flag-settings layer (`effortLevel`) and
-    // switches live via applyFlagSettings.
+    // non-max effort rides in the flag-settings layer and switches live via applyFlagSettings
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "high" }),
@@ -1131,8 +1130,7 @@ describe("claudeSelectionRequiresRestart", () => {
   });
 
   it("treats ultrathink as prompt-injected, not a spawn change", () => {
-    // ultrathink carries no API effort, so switching from no effort to ultrathink
-    // must not respawn the subprocess.
+    // ultrathink carries no API effort — switching from no effort must not respawn the subprocess
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8"),
@@ -1142,7 +1140,7 @@ describe("claudeSelectionRequiresRestart", () => {
   });
 
   it("does not restart when ultracode toggles", () => {
-    // ultracode is a Settings key (xhigh effortLevel + ultracode) applied live.
+    // ultracode is a Settings key (xhigh + ultracode) applied live
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "xhigh" }),
@@ -1152,7 +1150,7 @@ describe("claudeSelectionRequiresRestart", () => {
   });
 
   it("does not restart when fast mode toggles", () => {
-    // fastMode is a Settings key applied live via applyFlagSettings.
+    // fastMode is a Settings key applied live via applyFlagSettings
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "high" }),
@@ -1162,7 +1160,7 @@ describe("claudeSelectionRequiresRestart", () => {
   });
 
   it("does not restart when the thinking toggle changes", () => {
-    // The thinking toggle switches live via the SDK flag-settings control.
+    // the thinking toggle switches live via the SDK flag-settings control
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-haiku-4-5"),
@@ -1172,7 +1170,7 @@ describe("claudeSelectionRequiresRestart", () => {
   });
 
   it("ignores options the target model does not support", () => {
-    // fastMode is not supported on Sonnet models, so toggling it is a no-op.
+    // fastMode isn't supported on Sonnet — toggling is a no-op
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-sonnet-5", { effort: "high" }),

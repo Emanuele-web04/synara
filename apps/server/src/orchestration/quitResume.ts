@@ -1,40 +1,4 @@
-/**
- * quitResume - "Resume chats automatically" after a desktop quit.
- *
- * When the user quits the desktop app while chats are running and leaves the
- * "Resume chats automatically" box checked, the renderer calls the
- * `orchestration.prepareQuitResume` RPC *before* answering the quit request.
- * `prepareQuitResume` durably records the listed threads that are genuinely
- * in flight (with the turn that was running at that moment, or none while the
- * provider was still connecting) in a small JSON file next to the other server
- * state, then interrupts those turns. Because the record is written before the
- * renderer replies `allow`, it survives the renderer and the backend being torn
- * down mid-flight; a failed write fails the RPC and the renderer falls back to a
- * plain interrupt-and-quit.
- *
- * A quit can still be cancelled after the record exists (renderer crash, desktop
- * refusing to quit). If this process is still alive `QUIT_RESUME_ABANDON_AFTER_MS`
- * after writing it, the quit evidently did not happen and the record is removed
- * so an unrelated later restart never resumes those chats.
- *
- * At the next server start `claimQuitResumeRecordAtStartup` consumes the record
- * before commands are admitted (so no new quit can race it; atomic rename then
- * delete — a crash in between loses the resume rather than doubling it), then
- * `resumeQuitInterruptedChats` filters out threads that moved on since the record
- * was written and dispatches one ordinary user turn per remaining thread with the
- * recorded continuation prompt. Each turn carries a `resumePrecondition` so the
- * decider re-checks the same conditions atomically inside the serialized
- * dispatch — a client command landing between the plan and the dispatch cannot
- * slip a stale continuation through. No record → one `exists` check and nothing
- * else.
- *
- * Accepted residual windows (all require a second quit or a new turn to land
- * within microseconds of the first): a turn that replaces the recorded one inside
- * the prepare RPC is interrupted and not resumed; a second quit prepared exactly
- * when the first one's abandon sweep fires loses its record.
- *
- * @module quitResume
- */
+/** record durably before the renderer answers quit (survives teardown; a failed write falls back to plain interrupt-and-quit); a cancelled quit's record is removed after QUIT_RESUME_ABANDON_AFTER_MS; at next start the record is claimed atomically before commands admit, filtered for threads that moved on, and each resume carries a resumePrecondition the decider re-checks inside serialized dispatch */
 import type {
   OrchestrationCommand,
   OrchestrationPrepareQuitResumeInput,
@@ -64,14 +28,10 @@ import {
 } from "./commandInvariants.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 
-/**
- * A quit normally stops this process within seconds (desktop shutdown timeout is
- * 10s). A record still owned by a live process this long after it was written
- * belongs to a quit that was cancelled and must not survive.
- */
+/** a quit normally stops this process within seconds — a record still owned by a live process this long belongs to a cancelled quit */
 export const QUIT_RESUME_ABANDON_AFTER_MS = 30_000;
 
-/** Sleep without keeping the Node process alive during a normal desktop shutdown. */
+/** sleep without keeping the Node process alive during a normal desktop shutdown */
 const sleepUnref = (duration: Duration.Input) =>
   Effect.callback<void>((resume) => {
     const timer = setTimeout(
@@ -84,14 +44,14 @@ const sleepUnref = (duration: Duration.Input) =>
 
 export const QuitResumeRecord = Schema.Struct({
   version: Schema.Literal(1),
-  /** Unique per quit; command/message ids derive from it so replays dedup and quits never collide. */
+  /** unique per quit — command/message ids derive from it so replays dedup and quits never collide */
   recordId: TrimmedNonEmptyString,
   recordedAt: IsoDateTime,
   continuationPrompt: TrimmedNonEmptyString.check(Schema.isMaxLength(QUIT_RESUME_MAX_PROMPT_CHARS)),
   threads: Schema.Array(
     Schema.Struct({
       threadId: ThreadId,
-      /** The turn in flight when the record was written; null while the provider was still connecting. */
+      /** the turn in flight when recorded; null while the provider was connecting */
       turnId: Schema.NullOr(TurnId),
     }),
   ).check(Schema.isMaxLength(QUIT_RESUME_MAX_THREADS)),
@@ -106,13 +66,11 @@ type ThreadTurnInterruptCommand = Extract<
   { readonly type: "thread.turn.interrupt" }
 >;
 
-/** Read-model thread fields needed to snapshot a thread into the record. */
 export type QuitResumeRecordableThread = Pick<
   OrchestrationThread,
   "id" | "deletedAt" | "latestTurn" | "session"
 >;
 
-/** Read-model thread fields the boot-time planner inspects (a superset is fine). */
 export type QuitResumeThread = Pick<
   OrchestrationThread,
   | "id"
@@ -140,7 +98,6 @@ export interface QuitResumePlan {
   }>;
 }
 
-/** The turn a thread is running right now, or null while its provider is still connecting. */
 function inFlightTurnId(thread: QuitResumeRecordableThread): TurnId | null {
   return (
     thread.session?.activeTurnId ??
@@ -148,12 +105,7 @@ function inFlightTurnId(thread: QuitResumeRecordableThread): TurnId | null {
   );
 }
 
-/**
- * Pure: snapshot the requested threads into a record. Only threads that are
- * genuinely in flight are remembered — the dialog shows a snapshot, and a chat
- * that finished while it was open has nothing to resume. Unknown and deleted
- * threads are dropped, duplicates collapse, order is kept.
- */
+/** only threads genuinely in flight are remembered — the dialog shows a snapshot and a chat that finished while it was open has nothing to resume; unknown/deleted dropped, duplicates collapse */
 export function buildQuitResumeRecord(input: {
   readonly request: OrchestrationPrepareQuitResumeInput;
   readonly threads: ReadonlyArray<QuitResumeRecordableThread>;
@@ -198,18 +150,7 @@ export function buildQuitInterruptCommand(input: {
   };
 }
 
-/**
- * Pure: map a consumed record onto the current read model. A thread is resumed
- * only when it still exists, is not deleted, its project exists, and
- * `threadResumePreconditionViolation` is clear (not archived, nothing in flight,
- * no turn completed on its own since the record). The automatic continuation
- * uses the thread's own runtime/interaction settings (model omitted → provider
- * reactor uses the thread's current selection) and carries
- * the same precondition for the decider to enforce atomically.
- *
- * Command and message ids derive from the record so an accidental re-run
- * collides with the engine's receipt dedup instead of starting a second turn.
- */
+/** resumed only when the thread still exists, isn't deleted, its project exists, and the precondition is clear; uses the thread's own settings (model omitted → reactor uses current selection); ids derive from the record so a re-run collides with receipt dedup */
 export function planQuitResumeTurns(input: {
   readonly record: QuitResumeRecord;
   readonly threads: ReadonlyArray<QuitResumeThread>;
@@ -292,10 +233,7 @@ export type QuitResumeRecordRead =
   | { readonly kind: "invalid" }
   | { readonly kind: "record"; readonly record: QuitResumeRecord };
 
-/**
- * `absent` when there is no file, `invalid` when a file is there but cannot be
- * read or is not a record.
- */
+/** `absent` = no file; `invalid` = a file that isn't a readable record */
 export const readQuitResumeRecord = (
   path: string,
 ): Effect.Effect<QuitResumeRecordRead, never, FileSystem.FileSystem> =>
@@ -316,13 +254,7 @@ export const readQuitResumeRecord = (
     );
   });
 
-/**
- * Take exclusive ownership of whatever record is at `path`: an atomic rename to a
- * claimant-unique private path (so a second process claiming the same state dir
- * can win at most once without deleting the first claimant's file), read it,
- * then remove the private copy. `absent` when there was nothing to claim. A
- * private copy left behind by a crash is never mistaken for a fresh record.
- */
+/** atomic rename to a claimant-unique private path — a second process can win at most once without deleting the first's file; a private copy left by a crash is never mistaken for a fresh record */
 export const claimQuitResumeRecord = (
   path: string,
 ): Effect.Effect<QuitResumeRecordRead, never, FileSystem.FileSystem> =>
@@ -357,10 +289,7 @@ export const claimQuitResumeRecord = (
     return read;
   });
 
-/**
- * Remove the record only if it is still the one with `recordId`: a newer quit
- * may have replaced it in the meantime and must keep its own record.
- */
+/** remove only if still the record with `recordId` — a newer quit may have replaced it */
 const clearQuitResumeRecordIfOwned = (path: string, recordId: string) =>
   Effect.gen(function* () {
     const current = yield* readQuitResumeRecord(path);
@@ -371,14 +300,7 @@ const clearQuitResumeRecordIfOwned = (path: string, recordId: string) =>
     return true;
   });
 
-/**
- * RPC body: record first (failure fails the call so the renderer can fall back to
- * a plain interrupt) and immediately arm the abandon sweep — if this process is
- * still running `QUIT_RESUME_ABANDON_AFTER_MS` later, the quit was cancelled and
- * the record is dropped. Then interrupt every recorded thread. Interrupt failures
- * are logged, not surfaced — the record is already durable and the restart
- * reconciliation heals any turn the interrupt did not reach.
- */
+/** record first (failure fails the RPC so the renderer falls back), arm the abandon sweep immediately, then interrupt; interrupt failures are logged not surfaced — the record is durable and restart reconciliation heals any unreached turn */
 export const prepareQuitResume = (input: {
   readonly request: OrchestrationPrepareQuitResumeInput;
   readonly recordPath: string;
@@ -390,8 +312,7 @@ export const prepareQuitResume = (input: {
   readonly abandonAfter?: Duration.Input;
 }): Effect.Effect<OrchestrationPrepareQuitResumeResult, unknown, FileSystem.FileSystem> =>
   Effect.gen(function* () {
-    // Stamp before the snapshot: anything that completes after the snapshot is
-    // then provably "completed since the record" for the resume precondition.
+    // stamp before the snapshot — anything completing after is provably "completed since the record" for the precondition
     const now = new Date().toISOString();
     const readModel = yield* input.getReadModel();
     const record = buildQuitResumeRecord({
@@ -418,14 +339,11 @@ export const prepareQuitResume = (input: {
       Effect.catchCause((cause) =>
         Effect.logWarning("quit-resume abandon sweep failed", { recordId: record.recordId, cause }),
       ),
-      // Detached on purpose: the sweep must outlive this request. If the process
-      // exits first (the normal quit), the fiber simply dies with it.
+      // detached on purpose — the sweep must outlive this request; if the process exits first the fiber dies with it
       Effect.forkDetach,
     );
 
-    // The durable write is the RPC acknowledgement contract. Interrupts are
-    // best-effort and must not make the renderer miss its bounded quit wait;
-    // process shutdown itself will stop any provider command that remains live.
+    // the durable write is the RPC acknowledgement contract — interrupts are best-effort and must not make the renderer miss its bounded quit wait
     yield* Effect.forEach(
       record.threads,
       (entry) =>
@@ -455,20 +373,14 @@ export const prepareQuitResume = (input: {
     };
   });
 
-/**
- * Boot-time claim. Must run before commands are admitted so no quit prepared by
- * a freshly connected client can interleave with it; cheap when there is nothing
- * to resume (one `exists` probe). Never fails — resuming is best-effort.
- */
+/** must run before commands are admitted so no freshly prepared quit can interleave; cheap when there's nothing to resume; never fails — resuming is best-effort */
 export const claimQuitResumeRecordAtStartup: Effect.Effect<
   QuitResumeRecordRead,
   never,
   ServerConfig | FileSystem.FileSystem
 > = Effect.gen(function* () {
   const config = yield* ServerConfig;
-  // Claim before dispatching: a second process or a crash mid-dispatch must
-  // never resume the same chats twice. An unreadable record is consumed too, so
-  // it does not get re-parsed (and silently ignored) on every later boot.
+  // claim before dispatching — a second process or mid-dispatch crash must never resume twice; an unreadable record is consumed too so it isn't re-parsed every boot
   const claimed = yield* claimQuitResumeRecord(config.quitResumeStatePath);
   if (claimed.kind === "invalid") {
     yield* Effect.logWarning("dropped an unreadable quit-resume record", {
@@ -484,11 +396,7 @@ export const claimQuitResumeRecordAtStartup: Effect.Effect<
   ),
 );
 
-/**
- * Boot-time consumer of a claimed record. Runs once after restart reconciliation
- * has settled the orphaned turns. Every failure is contained and logged —
- * resuming must never affect server startup.
- */
+/** runs once after restart reconciliation settles orphaned turns; every failure contained and logged — resuming must never affect startup */
 export const resumeQuitInterruptedChats = (
   claimed: QuitResumeRecordRead,
 ): Effect.Effect<void, never, OrchestrationEngineService> =>
@@ -527,8 +435,7 @@ export const resumeQuitInterruptedChats = (
       plan.commands,
       (command) =>
         engine.dispatch(command).pipe(
-          // The decider re-checks the resume precondition atomically; a rejection
-          // here means the thread moved on between the plan and the dispatch.
+          // the decider re-checks the precondition atomically — a rejection means the thread moved on between plan and dispatch
           Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
             Effect.logInfo("quit-resume turn was not accepted", {
               threadId: command.threadId,

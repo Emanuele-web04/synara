@@ -59,8 +59,7 @@ describe("sortEntriesByVersionDesc", () => {
     const sorted = sortEntriesByVersionDesc(input);
 
     expect(sorted.map((e) => e.version)).toEqual(["0.1.0", "0.0.29", "0.0.27"]);
-    // Input array identity must be preserved — settings uses the same array
-    // for the accordion and the dialog derives another sort from it.
+    // Input array identity must be preserved — settings uses the same array for the accordion and the dialog derives another sort from it.
     expect(input.map((e) => e.version)).toEqual(["0.0.27", "0.1.0", "0.0.29"]);
   });
 });
@@ -115,9 +114,7 @@ describe("resolveWhatsNewState", () => {
     }
     expect(state.currentEntry.version).toBe("0.0.29");
     expect(state.nextLastSeenVersion).toBe("0.0.29");
-    // Accordion view shows everything we know about, newest first — including
-    // releases that come *after* the installed build so users can see what's
-    // coming next if the team chose to preview it.
+    // Accordion view shows everything we know about, newest first — including releases that come *after* the installed build so users can see what's coming next if the team chose to preview it.
     expect(state.allEntries.map((e) => e.version)).toEqual(["0.1.0", "0.0.29", "0.0.28", "0.0.27"]);
   });
 

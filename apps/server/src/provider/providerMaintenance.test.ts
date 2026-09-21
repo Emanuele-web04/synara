@@ -66,7 +66,6 @@ const CLAUDE_DEFINITION = {
   },
 } as const satisfies PackageManagedProviderMaintenanceDefinition;
 
-/** The trailing name of a probed path, whichever separator the host joined it with. */
 function fileNameOf(probedPath: string): string {
   return probedPath.slice(Math.max(probedPath.lastIndexOf("/"), probedPath.lastIndexOf("\\")) + 1);
 }
@@ -93,9 +92,7 @@ describe("providerMaintenance", () => {
   });
 
   it("pins the npm global prefix that owns the detected binary", () => {
-    // npm's global prefix follows the node that runs it, so without --prefix a
-    // second node install (e.g. nvm) would receive the update while Synara
-    // keeps checking the copy it originally detected.
+    // npm's global prefix follows the node that runs it — without --prefix a second node install gets the update while Synara checks the originally detected copy
     assert.strictEqual(
       deriveNpmGlobalPrefix("/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js"),
       "/opt/homebrew",
@@ -250,8 +247,6 @@ describe("providerMaintenance", () => {
       );
 
       assert.deepStrictEqual(probed, [join("/first", "codex"), join("/second", "codex")]);
-      // Resolution stops at the hit, so /third is never touched, and the detected directory is
-      // the PATH entry rather than anything derived from the command name.
       assert.strictEqual(capabilities.update, null);
     });
 
@@ -262,9 +257,7 @@ describe("providerMaintenance", () => {
         env: { PATH: "C:\\bin", PATHEXT: ".EXE;.CMD" },
       });
 
-      // An installation can be an extensionless file that nothing could spawn directly; this
-      // resolver is reporting on what is installed, not picking something to run.
-      // Candidates are joined with the host separator, so compare file names rather than paths.
+      // an installation can be an extensionless file nothing could spawn — this reports what is installed, not what runs
       assert.deepStrictEqual(probed.map(fileNameOf), [
         "codex",
         "codex.EXE",
@@ -275,8 +268,7 @@ describe("providerMaintenance", () => {
     });
 
     it("prefers .BAT over .CMD, matching Windows' own PATHEXT precedence", async () => {
-      // The list this replaced was ["", ".exe", ".cmd", ".bat"], which resolved this pair the
-      // wrong way round whenever both shims existed.
+      // The list this replaced was ["", ".exe", ".cmd", ".bat"], which resolved this pair the wrong way round whenever both shims existed.
       const { probed } = await runWithVirtualFileSystem(new Set(), {
         binaryPath: "codex",
         platform: "win32",
@@ -350,8 +342,7 @@ describe("providerMaintenance", () => {
   });
 
   it("reports an unknowable latest version for self-updating providers", () => {
-    // `cursor-agent update` exists, but no registry publishes its version, so the
-    // advisory can never reach "current" — callers must not read that as "outdated".
+    // `cursor-agent update` exists, but no registry publishes its version, so the advisory can never reach "current" — callers must not read that as "outdated".
     const advisory = createProviderVersionAdvisory({
       provider: "cursor",
       currentVersion: "2026.07.09-c59fd9a",

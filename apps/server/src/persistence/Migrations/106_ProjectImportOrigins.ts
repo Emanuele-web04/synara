@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-// Import provenance outlives runtime bindings, archives, and soft-deleted tasks.
+// import provenance outlives runtime bindings, archives, soft-deleted tasks
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`

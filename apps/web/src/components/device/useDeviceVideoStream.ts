@@ -1,9 +1,3 @@
-// FILE: useDeviceVideoStream.ts
-// Purpose: Drive a WebCodecs H.264 decoder from the device frame socket into a canvas.
-// Layer: Device pane runtime hook
-// Exports: useDeviceVideoStream
-// Depends on: DevicePanel.logic frame gate, deviceFrameSource transport
-
 import type { DeviceUdid } from "@synara/contracts";
 import type { DeviceFrame } from "@synara/shared/deviceFrame";
 import { useEffect, useRef, useState } from "react";
@@ -93,8 +87,7 @@ export function useDeviceVideoStream(input: {
   const [status, setStatus] = useState<DeviceVideoStatus>({ kind: "idle" });
   const [dimensions, setDimensions] = useState<DeviceVideoDimensions | null>(null);
 
-  // Generation guards every async callback: a decoder output or socket message
-  // from a torn-down stream must not paint over the current one.
+  // generation guards every async callback: output or socket messages from a torn-down stream must not paint over the current one
   const generationRef = useRef(0);
 
   useEffect(() => {
@@ -123,11 +116,7 @@ export function useDeviceVideoStream(input: {
         udid,
         handlers: { onFrame: handleFrame, onReset: handleReset },
       });
-    // The codec-config frame carries SPS/PPS only, with no slice data, so it
-    // cannot itself be decoded as a key chunk — WebCodecs rejects it with "a key
-    // frame is required after configure()". Hold the parameter sets and prepend
-    // them to the next keyframe, which is how in-band Annex-B parameter sets are
-    // meant to reach the decoder.
+    // the codec-config frame carries SPS/PPS with no slice data and can't decode as a key chunk — hold the parameter sets and prepend to the next keyframe
     let pendingParameterSets: Uint8Array | null = null;
 
     setStatus({ kind: "connecting" });
@@ -147,15 +136,13 @@ export function useDeviceVideoStream(input: {
         context?.drawImage(videoFrame, 0, 0);
         setStatus((previous) => (previous.kind === "streaming" ? previous : { kind: "streaming" }));
       } finally {
-        // VideoFrame holds a GPU buffer; failing to close it stalls the decoder
-        // within a few frames.
+        // VideoFrame holds a GPU buffer; failing to close it stalls the decoder within a few frames
         videoFrame.close();
       }
     };
 
     const teardownDecoder = () => {
-      // Parameter sets belong to the decoder being torn down; carrying them into
-      // the next one would prepend a stale SPS/PPS to its first keyframe.
+      // parameter sets belong to the decoder being torn down — carrying them over would prepend a stale SPS/PPS to the next decoder's first keyframe
       pendingParameterSets = null;
       if (!decoder) return;
       const current = decoder;
@@ -190,18 +177,13 @@ export function useDeviceVideoStream(input: {
           paint(videoFrame);
         },
         error: (error) => {
-          // A decoder error is recoverable: asking the server to rebuild the
-          // capture session yields fresh parameter sets and an IDR, which
-          // reconfigures this decoder rather than waiting out the encoder's
-          // next natural keyframe (up to two seconds away).
+          // a decoder error is recoverable: asking the server to rebuild the capture session yields fresh parameter sets + IDR rather than waiting out the encoder's next natural keyframe (~2s)
           failStream(error instanceof Error ? error.message : "The video decoder failed.");
           source?.requestResync();
         },
       });
       try {
-        // No `description`: omitting it selects Annex-B, matching what the
-        // helper writes out of VideoToolbox. Supplying one would switch the
-        // decoder to length-prefixed AVCC samples and every frame would fail.
+        // no `description`: omitting it selects Annex-B matching what the helper writes out of VideoToolbox; supplying one would switch to length-prefixed AVCC and every frame would fail
         next.configure({ codec, optimizeForLatency: true });
       } catch (error) {
         failStream(
@@ -210,8 +192,7 @@ export function useDeviceVideoStream(input: {
         return;
       }
       decoder = next;
-      // Carried, not decoded: the next keyframe is sent with these bytes in
-      // front of it so the decoder sees SPS/PPS and an IDR in one chunk.
+      // carried, not decoded: the next keyframe is sent with these bytes in front so the decoder sees SPS/PPS + IDR in one chunk
       pendingParameterSets = frame.payload.slice();
     };
 
@@ -240,8 +221,7 @@ export function useDeviceVideoStream(input: {
     };
 
     const handleFrame = (frame: DeviceFrame) => {
-      // Any delivered frame proves the socket is healthy, so the next drop
-      // starts its backoff from the beginning rather than from a long delay.
+      // any delivered frame proves the socket healthy — the next drop starts its backoff from the beginning
       reconnectAttempts = 0;
       if (!isCurrent() || disposed) return;
       const step = stepDeviceFrameGate(gate, frame.header, udid);
@@ -266,10 +246,7 @@ export function useDeviceVideoStream(input: {
       gate = createDeviceFrameGateState();
       if (reason === "closed") {
         setStatus({ kind: "connecting" });
-        // A frame source is single-use, so a socket that closes under a still
-        // mounted pane (a server restart, a network blip) leaves nothing to
-        // reconnect it and the pane spins forever. Open a fresh one, backing
-        // off so a server that is down does not become a reconnect loop.
+        // a frame source is single-use: a socket that closes under a mounted pane leaves nothing to reconnect — open a fresh one, backing off so a down server doesn't become a reconnect loop
         reconnectAttempts += 1;
         const delay = Math.min(500 * 2 ** (reconnectAttempts - 1), FRAME_RECONNECT_MAX_DELAY_MS);
         reconnectTimer = setTimeout(() => {

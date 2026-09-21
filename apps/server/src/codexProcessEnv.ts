@@ -1,9 +1,3 @@
-// FILE: codexProcessEnv.ts
-// Purpose: Builds the exact environment used when Synara launches Codex subprocesses.
-// Layer: Server runtime utility
-// Exports: Codex process env builder and browser-plugin overlay helpers.
-// Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.
-
 import * as fs from "node:fs/promises";
 import path from "node:path";
 
@@ -22,13 +16,7 @@ import {
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
-// SQLite databases and their WAL/SHM/journal sidecars are never mirrored into
-// the overlay. SQLite derives sidecar paths from the path it opened the
-// database through, and on Windows deleting a sidecar through a symlink only
-// removes the link, so a per-file mirror lets Synara's app-server and an
-// external `codex` CLI end up with two WALs on one database. The overlay
-// instead points CODEX_SQLITE_HOME at the source home so every process opens
-// the same files through the same path.
+// SQLite dbs + sidecars are never mirrored — SQLite derives sidecar paths from the open path and Windows symlink deletion only removes the link, so per-file mirroring could split one db across two WALs; the overlay points CODEX_SQLITE_HOME at the source home instead
 const CODEX_SQLITE_STATE_ENTRY_PATTERN = /^.+\.sqlite(?:-(?:wal|shm|journal))?$/;
 const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
 const SYNARA_MANAGED_MCP_TABLE_HEADER = "[mcp_servers.synara]";
@@ -40,8 +28,7 @@ export const SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS = [
 const MAX_CONFIG_SUPPRESSION_SECTIONS = 32;
 const MAX_CONFIG_SUPPRESSION_HEADER_LENGTH = 256;
 const codexOverlayPreparationQueues = new Map<string, Promise<void>>();
-// Retired local browser integrations used a stable six-character namespace.
-// Match the structural conflict without retaining any previous product name.
+// retired local browser integrations used a stable six-char namespace — match the structural conflict without retaining the old product name
 const CONFLICTING_LOCAL_BROWSER_PLUGIN_SECTION_PATTERN =
   /^\[plugins\."[a-z0-9][a-z0-9-]{5}-browser@local"\]$/;
 
@@ -216,8 +203,7 @@ async function ensureCodexOverlaySymlink(input: {
     }
 
     if (targetStat.isSymbolicLink() || CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)) {
-      // Auth must mirror the user's real Codex home so external `codex login`
-      // changes are visible.
+      // auth must mirror the user's real Codex home so external `codex login` changes are visible
       await fs.rm(input.targetPath, { recursive: true, force: true });
     } else {
       return;
@@ -231,11 +217,7 @@ function isCodexSqliteStateEntry(entryName: string): boolean {
   return CODEX_SQLITE_STATE_ENTRY_PATTERN.test(entryName);
 }
 
-/**
- * Removes SQLite links that earlier Synara releases mirrored into the overlay.
- * Only symlinks are removed: a regular database file in the overlay is left
- * untouched because Synara no longer owns or reads it.
- */
+/** only symlinks removed — a regular db file in the overlay is left untouched since Synara no longer owns or reads it */
 async function removeLegacyCodexOverlaySqliteLinks(overlayHomePath: string): Promise<void> {
   for (const entry of await fs.readdir(overlayHomePath)) {
     if (!isCodexSqliteStateEntry(entry)) {
@@ -594,11 +576,9 @@ function appendManagedCodexConfigSection(config: string, section: string): strin
       continue;
     }
     if (tableName === managedMcpTableName) {
-      // The session-scoped gateway entry is authoritative inside Synara's
-      // overlay. The user's source config remains untouched.
+      // the session-scoped gateway entry is authoritative inside the overlay; the user's source config stays untouched
       overlayConfig = removeTomlTableNamespace(overlayConfig, SYNARA_MANAGED_MCP_TABLE_HEADER);
-      // Recover only the fields Synara generates for its HTTP gateway. Saved
-      // stdio fields (including multiline args/env) make Codex reject the config.
+      // recover only fields Synara generates for its HTTP gateway — saved stdio fields (multiline args/env) make Codex reject the config
       tables.push(
         [
           header,
@@ -655,8 +635,7 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   await fs.mkdir(overlayHomePath, { recursive: true });
 
   try {
-    // Auth must get a best-effort link/copy before optional entries whose
-    // symlinks may fail on restricted Windows installs.
+    // auth gets a best-effort link/copy before optional entries whose symlinks may fail on restricted Windows installs
     await removeLegacyCodexOverlaySqliteLinks(overlayHomePath);
     for (const entry of prioritizeCodexOverlayEntries(await fs.readdir(sourceHomePath))) {
       if (entry === "config.toml" || isCodexSqliteStateEntry(entry)) {
@@ -673,8 +652,7 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
       });
     }
   } catch {
-    // If the source home is partially missing, Codex can still start with the
-    // overlay config and create any required state lazily.
+    // a partially missing source home still lets Codex start with the overlay config
   }
 
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
@@ -753,9 +731,7 @@ export async function buildCodexProcessEnv(
       ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }
       : baseEnv;
   if (overlayHomePath && !configuredEnv.CODEX_SQLITE_HOME?.trim()) {
-    // Keep every Codex process (Synara's app-server, the user's own `codex`
-    // CLI) on one SQLite home reached through one path; see
-    // CODEX_SQLITE_STATE_ENTRY_PATTERN. A user-provided value wins.
+    // keep every Codex process on one SQLite home through one path (CODEX_SQLITE_STATE_ENTRY_PATTERN); a user-provided value wins
     configuredEnv.CODEX_SQLITE_HOME = resolveBaseCodexHomePath(baseEnv, input.homePath);
   }
   const platform = input.platform ?? process.platform;
@@ -787,9 +763,7 @@ export async function buildCodexProcessEnv(
           effectiveEnv[providerEnvKey] = shellEnvironment[providerEnvKey];
         }
       }
-    } catch {
-      // Keep inherited environment if shell lookup fails.
-    }
+    } catch {}
   }
 
   return effectiveEnv;

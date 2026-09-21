@@ -101,9 +101,7 @@ function createMockOpenCodeRuntime(options?: {
   const mcpAddCalls: Array<Record<string, unknown>> = [];
   let eventSubscribeCallCount = 0;
   const emptySubscription = {
-    async *[Symbol.asyncIterator]() {
-      // No provider-side events needed for these adapter lifecycle tests.
-    },
+    async *[Symbol.asyncIterator]() {},
   };
   const client = {
     event: {
@@ -1898,8 +1896,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     );
 
     expect(runtime.forkCalls).toEqual([{ sessionID: "source-session-1" }]);
-    // Only the scoped fork client connects: the target session starts later
-    // under a ProviderService lifecycle lease, not inside forkThread.
+    // only the scoped fork client connects — the target session starts later under a ProviderService lifecycle lease, not inside forkThread
     expect(runtime.connectCalls).toHaveLength(1);
     expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/source" });
     expect(result.resumeCursor).toMatchObject({
@@ -2230,7 +2227,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
               id: "part-1",
               messageID: "assistant-message-1",
               type: "text",
-              // The cumulative snapshot may already contain the earlier buffered delta.
               text: "Hello",
               time: {
                 start: 1,
@@ -3928,8 +3924,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           },
         });
 
-        // Auto-approved ask at the tail of the turn; the reply echo has not arrived yet
-        // when the turn completes and active-turn state is torn down.
         eventQueue.push({
           id: "evt-permission-asked",
           type: "permission.asked",
@@ -3979,8 +3973,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             },
           },
         });
-        // Late echo after teardown: must be swallowed as the auto-approved reply, not
-        // surfaced as a request.resolved for a request the UI never saw opened.
+        // a late echo after teardown must be swallowed as the auto-approved reply, not surfaced as a resolution for a request the UI never saw
         eventQueue.push({
           id: "evt-late-permission-replied",
           type: "permission.replied",
@@ -3990,8 +3983,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             reply: "once",
           },
         });
-        // A queued question flushes the stream: the queue is FIFO, so its
-        // user-input.requested must be the next event, proving the late echo emitted nothing.
         eventQueue.push({
           id: "evt-question-asked",
           type: "question.asked",
@@ -4178,7 +4169,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           ApprovalRequestId.makeUnsafe("permission-human-1"),
           "accept",
         );
-        // The runtime echo may arrive after permission.list already confirmed the reply.
         eventQueue.push({
           type: "permission.replied",
           properties: {
@@ -4187,9 +4177,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             reply: "once",
           },
         });
-        // Reconnect replay can repeat both the reply and the original ask. The settled request id
-        // remains guarded for the lifetime of the adapter session, so neither becomes a second UI
-        // interaction.
         eventQueue.push({
           type: "permission.asked",
           properties: {
@@ -4430,8 +4417,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
         eventQueue.push({ type: "permission.asked", properties: permission });
         yield* Fiber.join(openedFiber);
 
-        // Fill the one-slot runtime event queue, then let permission.replied block on the next
-        // offer. Layer teardown must still interrupt the session event pump.
+        // with the event queue full, layer teardown must still interrupt the session event pump
         eventQueue.push({
           type: "session.next.text.delta",
           properties: {
@@ -5334,8 +5320,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             },
           },
         });
-        // The stream part arrives after the grace period. Synara must first
-        // recover the provider snapshot, then ignore this duplicate late event.
         yield* Effect.sleep(30);
         eventQueue.push({
           type: "message.part.updated",
@@ -5446,8 +5430,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           properties: { sessionID: "opencode-session-1" },
         });
 
-        // The first recovery sees final metadata with no parts. The late SSE
-        // part must still be emitted before the turn completes.
         yield* Effect.sleep(30);
         eventQueue.push({
           type: "message.part.updated",
@@ -5495,8 +5477,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
   it("waits for every late final-message part before completing a plan turn", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime({
-      // Exercise the event-stream fallback: OpenCode's read model may still lag
-      // while several final text parts are arriving over SSE.
       messages: async () => ({ data: [] }),
     });
     const client = runtime.runtime.createOpenCodeSdkClient({
@@ -5687,8 +5667,6 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           properties: { sessionID: "opencode-session-1" },
         });
 
-        // The first recovery sees one complete part and one open part. The turn
-        // must remain running until the provider snapshot closes the latter.
         yield* Effect.sleep(30);
         const [sessionWhilePlanPartOpen] = yield* adapter.listSessions();
         messageSnapshot = [

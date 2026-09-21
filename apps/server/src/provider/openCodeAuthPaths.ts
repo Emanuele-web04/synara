@@ -1,8 +1,4 @@
-// FILE: openCodeAuthPaths.ts
-// Purpose: Candidate auth.json locations for OpenCode-compatible CLIs.
-// Official OpenCode stores auth at xdgData/opencode — `XDG_DATA_HOME` or `~/.local/share` —
-// on every OS, including Windows and macOS. Some Windows tools still write %APPDATA% or
-// %LOCALAPPDATA%; those stay fallbacks so we do not miss a login, but they are never first.
+// official OpenCode uses xdgData/opencode on every OS incl. Windows/macOS — %APPDATA%/%LOCALAPPDATA% stay fallbacks but never first
 
 import { readFile } from "node:fs/promises";
 import nodePath from "node:path";
@@ -35,7 +31,6 @@ export function resolveOpenCodeCompatibleAuthPaths(input: OpenCodeAuthPathInput)
   const xdg = env.XDG_DATA_HOME?.trim();
   if (xdg) push(nodePath.join(xdg, input.dataDirectoryName, "auth.json"));
 
-  // Canonical OpenCode path on Linux, macOS, and Windows (`xdg-basedir`).
   push(nodePath.join(input.homeDir, ".local", "share", input.dataDirectoryName, "auth.json"));
 
   if (input.platform === "win32") {

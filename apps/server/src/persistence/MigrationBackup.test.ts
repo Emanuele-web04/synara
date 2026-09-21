@@ -70,10 +70,10 @@ async function backupPaths(dbPath: string): Promise<Array<string>> {
   return names.filter((name) => name.endsWith(".sqlite")).map((name) => path.join(directory, name));
 }
 
-/** A July 2026 day, as the compact UTC date every generated artifact name carries. */
+/** a July 2026 day, the compact UTC date artifact names carry */
 const artifactDay = (day: number) => `202607${`${day}`.padStart(2, "0")}`;
 
-/** Ages a marker to the state where startup has stopped retrying and fails closed. */
+/** ages a marker past the retry budget to where startup fails closed */
 async function exhaustResumeBudget(markerPath: string): Promise<void> {
   const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
   await fs.writeFile(
@@ -204,8 +204,7 @@ describe("migration backups", () => {
     } finally {
       failedDatabaseText.close();
     }
-    // Failing closed is what startup does *after* the bounded self-heal is
-    // spent; that terminal state is what the rest of this test asserts on.
+    // failing closed is what startup does after the bounded self-heal is spent — the terminal state this test asserts
     await exhaustResumeBudget(markerPath);
     const blockedMarkerText = await fs.readFile(markerPath, "utf8");
     const databaseStatBeforeStartup = await fs.stat(dbPath);
@@ -358,10 +357,7 @@ describe("migration backups", () => {
       ),
     ).rejects.toThrow("leave recovery artifacts");
 
-    // Age is deliberately not a factor for partials. Only the lock holder can
-    // write one, so a partial observed at startup always outlived its writer —
-    // and an age cutoff here is what let a restart loop accumulate hundreds of
-    // gigabytes of unreclaimable snapshots.
+    // only the lock holder can write a partial, so one observed at startup outlived its writer — an age cutoff here let a restart loop accumulate hundreds of GB
     await expect(fs.stat(stalePartial)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(recentPartial)).rejects.toMatchObject({ code: "ENOENT" });
 
@@ -378,10 +374,7 @@ describe("migration backups", () => {
   });
 
   it("reclaims stranded partials at startup even while failing closed on recovery", async () => {
-    // Regression: a database needing recovery fails closed before it can ever
-    // reach the backup path, so nothing reclaimed the partials each restart
-    // left behind. A crash-looping desktop shell turned that into hundreds of
-    // gigabytes of unreferenced snapshots in minutes.
+    // a database needing recovery fails closed before reaching the backup path — nothing reclaimed the partials each restart left (crash-looping shell → hundreds of GB in minutes)
     const dbPath = await makeDbPath();
     const backupDirectory = migrationBackupDirectory(dbPath);
 
@@ -397,8 +390,7 @@ describe("migration backups", () => {
 
     const markerPath = migrationRecoveryMarkerPath(dbPath);
     expect(await fs.readFile(markerPath, "utf8")).toContain("migration-in-progress");
-    // Spend the resume budget so startup is past self-healing and back to
-    // failing closed, which is the state this reclaim has to survive.
+    // spend the resume budget so startup is past self-healing — the state this reclaim must survive
     await exhaustResumeBudget(markerPath);
 
     const partials = Array.from(
@@ -421,16 +413,14 @@ describe("migration backups", () => {
     const remaining = await fs.readdir(backupDirectory);
     expect(remaining.filter((name) => name.endsWith(".partial"))).toEqual([]);
 
-    // Reclaiming must never cost the user their restore point.
+    // reclaiming must never cost the user their restore point
     expect(await fs.readFile(markerPath, "utf8")).toContain("migration-in-progress");
     const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as { backupPath: string };
     await expect(fs.stat(marker.backupPath)).resolves.toBeDefined();
   });
 
   it("resumes an interrupted migration on the next startup without taking a second backup", async () => {
-    // Regression: 0.6.0 wrote this marker and then refused to open the database
-    // forever, with no in-app path back out. Startup must be able to finish the
-    // migration it was interrupted during.
+    // 0.6.0 wrote this marker then refused to open forever — startup must be able to finish the interrupted migration
     const dbPath = await makeDbPath();
 
     await runWithDatabase(
@@ -455,10 +445,9 @@ describe("migration backups", () => {
       ),
     );
 
-    // Success is what clears the marker; nothing else is allowed to.
+    // success is what clears the marker; nothing else may
     await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
-    // Re-snapshotting here would both point recovery at the broken database and
-    // copy the whole file on every restart.
+    // re-snapshotting would point recovery at the broken database and copy the whole file every restart
     expect(await backupPaths(dbPath)).toEqual(backupsBefore);
     const provenance = JSON.parse(
       await fs.readFile(migrationBackupProvenancePath(dbPath), "utf8"),
@@ -504,7 +493,7 @@ describe("migration backups", () => {
     await expect(Effect.runPromise(inspectPendingMigrationRecovery(dbPath))).rejects.toThrow(
       MigrationRecoveryRequiredError,
     );
-    // The snapshot the operator restores from must still be intact.
+    // the snapshot the operator restores from must still be intact
     const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as { backupPath: string };
     await expect(fs.stat(marker.backupPath)).resolves.toBeDefined();
   });
@@ -526,8 +515,7 @@ describe("migration backups", () => {
       resumeMarkedMigration(dbPath, marker!, Effect.fail(new Error("died again"))),
     ).catch(() => undefined);
 
-    // Charged up front: a process killed mid-migration must not get a free retry,
-    // or a deterministic failure loops forever.
+    // charged up front — a process killed mid-migration must not get a free retry or a deterministic failure loops forever
     await expect(Effect.runPromise(inspectPendingMigrationRecovery(dbPath))).resolves.toMatchObject(
       {
         resumeAttempts: 1,
@@ -611,7 +599,7 @@ describe("migration backups", () => {
 
     await expect(fs.stat(strandedMarkerPartial)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(strandedBackupPartial)).rejects.toMatchObject({ code: "ENOENT" });
-    // The marker itself is the recovery authority; the sweep must never take it.
+    // the marker itself is the recovery authority — the sweep must never take it
     await expect(fs.stat(markerPath)).resolves.toBeDefined();
     await expect(fs.stat(dbPath)).resolves.toBeDefined();
   });
@@ -659,9 +647,7 @@ describe("migration backups", () => {
         yield* sql`CREATE TABLE replay_recovery_probe(value TEXT NOT NULL)`;
         yield* sql`INSERT INTO replay_recovery_probe(value) VALUES ('preserved')`;
 
-        // Reproduce the tracker state left by lineage reconciliation after the
-        // released migration-54 renumbering. The schema already contains this
-        // range, so every replayed migration must be genuinely idempotent.
+        // reproduce tracker state left by the migration-54 renumbering — every replayed migration must be genuinely idempotent
         yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 54`;
         const replayed = yield* runWithPreMigrationBackup(dbPath, runMigrations());
         expect(replayed[0]?.[0]).toBe(54);
@@ -1016,7 +1002,7 @@ describe("migration backups", () => {
     expect(migrationCount).toBe(migrationEntries.length);
     expect(await backupPaths(dbPath)).toEqual([]);
 
-    // A current schema is a no-op startup and must not consume retention slots.
+    // a current schema is a no-op startup — must not consume retention slots
     expect(await startDatabase()).toBe(migrationEntries.length);
     expect(await backupPaths(dbPath)).toEqual([]);
   });
@@ -1063,10 +1049,7 @@ describe("migration backups", () => {
   });
 
   it("bounds every unreferenced artifact family without touching the live database", async () => {
-    // Regression: retention only ever matched the `pre-migration-` prefix, so
-    // `failed-migration-` bundles and legacy `pre-tracker-repair-` snapshots —
-    // both full-size copies of the database — could never be reclaimed by any
-    // code path a normal install runs.
+    // retention only ever matched `pre-migration-` — `failed-migration-` bundles and `pre-tracker-repair-` snapshots could never be reclaimed by any path a normal install runs
     const dbPath = await makeDbPath();
     const dbDirectory = path.dirname(dbPath);
     const basename = path.basename(dbPath);
@@ -1081,7 +1064,7 @@ describe("migration backups", () => {
     ];
     await Promise.all(liveFiles.map((filePath) => fs.writeFile(filePath, "live")));
 
-    // Ordering must come from the name, so mtime is deliberately the inverse.
+    // ordering must come from the name — mtime is deliberately the inverse
     const failedBundles = [1, 2, 3, 4, 5, 6].map(
       (value) => `${basename}.failed-migration-${artifactDay(value)}T120000000Z-${randomUUID()}`,
     );
@@ -1105,7 +1088,7 @@ describe("migration backups", () => {
       ),
     );
 
-    // The short `YYYYMMDDThhmm` stamp is the form the released writer used.
+    // the short YYYYMMDDThhmm stamp is the form the released writer used
     const trackerRepairs = [1, 2, 3].map(
       (value) => `${basename}.pre-tracker-repair-v0.6.0-${artifactDay(value)}T1355.sqlite`,
     );
@@ -1132,8 +1115,7 @@ describe("migration backups", () => {
         ...failedBundles
           .slice(-FAILED_MIGRATION_BUNDLE_RETENTION)
           .flatMap((name) => [name, `${name}-wal`, `${name}-shm`]),
-        // Unrankable names are retained, never guessed at. Sidecars with no
-        // bundle to restore are reclaimed and never occupy a retention slot.
+        // unrankable names are retained, never guessed at; sidecars with no bundle are reclaimed without a slot
         undatedBundle,
         `${undatedBundle}-wal`,
       ].toSorted(),
@@ -1151,16 +1133,14 @@ describe("migration backups", () => {
         undatedTrackerRepair,
       ].toSorted(),
     );
-    // Restorable snapshots are off limits before the recovery marker is validated.
+    // restorable snapshots are off limits before the recovery marker is validated
     expect(remainingBackups.filter((name) => name.includes("pre-migration")).toSorted()).toEqual(
       [...preMigrationBackups].toSorted(),
     );
   });
 
   it("bounds failed-migration bundles on the normal startup path", async () => {
-    // The explicit restore command was the only caller that ever pruned these,
-    // and most installs never run it — so a 1.2 GB copy of the database sat
-    // beside it indefinitely.
+    // the explicit restore command was the only caller that ever pruned these — most installs never run it, so a 1.2GB copy sat indefinitely
     const dbPath = await makeDbPath();
     const basename = path.basename(dbPath);
 

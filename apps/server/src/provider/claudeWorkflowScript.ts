@@ -1,7 +1,4 @@
-// Static, best-effort inspection of Claude Code workflow scripts and results.
-// Workflow scripts must open with `export const meta = {...}` as a pure literal,
-// so the meta can be read without evaluating the script; everything here returns
-// undefined instead of throwing when the input does not match that shape.
+// meta must open the script as a pure literal so it's readable without evaluation — return undefined on anything else
 
 import type { WorkflowAgentPlan, WorkflowAgentSnapshot, WorkflowPhase } from "@synara/contracts";
 
@@ -20,14 +17,8 @@ export interface ClaudeWorkflowLaunch {
 
 const QUOTES = new Set(['"', "'", "`"]);
 
-// Reads one literal value (string/number/boolean/null/array/object) starting at
-// `index`. Returns undefined on anything computed - identifiers, calls, template
-// interpolation - which is exactly the "pure literal" contract for meta.
 function parseLiteral(source: string, index: number): { value: unknown; end: number } | undefined {
-  // Consumes whitespace plus `//` line comments and `/* ... */` block
-  // comments so inline comments inside the meta literal don't derail the
-  // parse. An unterminated block comment has no valid resumption point, so
-  // it jumps to end-of-source, which the caller then treats as a mismatch.
+  // an unterminated block comment has no valid resumption — jump to end-of-source so the caller treats it as a mismatch
   const skipTrivia = (from: number): number => {
     let at = from;
     while (at < source.length) {
@@ -205,9 +196,6 @@ export function parseClaudeWorkflowScriptMeta(
   };
 }
 
-// Scans agent(...) call options for string-literal {label, phase, model, effort}
-// opts. Computed values are skipped; the map is a planning fallback for agent
-// rows before (or without) live per-agent data.
 export function extractClaudeWorkflowAgentPlans(
   script: string,
 ): Record<string, WorkflowAgentPlan> | undefined {
@@ -236,8 +224,7 @@ export function extractClaudeWorkflowAgentPlans(
   return Object.keys(plans).length > 0 ? plans : undefined;
 }
 
-// Legacy label -> phase map derived from the plans; still emitted so older
-// persisted-event consumers keep working.
+// Legacy label -> phase map derived from the plans; still emitted so older persisted-event consumers keep working.
 export function extractClaudeWorkflowAgentPhases(
   script: string,
 ): Record<string, string> | undefined {
@@ -251,15 +238,7 @@ export function extractClaudeWorkflowAgentPhases(
   return pairs.length > 0 ? Object.fromEntries(pairs) : undefined;
 }
 
-// Returns the text of one call's argument list, from the opening paren to its
-// balanced close, skipping over string literals (so parens inside prompts
-// don't unbalance the scan) and comments (so parens or option-shaped text
-// inside `//`/`/* */` comments don't unbalance the scan or leak into the
-// result). Comment regions are elided down to a single space in the
-// returned text so downstream regex extraction never sees commented-out
-// content; string literal contents - including ones containing `//` or
-// `/*` - are preserved exactly, since comment-skipping only applies outside
-// of string literals.
+// balanced-paren arg scan skips strings and comments; comment regions collapse to one space so downstream regex never sees commented-out content
 function readBalancedCall(source: string, openParen: number): string | undefined {
   let depth = 0;
   let at = openParen;
@@ -317,11 +296,9 @@ function readOptionStringLiteral(callText: string, key: string): string | undefi
 
 const WORKFLOW_RUN_ID_PATTERN = /\bwf_[a-z0-9-]{6,}\b/;
 
-// Enough of a prompt to render a two-line preview with an expand affordance.
 export const WORKFLOW_PROMPT_PREVIEW_CHARS = 400;
 
-// Launch identifiers from the Workflow tool result. taskType was added after
-// the original structured result shape, so it may be absent on older results.
+// Launch identifiers from the Workflow tool result. taskType was added after the original structured result shape, so it may be absent on older results.
 export function parseClaudeWorkflowLaunch(value: unknown): ClaudeWorkflowLaunch | undefined {
   if (typeof value === "string") {
     try {
@@ -368,8 +345,6 @@ export function parseClaudeWorkflowLaunchFromText(text: string): ClaudeWorkflowL
   };
 }
 
-// Final per-agent snapshots from the workflow's output_file JSON
-// (`workflowProgress` array with workflow_agent entries).
 export function parseClaudeWorkflowProgressAgents(
   content: string,
 ): ReadonlyArray<WorkflowAgentSnapshot> | undefined {

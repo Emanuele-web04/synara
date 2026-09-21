@@ -1,7 +1,3 @@
-// FILE: HomepageRail.tsx
-// Purpose: Quiet desktop section navigation for the long marketing page.
-// Layer: Client component
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -16,9 +12,7 @@ const SECTIONS = [
   { id: "download", label: "Download" },
 ] as const;
 
-// Uniform inactive line: every section rests at the same width (w-4) and grows one
-// step on hover (w-5). The active line stays w-8 — exactly 2x the resting width, so
-// active/inactive stay proportional. Literal classes so Tailwind JIT picks them up.
+// active line is w-8, exactly 2x resting w-4; literal classes so Tailwind JIT picks them up
 const LINE_CLASSES =
   "w-4 group-hover:w-5 bg-[var(--text-tertiary)] group-hover:bg-[var(--text-secondary)]";
 
@@ -66,8 +60,7 @@ export default function HomepageRail() {
               <a
                 href={`#${id}`}
                 onClick={(event) => {
-                  // Smooth jump instead of the browser's instant one; the marker
-                  // lights up immediately rather than waiting for the observer.
+                  // smooth jump instead of the browser's instant one; the marker lights immediately rather than waiting for the observer
                   if (scrollToAnchor(id, event)) setActiveId(id);
                 }}
                 aria-current={active ? "location" : undefined}

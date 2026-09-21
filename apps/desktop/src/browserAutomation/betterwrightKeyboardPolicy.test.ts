@@ -58,7 +58,6 @@ describe("Betterwright native keyboard policy", () => {
         policy.check({ type: "rawKeyDown", modifiers: 4, windowsVirtualKeyCode: 32 }),
       ).toThrow();
     }
-    // Space without a command remains safe native typing.
     expect(() => policy.check({ type: "rawKeyDown", modifiers: 0, key: " " })).not.toThrow();
   });
 

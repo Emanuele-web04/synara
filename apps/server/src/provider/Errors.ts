@@ -2,9 +2,6 @@ import { Schema } from "effect";
 
 import type { CheckpointServiceError } from "../checkpointing/Errors.ts";
 
-/**
- * ProviderAdapterValidationError - Invalid adapter API input.
- */
 export class ProviderAdapterValidationError extends Schema.TaggedErrorClass<ProviderAdapterValidationError>()(
   "ProviderAdapterValidationError",
   {
@@ -19,9 +16,6 @@ export class ProviderAdapterValidationError extends Schema.TaggedErrorClass<Prov
   }
 }
 
-/**
- * ProviderAdapterSessionNotFoundError - Adapter-owned session id is unknown.
- */
 export class ProviderAdapterSessionNotFoundError extends Schema.TaggedErrorClass<ProviderAdapterSessionNotFoundError>()(
   "ProviderAdapterSessionNotFoundError",
   {
@@ -35,9 +29,6 @@ export class ProviderAdapterSessionNotFoundError extends Schema.TaggedErrorClass
   }
 }
 
-/**
- * ProviderAdapterSessionClosedError - Adapter session exists but is closed.
- */
 export class ProviderAdapterSessionClosedError extends Schema.TaggedErrorClass<ProviderAdapterSessionClosedError>()(
   "ProviderAdapterSessionClosedError",
   {
@@ -51,9 +42,6 @@ export class ProviderAdapterSessionClosedError extends Schema.TaggedErrorClass<P
   }
 }
 
-/**
- * ProviderAdapterRequestError - Provider protocol request failed or timed out.
- */
 export class ProviderAdapterRequestError extends Schema.TaggedErrorClass<ProviderAdapterRequestError>()(
   "ProviderAdapterRequestError",
   {
@@ -68,9 +56,6 @@ export class ProviderAdapterRequestError extends Schema.TaggedErrorClass<Provide
   }
 }
 
-/**
- * ProviderAdapterProcessError - Provider process lifecycle failure.
- */
 export class ProviderAdapterProcessError extends Schema.TaggedErrorClass<ProviderAdapterProcessError>()(
   "ProviderAdapterProcessError",
   {
@@ -87,9 +72,6 @@ export class ProviderAdapterProcessError extends Schema.TaggedErrorClass<Provide
   }
 }
 
-/**
- * ProviderValidationError - Invalid provider API input.
- */
 export class ProviderValidationError extends Schema.TaggedErrorClass<ProviderValidationError>()(
   "ProviderValidationError",
   {
@@ -104,9 +86,6 @@ export class ProviderValidationError extends Schema.TaggedErrorClass<ProviderVal
   }
 }
 
-/**
- * ProviderUnsupportedError - Requested provider is not implemented.
- */
 export class ProviderUnsupportedError extends Schema.TaggedErrorClass<ProviderUnsupportedError>()(
   "ProviderUnsupportedError",
   {
@@ -119,9 +98,6 @@ export class ProviderUnsupportedError extends Schema.TaggedErrorClass<ProviderUn
   }
 }
 
-/**
- * ProviderSessionNotFoundError - Provider-facing session not found.
- */
 export class ProviderSessionNotFoundError extends Schema.TaggedErrorClass<ProviderSessionNotFoundError>()(
   "ProviderSessionNotFoundError",
   {
@@ -134,9 +110,6 @@ export class ProviderSessionNotFoundError extends Schema.TaggedErrorClass<Provid
   }
 }
 
-/**
- * ProviderSessionDirectoryPersistenceError - Session directory persistence failure.
- */
 export class ProviderSessionDirectoryPersistenceError extends Schema.TaggedErrorClass<ProviderSessionDirectoryPersistenceError>()(
   "ProviderSessionDirectoryPersistenceError",
   {

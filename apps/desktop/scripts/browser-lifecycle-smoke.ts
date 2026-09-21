@@ -13,8 +13,6 @@ import { BrowserVaultCapture } from "../src/browserAutomation/browserVaultCaptur
 import type { BrowserVault } from "../src/browserAutomation/browserVault";
 import type { BrowserAutomationVisibleRuntime } from "../src/browserManager";
 
-// Synthetic, loopback-only fixtures. No personal profiles, credentials, or
-// external sites are used. This runs in Electron, not a mocked Session.
 configureElectronNetwork();
 const home = await mkdtemp(join(tmpdir(), "synara-browser-lifecycle-"));
 app.setPath("userData", join(home, "electron"));
@@ -37,9 +35,6 @@ async function checkCookieImportMetadata(contents: WebContents) {
     policy: new NetworkPolicy({ allowLoopback: true }),
   });
   let includeCookie = true;
-  // Stub only local-profile extraction. The installed client must derive
-  // hostOwnedTarget, dispatch to its real worker, write through CDP, verify
-  // Electron's cookie store, and return metadata through the patched result.
   Object.defineProperty(browser, "_extractCookieSync", {
     value: async () => ({
       cookies: includeCookie
@@ -134,7 +129,6 @@ async function smoke() {
   const session = contents.session;
   session.on("will-download", (event) => event.preventDefault());
   const baselineProxy = await session.resolveProxy(allowedUrl);
-  // Seed a direct connection before leasing; acquisition must drain it.
   assert.equal(await (await session.fetch(`${blockedUrl}/warmup`)).text(), "blocked fixture");
   blockedRequests = 0;
   await contents.loadURL(allowedUrl);
@@ -224,8 +218,6 @@ async function smoke() {
     const siblingRun = siblingBrowser.run("return await page.title()", { automaticUI: false });
     await siblingQueued.promise;
     assert.equal(siblingConnected, false, "Concurrent tab bypassed the session queue");
-    // A closed transport causes the actual client to replace its worker. The
-    // new worker supplies a new SOCKS proxy; the same host target must adopt it.
     await leases[0]!.close();
     const rotated = await browser.run(
       `await page.goto(${JSON.stringify(allowedUrl)}); return await page.title()`,
@@ -260,8 +252,6 @@ async function smoke() {
     await checkCookieImportMetadata(contents);
     assert.equal(await session.resolveProxy(allowedUrl), baselineProxy);
 
-    // Install the real upstream capture sensor into a live Electron isolated
-    // world, then verify its script, scoped binding, and disposal.
     const ready = Promise.withResolvers<void>();
     const errors: unknown[] = [];
     const capture = new BrowserVaultCapture({

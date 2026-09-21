@@ -1,10 +1,3 @@
-// FILE: PullRequestsUnavailableState.tsx
-// Purpose: Actionable empty state for the pull requests surface when the GitHub CLI is missing,
-//          unauthenticated, or a request otherwise failed — each case gets a short explanation
-//          and a copyable terminal command instead of a dead end.
-// Layer: Pull request presentation
-// Exports: PullRequestsUnavailableState, isPullRequestsUnavailableError
-
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";

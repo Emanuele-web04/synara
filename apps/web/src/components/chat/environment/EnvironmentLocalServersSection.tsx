@@ -1,8 +1,3 @@
-// FILE: EnvironmentLocalServersSection.tsx
-// Purpose: Environment panel row/menu for active local dev servers with one-click stop actions.
-// Layer: Environment panel section
-// Depends on: server local-server React Query helpers and the shared Environment row skin.
-
 import type { ReactNode } from "react";
 
 import type { ServerLocalServerProcess } from "@synara/contracts";

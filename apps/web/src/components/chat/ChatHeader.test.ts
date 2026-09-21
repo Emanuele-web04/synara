@@ -1,8 +1,3 @@
-// FILE: ChatHeader.test.ts
-// Purpose: Covers chat header presentation helpers that choose thread identity chrome.
-// Layer: Component unit tests
-// Depends on: ChatHeader pure helpers and Vitest assertions.
-
 import { describe, expect, it } from "vitest";
 
 import { resolveChatHeaderThreadIconKind } from "./ChatHeader";

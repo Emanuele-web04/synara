@@ -1,7 +1,3 @@
-// FILE: updateInstallMarker.test.ts
-// Purpose: Verifies durable update install marker persistence and restart outcome resolution.
-// Layer: Desktop update tests
-
 import * as FS from "node:fs";
 import * as OS from "node:os";
 import * as Path from "node:path";

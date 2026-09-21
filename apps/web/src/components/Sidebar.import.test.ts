@@ -1,8 +1,3 @@
-// FILE: Sidebar.import.test.ts
-// Purpose: Smoke-test that the large Sidebar module still imports after project-run wiring.
-// Layer: Web component module test
-// Depends on: Vitest module mocking and Sidebar's transitive imports.
-
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./terminal/terminalRuntimeRegistry", () => ({

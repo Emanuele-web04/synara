@@ -1,8 +1,3 @@
-// FILE: ComposerColumnFrame.test.ts
-// Purpose: Pins the composer column + stacked-header rail layout contract.
-// Layer: Chat composer regression test
-// Depends on: ComposerColumnFrame, ComposerStackedHeaderFrame.
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 

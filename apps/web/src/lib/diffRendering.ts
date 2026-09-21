@@ -1,8 +1,3 @@
-// FILE: diffRendering.ts
-// Purpose: Shared helpers for rendering, caching, copying, and summarizing git patches.
-// Layer: Web diff utilities
-// Depends on: @pierre/diffs patch parsing
-
 import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
@@ -20,14 +15,10 @@ export function resolveDiffThemeName(theme: "light" | "dark"): DiffThemeName {
   return theme === "dark" ? DIFF_THEME_NAMES.dark : DIFF_THEME_NAMES.light;
 }
 
-// The `unsafeCSS` payload is identical per theme and only ever has two values,
-// so cache it instead of rebuilding the (large) template string per file/render.
+// the unsafeCSS payload is identical per theme with only two values — cache it instead of rebuilding the large template per file/render
 const diffPanelUnsafeCssCache = new Map<"light" | "dark", string>();
 
-// Themed CSS injected into the @pierre/diffs shadow markup so the diff viewer
-// adopts the app's chat code font and themed addition/deletion backgrounds.
-// Shared by every diff surface (turn diffs, repo diffs, the git pane) so they
-// render consistently — previously the git pane omitted this entirely.
+// shared by every diff surface (turn diffs, repo diffs, git pane) so they render consistently — the git pane previously omitted it
 export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   const cached = diffPanelUnsafeCssCache.get(theme);
   if (cached) {
@@ -211,9 +202,7 @@ export function buildPatchCacheKey(patch: string, scope = "diff-panel"): string 
 export const PARTIAL_DIFF_COPY_NOTICE =
   "[Synara: partial diff. Output was truncated at the size limit; some files or changes may be missing.]";
 
-// Returns copyable source text for diff surfaces without depending on virtualized DOM rows.
-// A truncation notice travels with partial clipboard content so it cannot be mistaken for a
-// complete patch after it leaves Synara.
+// copyable source text without depending on virtualized DOM rows; a truncation notice travels with partial clipboard content so it can't be mistaken for a complete patch
 export function resolveDiffCopyText(patch: string | undefined, truncated = false): string | null {
   if (typeof patch !== "string") {
     return null;
@@ -288,8 +277,7 @@ export function getRenderablePatch(
   }
 }
 
-// Resolve the working-tree-relative path for a parsed file diff, stripping the
-// conventional `a/` / `b/` patch prefixes so callers can match git status paths.
+// Resolve the working-tree-relative path for a parsed file diff, stripping the conventional `a/` / `b/` patch prefixes so callers can match git status paths.
 export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
   const raw = fileDiff.name ?? fileDiff.prevName ?? "";
   if (raw.startsWith("a/") || raw.startsWith("b/")) {
@@ -298,10 +286,7 @@ export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
   return raw;
 }
 
-// Resolve the pre-change path for a parsed file diff (the old side of a
-// rename/move), stripping the conventional `a/` patch prefix. Returns null for
-// files that were not renamed or moved: the parser also fills `prevName` for
-// added files, where it is `/dev/null` or a copy of the new name.
+// null for non-renames: the parser also fills prevName for added files (/dev/null or a copy of the new name)
 export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | null {
   if (
     fileDiff.prevName === undefined ||
@@ -316,24 +301,18 @@ export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | nu
   return raw;
 }
 
-// Symlinks (120000) show their target path but the workspace read/write path
-// follows the link, and gitlinks (160000, submodules) are directories in the
-// working tree: neither can be edited in place as the text the diff shows.
+// symlinks show their target but writes follow the link; gitlinks are directories — neither is editable as the shown text
 const UNEDITABLE_GIT_MODES = new Set(["120000", "160000"]);
 
 export function hasUneditableGitMode(fileDiff: FileDiffMetadata): boolean {
   return UNEDITABLE_GIT_MODES.has(fileDiff.mode ?? fileDiff.prevMode ?? "");
 }
 
-// Stable identity for a parsed file diff, used as a React key and selection id.
 export function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
 }
 
-// Split a repo-relative path into a trailing-slash directory prefix and a leaf
-// name so diff/file rows can dim the directory while emphasizing the file name.
-// Intentionally not reusing the directory-browser helpers (projectPaths.ts):
-// those carry trailing-separator / Windows-drive semantics meant for browsing.
+// intentionally not reusing projectPaths helpers — those carry trailing-separator/Windows-drive semantics meant for browsing
 export function splitRepoRelativePath(path: string): { dir: string; name: string } {
   const index = path.lastIndexOf("/");
   if (index === -1) {
@@ -342,8 +321,7 @@ export function splitRepoRelativePath(path: string): { dir: string; name: string
   return { dir: path.slice(0, index + 1), name: path.slice(index + 1) };
 }
 
-// Natural-order comparator for parsed file diffs by working-tree path, so file
-// lists stay stable and human-friendly (numeric-aware, case-insensitive).
+// Natural-order comparator for parsed file diffs by working-tree path, so file lists stay stable and human-friendly (numeric-aware, case-insensitive).
 let diffPathCollator: Intl.Collator | undefined;
 
 export function compareDiffPaths(left: string, right: string): number {
@@ -359,7 +337,6 @@ export function sortFileDiffsByPath(files: ReadonlyArray<FileDiffMetadata>): Fil
   return files.toSorted(compareFileDiffByPath);
 }
 
-// Summarize parsed hunks for compact, consistent diff stats across panel chrome.
 export function summarizeFileDiffStats(files: ReadonlyArray<FileDiffMetadata>): {
   additions: number;
   deletions: number;
@@ -392,11 +369,7 @@ export function summarizePatchTotals(
   return summarizeRenderablePatchStats(renderable);
 }
 
-// Per-file +N/-M parsed from a unified diff/patch, keyed by working-tree-relative
-// path (a/ b/ prefixes stripped via resolveFileDiffPath). Lets transcript
-// "Edited <file>" rows surface diff stats from a tool call's own patch when no
-// turn-diff summary is in scope (e.g. standalone work rows). Empty map when the
-// patch is missing or unparsable, so callers can fall back gracefully.
+// lets "Edited <file>" rows surface diff stats from the tool call's own patch when no turn-diff summary is in scope; empty map when unparsable
 export function fileDiffStatsByPath(patch: string | undefined): Map<string, FileDiffStat> {
   const stats = new Map<string, FileDiffStat>();
   const renderable = getRenderablePatch(patch, "tool-row:stats");
@@ -445,8 +418,7 @@ export function resolveDiffEntryByPath<T>(
   return matches.length === 1 ? matches.at(0) : undefined;
 }
 
-// Resolve a parsed patch stat for a visible changed-file row. Parsed patch paths are
-// usually repo-relative, while work-log changedFiles can be absolute or basename-only.
+// Resolve a parsed patch stat for a visible changed-file row. Parsed patch paths are usually repo-relative, while work-log changedFiles can be absolute or basename-only.
 export function resolveFileDiffStatByChangedPath(
   statsByPath: ReadonlyMap<string, FileDiffStat>,
   changedFilePath: string,

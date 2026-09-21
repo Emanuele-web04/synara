@@ -1,7 +1,3 @@
-// FILE: CrossTaskOriginLabel.tsx
-// Purpose: Identify the source thread for conversations created by another Synara agent.
-// Layer: Chat transcript UI
-
 import { type ProviderKind, type ThreadId } from "@synara/contracts";
 import { memo, type ReactNode } from "react";
 
@@ -13,9 +9,7 @@ export interface CrossTaskOrigin {
   readonly sourceProvider: ProviderKind | null;
 }
 
-// A single, app-level attribution: the message reached this thread from another
-// Synara thread, so it always reads as "Sent by Synara" with the Synara mark
-// (the origin provider is not surfaced here to keep one consistent label).
+// A single, app-level attribution: the message reached this thread from another Synara thread, so it always reads as "Sent by Synara" with the Synara mark (the origin provider is not surfaced here to keep one consistent label).
 function OriginContent(): ReactNode {
   return (
     <>

@@ -6,18 +6,14 @@ export interface KeyedSingleFlightCacheOptions<A> {
 }
 
 export interface KeyedSingleFlightCache<A, E> {
-  /**
-   * Returns a fresh cached value or joins one independently-owned computation for the key.
-   * Cancelling one caller only cancels the computation when it was the final waiter.
-   */
+  /** fresh cached value or join one computation; cancelling a caller cancels work only when it was the last waiter */
   readonly get: <R>(key: string, load: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-  /** Invalidates one key without allowing older work to repopulate it. */
+  /** invalidate one key without letting older work repopulate it */
   readonly invalidate: (key: string) => Effect.Effect<void>;
-  /** Invalidates only matching keys, including keys which currently have in-flight work. */
+  /** invalidate only matching keys, including keys with in-flight work */
   readonly invalidateWhere: (predicate: (key: string) => boolean) => Effect.Effect<void>;
-  /** Invalidates every value while allowing existing waiters to finish their current work. */
+  /** invalidate every value while existing waiters finish their current work */
   readonly invalidateAll: Effect.Effect<void>;
-  /** Test and diagnostics hook; not used to coordinate application behavior. */
   readonly size: Effect.Effect<{ readonly cached: number; readonly inFlight: number }>;
 }
 
@@ -36,14 +32,7 @@ interface InFlight<A, E> {
   settled: boolean;
 }
 
-/**
- * A small bounded cache and single-flight primitive for remote subprocess work.
- *
- * Work runs in a cache-owned scope instead of the first request fiber. This prevents an owner
- * cancellation from poisoning healthy joiners, while the waiter count still interrupts remote
- * work as soon as nobody needs it. Monotonic generations prevent invalidated work from publishing
- * a stale result, even when a replacement request starts before the old process exits.
- */
+/** work runs in a cache-owned scope so owner cancellation can't poison joiners; monotonic generations block stale publication */
 export const makeKeyedSingleFlightCache = <A, E>(
   options: KeyedSingleFlightCacheOptions<A>,
 ): Effect.Effect<KeyedSingleFlightCache<A, E>, never, Scope.Scope> =>
@@ -94,9 +83,7 @@ export const makeKeyedSingleFlightCache = <A, E>(
 
     const finish = (key: string, entry: InFlight<A, E>, exit: Exit.Exit<A, E>) =>
       Effect.gen(function* () {
-        // A functional TTL is extension code and may throw. Resolve it before mutating the
-        // in-flight entry, then treat a defective callback as "do not cache" so every waiter still
-        // receives the completed load instead of being left on an orphaned Deferred.
+        // resolve TTL before mutating; a defective callback means "do not cache" so waiters still get the completed load
         const ttlMs = Exit.isSuccess(exit)
           ? yield* Effect.sync(() => {
               try {
@@ -142,8 +129,7 @@ export const makeKeyedSingleFlightCache = <A, E>(
             if (inFlight.get(entry.inFlightKey) === entry) {
               inFlight.delete(entry.inFlightKey);
             }
-            // Removing the current generation makes stale publication impossible before a
-            // replacement request allocates its globally unique generation.
+            // removing the current generation makes stale publication impossible
             if (generations.get(key) === entry.generation) {
               generations.delete(key);
             }
@@ -162,8 +148,7 @@ export const makeKeyedSingleFlightCache = <A, E>(
               if (cached && cached.expiresAt <= now) {
                 deleteCached(key);
               } else if (cached && generations.get(key) === cached.generation) {
-                // Touch on read so the bounded map behaves as a tiny LRU rather than evicting a
-                // frequently used key solely because it was inserted early.
+                // touch on read → tiny LRU; don't evict a frequent key for being inserted early
                 cache.delete(key);
                 cache.set(key, cached);
                 return { _tag: "cached" as const, value: cached.value };

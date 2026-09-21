@@ -1,8 +1,3 @@
-// FILE: relativeTime.ts
-// Purpose: Compact relative-time labels ("now", "5m", "3h", "2d", "1w", "5mo") for thread and
-//          pull request lists.
-// Layer: Web UI utility
-
 export function formatRelativeTime(iso: string): string {
   const diff = Math.max(0, Date.now() - new Date(iso).getTime());
   const minutes = Math.floor(diff / 60_000);

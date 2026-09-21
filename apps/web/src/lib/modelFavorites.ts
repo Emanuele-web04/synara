@@ -1,7 +1,3 @@
-// FILE: modelFavorites.ts
-// Purpose: Shared storage keys + readers for per-provider favorite model slugs.
-// Layer: Web local-storage helpers used by the model picker and model cycle shortcuts.
-
 import type { ProviderKind } from "@synara/contracts";
 import { Schema } from "effect";
 

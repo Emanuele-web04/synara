@@ -1,10 +1,3 @@
-// FILE: FileDiffHeader.tsx
-// Purpose: Synara-styled file header for @pierre/diffs cards in side panels
-//          (PR Code tab, review DiffPanel, Git pane). Replaces Pierre's default
-//          path/+N chrome with the same icon / filename+dir / DiffStat language
-//          used by the jump menu and explorer rows.
-// Layer: Chat/diff UI primitives
-
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { type ReactNode } from "react";
 

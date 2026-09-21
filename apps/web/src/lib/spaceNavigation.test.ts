@@ -10,8 +10,7 @@ import {
 } from "./spaceNavigation";
 import type { Project, SidebarThreadSummary } from "../types";
 
-// No server paths resolved: container classification then falls back to `kind` alone, which is
-// exactly the partition these rules care about (see isHomeChatContainerProject).
+// No server paths resolved: container classification then falls back to `kind` alone, which is exactly the partition these rules care about (see isHomeChatContainerProject).
 const paths: ServerWorkspacePaths = {
   homeDir: null,
   chatWorkspaceRoot: null,
@@ -61,8 +60,7 @@ function thread(input: {
   };
 }
 
-// The upgraded-install shape that produced the bug report: every pre-existing project kept
-// `space_id = NULL`, so the user's own Space is genuinely empty while Void holds everything.
+// The upgraded-install shape that produced the bug report: every pre-existing project kept `space_id = NULL`, so the user's own Space is genuinely empty while Void holds everything.
 const voidProject = project({ id: "project-void", spaceId: null });
 const homeChatContainer = project({ id: "project-home", kind: "chat" });
 const voidThread = thread({ id: "thread-void", projectId: "project-void" });
@@ -72,9 +70,7 @@ const projectById = new Map([
 ]);
 
 describe("selecting an empty Space", () => {
-  // The user-visible symptom: clicking a Space in the switcher appeared to do nothing. Selecting
-  // an empty Space fell through to the generic "/" restore, which reopened the *previous* Space's
-  // thread, and useRouteSpaceSync then wrote that thread's Space back over the click.
+  // the bug: selecting an empty Space fell through to the generic "/" restore which reopened the *previous* Space's thread, and useRouteSpaceSync then wrote that thread's Space back over the click
   it("never lands on a thread belonging to another Space", () => {
     const target: SpaceSelectionTarget = resolveSpaceSelectionTarget({
       spaceId: workSpaceId,
@@ -122,9 +118,7 @@ describe("selecting an empty Space", () => {
     ).toEqual({ threadId: homeThread.id });
   });
 
-  // activeSpaceId lives in sessionStorage and is empty on a fresh launch; the remembered route
-  // lives in localStorage and survives. Scoping unconditionally would drop the user out of the
-  // Space they closed the app in, so a landing with no Space intent must not filter.
+  // activeSpaceId lives in sessionStorage (empty on fresh launch); the remembered route lives in localStorage and survives — unconditional scoping would drop the user out of the Space they left the app in
   it("restores the remembered route unscoped when the landing carries no Space intent", () => {
     expect(
       resolveChatIndexRestoreRoute({

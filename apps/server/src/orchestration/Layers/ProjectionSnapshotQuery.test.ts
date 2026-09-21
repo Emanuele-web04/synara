@@ -571,8 +571,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           lastKnownPr: null,
           latestUserMessageAt: "2026-02-24T00:00:03.500Z",
           latestHumanMessageAt: null,
-          // A present empty pending-interaction projection is authoritative;
-          // historical activity rows alone must not resurrect stale prompts.
+          // a present empty pending-interaction projection is authoritative — historical activity rows must not resurrect stale prompts
           hasPendingApprovals: false,
           hasPendingUserInput: false,
           hasActionableProposedPlan: true,
@@ -809,9 +808,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(snapshotActivities[1]?.id, asEventId("activity-5"));
       assert.equal(snapshotActivities.at(-1)?.id, asEventId("activity-504"));
 
-      // Thread detail keeps a far deeper window (2_000) than the bulk snapshot,
-      // so the same 506-row thread is returned whole - including the activities
-      // the snapshot had to drop.
+      // thread detail keeps a 2000-row window vs the bulk snapshot — the same 506-row thread returns whole
       const detail = yield* snapshotQuery.getThreadDetailById(asThreadId("thread-activity-cap"));
       assert.isTrue(Option.isSome(detail));
       const detailActivities = Option.isSome(detail) ? detail.value.activities : [];
@@ -938,11 +935,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-      // 2_150 activities across three turns, so the raw 2_000-row detail cap
-      // falls at sequence 151 - in the middle of `turn-cutoff` (51..250):
-      //   turn-old    -> sequence 1..50      (fully outside the window)
-      //   turn-cutoff -> sequence 51..250    (straddles the cap)
-      //   turn-recent -> sequence 251..2150
+      // 2150 activities across three turns — the raw 2000-row cap falls mid-turn at sequence 151
       yield* sql`
         INSERT INTO projection_thread_activities (
           activity_id, thread_id, turn_id, tone, kind, summary,
@@ -972,8 +965,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.isTrue(Option.isSome(detail));
       const detailActivities = Option.isSome(detail) ? detail.value.activities : [];
 
-      // The partial `turn-cutoff` is dropped rather than extending the query
-      // beyond its budget. The complete recent turn remains intact.
+      // the partial turn is dropped rather than extending past the budget; the complete recent turn stays intact
       assert.equal(detailActivities.length, 1_900);
       assert.equal(detailActivities[0]?.id, asEventId("activity-251"));
       assert.equal(detailActivities[0]?.turnId, asTurnId("turn-recent"));
@@ -982,10 +974,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         detailActivities.filter((activity) => activity.turnId === asTurnId("turn-cutoff")).length,
         0,
       );
-      // Turns entirely older than the window are still dropped.
       assert.isFalse(detailActivities.some((activity) => activity.turnId === asTurnId("turn-old")));
 
-      // The bulk snapshot keeps its own, much smaller cap and does not turn-align.
+      // the bulk snapshot keeps its own smaller cap and doesn't turn-align
       const snapshot = yield* snapshotQuery.getSnapshot();
       const snapshotActivities = snapshot.threads[0]?.activities ?? [];
       assert.equal(snapshotActivities.length, 500);
@@ -1051,7 +1042,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(activities.length, 2_000);
       assert.equal(activities[0]?.id, asEventId("oversized-activity-151"));
       assert.equal(activities.at(-1)?.id, asEventId("oversized-activity-2150"));
-      // Enrich retained legacy usage without exempting accounting from the caps.
+      // enrich retained legacy usage without exempting accounting from the caps
       yield* sql`UPDATE projection_thread_activities SET kind = 'context-window.updated'
         WHERE activity_id IN ('oversized-activity-1', 'oversized-activity-2000')`;
       yield* sql`UPDATE projection_thread_activities SET kind = 'turn.completed'
@@ -1190,8 +1181,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           )
         `;
       }
-      // Providers can reuse a message id in another thread. Its segments must
-      // never be joined to the retained message in this thread.
+      // providers can reuse a message id in another thread — its segments must never join the retained message here
       yield* sql`
         INSERT INTO message_text_segments (
           thread_id, message_id, sequence, started_at, ended_at, text
@@ -2578,21 +2568,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         limit: 10,
       });
 
-      // Candidacy covers every thread whose projection still claims an active
-      // turn past the staleness cutoff, including threads whose runtime binding
-      // row is already gone (`thread-unbound-oldest`) and archived threads
-      // (`thread-archived-running`) - archiving does not settle a live turn.
-      // Excluded: `thread-fresh-running` (updated after the cutoff),
-      // `thread-settled` (no active turn), and `thread-queued-oldest` (a pending
-      // turn with no active turn id on either the session or the runtime row).
+      // covers every thread still claiming an active turn past the cutoff, including missing binding rows and archived threads — archiving doesn't settle a live turn; excluded: fresh-running, settled, queued-with-no-active-turn
       assert.deepEqual(candidates, [
         ThreadId.makeUnsafe("thread-unbound-oldest"),
         ThreadId.makeUnsafe("thread-archived-running"),
         ThreadId.makeUnsafe("thread-stale-running"),
       ]);
 
-      // Oldest-first ordering, so a bounded sweep drains the longest-stuck
-      // threads first.
+      // oldest-first so a bounded sweep drains the longest-stuck threads first
       const oldestCandidate = yield* snapshotQuery.listStaleInFlightThreadIds({
         updatedBefore: "2026-07-23T09:00:00.000Z",
         limit: 1,
@@ -2666,8 +2649,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       const snapshot = yield* snapshotQuery.getSnapshot();
-      // Soft-deleted threads still appear as rows: only their bodies are dropped, so
-      // nothing that reconciles tombstones client-side changes behavior.
+      // soft-deleted threads still appear as rows — only their bodies are dropped
       const live = snapshot.threads.find((thread) => thread.id === asThreadId("thread-live"));
       const deleted = snapshot.threads.find(
         (thread) => thread.id === asThreadId("thread-soft-deleted"),
@@ -2726,7 +2708,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-      // Decider idempotency depends on deleted threads keeping their lifecycle rows.
+      // decider idempotency depends on deleted threads keeping lifecycle rows
       const commandModel = yield* snapshotQuery.getCommandReadModel();
       const thread = commandModel.threads.find(
         (candidate) => candidate.id === asThreadId("thread-deleted-command"),
@@ -2815,11 +2797,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
   it.effect("fails with ProjectionStateIncompleteError when a required cursor row is missing", () =>
     Effect.gen(function* () {
-      // Regression for the permanent resnapshot loop: a non-empty cursor
-      // table missing projection.hot (an interrupted repair leaves exactly
-      // this shape) used to read as snapshot sequence 0, which the stream
-      // layer interpreted as "high-water events behind" forever. It must be
-      // a typed, diagnosable failure instead of a silent 0.
+      // a non-empty cursor table missing projection.hot (what an interrupted repair leaves) used to read as sequence 0 — "high-water events behind" forever; must be a typed diagnosable failure
       const snapshotQuery = yield* ProjectionSnapshotQuery;
       const sql = yield* SqlClient.SqlClient;
       yield* sql`DELETE FROM projection_state`;
@@ -2850,9 +2828,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
   it.effect("derives the snapshot sequence from the minimum required cursor", () =>
     Effect.gen(function* () {
-      // A stalled required projector must lower the fence (forcing honest
-      // replay), never be skipped: serving the higher cursor would hand
-      // clients a snapshot claiming coverage the stalled projection lacks.
+      // a stalled required projector must lower the fence, never be skipped — the higher cursor would claim coverage the projection lacks
       const snapshotQuery = yield* ProjectionSnapshotQuery;
       const sql = yield* SqlClient.SqlClient;
       yield* sql`DELETE FROM projection_state`;

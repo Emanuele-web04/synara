@@ -1,8 +1,3 @@
-// FILE: ProviderIcon.test.tsx
-// Purpose: Covers shared provider icon rendering that many chat surfaces reuse.
-// Layer: web UI tests
-// Depends on: react-dom server rendering and ProviderIcon provider mapping.
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 

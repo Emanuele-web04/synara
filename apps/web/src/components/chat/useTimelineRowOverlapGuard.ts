@@ -1,29 +1,12 @@
-// FILE: useTimelineRowOverlapGuard.ts
-// Purpose: Pre-paint correction for LegendList's one-frame row overlap. The
-//          list positions each row's container absolutely from its size model,
-//          but on web the model→DOM write goes through a default-priority React
-//          update that flushes in a macrotask — after the frame in which a row
-//          changed height has already painted. Every frame where a row grows
-//          (streaming text, tool calls landing, the 220ms disclosure animation)
-//          therefore paints with the rows below still at stale offsets, drawn
-//          on top of the grown row. This hook closes that window: a
-//          ResizeObserver fires in the same frame as the height change but
-//          before paint, and pushes the stale containers down with direct
-//          style writes. LegendList's own commit lands next frame with the
-//          same cumulative positions, so the manual writes are transient and
-//          never fight the list's model.
-// Layer: React hooks (chat timeline)
+// on web, LegendList's model→DOM write flushes after the frame a row grew paints — a ResizeObserver fires pre-paint in that same frame and pushes stale containers down; the list's own commit lands next frame so the writes never fight it
 
 import { useCallback, useEffect, useRef } from "react";
 
-// LegendList parks recycled containers at top: -10000000; anything that far up
-// is not part of the visible layout.
+// LegendList parks recycled containers at top: -10000000; anything that far up isn't in the visible layout
 const OUT_OF_VIEW_THRESHOLD_PX = -100_000;
-// Sub-pixel rounding between the list's integer size model and border-box
-// measurement; intrusions this small are not visible.
+// sub-pixel rounding between the integer size model and border-box measurement
 const OVERLAP_EPSILON_PX = 1;
-// A row's positioned container is expected within a few wrappers; walking to
-// the document root would mean the row is not inside a LegendList container.
+// a row's positioned container is expected within a few wrappers; reaching the document root means it isn't inside a LegendList container
 const MAX_CONTAINER_ANCESTOR_DEPTH = 8;
 
 /**
@@ -76,11 +59,7 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
       return;
     }
 
-    // Fast path: while text streams, the only row changing size each frame is
-    // the growing tail. A resize confined to the single bottom-most placed
-    // container cannot intrude on anything (nothing is placed below it, and
-    // this guard only ever pushes rows down), so the measurement pass — the
-    // one getBoundingClientRect per frame — is skipped entirely.
+    // fast path: while text streams, only the bottom-most container changes size and can't intrude — skip the getBoundingClientRect pass entirely
     if (entries !== undefined) {
       let maxTop = Number.NEGATIVE_INFINITY;
       let maxTopCount = 0;
@@ -100,8 +79,7 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
             continue;
           }
           const container = resolvePositionedContainer(target);
-          // Rows outside a placed container (parked/recycled) can't intrude
-          // on the visible layout — same as being dropped from `placed` below.
+          // rows outside a placed container (parked/recycled) can't intrude on the visible layout
           if (!container) {
             continue;
           }
@@ -155,8 +133,7 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
       if (!element) {
         return;
       }
-      // ResizeObserver callbacks run after layout but before paint, so the
-      // correction below lands in the same frame as the size change.
+      // ResizeObserver callbacks run after layout but before paint — the correction lands in the same frame as the size change
       observerRef.current ??= new ResizeObserver(closeOverlaps);
       const observer = observerRef.current;
       observer.observe(element);

@@ -1,7 +1,3 @@
-// FILE: SplashScreen.tsx
-// Purpose: Render the branded startup face while the app is still booting a route or session.
-// Layer: Shared app loading presentation
-
 import { SynaraLogo } from "~/components/SynaraLogo";
 
 export function SplashScreen({
