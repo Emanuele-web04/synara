@@ -1,4 +1,4 @@
-export type ChatAuxiliarySurface = "environment" | "project";
+export type ChatAuxiliarySurface = "environment" | "project" | "library";
 
 export function resolveAuxiliarySurface(input: {
   readonly current: ChatAuxiliarySurface | null;

@@ -73,6 +73,17 @@ import type {
   ProjectAgentListThreadIndexResult,
   ProjectAgentListEvidenceInput,
   ProjectAgentListEvidenceResult,
+  ProjectAgentLibraryDeleteInput,
+  ProjectAgentLibraryHistoryInput,
+  ProjectAgentLibraryHistoryResult,
+  ProjectAgentLibraryListInput,
+  ProjectAgentLibraryListResult,
+  ProjectAgentLibraryMkdirInput,
+  ProjectAgentLibraryMutationResult,
+  ProjectAgentLibraryRenameInput,
+  ProjectAgentLibraryRestoreInput,
+  ProjectAgentLibraryStatusInput,
+  ProjectAgentLibraryStatusResult,
   ProjectDocumentRevision,
   ProjectGoal,
   ProjectTask,
@@ -1021,6 +1032,19 @@ export interface NativeApi {
       input: ProjectAgentExportDocumentsInput,
     ) => Promise<ProjectAgentExportDocumentsResult>;
     refreshDigest: (input: ProjectAgentRefreshDigestInput) => Promise<ProjectAgentOverview>;
+    library: {
+      list: (input: ProjectAgentLibraryListInput) => Promise<ProjectAgentLibraryListResult>;
+      mkdir: (input: ProjectAgentLibraryMkdirInput) => Promise<ProjectAgentLibraryMutationResult>;
+      rename: (input: ProjectAgentLibraryRenameInput) => Promise<ProjectAgentLibraryMutationResult>;
+      delete: (input: ProjectAgentLibraryDeleteInput) => Promise<ProjectAgentLibraryMutationResult>;
+      history: (
+        input: ProjectAgentLibraryHistoryInput,
+      ) => Promise<ProjectAgentLibraryHistoryResult>;
+      restore: (
+        input: ProjectAgentLibraryRestoreInput,
+      ) => Promise<ProjectAgentLibraryMutationResult>;
+      status: (input: ProjectAgentLibraryStatusInput) => Promise<ProjectAgentLibraryStatusResult>;
+    };
     subscribe: (input: { projectId: string }) => Promise<void>;
     unsubscribe: (input: { projectId: string }) => Promise<void>;
     onEvent: (callback: (event: ProjectAgentStreamEvent) => void) => () => void;
