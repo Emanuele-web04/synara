@@ -128,8 +128,45 @@ export function libraryHistory(
   });
 }
 
+// `git log --follow` crosses rename boundaries: replaying its --name-status
+// output backwards from HEAD yields the name the entry had at any ancestor
+// commit, so a restore of "renamed.md" at a pre-rename sha resolves "notes.md".
+function resolveLibraryPathAtCommit(
+  git: GitCoreShape,
+  root: string,
+  relativePath: string,
+  sha: string,
+): Effect.Effect<string, GitCommandError> {
+  return Effect.gen(function* () {
+    const log = yield* runGitStdout(git, "library.pathHistory", root, [
+      "log",
+      "--format=%H",
+      "--follow",
+      "-M",
+      "--name-status",
+      "--",
+      relativePath,
+    ]);
+    let current = relativePath;
+    for (const line of log.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (/^[0-9a-f]{40}$/.test(trimmed)) {
+        if (trimmed === sha) return current;
+        continue;
+      }
+      const rename = /^R\d*\t(.+)\t(.+)$/.exec(trimmed);
+      if (rename && rename[2] === current) current = rename[1]!;
+    }
+    return current;
+  });
+}
+
 // Checks out the path at `sha`, then commits the restoration so the timeline
-// keeps an explicit record of the rollback.
+// keeps an explicit record of the rollback. When the entry had a different name
+// at that commit, the checkout lands on the historical path and is moved onto
+// the current one so the version comes back in place rather than resurrecting
+// a stale filename.
 export function restoreLibraryEntry(
   git: GitCoreShape,
   root: string,
@@ -137,7 +174,11 @@ export function restoreLibraryEntry(
   sha: string,
 ): Effect.Effect<{ readonly commitSha: string }, GitCommandError> {
   return Effect.gen(function* () {
-    yield* runGit(git, "library.restoreCheckout", root, ["checkout", sha, "--", relativePath]);
+    const pathAtSha = yield* resolveLibraryPathAtCommit(git, root, relativePath, sha);
+    yield* runGit(git, "library.restoreCheckout", root, ["checkout", sha, "--", pathAtSha]);
+    if (pathAtSha !== relativePath) {
+      yield* runGit(git, "library.restoreMove", root, ["mv", "-f", pathAtSha, relativePath]);
+    }
     return yield* commitLibraryChange(git, root, `Restore ${relativePath} from ${sha.slice(0, 7)}`);
   });
 }

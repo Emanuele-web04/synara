@@ -166,6 +166,32 @@ it.layer(TestLayer)("group library", (it) => {
     }),
   );
 
+  it.effect("restores a renamed file to a pre-rename version in place", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root);
+
+      const source = yield* resolveLibraryWriteTarget(root, "a.md");
+      yield* Effect.promise(() => fs.writeFile(source, "original", "utf8"));
+      const added = yield* commitLibraryChange(git, root, "Add a.md");
+      const renamed = yield* resolveLibraryCreateTarget(root, "b.md");
+      yield* Effect.promise(() => fs.rename(source, renamed));
+      yield* commitLibraryChange(git, root, "Rename a.md to b.md");
+      yield* Effect.promise(() => fs.writeFile(renamed, "edited", "utf8"));
+      yield* commitLibraryChange(git, root, "Update b.md");
+
+      yield* restoreLibraryEntry(git, root, "b.md", added.commitSha);
+
+      const contents = yield* Effect.promise(() => fs.readFile(renamed, "utf8"));
+      expect(contents).toBe("original");
+      const names = yield* Effect.promise(() => fs.readdir(root));
+      expect(names).not.toContain("a.md");
+      const history = yield* libraryHistory(git, root, "b.md");
+      expect(history[0]?.message).toBe(`Restore b.md from ${added.commitSha.slice(0, 7)}`);
+    }),
+  );
+
   it.effect("serializes concurrent queued mutations into two commits", () =>
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
