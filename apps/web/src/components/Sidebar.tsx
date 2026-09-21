@@ -142,7 +142,6 @@ import {
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
   createSidebarThreadSummariesSelector,
-  createSidebarTreeThreadsSelector,
   isSidebarThreadVisible,
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
@@ -310,6 +309,7 @@ import {
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
+  deriveSidebarThreadActivity,
   createSidebarThreadHoverAnchorId,
   findWorkspaceRootMatch,
   getPinnedThreadsForSidebar,
@@ -1698,12 +1698,19 @@ export default function Sidebar() {
   const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
   const hideAutomationRunThreads = !appSettings.showAutomationRunThreads;
-  const selectSidebarTreeThreads = useMemo(
-    () => createSidebarTreeThreadsSelector({ hideAutomationRunThreads }),
-    [hideAutomationRunThreads],
+  const rawSidebarThreads = useStore(selectSidebarThreads);
+  const sidebarThreads = useMemo(
+    () => deriveSidebarThreadActivity(rawSidebarThreads),
+    [rawSidebarThreads],
   );
-  const sidebarThreads = useStore(selectSidebarThreads);
-  const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
+  const sidebarTreeThreads = useMemo(
+    () =>
+      sidebarThreads.filter(
+        (thread) =>
+          thread.archivedAt == null && isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
+      ),
+    [hideAutomationRunThreads, sidebarThreads],
+  );
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
   const studioProjectIdSet = useMemo(
