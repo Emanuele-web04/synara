@@ -864,7 +864,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
           const nextRoot = yield* resolveLibraryRoot({
             stateDir: serverConfig.stateDir,
             projectId: input.projectId,
-            libraryPath: input.libraryPath,
+            // `null` clears to the default per-project library root.
+            libraryPath: input.libraryPath ?? undefined,
           }).pipe(Effect.mapError(toServiceError("Failed to resolve the new library.")));
           yield* assertLibraryRootLocation({
             root: nextRoot,
