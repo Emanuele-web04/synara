@@ -14,6 +14,7 @@ This document covers build-only native validation and publishing desktop release
   - macOS `x64` DMG
   - Linux `x64` AppImage
   - Windows `x64` NSIS installer
+- The macOS DMG names `Synara-${version}-${arch}.dmg` are the Homebrew Cask download contract. Keep them stable so `brew install --cask synara` can track GitHub Releases.
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - Stable clean-lane releases are GitHub Latest; the 0.4.x compatibility release remains historical.
@@ -223,6 +224,7 @@ full subject distinguished name.
    - release job uploads expected files
 8. For a stable clean-lane release, confirm the new versioned release is GitHub Latest, contains all three default `latest` manifests plus all three `synara` aliases, and left the historical compatibility release unchanged.
 9. Smoke test downloaded artifacts.
+10. Refresh the official Homebrew Cask source with `bun run homebrew:cask -- --from-github --write`. Until Homebrew accepts `synara`, submit or update [homebrew/cask](https://github.com/Homebrew/homebrew-cask) from `packaging/homebrew/Casks/synara.rb`. After acceptance, Homebrew `livecheck` owns version bumps; do not rename `Synara-${version}-${arch}.dmg`.
 
 ## 5) Troubleshooting
 

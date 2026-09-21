@@ -117,7 +117,13 @@ Configure the shell to match the way you work with light and dark themes, typogr
 
 ### Desktop application
 
-Download the latest build from [GitHub Releases](https://github.com/Emanuele-web04/synara/releases) or visit [trysynara.com](https://www.trysynara.com/).
+On macOS, the official Homebrew Cask installs the same signed GitHub Release `.dmg` as the download page:
+
+```bash
+brew install --cask synara
+```
+
+If Homebrew reports that the cask is not yet available, download the latest build from [GitHub Releases](https://github.com/Emanuele-web04/synara/releases) or [trysynara.com/install](https://www.trysynara.com/install).
 
 Current native release targets are Windows x64, macOS Intel, macOS Apple Silicon, and Linux x64.
 

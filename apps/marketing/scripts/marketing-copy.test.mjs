@@ -198,10 +198,12 @@ test("testimonial curation excludes identity-defense and volatile-version framin
 
 test("install and metadata surfaces share the new category", () => {
   const install = read("src/app/install/page.tsx");
+  const installOptions = read("src/components/InstallOptions.tsx");
   const seo = read("src/lib/seo.ts");
 
   assert.ok(install.includes("PRODUCT_CATEGORY"));
   assert.ok(install.includes("Download Synara — Coding Agent Workspace"));
+  assert.ok(installOptions.includes("brew install --cask synara"));
   assert.ok(seo.includes("PRODUCT_HERO_TITLE"));
   assert.ok(seo.includes("PRODUCT_META_DESCRIPTION"));
   assert.ok(seo.includes("Coding agent workspace and control plane"));
