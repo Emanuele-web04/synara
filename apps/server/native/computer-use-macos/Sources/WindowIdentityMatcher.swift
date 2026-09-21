@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// AX heuristics are allowed only when WindowServer identity is unavailable.
