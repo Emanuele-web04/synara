@@ -8,7 +8,7 @@
 
 import type { ProjectId } from "@synara/contracts";
 
-import { applyGroupWorkerRoutingDefaults } from "../lib/groupProjects";
+import { applyGroupWorkerRoutingDefaults } from "../lib/groupWorkerRouting";
 import { startContainerChat, type StartContainerChatResult } from "../lib/startContainerChat";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "./useHandleNewThread";

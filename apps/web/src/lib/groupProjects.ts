@@ -7,7 +7,7 @@
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 
-import { useComposerDraftStore, type DraftThreadState } from "../composerDraftStore";
+import type { DraftThreadState } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
@@ -117,33 +117,6 @@ export function findGroupDraftThreadId(input: {
     }
   }
   return null;
-}
-
-// New chats inside a group inherit the coordinator's worker routing defaults:
-// model selection goes straight onto the draft, and provider start options ride
-// on the draft so the first send dispatches with them.
-export async function applyGroupWorkerRoutingDefaults(input: {
-  readonly groupProjectId: ProjectId;
-  readonly threadId: ThreadId;
-}): Promise<void> {
-  const api = readNativeApi();
-  if (!api) {
-    return;
-  }
-  const overview = await api.projectAgent
-    .getOverview({ projectId: input.groupProjectId })
-    .catch(() => null);
-  const workerRouting = overview?.config?.workerRouting;
-  if (!workerRouting) {
-    return;
-  }
-  const draftStore = useComposerDraftStore.getState();
-  if (workerRouting.modelSelection) {
-    draftStore.setModelSelection(input.threadId, workerRouting.modelSelection);
-  }
-  if (workerRouting.providerOptions) {
-    draftStore.setProviderOptionsForDispatch(input.threadId, workerRouting.providerOptions);
-  }
 }
 
 function findGroupContainerCandidateById<
