@@ -7026,8 +7026,20 @@ export default function Sidebar() {
                 hasThread: () =>
                   useStore.getState().sidebarThreadSummaryById[coordinatorThreadId] !== undefined,
                 subscribe: (listener) => useStore.subscribe(listener),
+                // The sidebar intent path resolves against the summary map captured at
+                // render time; a thread created by this dialog hydrates later, so wait
+                // for its row and then open it directly.
                 activate: () => {
-                  activateThreadFromSidebarIntent(coordinatorThreadId);
+                  prewarmThreadDetailForIntent(coordinatorThreadId);
+                  setOptimisticActiveThreadId(coordinatorThreadId);
+                  setSelectionAnchor(coordinatorThreadId);
+                  openChatThreadPage(coordinatorThreadId);
+                  rememberLastThreadRouteNow({ threadId: coordinatorThreadId });
+                  void navigate({
+                    to: "/$threadId",
+                    params: { threadId: coordinatorThreadId },
+                    search: (previous) => ({ ...previous, splitViewId: undefined }),
+                  });
                 },
               });
             }
