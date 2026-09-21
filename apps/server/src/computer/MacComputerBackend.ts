@@ -1618,6 +1618,7 @@ export class MacComputerBackend implements ComputerBackend {
     if (
       !options.force &&
       cached &&
+      !this.helperPromise &&
       this.helper?.running === true &&
       this.now() - cached.at < CAPABILITY_CACHE_TTL_MS
     ) {
@@ -1879,15 +1880,25 @@ export class MacComputerBackend implements ComputerBackend {
     assertDesktopOperationActive();
     const helper = await this.ensureHelper();
     assertDesktopOperationActive();
+    return this.requestHelper(helper, method, params);
+  }
+
+  private async requestHelper(
+    helper: MacHelperTransport,
+    method: string,
+    params: Record<string, unknown> = {},
+  ): Promise<unknown> {
     try {
       return await helper.request(method, params, { signal: desktopOperationSignal() });
     } catch (error) {
       const record = asRecord(error);
       const code = typeof record.code === "string" ? record.code : "";
       if (HELPER_CONNECTION_FAILURE_CODES.has(code)) {
-        this.invalidateHelper();
-        this.recordHealthFailure(error);
-        this.publishHealth();
+        if (this.helper === helper) {
+          this.invalidateHelper();
+          this.recordHealthFailure(error);
+          this.publishHealth();
+        }
         throw new ComputerBackendError(error instanceof Error ? error.message : String(error), {
           retryable: true,
           cause: error,
@@ -1964,6 +1975,7 @@ export class MacComputerBackend implements ComputerBackend {
 
   private async ensureHelper(): Promise<MacHelperTransport> {
     if (this.disposed) throw new ComputerBackendError("macOS computer backend is disposed.");
+    if (this.helperPromise) return this.helperPromise;
     if (this.helper?.running) return this.helper;
     this.helperPromise ??= this.startHelper().finally(() => {
       this.helperPromise = undefined;
@@ -2029,7 +2041,9 @@ export class MacComputerBackend implements ComputerBackend {
     let capabilities: MacHelperCapabilities | undefined;
     let probeFailure: unknown;
     try {
-      capabilities = await this.readCapabilities({ force: true });
+      capabilities = this.recordCapabilities(
+        parseMacCapabilities(await this.requestHelper(helper, MAC_HELPER_METHODS.capabilities)),
+      );
     } catch (error) {
       // A probe that merely could not be answered — an unknown method on an odd
       // build — is not a reason to refuse the helper, so the error is held
