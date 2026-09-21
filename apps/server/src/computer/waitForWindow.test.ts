@@ -39,6 +39,84 @@ describe("launch window readiness", () => {
     );
     expect(reads).toBe(2);
   });
+  it("does not infer a primary Notes window from accessory sizes", async () => {
+    const notes = {
+      ...window,
+      title: "Notes",
+      appName: "Notes",
+      bounds: { x: 0, y: 0, width: 1000, height: 660 },
+    };
+    const checkInputReady = vi.fn(async () => {});
+    expect(
+      await waitForWindow(
+        async () => [
+          {
+            ...notes,
+            id: "8",
+            title: "",
+            visible: false,
+            bounds: { x: 0, y: 0, width: 500, height: 500 },
+          },
+          { ...notes, id: "9", title: "Window", bounds: { x: 0, y: 0, width: 66, height: 20 } },
+          notes,
+        ],
+        "Notes",
+        0,
+        undefined,
+        { checkInputReady },
+      ),
+    ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
+    expect(checkInputReady).not.toHaveBeenCalled();
+  });
+  it.each([
+    { title: "", bounds: { x: 0, y: 0, width: 1000, height: 660 } },
+    { title: "Document", bounds: { x: 0, y: 0, width: 0, height: 0 } },
+  ])("does not bind a titled inspector over a document with $title", async (document) => {
+    const checkInputReady = vi.fn(async () => {});
+    const windows = [
+      { ...window, ...document },
+      { ...window, id: "8", title: "Inspector", bounds: { x: 0, y: 0, width: 240, height: 160 } },
+    ];
+    for (const candidates of [windows, [...windows].reverse()]) {
+      expect(
+        await waitForWindow(async () => candidates, "Helium", 0, undefined, { checkInputReady }),
+      ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
+    }
+    expect(checkInputReady).not.toHaveBeenCalled();
+  });
+  it("keeps two real titled windows ambiguous regardless of size or order", async () => {
+    const first = { ...window, bounds: { x: 0, y: 0, width: 120, height: 80 } };
+    const second = {
+      ...first,
+      id: "8",
+      title: "Other",
+      bounds: { x: 0, y: 0, width: 1000, height: 660 },
+    };
+    expect(await waitForWindow(async () => [first, second], "Helium", 0)).toEqual({
+      window: null,
+      windowStatus: "no_usable_window",
+      windowReason: "ambiguous",
+    });
+  });
+  it("keeps multiple hidden windows ambiguous", async () => {
+    expect(
+      await waitForWindow(
+        async () => [
+          { ...window, visible: false },
+          { ...window, id: "8", visible: false },
+        ],
+        "Helium",
+        0,
+      ),
+    ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
+  });
+  it("keeps a single untitled window without bounds usable", async () => {
+    const untitled = { ...window, title: "" };
+    expect(await waitForWindow(async () => [untitled], "Helium", 0)).toEqual({
+      window: untitled,
+      windowStatus: "ready",
+    });
+  });
   it("does not choose between multiple app windows or unrelated apps", async () => {
     expect(
       await waitForWindow(async () => [window, { ...window, id: "8" }], "Helium", 0),

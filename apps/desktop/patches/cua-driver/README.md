@@ -635,3 +635,50 @@ correct the macOS signed-wheel direction, and retain launch focus observations.
 Pure native policy and cancellation checks do not qualify Resolve dialogs,
 Helium browser chrome, or another machine's permission state; those still need
 an application-specific trace and observed outcome.
+
+### Revision 38: atomic text into the target window's own focused element
+
+`type_text` without an element refused with `same_pid_keyboard_ambiguity`
+whenever the application owned a sibling top-level window, before its AX rung
+could run. Notes always owns one, so every sentence degraded to one
+`press_key` call per character. That refusal protects against process-scoped
+key events reaching a sibling; the AX rung posts none. It writes
+`AXSelectedText` into `focused_element_in_window(pid, window_id)`, an element
+proven to belong to the exact target window.
+
+When `InsertText` is refused for that reason, semantic AX admission still
+executes, and the target window has its own focused element, the policy is now
+`SemanticFocused`: one atomic `AXSelectedText` write with AX read-back, under
+the existing process mutation lease and cancellation gate. The CGEvent rung
+stays refused with the original refusal, so a write that does not land returns
+`same_pid_keyboard_ambiguity` exactly as before and nothing is retried. Explicit
+`semantic_only` requests keep their character-paced exact-element contract, and
+hotkeys (including paste) are unchanged. Not qualified: web-content fields,
+where `AXValue` read-back is not renderer evidence.
+
+### Revision 39: exclude proven non-keyboard sibling windows
+
+The same-pid keyboard ambiguity check still requires independently AX-mapped,
+non-minimized top-level siblings. It now excludes a sibling whose known AX
+subrole is not `AXStandardWindow`, `AXDialog`, `AXSystemDialog`, or
+`AXFloatingWindow`, or whose WindowServer record explicitly says off-screen.
+Either exclusion additionally requires AX main and focused both proven false:
+a panel with an unusual subrole can still hold the key window. `AXFocusedWindow` also
+identifies the app's keyboard window when a per-window focus attribute is absent.
+No size, stacking-order, or recency heuristic participates in native admission.
+
+Missing/empty/`AXUnknown` subroles remain potential keyboard destinations.
+WindowServer visibility is retained as optional internal evidence: a missing or
+malformed `kCGWindowIsOnscreen` must not become proof of off-screen status.
+Unknown AX main/focus facts likewise keep the sibling counted. On-screen standard
+windows, dialogs and floating windows, and off-screen main/focused windows still
+preserve the ambiguity refusal. Exact window/element identity, cancellation,
+leases, and revision 38's atomic text path are unchanged.
+
+The exact-target tests cover compositor surfaces, real siblings, known accessory
+subroles, off-screen non-key windows, focused/main off-screen windows, all four
+keyboard subroles, and missing visibility/subrole/focus evidence. The type-text
+suite preserves revision 38 behavior. A staged macOS arm64 build is source/build
+proof only: live Notes behavior, fewer tool calls, hotkey/paste delivery, other
+apps, Intel/Windows/Linux runtime behavior, and signed release distribution are
+not qualified by these checks.

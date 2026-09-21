@@ -74,7 +74,8 @@ async function probeWindow(
         : window.appName?.toLocaleLowerCase() === name,
     );
     signal?.throwIfAborted();
-    // Do not select a sibling just because it happens to be visible.
+    // Titles, visibility and size do not prove which same-app window is the
+    // requested document. Keep the choice explicit when siblings exist.
     if (matches.length > 1) return unavailable("ambiguous");
     const candidate = matches[0];
     const reason = !candidate

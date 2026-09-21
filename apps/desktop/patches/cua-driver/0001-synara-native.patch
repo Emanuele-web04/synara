@@ -24628,3 +24628,599 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs b
 
      #[test]
      fn read_only_facts_select_one_typed_write_route() {
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index 4fdecf6..1930b66 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -710,7 +710,7 @@ fn daemon_metadata_response() -> DaemonResponse {
+         .expect("daemon metadata is serializable");
+     #[cfg(target_os = "macos")]
+     {
+-        metadata["synara_native_revision"] = serde_json::json!(37);
++        metadata["synara_native_revision"] = serde_json::json!(38);
+     }
+     DaemonResponse::ok(metadata)
+ }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+index d83a772..b55c744 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+@@ -306,7 +306,7 @@ impl Tool for TypeTextTool {
+         if let (Some(cx), Some(cy)) = (px, py) {
+             // The px form has no exact element for a semantic-only write; when
+             // the keyboard rung is refused, refuse before the focus click too.
+-            if let BackgroundKeyboardPolicy::SemanticOnly(ref refusal) = keyboard_policy {
++            if let Some(refusal) = keyboard_policy.semantic_refusal() {
+                 let wid = window_id.expect("gate ran only with window_id");
+                 return super::background_refusal_result(pid, wid, refusal);
+             }
+@@ -804,6 +804,21 @@ enum BackgroundKeyboardPolicy {
+     /// process-scoped CGEvent rung is refused with this refusal — carried so
+     /// the exact reason is returned if the AX write does not land.
+     SemanticOnly(BackgroundRefusal),
++    /// No element was addressed and process-scoped keys are refused (the app
++    /// owns sibling windows), but the target window's own focused element is
++    /// proven: one atomic `AXSelectedText` write into it may run. Like
++    /// `SemanticOnly`, the CGEvent rung stays refused with this refusal.
++    SemanticFocused(BackgroundRefusal),
++}
++
++impl BackgroundKeyboardPolicy {
++    /// The refusal to return when only the semantic AX rung may run.
++    fn semantic_refusal(&self) -> Option<&BackgroundRefusal> {
++        match self {
++            Self::Allowed => None,
++            Self::SemanticOnly(refusal) | Self::SemanticFocused(refusal) => Some(refusal),
++        }
++    }
+ }
+ 
+ /// Delivery envelope for `type_text_blocking`: either an actuator ran
+@@ -887,11 +902,30 @@ async fn background_keyboard_policy(
+     match decide_background_input(target, &facts, BackgroundAction::InsertText) {
+         BackgroundInputDecision::Execute { .. } => Ok((lease, BackgroundKeyboardPolicy::Allowed)),
+         BackgroundInputDecision::Refuse(refusal) => {
+-            let semantic_available = element_ptr.is_some()
+-                && decide_background_input(target, &facts, BackgroundAction::AxSemantic)
+-                    .is_execute();
+-            if semantic_available {
+-                Ok((lease, BackgroundKeyboardPolicy::SemanticOnly(refusal)))
++            let semantic_executes =
++                decide_background_input(target, &facts, BackgroundAction::AxSemantic).is_execute();
++            if semantic_executes && element_ptr.is_some() {
++                return Ok((lease, BackgroundKeyboardPolicy::SemanticOnly(refusal)));
++            }
++            // No element was addressed. Process-scoped keys stay refused, but
++            // the AX rung never posts them: it writes `AXSelectedText` into
++            // the element the target window itself has focused, which cannot
++            // reach a sibling window. Admit that single exact write.
++            let focused_in_window = semantic_executes
++                && refusal.code == refusal_codes::SAME_PID_KEYBOARD_AMBIGUITY
++                && tokio::task::spawn_blocking(move || unsafe {
++                    match crate::ax::exact_target::focused_element_in_window(pid, window_id) {
++                        Some(element) => {
++                            CFRelease(element as _);
++                            true
++                        }
++                        None => false,
++                    }
++                })
++                .await
++                .unwrap_or(false);
++            if focused_in_window {
++                Ok((lease, BackgroundKeyboardPolicy::SemanticFocused(refusal)))
+             } else {
+                 Err(super::background_refusal_result(pid, window_id, &refusal))
+             }
+@@ -1292,8 +1326,8 @@ fn type_text_blocking(
+         // A terminal insert has no semantic AX rung: when the exact-target
+         // decision restricted this request to semantic-only, there is nothing
+         // safe to run — refuse before posting anything.
+-        if let BackgroundKeyboardPolicy::SemanticOnly(refusal) = keyboard_policy {
+-            return Ok(TypeTextDelivery::Refused(refusal));
++        if let Some(refusal) = keyboard_policy.semantic_refusal() {
++            return Ok(TypeTextDelivery::Refused(refusal.clone()));
+         }
+         if let Some(refusal) = synthesis_preflight(
+             TextDeliveryRoute::UnicodeSynthesis,
+@@ -1485,8 +1519,8 @@ fn type_text_blocking(
+     // The semantic AX rung did not land and this request is restricted to it:
+     // the process-scoped CGEvent rung could reach a sibling window, so return
+     // the structured refusal instead of escalating.
+-    if let BackgroundKeyboardPolicy::SemanticOnly(refusal) = keyboard_policy {
+-        return Ok(TypeTextDelivery::Refused(refusal));
++    if let Some(refusal) = keyboard_policy.semantic_refusal() {
++        return Ok(TypeTextDelivery::Refused(refusal.clone()));
+     }
+ 
+     if let Some(refusal) = synthesis_preflight(
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index 1930b66..f9aee2c 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -710,7 +710,7 @@ fn daemon_metadata_response() -> DaemonResponse {
+         .expect("daemon metadata is serializable");
+     #[cfg(target_os = "macos")]
+     {
+-        metadata["synara_native_revision"] = serde_json::json!(38);
++        metadata["synara_native_revision"] = serde_json::json!(39);
+     }
+     DaemonResponse::ok(metadata)
+ }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+index 39fa7cd..3b16eb4 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+@@ -177,24 +177,40 @@ pub fn keyboard_focus_matches_target(
+     }
+ }
+ 
+-/// One fresh `AXWindows` row: the mapped CGWindowID plus its minimized state.
+-/// `minimized: None` means the attribute could not be read — unknown, not
+-/// "not minimized".
++/// One fresh `AXWindows` row. Unreadable attributes remain unknown; absence
++/// alone never proves that a sibling cannot receive keyboard input.
+ struct AxWindowRecord {
+     window_id: u32,
+     minimized: Option<bool>,
++    subrole: Option<String>,
++    main: Option<bool>,
++    focused: Option<bool>,
+ }
+ 
+ /// Map the application's fresh `AXWindows` through `_AXUIElementGetWindow`.
+ /// Windows whose id the SPI cannot resolve are omitted: an unmappable window
+ /// can never satisfy an exact-target requirement.
+ unsafe fn ax_window_records(app: AXUIElementRef) -> Vec<AxWindowRecord> {
++    let focused_window = copy_element_attr(app, "AXFocusedWindow");
++    let focused_window_id = focused_window.and_then(|window| {
++        let id = ax_get_window_id(window);
++        CFRelease(window as CFTypeRef);
++        id
++    });
+     copy_ax_windows(app)
+         .into_iter()
+         .filter_map(|window| {
+             let record = ax_get_window_id(window).map(|window_id| AxWindowRecord {
+                 window_id,
+                 minimized: copy_bool_attr(window, "AXMinimized"),
++                subrole: copy_string_attr(window, "AXSubrole"),
++                main: copy_bool_attr(window, "AXMain"),
++                focused: if focused_window_id == Some(window_id) {
++                    Some(true)
++                } else {
++                    copy_bool_attr(window, "AXFocused")
++                        .or_else(|| focused_window_id.map(|id| id == window_id))
++                },
+             });
+             CFRelease(window as CFTypeRef);
+             record
+@@ -209,20 +225,40 @@ unsafe fn ax_window_records(app: AXUIElementRef) -> Vec<AxWindowRecord> {
+ /// not enough to prove another process-scoped keyboard destination. Requiring a
+ /// fresh `AXWindows` mapping preserves the fail-closed two-window guard while
+ /// ignoring render surfaces that cannot independently become the AX key window.
++/// A mapped sibling is excluded only for a known non-keyboard subrole, or
++/// explicit off-screen evidence with AX main/focus both proven false. Size is
++/// irrelevant; missing visibility or AX focus metadata keeps the refusal.
+ fn count_competing_keyboard_destinations(
+     pid: i32,
+     target_window_id: u32,
+-    window_server_rows: impl IntoIterator<Item = (i32, u32)>,
++    window_server_rows: impl IntoIterator<Item = (i32, u32, Option<bool>)>,
+     ax_records: &[AxWindowRecord],
+ ) -> usize {
+     window_server_rows
+         .into_iter()
+-        .filter(|(owner_pid, window_id)| {
++        .filter(|(owner_pid, window_id, on_screen)| {
+             *owner_pid == pid
+                 && *window_id != target_window_id
+-                && ax_records
+-                    .iter()
+-                    .any(|record| record.window_id == *window_id && record.minimized != Some(true))
++                && ax_records.iter().any(|record| {
++                    let non_keyboard_subrole = record.subrole.as_deref().is_some_and(|subrole| {
++                        !subrole.trim().is_empty()
++                            && !matches!(
++                                subrole,
++                                "AXUnknown"
++                                    | "AXStandardWindow"
++                                    | "AXDialog"
++                                    | "AXSystemDialog"
++                                    | "AXFloatingWindow"
++                            )
++                    });
++                    let off_screen_non_key = *on_screen == Some(false)
++                        && record.main == Some(false)
++                        && record.focused == Some(false);
++                    record.window_id == *window_id
++                        && record.minimized != Some(true)
++                        && !non_keyboard_subrole
++                        && !off_screen_non_key
++                })
+         })
+         .count()
+ }
+@@ -279,7 +315,7 @@ pub fn gather_background_facts(
+         window_id,
+         all_windows()
+             .iter()
+-            .map(|window| (window.pid, window.window_id)),
++            .map(|window| (window.pid, window.window_id, window.on_screen_evidence)),
+         &records,
+     );
+ 
+@@ -289,8 +325,9 @@ pub fn gather_background_facts(
+         target_minimized: target.and_then(|record| record.minimized),
+         app_hidden,
+         competing_keyboard_destinations,
+-        // Only focused-key admission and the explicit capability query need
+-        // AX focus reads. Pointer and semantic mutations pay no extra round trip.
++        // Only focused-key admission and the explicit capability query prove
++        // the addressed field's keyboard focus. Sibling focus facts above do
++        // not establish that the requested field is the keyboard recipient.
+         keyboard_focus_proven: false,
+         element: element.unwrap_or(ElementAncestry::NotAddressed),
+     }
+@@ -322,12 +359,22 @@ mod tests {
+         AxWindowRecord {
+             window_id,
+             minimized,
++            subrole: Some("AXStandardWindow".to_string()),
++            main: Some(false),
++            focused: Some(false),
+         }
+     }
+ 
+     #[test]
+     fn compositor_surfaces_do_not_create_keyboard_ambiguity() {
+-        let rows = [(42, 10), (42, 11), (42, 12), (42, 13), (42, 14), (42, 15)];
++        let rows = [
++            (42, 10, Some(true)),
++            (42, 11, Some(true)),
++            (42, 12, Some(true)),
++            (42, 13, Some(true)),
++            (42, 14, Some(true)),
++            (42, 15, Some(true)),
++        ];
+         let records = [ax_window(10, Some(false))];
+ 
+         assert_eq!(
+@@ -338,7 +385,7 @@ mod tests {
+ 
+     #[test]
+     fn independently_mapped_sibling_remains_ambiguous() {
+-        let rows = [(42, 10), (42, 11)];
++        let rows = [(42, 10, Some(true)), (42, 11, Some(true))];
+         let records = [ax_window(10, Some(false)), ax_window(11, Some(false))];
+ 
+         assert_eq!(
+@@ -349,7 +396,7 @@ mod tests {
+ 
+     #[test]
+     fn minimized_mapped_sibling_is_not_a_keyboard_destination() {
+-        let rows = [(42, 10), (42, 11)];
++        let rows = [(42, 10, Some(true)), (42, 11, Some(true))];
+         let records = [ax_window(10, Some(false)), ax_window(11, Some(true))];
+ 
+         assert_eq!(
+@@ -360,7 +407,11 @@ mod tests {
+ 
+     #[test]
+     fn unmapped_window_server_sibling_is_not_a_keyboard_destination() {
+-        let rows = [(42, 10), (42, 99), (7, 11)];
++        let rows = [
++            (42, 10, Some(true)),
++            (42, 99, Some(true)),
++            (7, 11, Some(true)),
++        ];
+         let records = [ax_window(10, Some(false)), ax_window(11, Some(false))];
+ 
+         assert_eq!(
+@@ -368,4 +419,102 @@ mod tests {
+             0
+         );
+     }
++
++    #[test]
++    fn non_standard_subrole_sibling_is_not_a_keyboard_destination() {
++        let rows = [(42, 10, Some(true)), (42, 11, Some(true))];
++        let mut sibling = ax_window(11, Some(false));
++        sibling.subrole = Some("AXSystemFloatingWindow".to_string());
++        let records = [ax_window(10, Some(false)), sibling];
++        assert_eq!(
++            count_competing_keyboard_destinations(42, 10, rows, &records),
++            0
++        );
++    }
++
++    #[test]
++    fn off_screen_non_focused_sibling_is_not_a_keyboard_destination() {
++        let rows = [(42, 10, Some(true)), (42, 11, Some(false))];
++        let records = [ax_window(10, Some(false)), ax_window(11, Some(false))];
++        assert_eq!(
++            count_competing_keyboard_destinations(42, 10, rows, &records),
++            0
++        );
++    }
++
++    #[test]
++    fn off_screen_but_ax_focused_sibling_remains_ambiguous() {
++        let rows = [(42, 10, Some(true)), (42, 11, Some(false))];
++        let mut sibling = ax_window(11, Some(false));
++        sibling.focused = Some(true);
++        let records = [ax_window(10, Some(false)), sibling];
++        assert_eq!(
++            count_competing_keyboard_destinations(42, 10, rows, &records),
++            1
++        );
++    }
++
++    #[test]
++    fn off_screen_but_ax_main_sibling_remains_ambiguous() {
++        let rows = [(42, 10, Some(true)), (42, 11, Some(false))];
++        let mut sibling = ax_window(11, Some(false));
++        sibling.main = Some(true);
++        let records = [ax_window(10, Some(false)), sibling];
++        assert_eq!(
++            count_competing_keyboard_destinations(42, 10, rows, &records),
++            1
++        );
++    }
++
++    #[test]
++    fn unknown_subrole_on_screen_sibling_remains_ambiguous() {
++        for subrole in [None, Some(""), Some("AXUnknown")] {
++            let rows = [(42, 10, Some(true)), (42, 11, Some(true))];
++            let mut sibling = ax_window(11, Some(false));
++            sibling.subrole = subrole.map(str::to_string);
++            let records = [ax_window(10, Some(false)), sibling];
++            assert_eq!(
++                count_competing_keyboard_destinations(42, 10, rows, &records),
++                1
++            );
++        }
++    }
++
++    #[test]
++    fn keyboard_subroles_on_screen_remain_ambiguous() {
++        for subrole in [
++            "AXStandardWindow",
++            "AXDialog",
++            "AXSystemDialog",
++            "AXFloatingWindow",
++        ] {
++            let rows = [(42, 10, Some(true)), (42, 11, Some(true))];
++            let mut sibling = ax_window(11, Some(false));
++            sibling.subrole = Some(subrole.to_string());
++            let records = [ax_window(10, Some(false)), sibling];
++            assert_eq!(
++                count_competing_keyboard_destinations(42, 10, rows, &records),
++                1
++            );
++        }
++    }
++
++    #[test]
++    fn unknown_visibility_or_ax_focus_keeps_sibling_ambiguous() {
++        for (on_screen, main, focused) in [
++            (None, Some(false), Some(false)),
++            (Some(false), None, Some(false)),
++            (Some(false), Some(false), None),
++        ] {
++            let rows = [(42, 10, Some(true)), (42, 11, on_screen)];
++            let mut sibling = ax_window(11, Some(false));
++            sibling.main = main;
++            sibling.focused = focused;
++            let records = [ax_window(10, Some(false)), sibling];
++            assert_eq!(
++                count_competing_keyboard_destinations(42, 10, rows, &records),
++                1
++            );
++        }
++    }
+ }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/consent_ui.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/consent_ui.rs
+index 4d2e131..adf80a9 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/browser/consent_ui.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/consent_ui.rs
+@@ -472,6 +472,7 @@ mod tests {
+             layer: 0,
+             z_index,
+             is_on_screen: true,
++            on_screen_evidence: Some(true),
+             current_space_id: None,
+             on_current_space: Some(true),
+             space_ids: None,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
+index 5b4afe0..345f39d 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/browser/platform.rs
+@@ -1595,6 +1595,7 @@ mod tests {
+             layer: 0,
+             z_index: 0,
+             is_on_screen: true,
++            on_screen_evidence: Some(true),
+             current_space_id: None,
+             on_current_space: Some(true),
+             space_ids: None,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
+index 141a881..cc33683 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/cursor/overlay.rs
+@@ -1464,6 +1464,7 @@ mod tests {
+             layer: 0,
+             z_index,
+             is_on_screen: true,
++            on_screen_evidence: Some(true),
+             current_space_id: None,
+             on_current_space: None,
+             space_ids: None,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
+index 2db3f2b..88fe456 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/input/target_guard.rs
+@@ -345,6 +345,7 @@ mod tests {
+             layer: 0,
+             z_index: 0,
+             is_on_screen: true,
++            on_screen_evidence: Some(true),
+             current_space_id: Some(9),
+             on_current_space: Some(true),
+             space_ids: Some(vec![9]),
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
+index b03319f..a008635 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/launch_app.rs
+@@ -582,6 +582,7 @@ mod tests {
+             layer: 0,
+             z_index: 0,
+             is_on_screen,
++            on_screen_evidence: Some(is_on_screen),
+             current_space_id: Some(1),
+             on_current_space,
+             space_ids: Some(vec![if on_current_space == Some(false) {
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
+index e199d00..13616db 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/list_windows.rs
+@@ -180,6 +180,7 @@ mod tests {
+             layer: 0,
+             z_index: 7,
+             is_on_screen: true,
++            on_screen_evidence: Some(true),
+             current_space_id: Some(1),
+             on_current_space: Some(true),
+             space_ids: Some(vec![1]),
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
+index e60520b..ea6815a 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/mod.rs
+@@ -117,6 +117,7 @@ mod pid_window_target_tests {
+             layer: 0,
+             z_index: 1,
+             is_on_screen: true,
++            on_screen_evidence: Some(true),
+             current_space_id: None,
+             on_current_space: None,
+             space_ids: None,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/window_change_detector.rs b/libs/cua-driver/rust/crates/platform-macos/src/window_change_detector.rs
+index 6817c09..74c5613 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/window_change_detector.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/window_change_detector.rs
+@@ -382,6 +382,7 @@ mod tests {
+             layer: 0,
+             z_index: 0,
+             is_on_screen: true,
++            on_screen_evidence: Some(true),
+             current_space_id: None,
+             on_current_space: None,
+             space_ids: None,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/windows.rs b/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
+index 06d0809..8332a9d 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/windows.rs
+@@ -23,6 +23,9 @@ pub struct WindowInfo {
+     pub layer: i32,
+     pub z_index: usize,
+     pub is_on_screen: bool,
++    /// Raw WindowServer evidence for input safety; missing is not off-screen.
++    #[serde(skip)]
++    pub(crate) on_screen_evidence: Option<bool>,
+     /// Active Space on the display WindowServer associates with this window.
+     /// This can differ between windows when displays use independent Spaces.
+     pub current_space_id: Option<u64>,
+@@ -185,18 +188,17 @@ fn enumerate_window_metadata(
+                 .unwrap_or_default()
+         };
+ 
+-        let get_bool = |key: &str| -> bool {
++        let get_bool = |key: &str| -> Option<bool> {
+             let k = CFString::new(key);
+             dict.find(k.as_concrete_TypeRef() as *const c_void)
+-                .map(|v| unsafe {
++                .and_then(|v| unsafe {
+                     let v = *v;
+                     if CFGetTypeID(v) == CFBoolean::type_id() {
+-                        bool::from(CFBoolean::wrap_under_get_rule(v as _))
++                        Some(bool::from(CFBoolean::wrap_under_get_rule(v as _)))
+                     } else {
+-                        false
++                        None
+                     }
+                 })
+-                .unwrap_or(false)
+         };
+ 
+         let window_id = get_num("kCGWindowNumber") as u32;
+@@ -204,7 +206,8 @@ fn enumerate_window_metadata(
+         let app_name = get_str("kCGWindowOwnerName");
+         let title = get_str("kCGWindowName");
+         let layer = get_num("kCGWindowLayer") as i32;
+-        let is_on_screen = get_bool("kCGWindowIsOnscreen");
++        let on_screen_evidence = get_bool("kCGWindowIsOnscreen");
++        let is_on_screen = on_screen_evidence.unwrap_or(false);
+ 
+         // Only include layer-0 windows, unless the caller asked for every layer.
+         if layer != 0 && layers == LayerFilter::ZeroOnly {
+@@ -254,6 +257,7 @@ fn enumerate_window_metadata(
+             layer,
+             z_index,
+             is_on_screen,
++            on_screen_evidence,
+             current_space_id: None,
+             on_current_space: None,
+             space_ids: None,
+@@ -491,6 +495,7 @@ mod tests {
+             layer: 0,
+             z_index: 1,
+             is_on_screen: true,
++            on_screen_evidence: Some(true),
+             current_space_id: None,
+             on_current_space: None,
+             space_ids: None,
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+index 3b16eb4..c06facc 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/exact_target.rs
+@@ -254,6 +254,12 @@ fn count_competing_keyboard_destinations(
+                     let off_screen_non_key = *on_screen == Some(false)
+                         && record.main == Some(false)
+                         && record.focused == Some(false);
++                    // A panel with an unusual subrole can still hold the key
++                    // window: its subrole excludes it only with AX main and
++                    // focus both proven false, like the off-screen rule.
++                    let non_keyboard_subrole = non_keyboard_subrole
++                        && record.main == Some(false)
++                        && record.focused == Some(false);
+                     record.window_id == *window_id
+                         && record.minimized != Some(true)
+                         && !non_keyboard_subrole
+@@ -420,6 +426,27 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn focused_or_unproven_non_standard_subrole_sibling_remains_ambiguous() {
++        let rows = [(42, 10, Some(true)), (42, 11, Some(true))];
++        for (main, focused) in [
++            (Some(false), Some(true)),
++            (Some(true), Some(false)),
++            (None, Some(false)),
++            (Some(false), None),
++        ] {
++            let mut sibling = ax_window(11, Some(false));
++            sibling.subrole = Some("AXSystemFloatingWindow".to_string());
++            sibling.main = main;
++            sibling.focused = focused;
++            let records = [ax_window(10, Some(false)), sibling];
++            assert_eq!(
++                count_competing_keyboard_destinations(42, 10, rows, &records),
++                1
++            );
++        }
++    }
++
+     #[test]
+     fn non_standard_subrole_sibling_is_not_a_keyboard_destination() {
+         let rows = [(42, 10, Some(true)), (42, 11, Some(true))];
