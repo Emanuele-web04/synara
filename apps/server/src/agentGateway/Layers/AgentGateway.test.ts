@@ -18,6 +18,7 @@ import {
   AutomationId,
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   DEFAULT_MODEL_BY_PROVIDER,
+  COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
   EventId,
   MessageId,
   ModelSelection,
@@ -73,6 +74,9 @@ import {
   type AgentGatewayOperationRecord,
 } from "../Services/AgentGatewayOperationRepository.ts";
 import { AgentGatewayLive } from "./AgentGateway.ts";
+import { ComputerService } from "../../computer/Services/ComputerService.ts";
+import { makeComputerServiceLayer } from "../../computer/Layers/ComputerService.ts";
+import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
 import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "../inFlightRequestRegistry.ts";
 
@@ -345,6 +349,7 @@ const VALID_TOKENS: Record<string, string> = {
   "token-parent": "thread-parent",
   "token-parent-claude": "thread-parent",
   "token-parent-readonly": "thread-parent",
+  "token-parent-computer": "thread-parent",
   "token-ghost": "thread-ghost",
 };
 
@@ -404,6 +409,8 @@ function makeHarnessLayer(
       readonly id: string;
       readonly automationId: AutomationDefinition["id"];
     };
+    /** Serves the computer_* family in the tool catalog (denial paths only need the names). */
+    readonly computerService?: Layer.Layer<ComputerService>;
   } = {},
 ) {
   const inFlightRequests = makeAgentGatewayInFlightRequestRegistry();
@@ -452,12 +459,14 @@ function makeHarnessLayer(
             capabilities:
               token === "token-parent-readonly"
                 ? new Set(["thread:read"] as const)
-                : new Set([
-                    "thread:read",
-                    "thread:write",
-                    "automation:write",
-                    "diagnostics:read",
-                  ] as const),
+                : token === "token-parent-computer"
+                  ? new Set(["thread:read", "computer:control"] as const)
+                  : new Set([
+                      "thread:read",
+                      "thread:write",
+                      "automation:write",
+                      "diagnostics:read",
+                    ] as const),
           }
         : null;
     },
@@ -1257,6 +1266,7 @@ function makeHarnessLayer(
     Layer.provide(providerRuntimeEventsLayer),
     Layer.provide(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provide(NodeServices.layer),
+    Layer.provide(options.computerService ?? Layer.empty),
   );
 
   const makeHarness = Effect.gen(function* () {
@@ -1778,6 +1788,96 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("surfaces one computer-control denial card per tool per turn", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      computerService: makeComputerServiceLayer({
+        backend: new FakeComputerBackend(),
+        supported: true,
+      }),
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const denialCards = () =>
+        harness.dispatched.filter(
+          (command) =>
+            command.type === "thread.activity.append" &&
+            command.activity.kind === COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
+        );
+      const callComputerTool = (id: number, name: string) =>
+        harness.postRaw({
+          authorizationHeader: "Bearer token-parent",
+          body: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: {} } },
+        });
+      const deniedErrorOf = (body: unknown) =>
+        JSON.parse(
+          (body as { result: { content: Array<{ text: string }> } }).result.content[0]!.text,
+        ) as { error: { code: string; details: { requiredCapability: string } } };
+      // token-parent was never granted computer control: every computer tool denies.
+      for (const [id, name] of [
+        [11, "computer_click"],
+        [12, "computer_type_text"],
+      ] as const) {
+        const response = yield* callComputerTool(id, name);
+        assert.equal(response.status, 200);
+        const error = deniedErrorOf(response.body).error;
+        assert.equal(error.code, "capability_denied");
+        assert.equal(error.details.requiredCapability, "computer:control");
+      }
+      // Two different tools denied in one turn earn two cards, not one.
+      assert.equal(denialCards().length, 2);
+      // Retrying the first tool in the same turn earns no third card.
+      const repeat = yield* callComputerTool(13, "computer_click");
+      assert.equal(repeat.status, 200);
+      assert.equal(deniedErrorOf(repeat.body).error.code, "capability_denied");
+      assert.equal(denialCards().length, 2);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("denies prefixed computer spellings with a denial card, never Unknown-tool", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      computerService: makeComputerServiceLayer({
+        backend: new FakeComputerBackend(),
+        supported: true,
+      }),
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const denialCards = () =>
+        harness.dispatched.filter(
+          (command) =>
+            command.type === "thread.activity.append" &&
+            command.activity.kind === COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
+        );
+      const callComputerTool = (id: number, name: string) =>
+        harness.postRaw({
+          authorizationHeader: "Bearer token-parent",
+          body: { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: {} } },
+        });
+      const deniedErrorOf = (body: unknown) =>
+        JSON.parse(
+          (body as { result: { content: Array<{ text: string }> } }).result.content[0]!.text,
+        ) as { error: { code: string; details: { requiredCapability: string } } };
+      // token-parent was never granted computer control: prefixed spellings of a
+      // known family name deny with the card instead of dying as Unknown-tool.
+      for (const [id, name] of [
+        [21, "synara_computer_click"],
+        [22, "mcp__synara__computer_click"],
+      ] as const) {
+        const response = yield* callComputerTool(id, name);
+        assert.equal(response.status, 200);
+        const error = deniedErrorOf(response.body).error;
+        assert.equal(error.code, "capability_denied");
+        assert.equal(error.details.requiredCapability, "computer:control");
+      }
+      assert.equal(denialCards().length, 2);
+      // An entirely-unknown name still stays INVALID_PARAMS with no card.
+      const unknown = yield* callComputerTool(23, "foo_bar");
+      assert.equal(unknown.status, 200);
+      assert.equal((unknown.body as { error?: { code: number } }).error?.code, -32602);
+      assert.equal(denialCards().length, 2);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("requires the explicit diagnostics capability for forensic tools", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -1793,6 +1893,46 @@ describe("AgentGateway", () => {
       };
       assert.equal(error.code, "capability_denied");
       assert.equal(error.details.requiredCapability, "diagnostics:read");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("drives a second app on a full-access thread without a second-app card", () => {
+    // The packaged E2E was full-access and stalled behind "Allow the agent to
+    // drive Google Chrome?" for the driver-owned isolated Chromium it had
+    // launched itself. Full access is the broader consent; the wiring must
+    // not publish an approval card for the second app.
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      baseThreads.map((thread) =>
+        thread.id === "thread-parent"
+          ? makeThreadShell("thread-parent", { runtimeMode: "full-access" })
+          : thread,
+      ),
+      [],
+      {
+        computerService: makeComputerServiceLayer({
+          backend: new FakeComputerBackend(),
+          supported: true,
+        }),
+      },
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const launch = (app: string) =>
+        harness.callTool({
+          token: "token-parent-computer",
+          name: "computer_launch_app",
+          args: { app, wait_for_window: false },
+        });
+      const first = yield* launch("kcalc");
+      assert.isFalse(isToolError(first.result), toolErrorText(first.result));
+      const second = yield* launch("Google Chrome");
+      assert.isFalse(isToolError(second.result), toolErrorText(second.result));
+      const cards = harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "approval.requested",
+      );
+      assert.equal(cards.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

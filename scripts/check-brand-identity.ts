@@ -46,13 +46,13 @@ const forbiddenPatterns = [
   new RegExp(escapeRegExp(incorrectBundleDomain), "i"),
 ] as const;
 
-interface ApprovedAttribution {
+interface ApprovedIdentityLine {
   readonly path: string;
   readonly line: string;
   readonly markdownSection?: string;
 }
 
-const approvedAttributions: readonly ApprovedAttribution[] = [
+const approvedIdentityLines: readonly ApprovedIdentityLine[] = [
   {
     path: "LICENSE",
     line: `Copyright (c) 2026 ${retiredCompanyDisplayName} Inc.`,
@@ -82,7 +82,120 @@ const approvedAttributions: readonly ApprovedAttribution[] = [
     path: "apps/marketing/src/data/testimonials.ts",
     line: `"I've been using @trySynara for a few hours now. I'm really impressed. I'd already tried ${retiredFirstDisplayName.slice(0, 2)} Chat, Orca, and Terax, but none of them managed to grab my attention quite like Synara did.",`,
   },
+  // Preserve the recorded license provenance; these are exact attribution
+  // lines, not permission to reintroduce retired product names in these docs.
+  {
+    path: "docs/computer-use-cua/extraction-plan.md",
+    markdownSection: "## Upstream license and PR-back feasibility",
+    line: `also MIT (LICENSE, ${retiredCompanyDisplayName} Inc and Emanuele Di Pietro). There is no license`,
+  },
+  {
+    path: "docs/computer-use-cua/handoffs/synara-cu-v2-mega-handoff-2026-09-16.md",
+    line: `- Decide what ships open: likely the driver patch + host protocol + tools + docs (MIT/Apache), either as its own project or upstreamed into trycua/cua; Synara product code can stay whatever it is. Keep \`CUA-LICENSE.txt\` attribution; Synara repo is MIT (${retiredCompanyDisplayName} Inc + Emanuele Di Pietro).`,
+  },
+  {
+    path: "docs/computer-use-cua/open-decisions-sheet.md",
+    markdownSection: "## 3. Which license",
+    line: `- Verification: Synara repo is MIT, held by ${retiredCompanyDisplayName} Inc and Emanuele Di Pietro`,
+  },
+  {
+    path: "docs/computer-use-cua/workstream-f-opensource-spec.md",
+    markdownSection: "## Current state",
+    line: `The tree already carries two licenses. The Synara repo is MIT, held by ${retiredCompanyDisplayName} Inc and Emanuele Di Pietro (\`LICENSE:1\`, \`LICENSE:3\`). The Cua driver redistribution license is MIT, held by Cua AI Inc (\`docs/computer-use-cua/CUA-LICENSE.txt:1\`, \`docs/computer-use-cua/CUA-LICENSE.txt:3\`). The redistribution license is referenced from the computer use README (\`docs/computer-use-cua/README.md:15\`). A full read of \`package.json:1\` through the end of the file shows no license field, so the root manifest states no license of its own. This is unverified as a problem, but an auditor will flag it.`,
+  },
+  // These two terms are the cubic time coefficient in the reviewed native
+  // patch. Keep the patch and its recorded checksum unchanged.
+  ...[0, 1].map((axis) => ({
+    path: "apps/desktop/patches/cua-driver/0001-synara-native.patch",
+    line: `+                            + ${retiredShortName} * self.to.${axis}`,
+  })),
 ];
+
+// These are existing macOS TCC fixture identities, including identities in
+// recorded evidence. Renaming them would change permission ownership or falsify
+// the evidence. Only the complete reviewed ID is allowed at each exact path;
+// the rest of every line still goes through the ordinary branding checks.
+const approvedFixtureBundleIdentityPatterns = new Map<string, RegExp>(
+  [
+    {
+      suffix: "cua-fixture",
+      paths: [
+        "apps/desktop/src/cuaFixtures/electron.ts",
+        "apps/desktop/src/cuaFixtures/live.ts",
+        "scripts/computer-use-fixtures/build-electron.mjs",
+        "docs/computer-use-cua/evidence/efficiency-implementation-2026-09-08/native/signed-fixture-permission-check.json",
+        "docs/computer-use-cua/evidence/fixture-g5-set-value-2026-09-17.report.json",
+        "docs/computer-use-cua/evidence/gateway-native-report.json",
+        "docs/computer-use-cua/evidence/live-provider-report.json",
+        "docs/computer-use-cua/evidence/native-fixture-report.json",
+        "docs/computer-use-cua/evidence/native-fixture-run6-report.json",
+        "docs/computer-use-cua/evidence/native-revision1-final-report.json",
+        "docs/computer-use-cua/evidence/native-revision1-foreground-initial-report.json",
+        "docs/computer-use-cua/evidence/native-revision1-renewed-build-permission-refusal.json",
+        "docs/computer-use-cua/evidence/native-revision1-report.json",
+        "docs/computer-use-cua/evidence/overlay-disabled-report.json",
+        "docs/computer-use-cua/evidence/overlay-enabled-report.json",
+        "docs/computer-use-cua/evidence/rev15-electron-2026-09-17-report.json",
+        "docs/computer-use-cua/evidence/short-cursor-report.json",
+      ],
+    },
+    {
+      suffix: "cua-fixture-external",
+      paths: [
+        "docs/computer-use-cua/evidence/rev17-cancellation-2026-09-17-notes.md",
+        "docs/computer-use-cua/evidence/rev17-cancellation-2026-09-17-report.json",
+        "docs/computer-use-cua/evidence/rev17-gateway-2026-09-17-notes.md",
+        "docs/computer-use-cua/evidence/rev17-gateway-2026-09-17-report.json",
+        "docs/computer-use-cua/evidence/rev17-live-2026-09-17-live-report.json",
+        "docs/computer-use-cua/evidence/rev17-live-2026-09-17-notes.md",
+        "docs/computer-use-cua/evidence/rev17-live-2026-09-17-report.json",
+        "docs/computer-use-cua/evidence/rev17-native-2026-09-17-notes.md",
+        "docs/computer-use-cua/evidence/rev17-native-2026-09-17-report.json",
+      ],
+    },
+    {
+      suffix: "cua-canary",
+      paths: [
+        "scripts/computer-use-fixtures/build-canary.mjs",
+        "scripts/computer-use-fixtures/canary-main.ts",
+        "scripts/computer-use-fixtures/live-cert.ts",
+        "docs/computer-use-cua/belief-canary-runbook.md",
+        "docs/computer-use-cua/handoffs/synara-cu-v2-session-handoff-2026-09-17.md",
+        "docs/computer-use-cua/evidence/rev20-realapp-calculator-2026-09-17-report.json",
+        "docs/computer-use-cua/evidence/rev20-realapp-notes-2026-09-17-report.json",
+      ],
+    },
+    {
+      suffix: "test",
+      paths: [
+        "apps/server/src/computer/CuaComputerBackend.test.ts",
+        "apps/server/src/computer/computerSignatureChange.test.ts",
+      ],
+    },
+    {
+      suffix: "latency-probe",
+      paths: [
+        "docs/computer-use-cua/evidence/latency-rev17-probe.ts",
+        "docs/computer-use-cua/evidence/latency-rev17-supplement-probe.ts",
+      ],
+    },
+    {
+      suffix: "cua-display-cert",
+      paths: ["scripts/computer-use-fixtures/multi-display-cert.ts"],
+    },
+  ].flatMap(({ suffix, paths }) =>
+    paths.map(
+      (path) =>
+        [
+          path,
+          new RegExp(
+            `(?<![a-zA-Z0-9_.-])${escapeRegExp(`${incorrectBundleDomain}.${suffix}`)}(?![a-zA-Z0-9_.-])`,
+            "g",
+          ),
+        ] as const,
+    ),
+  ),
+);
 
 // Raster images cannot be searched for embedded text. Keep the user-facing
 // screenshots behind reviewed digests so changing either one requires another
@@ -118,19 +231,18 @@ function containsForbiddenIdentity(value: string): boolean {
   return forbiddenPatterns.some((pattern) => pattern.test(value));
 }
 
-function findApprovedAttribution(
+function findApprovedIdentityLine(
   path: string,
   line: string,
   markdownSection: string | null,
-  consumedAttributions: ReadonlySet<number>,
+  consumedLines: ReadonlySet<number>,
 ): number | null {
-  const index = approvedAttributions.findIndex(
-    (attribution, candidateIndex) =>
-      !consumedAttributions.has(candidateIndex) &&
-      attribution.path === path &&
-      attribution.line === line.trim() &&
-      (attribution.markdownSection === undefined ||
-        attribution.markdownSection === markdownSection),
+  const index = approvedIdentityLines.findIndex(
+    (approved, candidateIndex) =>
+      !consumedLines.has(candidateIndex) &&
+      approved.path === path &&
+      approved.line === line.trim() &&
+      (approved.markdownSection === undefined || approved.markdownSection === markdownSection),
   );
   return index === -1 ? null : index;
 }
@@ -143,19 +255,23 @@ export function findBrandIdentityViolations(
     if (containsForbiddenIdentity(file.path)) {
       violations.push({ path: file.path, line: null, text: file.path });
     }
-    const consumedAttributions = new Set<number>();
+    const consumedLines = new Set<number>();
+    const approvedFixtureIdentity = approvedFixtureBundleIdentityPatterns.get(file.path);
     let markdownSection: string | null = null;
     for (const [index, line] of file.contents.split(/\r?\n/).entries()) {
       if (/^#{1,2}\s+/.test(line)) markdownSection = line.trim();
-      if (!containsForbiddenIdentity(line)) continue;
-      const approvedAttribution = findApprovedAttribution(
+      const textToCheck = approvedFixtureIdentity
+        ? line.replace(approvedFixtureIdentity, "")
+        : line;
+      if (!containsForbiddenIdentity(textToCheck)) continue;
+      const approvedLine = findApprovedIdentityLine(
         file.path,
         line,
         markdownSection,
-        consumedAttributions,
+        consumedLines,
       );
-      if (approvedAttribution !== null) {
-        consumedAttributions.add(approvedAttribution);
+      if (approvedLine !== null) {
+        consumedLines.add(approvedLine);
         continue;
       }
       violations.push({ path: file.path, line: index + 1, text: line.trim() });

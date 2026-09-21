@@ -73,6 +73,13 @@ export function UserInputQuestionForm({
       onAdvanceRef.current(nextDraftAnswer ? { [questionId]: nextDraftAnswer } : undefined);
     }, 200);
   };
+  const handleCancel = () => {
+    if (autoAdvanceTimerRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimerRef.current);
+      autoAdvanceTimerRef.current = null;
+    }
+    onCancel?.();
+  };
   const handleShortcut = (
     event: Pick<
       KeyboardEvent,
@@ -176,12 +183,13 @@ export function UserInputQuestionForm({
             );
           })}
         </div>
-      ) : onCancel ? (
+      ) : null}
+      {onCancel ? (
         <div className="mt-2.5 flex justify-end">
           <button
             type="button"
             disabled={isResponding}
-            onClick={onCancel}
+            onClick={handleCancel}
             className={cn(
               "rounded-md px-2 py-1 text-ui text-[var(--color-text-foreground-secondary)] transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
               isResponding && "cursor-not-allowed opacity-50",

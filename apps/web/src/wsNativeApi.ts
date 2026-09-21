@@ -48,6 +48,9 @@ import {
   DEVICE_WS_CHANNELS,
   DEVICE_WS_METHODS,
   type DeviceEvent,
+  COMPUTER_WS_CHANNELS,
+  COMPUTER_WS_METHODS,
+  type ComputerEvent,
 } from "@synara/contracts";
 import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 
@@ -159,6 +162,7 @@ const terminalEventListeners = createListenerRegistry<TerminalEvent>();
 const projectDevServerEventListeners = createListenerRegistry<ProjectDevServerEvent>();
 const automationEventListeners = createListenerRegistry<AutomationStreamEvent>();
 const deviceEventListeners = createListenerRegistry<DeviceEvent>();
+const computerEventListeners = createListenerRegistry<ComputerEvent>();
 const orchestrationDomainEventListeners = createListenerRegistry<OrchestrationEvent>();
 const orchestrationShellEventListeners = createListenerRegistry<OrchestrationShellStreamItem>();
 const orchestrationThreadEventListeners = createListenerRegistry<OrchestrationThreadStreamItem>();
@@ -179,6 +183,7 @@ function clearWsNativeApiListeners(): void {
   projectDevServerEventListeners.clear();
   automationEventListeners.clear();
   deviceEventListeners.clear();
+  computerEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();
@@ -475,6 +480,9 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(DEVICE_WS_CHANNELS.event, (message) => {
     deviceEventListeners.emit(message.data);
   });
+  transport.subscribe(COMPUTER_WS_CHANNELS.event, (message) => {
+    computerEventListeners.emit(message.data);
+  });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     orchestrationShellEventListeners.emit(message.data);
   });
@@ -718,6 +726,8 @@ export function createWsNativeApi(): NativeApi {
       consumeCodexResetCredit: (input) =>
         transport.request(WS_METHODS.serverConsumeCodexResetCredit, input),
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
+      readThreadDiagnostics: (input) =>
+        transport.request(WS_METHODS.serverReadThreadDiagnostics, input),
       generateThreadRecap: (input) =>
         transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
           timeoutMs: null,
@@ -859,6 +869,19 @@ export function createWsNativeApi(): NativeApi {
       scrollToElement: (input) =>
         transport.request(DEVICE_WS_METHODS.scrollToElement, input, { timeoutMs: null }),
       onEvent: deviceEventListeners.subscribe,
+    },
+    computer: {
+      getStatus: (input) => transport.request(COMPUTER_WS_METHODS.getStatus, input),
+      getAuditHistory: (input) => transport.request(COMPUTER_WS_METHODS.getAuditHistory, input),
+      getState: (input) => transport.request(COMPUTER_WS_METHODS.getState, input),
+      provision: (input) =>
+        transport.request(COMPUTER_WS_METHODS.provision, input, { timeoutMs: null }),
+      getThreadState: (input) => transport.request(COMPUTER_WS_METHODS.getThreadState, input),
+      setControlEnabled: (input) => transport.request(COMPUTER_WS_METHODS.setControlEnabled, input),
+      inputClick: (input) => transport.request(COMPUTER_WS_METHODS.inputClick, input),
+      inputScroll: (input) => transport.request(COMPUTER_WS_METHODS.inputScroll, input),
+      inputKey: (input) => transport.request(COMPUTER_WS_METHODS.inputKey, input),
+      onEvent: computerEventListeners.subscribe,
     },
     browser: {
       ...(window.desktopBridge?.browser?.vault

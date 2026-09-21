@@ -4,6 +4,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Option } from "effect";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { AgentGatewayShape } from "./Services/AgentGateway.ts";
 import type { AgentGatewayCredentialsShape } from "./Services/AgentGatewayCredentials.ts";
+import type { AgentGatewayCapability } from "./Services/AgentGatewaySessionRegistry.ts";
 import { extractBearerToken } from "./bearerToken.ts";
 import {
   buildMcpInitializeResult,
@@ -19,6 +20,7 @@ import {
 } from "./protocol.ts";
 import { sanitizeToolInputSchema } from "./sanitizeToolInputSchema.ts";
 import {
+  filterToolsByCapability,
   GatewayToolError,
   gatewayToolErrorResult,
   type ToolContext,
@@ -55,6 +57,36 @@ function invalidRequestResponse(
   };
 }
 
+/**
+ * Authority 401s: the credential itself is unusable, so there is no tool call
+ * to deny and `onCapabilityDenied` must never fire from these paths. Each body
+ * carries a machine-readable `data.code` plus the retry rule in prose:
+ *
+ * - `revoked-token`: missing, revoked, or invalid credential. Do not retry
+ *   with the same token; revoke the lease and re-lease a fresh session.
+ * - `thread-gone`: the bearer names a thread that no longer exists. Do not
+ *   retry; the thread is gone for good.
+ * - `provider-mismatch`: a live thread owned by another provider session. Do
+ *   not retry with this token; re-lease ownership before calling again.
+ */
+type AgentGatewayAuthorityFailureCode = "revoked-token" | "thread-gone" | "provider-mismatch";
+
+function invalidSessionResponse(
+  code: AgentGatewayAuthorityFailureCode,
+  message: string,
+  retry: "reauthenticate" | "do-not-retry" | "re-lease",
+): { readonly status: number; readonly body: McpJsonRpcResponse } {
+  return {
+    status: 401,
+    body: {
+      ...jsonRpcError(null, JSON_RPC_INVALID_REQUEST, message),
+      // jsonRpcError shapes only code/message; the structured detail rides in
+      // `data` beside them rather than in a second error convention.
+      data: { code, retry },
+    },
+  };
+}
+
 function requestIdKey(id: JsonRpcId): string {
   return `${typeof id}:${String(id)}`;
 }
@@ -67,6 +99,27 @@ export function makeAgentGatewayMcpTransport(input: {
   readonly requireThreadShell: (
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, unknown>;
+  // Lets the gateway surface a capability denial to the user (e.g. as a thread
+  // activity). Must not fail; the denial response is returned regardless.
+  // Fires only for tool-call denials — never for authority 401s, which carry
+  // their own structured retry detail instead.
+  readonly onCapabilityDenied?: (denial: {
+    readonly toolName: string;
+    readonly requiredCapability: string;
+    readonly callerThreadId: string;
+    readonly callerTurnId: string | null;
+  }) => Effect.Effect<void>;
+  /**
+   * Names the computer tool family from the unfiltered input.tools catalog so
+   * a caller whose session was never granted computer control still gets a
+   * capability_denied (plus the denial hook) when it calls one by name —
+   * instead of an Unknown-tool error — even when that tool is absent from the
+   * served catalog. Entirely-unknown names still stay INVALID_PARAMS.
+   * Mirrors onCapabilityDenied: the call site owns the family (and its
+   * capability value); the transport stays generic.
+   */
+  readonly isComputerToolName?: (toolName: string) => boolean;
+  readonly computerControlCapability?: AgentGatewayCapability;
 }): AgentGatewayShape["handleMcpPost"] {
   const toolsByName = new Map(input.tools.map((tool) => [tool.definition.name, tool]));
   const handleRequest = (request: JsonRpcRequest, context: Omit<ToolContext, "jsonRpcRequestId">) =>
@@ -85,30 +138,34 @@ export function makeAgentGatewayMcpTransport(input: {
           return jsonRpcResult(request.id, {});
         case "tools/list":
           return jsonRpcResult(request.id, {
-            tools: input.tools.map((tool) => ({
-              ...tool.definition,
-              // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
-              // returns a fresh object for object input, so this restores the static type.
-              inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
-                string,
-                unknown
-              >,
-            })),
+            tools: filterToolsByCapability(input.tools, context.callerCapabilities)
+              // Discovery-only tools stay callable by exact name — toolsByName
+              // is built from the unfiltered catalog — but do not advertise.
+              .filter((tool) => tool.discoveryOnly !== true)
+              .map((tool) => ({
+                ...tool.definition,
+                // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
+                // returns a fresh object for object input, so this restores the static type.
+                inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
+                  string,
+                  unknown
+                >,
+              })),
           });
         case "tools/call": {
           const toolName = request.params.name;
           if (typeof toolName !== "string") {
             return jsonRpcError(request.id, JSON_RPC_INVALID_PARAMS, "Missing tool name.");
           }
-          const tool = toolsByName.get(toolName);
-          if (!tool) {
-            return jsonRpcError(request.id, JSON_RPC_INVALID_PARAMS, `Unknown tool "${toolName}".`);
-          }
-          const rawArgs = request.params.arguments;
-          const args = asRecord(rawArgs) ?? {};
-          const requiredCapability = tool.requiredCapability;
-          if (!context.callerCapabilities.has(requiredCapability)) {
-            return jsonRpcResult(
+          const readCallerAuthorityError = () =>
+            context.assertCallerTurnActive().pipe(
+              Effect.match({
+                onFailure: (error) => error,
+                onSuccess: () => null,
+              }),
+            );
+          const capabilityDeniedResult = (requiredCapability: string) =>
+            jsonRpcResult(
               request.id,
               gatewayToolErrorResult(
                 new GatewayToolError(
@@ -118,22 +175,66 @@ export function makeAgentGatewayMcpTransport(input: {
                 ),
               ),
             );
+          const tool = toolsByName.get(toolName);
+          if (!tool) {
+            // Entirely-unknown names stay INVALID_PARAMS — except a computer
+            // tool the caller's session was never granted: that is a
+            // capability truth, not a typo, so it denies like a known one.
+            const computerControlCapability = input.computerControlCapability;
+            if (
+              computerControlCapability === undefined ||
+              context.callerCapabilities.has(computerControlCapability) ||
+              input.isComputerToolName?.(toolName) !== true
+            ) {
+              return jsonRpcError(
+                request.id,
+                JSON_RPC_INVALID_PARAMS,
+                `Unknown tool "${toolName}".`,
+              );
+            }
+            // Computer tools need an active turn: an inactive turn reports the
+            // authority error and never fires the denial hook.
+            const authorityError = yield* readCallerAuthorityError();
+            if (authorityError !== null) {
+              return jsonRpcResult(request.id, gatewayToolErrorResult(authorityError));
+            }
+            if (input.onCapabilityDenied) {
+              yield* input.onCapabilityDenied({
+                toolName,
+                requiredCapability: computerControlCapability,
+                callerThreadId: context.callerThreadId,
+                callerTurnId: context.callerTurnId,
+              });
+            }
+            return capabilityDeniedResult(computerControlCapability);
+          }
+          const rawArgs = request.params.arguments;
+          const args = asRecord(rawArgs) ?? {};
+          // Turn-active first: an inactive turn reports the authority error
+          // and never fires the denial hook, even for a tool whose capability
+          // the caller also lacks.
+          if (tool.requiresActiveTurn) {
+            const authorityError = yield* readCallerAuthorityError();
+            if (authorityError !== null) {
+              return jsonRpcResult(request.id, gatewayToolErrorResult(authorityError));
+            }
+          }
+          const requiredCapability = tool.requiredCapability;
+          if (!context.callerCapabilities.has(requiredCapability)) {
+            if (input.onCapabilityDenied) {
+              yield* input.onCapabilityDenied({
+                toolName,
+                requiredCapability,
+                callerThreadId: context.callerThreadId,
+                callerTurnId: context.callerTurnId,
+              });
+            }
+            return capabilityDeniedResult(requiredCapability);
           }
           const invocationContext: ToolContext = {
             ...context,
             jsonRpcRequestId: request.id,
           };
-          if (tool.requiresActiveTurn) {
-            const authorityError = yield* context.assertCallerTurnActive().pipe(
-              Effect.match({
-                onFailure: (error) => error,
-                onSuccess: () => null,
-              }),
-            );
-            if (authorityError !== null) {
-              return jsonRpcResult(request.id, gatewayToolErrorResult(authorityError));
-            }
-          }
           const result = yield* Effect.suspend(() => tool.handler(args, invocationContext)).pipe(
             Effect.catchDefect((defect) => Effect.succeed(mcpToolResultError(errorText(defect)))),
           );
@@ -153,9 +254,10 @@ export function makeAgentGatewayMcpTransport(input: {
       const token = extractBearerToken(requestInput.authorizationHeader);
       const callerSession = token ? input.credentials.verifySession(token) : null;
       if (!token || !callerSession) {
-        return invalidRequestResponse(
-          401,
-          "caller_session_inactive: Missing, revoked, or invalid provider-session credential.",
+        return invalidSessionResponse(
+          "revoked-token",
+          "caller_session_inactive: Missing, revoked, or invalid provider-session credential. Do not retry with this token; revoke the lease and re-lease a fresh provider session.",
+          "reauthenticate",
         );
       }
       const callerThreadId = callerSession.threadId;
@@ -163,16 +265,18 @@ export function makeAgentGatewayMcpTransport(input: {
         .getThreadShellById(ThreadId.makeUnsafe(callerThreadId))
         .pipe(Effect.catch(() => Effect.succeed(Option.none())));
       if (Option.isNone(callerThread)) {
-        return invalidRequestResponse(
-          401,
-          "Bearer token refers to a thread that no longer exists.",
+        return invalidSessionResponse(
+          "thread-gone",
+          "Bearer token refers to a thread that no longer exists. Do not retry; the thread is gone.",
+          "do-not-retry",
         );
       }
       const liveProvider = callerThread.value.session?.providerName;
       if ((liveProvider ?? callerThread.value.modelSelection.provider) !== callerSession.provider) {
-        return invalidRequestResponse(
-          401,
-          "caller_session_inactive: Provider session no longer owns this thread.",
+        return invalidSessionResponse(
+          "provider-mismatch",
+          "caller_session_inactive: Provider session no longer owns this thread. Do not retry with this token; re-lease thread ownership before calling again.",
+          "re-lease",
         );
       }
       const callerWriteAuthority =
@@ -241,6 +345,9 @@ export function makeAgentGatewayMcpTransport(input: {
           turnId: callerWriteAuthority?.turnId ?? null,
         },
         callerThreadId,
+        // The nickname first: a subagent that has one is known by it, and its
+        // title describes the work rather than who is doing it.
+        callerThreadLabel: callerThread.value.subagentNickname ?? callerThread.value.title ?? null,
         callerSessionKey: callerSession.sessionKey,
         callerProvider: callerSession.provider,
         callerCapabilities: callerSession.capabilities,

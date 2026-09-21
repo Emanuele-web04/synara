@@ -28,6 +28,7 @@ import {
   CircleAlertIcon,
   CircleQuestionIcon,
   ContextCompactionIcon,
+  ComputerUseIcon,
   EyeIcon,
   GitHubIcon,
   GlobeIcon,
@@ -43,6 +44,7 @@ import {
   ZapIcon,
 } from "~/lib/icons";
 import { describeLinkChip } from "~/lib/linkChips";
+import { computerToolName, describeComputerToolCall } from "~/lib/computerToolPresentation";
 import { cn } from "~/lib/utils";
 
 import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
@@ -54,6 +56,8 @@ import {
   isReasoningUpdateWorkEntry,
 } from "./agentActivity.logic";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
+import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
+import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
 import ChatMarkdown from "../ChatMarkdown";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -73,6 +77,7 @@ import {
   deriveFriendlyCommandTarget,
   deriveSynaraMcpToolTitle,
   extractWebFetchUrl,
+  isGenericToolTitle,
   isSynaraBrowserToolCall,
   normalizeToolTextForComparison,
   resolveCommandVisualKind,
@@ -251,6 +256,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.requestKind === "command") return commandWorkEntryIcon(workEntry);
   if (workEntry.requestKind === "file-read") return SearchIcon;
   if (workEntry.requestKind === "file-change") return PencilIcon;
+  if (workEntry.requestKind === "tool") return McpIcon;
 
   if (workEntry.itemType === "command_execution" || workEntry.command) {
     return commandWorkEntryIcon(workEntry);
@@ -286,11 +292,19 @@ export function renderWorkEntryIcon(Icon: LucideIcon, className: string): ReactE
 // over the kind-derived entry icon. Shared with the collapsed tool-group summary
 // row, which borrows its first entry's icon.
 export function workEntryLeftIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  if (isComputerWorkEntry(workEntry)) return ComputerUseIcon;
   if (isGitHubMcpToolCall(workEntry)) return GitHubIcon;
   if (isSynaraBrowserWorkEntry(workEntry)) return GlobeIcon;
   if (isSynaraToolCall(workEntry)) return SynaraToolIcon;
   if (workEntry.itemType === "mcp_tool_call") return McpIcon;
   return workEntryIcon(workEntry);
+}
+
+function isComputerWorkEntry(workEntry: TimelineWorkEntry): boolean {
+  return (
+    computerToolName(workEntry.toolName) !== null ||
+    /^Computer Use:/i.test(workEntry.toolTitle ?? "")
+  );
 }
 
 function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
@@ -364,6 +378,14 @@ function capitalizePhrase(value: string): string {
 }
 
 function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
+  if (computerToolName(workEntry.toolName)) {
+    // Work-log projection already resolves the action and target. The generic
+    // MCP presentation would replace that with "Synara clicked the desktop".
+    const title = normalizeCompactToolLabel(workEntry.toolTitle ?? "");
+    if (title && !isGenericToolTitle(title) && !computerToolName(title))
+      return capitalizePhrase(title);
+    return describeComputerToolCall({ toolName: workEntry.toolName, args: undefined })!.summary;
+  }
   // Task progress is semantic copy, not a tool lifecycle status. Preserve the
   // trailing "completed" instead of passing it through the compact tool-label
   // normalizer, which intentionally strips lifecycle suffixes.
@@ -494,6 +516,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
   onOpenAgentActivity?: (activityId: string) => void;
   onOpenAutomation?: (automationId: string) => void;
+  computerControlEnabled?: boolean;
+  onEnableComputerControl?: () => void;
   timestampFormat: TimestampFormat;
 }) {
   // Defaults are applied in the body (not in the destructuring pattern): a default
@@ -511,6 +535,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     onOpenTurnDiff,
     onOpenAgentActivity,
     onOpenAutomation,
+    computerControlEnabled,
+    onEnableComputerControl,
     timestampFormat,
   } = props;
   const textFontSizePx = textFontSizePxProp ?? chatMetaFontSizePx;
@@ -526,6 +552,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   // Standard tool rows keep one discoverable left glyph. Codex status rows
   // deliberately skip it and reuse only the shared tool-label typography.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
+  const isComputerToolRow = isComputerWorkEntry(workEntry);
   const isSynaraBrowserToolRow = !isGitHubToolRow && isSynaraBrowserWorkEntry(workEntry);
   const isSynaraToolRow =
     !isGitHubToolRow && !isSynaraBrowserToolRow && isSynaraToolCall(workEntry);
@@ -537,15 +564,17 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   const LeftIcon = workEntryLeftIcon(workEntry);
   const leftIconKind = webFetchUrl
     ? "web-fetch"
-    : isGitHubToolRow || EntryIcon === GitHubIcon
-      ? "github"
-      : isSynaraBrowserToolRow
-        ? "browser"
-        : isSynaraToolRow
-          ? "synara"
-          : isMcpToolRow
-            ? "mcp"
-            : undefined;
+    : isComputerToolRow
+      ? "computer"
+      : isGitHubToolRow || EntryIcon === GitHubIcon
+        ? "github"
+        : isSynaraBrowserToolRow
+          ? "browser"
+          : isSynaraToolRow
+            ? "synara"
+            : isMcpToolRow
+              ? "mcp"
+              : undefined;
   const { heading, preview, displayText } = workEntryDisplayParts(workEntry);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
@@ -581,6 +610,33 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
         subagent: workEntry.itemType === "collab_agent_tool_call",
       })
     : null;
+
+  // A computer-control denial renders as an actionable card (enable + retry)
+  // instead of a buried tool-error line. Kept after the hooks above so the
+  // early return never changes hook order.
+  if (workEntry.computerSetupRequired) {
+    return (
+      <ConnectedComputerSetupRequiredCard
+        {...workEntry.computerSetupRequired}
+        textFontSizePx={textFontSizePx}
+        metaFontSizePx={chatMetaFontSizePx}
+      />
+    );
+  }
+
+  const computerControlDenied = workEntry.computerControlDenied;
+  if (computerControlDenied) {
+    return (
+      <div className={cn(compact ? "py-0.5" : "py-1")}>
+        <ComputerControlDeniedCard
+          {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+          textFontSizePx={textFontSizePx}
+          metaFontSizePx={chatMetaFontSizePx}
+          {...(onEnableComputerControl ? { onEnable: onEnableComputerControl } : {})}
+        />
+      </div>
+    );
+  }
 
   // A created-automation row renders as its own card instead of a tool-call line.
   // Kept after the hooks above so the early return never changes hook order.

@@ -1,0 +1,24 @@
+[computer] semantic text lane write {
+  pid: 57215,
+  windowId: 'cua:57215:375',
+  laneWaitMs: 0,
+  deliveryMs: 3655,
+  verified: 'confirmed',
+  effect: 'verified'
+}
+[computer] semantic text lane write {
+  pid: 57215,
+  windowId: 'cua:57215:376',
+  laneWaitMs: 0,
+  deliveryMs: 4101,
+  verified: 'confirmed',
+  effect: 'verified'
+}
+[computer] semantic text lane write {
+  pid: 57215,
+  windowId: 'cua:57215:377',
+  laneWaitMs: 0,
+  deliveryMs: 4170,
+  verified: 'confirmed',
+  effect: 'verified'
+}

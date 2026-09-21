@@ -1,0 +1,303 @@
+{
+  "run": "livecert-mu6mbgax",
+  "date": "2026-09-18T07:10:04.047Z",
+  "driver": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+  "endpoint": "/var/folders/2j/fwfzfr5x639f8rbmqc9t9ym40000gn/T/synara-cua-Lbi56H/host.sock",
+  "elapsedMs": 40899,
+  "rows": [
+    {
+      "name": "launch-isolation",
+      "verdict": "pass",
+      "detail": "open -g TextEdit pid 18897; front stayed TextEdit",
+      "evidence": {
+        "pid": 18897,
+        "window": 366,
+        "front": "TextEdit"
+      },
+      "elapsedMs": 627
+    },
+    {
+      "name": "visible-nonkey-write",
+      "verdict": "pass",
+      "detail": "effect=confirmed readback=exact",
+      "evidence": {
+        "effect": "confirmed",
+        "readback": "livecert-mu6mbgax-visible"
+      },
+      "elapsedMs": 1490
+    },
+    {
+      "name": "hidden-write",
+      "verdict": "pass",
+      "detail": "is_on_screen=false readback=exact",
+      "evidence": {
+        "visible": false,
+        "elements": 37,
+        "readback": "livecert-mu6mbgax-hidden"
+      },
+      "elapsedMs": 1947
+    },
+    {
+      "name": "minimized-write",
+      "verdict": "pass",
+      "detail": "minimized=off-screen readback=exact",
+      "evidence": {
+        "isOnScreen": false,
+        "readback": "livecert-mu6mbgax-minimized"
+      },
+      "elapsedMs": 3683
+    },
+    {
+      "name": "concurrent-writes",
+      "verdict": "pass",
+      "detail": "3 targets, readbacks 3/3 exact",
+      "evidence": {
+        "readbacks": [
+          "livecert-mu6mbgax-conc-0",
+          "livecert-mu6mbgax-conc-1",
+          "livecert-mu6mbgax-conc-2"
+        ]
+      },
+      "elapsedMs": 4765
+    },
+    {
+      "name": "operator-typing",
+      "verdict": "pass",
+      "detail": "front doc got human-only=true; hidden doc exact=true",
+      "evidence": {
+        "opValue": "HUMAN-OPERATOR-TYPING",
+        "agentValue": "livecert-mu6mbgax-bgagent"
+      },
+      "elapsedMs": 4413
+    },
+    {
+      "name": "hidden-launch-default",
+      "verdict": "pass",
+      "detail": "manager.launchApp(no opts) → pid 20413 on_screen=false front 18886→18886",
+      "evidence": {
+        "launch": "{\"computerId\":\"desktop\",\"app\":\"Calculator\",\"window\":null}",
+        "launchPid": 20413,
+        "winNum": 415,
+        "listed": {
+          "app_name": "Calculator",
+          "bounds": {
+            "height": 30,
+            "width": 1600,
+            "x": 0,
+            "y": 0
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 20413,
+          "space_ids": null,
+          "title": "",
+          "window_id": 415,
+          "z_index": 25
+        },
+        "frontBefore": 18886,
+        "frontAfter": 18886
+      },
+      "elapsedMs": 3051
+    },
+    {
+      "name": "space-roundtrip",
+      "verdict": "pass",
+      "detail": "switch 1→3: true; write: true; back: true",
+      "evidence": {
+        "sw1": "set-current rc=0 active=3 verified=1",
+        "writeOk": true,
+        "sw2": "set-current rc=0 active=1 verified=1",
+        "win": 421
+      },
+      "elapsedMs": 2553
+    },
+    {
+      "name": "off-space-refusal",
+      "verdict": "pass",
+      "detail": "off-space window: elements=50, write=verified, readback=exact",
+      "evidence": {
+        "win": 432,
+        "elements": 50,
+        "outcome": "verified, readback=exact"
+      },
+      "elapsedMs": 2491
+    },
+    {
+      "name": "screenshot-fresh",
+      "verdict": "pass",
+      "detail": "png=true valid=true freshness=captured_current_space",
+      "evidence": {
+        "hasPng": true,
+        "valid": true,
+        "freshness": "captured_current_space",
+        "bounds": {
+          "height": 488,
+          "width": 586,
+          "x": 165,
+          "y": 86
+        },
+        "pngBytes": 36860
+      },
+      "elapsedMs": 125
+    },
+    {
+      "name": "stale-token",
+      "verdict": "pass",
+      "detail": "forged token → {\"ok\":true,\"result\":{\"content\":[{\"text\":\"element_token is stale; call get_window_state again to refresh\",\"type\":\"text\"}],\"isError\":true,\"structuredContent\":{\"re",
+      "evidence": {
+        "reply": {
+          "ok": true,
+          "result": {
+            "content": [
+              {
+                "text": "element_token is stale; call get_window_state again to refresh",
+                "type": "text"
+              }
+            ],
+            "isError": true,
+            "structuredContent": {
+              "refusal": {
+                "code": "stale_element_token",
+                "message": "element_token is stale; call get_window_state again to refresh"
+              },
+              "status": "refused"
+            }
+          },
+          "desktopEpoch": 3,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        }
+      },
+      "elapsedMs": 10
+    },
+    {
+      "name": "verify-state",
+      "verdict": "pass",
+      "detail": "{\"elapsed_ms\":228,\"predicates\":[{\"index\":0,\"observed_json\":\"{\\\"element_index\\\":1,\\\"frame\\\":{\\\"h\\\":382.0,\\\"w\\\":586.0,\\\"x\\\":165.0,\\\"y\\\":186.0},\\\"label\\\":\\\"livecert-mu6mbgax-conc-0\\\",\\\"role\\\":\\\"AXTextAre",
+      "evidence": {
+        "reply": {
+          "ok": true,
+          "result": {
+            "content": [
+              {
+                "text": "verify_state: satisfied after 2 sample(s) in 228 ms",
+                "type": "text"
+              }
+            ],
+            "structuredContent": {
+              "elapsed_ms": 228,
+              "predicates": [
+                {
+                  "index": 0,
+                  "observed_json": "{\"element_index\":1,\"frame\":{\"h\":382.0,\"w\":586.0,\"x\":165.0,\"y\":186.0},\"label\":\"livecert-mu6mbgax-conc-0\",\"role\":\"AXTextArea\",\"value\":\"livecert-mu6mbgax-conc-0\"}",
+                  "status": "satisfied",
+                  "unknown_reason": null
+                }
+              ],
+              "samples": 2,
+              "stable": true,
+              "status": "satisfied"
+            }
+          },
+          "desktopEpoch": 3,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        }
+      },
+      "elapsedMs": 234
+    },
+    {
+      "name": "masked-activation",
+      "verdict": "pass",
+      "detail": "panel=1 front=20526 (want 20526) masked=1 wrote=true released=true",
+      "evidence": {
+        "engage": {
+          "ok": true,
+          "result": {
+            "engaged": true,
+            "shield_id": "lc4414ee81ac99"
+          },
+          "desktopEpoch": 3,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        },
+        "panels": [
+          {
+            "id": 446,
+            "bounds": {
+              "x": 165,
+              "y": 86,
+              "width": 586,
+              "height": 488
+            },
+            "layer": 25
+          }
+        ],
+        "raise": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"Brought exact window 441 for pid 20526 to the foreground.\",\"type\":\"text\"}],\"structuredContent\":{\"activated\":true,\"code\":\"bring_to_front_exact_window_verified\",",
+        "frontPid": 20526,
+        "targetPid": 20526,
+        "write": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readback\"}],\"route\":\"accessibility\"}},\"desktopE",
+        "value": "livecert-mu6mbgax-masked",
+        "release": {
+          "ok": true,
+          "desktopEpoch": 3,
+          "desktopPauses": [],
+          "desktopInterruptions": 0
+        },
+        "panelsAfter": []
+      },
+      "elapsedMs": 4613
+    },
+    {
+      "name": "escape-kill-switch",
+      "verdict": "pass",
+      "detail": "baseline=true hostArmed=true immune=true engaged=true refused=true rearmed=true (physical key unverified — VM)",
+      "evidence": {
+        "armedByHost": true,
+        "escArmEvents": [true, false, true, false, true, false, true, false],
+        "baseline": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confi",
+        "afterSynthetic": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readbac",
+        "engaged": true,
+        "refused": "{\"ok\":true,\"result\":{\"isError\":true,\"content\":[{\"type\":\"text\",\"text\":\"Computer input was stopped with the Escape key. It stays stopped until the user re-arms computer control; do not retry actions.\"}],\"structuredContent\":{\"effect\":\"refused\"",
+        "rearm": "{\"ok\":true,\"result\":{\"rearmed\":true,\"wasStopped\":true},\"desktopEpoch\":4,\"desktopPauses\":[],\"desktopInterruptions\":0}",
+        "afterRearm": "{\"ok\":true,\"result\":{\"content\":[{\"text\":\"✅ Set AXValue on [1] AXTextArea.\",\"type\":\"text\"}],\"structuredContent\":{\"delivery\":{\"mode\":\"background\"},\"effect\":\"confirmed\",\"evidence\":[{\"kind\":\"value_readbac",
+        "value": "livecert-mu6mbgax-esc-rearmed"
+      },
+      "elapsedMs": 5938
+    },
+    {
+      "name": "cancellation",
+      "verdict": "pass",
+      "detail": "cancelled=true effect=undefined delivered=18/2518 chars",
+      "evidence": {
+        "delivered": 18,
+        "afterLen": 40,
+        "reply": "{\"ok\":false,\"error\":\"Error: Computer operation cancelled. Input already dispatched may have taken effect; do not replay.\"}"
+      },
+      "elapsedMs": 2620
+    },
+    {
+      "name": "focus-invariant",
+      "verdict": "pass",
+      "detail": "theft-free across 1513 samples (0 topWin blips tolerated)",
+      "evidence": {
+        "theft": [],
+        "persistent": [],
+        "warnings": [],
+        "drift": [],
+        "sampleCount": 1513,
+        "issues": []
+      },
+      "elapsedMs": 0
+    }
+  ],
+  "summary": {
+    "total": 16,
+    "pass": 16,
+    "fail": 0,
+    "skipped": 0,
+    "verdict": "pass"
+  }
+}

@@ -66,7 +66,11 @@ const SLASH_COMMAND_CHIP_TOKEN_REGEX = /(^|\s)\/([a-zA-Z][a-zA-Z0-9_-]*)(?=\s)/i
 
 // Built-in commands that render as an inline chip (icon + label) instead of plain
 // text, both while typing and in the sent message. Everything else stays literal.
-const COMPOSER_SLASH_COMMAND_CHIP_NAMES = new Set<ComposerSlashCommand>(["automation", "goal"]);
+const COMPOSER_SLASH_COMMAND_CHIP_NAMES = new Set<ComposerSlashCommand>([
+  "automation",
+  "goal",
+  "computer-use",
+]);
 
 // While typing (composer) a URL only becomes a chip once a delimiter follows it,
 // mirroring how skills/mentions wait for a trailing boundary. For read-only

@@ -7,6 +7,7 @@
 
 import {
   SYNARA_CANARY_DESKTOP_ORIGIN,
+  SYNARA_CUA_DESKTOP_ORIGIN,
   SYNARA_DESKTOP_ORIGIN,
 } from "@synara/shared/desktopIdentity";
 
@@ -16,6 +17,7 @@ import { isLoopbackHost, isWildcardHost } from "./startupAccess";
 export const DESKTOP_APP_CORS_ORIGINS: ReadonlySet<string> = new Set([
   SYNARA_DESKTOP_ORIGIN,
   SYNARA_CANARY_DESKTOP_ORIGIN,
+  SYNARA_CUA_DESKTOP_ORIGIN,
 ]);
 
 export function normalizeCorsOrigin(rawOrigin: string | ReadonlyArray<string> | undefined) {

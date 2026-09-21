@@ -24,7 +24,36 @@ import {
 } from "./composerSlashCommands";
 
 describe("composerSlashCommands", () => {
+  it.each([
+    "codex",
+    "claudeAgent",
+    "cursor",
+    "grok",
+    "droid",
+    "devin",
+    "opencode",
+    "pi",
+    "antigravity",
+  ] as const)(
+    "offers one Synara Computer invocation for %s despite a native name collision",
+    (provider) => {
+      const commands = getAvailableComposerSlashCommands({
+        provider,
+        supportsFastSlashCommand: false,
+        canOfferCompactCommand: false,
+        canOfferReviewCommand: false,
+        canOfferForkCommand: false,
+        canOfferSideCommand: false,
+        canOfferExportCommand: false,
+        providerNativeCommandNames: ["computer-use"],
+      });
+      expect(commands.filter((command) => command === "computer-use")).toHaveLength(1);
+      expect(shouldHideProviderNativeCommandFromComposerMenu(provider, "computer-use")).toBe(true);
+      expect(isBuiltInComposerSlashCommand("computer-use")).toBe(true);
+    },
+  );
   it("recognizes built-in slash commands", () => {
+    expect(isBuiltInComposerSlashCommand("computer-use")).toBe(true);
     expect(isBuiltInComposerSlashCommand("review")).toBe(true);
     expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
     expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
@@ -55,6 +84,10 @@ describe("composerSlashCommands", () => {
   });
 
   it("parses slash invocations with optional arguments", () => {
+    expect(parseComposerSlashInvocation("/computer-use open Notes")).toEqual({
+      command: "computer-use",
+      args: "open Notes",
+    });
     expect(parseComposerSlashInvocation("/review current diff")).toEqual({
       command: "review",
       args: "current diff",
@@ -467,6 +500,7 @@ describe("composerSlashCommands", () => {
       "goal",
       "rename",
       "debug",
+      "computer-use",
       "default",
       "feedback",
       "automation",
@@ -595,6 +629,7 @@ describe("composerSlashCommands", () => {
       "side",
       "status",
       "subagents",
+      "computer-use",
       "export",
       "goal",
       "rename",

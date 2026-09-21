@@ -157,7 +157,7 @@ jobs:
     name: Build ${{ matrix.label }}
     needs: preflight
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -205,6 +205,20 @@ jobs:
         # Preflight validates the entire workspace. Native artifacts retain all
         # runtime/build dependencies but do not install the unrelated marketing site.
         run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+
+      - name: Install the pinned Cua Driver compiler
+        # The mac and Linux artifacts compile the patched Cua Driver from source,
+        # and provisioning refuses any rustc other than the pinned release.
+        if: matrix.platform == 'mac' || matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rust_version=$(jq -r .rustVersion packages/shared/src/cuaDriverRelease.json)
+          rustup toolchain install "$rust_version" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$rust_version" >> "$GITHUB_ENV"
+          # Provisioning otherwise compiles into a directory it deletes, so the
+          # macOS x64 packaging retries would each recompile the driver.
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cua-driver-target" >> "$GITHUB_ENV"
 
       - id: build_artifact
         name: Build desktop artifact

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerManager } from "./codexAppServerManager.ts";
 import { CodexSessionStartError } from "./codexErrorClassification.ts";
 import { ServerConfig } from "./config.ts";
+import { AGENT_GATEWAY_NO_CAPABILITIES } from "./agentGateway/sessionLease.ts";
 import { classifyProviderAttemptOutcome } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { makeCodexAdapterLive } from "./provider/Layers/CodexAdapter.ts";
 import { CodexAdapter } from "./provider/Services/CodexAdapter.ts";
@@ -89,6 +90,7 @@ function createStartupHarness(
     cwd: process.cwd(),
     runtimeMode: "full-access" as const,
     ...(resumeExistingThread ? { resumeCursor: { threadId: "codex-existing-thread" } } : {}),
+    agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
   };
   const expectedErrorMessage =
     failure === "exit" ? "codex app-server exited (code=0, signal=null)." : transportError.message;
@@ -114,6 +116,13 @@ afterEach(() => {
 });
 
 describe("Codex session startup failures", () => {
+  it("fails fast when the gateway capability input is omitted", async () => {
+    const { manager, input } = createStartupHarness();
+    await expect(
+      manager.startSession({ ...input, agentGatewayCapabilityInput: undefined as never }),
+    ).rejects.toThrow(/agentGatewayCapabilityInput/);
+    expect(manager.listSessions()).toEqual([]);
+  });
   it.each(["thread/start", "thread/resume", "thread/fork"])(
     "keeps %s on the existing request deadline",
     async (method) => {

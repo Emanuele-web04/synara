@@ -43,7 +43,10 @@ import {
 import { stripTerminalControlSequences } from "@synara/shared/text";
 import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
-import { takeSynaraHarnessPolicyForProviderSession } from "../../agentGateway/harnessPolicy.ts";
+import {
+  type SynaraHarnessPolicyDeliveryState,
+  takeSynaraHarnessPolicyForProviderSession,
+} from "../../agentGateway/harnessPolicy.ts";
 import {
   callAgentGatewayMcpTool,
   listAgentGatewayMcpTools,
@@ -53,10 +56,13 @@ import {
   AgentGatewayCredentials,
   type AgentGatewayMcpConnection,
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
+import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
 import {
   acquireAgentGatewaySessionLease,
   cancelAgentGatewayTurn,
+  captureAgentGatewayCapabilityInput,
   releaseAgentGatewaySessionLeaseOnInterrupt,
+  type AgentGatewayCapabilityInput,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
 } from "../../agentGateway/sessionLease.ts";
@@ -97,6 +103,18 @@ import {
 } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "pi" as const;
+
+export function buildPiTurnPrompt(
+  state: SynaraHarnessPolicyDeliveryState,
+  input: { readonly text: string; readonly gatewayControlAvailable: boolean },
+): string {
+  const harnessPolicy = takeSynaraHarnessPolicyForProviderSession(state, {
+    provider: PROVIDER,
+    scopedGatewayConnectionAvailable: input.gatewayControlAvailable,
+  });
+  return [harnessPolicy, input.text].filter(Boolean).join("\n\n");
+}
+
 const DEFAULT_PI_THINKING_LEVEL: ThinkingLevel = "medium";
 const PI_THINKING_OPTIONS: ReadonlyArray<{
   readonly value: ThinkingLevel;
@@ -354,9 +372,30 @@ const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
 
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
-  readonly gatewayControlAvailable: boolean;
+  readonly enableComputerControl?: boolean;
+  /**
+   * Whether the CURRENT gateway rotation exposes Synara control. Recomputed on
+   * every credential rotation, never inherited blindly from session start.
+   */
+  gatewayControlAvailable: boolean;
+  /**
+   * Pi rotates its gateway credential when a turn completes, long after the
+   * start input is gone. Keep the shared capability projection so the re-lease
+   * derives from the same facts as the original lease. Refreshed from the
+   * session fact on every dispatched turn; rotation consumes this stashed
+   * value, not the start snapshot and not a fresh derivation.
+   */
+  gatewayCapabilityInput: AgentGatewayCapabilityInput;
   gatewaySessionLease?: AgentGatewaySessionLease;
   gatewayConnection?: AgentGatewayMcpConnection;
+  /**
+   * Installed Synara gateway tool definitions. Rotation rebuilds these in
+   * place (the Pi SDK exposes no post-construction registration API), so the
+   * array elements are the exact objects handed to the SDK at session start.
+   */
+  gatewayTools: ToolDefinition[];
+  /** Wraps rebuilt gateway tools exactly like session start does. */
+  readonly gatewayDefineTool: (tool: ToolDefinition) => ToolDefinition;
   readonly lifecycleGeneration?: string;
   runtime: PiAgentRuntime;
   readonly processSupervisor: PiBashProcessSupervisor;
@@ -482,6 +521,19 @@ function piGatewayToolResult(result: unknown): AgentToolResult<unknown> {
 }
 
 /**
+ * Enabled Pi sessions retain direct routes to the hidden Computer specialists.
+ * Use this same projection when comparing a rotated catalog with installed
+ * tools; sessions without an advertised Computer tool get no family stubs.
+ */
+export function piInstalledGatewayToolNames(freshNames: Iterable<string>): Set<string> {
+  const installed = new Set(freshNames);
+  if (SYNARA_COMPUTER_TOOL_NAMES.some((name) => installed.has(name))) {
+    for (const name of SYNARA_COMPUTER_TOOL_NAMES) installed.add(name);
+  }
+  return installed;
+}
+
+/**
  * Project the canonical MCP catalog into Pi's native custom-tool API. Tool
  * schemas and execution both remain owned by the gateway; Pi only adapts the
  * provider boundary.
@@ -489,6 +541,7 @@ function piGatewayToolResult(result: unknown): AgentToolResult<unknown> {
 export async function buildPiAgentGatewayCustomTools(input: {
   readonly connection: AgentGatewayMcpConnection;
   readonly defineTool: (tool: ToolDefinition) => ToolDefinition;
+  readonly enableComputerControl?: boolean;
   readonly fetch?: AgentGatewayMcpFetch;
 }): Promise<ReadonlyArray<ToolDefinition>> {
   const tools = await listAgentGatewayMcpTools({
@@ -498,24 +551,49 @@ export async function buildPiAgentGatewayCustomTools(input: {
   if (tools.length === 0) {
     throw new Error("Synara MCP returned an empty tool catalog.");
   }
-  return tools.map((tool) =>
-    input.defineTool({
-      name: tool.name,
-      label: tool.name,
-      description: tool.description,
-      parameters: tool.inputSchema as ToolDefinition["parameters"],
+  const catalog = new Map(tools.map((tool) => [tool.name, tool]));
+  if (input.enableComputerControl === true) {
+    // These are always advertised by the shared Computer catalog. Check the
+    // negotiated definitions before compatibility forwarders fill hidden names;
+    // a help-only catalog must not masquerade as observation and action support.
+    const missing = [
+      "computer_get_state",
+      "computer_click",
+      "computer_press_key",
+      "computer_run",
+    ].filter((name) => !catalog.has(name));
+    if (missing.length > 0) {
+      throw new Error(
+        `Synara MCP catalog is missing required Computer tools: ${missing.join(", ")}.`,
+      );
+    }
+  }
+  return [...piInstalledGatewayToolNames(catalog.keys())].map((name) => {
+    const tool = catalog.get(name);
+    return input.defineTool({
+      name,
+      label: name,
+      description:
+        tool?.description ??
+        (name.startsWith("computer_browser_")
+          ? 'Read computer_help({topic:"browser"}) before calling. Gateway permissions apply.'
+          : `Read computer_help({tool:"${name}"}) for arguments. Gateway permissions apply.`),
+      parameters: (tool?.inputSchema ?? {
+        type: "object",
+        properties: {},
+      }) as ToolDefinition["parameters"],
       execute: async (_toolCallId, params, signal) =>
         piGatewayToolResult(
           await callAgentGatewayMcpTool({
             connection: input.connection,
-            name: tool.name,
+            name,
             arguments: params as Record<string, unknown>,
             ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
             ...(signal === undefined ? {} : { signal }),
           }),
         ),
-    }),
-  );
+    });
+  });
 }
 
 function toMessage(cause: unknown, fallback: string): string {
@@ -1729,6 +1807,144 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       return uiContext;
     };
 
+    /**
+     * Reinstall the Synara gateway tools against the rotated credential. The
+     * bearer swap in completePrompt already keeps existing closures authorized;
+     * this tail only rebuilds definitions when the per-rotation tools/list
+     * catalog actually differs from what is installed. A diff that is only
+     * logged and never installed would leave the model calling stale tools.
+     */
+    const reinstallPiGatewayTools = (context: PiSessionContext): void => {
+      const lease = context.gatewaySessionLease;
+      const connection = context.gatewayConnection;
+      if (!lease || !connection) return;
+      const threadId = context.session.threadId;
+      Effect.runFork(
+        Effect.promise(async () => {
+          if (context.stopped || sessions.get(threadId) !== context) return;
+          if (context.gatewaySessionLease !== lease || context.gatewayConnection !== connection) {
+            return;
+          }
+          const fetchOptions =
+            options?.agentGatewayFetch === undefined ? {} : { fetch: options.agentGatewayFetch };
+          let freshNames: string[];
+          try {
+            const catalog = await listAgentGatewayMcpTools({ connection, ...fetchOptions });
+            freshNames = catalog.map((tool) => tool.name);
+          } catch {
+            // Catalog unreadable: the installed definitions stay valid through
+            // the rotated bearer, so keep them and stay available.
+            return;
+          }
+          const installedNames = new Set(context.gatewayTools.map((tool) => tool.name));
+          // Include enabled-session specialist forwarders in both sides of
+          // this comparison. Off sessions still install no Computer schemas;
+          // activation changes restart/resume at the reactor's turn boundary.
+          const freshNameSet = piInstalledGatewayToolNames(freshNames);
+          const sameCatalog =
+            installedNames.size === freshNameSet.size &&
+            [...freshNameSet].every((name) => installedNames.has(name));
+          if (sameCatalog) return;
+          let rebuilt: ReadonlyArray<ToolDefinition>;
+          try {
+            rebuilt = await buildPiAgentGatewayCustomTools({
+              connection,
+              defineTool: context.gatewayDefineTool,
+              enableComputerControl: context.enableComputerControl === true,
+              ...fetchOptions,
+            });
+          } catch (cause) {
+            // Rotation must never silently drop computer:*: the installed
+            // definitions stay valid through the rotated bearer, so keep them
+            // and stay available. Session start releases the lease on a bad
+            // catalog because nothing is installed yet; here clearing would
+            // revoke working control mid-session.
+            offerRuntimeEvent({
+              ...makeEventBase(context, { includeTurnId: false }),
+              type: "runtime.warning",
+              payload: {
+                message:
+                  "Pi could not refresh the Synara gateway tool catalog after rotation; keeping the previous tools.",
+                detail: { method: "gateway/rotate", cause: toMessage(cause, "refresh failed") },
+              },
+              raw: {
+                source: "pi.sdk.event",
+                method: "gateway/rotate",
+                payload: { cause: cause ?? null },
+              },
+            } satisfies ProviderRuntimeEvent);
+            return;
+          }
+          if (context.stopped || sessions.get(threadId) !== context) return;
+          if (context.gatewaySessionLease !== lease || context.gatewayConnection !== connection) {
+            return;
+          }
+          const rebuiltByName = new Map(rebuilt.map((tool) => [tool.name, tool]));
+          const nextInstalled: ToolDefinition[] = [];
+          for (const installed of context.gatewayTools) {
+            const fresh = rebuiltByName.get(installed.name);
+            if (!fresh) continue;
+            // Mutate in place: the Pi SDK holds these same definition objects
+            // and exposes no post-construction registration API.
+            for (const key of Object.keys(installed)) {
+              delete (installed as unknown as Record<string, unknown>)[key];
+            }
+            Object.assign(installed, fresh);
+            nextInstalled.push(installed);
+            rebuiltByName.delete(installed.name);
+          }
+          // Added tools cannot join the SDK's already-built registry; the
+          // context still tracks them truthfully for future rotations, and a
+          // warning names them so a newly-appearing computer:* is never a
+          // silent gap until the session restarts.
+          const addedNames = [...rebuiltByName.keys()];
+          for (const added of rebuiltByName.values()) nextInstalled.push(added);
+          context.gatewayTools = nextInstalled;
+          context.gatewayControlAvailable = nextInstalled.length > 0;
+          const removed = [...installedNames].filter((name) => !freshNameSet.has(name));
+          const droppedComputer = removed.filter((name) => name.startsWith("computer"));
+          const addedComputer = addedNames.filter((name) => name.startsWith("computer"));
+          if (addedNames.length > 0 || droppedComputer.length > 0) {
+            offerRuntimeEvent({
+              ...makeEventBase(context, { includeTurnId: false }),
+              type: "runtime.warning",
+              payload: {
+                message:
+                  "Pi gateway tool catalog changed after rotation; added tools need a session restart before the model can call them.",
+                detail: {
+                  method: "gateway/rotate",
+                  ...(addedNames.length > 0 ? { added: addedNames } : {}),
+                  ...(removed.length > 0 ? { removed } : {}),
+                  ...(addedComputer.length > 0 ? { addedComputer } : {}),
+                  ...(droppedComputer.length > 0 ? { droppedComputer } : {}),
+                },
+              },
+              raw: {
+                source: "pi.sdk.event",
+                method: "gateway/rotate",
+                payload: { added: addedNames, removed },
+              },
+            } satisfies ProviderRuntimeEvent);
+          }
+          if (removed.length > 0) {
+            try {
+              context.runtime.session.setActiveToolsByName(
+                context.runtime.session
+                  .getActiveToolNames()
+                  .filter((name) => !removed.includes(name)),
+              );
+            } catch {
+              // Best effort: the definitions are already dropped from the context.
+            }
+          }
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("pi.agent_gateway.tool_reinstall_failed", { threadId, cause }),
+          ),
+        ),
+      );
+    };
+
     const completePrompt = (
       context: PiSessionContext,
       turnId: TurnId,
@@ -1795,16 +2011,44 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const outgoingLease = context.gatewaySessionLease;
         const drainage = outgoingLease.retireTurn(turnId);
         outgoingLease.release();
+        // The replacement derives from the facts stashed at dispatch time, not
+        // the start snapshot and not a fresh derivation.
         const replacementLease = acquireAgentGatewaySessionLease(
           agentGatewayCredentials,
           context.session.threadId,
           PROVIDER,
+          context.gatewayCapabilityInput,
         );
         if (replacementLease) {
           context.gatewaySessionLease = replacementLease;
+          // Installed gateway tools close over this object, so mutating it in
+          // place keeps their bearer current without re-registration.
           Object.assign(context.gatewayConnection, replacementLease.connection);
+          // Published before turn.completed below: guidance for the next turn
+          // reads the new rotation's availability, never the retired one. The
+          // reinstall tail corrects this once the fresh catalog is known.
+          context.gatewayControlAvailable = true;
+          reinstallPiGatewayTools(context);
         } else {
           delete context.gatewaySessionLease;
+          delete context.gatewayConnection;
+          context.gatewayControlAvailable = false;
+          const rotationTurnId = TurnId.makeUnsafe(crypto.randomUUID());
+          offerRuntimeEvent({
+            ...makeEventBase(context, { includeTurnId: false }),
+            turnId: rotationTurnId,
+            type: "runtime.error",
+            payload: {
+              message:
+                "Pi could not rotate the Synara gateway credential after the turn; Synara tools are unavailable until the session restarts.",
+              class: classifyPiRuntimeError("gateway credential rotation failed"),
+            },
+            raw: {
+              source: "pi.sdk.event",
+              method: "gateway/rotate",
+              payload: { turnId },
+            },
+          } satisfies ProviderRuntimeEvent);
         }
         Effect.runFork(
           Effect.promise(() => drainage).pipe(
@@ -1908,15 +2152,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     };
 
     const buildProviderText = (context: PiSessionContext, text: string) =>
-      [
-        takeSynaraHarnessPolicyForProviderSession(context, {
-          provider: PROVIDER,
-          scopedGatewayConnectionAvailable: context.gatewayControlAvailable,
-        }),
+      buildPiTurnPrompt(context, {
         text,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
+        gatewayControlAvailable: context.gatewayControlAvailable,
+      });
 
     const sendTurnBusyError = () =>
       new ProviderAdapterValidationError({
@@ -2547,8 +2786,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           agentGatewayCredentials,
           input.threadId,
           PROVIDER,
+          input,
         );
         const agentGatewayConnection = agentGatewaySessionLease?.connection;
+        if (input.enableComputerControl === true && !agentGatewayConnection) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/start",
+            detail:
+              "Computer Use could not start because Pi did not receive a thread-scoped Synara gateway connection.",
+          });
+        }
         const gatewayTools = agentGatewayConnection
           ? yield* releaseAgentGatewaySessionLeaseOnInterrupt(
               agentGatewaySessionLease,
@@ -2557,6 +2805,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                   buildPiAgentGatewayCustomTools({
                     connection: agentGatewayConnection,
                     defineTool: (tool) => piSdk.defineTool(tool),
+                    enableComputerControl: input.enableComputerControl === true,
                     ...(options?.agentGatewayFetch === undefined
                       ? {}
                       : { fetch: options.agentGatewayFetch }),
@@ -2567,10 +2816,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               Effect.catch((cause) =>
                 Effect.sync(() => agentGatewaySessionLease?.release()).pipe(
                   Effect.andThen(
-                    Effect.logWarning(
-                      "Pi could not install thread-scoped Synara gateway tools",
-                      cause,
-                    ),
+                    input.enableComputerControl === true
+                      ? Effect.fail(
+                          new ProviderAdapterRequestError({
+                            provider: PROVIDER,
+                            method: "session/start",
+                            detail: `Computer Use could not start because Pi could not install Synara gateway tools: ${toMessage(cause, "Gateway setup failed.")}`,
+                            cause,
+                          }),
+                        )
+                      : Effect.logWarning(
+                          "Pi could not install thread-scoped Synara gateway tools",
+                          cause,
+                        ),
                   ),
                   Effect.as([] as ReadonlyArray<ToolDefinition>),
                 ),
@@ -2628,6 +2886,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           ...(resumeCursor ? { resumeCursor } : {}),
         };
         const context: PiSessionContext = {
+          enableComputerControl: input.enableComputerControl === true,
+          gatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
           ...(input.lifecycleGeneration !== undefined
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),
@@ -2639,6 +2899,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 gatewayConnection: agentGatewayConnection!,
               }
             : {}),
+          gatewayTools: [...gatewayTools],
+          gatewayDefineTool: (tool) => piSdk.defineTool(tool),
           processSupervisor,
           modelRegistry,
           session,
@@ -2807,6 +3069,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         input.threadId,
         Effect.gen(function* () {
           const context = yield* requireSession(input.threadId);
+          // Snapshot the session's computer-control fact for the turn being
+          // dispatched. Credential rotation at completion consumes this stashed
+          // value, not the start snapshot and not a fresh derivation. Turns
+          // carry no per-turn override; the session fact is the only source.
+          context.gatewayCapabilityInput = captureAgentGatewayCapabilityInput({
+            enableComputerControl: context.enableComputerControl === true,
+          });
           if (
             context.pendingAbortTurnId !== undefined &&
             context.pendingAbortTurnId === context.activeTurnId
@@ -2858,6 +3127,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         input.threadId,
         Effect.gen(function* () {
           const context = yield* requireSession(input.threadId);
+          // Same dispatch-time snapshot as sendTurn, so a steered fresh turn
+          // rotates from current facts.
+          context.gatewayCapabilityInput = captureAgentGatewayCapabilityInput({
+            enableComputerControl: context.enableComputerControl === true,
+          });
           if (
             context.pendingAbortTurnId !== undefined &&
             context.pendingAbortTurnId === context.activeTurnId
