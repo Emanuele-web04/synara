@@ -85,7 +85,7 @@ final class AppDragView: NSView, NSPasteboardItemDataProvider, NSDraggingSource 
 }
 
 @MainActor
-final class GrantCoach {
+final class GrantCoach: NSObject {
     private let appName: String
     private let appPath: String
     private let pane: String
@@ -102,6 +102,7 @@ final class GrantCoach {
         self.appName = appName
         self.appPath = appPath
         self.pane = pane
+        super.init()
     }
     private var paneTitle: String {
         switch pane {
@@ -146,6 +147,9 @@ final class GrantCoach {
         guard isPresented else { return }
         dismiss()
         onDismissed?()
+    }
+    @objc private func closeGuide() {
+        dismissFromEscape()
     }
     private func installEscapeMonitor() {
         guard escapeMonitor == nil else { return }
@@ -207,8 +211,20 @@ final class GrantCoach {
         title.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         title.textColor = .labelColor
         title.lineBreakMode = .byTruncatingTail
-        title.frame = NSRect(x: pad + row + 8, y: arrowY, width: width - pad * 2 - row - 8, height: row)
+        title.frame = NSRect(x: pad + row + 8, y: arrowY, width: width - pad * 2 - row * 2 - 16, height: row)
         card.addSubview(title)
+        // A direct close action also works before keyboard-monitoring permission
+        // is granted, while System Settings keeps the keyboard focus.
+        let closeButton = NSButton(title: "", target: self, action: #selector(closeGuide))
+        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)
+        closeButton.frame = NSRect(x: width - pad - row, y: arrowY, width: row, height: row)
+        closeButton.isBordered = false
+        closeButton.refusesFirstResponder = true
+        closeButton.imagePosition = .imageOnly
+        closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.toolTip = "Close permission guide"
+        closeButton.setAccessibilityLabel("Close permission guide")
+        card.addSubview(closeButton)
         let chip = AppDragView(frame: NSRect(x: pad, y: pad, width: width - pad * 2, height: chipHeight),
                                appName: appName, appPath: appPath,
                                toolTipText: "Drag \(appName) onto the \(paneTitle) list")
