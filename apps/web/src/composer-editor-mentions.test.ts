@@ -75,6 +75,15 @@ describe("matchComposerSlashCommandChipToken", () => {
     });
   });
 
+  it("matches /computer-use as a chip, hyphen included", () => {
+    expect(matchComposerSlashCommandChipToken("/computer-use")).toBeNull();
+    expect(matchComposerSlashCommandChipToken("/computer-use open Calculator")).toEqual({
+      command: "computer-use",
+      start: 0,
+      end: "/computer-use".length,
+    });
+  });
+
   it("does not match other built-in slash commands as composer chips", () => {
     expect(matchComposerSlashCommandChipToken("/plan ")).toBeNull();
     expect(matchComposerSlashCommandChipToken("/model spark")).toBeNull();

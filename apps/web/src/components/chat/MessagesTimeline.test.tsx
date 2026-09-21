@@ -3051,6 +3051,52 @@ describe("MessagesTimeline", () => {
     expect(presentationOnlyMarkup).toContain('data-tool-icon="browser"');
   });
 
+  it.each([
+    "computer_click",
+    "mcp__synara__computer_click",
+    "synara_computer_click",
+    "computer_browser_click",
+    "mcp__synara__computer_browser_click",
+  ])("uses the requested cursor and contextual label for %s", async (toolName) => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "computer-human-label",
+          kind: "tool.completed",
+          summary: "Tool",
+          payload: {
+            itemType: "mcp_tool_call",
+            toolName,
+            arguments: { label: "Search", app: "Safari", x: 123, y: 456 },
+          },
+        }),
+      ],
+      undefined,
+    );
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "computer-row",
+            kind: "work",
+            createdAt: entry!.createdAt,
+            entry: entry!,
+          },
+        ]}
+      />,
+    );
+    expect(markup).toContain('data-tool-icon="computer"');
+    expect(markup).toContain("central-icons-reversed/cursor-1.svg");
+    expect(markup).toContain(
+      toolName.includes("browser") ? "Click in the browser" : "Click on “Search” in Safari",
+    );
+    expect(markup).not.toContain("Synara clicked the desktop");
+    expect(markup).not.toContain("123, 456");
+    expect(markup).not.toContain('data-tool-icon="mcp"');
+  });
+
   it("hides raw `ToolName: {json}` argument details behind the humanized heading", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const baseProps = makeTimelineBaseProps();
@@ -3236,6 +3282,68 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Claude Sonnet 5");
     expect(markup.indexOf("Both threads are running.")).toBeLessThan(
       markup.indexOf('data-synara-thread-creation-card="true"'),
+    );
+  });
+
+  it("shows the Computer setup card after the answer instead of inside the settled fold", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          nowIso="2026-03-17T19:12:31.000Z"
+          isWorking={false}
+          activeTurnInProgress={false}
+          timelineEntries={[
+            {
+              id: "entry-computer-tool",
+              kind: "work",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              entry: {
+                id: "work-computer-tool",
+                createdAt: "2026-03-17T19:12:28.000Z",
+                label: "MCP tool call",
+                tone: "tool",
+                itemType: "mcp_tool_call",
+                toolTitle: "Listed windows",
+                activityKind: "tool.completed",
+              },
+            },
+            {
+              id: "entry-computer-setup",
+              kind: "work",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              entry: {
+                id: "work-computer-setup",
+                createdAt: "2026-03-17T19:12:29.000Z",
+                label: "Computer setup required",
+                tone: "error",
+                computerSetupRequired: { missing: ["screenRecording"] },
+              },
+            },
+            {
+              id: "entry-computer-setup-assistant",
+              kind: "message",
+              createdAt: "2026-03-17T19:12:30.000Z",
+              message: {
+                id: MessageId.makeUnsafe("message-computer-setup"),
+                role: "assistant",
+                text: "Synara needs macOS permissions first.",
+                createdAt: "2026-03-17T19:12:30.000Z",
+                completedAt: "2026-03-17T19:12:31.000Z",
+                streaming: false,
+              },
+            },
+          ]}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("Worked for");
+    expect(markup.match(/Computer control needs Screen Recording/g)).toHaveLength(1);
+    expect(markup.indexOf("Synara needs macOS permissions first.")).toBeLessThan(
+      markup.indexOf("Computer control needs Screen Recording"),
     );
   });
 

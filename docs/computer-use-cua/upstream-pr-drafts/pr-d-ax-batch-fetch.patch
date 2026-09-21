@@ -1,0 +1,995 @@
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
+index 02ba09c01..6d5fb8c53 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
+@@ -44,6 +44,10 @@ pub const kAXValueCGPointType: AXValueType = 1;
+ pub const kAXValueCGSizeType: AXValueType = 2;
+ pub const kAXValueCGRectType: AXValueType = 3;
+ pub const kAXValueCFRangeType: AXValueType = 4;
++/// AXValue subtype used by `AXUIElementCopyMultipleAttributeValues` to mark
++/// a slot whose attribute could not be fetched; the wrapped payload is the
++/// `AXError` for that attribute (e.g. `kAXErrorAttributeUnsupported`).
++pub const kAXValueAXErrorType: AXValueType = 5;
+ pub const kAXValueIllegalType: AXValueType = 1_000;
+ 
+ // ── Link to AXUIElement functions ────────────────────────────────────────────
+@@ -55,6 +59,16 @@ extern "C" {
+         attribute: CFStringRef,
+         value: *mut CFTypeRef,
+     ) -> AXError;
++    /// Fetches many attributes in one IPC round-trip. `options` is
++    /// `AXCopyMultipleAttributeOptions` — 0 fetches all; per-attribute
++    /// failures land in the returned array as error markers rather than
++    /// failing the call.
++    pub fn AXUIElementCopyMultipleAttributeValues(
++        element: AXUIElementRef,
++        attributes: CFArrayRef,
++        options: u32,
++        values: *mut CFArrayRef,
++    ) -> AXError;
+     pub fn AXUIElementCopyAttributeNames(
+         element: AXUIElementRef,
+         names: *mut CFArrayRef,
+@@ -117,6 +131,7 @@ pub unsafe fn element_at_screen_position(pid: i32, x: f64, y: f64) -> Option<AXU
+ #[link(name = "ApplicationServices", kind = "framework")]
+ extern "C" {
+     pub fn AXValueCreate(the_type: AXValueType, value_ptr: *const c_void) -> AXValueRef;
++    pub fn AXValueGetTypeID() -> CFTypeID;
+     pub fn AXValueGetType(value: AXValueRef) -> AXValueType;
+     pub fn AXValueGetValue(
+         value: AXValueRef,
+@@ -748,6 +763,245 @@ pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
+         .collect()
+ }
+ 
++// ── Batched attribute reads ──────────────────────────────────────────────────
++
++// The `kCFNull` singleton — the second marker form a batch slot can hold
++// for an unsupported/unreadable attribute (the first being an AXValue of
++// type `kAXValueAXErrorType`). Pointer equality is the documented check.
++#[link(name = "CoreFoundation", kind = "framework")]
++extern "C" {
++    static kCFNull: CFTypeRef;
++}
++
++/// Attribute names fetched per element in a single
++/// `AXUIElementCopyMultipleAttributeValues` IPC call. The slot indices in
++/// `copy_element_attrs` must match this order.
++const ELEMENT_BATCH_ATTRS: &[&str] = &[
++    "AXRole",             // 0
++    "AXChildren",         // 1
++    "AXTitle",            // 2
++    "AXValue",            // 3
++    "AXPlaceholderValue", // 4
++    "AXDescription",      // 5
++    "AXIdentifier",       // 6
++    "AXHelp",             // 7
++    "AXActionNames",      // 8
++    "AXEnabled",          // 9
++    "AXValueDescription", // 10
++    "AXMinValue",         // 11
++    "AXMaxValue",         // 12
++    "AXSelected",         // 13
++    "AXPosition",         // 14
++    "AXSize",             // 15
++];
++
++/// One element's attribute values, decoded from a single
++/// `AXUIElementCopyMultipleAttributeValues` round-trip. Failed or
++/// unsupported attributes decode to `None`/empty — the same result the
++/// single-attribute `copy_*` helpers produce for a failed fetch.
++///
++/// `children` holds retained `AXUIElementRef`s under the same ownership
++/// contract as [`copy_children`]: the caller must `CFRelease` each one
++/// after use. `action_names` is `None` when the element does not serve
++/// `AXActionNames` through the attribute API (most AppKit elements don't),
++/// in which case the caller should fall back to [`copy_action_names`].
++#[derive(Default)]
++pub struct ElementAttrs {
++    pub role: Option<String>,
++    pub title: Option<String>,
++    pub value: Option<StringishAttrValue>,
++    pub placeholder_value: Option<String>,
++    pub description: Option<String>,
++    pub identifier: Option<String>,
++    pub help: Option<String>,
++    pub action_names: Option<Vec<String>>,
++    pub enabled: Option<bool>,
++    pub value_description: Option<String>,
++    pub min_value: Option<f64>,
++    pub max_value: Option<f64>,
++    pub selected: Option<bool>,
++    /// `[x, y, width, height]` — only when both `AXPosition` and `AXSize`
++    /// decoded and the size is at least 1×1, matching the acceptance test
++    /// in [`element_screen_rect`].
++    pub frame: Option<[f64; 4]>,
++    pub children: Vec<AXUIElementRef>,
++}
++
++/// Fetch every attribute the AX tree walker reads for one element in a
++/// single IPC call.
++///
++/// When the batch call itself fails the returned struct is all defaults —
++/// equivalent to every individual read failing (unknown role, no children,
++/// no content) — so a dead or unresponsive element degrades the way the
++/// per-attribute path already does instead of aborting the walk.
++///
++/// # Safety
++///
++/// `element` must be a valid, live `AXUIElementRef` for the duration of the
++/// call. The caller must `CFRelease` every element in the returned
++/// `children` vec after use.
++pub unsafe fn copy_element_attrs(element: AXUIElementRef) -> ElementAttrs {
++    let names: Vec<CFStr> = ELEMENT_BATCH_ATTRS.iter().map(|n| CFStr::new(n)).collect();
++    let attr_array = CFArray::from_CFTypes(&names);
++    let mut values: CFArrayRef = std::ptr::null_mut();
++    let err = AXUIElementCopyMultipleAttributeValues(
++        element,
++        attr_array.as_concrete_TypeRef(),
++        // Do NOT pass kAXCopyMultipleAttributeOptionStopOnError — fetching
++        // must continue past attributes the element doesn't support.
++        0,
++        &mut values,
++    );
++    if err != kAXErrorSuccess || values.is_null() {
++        if !values.is_null() {
++            CFRelease(values as CFTypeRef);
++        }
++        return ElementAttrs::default();
++    }
++    let slots = CFArray::<CFTypeRef>::wrap_under_create_rule(values);
++    ElementAttrs {
++        role: batch_slot(&slots, 0).and_then(|v| slot_string(v)),
++        children: batch_slot(&slots, 1).map_or_else(Vec::new, |v| slot_children(v)),
++        title: batch_slot(&slots, 2).and_then(|v| slot_string(v)),
++        value: batch_slot(&slots, 3).and_then(|v| coerce_stringish_value(v)),
++        placeholder_value: batch_slot(&slots, 4).and_then(|v| slot_string(v)),
++        description: batch_slot(&slots, 5).and_then(|v| slot_string(v)),
++        identifier: batch_slot(&slots, 6).and_then(|v| slot_string(v)),
++        help: batch_slot(&slots, 7).and_then(|v| slot_string(v)),
++        action_names: batch_slot(&slots, 8).and_then(|v| slot_string_array(v)),
++        enabled: batch_slot(&slots, 9).and_then(|v| slot_bool(v)),
++        value_description: batch_slot(&slots, 10).and_then(|v| slot_string(v)),
++        min_value: batch_slot(&slots, 11).and_then(|v| slot_number(v)),
++        max_value: batch_slot(&slots, 12).and_then(|v| slot_number(v)),
++        selected: batch_slot(&slots, 13).and_then(|v| slot_bool(v)),
++        frame: slot_rect(batch_slot(&slots, 14), batch_slot(&slots, 15)),
++    }
++}
++
++/// The borrowed value at batch slot `index`, or `None` for out-of-range
++/// slots and error markers. The batch API places an AXValue of type
++/// `kAXValueAXErrorType` (wrapping that attribute's `AXError`) or the
++/// `kCFNull` singleton in slots it could not fill; every slot decoder
++/// below also type-checks its input, so a marker would map to `None`
++/// either way — filtering here just keeps that contract explicit.
++unsafe fn batch_slot(values: &CFArray<CFTypeRef>, index: usize) -> Option<CFTypeRef> {
++    let value = *values.get(index as _)?;
++    if value == kCFNull {
++        return None;
++    }
++    if core_foundation::base::CFGetTypeID(value) == AXValueGetTypeID()
++        && AXValueGetType(value as AXValueRef) == kAXValueAXErrorType
++    {
++        return None;
++    }
++    Some(value)
++}
++
++/// Decode a borrowed `CFString` slot; `None` for any other type.
++unsafe fn slot_string(value: CFTypeRef) -> Option<String> {
++    if core_foundation::base::CFGetTypeID(value) != CFStr::type_id() {
++        return None;
++    }
++    Some(CFStr::wrap_under_get_rule(value as _).to_string())
++}
++
++/// Decode a borrowed `CFNumber` slot; `None` for any other type.
++unsafe fn slot_number(value: CFTypeRef) -> Option<f64> {
++    use core_foundation::number::CFNumber;
++    if core_foundation::base::CFGetTypeID(value) != CFNumber::type_id() {
++        return None;
++    }
++    CFNumber::wrap_under_get_rule(value as _).to_f64()
++}
++
++/// Decode a borrowed `CFBoolean`/`CFNumber` slot — same coercion as
++/// [`copy_bool_attr`] (some apps report 0/1 numbers instead of booleans).
++unsafe fn slot_bool(value: CFTypeRef) -> Option<bool> {
++    use core_foundation::boolean::CFBoolean;
++    use core_foundation::number::CFNumber;
++    let type_id = core_foundation::base::CFGetTypeID(value);
++    if type_id == CFBoolean::type_id() {
++        return Some(CFBoolean::wrap_under_get_rule(value as _).into());
++    }
++    if type_id == CFNumber::type_id() {
++        return CFNumber::wrap_under_get_rule(value as _)
++            .to_f64()
++            .map(|f| f != 0.0);
++    }
++    None
++}
++
++/// Decode a borrowed `CFArray` of `CFString` slot (e.g. `AXActionNames`);
++/// `None` when the slot isn't an array.
++unsafe fn slot_string_array(value: CFTypeRef) -> Option<Vec<String>> {
++    if core_foundation::base::CFGetTypeID(value) != CFArray::<CFTypeRef>::type_id() {
++        return None;
++    }
++    let arr = CFArray::<CFStr>::wrap_under_get_rule(value as _);
++    Some(
++        (0..arr.len())
++            .filter_map(|i| arr.get(i).map(|s| s.to_string()))
++            .collect(),
++    )
++}
++
++/// Decode a borrowed `AXChildren` slot. Each element ref is retained —
++/// same ownership contract as [`copy_children`].
++unsafe fn slot_children(value: CFTypeRef) -> Vec<AXUIElementRef> {
++    if core_foundation::base::CFGetTypeID(value) != CFArray::<CFTypeRef>::type_id() {
++        return vec![];
++    }
++    let arr = CFArray::<CFTypeRef>::wrap_under_get_rule(value as _);
++    let ax_type_id = AXUIElementGetTypeID();
++    (0..arr.len())
++        .filter_map(|i| {
++            let item = *arr.get(i)?;
++            if core_foundation::base::CFGetTypeID(item) == ax_type_id {
++                // Retain so we own it — caller is responsible for releasing.
++                CFRetain(item);
++                Some(item as AXUIElementRef)
++            } else {
++                None
++            }
++        })
++        .collect()
++}
++
++/// Decode `AXPosition` + `AXSize` slots into `[x, y, width, height]` —
++/// the same decode and ≥1×1 size acceptance test as [`element_screen_rect`].
++unsafe fn slot_rect(position: Option<CFTypeRef>, size: Option<CFTypeRef>) -> Option<[f64; 4]> {
++    let position = position?;
++    if core_foundation::base::CFGetTypeID(position) != AXValueGetTypeID() {
++        return None;
++    }
++    let mut pos = CGPointValue { x: 0.0, y: 0.0 };
++    if !AXValueGetValue(
++        position as AXValueRef,
++        kAXValueCGPointType,
++        &mut pos as *mut _ as *mut c_void,
++    ) {
++        return None;
++    }
++    let size = size?;
++    if core_foundation::base::CFGetTypeID(size) != AXValueGetTypeID() {
++        return None;
++    }
++    let mut sz = CGSizeValue {
++        width: 0.0,
++        height: 0.0,
++    };
++    if !AXValueGetValue(
++        size as AXValueRef,
++        kAXValueCGSizeType,
++        &mut sz as *mut _ as *mut c_void,
++    ) || sz.width < 1.0
++        || sz.height < 1.0
++    {
++        return None;
++    }
++    Some([pos.x, pos.y, sz.width, sz.height])
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
+index ee1f5d3a1..0ea7814a7 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/tree.rs
+@@ -14,6 +14,7 @@
+ use super::bindings::*;
+ use super::window_scope::{decide_window_scope, TopLevelCandidate, WindowScope};
+ use core_foundation::base::{CFEqual, CFRelease, CFRetain, CFTypeRef};
++use std::sync::mpsc;
+ 
+ /// Default maximum depth for AX tree walks. Deep menus and complex web views
+ /// can nest deeply; 25 covers realistic app chrome without exploding on
+@@ -287,24 +288,30 @@ pub fn walk_tree_bounded(
+             top_level.to_vec()
+         };
+ 
+-        // Walk each top-level child at depth 0.
+-        for child in walk_these {
+-            walk_element(
+-                child,
+-                0,
+-                None,
+-                false,
+-                &mut nodes,
+-                &mut lines,
+-                &mut index_counter,
+-                &mut visited_count,
+-                &mut truncated,
+-                max_elements,
+-                max_depth,
+-            );
+-        }
++        // The fetch pool overlaps sibling elements' AX round trips. Every
++        // ordering and budget decision still runs on this thread (see
++        // walk_children), so the rendered tree is identical to a serial walk.
++        let pool = FetchPool::new();
++
++        // Walk each top-level child at depth 0. walk_children never releases
++        // the refs it is handed — `walk_these` borrows `top_level`, whose
++        // release loop below owns each element exactly once.
++        walk_children(
++            &walk_these,
++            0,
++            None,
++            false,
++            &mut nodes,
++            &mut lines,
++            &mut index_counter,
++            &mut visited_count,
++            &mut truncated,
++            max_elements,
++            max_depth,
++            &pool,
++        );
+ 
+-        // Release all top-level elements (copy_children / copy_ax_windows both retain).
++        // Release all top-level elements; every application-level read retains.
+         for child in top_level {
+             CFRelease(child as CFTypeRef);
+         }
+@@ -337,9 +344,288 @@ pub fn walk_tree_bounded(
+     }
+ }
+ 
++// ── Parallel attribute fetch ─────────────────────────────────────────────
++//
++// Every AX read is one IPC round trip into the target process (~1.5 ms each).
++// The AX server serializes requests per element but serves requests against
++// DIFFERENT elements concurrently, so siblings' attribute fetches can overlap.
++// The pool below keeps that overlap bounded; all tree ordering and budget
++// decisions stay on the walk thread, which is what keeps the rendered output
++// identical to the serial walk.
++
++/// Number of concurrent AX fetch workers. Four overlaps the ~1.5 ms IPC
++/// stalls without flooding the target app's AX server thread.
++const FETCH_WORKERS: usize = 4;
++
++/// Everything the assembly phase needs from one element, resolved on a pool
++/// worker. `attrs.children` holds retained `AXUIElementRef`s under the same
++/// ownership contract as [`copy_children`]: the caller must `CFRelease` each
++/// one after use — including children whose subtree is never entered because
++/// a truncation gate fires first.
++struct FetchedElement {
++    attrs: ElementAttrs,
++    /// Resolved action names — the batch `AXActionNames` slot, or the
++    /// `AXUIElementCopyActionNames` fallback for AppKit elements that don't
++    /// serve it through the attribute API.
++    actions: Vec<String>,
++    /// `AXValue` writability probe result. Only meaningful for the
++    /// `role_supports_value_addressing` family when `actions` is empty —
++    /// resolved on the worker so its round trip overlaps too.
++    value_settable: bool,
++}
++
++// FetchedElement is plain fetched data — decoded Strings/values plus retained
++// element refs that are moved (never shared) between threads. CF reference
++// counting is thread-safe and each job's element is a distinct object, so the
++// same Send assertion as `RetainedElement` in ax/cache.rs applies.
++unsafe impl Send for FetchedElement {}
++
++/// One fetch request: the slot the element occupies in its siblings array
++/// (results come back out of order and are re-placed by slot) plus the
++/// element as a usize — the same convention the element cache uses for Send.
++struct FetchJob {
++    slot: usize,
++    element: usize,
++}
++
++struct FetchResult {
++    slot: usize,
++    fetched: Option<FetchedElement>,
++}
++
++/// Perform every AX read the walk needs for one element, in the same order
++/// the serial walker issued them: bound the messaging timeout, one batched
++/// attribute fetch, the `AXActionNames` fallback, then the `AXValue`
++/// writability probe. Runs on a pool worker, or inline on the walk thread
++/// for an element that wasn't prefetched.
++unsafe fn fetch_element(element: AXUIElementRef) -> FetchedElement {
++    // Messaging timeouts are per AX object, not inherited from the application
++    // element, so every element must be bounded before any attribute read.
++    set_messaging_timeout(element);
++    let mut attrs = copy_element_attrs(element);
++    // Most AppKit elements do not serve AXActionNames through the attribute
++    // API (the batch slot is then an error marker); fall back to the
++    // dedicated AXUIElementCopyActionNames call for those.
++    let actions = attrs
++        .action_names
++        .take()
++        .unwrap_or_else(|| copy_action_names(element));
++    // Some native controls expose no AX action names but do expose a writable
++    // AXValue. Probe writability only for the small family of value controls —
++    // the same gate the serial walk used — so display nodes pay no extra IPC.
++    let role = attrs.role.as_deref().unwrap_or("AXUnknown");
++    let value_settable = actions.is_empty()
++        && role_supports_value_addressing(role)
++        && is_attribute_settable(element, "AXValue");
++    FetchedElement {
++        attrs,
++        actions,
++        value_settable,
++    }
++}
++
++/// Bounded pool of worker threads executing [`fetch_element`] for sibling
++/// element arrays. Workers share no elements: each job is a distinct,
++/// independently-retained `AXUIElementRef` owned by its slot.
++struct FetchPool {
++    job_txs: Vec<mpsc::Sender<FetchJob>>,
++    result_rx: mpsc::Receiver<FetchResult>,
++    workers: Vec<std::thread::JoinHandle<()>>,
++}
++
++impl FetchPool {
++    fn new() -> Self {
++        let (result_tx, result_rx) = mpsc::channel::<FetchResult>();
++        let mut job_txs = Vec::new();
++        let mut workers = Vec::new();
++        // CUA_AX_SERIAL_FETCH disables the pool: every element falls back to
++        // an inline fetch on the walk thread — the serial IPC pattern — for
++        // A/B timing and as a kill switch if pooled reads misbehave.
++        if std::env::var_os("CUA_AX_SERIAL_FETCH").is_none() {
++            for _ in 0..FETCH_WORKERS {
++                let (job_tx, job_rx) = mpsc::channel::<FetchJob>();
++                let result_tx = result_tx.clone();
++                workers.push(std::thread::spawn(move || {
++                    while let Ok(job) = job_rx.recv() {
++                        let element = job.element as AXUIElementRef;
++                        // A panic in the decode path must not kill the worker:
++                        // a dead worker leaves its queued jobs unanswered and
++                        // the collector would wait on results that never come.
++                        let fetched =
++                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
++                                fetch_element(element)
++                            }))
++                            .ok();
++                        if result_tx
++                            .send(FetchResult {
++                                slot: job.slot,
++                                fetched,
++                            })
++                            .is_err()
++                        {
++                            break;
++                        }
++                    }
++                }));
++                job_txs.push(job_tx);
++            }
++        }
++        FetchPool {
++            job_txs,
++            result_rx,
++            workers,
++        }
++    }
++
++    /// Fetch `elements` concurrently across the pool. Returns one slot per
++    /// element in the same order; a `None` slot means the job never ran (its
++    /// worker was never spawned, or it panicked mid-fetch) and the caller
++    /// fetches that element inline instead.
++    unsafe fn fetch_batch(&self, elements: &[AXUIElementRef]) -> Vec<Option<FetchedElement>> {
++        let mut results: Vec<Option<FetchedElement>> = Vec::new();
++        results.resize_with(elements.len(), || None);
++        if self.job_txs.is_empty() {
++            return results;
++        }
++        let worker_count = self.job_txs.len();
++        let mut sent = 0usize;
++        // Same-element concurrency is the one AX hazard: if a pathological
++        // app returns a duplicate child pointer, its later slots stay None
++        // and fetch inline on the walk thread instead.
++        let mut seen = std::collections::HashSet::new();
++        for (slot, &element) in elements.iter().enumerate() {
++            if !seen.insert(element as usize) {
++                continue;
++            }
++            // Round-robin keeps each worker's queue within one job of the
++            // others; jobs cost the same (one element's reads), so this stays
++            // balanced without a shared queue.
++            if self.job_txs[slot % worker_count]
++                .send(FetchJob {
++                    slot,
++                    element: element as usize,
++                })
++                .is_ok()
++            {
++                sent += 1;
++            }
++        }
++        // Every sent job yields exactly one result — the worker cannot die
++        // silently (panics are caught above) — so this always drains. The
++        // result channel empties before the next batch is submitted.
++        for _ in 0..sent {
++            match self.result_rx.recv() {
++                Ok(result) if result.slot < results.len() => {
++                    results[result.slot] = result.fetched;
++                }
++                // A slot outside this batch cannot happen, but release the
++                // orphaned children refs rather than leak them.
++                Ok(result) => {
++                    if let Some(fetched) = result.fetched {
++                        for child in fetched.attrs.children {
++                            CFRelease(child as CFTypeRef);
++                        }
++                    }
++                }
++                Err(_) => break,
++            }
++        }
++        results
++    }
++}
++
++impl Drop for FetchPool {
++    fn drop(&mut self) {
++        // Closing every job channel ends each worker's recv loop.
++        self.job_txs.clear();
++        for worker in self.workers.drain(..) {
++            let _ = worker.join();
++        }
++    }
++}
++
++/// Release the retained children of a prefetched element whose subtree was
++/// never entered — the fetch already ran, so its `AXChildren` refs exist and
++/// must not leak. Children that ARE walked release through the caller's loop
++/// exactly as the serial walk did.
++unsafe fn release_prefetched_children(fetched: Option<FetchedElement>) {
++    if let Some(fetched) = fetched {
++        for child in fetched.attrs.children {
++            CFRelease(child as CFTypeRef);
++        }
++    }
++}
++
++/// Walk `children` serially in document order, prefetching their attribute
++/// batches on the pool so the per-element AX round trips overlap.
++///
++/// Prefetching never changes the rendered output: every ordering and budget
++/// decision still happens on the walk thread in the same sequence the serial
++/// walker used. The prefetch bound mirrors the truncation gates — children
++/// at `child_depth > max_depth` are all depth-blocked (the gate is uniform
++/// across a siblings array), and children beyond the remaining `max_elements`
++/// budget are cap-blocked because each older sibling's walk consumes at least
++/// one visit. Those elements reach `walk_element` unfetched and take the same
++/// early-return path the serial code takes.
++#[allow(clippy::too_many_arguments)]
++unsafe fn walk_children(
++    children: &[AXUIElementRef],
++    child_depth: usize,
++    parent_index: Option<usize>,
++    in_web_content: bool,
++    nodes: &mut Vec<AXNode>,
++    lines: &mut Vec<(usize, String)>,
++    counter: &mut usize,
++    visited_count: &mut usize,
++    truncated: &mut bool,
++    max_elements: usize,
++    max_depth: usize,
++    pool: &FetchPool,
++) {
++    let prefetch_count = if child_depth > max_depth {
++        0
++    } else {
++        children
++            .len()
++            .min(max_elements.saturating_sub(*visited_count))
++    };
++    let mut prefetched: Vec<Option<FetchedElement>> = if prefetch_count == 0 {
++        Vec::new()
++    } else if prefetch_count == 1 {
++        // A single element has nothing to overlap with — skip the pool round
++        // trip and fetch on this thread.
++        vec![Some(fetch_element(children[0]))]
++    } else {
++        pool.fetch_batch(&children[..prefetch_count])
++    };
++    for (index, &child) in children.iter().enumerate() {
++        let fetched = if index < prefetch_count {
++            prefetched[index].take()
++        } else {
++            None
++        };
++        walk_element(
++            child,
++            fetched,
++            child_depth,
++            parent_index,
++            in_web_content,
++            nodes,
++            lines,
++            counter,
++            visited_count,
++            truncated,
++            max_elements,
++            max_depth,
++            pool,
++        );
++    }
++}
++
+ #[allow(clippy::too_many_arguments)]
+ unsafe fn walk_element(
+     element: AXUIElementRef,
++    prefetched: Option<FetchedElement>,
+     depth: usize,
+     parent_index: Option<usize>,
+     in_web_content: bool,
+@@ -350,23 +636,53 @@ unsafe fn walk_element(
+     truncated: &mut bool,
+     max_elements: usize,
+     max_depth: usize,
++    pool: &FetchPool,
+ ) {
+     if depth > max_depth {
++        release_prefetched_children(prefetched);
+         return;
+     }
+     // Enforce total-node cap — mirrors Swift's maxElements guard.
+     // Set the truncated flag only when we actually stop early.
+     if *visited_count >= max_elements {
+         *truncated = true;
++        release_prefetched_children(prefetched);
+         return;
+     }
+     *visited_count += 1;
+ 
+-    // Messaging timeouts are per AX object, not inherited from the application
+-    // element, so every descendant must be bounded before any attribute read.
+-    set_messaging_timeout(element);
++    // Elements the prefetch bound skipped — and any whose pooled fetch
++    // failed — fetch inline here. When the pool is disabled this is the
++    // serial path for every element.
++    let FetchedElement {
++        attrs,
++        actions,
++        value_settable,
++    } = prefetched.unwrap_or_else(|| fetch_element(element));
+ 
+-    let role = copy_string_attr(element, "AXRole").unwrap_or_else(|| "AXUnknown".into());
++    // One IPC call fetched every attribute this walk needs. Per-attribute
++    // failures arrive as error markers in the batch slots and decode to
++    // None/empty — the same results the individual copy_* helpers produce
++    // on a failed fetch.
++    let ElementAttrs {
++        role,
++        children,
++        title,
++        value: copied_value,
++        placeholder_value,
++        description,
++        identifier,
++        help,
++        enabled: attr_enabled,
++        value_description: attr_value_description,
++        min_value: attr_min_value,
++        max_value: attr_max_value,
++        selected: attr_selected,
++        frame,
++        ..
++    } = attrs;
++
++    let role = role.unwrap_or_else(|| "AXUnknown".into());
+ 
+     let in_web_content = in_web_content || is_web_content_role(&role);
+ 
+@@ -375,21 +691,21 @@ unsafe fn walk_element(
+         // Still recurse — children may be interesting. Layout containers
+         // collapse, so children inherit the parent's depth AND the same
+         // parent_index (no actionable node was emitted here).
+-        let children = copy_children(element);
++        walk_children(
++            &children,
++            depth,
++            parent_index,
++            in_web_content,
++            nodes,
++            lines,
++            counter,
++            visited_count,
++            truncated,
++            max_elements,
++            max_depth,
++            pool,
++        );
+         for child in children {
+-            walk_element(
+-                child,
+-                depth,
+-                parent_index,
+-                in_web_content,
+-                nodes,
+-                lines,
+-                counter,
+-                visited_count,
+-                truncated,
+-                max_elements,
+-                max_depth,
+-            );
+             CFRelease(child as CFTypeRef);
+         }
+         return;
+@@ -400,21 +716,20 @@ unsafe fn walk_element(
+     // This is critical for Calculator where AXTitle="" but AXDescription="2"
+     // (digit buttons). Merging them would produce "2" (quoted) instead of (2)
+     // (parens), breaking _find_calc_button which searches for "(2)".
+-    let title = copy_string_attr(element, "AXTitle");
+-    // Read AXValue once with enough type information to preserve the existing
++    //
++    // `copied_value` carries enough type information to preserve the
+     // string-only markdown while also exposing numeric/boolean control state.
+-    let copied_value = copy_stringish_attr(element, "AXValue");
+     let value = copied_value
+         .as_ref()
+         .and_then(|copied| copied.string_value.clone());
+     // AXPlaceholderValue as fallback for empty text fields.
+-    let value = value
+-        .filter(|v| !v.trim().is_empty())
+-        .or_else(|| copy_string_attr(element, "AXPlaceholderValue"));
+-    let description = copy_string_attr(element, "AXDescription");
+-    let identifier = copy_string_attr(element, "AXIdentifier");
+-    let help = copy_string_attr(element, "AXHelp").filter(|h| !h.trim().is_empty());
+-    let actions = copy_action_names(element);
++    let value = value.filter(|v| !v.trim().is_empty()).or(placeholder_value);
++    let help = help.filter(|h| !h.trim().is_empty());
++    // `actions` and `value_settable` were resolved alongside the batch fetch
++    // (on a pool worker for prefetched elements) — including the
++    // AXUIElementCopyActionNames fallback and the AXValue writability probe
++    // for the value-control family (Finder's transient inline-rename field is
++    // the case that needs an index without any action names).
+ 
+     let visible_title = title.as_deref().unwrap_or("").trim().to_owned();
+     let visible_description = description.as_deref().unwrap_or("").trim().to_owned();
+@@ -422,49 +737,39 @@ unsafe fn walk_element(
+ 
+     let has_content =
+         !visible_title.is_empty() || !visible_description.is_empty() || !visible_value.is_empty();
+-    // Some native controls expose no AX action names but do expose a writable
+-    // AXValue. Finder's transient inline-rename field is the important case:
+-    // rendering it without an element_index leaves an agent able to see the
+-    // field but unable to call set_value on it. Probe writability only for the
+-    // small family of value controls so arbitrary display nodes do not pay an
+-    // extra AX round trip.
+-    let value_settable = actions.is_empty()
+-        && role_supports_value_addressing(&role)
+-        && is_attribute_settable(element, "AXValue");
+     // A closed submenu can keep its descendants in AXChildren while reporting
+     // those controls disabled. Never assign such a row a live element index:
+     // the same native state also causes dispatch to refuse it, and exposing an
+     // index for it invites agents to retain an unusable menu target.
+     let enabled = if !actions.is_empty() || value_settable {
+-        copy_bool_attr(element, "AXEnabled")
++        attr_enabled
+     } else {
+         None
+     };
+     let is_actionable = is_addressable(!actions.is_empty(), value_settable, enabled);
+ 
+     if !is_actionable && !has_content && role != "AXWindow" && role != "AXSheet" {
+-        let children = copy_children(element);
++        walk_children(
++            &children,
++            depth + 1,
++            parent_index,
++            in_web_content,
++            nodes,
++            lines,
++            counter,
++            visited_count,
++            truncated,
++            max_elements,
++            max_depth,
++            pool,
++        );
+         for child in children {
+-            walk_element(
+-                child,
+-                depth + 1,
+-                parent_index,
+-                in_web_content,
+-                nodes,
+-                lines,
+-                counter,
+-                visited_count,
+-                truncated,
+-                max_elements,
+-                max_depth,
+-            );
+             CFRelease(child as CFTypeRef);
+         }
+         return;
+     }
+ 
+     let element_ptr = element as usize;
+-    let frame = element_screen_rect(element);
+     // Structured `elements` only contains actionable nodes. Keep all new AX
+     // round-trips behind that same gate so display-only rows pay no cost.
+     let control_state = read_control_state_if_actionable(is_actionable, || ControlState {
+@@ -474,13 +779,13 @@ unsafe fn walk_element(
+             .or_else(|| value.clone())
+             .map(|v| v.trim().to_owned())
+             .filter(|v| !v.is_empty()),
+-        value_description: copy_string_attr(element, "AXValueDescription")
++        value_description: attr_value_description
+             .map(|v| v.trim().to_owned())
+             .filter(|v| !v.is_empty()),
+-        min_value: copy_number_attr(element, "AXMinValue"),
+-        max_value: copy_number_attr(element, "AXMaxValue"),
++        min_value: attr_min_value,
++        max_value: attr_max_value,
+         enabled,
+-        selected: copy_bool_attr(element, "AXSelected"),
++        selected: attr_selected,
+     });
+     let node = if is_actionable {
+         let idx = *counter;
+@@ -566,21 +871,21 @@ unsafe fn walk_element(
+     lines.push((depth, line));
+     nodes.push(node);
+ 
+-    let children = copy_children(element);
++    walk_children(
++        &children,
++        depth + 1,
++        next_parent,
++        in_web_content,
++        nodes,
++        lines,
++        counter,
++        visited_count,
++        truncated,
++        max_elements,
++        max_depth,
++        pool,
++    );
+     for child in children {
+-        walk_element(
+-            child,
+-            depth + 1,
+-            next_parent,
+-            in_web_content,
+-            nodes,
+-            lines,
+-            counter,
+-            visited_count,
+-            truncated,
+-            max_elements,
+-            max_depth,
+-        );
+         CFRelease(child as CFTypeRef);
+     }
+ }
+@@ -782,4 +1087,115 @@ mod tests {
+         assert_eq!(reads.get(), 1, "actionable nodes must read state once");
+         assert_eq!(actionable.enabled, Some(true));
+     }
++
++    /// Every AXNode field that must agree between serial and parallel walks.
++    /// `element_ptr` is excluded on purpose: the AX server may hand back
++    /// different proxy pointers across calls, so even two serial walks can
++    /// legitimately differ there. `frame` is compared separately — live apps
++    /// legitimately drift a few pixels between two sequential walks.
++    fn node_fingerprint(node: &AXNode) -> String {
++        format!(
++            "{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}",
++            node.element_index,
++            node.role,
++            node.title,
++            node.value,
++            node.description,
++            node.identifier,
++            node.help,
++            node.actions,
++            node.depth,
++            node.parent_element_index,
++            node.value_state,
++            node.value_description,
++            node.min_value,
++            node.max_value,
++            node.enabled,
++            node.selected,
++            node.in_web_content,
++        )
++    }
++
++    /// Frames agree when both sides report the same rect within a small
++    /// pixel tolerance (or both report nothing). 20 px covers the settle
++    /// drift observed on live apps without masking a real layout change.
++    fn frames_agree(a: Option<[f64; 4]>, b: Option<[f64; 4]>) -> bool {
++        match (a, b) {
++            (None, None) => true,
++            (Some(a), Some(b)) => a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() <= 20.0),
++            _ => false,
++        }
++    }
++
++    /// A/B harness: walks the same app serially (pool disabled via
++    /// CUA_AX_SERIAL_FETCH) and in parallel, asserts byte-identical output,
++    /// and prints both wall-clock times. Needs a live target — pass its pid
++    /// in CUA_AX_TEST_PID — and an AX-trusted test process, so it is ignored
++    /// by default:
++    ///
++    ///   CUA_AX_TEST_PID=$(pgrep -x Calculator | head -1) \
++    ///     cargo test -p platform-macos --lib ax::tree::tests -- --ignored --nocapture
++    ///
++    /// Run it alone: the env toggle is process-global.
++    #[test]
++    #[ignore]
++    fn parallel_prefetch_matches_serial_output_and_times_it() {
++        let pid: i32 = std::env::var("CUA_AX_TEST_PID")
++            .ok()
++            .and_then(|v| v.parse().ok())
++            .expect("CUA_AX_TEST_PID must name a live pid");
++
++        std::env::set_var("CUA_AX_SERIAL_FETCH", "1");
++        let start = std::time::Instant::now();
++        let serial = walk_tree(pid, None, None);
++        let serial_ms = start.elapsed().as_secs_f64() * 1e3;
++
++        std::env::remove_var("CUA_AX_SERIAL_FETCH");
++        let start = std::time::Instant::now();
++        let parallel = walk_tree(pid, None, None);
++        let parallel_ms = start.elapsed().as_secs_f64() * 1e3;
++
++        eprintln!(
++            "pid={pid} serial={serial_ms:.1}ms parallel={parallel_ms:.1}ms \
++             nodes serial={} parallel={}",
++            serial.nodes.len(),
++            parallel.nodes.len()
++        );
++
++        assert_eq!(
++            serial.tree_markdown, parallel.tree_markdown,
++            "tree_markdown differs between serial and parallel walks"
++        );
++        assert_eq!(serial.truncated, parallel.truncated);
++        assert_eq!(serial.nodes.len(), parallel.nodes.len());
++        for (i, (s, p)) in serial.nodes.iter().zip(&parallel.nodes).enumerate() {
++            assert_eq!(
++                node_fingerprint(s),
++                node_fingerprint(p),
++                "node {i} differs between serial and parallel walks"
++            );
++            assert!(
++                frames_agree(s.frame, p.frame),
++                "node {i} frame differs: {:?} vs {:?}",
++                s.frame,
++                p.frame
++            );
++        }
++
++        // Truncation gates must cut identically under prefetch: a tight
++        // element cap exercises the budget bound in walk_children, a tight
++        // depth cap exercises the depth bound.
++        for (max_elements, max_depth) in [(5usize, 25usize), (2_000usize, 1usize)] {
++            std::env::set_var("CUA_AX_SERIAL_FETCH", "1");
++            let s = walk_tree_bounded(pid, None, None, max_elements, max_depth);
++            std::env::remove_var("CUA_AX_SERIAL_FETCH");
++            let p = walk_tree_bounded(pid, None, None, max_elements, max_depth);
++            assert_eq!(
++                s.tree_markdown, p.tree_markdown,
++                "bounded walk (max_elements={max_elements}, max_depth={max_depth}) differs"
++            );
++            assert_eq!(s.truncated, p.truncated);
++            assert_eq!(s.nodes.len(), p.nodes.len());
++        }
++    }
+ }

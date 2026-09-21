@@ -33,6 +33,26 @@ function makePendingInteraction(
 }
 
 describe("derivePendingApprovals", () => {
+  it("preserves the task consent scope of a gateway Computer approval", () => {
+    const approvals = derivePendingApprovals([
+      makeActivity({
+        kind: "approval.requested",
+        summary: "Allow Computer for this task",
+        tone: "approval",
+        payload: {
+          requestId: "computer:task",
+          requestKind: "tool",
+          approvalScope: "computer-task",
+          sessionApprovalAvailable: false,
+        },
+      }),
+    ]);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({
+      approvalScope: "computer-task",
+      sessionApprovalAvailable: false,
+    });
+  });
   it("shows only actionable durable approval settlements", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -248,6 +268,36 @@ describe("derivePendingApprovals", () => {
           network: { enabled: true },
           fileSystem: { read: ["/tmp/example"] },
         },
+      },
+    ]);
+  });
+
+  it("preserves MCP tool approval display data", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tool-approval-open",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "approval.requested",
+        summary: "Tool approval requested",
+        tone: "approval",
+        payload: {
+          requestId: "tool-request-1",
+          requestKind: "tool",
+          detail: "Allow Synara to launch the calculator?",
+          toolName: "computer_launch_app",
+          toolParamsDisplay: [{ name: "app", value: "kcalc", display_name: "app" }],
+        },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([
+      {
+        requestId: "tool-request-1",
+        requestKind: "tool",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        detail: "Allow Synara to launch the calculator?",
+        toolName: "computer_launch_app",
+        toolParamsDisplay: [{ name: "app", value: "kcalc", displayName: "app" }],
       },
     ]);
   });

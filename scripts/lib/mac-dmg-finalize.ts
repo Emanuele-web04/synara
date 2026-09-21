@@ -4,7 +4,8 @@
 // Exports: signed DMG finalization plus pure command construction for tests.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export interface MacDmgNotaryCredentials {
@@ -26,6 +27,40 @@ export interface FinalizeSignedMacDmgOptions extends MacDmgNotaryCredentials {
 export interface FinalizedSignedMacDmg {
   readonly dmgPath: string;
   readonly dmgFileName: string;
+}
+
+export interface RebuildUnsignedMacDmgOptions {
+  readonly stageDistDir: string;
+  readonly productName: string;
+  readonly verbose?: boolean;
+}
+
+export function buildUnsignedMacDmgCommands(
+  appBundlePath: string,
+  imageRoot: string,
+  dmgPath: string,
+  productName: string,
+): ReadonlyArray<MacDmgCommand> {
+  return [
+    {
+      command: "ditto",
+      args: [appBundlePath, join(imageRoot, `${productName}.app`)],
+    },
+    {
+      command: "hdiutil",
+      args: [
+        "create",
+        "-volname",
+        productName,
+        "-srcfolder",
+        imageRoot,
+        "-ov",
+        "-format",
+        "UDZO",
+        dmgPath,
+      ],
+    },
+  ];
 }
 
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
@@ -118,6 +153,60 @@ function runCommand(command: MacDmgCommand, verbose: boolean): void {
       `${command.command} failed with exit code ${result.status ?? "unknown"}${detail ? `: ${detail}` : ""}`,
     );
   }
+}
+
+function findFirstMacAppBundle(root: string): string | null {
+  const pending = [root];
+  while (pending.length > 0) {
+    const current = pending.shift();
+    if (!current) continue;
+    for (const entry of readdirSync(current)) {
+      const candidate = join(current, entry);
+      const stat = statSync(candidate);
+      if (!stat.isDirectory()) continue;
+      if (entry.endsWith(".app")) return candidate;
+      pending.push(candidate);
+    }
+  }
+  return null;
+}
+
+export function rebuildUnsignedMacDmg(
+  options: RebuildUnsignedMacDmgOptions,
+): FinalizedSignedMacDmg {
+  if (process.platform !== "darwin") {
+    throw new Error("Unsigned macOS DMG rebuilding must run on macOS.");
+  }
+  const dmgFileName = resolveSingleMacDmgFileName(readdirSync(options.stageDistDir));
+  const dmgPath = join(options.stageDistDir, dmgFileName);
+  const appBundlePath = findFirstMacAppBundle(options.stageDistDir);
+  if (!appBundlePath) {
+    throw new Error(`Could not find packaged .app bundle inside ${options.stageDistDir}.`);
+  }
+
+  const imageRoot = mkdtempSync(join(tmpdir(), "synara-mac-dmg-"));
+  try {
+    const [copyAppCommand, createDmgCommand] = buildUnsignedMacDmgCommands(
+      appBundlePath,
+      imageRoot,
+      dmgPath,
+      options.productName,
+    );
+    if (!copyAppCommand || !createDmgCommand) {
+      throw new Error("Unsigned macOS DMG commands were not constructed.");
+    }
+    runCommand(copyAppCommand, options.verbose === true);
+    symlinkSync("/Applications", join(imageRoot, "Applications"));
+    rmSync(dmgPath, { force: true });
+    runCommand(createDmgCommand, options.verbose === true);
+  } finally {
+    rmSync(imageRoot, { force: true, recursive: true });
+  }
+
+  if (!existsSync(dmgPath)) {
+    throw new Error(`Rebuilt macOS DMG artifact was not found at ${dmgPath}.`);
+  }
+  return { dmgPath, dmgFileName };
 }
 
 export function finalizeSignedMacDmg(options: FinalizeSignedMacDmgOptions): FinalizedSignedMacDmg {

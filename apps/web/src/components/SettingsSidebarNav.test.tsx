@@ -40,6 +40,26 @@ describe("rankSettingsSearchEntries", () => {
     expect(results.some((entry) => entry.id === "general:automation-run-threads")).toBe(true);
   });
 
+  it("keeps the Computer auto-open row searchable for every desktop preview", () => {
+    const offered = rankSettingsSearchEntries("open automatically", 12, {
+      computerBackendIsVisibleDesktop: false,
+    });
+    expect(offered.some((entry) => entry.id === "computer:open-automatically")).toBe(true);
+
+    const visibleDesktop = rankSettingsSearchEntries("open automatically", 12, {
+      computerBackendIsVisibleDesktop: true,
+    });
+    expect(visibleDesktop.some((entry) => entry.id === "computer:open-automatically")).toBe(true);
+  });
+
+  it("indexes the Computer control switch with its guardrails", () => {
+    const entry = SETTINGS_SEARCH_ENTRIES.find(
+      (candidate) => candidate.id === "computer:how-agents-use-the-desktop",
+    );
+    expect(entry?.title).toBe("Computer control");
+    expect(entry?.keywords).toContain("Approval gates and Stop still apply");
+  });
+
   it("includes the activity toasts notification row", () => {
     const results = rankSettingsSearchEntries("toasts", 12);
     expect(results.some((entry) => entry.id === "notifications:activity-toasts")).toBe(true);

@@ -103,6 +103,12 @@ export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_a
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manual";
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
+export const ComputerPreviewSize = Schema.Literals(["compact", "large"]);
+export type ComputerPreviewSize = typeof ComputerPreviewSize.Type;
+export const DEFAULT_COMPUTER_PREVIEW_SIZE: ComputerPreviewSize = "compact";
+export const AgentCursorColorMode = Schema.Literals(["stock", "custom"]);
+export type AgentCursorColorMode = typeof AgentCursorColorMode.Type;
+export const DEFAULT_AGENT_CURSOR_COLOR_MODE: AgentCursorColorMode = "stock";
 
 const SidebarNavItemId = Schema.Literals([...SIDEBAR_NAV_ITEM_IDS]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
@@ -348,6 +354,28 @@ export const AppSettingsSchema = Schema.Struct({
   appSnapPlaySound: Schema.Boolean.pipe(withDefaults(() => true)),
   // Deprecated rename bridge. Normalization migrates this value and then omits the key.
   enableAppshots: Schema.optionalKey(Schema.Boolean),
+  // Show the in-chat Computer preview when an agent starts driving the desktop.
+  autoOpenComputerPane: Schema.Boolean.pipe(withDefaults(() => true)),
+  // In-chat computer preview footprint. Compact is the default: a small
+  // glanceable card that reserves a narrow gutter. Large restores the
+  // previous wide card for users who want the detail inline.
+  computerPreviewSize: ComputerPreviewSize.pipe(withDefaults(() => DEFAULT_COMPUTER_PREVIEW_SIZE)),
+  // Computer control is off by default. When on, the agent may use the desktop
+  // in any chat. Approval gates and Stop still apply.
+  computerControlEnabled: Schema.Boolean.pipe(withDefaults(() => false)),
+  // The agent cursor's colors. Stock is the default monochrome treatment and
+  // stores no overrides; "custom" opts into a fill and rim, persisted as
+  // lowercase `#rrggbb` strings and pushed to the desktop cursor host.
+  agentCursorColorMode: AgentCursorColorMode.pipe(
+    withDefaults(() => DEFAULT_AGENT_CURSOR_COLOR_MODE),
+  ),
+  agentCursorFillColor: Schema.String.check(Schema.isMaxLength(7)).pipe(withDefaults(() => "")),
+  agentCursorRimColor: Schema.String.check(Schema.isMaxLength(7)).pipe(withDefaults(() => "")),
+  // Deprecated rename bridge. Normalization migrates this value and then omits the key.
+  allowComputerControlInNewChats: Schema.optionalKey(Schema.Boolean),
+  // One-shot composer hint that suggests Medium effort for faster desktop actions.
+  // Set when the user applies or dismisses it, so the hint never asks twice.
+  dismissedComputerControlEffortHint: Schema.Boolean.pipe(withDefaults(() => false)),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     withDefaults(() => DEFAULT_SIDEBAR_PROJECT_SORT_ORDER),
   ),
@@ -556,6 +584,32 @@ export function normalizeTerminalFontSizePx(value: number | null | undefined): n
   );
 }
 
+/** Normalize a cursor color to lowercase `#rrggbb`, or "" for anything else. */
+export function normalizeCursorHexColor(value: string | null | undefined): string {
+  const candidate = (value ?? "").trim().toLowerCase();
+  return /^#[0-9a-f]{6}$/.test(candidate) ? candidate : "";
+}
+
+/**
+ * The custom agent-cursor colors to push to the desktop cursor host, or null
+ * for the stock monochrome cursor. Stock mode resolves to null no matter what
+ * colors are stored, so switching back to stock never leaves a stale override
+ * in the pushed payload. A channel with no valid color is omitted, not sent
+ * empty, because the driver treats an omitted channel as stock.
+ */
+export function resolveAgentCursorColors(
+  settings: Pick<
+    AppSettings,
+    "agentCursorColorMode" | "agentCursorFillColor" | "agentCursorRimColor"
+  >,
+): { fill?: string; rim?: string } | null {
+  if ((settings.agentCursorColorMode ?? DEFAULT_AGENT_CURSOR_COLOR_MODE) !== "custom") return null;
+  const fill = normalizeCursorHexColor(settings.agentCursorFillColor);
+  const rim = normalizeCursorHexColor(settings.agentCursorRimColor);
+  if (!fill && !rim) return null;
+  return { ...(fill ? { fill } : {}), ...(rim ? { rim } : {}) };
+}
+
 export function normalizeTerminalFontFamily(value: string | null | undefined): string {
   // Free-form font-family text. Only strip characters that can't legitimately
   // appear in a CSS font-family value so the typed name can't break out of the
@@ -604,6 +658,7 @@ function normalizeProviderBinaryPathOverride(
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   const {
     enableAppshots: legacyEnableAppshots,
+    allowComputerControlInNewChats: legacyAllowComputerControlInNewChats,
     geminiBinaryPath: legacyGeminiBinaryPath,
     customGeminiModels: legacyCustomGeminiModels,
     ...currentSettings
@@ -611,6 +666,8 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...currentSettings,
     enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
+    computerControlEnabled:
+      settings.computerControlEnabled || legacyAllowComputerControlInNewChats === true,
     // Password fields are accepted only as write-only update patches. Never retain
     // reusable provider credentials in browser state or localStorage.
     openCodeServerPassword: "",
@@ -631,6 +688,8 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
     uiDensity: normalizeUiDensityValue(settings.uiDensity),
     chatWidth: normalizeChatWidthModeValue(settings.chatWidth),
+    agentCursorFillColor: normalizeCursorHexColor(settings.agentCursorFillColor),
+    agentCursorRimColor: normalizeCursorHexColor(settings.agentCursorRimColor),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
     terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
     terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),

@@ -67,6 +67,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   const [allowProjectRead, setAllowProjectRead] = useState(false);
   const [allowLocal, setAllowLocal] = useState(false);
   const [allowFullAccess, setAllowFullAccess] = useState(false);
+  const [allowComputerControl, setAllowComputerControl] = useState(false);
   const [setup, setSetup] = useState<ExternalMcpCreateIntegrationResult | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -95,8 +96,9 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
     if (allowProjectRead) next.push("tasks:read-project");
     if (allowLocal) next.push("runtime:local");
     if (allowFullAccess) next.push("runtime:full-access");
+    if (allowComputerControl) next.push("computer:control");
     return next;
-  }, [allowFullAccess, allowLocal, allowProjectRead]);
+  }, [allowComputerControl, allowFullAccess, allowLocal, allowProjectRead]);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -354,6 +356,16 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                   </div>
                 </div>
                 <Switch checked={allowFullAccess} onCheckedChange={setAllowFullAccess} />
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs font-medium">Computer control</div>
+                  <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                    High impact. Tasks may drive this Mac&apos;s screen — observe, click, type,
+                    menus, clipboard. Every computer action still asks for your approval.
+                  </div>
+                </div>
+                <Switch checked={allowComputerControl} onCheckedChange={setAllowComputerControl} />
               </div>
             </DisclosureRegion>
           </SettingsRow>

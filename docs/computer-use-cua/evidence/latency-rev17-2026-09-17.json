@@ -1,0 +1,2065 @@
+{
+  "meta": {
+    "date": "2026-09-17T16:53:26.138Z",
+    "binary": "/Users/devin/repos/synara/apps/desktop/resources/cua-driver/cua-driver",
+    "binaryProvenance": {
+      "version": "0.28.2",
+      "source": "fc188250b4ca8549b8e61f937fdb1fb560770e86",
+      "nativeRevision": 17,
+      "patchSha256": "388f1693f94c32218d8a7b6c31c5280c6bae95341a64676b232b82dff7573259",
+      "rustVersion": "1.97.1",
+      "rustcVersion": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+      "architectures": ["arm64"],
+      "binarySha256": "a8d9f70f9b16a9378e8d767b5f4f19d022dbee08a62894d53661d46406314e0a",
+      "upstreamArchiveSha256": "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa"
+    },
+    "arch": "arm64",
+    "os": "26.5.2",
+    "chip": "Apple M4 Pro (Virtual)",
+    "model": "VirtualMac2,1",
+    "commit": "98b86be0ccc9e07c07d87a6db6c0b9fc4374c92d",
+    "frontmostBefore": "ghostty",
+    "warmFlagEnv": null,
+    "nWarm": 30,
+    "targetWindow": {
+      "pid": 67068,
+      "window_id": 428,
+      "title": "Untitled",
+      "bounds": {
+        "height": 488,
+        "width": 586,
+        "x": 165,
+        "y": 86
+      },
+      "is_on_screen": true
+    },
+    "frontmostAfterSetup": "ghostty",
+    "frontmostAfter": "ghostty",
+    "frontmostByPhase": {
+      "baselines": "ghostty",
+      "get_state_ax": "ghostty",
+      "get_state_img": "ghostty",
+      "click": "ghostty",
+      "type": "ghostty",
+      "scroll": "ghostty",
+      "launch_app": "ghostty"
+    }
+  },
+  "coldStarts": [
+    {
+      "i": 0,
+      "listenMs": 135.09,
+      "firstCallMs": 985.24,
+      "firstCallReplyMs": 984.35,
+      "secondCallMs": 1.87,
+      "firstCallOk": true
+    },
+    {
+      "i": 1,
+      "listenMs": 0.54,
+      "firstCallMs": 86.62,
+      "firstCallReplyMs": 86.56,
+      "secondCallMs": 0.61,
+      "firstCallOk": true
+    },
+    {
+      "i": 2,
+      "listenMs": 0.61,
+      "firstCallMs": 53.14,
+      "firstCallReplyMs": 53.05,
+      "secondCallMs": 1.05,
+      "firstCallOk": true
+    }
+  ],
+  "warmHostStartup": {
+    "listenMs": 0.67,
+    "firstCallMs": 54.39,
+    "firstCallReplyMs": 54.29,
+    "ok": true
+  },
+  "samples": {
+    "probe": [
+      {
+        "i": 0,
+        "ms": 0.51,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 1,
+        "ms": 0.75,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 2,
+        "ms": 0.39,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 3,
+        "ms": 0.4,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 4,
+        "ms": 0.4,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 5,
+        "ms": 0.44,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 6,
+        "ms": 0.52,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 7,
+        "ms": 0.46,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 8,
+        "ms": 0.4,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 9,
+        "ms": 0.36,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 10,
+        "ms": 0.37,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 11,
+        "ms": 1.28,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 12,
+        "ms": 0.55,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 13,
+        "ms": 0.35,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 14,
+        "ms": 0.33,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 15,
+        "ms": 0.31,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 16,
+        "ms": 0.51,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 17,
+        "ms": 0.89,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 18,
+        "ms": 0.39,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 19,
+        "ms": 0.76,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 20,
+        "ms": 0.4,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 21,
+        "ms": 0.43,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 22,
+        "ms": 0.84,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 23,
+        "ms": 0.5,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 24,
+        "ms": 0.41,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 25,
+        "ms": 0.46,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 26,
+        "ms": 0.37,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 27,
+        "ms": 0.32,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 28,
+        "ms": 0.34,
+        "ok": true,
+        "bytes": 74
+      },
+      {
+        "i": 29,
+        "ms": 0.34,
+        "ok": true,
+        "bytes": 74
+      }
+    ],
+    "get_screen_size": [
+      {
+        "i": 0,
+        "ms": 0.69,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 1,
+        "ms": 0.74,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 2,
+        "ms": 2.3,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 3,
+        "ms": 0.86,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 4,
+        "ms": 0.63,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 5,
+        "ms": 0.61,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 6,
+        "ms": 0.69,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 7,
+        "ms": 0.72,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 8,
+        "ms": 0.66,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 9,
+        "ms": 0.74,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 10,
+        "ms": 0.58,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 11,
+        "ms": 0.6,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 12,
+        "ms": 0.82,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 13,
+        "ms": 1.16,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 14,
+        "ms": 0.6,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 15,
+        "ms": 0.8,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 16,
+        "ms": 0.65,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 17,
+        "ms": 0.91,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 18,
+        "ms": 0.78,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 19,
+        "ms": 0.86,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 20,
+        "ms": 0.72,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 21,
+        "ms": 0.62,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 22,
+        "ms": 0.62,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 23,
+        "ms": 0.79,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 24,
+        "ms": 0.67,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 25,
+        "ms": 0.62,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 26,
+        "ms": 0.59,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 27,
+        "ms": 0.86,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 28,
+        "ms": 0.6,
+        "ok": true,
+        "bytes": 183
+      },
+      {
+        "i": 29,
+        "ms": 1.31,
+        "ok": true,
+        "bytes": 183
+      }
+    ],
+    "get_state_ax": [
+      {
+        "i": 0,
+        "ms": 360.57,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 1,
+        "ms": 22436.96,
+        "ok": true,
+        "bytes": 154867,
+        "elements": 165
+      },
+      {
+        "i": 2,
+        "ms": 344.07,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 3,
+        "ms": 1710.82,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 4,
+        "ms": 1786.41,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 5,
+        "ms": 353.42,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 6,
+        "ms": 1316.63,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 7,
+        "ms": 978.8,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 8,
+        "ms": 355.17,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 9,
+        "ms": 4175.73,
+        "ok": true,
+        "bytes": 154867,
+        "elements": 165
+      },
+      {
+        "i": 10,
+        "ms": 1143.51,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 11,
+        "ms": 810.76,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 12,
+        "ms": 1713.42,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 13,
+        "ms": 108.91,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 14,
+        "ms": 936.45,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 15,
+        "ms": 2107.24,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 16,
+        "ms": 2933.21,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 17,
+        "ms": 1058.72,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 18,
+        "ms": 15781.13,
+        "ok": true,
+        "bytes": 154867,
+        "elements": 165
+      },
+      {
+        "i": 19,
+        "ms": 1234.3,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 20,
+        "ms": 357.36,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 21,
+        "ms": 796.31,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 22,
+        "ms": 379.54,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 23,
+        "ms": 394.29,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 24,
+        "ms": 327.74,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 25,
+        "ms": 396.64,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 26,
+        "ms": 258.63,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 27,
+        "ms": 318.9,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      },
+      {
+        "i": 28,
+        "ms": 15924.1,
+        "ok": true,
+        "bytes": 154867,
+        "elements": 165
+      },
+      {
+        "i": 29,
+        "ms": 449.08,
+        "ok": true,
+        "bytes": 178035,
+        "elements": 165
+      }
+    ],
+    "get_state_img": [
+      {
+        "i": 0,
+        "ms": 395.37,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 1,
+        "ms": 355.72,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 2,
+        "ms": 323.53,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 3,
+        "ms": 597.64,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 4,
+        "ms": 304.63,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 5,
+        "ms": 334.04,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 6,
+        "ms": 522.81,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 7,
+        "ms": 1245.41,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 8,
+        "ms": 212.77,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 9,
+        "ms": 882.76,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 10,
+        "ms": 298.84,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 11,
+        "ms": 86.72,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 12,
+        "ms": 368.24,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 13,
+        "ms": 340.84,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 14,
+        "ms": 443.4,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 15,
+        "ms": 464.67,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 16,
+        "ms": 354.6,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 17,
+        "ms": 336.27,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 18,
+        "ms": 1231.82,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 19,
+        "ms": 323,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 20,
+        "ms": 836.04,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 21,
+        "ms": 1335.14,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 22,
+        "ms": 1251.91,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 23,
+        "ms": 502.35,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 24,
+        "ms": 720.09,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 25,
+        "ms": 430.76,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 26,
+        "ms": 456.79,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 27,
+        "ms": 323.21,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 28,
+        "ms": 916.27,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      },
+      {
+        "i": 29,
+        "ms": 878.21,
+        "ok": true,
+        "bytes": 178035,
+        "image": true
+      }
+    ],
+    "click": [
+      {
+        "i": 0,
+        "ms": 1383.39,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 1,
+        "ms": 623.81,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 2,
+        "ms": 731.84,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 3,
+        "ms": 660.52,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 4,
+        "ms": 638.28,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 5,
+        "ms": 616.37,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 6,
+        "ms": 577.91,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 7,
+        "ms": 659.63,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 8,
+        "ms": 742.26,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 9,
+        "ms": 713.81,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 10,
+        "ms": 599.26,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 11,
+        "ms": 694.6,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 12,
+        "ms": 648.19,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 13,
+        "ms": 720.63,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 14,
+        "ms": 667.85,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 15,
+        "ms": 587.56,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 16,
+        "ms": 622.25,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 17,
+        "ms": 683.18,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 18,
+        "ms": 700.75,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 19,
+        "ms": 714.63,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 20,
+        "ms": 579.03,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 21,
+        "ms": 659.09,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 22,
+        "ms": 687.9,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 23,
+        "ms": 603.15,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 24,
+        "ms": 680.56,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 25,
+        "ms": 614.64,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 26,
+        "ms": 645.43,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 27,
+        "ms": 682.29,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 28,
+        "ms": 641.3,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      },
+      {
+        "i": 29,
+        "ms": 658.96,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 283
+      }
+    ],
+    "scroll": [
+      {
+        "i": 0,
+        "ms": 636.38,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 1,
+        "ms": 743.36,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 2,
+        "ms": 727.24,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 3,
+        "ms": 756.06,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 4,
+        "ms": 775.49,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 5,
+        "ms": 735.16,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 6,
+        "ms": 786.23,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 7,
+        "ms": 704.24,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 8,
+        "ms": 815.89,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 9,
+        "ms": 838.43,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 10,
+        "ms": 740.29,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 11,
+        "ms": 760.13,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 12,
+        "ms": 797.83,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 13,
+        "ms": 662.49,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 14,
+        "ms": 823.09,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 15,
+        "ms": 787.93,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 16,
+        "ms": 742.56,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 17,
+        "ms": 796.89,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 18,
+        "ms": 708.1,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 19,
+        "ms": 747.75,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 20,
+        "ms": 752.72,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 21,
+        "ms": 708.75,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 22,
+        "ms": 673.41,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 23,
+        "ms": 686.54,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 24,
+        "ms": 734.32,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 25,
+        "ms": 816.5,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 26,
+        "ms": 681.82,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 27,
+        "ms": 714.02,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 28,
+        "ms": 696.14,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      },
+      {
+        "i": 29,
+        "ms": 797.46,
+        "ok": true,
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery": "background",
+        "bytes": 331
+      }
+    ],
+    "launch_app": [
+      {
+        "i": 0,
+        "ms": 19832.68,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 78785
+      },
+      {
+        "i": 1,
+        "ms": 2001.45,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 80293
+      },
+      {
+        "i": 2,
+        "ms": 2093.38,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 81815
+      },
+      {
+        "i": 3,
+        "ms": 1908.14,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 83337
+      },
+      {
+        "i": 4,
+        "ms": 2027.06,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 84839
+      },
+      {
+        "i": 5,
+        "ms": 2057.77,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 86340
+      },
+      {
+        "i": 6,
+        "ms": 1823.43,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": null
+      },
+      {
+        "i": 7,
+        "ms": 1955.72,
+        "ok": true,
+        "bytes": 691,
+        "alreadyRunning": false,
+        "spawnedPid": 89312
+      },
+      {
+        "i": 8,
+        "ms": 2058.26,
+        "ok": true,
+        "bytes": 691,
+        "alreadyRunning": false,
+        "spawnedPid": 90807
+      },
+      {
+        "i": 9,
+        "ms": 1998.61,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 92327
+      },
+      {
+        "i": 10,
+        "ms": 1869.43,
+        "ok": true,
+        "bytes": 691,
+        "alreadyRunning": false,
+        "spawnedPid": 93807
+      },
+      {
+        "i": 11,
+        "ms": 1860.08,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 95327
+      },
+      {
+        "i": 12,
+        "ms": 1993.4,
+        "ok": true,
+        "bytes": 691,
+        "alreadyRunning": false,
+        "spawnedPid": 96806
+      },
+      {
+        "i": 13,
+        "ms": 2075.49,
+        "ok": true,
+        "bytes": 691,
+        "alreadyRunning": false,
+        "spawnedPid": 98325
+      },
+      {
+        "i": 14,
+        "ms": 1970.79,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 99870
+      },
+      {
+        "i": 15,
+        "ms": 1924.15,
+        "ok": true,
+        "bytes": 351,
+        "alreadyRunning": false,
+        "spawnedPid": 1897
+      },
+      {
+        "i": 16,
+        "ms": 2046.9,
+        "ok": true,
+        "bytes": 351,
+        "alreadyRunning": false,
+        "spawnedPid": 3365
+      },
+      {
+        "i": 17,
+        "ms": 1954.62,
+        "ok": true,
+        "bytes": 351,
+        "alreadyRunning": false,
+        "spawnedPid": 4812
+      },
+      {
+        "i": 18,
+        "ms": 1968.35,
+        "ok": true,
+        "bytes": 351,
+        "alreadyRunning": false,
+        "spawnedPid": 6262
+      },
+      {
+        "i": 19,
+        "ms": 1839.42,
+        "ok": true,
+        "bytes": 351,
+        "alreadyRunning": false,
+        "spawnedPid": 7729
+      },
+      {
+        "i": 20,
+        "ms": 1937.57,
+        "ok": true,
+        "bytes": 351,
+        "alreadyRunning": false,
+        "spawnedPid": 9213
+      },
+      {
+        "i": 21,
+        "ms": 1973.55,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 10775
+      },
+      {
+        "i": 22,
+        "ms": 1789.32,
+        "ok": true,
+        "bytes": 691,
+        "alreadyRunning": false,
+        "spawnedPid": 12214
+      },
+      {
+        "i": 23,
+        "ms": 1803.78,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 13697
+      },
+      {
+        "i": 24,
+        "ms": 1852.42,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": null
+      },
+      {
+        "i": 25,
+        "ms": 2052.34,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 16554
+      },
+      {
+        "i": 26,
+        "ms": 1836.05,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 18012
+      },
+      {
+        "i": 27,
+        "ms": 2133.24,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 19534
+      },
+      {
+        "i": 28,
+        "ms": 1943.29,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 21069
+      },
+      {
+        "i": 29,
+        "ms": 1946.21,
+        "ok": true,
+        "bytes": 353,
+        "alreadyRunning": false,
+        "spawnedPid": 22527
+      }
+    ]
+  },
+  "typeCompose": [
+    {
+      "i": 0,
+      "ms": 3775.03,
+      "resolveMs": 2444.02,
+      "writeMs": 1149.76,
+      "rereadMs": 181.25,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 441085
+    },
+    {
+      "i": 1,
+      "ms": 1571.01,
+      "resolveMs": 113.32,
+      "writeMs": 1203.86,
+      "rereadMs": 253.83,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 441125
+    },
+    {
+      "i": 2,
+      "ms": 1421.73,
+      "resolveMs": 119.97,
+      "writeMs": 1178.25,
+      "rereadMs": 123.52,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 441253
+    },
+    {
+      "i": 3,
+      "ms": 1459.49,
+      "resolveMs": 84.32,
+      "writeMs": 1165.38,
+      "rereadMs": 209.79,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 441381
+    },
+    {
+      "i": 4,
+      "ms": 1375.74,
+      "resolveMs": 75.99,
+      "writeMs": 1124.16,
+      "rereadMs": 175.59,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 441509
+    },
+    {
+      "i": 5,
+      "ms": 1576.55,
+      "resolveMs": 75.69,
+      "writeMs": 1120.39,
+      "rereadMs": 380.46,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 441637
+    },
+    {
+      "i": 6,
+      "ms": 1354.45,
+      "resolveMs": 67.52,
+      "writeMs": 1135.82,
+      "rereadMs": 151.11,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 441765
+    },
+    {
+      "i": 7,
+      "ms": 1434.49,
+      "resolveMs": 124.85,
+      "writeMs": 1137.28,
+      "rereadMs": 172.35,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 441893
+    },
+    {
+      "i": 8,
+      "ms": 1369.94,
+      "resolveMs": 168.89,
+      "writeMs": 1085.4,
+      "rereadMs": 115.65,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 442021
+    },
+    {
+      "i": 9,
+      "ms": 1285.06,
+      "resolveMs": 70.15,
+      "writeMs": 1067.64,
+      "rereadMs": 147.28,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 442149
+    },
+    {
+      "i": 10,
+      "ms": 1300.82,
+      "resolveMs": 103.16,
+      "writeMs": 1082.15,
+      "rereadMs": 115.51,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 442281
+    },
+    {
+      "i": 11,
+      "ms": 1685.73,
+      "resolveMs": 70.42,
+      "writeMs": 1122.91,
+      "rereadMs": 492.4,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 442417
+    },
+    {
+      "i": 12,
+      "ms": 1346.74,
+      "resolveMs": 80.86,
+      "writeMs": 1079.85,
+      "rereadMs": 186.03,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 442553
+    },
+    {
+      "i": 13,
+      "ms": 1283.15,
+      "resolveMs": 77.78,
+      "writeMs": 1077.83,
+      "rereadMs": 127.53,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 442689
+    },
+    {
+      "i": 14,
+      "ms": 1269.99,
+      "resolveMs": 78.3,
+      "writeMs": 1073.83,
+      "rereadMs": 117.86,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 442825
+    },
+    {
+      "i": 15,
+      "ms": 1383.27,
+      "resolveMs": 167.83,
+      "writeMs": 1089.76,
+      "rereadMs": 125.67,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 442961
+    },
+    {
+      "i": 16,
+      "ms": 1325.93,
+      "resolveMs": 71.27,
+      "writeMs": 1142.14,
+      "rereadMs": 112.52,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 443097
+    },
+    {
+      "i": 17,
+      "ms": 1278,
+      "resolveMs": 68.67,
+      "writeMs": 1081.03,
+      "rereadMs": 128.3,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 443233
+    },
+    {
+      "i": 18,
+      "ms": 1287.14,
+      "resolveMs": 67.92,
+      "writeMs": 1106.75,
+      "rereadMs": 112.47,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 443369
+    },
+    {
+      "i": 19,
+      "ms": 1310.5,
+      "resolveMs": 73.51,
+      "writeMs": 1111.9,
+      "rereadMs": 125.08,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 443505
+    },
+    {
+      "i": 20,
+      "ms": 1325.86,
+      "resolveMs": 68.44,
+      "writeMs": 1133.76,
+      "rereadMs": 123.66,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 443641
+    },
+    {
+      "i": 21,
+      "ms": 1351.2,
+      "resolveMs": 70.1,
+      "writeMs": 1154.3,
+      "rereadMs": 126.8,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 443777
+    },
+    {
+      "i": 22,
+      "ms": 1343.02,
+      "resolveMs": 69.21,
+      "writeMs": 1150.85,
+      "rereadMs": 122.96,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 443913
+    },
+    {
+      "i": 23,
+      "ms": 1370.94,
+      "resolveMs": 68.83,
+      "writeMs": 1174.92,
+      "rereadMs": 127.19,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 444049
+    },
+    {
+      "i": 24,
+      "ms": 1285.78,
+      "resolveMs": 70.15,
+      "writeMs": 1101,
+      "rereadMs": 114.63,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 444185
+    },
+    {
+      "i": 25,
+      "ms": 1343.99,
+      "resolveMs": 69.14,
+      "writeMs": 1122.05,
+      "rereadMs": 152.79,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 444321
+    },
+    {
+      "i": 26,
+      "ms": 1316.86,
+      "resolveMs": 72.58,
+      "writeMs": 1132.05,
+      "rereadMs": 112.22,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 444457
+    },
+    {
+      "i": 27,
+      "ms": 1338.2,
+      "resolveMs": 69.33,
+      "writeMs": 1136.54,
+      "rereadMs": 132.33,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 444593
+    },
+    {
+      "i": 28,
+      "ms": 1279.1,
+      "resolveMs": 69.51,
+      "writeMs": 1091.47,
+      "rereadMs": 118.13,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 444729
+    },
+    {
+      "i": 29,
+      "ms": 1260.03,
+      "resolveMs": 66.99,
+      "writeMs": 1072.39,
+      "rereadMs": 120.65,
+      "writeEffect": "confirmed",
+      "confirmed": true,
+      "bytes": 444865
+    }
+  ],
+  "stats": {
+    "probe": {
+      "n": 30,
+      "min": 0.31,
+      "p50": 0.4,
+      "p95": 0.89,
+      "max": 1.28,
+      "mean": 0.49
+    },
+    "get_screen_size": {
+      "n": 30,
+      "min": 0.58,
+      "p50": 0.69,
+      "p95": 1.31,
+      "max": 2.3,
+      "mean": 0.79
+    },
+    "get_state_ax": {
+      "n": 30,
+      "min": 108.91,
+      "p50": 810.76,
+      "p95": 15924.1,
+      "max": 22436.96,
+      "mean": 2708.29
+    },
+    "get_state_img": {
+      "n": 30,
+      "min": 86.72,
+      "p50": 430.76,
+      "p95": 1251.91,
+      "max": 1335.14,
+      "mean": 569.13
+    },
+    "click": {
+      "n": 30,
+      "min": 577.91,
+      "p50": 659.09,
+      "p95": 742.26,
+      "max": 1383.39,
+      "mean": 681.3
+    },
+    "scroll": {
+      "n": 30,
+      "min": 636.38,
+      "p50": 742.56,
+      "p95": 823.09,
+      "max": 838.43,
+      "mean": 744.91
+    },
+    "launch_app": {
+      "n": 30,
+      "min": 1789.32,
+      "p50": 1955.72,
+      "p95": 2133.24,
+      "max": 19832.68,
+      "mean": 2550.9
+    },
+    "type_compose": {
+      "n": 30,
+      "min": 1260.03,
+      "p50": 1343.02,
+      "p95": 1685.73,
+      "max": 3775.03,
+      "mean": 1443.66
+    },
+    "type_compose_resolve_leg": {
+      "n": 30,
+      "min": 66.99,
+      "p50": 71.27,
+      "p95": 168.89,
+      "max": 2444.02,
+      "mean": 163.29
+    },
+    "type_compose_write_leg": {
+      "n": 30,
+      "min": 1067.64,
+      "p50": 1122.05,
+      "p95": 1178.25,
+      "max": 1203.86,
+      "mean": 1120.18
+    },
+    "type_compose_reread_leg": {
+      "n": 30,
+      "min": 112.22,
+      "p50": 126.8,
+      "p95": 380.46,
+      "max": 492.4,
+      "mean": 160.19
+    },
+    "cold_start_first_call": {
+      "n": 3,
+      "min": 53.14,
+      "p50": 86.62,
+      "p95": 985.24,
+      "max": 985.24,
+      "mean": 375
+    },
+    "cold_start_listen": {
+      "n": 3,
+      "min": 0.54,
+      "p50": 0.61,
+      "p95": 135.09,
+      "max": 135.09,
+      "mean": 45.41
+    }
+  },
+  "anomalies": []
+}

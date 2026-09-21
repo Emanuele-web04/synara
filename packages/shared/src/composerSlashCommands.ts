@@ -4,6 +4,8 @@
 // Layer: Shared runtime utility
 // Exports: command-name constants and normalization helpers.
 
+import { COMPUTER_USE_SLASH_COMMAND } from "./computerInvocation";
+
 export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "clear",
   "compact",
@@ -16,6 +18,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "side",
   "status",
   "subagents",
+  COMPUTER_USE_SLASH_COMMAND,
   "fast",
   "export",
   "goal",

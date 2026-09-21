@@ -1,0 +1,4 @@
+[desktop-cua] driver stderr tail: Cua Driver daemon listening on /var/folders/7c/w626kwy50ds8pwsspgc457tc0000gp/T/synara-cua-vyQuf2/driver-ffbce1e6.sock | Cua Driver embedded host closed its lifetime pipe; shutting down.
+[desktop-cua] driver stderr tail: Cua Driver daemon listening on /var/folders/7c/w626kwy50ds8pwsspgc457tc0000gp/T/synara-cua-vyQuf2/driver-449a865e.sock | Cua Driver embedded host closed its lifetime pipe; shutting down.
+[desktop-cua] fresh desktop observation via get_window_state; input gate cleared
+[desktop-cua] driver stderr tail: Cua Driver daemon listening on /var/folders/7c/w626kwy50ds8pwsspgc457tc0000gp/T/synara-cua-vyQuf2/driver-fcbb846d.sock | Cua Driver embedded host closed its lifetime pipe; shutting down.

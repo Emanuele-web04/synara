@@ -143,7 +143,7 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     workflow,
-    "  build:\n    name: Build ${{ matrix.label }}\n    needs: preflight\n    runs-on: ${{ matrix.runner }}\n    timeout-minutes: 30\n    permissions:\n      contents: read",
+    "  build:\n    name: Build ${{ matrix.label }}\n    needs: preflight\n    runs-on: ${{ matrix.runner }}\n    timeout-minutes: 60\n    permissions:\n      contents: read",
     "Expected artifact builds to receive read-only repository access.",
   );
   assertContains(
