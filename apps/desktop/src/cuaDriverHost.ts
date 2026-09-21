@@ -51,6 +51,9 @@ interface TaskRequest {
 // Keep the marker through ordinary model turns, with a native expiry backstop
 // if task-end cleanup cannot reach the overlay. This wait does not repaint.
 export const CUA_CURSOR_IDLE_HIDE_MS = 60_000;
+/** A raw ENOENT names a path, not a remedy; source builds stage the driver themselves. */
+const CUA_DRIVER_MISSING_MESSAGE =
+  "Cua Driver is not bundled. Run `node apps/desktop/scripts/provision-cua-driver.mjs` in this checkout (needs the pinned Rust toolchain), then relaunch Synara.";
 
 interface ControlledTarget {
   pid: number;
@@ -808,8 +811,7 @@ export class CuaDriverHost {
       } catch {
         return {
           ok: false,
-          error:
-            "Cua Driver is not bundled. Run the local provisioning script and relaunch Synara.",
+          error: CUA_DRIVER_MISSING_MESSAGE,
         };
       }
       return {
@@ -1784,7 +1786,12 @@ export class CuaDriverHost {
       if (this.generation && !this.generation.retired && !this.generation.didExit)
         return this.generation;
       if (this.generation) await this.retire(this.generation);
-      await access(this.options.binaryPath);
+      try {
+        await access(this.options.binaryPath);
+      } catch {
+        // Same wording as the probe: a raw ENOENT names a path, not a remedy.
+        throw new Error(CUA_DRIVER_MISSING_MESSAGE);
+      }
       const endpoint =
         process.platform === "win32"
           ? `\\\\.\\pipe\\synara-cua-driver-${randomUUID().slice(0, 8)}`

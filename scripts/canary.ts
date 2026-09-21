@@ -226,9 +226,52 @@ function checkout(paths: CanaryPaths, commit: string): void {
   run("git", ["checkout", "--detach", "--force", commit], paths.source);
 }
 
+function readJsonFile(path: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(FS.readFileSync(path, "utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The Computer driver is a gitignored build artifact, so a fresh checkout has
+ * none and Computer use fails at its first action. Stage the pinned driver when
+ * it is missing or predates the pinned release. It compiles with the pinned
+ * Rust toolchain; a machine without it still gets a working Canary, only
+ * without Computer use.
+ */
+function provisionComputerDriver(paths: CanaryPaths): void {
+  if (process.platform !== "darwin") return;
+  const driverDirectory = Path.join(paths.source, "apps/desktop/resources/cua-driver");
+  const release = readJsonFile(
+    Path.join(paths.source, "packages/shared/src/cuaDriverRelease.json"),
+  );
+  const provenance = readJsonFile(Path.join(driverDirectory, "provenance.json"));
+  if (
+    release &&
+    provenance &&
+    FS.existsSync(Path.join(driverDirectory, "cua-driver")) &&
+    provenance.source === release.source &&
+    provenance.nativeRevision === release.nativeRevision
+  ) {
+    return;
+  }
+  try {
+    run("node", ["apps/desktop/scripts/provision-cua-driver.mjs"], paths.source);
+  } catch (error) {
+    console.warn(
+      `[canary] Computer use is unavailable in this build: the Cua driver could not be provisioned (${
+        error instanceof Error ? error.message : String(error)
+      }). Install Rust ${String(release?.rustVersion ?? "")} with rustup, then run canary:update again.`,
+    );
+  }
+}
+
 function build(paths: CanaryPaths): void {
   run("bun", ["install", "--frozen-lockfile"], paths.source);
   run("bun", ["run", "build:desktop"], paths.source);
+  provisionComputerDriver(paths);
   run("bun", ["run", "release:smoke"], paths.source);
 }
 
