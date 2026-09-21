@@ -21,6 +21,47 @@ import {
 } from "./lib/terminalContext";
 
 describe("composerDraftStore persisted-state hydration", () => {
+  it.each([true, false])(
+    "persists a computer-control-only preference (%s) across reloads",
+    (enabled) => {
+      resetComposerDraftStore();
+      const threadId = ThreadId.makeUnsafe("computer-preference");
+      useComposerDraftStore.getState().setEnableComputerControl(threadId, enabled);
+      const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+      const hydrated = normalizeCurrentPersistedComposerDraftStoreState(persisted);
+      expect(hydrated.draftsByThreadId[threadId]?.enableComputerControl).toBe(enabled);
+      resetComposerDraftStore();
+    },
+  );
+
+  it.each([
+    { recorded: undefined, expected: undefined },
+    { recorded: true, expected: true },
+    { recorded: false, expected: false },
+  ])(
+    "round-trips a queued turn's computer-control choice ($recorded) without inventing one",
+    ({ recorded, expected }) => {
+      resetComposerDraftStore();
+      const threadId = ThreadId.makeUnsafe("queued-computer-control");
+      useComposerDraftStore.getState().enqueueQueuedTurn(threadId, {
+        ...makeQueuedChatTurn("queued-computer-control-turn"),
+        ...(recorded === undefined ? {} : { enableComputerControl: recorded }),
+      });
+
+      const hydrated = normalizeCurrentPersistedComposerDraftStoreState(
+        partializeComposerDraftStoreState(useComposerDraftStore.getState()),
+      );
+
+      // A turn that recorded no choice falls back to the live setting when it
+      // is dispatched. Writing or reading it back as `false` pins it off and
+      // silently drops the agent's computer tools after a reload.
+      expect(hydrated.draftsByThreadId[threadId]?.queuedTurns?.[0]?.enableComputerControl).toBe(
+        expected,
+      );
+      resetComposerDraftStore();
+    },
+  );
+
   it("normalizes null and empty persisted states", () => {
     const emptyState = {
       draftsByThreadId: {},

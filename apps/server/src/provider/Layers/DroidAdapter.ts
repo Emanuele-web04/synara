@@ -53,6 +53,7 @@ import {
   startAgentGatewaySessionLeaseExitWatcher,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
+  captureAgentGatewayCapabilityInput,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -766,7 +767,7 @@ export function makeDroidAdapter(
             agentGatewayCredentials,
             input.threadId,
             PROVIDER,
-            input,
+            captureAgentGatewayCapabilityInput(input),
           );
           yield* Effect.addFinalizer(() =>
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),

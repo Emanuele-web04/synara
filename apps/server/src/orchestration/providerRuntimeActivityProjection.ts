@@ -10,6 +10,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { nonEmptyTrimmed } from "@synara/shared/text";
+import { toolParamsDisplayFromToolInput } from "@synara/shared/toolParamsDisplay";
 
 import {
   sanitizeUnmappedProviderData,

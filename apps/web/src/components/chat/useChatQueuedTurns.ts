@@ -33,6 +33,9 @@ import { useComposerReferences } from "./useComposerReferences";
 import type { LateComposerSendHandlers } from "./chatSendTypes";
 const EMPTY_MESSAGES: ChatMessage[] = [];
 interface ChatQueuedTurnsInput {
+  setComposerDraftComputerControl: ReturnType<
+    typeof useChatComposerDraft
+  >["setComposerDraftComputerControl"];
   threadId: ThreadId;
   queuedComposerTurns: ReturnType<typeof useChatComposerDraft>["queuedComposerTurns"];
   activeThread: Thread | undefined;
@@ -119,6 +122,7 @@ export function useChatQueuedTurns({
   updateSelectedComposerMentions,
   setRestoredQueuedSourceProposedPlan,
   setComposerDraftModelSelection,
+  setComposerDraftComputerControl,
   setComposerDraftRuntimeMode,
   setComposerDraftInteractionMode,
   setComposerCursor,
@@ -238,6 +242,10 @@ export function useChatQueuedTurns({
       setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
+      // Tri-state: a queued turn that recorded no choice must restore the
+      // composer to "no choice" as well, or editing it would pin the chat to
+      // off and drop the agent's computer tools on send.
+      setComposerDraftComputerControl(activeThread.id, queuedTurn.enableComputerControl);
       setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
       setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
       scheduleComposerFocus();
@@ -259,6 +267,7 @@ export function useChatQueuedTurns({
       scheduleComposerFocus,
       setDraftThreadContext,
       setRestoredQueuedSourceProposedPlan,
+      setComposerDraftComputerControl,
       setComposerDraftInteractionMode,
       setComposerDraftModelSelection,
       setComposerDraftPrompt,

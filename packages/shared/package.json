@@ -324,9 +324,21 @@
       "types": "./src/frameTransport.ts",
       "import": "./src/frameTransport.ts"
     },
+    "./computerFrame": {
+      "types": "./src/computerFrame.ts",
+      "import": "./src/computerFrame.ts"
+    },
     "./deviceHelperCache": {
       "types": "./src/deviceHelperCache.ts",
       "import": "./src/deviceHelperCache.ts"
+    },
+    "./computerKeyNames": {
+      "types": "./src/computerKeyNames.ts",
+      "import": "./src/computerKeyNames.ts"
+    },
+    "./computerPermissions": {
+      "types": "./src/computerPermissions.ts",
+      "import": "./src/computerPermissions.ts"
     },
     "./lengthPrefixedRecords": {
       "types": "./src/lengthPrefixedRecords.ts",
@@ -335,6 +347,14 @@
     "./uiTreeTargeting": {
       "types": "./src/uiTreeTargeting.ts",
       "import": "./src/uiTreeTargeting.ts"
+    },
+    "./toolParamsDisplay": {
+      "types": "./src/toolParamsDisplay.ts",
+      "import": "./src/toolParamsDisplay.ts"
+    },
+    "./frameCodec": {
+      "types": "./src/frameCodec.ts",
+      "import": "./src/frameCodec.ts"
     },
     "./searchQuery": {
       "types": "./src/searchQuery.ts",

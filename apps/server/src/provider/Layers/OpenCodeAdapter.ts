@@ -55,6 +55,7 @@ import {
   cancelAgentGatewayTurn,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
+  captureAgentGatewayCapabilityInput,
 } from "../../agentGateway/sessionLease.ts";
 import { OpenCodeAdapter, type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
@@ -3393,7 +3394,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 agentGatewayCredentials,
                 input.threadId,
                 provider,
-                input,
+                captureAgentGatewayCapabilityInput(input),
               );
           const agentGatewayConnection = agentGatewaySessionLease?.connection;
           const poolIsolationKey = agentGatewayConnection ? randomUUID() : undefined;

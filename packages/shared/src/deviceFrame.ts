@@ -1,4 +1,3 @@
-import { decodeFrameEnvelope, encodeFrameEnvelope, FrameEncodeError } from "./frameEnvelope";
 import {
   DEVICE_FRAME_MAGIC,
   DEVICE_FRAME_MAX_DEVICE_ID_BYTES,
@@ -6,6 +5,8 @@ import {
   type DeviceFrameDecodeErrorReason,
   type DeviceFrameHeader,
 } from "@synara/contracts";
+
+import { makeFrameCodec } from "./frameCodec";
 
 /** Encoded device frames use a dedicated, uncompressed WebSocket connection. */
 export const DEVICE_FRAME_WS_PATH = "/ws/device-frames";
@@ -23,70 +24,22 @@ export type DeviceFrameDecodeResult =
 
 export class DeviceFrameEncodeError extends Error {}
 
-const DEVICE_FRAME_CODEC = {
+const codec = makeFrameCodec({
   magic: DEVICE_FRAME_MAGIC,
   version: DEVICE_FRAME_VERSION,
-  streamIdLabel: "deviceId",
+  streamIdKey: "deviceId",
   frameLabel: "Device",
   maxStreamIdBytes: DEVICE_FRAME_MAX_DEVICE_ID_BYTES,
-} as const;
+  decodeReasons: {
+    truncatedStreamId: "truncated-device-id",
+    invalidStreamId: "invalid-device-id",
+  },
+  encodeError: DeviceFrameEncodeError,
+});
 
-/**
- * Serializes a device frame through the shared binary envelope codec. The
- * device-shaped wrapper preserves the existing wire format and error names.
- */
-export const encodeDeviceFrame = (frame: DeviceFrame): Uint8Array => {
-  try {
-    return encodeFrameEnvelope(DEVICE_FRAME_CODEC, {
-      header: {
-        streamId: frame.header.deviceId,
-        sequence: frame.header.sequence,
-        timestampMs: frame.header.timestampMs,
-        keyframe: frame.header.keyframe,
-        codecConfig: frame.header.codecConfig,
-      },
-      payload: frame.payload,
-    });
-  } catch (error) {
-    if (error instanceof FrameEncodeError) {
-      throw new DeviceFrameEncodeError(error.message);
-    }
-    throw error;
-  }
-};
+/** Serializes a device frame through the shared envelope; the wire format is unchanged. */
+export const encodeDeviceFrame = (frame: DeviceFrame): Uint8Array => codec.encode(frame);
 
 /** Parses a binary device-frame message without copying its payload. */
-export const decodeDeviceFrame = (bytes: Uint8Array): DeviceFrameDecodeResult => {
-  const result = decodeFrameEnvelope(DEVICE_FRAME_CODEC, bytes);
-  if (!result.ok) {
-    return { ok: false, reason: mapDecodeReason(result.reason) };
-  }
-  return {
-    ok: true,
-    frame: {
-      header: {
-        deviceId: result.frame.header.streamId,
-        sequence: result.frame.header.sequence,
-        timestampMs: result.frame.header.timestampMs,
-        keyframe: result.frame.header.keyframe,
-        codecConfig: result.frame.header.codecConfig,
-      },
-      payload: result.frame.payload,
-    },
-  };
-};
-
-function mapDecodeReason(
-  reason:
-    | "too-short"
-    | "bad-magic"
-    | "unsupported-version"
-    | "truncated-stream-id"
-    | "invalid-stream-id",
-): DeviceFrameDecodeErrorReason {
-  return reason === "truncated-stream-id"
-    ? "truncated-device-id"
-    : reason === "invalid-stream-id"
-      ? "invalid-device-id"
-      : reason;
-}
+export const decodeDeviceFrame = (bytes: Uint8Array): DeviceFrameDecodeResult =>
+  codec.decode(bytes) as DeviceFrameDecodeResult;

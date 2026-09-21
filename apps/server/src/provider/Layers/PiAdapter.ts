@@ -357,6 +357,11 @@ const loadPiCodingAgentModule: () => Promise<PiCodingAgentModule> = lazyModule(
 interface PiSessionContext {
   harnessPolicyDelivered?: boolean;
   readonly gatewayControlAvailable: boolean;
+  /**
+   * Pi rotates its gateway credential when a turn completes, long after the
+   * start input is gone. Keep the shared capability projection so the re-lease
+   * derives from the same facts as the original lease.
+   */
   readonly gatewayCapabilityInput: AgentGatewayCapabilityInput;
   gatewaySessionLease?: AgentGatewaySessionLease;
   gatewayConnection?: AgentGatewayMcpConnection;
@@ -2551,7 +2556,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           agentGatewayCredentials,
           input.threadId,
           PROVIDER,
-          input,
+          captureAgentGatewayCapabilityInput(input),
         );
         const agentGatewayConnection = agentGatewaySessionLease?.connection;
         const gatewayTools = agentGatewayConnection

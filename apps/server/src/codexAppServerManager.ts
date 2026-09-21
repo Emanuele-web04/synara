@@ -2072,7 +2072,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
       signal?.throwIfAborted();
-      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
+      // Forks retain the same computer-control capability as a session start.
+      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId, {
+        enableComputerControl: input.enableComputerControl === true,
+      });
       const processEnv = await this.buildSessionProcessEnv(
         codexHomePath,
         gatewaySessionLease?.connection.bearerToken,

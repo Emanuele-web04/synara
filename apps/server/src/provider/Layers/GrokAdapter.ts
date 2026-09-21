@@ -61,6 +61,7 @@ import {
   startAgentGatewaySessionLeaseExitWatcher,
   type AgentGatewaySessionLease,
   withAgentGatewayTurnCancellation,
+  captureAgentGatewayCapabilityInput,
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
@@ -1018,7 +1019,7 @@ export function makeGrokAdapter(
             agentGatewayCredentials,
             input.threadId,
             PROVIDER,
-            input,
+            captureAgentGatewayCapabilityInput(input),
           );
           yield* Effect.addFinalizer(() =>
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
