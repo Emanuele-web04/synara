@@ -504,18 +504,20 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     // macOS 26 renders the Liquid Glass material only from a layered Icon
     // Composer asset, so compile one into the asset catalog that ships beside
     // the ICNS. Older releases ignore Assets.car and keep the solid mark.
-    const iconDeveloperDir = process.env.SYNARA_ICON_DEVELOPER_DIR?.trim();
-    yield* runCommand(
-      ChildProcess.make({
-        ...commandOutputOptions(verbose),
-        env: {
-          ...process.env,
-          ...(iconDeveloperDir ? { DEVELOPER_DIR: iconDeveloperDir } : {}),
-        },
-      })`xcrun actool ${iconComposerSource} --compile ${stageResourcesDir} --platform macosx --minimum-deployment-target ${MAC_ICON_COMPOSER_DEPLOYMENT_TARGET} --app-icon ${MAC_ICON_ASSET_NAME} --include-all-app-icons --output-partial-info-plist ${path.join(tmpRoot, "icon-partial.plist")} --output-format human-readable-text`,
-    );
-
     const assetCatalogPath = path.join(stageResourcesDir, "Assets.car");
+    const precompiledCatalog = process.env.SYNARA_MAC_ICON_CATALOG?.trim();
+    if (precompiledCatalog) {
+      // Release CI compiles this architecture-independent resource from the
+      // same checkout on macOS 26; native code retains the macOS 15 SDK.
+      yield* fs.copyFile(precompiledCatalog, assetCatalogPath);
+    } else {
+      yield* runCommand(
+        ChildProcess.make({
+          ...commandOutputOptions(verbose),
+        })`xcrun actool ${iconComposerSource} --compile ${stageResourcesDir} --platform macosx --minimum-deployment-target ${MAC_ICON_COMPOSER_DEPLOYMENT_TARGET} --app-icon ${MAC_ICON_ASSET_NAME} --include-all-app-icons --output-partial-info-plist ${path.join(tmpRoot, "icon-partial.plist")} --output-format human-readable-text`,
+      );
+    }
+
     if (!(yield* fs.exists(assetCatalogPath))) {
       return yield* new BuildScriptError({
         message: `actool completed but the icon asset catalog was not found at ${assetCatalogPath}`,

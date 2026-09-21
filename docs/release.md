@@ -105,12 +105,14 @@ To publish from a manual dispatch instead of a tag push, pass `publish_release=t
 
 ### macOS release toolchains
 
-Both macOS release runners use macOS 15. Native helpers and the pinned Cua
-apple-metal bridge build with Xcode 16.4's macOS 15 SDK. Icon Composer assets
-compile separately with Xcode 26.3: `SYNARA_ICON_DEVELOPER_DIR` overrides
-`DEVELOPER_DIR` only for the packaging script's `actool` command. The release
-workflow verifies both installations before building. Local builds use their
-selected Xcode for icons unless that explicit icon-only override is set.
+Both native macOS release runners use macOS 15. Native helpers and the pinned
+Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. A separate macOS 26
+job compiles the architecture-independent Icon Composer catalog with Xcode 26.3
+from the same release checkout and passes it through a required workflow artifact.
+`SYNARA_MAC_ICON_CATALOG` points packaging at that catalog; a missing file fails
+the build. This avoids Apple's AssetRuntime framework crash on macOS 15 without
+changing the native SDK. Local builds without that variable compile icons with
+the selected Xcode on the local host.
 
 An older `actool` can exit successfully without creating `Assets.car`; that is a
 packaging failure, not permission to silently omit the Liquid Glass icon.
