@@ -133,7 +133,10 @@ async function main() {
     assert(tabs?.[0]?.tab_id);
     const target = { target_id: bound.target_id, tab_id: tabs[0].tab_id };
     successful(await call("browser_navigate", { ...target, url }), "navigate");
-    const state = successful(await call("get_browser_state", target), "snapshot");
+    const state = successful(
+      await call("get_browser_state", { ...target, snapshot_format: "semantic_v2" }),
+      "snapshot",
+    );
     const clickRef = findRef(state, "Increment");
     const inputRef = findRef(state, "Probe input");
     assert(
@@ -142,7 +145,10 @@ async function main() {
     );
     successful(await call("browser_click", { ...target, ref: clickRef }), "click");
     await eventually(() => clicks === 1, "HTTP observer did not receive exactly one click");
-    const refreshed = successful(await call("get_browser_state", target), "fresh input ref");
+    const refreshed = successful(
+      await call("get_browser_state", { ...target, snapshot_format: "semantic_v2" }),
+      "fresh input ref",
+    );
     const freshInputRef = findRef(refreshed, "Probe input");
     assert(freshInputRef);
     successful(
