@@ -221,7 +221,10 @@ import {
 } from "./SidebarThreadRowContent";
 import { GroupSettingsDialog } from "./chat/group/GroupSettingsDialog";
 import { SidebarGroupsSurface } from "./SidebarGroupsSurface";
-import { resolveGroupChatTargetProjectId } from "./SidebarGroupsSurface.logic";
+import {
+  activateThreadWhenHydrated,
+  resolveGroupChatTargetProjectId,
+} from "./SidebarGroupsSurface.logic";
 
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { RenameDialog } from "./RenameDialog";
@@ -7019,7 +7022,13 @@ export default function Sidebar() {
             if (projectAgentDialogState?.mode !== "onboarding") return;
             const coordinatorThreadId = overview.config?.coordinatorThreadId;
             if (coordinatorThreadId) {
-              activateThreadFromSidebarIntent(coordinatorThreadId);
+              void activateThreadWhenHydrated({
+                hasThread: () =>
+                  useStore.getState().sidebarThreadSummaryById[coordinatorThreadId] !== undefined,
+                activate: () => {
+                  activateThreadFromSidebarIntent(coordinatorThreadId);
+                },
+              });
             }
           }}
         />

@@ -2,6 +2,7 @@ import { ProjectId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  activateThreadWhenHydrated,
   resolveGroupChatTargetProjectId,
   resolveGroupCoordinatorRowLabel,
   resolveGroupsListEmptyState,
@@ -67,5 +68,53 @@ describe("resolveGroupChatTargetProjectId", () => {
 
   it("returns null when no group exists", () => {
     expect(resolveGroupChatTargetProjectId({ activeProject: null, groupProjects: [] })).toBeNull();
+  });
+});
+
+describe("activateThreadWhenHydrated", () => {
+  it("activates immediately when the thread is already hydrated", async () => {
+    let activated = 0;
+    await expect(
+      activateThreadWhenHydrated({
+        hasThread: () => true,
+        activate: () => {
+          activated += 1;
+        },
+      }),
+    ).resolves.toBe(true);
+    expect(activated).toBe(1);
+  });
+
+  it("waits for the thread to appear before activating", async () => {
+    let present = false;
+    let activated = 0;
+    setTimeout(() => {
+      present = true;
+    }, 30);
+    await expect(
+      activateThreadWhenHydrated({
+        hasThread: () => present,
+        activate: () => {
+          activated += 1;
+        },
+        delayMs: 10,
+      }),
+    ).resolves.toBe(true);
+    expect(activated).toBe(1);
+  });
+
+  it("gives up without activating when the thread never appears", async () => {
+    let activated = 0;
+    await expect(
+      activateThreadWhenHydrated({
+        hasThread: () => false,
+        activate: () => {
+          activated += 1;
+        },
+        maxAttempts: 3,
+        delayMs: 1,
+      }),
+    ).resolves.toBe(false);
+    expect(activated).toBe(0);
   });
 });

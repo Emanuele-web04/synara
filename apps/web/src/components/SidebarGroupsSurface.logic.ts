@@ -3,7 +3,7 @@
 //          empty states, and new-chat target resolution.
 // Layer: Web view logic (no React)
 // Exports: resolveGroupCoordinatorRowLabel, resolveGroupsListEmptyState,
-//          resolveGroupChatTargetProjectId
+//          resolveGroupChatTargetProjectId, activateThreadWhenHydrated
 
 import type { ProjectId } from "@synara/contracts";
 
@@ -47,4 +47,28 @@ export function resolveGroupChatTargetProjectId(input: {
     return activeProjectId;
   }
   return input.groupProjects[0]?.id ?? null;
+}
+
+/**
+ * A just-configured coordinator thread is not in the sidebar summary map yet when
+ * onboarding saves, so a bare activation intent is dropped (`threadExists=false`).
+ * Poll briefly until the snapshot catches up, then activate. Returns whether the
+ * activation ran.
+ */
+export async function activateThreadWhenHydrated(input: {
+  readonly hasThread: () => boolean;
+  readonly activate: () => void;
+  readonly maxAttempts?: number | undefined;
+  readonly delayMs?: number | undefined;
+}): Promise<boolean> {
+  const maxAttempts = input.maxAttempts ?? 20;
+  const delayMs = input.delayMs ?? 100;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (input.hasThread()) {
+      input.activate();
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return false;
 }
