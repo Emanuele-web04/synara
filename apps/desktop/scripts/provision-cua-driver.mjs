@@ -84,6 +84,22 @@ if (platform === "linux") {
     artifact,
   });
 }
+// Check the compiler before fetching ~190 MB of upstream source: a missing or
+// mismatched toolchain is the common failure and needs no network to detect.
+if (!(option("--artifact-dir") ?? process.env.SYNARA_CUA_ARTIFACT_DIR) && platform !== "win32") {
+  let found;
+  try {
+    found = execFileSync("rustc", ["--version"], { encoding: "utf8" }).trim();
+  } catch {
+    found = "no rustc on PATH";
+  }
+  if (!found.startsWith(`rustc ${release.rustVersion} `)) {
+    console.error(
+      `Cua Driver needs the pinned Rust ${release.rustVersion} toolchain; found ${found}. Install it with: rustup toolchain install ${release.rustVersion} && rustup default ${release.rustVersion}`,
+    );
+    process.exit(1);
+  }
+}
 const temporary = await mkdtemp(join(tmpdir(), "synara-cua-package-"));
 const environment = {
   ...process.env,
