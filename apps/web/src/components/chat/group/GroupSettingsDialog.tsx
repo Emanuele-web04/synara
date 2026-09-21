@@ -45,9 +45,12 @@ import { GroupPluginsSection } from "./GroupPluginsSection";
 import {
   GROUP_SETTINGS_SECTION_LABELS,
   GROUP_SETTINGS_SECTIONS,
-  buildGroupSettingsDraft,
+  buildGroupSettingsBaseline,
   groupSettingsDirtySections,
+  resolveSaveAttemptRequestId,
+  saveAttemptFingerprint,
   saveGroupSettings,
+  type GroupSettingsBaseline,
   type GroupSettingsDraft,
   type GroupSettingsSection,
 } from "./groupSettingsDialog.logic";
@@ -91,19 +94,22 @@ export function GroupSettingsDialog(props: {
 
   const [section, setSection] = useState<GroupSettingsSection>("general");
   const [draft, setDraft] = useState<GroupSettingsDraft | null>(null);
-  const [baseline, setBaseline] = useState<GroupSettingsDraft | null>(null);
+  const [baseline, setBaseline] = useState<GroupSettingsBaseline | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const requestIdRef = useRef("");
+  // The most recent failed save attempt; a retry reuses its requestId only while
+  // the payload fingerprint matches so server receipts dedupe the replay.
+  const failedAttemptRef = useRef<{ requestId: string; fingerprint: string } | null>(null);
   const openRef = useRef(false);
+  const seededNameRef = useRef(props.projectName);
 
   const config = agent.overview?.config ?? null;
 
-  // One requestId per dialog session so server receipts dedupe retries.
   useEffect(() => {
     if (props.open && !openRef.current) {
       openRef.current = true;
-      requestIdRef.current = crypto.randomUUID();
+      seededNameRef.current = props.projectName;
+      failedAttemptRef.current = null;
       setSection(props.initialSection ?? "general");
       setDraft(null);
       setBaseline(null);
@@ -114,20 +120,37 @@ export function GroupSettingsDialog(props: {
     if (!props.open) {
       openRef.current = false;
     }
-  }, [props.open, props.initialSection]);
+  }, [props.open, props.initialSection, props.projectName]);
 
   useEffect(() => {
     if (!props.open || draft !== null || agent.overview === null) return;
-    const base = buildGroupSettingsDraft({
+    const base = buildGroupSettingsBaseline({
       config,
       projectName: props.projectName,
       defaultModelSelection: props.defaultModelSelection,
     });
     setBaseline(base);
-    setDraft(base);
+    setDraft(base.draft);
   }, [agent.overview, config, draft, props.defaultModelSelection, props.open, props.projectName]);
 
-  const dirtySections = draft && baseline ? groupSettingsDirtySections(draft, baseline) : new Set();
+  // The project can be renamed while the dialog is open; re-seed the name into
+  // baseline, and into the draft too when the user has not edited it.
+  useEffect(() => {
+    if (!props.open || seededNameRef.current === props.projectName) return;
+    const previousName = seededNameRef.current;
+    seededNameRef.current = props.projectName;
+    setBaseline((current) =>
+      current && current.draft.name === previousName
+        ? { ...current, draft: { ...current.draft, name: props.projectName } }
+        : current,
+    );
+    setDraft((current) =>
+      current && current.name === previousName ? { ...current, name: props.projectName } : current,
+    );
+  }, [props.open, props.projectName]);
+
+  const dirtySections =
+    draft && baseline ? groupSettingsDirtySections(draft, baseline.draft) : new Set();
   const dirty = draft !== null && baseline !== null && dirtySections.size > 0;
 
   const handleSave = async () => {
@@ -139,22 +162,31 @@ export function GroupSettingsDialog(props: {
     }
     setSaving(true);
     setSaveError(null);
+    const importedInstructions =
+      props.mode === "onboarding" &&
+      !instructionsSource.serverBacked &&
+      instructionsAutosave.value.trim().length > 0
+        ? instructionsAutosave.value
+        : props.importedInstructions?.trim()
+          ? props.importedInstructions
+          : undefined;
+    const fingerprint = saveAttemptFingerprint({
+      mode: props.mode,
+      draft,
+      importedInstructions,
+    });
+    const requestId = resolveSaveAttemptRequestId({
+      failed: failedAttemptRef.current,
+      fingerprint,
+    });
     const result = await saveGroupSettings({
       projectId: props.projectId,
-      requestId: requestIdRef.current || crypto.randomUUID(),
+      requestId,
       mode: props.mode,
       draft,
       baseline,
-      config,
-      expectedRevision: props.mode === "edit" ? config?.revision : undefined,
-      importedInstructions:
-        props.mode === "onboarding" &&
-        !instructionsSource.serverBacked &&
-        instructionsAutosave.value.trim().length > 0
-          ? instructionsAutosave.value
-          : props.importedInstructions?.trim()
-            ? props.importedInstructions
-            : undefined,
+      expectedRevision: props.mode === "edit" ? baseline.config?.revision : undefined,
+      importedInstructions,
       userDisplayName,
       renameProject: async (title) => {
         await api.orchestration.dispatchCommand({
@@ -169,9 +201,11 @@ export function GroupSettingsDialog(props: {
     });
     setSaving(false);
     if (!result.ok) {
+      failedAttemptRef.current = { requestId, fingerprint };
       setSaveError(result.error);
       return;
     }
+    failedAttemptRef.current = null;
     useProjectAgentSummariesStore.getState().applyOverview(result.overview);
     void agent.load();
     props.onSaved?.(result.overview);
@@ -191,21 +225,22 @@ export function GroupSettingsDialog(props: {
               : "Coordinator settings for this group."}
           </DialogDescription>
         </DialogHeader>
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
           <nav
             aria-label="Group settings sections"
-            className="w-[220px] shrink-0 overflow-y-auto border-r border-[color:var(--color-border-light)] px-1.5 py-2"
+            className="shrink-0 overflow-x-auto border-b border-[color:var(--color-border-light)] px-1.5 py-2 sm:w-[220px] sm:overflow-x-visible sm:overflow-y-auto sm:border-b-0 sm:border-r"
           >
-            <ul className={cn("flex flex-col", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
+            <ul className={cn("flex flex-row sm:flex-col", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
               {GROUP_SETTINGS_SECTIONS.map((id) => {
                 const isActive = id === section;
                 return (
-                  <li key={id}>
+                  <li key={id} className="shrink-0">
                     <button
                       type="button"
                       aria-current={isActive ? "page" : undefined}
                       className={cn(
                         SETTINGS_SIDEBAR_ITEM_CLASS_NAME,
+                        "whitespace-nowrap",
                         isActive
                           ? SETTINGS_SIDEBAR_ROW_FILL_ACTIVE_CLASS_NAME
                           : SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME,

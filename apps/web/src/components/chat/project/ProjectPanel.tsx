@@ -258,6 +258,7 @@ export function ProjectPanel({
       </div>
       {projectId !== null ? (
         <GroupSettingsDialog
+          key={projectId}
           open={agentDialogOpen}
           mode={configured ? "edit" : "onboarding"}
           projectId={projectId}

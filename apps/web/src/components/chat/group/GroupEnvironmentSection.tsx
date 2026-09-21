@@ -118,6 +118,9 @@ export function GroupEnvironmentSection(props: {
             ))}
           </SettingsCard>
         )}
+        <p className="mt-2 px-1 text-[11px] text-muted-foreground">
+          Linking and unlinking apply immediately.
+        </p>
       </SettingsSectionShell>
 
       <SettingsSectionShell title="Workspace">
@@ -166,14 +169,26 @@ export function GroupEnvironmentSection(props: {
           <SettingsRow
             title="Location"
             description={
-              draft.libraryPath ? abbreviateHomePath(draft.libraryPath, homeDir) : "Not set"
+              canPickFolder
+                ? draft.libraryPath
+                  ? abbreviateHomePath(draft.libraryPath, homeDir)
+                  : "Not set"
+                : "Absolute path to the library folder."
             }
             control={
               canPickFolder ? (
                 <Button size="xs" variant="outline" onClick={() => void pickLibraryPath()}>
                   Change…
                 </Button>
-              ) : undefined
+              ) : (
+                <Input
+                  value={draft.libraryPath}
+                  onChange={(event) => onChange({ libraryPath: event.target.value })}
+                  placeholder="/absolute/path"
+                  aria-label="Library location"
+                  className="w-full sm:w-64"
+                />
+              )
             }
           />
           <SettingsRow

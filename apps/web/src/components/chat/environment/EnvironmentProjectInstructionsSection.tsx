@@ -3,7 +3,7 @@
 // Layer: Environment panel section
 // Exports: EnvironmentProjectInstructionsSection
 
-import { useEffect, useRef, useState, type ChangeEventHandler } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEventHandler } from "react";
 import { THREAD_NOTES_MAX_CHARS, type ProjectId } from "@synara/contracts";
 
 import { Textarea } from "~/components/ui/textarea";
@@ -46,7 +46,9 @@ export function useProjectInstructionsAutosave({
     onChangeRef.current = onChange;
   }, [onChange]);
 
-  const flush = () => {
+  // Stable identity: `flush` is an effect dependency below, so a per-render
+  // closure would re-run the effects (and the unmount flush) on every keystroke.
+  const flush = useCallback(() => {
     if (debounceRef.current !== null) {
       window.clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -60,7 +62,7 @@ export function useProjectInstructionsAutosave({
     if (projectIdRef.current === pendingSave.projectId) {
       lastCommittedRef.current = pendingSave.value;
     }
-  };
+  }, []);
 
   useEffect(() => {
     const projectChanged = projectIdRef.current !== projectId;

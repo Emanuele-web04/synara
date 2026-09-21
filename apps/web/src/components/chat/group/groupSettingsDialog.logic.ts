@@ -120,6 +120,29 @@ export function buildGroupSettingsDraft(input: {
   };
 }
 
+/**
+ * The draft plus the config snapshot it was built from. `config.revision` is the
+ * optimistic-lock token sent as `expectedRevision`, and the preserved fields the
+ * dialog does not edit (extra `workerRouting` keys, `limits`, `captureEnabled`,
+ * `coordinatorProviderOptions`) are sent from this snapshot — never from live
+ * config, which may already reflect another writer's save.
+ */
+export interface GroupSettingsBaseline {
+  readonly draft: GroupSettingsDraft;
+  readonly config: ProjectAgentConfig | null;
+}
+
+export function buildGroupSettingsBaseline(input: {
+  readonly config: ProjectAgentConfig | null | undefined;
+  readonly projectName: string;
+  readonly defaultModelSelection: ModelSelection | null | undefined;
+}): GroupSettingsBaseline {
+  return {
+    draft: buildGroupSettingsDraft(input),
+    config: input.config ?? null,
+  };
+}
+
 /** Sections whose draft fields differ from the baseline. The Plugins section has no settings. */
 export function groupSettingsDirtySections(
   draft: GroupSettingsDraft,
@@ -161,14 +184,17 @@ export function buildGroupConfigureInput(input: {
   readonly requestId: string;
   readonly mode: "onboarding" | "edit";
   readonly draft: GroupSettingsDraft;
-  readonly baseline: GroupSettingsDraft;
-  readonly config: ProjectAgentConfig | null | undefined;
+  readonly baseline: GroupSettingsBaseline;
   readonly expectedRevision?: number | undefined;
   readonly importedInstructions?: string | undefined;
   readonly userDisplayName?: string | undefined;
 }): ProjectAgentConfigureInput {
-  const { draft, baseline, config } = input;
-  const generalDirty = groupSettingsDirtySections(draft, baseline).has("general");
+  const { draft, baseline } = input;
+  const baselineDraft = baseline.draft;
+  // Preserved fields come from the baseline snapshot so a concurrent write that
+  // already landed is not silently folded into this save.
+  const config = baseline.config;
+  const generalDirty = groupSettingsDirtySections(draft, baselineDraft).has("general");
 
   // Preserve fields the dialog does not edit so a save never drops them server-side.
   const workerRouting: ProjectAgentConfigureInput["workerRouting"] = {
@@ -176,6 +202,12 @@ export function buildGroupConfigureInput(input: {
     modelSelection: draft.workerModelSelection,
     environment: draft.workerEnvironment,
   };
+
+  // Cleared fields are sent as `null` (the server nulls the column); a field is
+  // omitted only when it was empty in the baseline too, where absent == keep.
+  const icon = draft.icon.trim();
+  const libraryPath = draft.libraryPath.trim();
+  const libraryRemoteUrl = draft.libraryRemoteUrl.trim();
 
   return {
     requestId: input.requestId,
@@ -200,15 +232,50 @@ export function buildGroupConfigureInput(input: {
       ? { importedInstructions: input.importedInstructions }
       : {}),
     goal: draft.goal,
-    ...(draft.icon.trim().length > 0 ? { icon: draft.icon.trim() } : {}),
+    ...(icon.length > 0 ? { icon } : baselineDraft.icon.trim().length > 0 ? { icon: null } : {}),
     autoMemoryEnabled: draft.autoMemoryEnabled,
     ...(input.userDisplayName?.trim() ? { userDisplayName: input.userDisplayName.trim() } : {}),
-    ...(draft.libraryPath.trim().length > 0 ? { libraryPath: draft.libraryPath.trim() } : {}),
-    ...(draft.libraryRemoteUrl.trim().length > 0
-      ? { libraryRemoteUrl: draft.libraryRemoteUrl.trim() }
-      : {}),
+    ...(libraryPath.length > 0
+      ? { libraryPath }
+      : baselineDraft.libraryPath.trim().length > 0
+        ? { libraryPath: null }
+        : {}),
+    ...(libraryRemoteUrl.length > 0
+      ? { libraryRemoteUrl }
+      : baselineDraft.libraryRemoteUrl.trim().length > 0
+        ? { libraryRemoteUrl: null }
+        : {}),
     libraryPushOnChange: draft.libraryPushOnChange,
   };
+}
+
+/**
+ * Covers everything a save attempt sends. A failed attempt may be retried with
+ * the same requestId only while this fingerprint is unchanged; editing the draft
+ * (or a different imported-instructions payload) starts a fresh attempt id so a
+ * server-side receipt never swallows a changed payload.
+ */
+export function saveAttemptFingerprint(input: {
+  readonly mode: "onboarding" | "edit";
+  readonly draft: GroupSettingsDraft;
+  readonly importedInstructions: string | undefined;
+}): string {
+  return JSON.stringify({
+    ...input.draft,
+    mode: input.mode,
+    importedInstructions: input.importedInstructions ?? null,
+  });
+}
+
+export function resolveSaveAttemptRequestId(input: {
+  readonly failed: { readonly requestId: string; readonly fingerprint: string } | null;
+  readonly fingerprint: string;
+  readonly generateRequestId?: () => string;
+}): string {
+  if (input.failed !== null && input.failed.fingerprint === input.fingerprint) {
+    return input.failed.requestId;
+  }
+  return (input.generateRequestId ?? (() => crypto.randomUUID()))();
 }
 
 export type SaveGroupSettingsResult =
@@ -220,8 +287,7 @@ export async function saveGroupSettings(input: {
   readonly requestId: string;
   readonly mode: "onboarding" | "edit";
   readonly draft: GroupSettingsDraft;
-  readonly baseline: GroupSettingsDraft;
-  readonly config: ProjectAgentConfig | null | undefined;
+  readonly baseline: GroupSettingsBaseline;
   readonly expectedRevision?: number | undefined;
   readonly importedInstructions?: string | undefined;
   readonly userDisplayName?: string | undefined;
@@ -233,9 +299,10 @@ export async function saveGroupSettings(input: {
     return { ok: false, error: "Give the group a name." };
   }
   try {
-    if (input.renameProject && trimmedName !== input.baseline.name.trim()) {
-      await input.renameProject(trimmedName);
-    }
+    // Configure first: a revision conflict must abort before the project meta
+    // rename lands. On retry the rename is compared against the last saved name
+    // (the baseline), and a reused requestId makes the configure call replay its
+    // receipt instead of re-applying.
     const overview = await input.configure(
       buildGroupConfigureInput({
         projectId: input.projectId,
@@ -243,12 +310,14 @@ export async function saveGroupSettings(input: {
         mode: input.mode,
         draft: input.draft,
         baseline: input.baseline,
-        config: input.config,
         expectedRevision: input.expectedRevision,
         importedInstructions: input.importedInstructions,
         userDisplayName: input.userDisplayName,
       }),
     );
+    if (input.renameProject && trimmedName !== input.baseline.draft.name.trim()) {
+      await input.renameProject(trimmedName);
+    }
     return { ok: true, overview };
   } catch (error) {
     return {

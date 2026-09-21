@@ -809,5 +809,20 @@ it.effect("round-trips library hosting fields and rejects a relative libraryPath
     assert.equal(preserved.config?.libraryPath, "/tmp/group-library");
     assert.equal(preserved.config?.libraryRemoteUrl, "https://example.com/library.git");
     assert.equal(preserved.config?.libraryPushOnChange, true);
+    // `null` clears the column; absent (as above) preserves it.
+    const cleared = yield* service.configure(
+      {
+        requestId: "req-lib-clear",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+        expectedRevision: preserved.config?.revision,
+        libraryPath: null,
+        libraryRemoteUrl: null,
+      },
+      { kind: "user" },
+    );
+    assert.equal(cleared.config?.libraryPath, undefined);
+    assert.equal(cleared.config?.libraryRemoteUrl, undefined);
+    assert.equal(cleared.config?.libraryPushOnChange, true);
   }).pipe(Effect.provide(harness.layer));
 });

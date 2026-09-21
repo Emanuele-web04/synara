@@ -1,10 +1,15 @@
-import { MEMORY_AUTO_DOCUMENT_PATH, MEMORY_DOCUMENT_PREFIX } from "@synara/shared/projectAgent";
+import {
+  MEMORY_AUTO_DOCUMENT_PATH,
+  MEMORY_DOCUMENT_PREFIX,
+  MEMORY_THREAD_DOCUMENT_PREFIX,
+} from "@synara/shared/projectAgent";
 import { useEffect, useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
 import type { useProjectInstructionsAutosave } from "~/components/chat/environment/EnvironmentProjectInstructionsSection";
 import type { useProjectInstructionsSource } from "~/components/chat/project/useProjectInstructionsSource";
 import type { useProjectAgent } from "~/components/chat/project/useProjectAgent";
+import { EnvironmentCollapsibleSection } from "~/components/chat/environment/EnvironmentRow";
 import {
   SettingsCard,
   SettingsEmptyState,
@@ -113,8 +118,14 @@ export function GroupMemorySection(props: {
   const [noteError, setNoteError] = useState<string | null>(null);
   const [noteBusy, setNoteBusy] = useState(false);
 
-  const memoryDocuments = props.agent.documents.filter((document) =>
-    document.logicalPath.startsWith(MEMORY_DOCUMENT_PREFIX),
+  const memoryDocuments = props.agent.documents.filter(
+    (document) =>
+      document.logicalPath.startsWith(MEMORY_DOCUMENT_PREFIX) &&
+      document.logicalPath !== MEMORY_AUTO_DOCUMENT_PATH &&
+      !document.logicalPath.startsWith(MEMORY_THREAD_DOCUMENT_PREFIX),
+  );
+  const threadDocuments = props.agent.documents.filter((document) =>
+    document.logicalPath.startsWith(MEMORY_THREAD_DOCUMENT_PREFIX),
   );
 
   const submitNote = () => {
@@ -150,6 +161,9 @@ export function GroupMemorySection(props: {
             placeholder="Instructions every thread in this group follows."
             aria-label="Group instructions"
           />
+          {instructionsSource.serverBacked ? (
+            <p className="text-[11px] text-muted-foreground">Applies immediately.</p>
+          ) : null}
           {instructionsSource.conflict ? (
             <p className="text-[11px] text-destructive" role="alert">
               {instructionsSource.conflict}
@@ -210,6 +224,33 @@ export function GroupMemorySection(props: {
             ))}
           </SettingsCard>
         )}
+        {threadDocuments.length > 0 ? (
+          <div className="mt-3">
+            <EnvironmentCollapsibleSection
+              label={`Thread memory (${threadDocuments.length})`}
+              defaultOpen={false}
+            >
+              <SettingsCard>
+                {threadDocuments.map((document) => (
+                  <SettingsListRow
+                    key={document.logicalPath}
+                    title={document.logicalPath.slice(MEMORY_THREAD_DOCUMENT_PREFIX.length)}
+                    description={formatRelativeTime(document.updatedAt)}
+                    actions={
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() => setViewingPath(document.logicalPath)}
+                      >
+                        View
+                      </Button>
+                    }
+                  />
+                ))}
+              </SettingsCard>
+            </EnvironmentCollapsibleSection>
+          </div>
+        ) : null}
         <div className="mt-3">
           <div className="flex items-center gap-2">
             <Input
@@ -235,6 +276,7 @@ export function GroupMemorySection(props: {
               <ArrowUpIcon className="size-4" />
             </IconButton>
           </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">Notes apply immediately.</p>
           {noteError ? (
             <p className="mt-1 text-[11px] text-destructive" role="alert">
               {noteError}

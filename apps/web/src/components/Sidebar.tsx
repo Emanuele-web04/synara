@@ -7095,6 +7095,7 @@ export default function Sidebar() {
 
       {projectAgentDialogProject ? (
         <GroupSettingsDialog
+          key={projectAgentDialogProject.id}
           open={projectAgentDialogState !== null}
           mode={projectAgentDialogState?.mode ?? "onboarding"}
           projectId={projectAgentDialogProject.id}

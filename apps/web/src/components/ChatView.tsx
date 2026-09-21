@@ -1644,10 +1644,12 @@ export default function ChatView({
   const [coordinatorSettingsSection, setCoordinatorSettingsSection] = useState<
     GroupSettingsSection | undefined
   >(undefined);
-  const showCoordinatorSuggestions = shouldShowCoordinatorSuggestions({
-    isCoordinatorThread: isCoordinatorConversation,
-    messages: activeThread?.messages ?? EMPTY_MESSAGES,
-  });
+  const showCoordinatorSuggestions =
+    isGroupContainer &&
+    shouldShowCoordinatorSuggestions({
+      isCoordinatorThread: isCoordinatorConversation,
+      messages: activeThread?.messages ?? EMPTY_MESSAGES,
+    });
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
@@ -5999,7 +6001,10 @@ export default function ChatView({
               onClose={() => setProjectFromAuxiliary(false)}
               settingsDialogOpen={coordinatorSettingsOpen}
               settingsInitialSection={coordinatorSettingsSection}
-              onSettingsDialogOpenChange={setCoordinatorSettingsOpen}
+              onSettingsDialogOpenChange={(open) => {
+                setCoordinatorSettingsOpen(open);
+                if (!open) setCoordinatorSettingsSection(undefined);
+              }}
             />
           ) : null}
         </div>

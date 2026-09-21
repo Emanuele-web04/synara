@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import type { ModelSelection } from "@synara/contracts";
+import type { ModelSelection, ProviderKind, ProviderModelDescriptor } from "@synara/contracts";
 
 import { useAppSettings } from "~/appSettings";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
@@ -12,6 +12,7 @@ import {
   buildModelSelection,
   buildNextProviderOptions,
   buildProviderOptionPatch,
+  type ProviderOptions,
 } from "~/providerModelOptions";
 import { SettingsRow } from "~/components/settings/SettingsPanelPrimitives";
 import { SettingsSelectControl } from "~/components/settings/SettingControls";
@@ -42,6 +43,49 @@ function useGroupModelCatalog(input: {
     }),
     modelHintByProvider: { [input.selection.provider]: input.selection.model },
   });
+}
+
+/**
+ * Reapply the current effort override on a model change when the new model
+ * exposes the same option id and accepts the same value; otherwise drop it.
+ */
+function carryEffortOverride(input: {
+  readonly current: ModelSelection;
+  readonly currentRuntimeModel: ProviderModelDescriptor | undefined;
+  readonly provider: ProviderKind;
+  readonly model: string;
+  readonly runtimeModel: ProviderModelDescriptor | undefined;
+}): ProviderOptions | undefined {
+  const options = input.current.options;
+  if (options === undefined) return undefined;
+  const optionId = getComposerTraitSelection(
+    input.current.provider,
+    input.current.model,
+    "",
+    options,
+    input.currentRuntimeModel,
+  ).primarySelectDescriptor?.id;
+  if (optionId === undefined) return undefined;
+  const value = (options as Record<string, unknown>)[optionId];
+  if (typeof value !== "string") return undefined;
+  const nextTraits = getComposerTraitSelection(
+    input.provider,
+    input.model,
+    "",
+    undefined,
+    input.runtimeModel,
+  );
+  if (
+    nextTraits.primarySelectDescriptor?.id !== optionId ||
+    !nextTraits.effortLevels.some((option) => option.value === value)
+  ) {
+    return undefined;
+  }
+  return buildNextProviderOptions(
+    input.provider,
+    undefined,
+    buildProviderOptionPatch(input.provider, optionId, value),
+  );
 }
 
 function UseDefaultLink(props: { readonly disabled: boolean; readonly onClick: () => void }) {
@@ -110,8 +154,19 @@ export function GroupModelRow(props: {
                 model,
                 runtimeModels: runtimeModelsByProvider[provider],
               });
+              const options = carryEffortOverride({
+                current: props.selection,
+                currentRuntimeModel: resolveRuntimeModelDescriptor({
+                  provider: props.selection.provider,
+                  model: props.selection.model,
+                  runtimeModels: runtimeModelsByProvider[props.selection.provider],
+                }),
+                provider,
+                model,
+                runtimeModel,
+              });
               props.onChange(
-                buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode),
+                buildModelSelection(provider, model, options, runtimeModel?.supportsAutoMode),
               );
             }}
           />
@@ -137,7 +192,7 @@ export function GroupEffortRow(props: {
   readonly projectCwd: string;
   readonly onChange: (next: ModelSelection) => void;
 }) {
-  const { runtimeModelsByProvider } = useGroupModelCatalog({
+  const { runtimeModelsByProvider, selectedProviderModelsLoading } = useGroupModelCatalog({
     selection: props.selection,
     projectCwd: props.projectCwd,
     pickerOpen: false,
@@ -169,7 +224,11 @@ export function GroupEffortRow(props: {
         title={props.title}
         description={props.description}
         status={
-          <span className="text-muted-foreground">Not available for {props.selection.model}.</span>
+          <span className="text-muted-foreground">
+            {selectedProviderModelsLoading
+              ? "Checking effort support…"
+              : `Not available for ${props.selection.model}.`}
+          </span>
         }
       />
     );
