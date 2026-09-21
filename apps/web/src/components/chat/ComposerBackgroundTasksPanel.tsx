@@ -112,11 +112,11 @@ export function ComposerBackgroundTasksPanel({
               >
                 <div className="flex min-w-0 flex-1 items-center gap-2" title={row.label}>
                   {rowIcon(row.kind)}
-                  <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/85">
+                  <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">
                     {row.label}
                   </span>
                   {elapsed ? (
-                    <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/55">
+                    <span className="shrink-0 text-ui-sm tabular-nums text-muted-foreground/55">
                       {elapsed}
                     </span>
                   ) : null}
