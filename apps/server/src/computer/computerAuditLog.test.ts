@@ -79,6 +79,33 @@ describe("summarizeComputerAuditArgs", () => {
 });
 
 describe("ComputerAuditLog", () => {
+  it("persists reviewed native diagnostics but strips arbitrary native payloads", async () => {
+    const dir = await tempDir();
+    const filePath = join(dir, "computer-audit.jsonl");
+    const log = new ComputerAuditLog(filePath);
+    const diagnostics = {
+      delivery_path: "ax" as const,
+      actuator: "ax_press" as const,
+      ax_error: -25202,
+      window_title: "private window title",
+      message: "private field value",
+      text: "private typed content",
+    };
+    log.record({
+      tool: "computer_click",
+      effect: "dispatched-unknown",
+      code: "cua_action_failed",
+      diagnostics,
+    });
+    await log.flush();
+    const saved = await readFile(filePath, "utf8");
+    expect(JSON.parse(saved).diagnostics).toEqual({
+      delivery_path: "ax",
+      actuator: "ax_press",
+      ax_error: -25202,
+    });
+    expect(saved).not.toContain("private");
+  });
   it("appends one JSON object per line with timestamp, target, and effect", async () => {
     const dir = await tempDir();
     const filePath = join(dir, "computer-audit.jsonl");

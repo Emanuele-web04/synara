@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./cuaActionDiagnostics": {
+      "types": "./src/cuaActionDiagnostics.ts",
+      "import": "./src/cuaActionDiagnostics.ts"
+    },
     "./computerInvocation": {
       "types": "./src/computerInvocation.ts",
       "import": "./src/computerInvocation.ts"

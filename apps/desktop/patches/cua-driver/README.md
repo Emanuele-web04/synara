@@ -495,6 +495,51 @@ alive across transient session death.
   inline outline ref clicks successfully, and a binding whose session
   namespace was dropped reinstates without a `get_browser_state` round-trip.
 
+Revision 34 addresses the September 20 live-test report's native focus and
+observability failures.
+
+- A plain coordinate click can use an exact-window AX hit-test before selecting
+  the pixel transport. Only an advertised `AXPress` is attempted; ancestry must
+  match the requested window, reflex activation is suppressed, and an attempted
+  AX failure never falls through to another actuator. Chromium detection selects
+  the pixel recipe independently of whether the caller forced synthetic input.
+- A raw background left click still briefly borrows keyboard focus when its
+  target is not already the user's exact key window. It now captures and proves
+  the prior PID, key-window ID, WindowServer focus and Space before activation.
+  An unobservable restoration target refuses the click before activation. The
+  activation, click and RAII restoration run on the same blocking worker, so
+  cancellation of an async waiter cannot restore ahead of a detached click.
+  Cleanup restores the exact native key window without re-entering a cancelled
+  input gate, preserves intervening user app/window/Space changes, and reports
+  failed or unobservable restoration instead of swallowing it. This reduces
+  focus disruption; it does not make synthetic clicks safe for uninterrupted
+  simultaneous physical typing.
+- Click and wheel results carry static actuator, delivery, focus and restoration
+  metadata. AX failures preserve their numeric AXError in the structured result,
+  alongside a fixed error code. Diagnostics never include titles, text or AX
+  content; the host separately allowlists fields before writing them to logs.
+- `get_agent_cursor_state` adds `overlay_ready`, `render_visible` and
+  `overlay_scope: "main_display"`. Readiness means an AppKit overlay exists;
+  render visibility describes logical render state, not proof of pixels on the
+  target's display. Overlay initialization failures emit static diagnostic codes.
+  The overlay already had `CanJoinAllSpaces`, `FullScreenAuxiliary` and
+  `Stationary` collection behavior upstream. Secondary-display rendering remains
+  unqualified: the single overlay covers `NSScreen.mainScreen.frame`.
+  Synara now keeps the cursor parked through model turns, hides it at turn end,
+  and uses a 60-second idle expiry as a backstop. A parked compact cursor does
+  not request frame ticks; only a pending glide, pulse or fade does.
+
+Revision 34 verification on Linux with Rust 1.97.1 includes the pure exact-focus
+restoration policy, compact cursor tests (including parked visibility and the
+60-second expiry), and the unchanged background-input admission tests. Apple
+architecture Rust metadata checking, including macOS test sources, also passes
+with the ScreenCaptureKit documentation build mode and host C compilation; this
+is source typechecking only and cannot produce or qualify a macOS executable.
+The normal Apple build requires the Apple SDK, and exact focus restoration,
+continuous typing, Spaces and display painting still require native qualification.
+Both patches are regenerated against the pinned source; the Linux follow-on
+patch changes only revision context, preserving its existing browser-only scope.
+
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).
 [`qualification.md`](../../../../docs/computer-use-cua/qualification.md) records

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CuaComputerBackend } from "./CuaComputerBackend.ts";
+import { CuaActionError, CuaComputerBackend } from "./CuaComputerBackend.ts";
 import { ComputerAvailability, ComputerScreenshot, ComputerState } from "@synara/contracts";
 import { Schema } from "effect";
 import {
@@ -20,6 +20,7 @@ function fixture(options?: {
   readonly semanticTextLaneGapMs?: number;
   readonly stillIntervalMs?: number;
   readonly hostPlatform?: string;
+  readonly nativeRevision?: number | null;
 }) {
   const calls: Array<{
     name?: string;
@@ -67,7 +68,10 @@ function fixture(options?: {
   header.write("IHDR", 12);
   header.writeUInt32BE(400, 16);
   header.writeUInt32BE(200, 20);
-  const request = vi.fn(async (_endpoint, request) => {
+  const respond = async (
+    _endpoint: unknown,
+    request: (typeof calls)[number] & { method?: string },
+  ) => {
     calls.push(request);
     const responseEpoch = desktopEpoch;
     if (request.method === "probe" || request.method === "stop")
@@ -207,7 +211,13 @@ function fixture(options?: {
       desktopEpoch: responseEpoch,
       hostPlatform: options?.hostPlatform ?? "darwin",
     };
-  }) as unknown as typeof cuaRequest;
+  };
+  const request = vi.fn(async (...args: Parameters<typeof respond>) => ({
+    ...(await respond(...args)),
+    ...(options?.nativeRevision === null
+      ? {}
+      : { driverNativeRevision: options?.nativeRevision ?? 34 }),
+  })) as unknown as typeof cuaRequest;
   const backend = new CuaComputerBackend({
     endpoint: "/fixture-only",
     request,
@@ -1928,7 +1938,8 @@ describe("Cua native boundary", () => {
     f.pauseDesktop(true);
     await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
       effect: "not-dispatched",
-      code: "desktop_input_paused",
+      code: "computer_input_paused",
+      layer: "driver-host",
       inputPause: { windowId: "cua:10:20" },
     });
     f.pauseDesktop(false);
@@ -1963,6 +1974,102 @@ describe("Cua native boundary", () => {
       });
     }
   });
+  it("permits advertised AXPress for plain clicks and preserves physical click gestures", async () => {
+    const f = fixture();
+    const point = { x: -275, y: 30 };
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    await f.backend.click(point, "cua:10:20");
+    await f.backend.click(point, "cua:10:20", ["shift"]);
+    await f.backend.doubleClick(point, "cua:10:20");
+    await f.backend.tripleClick(point, "cua:10:20");
+    await f.backend.rightClick(point, "cua:10:20");
+    const clicks = f.calls.filter((call) => call.name === "click");
+    expect(clicks).toHaveLength(5);
+    expect(clicks[0]?.args).not.toHaveProperty("force_synthetic");
+    for (const click of clicks.slice(1)) expect(click.args?.force_synthetic).toBe(true);
+    expect(clicks[1]?.args).toMatchObject({ modifier: ["shift"] });
+    expect(clicks[2]?.args).toMatchObject({ count: 2 });
+    expect(clicks[3]?.args).toMatchObject({ count: 3 });
+    expect(clicks[4]?.args).toMatchObject({ button: "right" });
+  });
+  it.each([0, 33, null])(
+    "keeps plain clicks synthetic for older or unknown native revision %s",
+    async (nativeRevision) => {
+      const f = fixture({ nativeRevision });
+      await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+      await f.backend.click({ x: -275, y: 30 }, "cua:10:20");
+      expect(f.calls.find((call) => call.name === "click")?.args).toMatchObject({
+        force_synthetic: true,
+      });
+    },
+  );
+  it("carries safe actuator diagnostics for uncertain clicks without replaying", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    f.onTool("click", () => ({
+      isError: true,
+      structuredContent: {
+        diagnostics: {
+          delivery_path: "ax",
+          actuator: "ax_press",
+          error_code: "ax_dispatch_failed",
+          ax_error: -25202,
+          message: "private focused content",
+          text: "private typed text",
+        },
+      },
+    }));
+    const failure = await f.backend.click({ x: -275, y: 30 }, "cua:10:20").catch((error) => error);
+    expect(failure).toBeInstanceOf(CuaActionError);
+    expect(failure).toMatchObject({
+      code: "cua_action_failed",
+      effect: "dispatched-unknown",
+      diagnostics: {
+        delivery_path: "ax",
+        actuator: "ax_press",
+        error_code: "ax_dispatch_failed",
+        ax_error: -25202,
+      },
+    });
+    expect(JSON.stringify(failure.diagnostics)).not.toContain("private");
+    expect(f.calls.filter((call) => call.name === "click")).toHaveLength(1);
+  });
+  it("preserves an explicit not-dispatched error and retains usable observation geometry", async () => {
+    const f = fixture();
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    f.onTool("click", () => ({
+      isError: true,
+      structuredContent: {
+        effect: "not-dispatched",
+        code: "ax_action_refused",
+        diagnostics: { error_code: "ax_action_refused", delivery_path: "ax" },
+      },
+    }));
+    await expect(f.backend.click({ x: -275, y: 30 }, "cua:10:20")).rejects.toMatchObject({
+      effect: "not-dispatched",
+      code: "ax_action_refused",
+    });
+    f.onTool("click", () => ({ structuredContent: { effect: "unverifiable" } }));
+    // Nothing was sent, so a corrected target may use the same observation.
+    await expect(f.backend.click({ x: -270, y: 30 }, "cua:10:20")).resolves.toMatchObject({
+      effect: "dispatched-unknown",
+    });
+    expect(f.calls.filter((call) => call.name === "click")).toHaveLength(2);
+  });
+  it.each(["dispatched-unknown", "unverifiable", "confirmed"])(
+    "never downgrades explicit %s input to a legacy status refusal",
+    async (effect) => {
+      const f = fixture();
+      f.onTool("press_key", () => ({
+        isError: true,
+        structuredContent: { effect, status: "refused", code: "ax_action_refused" },
+      }));
+      await expect(f.backend.pressKey("enter", "cua:10:20")).rejects.toMatchObject({
+        effect: "dispatched-unknown",
+      });
+      expect(f.calls.filter((call) => call.name === "press_key")).toHaveLength(1);
+    },
+  );
   it("keeps explicitly approved foreground text on the native foreground tool", async () => {
     const f = fixture();
     await withDesktopDeliveryMode("foreground", () => f.backend.typeText("abc", "cua:10:20"));
@@ -2666,6 +2773,23 @@ describe("Cua native boundary", () => {
     });
     expect(f.calls.filter((c) => isTyping(c.name))).toHaveLength(1);
   });
+  it("preserves status refusals and gives a semantic recovery route for keyboard ambiguity", async () => {
+    const f = fixture();
+    f.onTool("press_key", () => ({
+      structuredContent: {
+        status: "refused",
+        refusal: { code: "same_pid_keyboard_ambiguity" },
+      },
+    }));
+    const failure = await f.backend.pressKey("enter", "cua:10:20").catch((error) => error);
+    expect(failure).toMatchObject({
+      effect: "not-dispatched",
+      code: "same_pid_keyboard_ambiguity",
+    });
+    expect(failure.message).toContain("computer_type_text with an observed ref");
+    expect(failure.message).toContain("do not send keydown/keyup");
+    expect(f.calls.filter((call) => call.name === "press_key")).toHaveLength(1);
+  });
   it("encodes missing grants with the public permission schema", async () => {
     const f = fixture();
     f.denyPermissions();
@@ -2981,7 +3105,6 @@ describe("Cua native boundary", () => {
       x: 25,
       y: 10,
       coordinate_space: "window_points",
-      force_synthetic: true,
       expected_window_bounds: { x: -300, y: 20, width: 200, height: 100 },
     });
   });

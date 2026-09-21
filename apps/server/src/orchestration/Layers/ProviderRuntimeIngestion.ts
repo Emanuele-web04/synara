@@ -49,6 +49,7 @@ import {
 import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImages.ts";
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ComputerService } from "../../computer/Services/ComputerService.ts";
 import { activeThreadGoal } from "../../provider/goalMode.ts";
 import {
   classifyTerminalTurnApplicability,
@@ -657,6 +658,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const computerService = yield* Effect.serviceOption(ComputerService);
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const runtimeEvents = yield* ProviderRuntimeEventRepository;
@@ -2162,12 +2164,14 @@ const make = Effect.gen(function* () {
       if (event.type === "turn.started" && rawEventTurnId) {
         yield* rememberOutstandingTurn(thread.id, rawEventTurnId);
       }
+      const hasAmbiguousTurns =
+        isTerminalTurnEvent &&
+        ((yield* Ref.get(outstandingTurnIdsByThreadRef)).get(thread.id)?.size ?? 0) > 1;
       const terminalApplicability = isTerminalTurnEvent
         ? classifyTerminalTurnApplicability({
             activeTurnId,
             eventTurnId: rawEventTurnId,
-            hasAmbiguousTurns:
-              ((yield* Ref.get(outstandingTurnIdsByThreadRef)).get(thread.id)?.size ?? 0) > 1,
+            hasAmbiguousTurns,
           })
         : undefined;
       const eventTurnId =
@@ -2209,6 +2213,38 @@ const make = Effect.gen(function* () {
         event.type === "turn.started" && shouldApplyThreadLifecycle
           ? yield* getSourceProposedPlanReferenceForAcceptedTurnStart(thread.id, eventTurnId)
           : null;
+
+      // Release at the accepted provider lifecycle seam, including failed and
+      // interrupted turns. Keep explicit terminal identities even when they
+      // cannot replace the thread's active projection: the old turn may still
+      // own the desktop, while the manager refuses to release a newer owner.
+      // A turnless ambiguous completion proves neither turn has ended.
+      const computerSessionEnded =
+        event.type === "session.exited" ||
+        event.type === "runtime.error" ||
+        (event.type === "session.state.changed" &&
+          (event.payload.state === "stopped" || event.payload.state === "error"));
+      if (
+        Option.isSome(computerService) &&
+        (computerSessionEnded ||
+          (isTerminalTurnEvent &&
+            (eventTurnId !== undefined || (shouldApplyThreadLifecycle && !hasAmbiguousTurns))))
+      ) {
+        const releasedTurnId = isTerminalTurnEvent
+          ? eventTurnId
+          : (rawEventTurnId ?? activeTurnId ?? undefined);
+        yield* Effect.tryPromise(() =>
+          computerService.value.manager.releaseDesktopControl(thread.id, releasedTurnId),
+        ).pipe(
+          Effect.catchCause(() =>
+            Effect.logWarning("computer desktop lease release failed", {
+              threadId: thread.id,
+              turnId: releasedTurnId,
+              eventType: event.type,
+            }),
+          ),
+        );
+      }
 
       if (event.type === "session.started") {
         yield* settleUnanswerablePendingInteractions(thread.id, event, now);

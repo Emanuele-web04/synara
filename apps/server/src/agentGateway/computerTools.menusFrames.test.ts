@@ -58,6 +58,9 @@ async function setup(
   const manager = new ComputerManager({ backend, actionSettleMs: 0 });
   const tools = makeAgentGatewayComputerTools({
     manager,
+    // These tests exercise menu execution; the never-raise gate has explicit
+    // refusal coverage in computerTools.test.ts.
+    resolveForegroundAuthorization: async () => ({ userRequestedVisibleUse: true }),
     ...(authorizeAction ? { authorizeAction } : {}),
   });
   const byName = new Map(tools.map((tool) => [tool.definition.name, tool]));
@@ -267,6 +270,23 @@ describe("computer_set_window_frame", () => {
 });
 
 describe("computer_invoke_menu", () => {
+  it("does not promise background menu execution even when visible use is authorized", async () => {
+    const approval = vi.fn(async () => true);
+    const { call, backend, byName } = await setup(new FakeComputerBackend(), approval);
+    const schema = byName.get("computer_invoke_menu")?.definition.inputSchema as {
+      properties: { delivery_mode: { enum: string[] } };
+    };
+    expect(schema.properties.delivery_mode.enum).toEqual(["foreground"]);
+    const result = await call("computer_invoke_menu", {
+      window_id: "fake-calculator",
+      path: ["File"],
+      delivery_mode: "background",
+    });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain("cannot preserve background focus");
+    expect(approval).not.toHaveBeenCalled();
+    expect(backend.callsFor("invokeMenu")).toHaveLength(0);
+  });
   it("is approval-gated and invokes the exact path on the window's app", async () => {
     const approval = vi.fn(async () => true);
     const backend = new FakeComputerBackend();

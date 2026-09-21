@@ -257,7 +257,7 @@ describe("computer lock/resume", () => {
       // reply itself is what carries the interruption news.
       await expect(backend.checkInputReady("cua:10:20")).rejects.toMatchObject({
         effect: "not-dispatched",
-        code: "desktop_input_paused",
+        code: "computer_input_paused",
       });
       expect(events).toEqual([{ type: "desktop-interrupted", pauses: ["screen-lock"] }]);
       // The pause lifting changes no count — resume is not an interruption.

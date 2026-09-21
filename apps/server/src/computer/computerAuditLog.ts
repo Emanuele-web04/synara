@@ -1,5 +1,9 @@
 import { appendFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import {
+  parseCuaActionDiagnostics,
+  type CuaActionDiagnostics,
+} from "@synara/shared/cuaActionDiagnostics";
 import type {
   ComputerAuditEffect,
   ComputerGetAuditHistoryInput,
@@ -73,6 +77,9 @@ export interface ComputerAuditEntry {
   readonly effect: ComputerAuditEffect;
   /** The typed refusal or error code when `effect` is `refused`/`error`. */
   readonly code?: string;
+  /** Native actuator metadata only; never raw driver messages or field values. */
+  readonly diagnostics?: CuaActionDiagnostics;
+  readonly layer?: "driver-host" | "native-driver" | "server-manager";
 }
 
 /**
@@ -195,7 +202,15 @@ export class ComputerAuditLog {
   record(entry: Omit<ComputerAuditEntry, "ts">): void {
     if (this.filePath === undefined) return;
     try {
-      const line = `${JSON.stringify({ ts: this.now().toISOString(), ...entry })}\n`;
+      // Re-project at the persistence boundary, even if a caller supplied an
+      // object carrying extra native fields despite its static type.
+      const { diagnostics: suppliedDiagnostics, ...metadata } = entry;
+      const diagnostics = parseCuaActionDiagnostics({ diagnostics: suppliedDiagnostics });
+      const line = `${JSON.stringify({
+        ts: this.now().toISOString(),
+        ...metadata,
+        ...(diagnostics ? { diagnostics } : {}),
+      })}\n`;
       if (Buffer.byteLength(line, "utf8") > COMPUTER_AUDIT_MAX_BYTES) return;
       this.chain = this.chain.then(() => this.append(line));
     } catch {

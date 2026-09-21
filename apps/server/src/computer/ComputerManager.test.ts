@@ -1309,10 +1309,20 @@ describe("ComputerManager and FakeComputerBackend", () => {
     });
     const manager = new ComputerManager({ backend });
     try {
-      const result = await manager.invokeMenu("thread-1", { app: "Helium" }, [
-        "File",
-        "New Window",
-      ]);
+      const authorization = { userRequestedVisibleUse: true };
+      await expect(
+        manager.invokeMenu("thread-1", { app: "Helium" }, ["File"]),
+      ).rejects.toMatchObject({
+        code: "foreground_not_requested",
+        effect: "not-dispatched",
+      });
+      expect(backend.callsFor("invokeMenu")).toHaveLength(0);
+      const result = await manager.invokeMenu(
+        "thread-1",
+        { app: "Helium" },
+        ["File", "New Window"],
+        authorization,
+      );
       expect(backend.callsFor("invokeMenu").at(-1)?.args).toEqual([
         { pid: 6_001 },
         ["File", "New Window"],
@@ -1322,14 +1332,14 @@ describe("ComputerManager and FakeComputerBackend", () => {
       // An unknown spelling refuses with the list_apps pointer rather than
       // guessing a process.
       await expect(
-        manager.invokeMenu("thread-1", { app: "Ghost" }, ["File"]),
+        manager.invokeMenu("thread-1", { app: "Ghost" }, ["File"], authorization),
       ).rejects.toMatchObject({ code: "computer_target_not_found", notFound: true });
       expect(backend.callsFor("invokeMenu")).toHaveLength(1);
       // The pid form rides through to the backend, which refuses a pid that
       // is not running.
-      await expect(manager.invokeMenu("thread-1", { pid: 9_999 }, ["File"])).rejects.toThrow(
-        /No running application has pid 9999/,
-      );
+      await expect(
+        manager.invokeMenu("thread-1", { pid: 9_999 }, ["File"], authorization),
+      ).rejects.toThrow(/No running application has pid 9999/);
     } finally {
       computerApprovalGate.cancelThread("thread-1");
       await manager.dispose();
@@ -1440,8 +1450,8 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.click("thread-a", { x: 10, y: 10 });
     await expect(manager.click("thread-b", { x: 20, y: 20 })).rejects.toMatchObject({
       code: "computer_controlled_by_other_thread",
-      retryable: true,
-      message: expect.stringMatching(/another conversation; try again when it is free/),
+      retryable: false,
+      message: expect.stringMatching(/another conversation; no input was sent\. Do not retry/),
     });
 
     // Watching is safe while someone else drives, so nothing read-only is gated
@@ -1547,7 +1557,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.launchApp("thread-a", "kcalc");
     await expect(manager.typeText("thread-b", "hi")).rejects.toThrow(/another conversation/);
 
-    // What the lease reactor calls on turn.completed / turn.aborted /
+    // What provider runtime ingestion calls on turn.completed / turn.aborted /
     // session.exited.
     await manager.releaseDesktopControl("thread-a");
     await expect(manager.getThreadState("thread-b")).resolves.toMatchObject({
@@ -1602,9 +1612,17 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await expect(manager.typeText("thread-b", "hi")).resolves.toMatchObject({
       action: "computer_type_text",
     });
-    pending.resolve();
-    // The release resolved the moment the lease dropped — the wedged endTask
-    // could not hold it, and its rejection must not be re-thrown either.
+    // The release promise must settle while endTask remains pending, so it
+    // cannot wedge lifecycle ingestion or the owning action's finalizer.
+    let released = false;
+    void release.then(() => {
+      released = true;
+    });
+    try {
+      await vi.waitFor(() => expect(released).toBe(true));
+    } finally {
+      pending.resolve();
+    }
     await release;
     expect(backend.endTask).toHaveBeenCalledWith("thread-a", "turn-one");
     // The failure is still evidence: a stale preview is reported on the
@@ -1620,8 +1638,75 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
+  it("records lease transitions without text or cursor labels and discourages blocked retries", async () => {
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
+    let nowMs = 0;
+    const manager = new ComputerManager({
+      backend: new FakeComputerBackend(),
+      now: () => nowMs,
+      leaseIdleMs: 1_000,
+    });
+    try {
+      manager.setThreadLabel("thread-a", "Private window title");
+      await manager.withAgentActivity(
+        "thread-a",
+        () => manager.typeText("thread-a", "private typed value"),
+        undefined,
+        "turn-a",
+      );
+      await expect(manager.typeText("thread-b", "blocked text")).rejects.toMatchObject({
+        code: "computer_controlled_by_other_thread",
+        retryable: false,
+        message: expect.stringContaining("Do not retry"),
+      });
+      nowMs = 2_000;
+      await manager.withAgentActivity(
+        "thread-b",
+        () => manager.click("thread-b", { x: 10, y: 10 }),
+        undefined,
+        "turn-b",
+      );
+      await manager.releaseDesktopControl("thread-b", "turn-b");
+      const entries = log.mock.calls
+        .filter(([message]) => message === "[computer] desktop lease")
+        .map(([, entry]) => entry);
+      expect(entries).toEqual([
+        {
+          ts: new Date(0).toISOString(),
+          event: "acquired",
+          threadId: "thread-a",
+          turnId: "turn-a",
+        },
+        {
+          ts: new Date(2_000).toISOString(),
+          event: "stale-reclaimed",
+          threadId: "thread-a",
+          turnId: "turn-a",
+          nextThreadId: "thread-b",
+          idleMs: 2_000,
+        },
+        {
+          ts: new Date(2_000).toISOString(),
+          event: "acquired",
+          threadId: "thread-b",
+          turnId: "turn-b",
+        },
+        {
+          ts: new Date(2_000).toISOString(),
+          event: "released",
+          threadId: "thread-b",
+          turnId: "turn-b",
+        },
+      ]);
+      expect(JSON.stringify(entries)).not.toMatch(/private|blocked|title/i);
+    } finally {
+      await manager.dispose();
+      log.mockRestore();
+    }
+  });
+
   /**
-   * The release the lease reactor sends on session.exited can land while the
+   * The release runtime ingestion sends on session.exited can land while the
    * dead session's last call is still executing — a gateway call cannot be
    * aborted. Handing the desktop over at that moment would put two threads on
    * the same pointer, so the release waits for the call to drain.
@@ -1744,6 +1829,48 @@ describe("ComputerManager and FakeComputerBackend", () => {
     });
 
     await manager.dispose();
+  });
+
+  it("does not let a queued thread-level release tear down a newer turn", async () => {
+    const backend = Object.assign(new FakeComputerBackend(), {
+      endTask: vi.fn(async () => {}),
+    });
+    const manager = new ComputerManager({ backend });
+    const started = deferred();
+    const finish = deferred();
+    try {
+      await manager.withAgentActivity(
+        "thread-a",
+        () => manager.click("thread-a", { x: 10, y: 10 }),
+        undefined,
+        "turn-old",
+      );
+      const blocker = manager.withAgentActivity("reader", async () => {
+        started.resolve();
+        await finish.promise;
+      });
+      await started.promise;
+      const renewed = manager.withAgentActivity(
+        "thread-a",
+        () => manager.click("thread-a", { x: 20, y: 20 }),
+        undefined,
+        "turn-new",
+      );
+      const released = manager.releaseDesktopControl("thread-a");
+      finish.resolve();
+      await Promise.all([blocker, renewed, released]);
+      expect(backend.endTask).toHaveBeenCalledExactlyOnceWith("thread-a", "turn-old");
+      await expect(manager.typeText("thread-b", "second")).rejects.toMatchObject({
+        code: "computer_controlled_by_other_thread",
+      });
+      await manager.releaseDesktopControl("thread-a", "turn-new");
+      await expect(manager.typeText("thread-b", "second")).resolves.toMatchObject({
+        action: "computer_type_text",
+      });
+    } finally {
+      finish.resolve();
+      await manager.dispose();
+    }
   });
 
   it("does not stamp a released turn onto a later turnId-less claim", async () => {

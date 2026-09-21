@@ -73,10 +73,17 @@ describe("ComputerManager reserved Space boundaries", () => {
         m.foregroundWithRestore("a", window.id, undefined, { userRequestedVisibleUse: true }),
     ],
     ["launch", (m: ComputerManager) => m.launchApp("a", "Fixture")],
-    ["app menu", (m: ComputerManager) => m.invokeMenu("a", { pid: 10 }, ["File", "New"])],
+    [
+      "app menu",
+      (m: ComputerManager) =>
+        m.invokeMenu("a", { pid: 10 }, ["File", "New"], { userRequestedVisibleUse: true }),
+    ],
     [
       "window menu",
-      (m: ComputerManager) => m.invokeMenu("a", { windowId: window.id }, ["File", "New"]),
+      (m: ComputerManager) =>
+        m.invokeMenu("a", { windowId: window.id }, ["File", "New"], {
+          userRequestedVisibleUse: true,
+        }),
     ],
     ["visibility", (m: ComputerManager) => m.setAppVisibility("a", 10, false)],
     ["minimize", (m: ComputerManager) => m.setWindowMinimized("a", window.id, true)],

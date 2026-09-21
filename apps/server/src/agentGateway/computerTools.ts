@@ -248,7 +248,20 @@ function computerAuditSuccessEffect(name: string, value: unknown): ComputerAudit
   )
     return delivery.effect;
   if (name === "computer_run") {
-    const completed = (value as { completed?: unknown } | null | undefined)?.completed;
+    const batch = value as { completed?: unknown; steps?: unknown } | null | undefined;
+    // A failing first step may already have sent input. Zero completed steps
+    // is not proof of zero dispatch when the step's native error says unknown.
+    if (
+      Array.isArray(batch?.steps) &&
+      batch.steps.some(
+        (step) =>
+          step !== null &&
+          typeof step === "object" &&
+          (step as { error?: { effect?: unknown } }).error?.effect === "dispatched-unknown",
+      )
+    )
+      return "dispatched-unknown";
+    const completed = batch?.completed;
     return typeof completed === "number" && completed > 0 ? "dispatched-unknown" : "not-dispatched";
   }
   return "dispatched-unknown";
@@ -258,15 +271,22 @@ function computerAuditSuccessEffect(name: string, value: unknown): ComputerAudit
 export function computerAuditErrorOutcome(error: unknown): {
   readonly effect: ComputerAuditEffect;
   readonly code: string;
+  readonly diagnostics?: ComputerAuditEntry["diagnostics"];
+  readonly layer?: ComputerAuditEntry["layer"];
 } {
   // A CuaActionError already carries the delivery taxonomy's verdict.
   if (error instanceof CuaActionError)
-    return { effect: error.effect, code: error.code ?? "cua_action_error" };
+    return {
+      effect: error.effect,
+      code: error.code ?? "cua_action_error",
+      ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}),
+      ...(error.layer ? { layer: error.layer } : {}),
+    };
   if (error instanceof ComputerTargetError) return { effect: "refused", code: error.code };
   if (error instanceof ComputerLeaseError) return { effect: "refused", code: error.code };
   if (error instanceof ComputerBackendError) {
     return error.inputPause !== undefined
-      ? { effect: "refused", code: "computer_input_paused" }
+      ? { effect: "refused", code: "computer_input_paused", layer: "server-manager" }
       : { effect: "error", code: "computer_backend_error" };
   }
   if (error instanceof ToolInputError) return { effect: "refused", code: "invalid_arguments" };
@@ -596,12 +616,16 @@ export function cuaActionErrorPayload(error: CuaActionError): {
   readonly effect: string;
   readonly message: string;
   readonly retryAllowed: false;
+  readonly diagnostics?: ComputerAuditEntry["diagnostics"];
+  readonly layer?: ComputerAuditEntry["layer"];
 } {
   return {
     error: error.code,
     effect: error.effect,
     message: error.message,
     retryAllowed: false,
+    ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}),
+    ...(error.layer ? { layer: error.layer } : {}),
   };
 }
 
@@ -1636,6 +1660,9 @@ export function makeAgentGatewayComputerTools(
    * neither extend nor clear a streak.
    */
   const noteActionOutcome = (threadId: string, key: string, effect: ComputerAuditEffect): void => {
+    // Lease, admission and argument refusals prove nothing was dispatched.
+    // They must neither arm the loop guard nor erase earlier uncertain input.
+    if (effect === "refused" || effect === "not-dispatched") return;
     if (effect === "verified") {
       actionRings.delete(threadId);
       return;
@@ -1667,6 +1694,8 @@ export function makeAgentGatewayComputerTools(
       const audit = (outcome: {
         readonly effect: ComputerAuditEffect;
         readonly code?: string;
+        readonly diagnostics?: ComputerAuditEntry["diagnostics"];
+        readonly layer?: ComputerAuditEntry["layer"];
       }): void => {
         if (!COMPUTER_AUDITED_TOOLS.has(name)) return;
         const target = computerAuditTarget(args, drivenApps, resultWindowId);
@@ -1679,12 +1708,19 @@ export function makeAgentGatewayComputerTools(
           ...(target !== undefined ? { target } : {}),
           effect: outcome.effect,
           ...(outcome.code !== undefined ? { code: outcome.code } : {}),
+          ...(outcome.diagnostics ? { diagnostics: outcome.diagnostics } : {}),
+          ...(outcome.layer ? { layer: outcome.layer } : {}),
         });
       };
       const mutating = isMutatingToolCall(name);
       const actionKey = mutating ? repeatedActionKey(name, args) : "";
       return Effect.tryPromise({
         try: async (abortSignal) => {
+          if (name === "computer_invoke_menu" && args.delivery_mode === "background") {
+            throw new ToolInputError(
+              "computer_invoke_menu requires foreground delivery and explicit visible-use authorization; it cannot preserve background focus.",
+            );
+          }
           // The loop guard fires before consent and before dispatch: a third
           // identical call with no observed effect must not spend an approval
           // prompt on a refusal.
@@ -1722,7 +1758,8 @@ export function makeAgentGatewayComputerTools(
             (options.authorizeAction !== undefined ||
               PROVIDERS_WITHOUT_APPROVAL_GATE.has(context.callerProvider) ||
               args.delivery_mode === "foreground" ||
-              name === "computer_activate_window")
+              name === "computer_activate_window" ||
+              name === "computer_invoke_menu")
           ) {
             if (!options.authorizeAction) {
               audit({ effect: "refused", code: "approval_unavailable" });
@@ -1734,7 +1771,7 @@ export function makeAgentGatewayComputerTools(
             if (
               !(await options.authorizeAction(
                 name,
-                name === "computer_activate_window"
+                name === "computer_activate_window" || name === "computer_invoke_menu"
                   ? { ...args, delivery_mode: "foreground" }
                   : args,
                 context,
@@ -1803,17 +1840,21 @@ export function makeAgentGatewayComputerTools(
                     });
                     abortSignal.throwIfAborted();
                     const foreground =
-                      args.delivery_mode === "foreground" || name === "computer_activate_window";
+                      args.delivery_mode === "foreground" ||
+                      name === "computer_activate_window" ||
+                      name === "computer_invoke_menu";
+                    const restoresOwnForeground =
+                      name === "computer_activate_window" || name === "computer_invoke_menu";
                     const authorization =
-                      foreground && name !== "computer_activate_window"
+                      foreground && !restoresOwnForeground
                         ? await foregroundAuthorization(context)
                         : undefined;
                     return withDesktopDeliveryMode(foreground ? "foreground" : "background", () =>
-                      // computer_activate_window already restores via
-                      // foregroundWithRestore; every other foreground call gets
+                      // Activate and menu already restore in the manager;
+                      // every other foreground call gets
                       // the same excursion treatment, so a foreground type or
                       // click cannot strand the user's window behind the target.
-                      foreground && name !== "computer_activate_window"
+                      foreground && !restoresOwnForeground
                         ? manager.withForegroundRestore(
                             context.callerThreadId,
                             () =>
@@ -1894,8 +1935,8 @@ export function makeAgentGatewayComputerTools(
           if (!(error instanceof ComputerBackendError && error.controlRevoked)) {
             audit(outcome);
           }
-          // A failed call still tells the loop guard what it knows: its effect
-          // is never "verified", so three identical failures trip the refusal.
+          // Uncertain failures may follow input; proven pre-dispatch refusals
+          // are ignored by the loop guard rather than masquerading as input.
           if (mutating) noteActionOutcome(context.callerThreadId, actionKey, outcome.effect);
           const failure =
             error instanceof ComputerBackendError && error.inputPause
@@ -1904,6 +1945,7 @@ export function makeAgentGatewayComputerTools(
                     error: {
                       code: "computer_input_paused",
                       ...error.inputPause,
+                      layer: error instanceof CuaActionError ? error.layer : "server-manager",
                       retryable: false,
                     },
                     ...(error instanceof CuaActionError
@@ -1970,9 +2012,11 @@ export function makeAgentGatewayComputerTools(
           ...(inputSchema.properties as Record<string, unknown>),
           delivery_mode: {
             type: "string",
-            enum: ["background", "foreground"],
+            enum: name === "computer_invoke_menu" ? ["foreground"] : ["background", "foreground"],
             description:
-              "Background by default. Foreground requires the user's own task to ask to see the screen. Never replay uncertain input.",
+              name === "computer_invoke_menu"
+                ? "This menu route is always foreground and requires the user's explicit visible-use request."
+                : "Background by default. Foreground requires the user's own task to ask to see the screen. Never replay uncertain input.",
           },
         },
       },
@@ -2473,7 +2517,8 @@ export function makeAgentGatewayComputerTools(
       case "invoke_menu": {
         const target = readMenuTargetArg(step);
         const path = readMenuPathArg(step, 'Step "invoke_menu"');
-        return () => manager.invokeMenu(threadId, target, path);
+        return async () =>
+          manager.invokeMenu(threadId, target, path, await foregroundAuthorization(context));
       }
       case "kill_app": {
         const windowId = readWindowIdArg(step);
@@ -2631,6 +2676,7 @@ export function makeAgentGatewayComputerTools(
       ? {
           code: "computer_input_paused",
           ...error.inputPause,
+          layer: error instanceof CuaActionError ? error.layer : "server-manager",
           ...(error instanceof CuaActionError ? { effect: error.effect } : {}),
         }
       : error instanceof CuaActionError
@@ -2639,6 +2685,8 @@ export function makeAgentGatewayComputerTools(
             effect: error.effect,
             message: error.message,
             retryAllowed: false,
+            ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}),
+            ...(error.layer ? { layer: error.layer } : {}),
           }
         : error instanceof ComputerTargetError
           ? {
@@ -3739,7 +3787,7 @@ export function makeAgentGatewayComputerTools(
       actionEntry(
         "computer_invoke_menu",
         "Invoke menu item",
-        `Invoke a menu-bar item by path — ["File", "Save"] or ["Edit", "Copy"]. Name the target one way: window_id (that exact window's app, focus-sensitive semantics preserved) or app/pid (the running app's own menu bar — no window needed, so this is the route for an app with no windows yet). One to six levels; disabled or absent items are refused rather than clicked blindly. Menu commands can mutate the app or open dialogs, so read the result's verification and observe afterwards. ${DELIVERY_HINT}`,
+        'Invoke an exact menu-bar path, e.g. ["File", "Save"]. This native route activates the app: it requires the user\'s explicit visible-use request, like computer_activate_window, even in computer_run. Name window_id or app/pid (for an app with no windows). One to six levels; missing or disabled items refuse. Observe afterwards; dispatch does not prove the command succeeded.',
         {
           type: "object",
           properties: {
@@ -3771,7 +3819,12 @@ export function makeAgentGatewayComputerTools(
         async (args, context) => {
           const target = readMenuTargetArg(args);
           const path = readMenuPathArg(args, "computer_invoke_menu");
-          return manager.invokeMenu(context.callerThreadId, target, path);
+          return manager.invokeMenu(
+            context.callerThreadId,
+            target,
+            path,
+            await foregroundAuthorization(context),
+          );
         },
       ),
     ),
@@ -3941,7 +3994,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_scroll",
       "Scroll",
-      `Scroll both axes at an optional exact target. Requires a screenshot even without coordinates; distance uses its pixels (~80 per wheel notch at full resolution). Capped at half that frame's width/height for overlap; scroll.limitedTo reports reductions in desktop pixels. Read the returned image before scrolling again: scales may differ. scroll.traveledY measures actual movement (0 means none, often an edge); Synara pre-divides later requests by what it learned (scroll.gearing). To find a control, try computer_get_state first. ${POINTER_COORDINATE_HINT}`,
+      `Scroll with delta_x and delta_y in screenshot pixels, e.g. {delta_x:0,delta_y:300}; amount/direction are not supported. Requires a screenshot even without coordinates. Capped at half its width/height for overlap; scroll.limitedTo reports reductions. scroll.traveledY measures vertical movement; 0 may mean an edge or dropped input. Inspect the returned image before another scroll; use computer_get_state to find controls. ${POINTER_COORDINATE_HINT}`,
       {
         type: "object",
         properties: {
@@ -4004,7 +4057,7 @@ export function makeAgentGatewayComputerTools(
         ) {
           throw new ToolInputError(
             "Refusing a fourth consecutive scroll with no visible movement on this window. " +
-              "The content did not move — the page is at its edge. Stop scrolling and call " +
+              "An edge, a non-scrollable target or dropped delivery may explain it. Stop scrolling and call " +
               "computer_get_state with label_contains to find a labeled control instead.",
           );
         }
@@ -4031,7 +4084,11 @@ export function makeAgentGatewayComputerTools(
           frames.matchLatest(threadId, capturedWindow.screenshot, capturedWindow.windowId) !==
             undefined;
         const resultWindow = outcome.result.windowId ?? capturedWindow?.windowId ?? incomingWindow;
-        if (traveledY === 0 || willBeUnchanged) {
+        // Vertical correlation cannot rule out horizontal travel. Only a
+        // vertical-only request or an identical full frame proves no observed
+        // movement for the gesture as a whole.
+        const noMovementObserved = willBeUnchanged || (limited.deltaX === 0 && traveledY === 0);
+        if (noMovementObserved) {
           const current = unchangedScrolls.get(threadId);
           // One entry per thread, never purged on thread end — bounded like
           // the digests; losing a streak only resets the repeated-scroll nudge.
@@ -4051,29 +4108,37 @@ export function makeAgentGatewayComputerTools(
         } else {
           unchangedScrolls.delete(threadId);
         }
-        if (
-          outcome.result.scroll &&
-          (limited.deltaX !== delta.deltaX || limited.deltaY !== delta.deltaY)
-        ) {
-          return {
-            ...outcome,
-            result: {
-              ...outcome.result,
-              scroll: {
-                ...outcome.result.scroll,
-                requested: delta,
-                limitedTo: limited,
-              },
-            },
-          };
-        }
-        return outcome;
+        return {
+          ...outcome,
+          result: {
+            ...outcome.result,
+            ...(noMovementObserved
+              ? {
+                  scrollObservation: {
+                    status: "no-visible-movement",
+                    message:
+                      "No content movement was observed. This may be an edge, a non-scrollable target, or dropped delivery. Inspect fresh state and choose a scrollable element; do not blindly repeat the wheel event.",
+                  },
+                }
+              : {}),
+            ...(outcome.result.scroll &&
+            (limited.deltaX !== delta.deltaX || limited.deltaY !== delta.deltaY)
+              ? {
+                  scroll: {
+                    ...outcome.result.scroll,
+                    requested: delta,
+                    limitedTo: limited,
+                  },
+                }
+              : {}),
+          },
+        };
       },
     ),
     observedActionEntry(
       "computer_type_text",
       "Type text",
-      `Insert the whole string in one call at the caret, replacing any selection. To replace existing text, first select a range with computer_select_text, a line/paragraph with computer_click count:3, or all with the app's select-all shortcut; use computer_set_value for the whole field. Browser URLs: use the address-bar shortcut, type without a newline, then Enter with wait_for_label; never guess bar coordinates or repeat Enter on an unchanged page. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
+      `Insert text through an exact writable ref or label in window_id; this focus-neutral route can run in different windows concurrently. Use computer_set_value to replace the whole field. Semantic writes do not send keydown/keyup: verify autocomplete or submission separately. Background physical keys may refuse on multi-window apps. ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
       {
         type: "object",
         properties: {
@@ -4096,7 +4161,7 @@ export function makeAgentGatewayComputerTools(
     observedActionEntry(
       "computer_press_key",
       "Press key",
-      `Press one keyboard key or one keyboard shortcut on the computer-use seat — a key name, or a chord joined with "+" such as "cmd+s". ${hotkeyFormNote(dialect)} ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
+      `Press a key or chord such as "cmd+s". On multi-window Chromium/Electron apps background keys may refuse with same_pid_keyboard_ambiguity; use exact-element type_text/set_value or an advertised action instead of retrying. ${hotkeyFormNote(dialect)} ${KEYBOARD_TARGET_HINT} ${DELIVERY_HINT}`,
       {
         type: "object",
         properties: {

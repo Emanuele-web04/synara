@@ -688,7 +688,7 @@ index be5e28c..c665efb 100644
              if !value.get("structuredContent").is_some_and(Value::is_object) {
                  value["structuredContent"] = json!({});
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 68b728f..366cab3 100644
+index f499100..3949ad0 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -21,6 +21,11 @@
@@ -719,7 +719,7 @@ index 68b728f..366cab3 100644
 -    #[cfg(target_os = "macos")]
 +    #[cfg(any(target_os = "macos", target_os = "linux"))]
      {
-         metadata["synara_native_revision"] = serde_json::json!(33);
+         metadata["synara_native_revision"] = serde_json::json!(34);
      }
 +    #[cfg(target_os = "linux")]
 +    {

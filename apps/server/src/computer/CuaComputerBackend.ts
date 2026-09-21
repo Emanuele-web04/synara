@@ -1,4 +1,8 @@
 import { cuaSpaceInventory } from "./cuaSpaceInventory.ts";
+import {
+  parseCuaActionDiagnostics,
+  type CuaActionDiagnostics,
+} from "@synara/shared/cuaActionDiagnostics";
 import { ComputerSpaceError } from "./ComputerSpaceBroker.ts";
 import { COMPUTER_WINDOW_LIST_MAX_LENGTH } from "@synara/contracts";
 import type {
@@ -78,6 +82,8 @@ export class CuaActionError extends ComputerBackendError {
     readonly effect: CuaEffect,
     readonly code = "cua_action_failed",
     inputPause?: ComputerInputPause,
+    readonly diagnostics?: CuaActionDiagnostics,
+    readonly layer?: "driver-host" | "native-driver",
   ) {
     super(`${message} [effect=${effect}; automatic replay is forbidden]`, {
       retryable: false,
@@ -571,16 +577,22 @@ export class CuaComputerBackend implements ComputerBackend {
       this.host({ method: "call", name, args }, mutation, allowModelObservation),
     );
     const result = reply.result ?? {};
-    if (result.isError || result.structuredContent?.effect === "refused") {
+    if (
+      result.isError ||
+      result.structuredContent?.effect === "refused" ||
+      result.structuredContent?.status === "refused"
+    ) {
       const structured = result.structuredContent ?? {};
-      // Only a structured native admission refusal proves no dispatch. An
-      // arbitrary native exception may follow partially delivered input. The
-      // driver publishes two refusal dialects: action tools carry
-      // `effect:"refused"`, while tools like invoke_menu/kill_app carry
-      // `status:"refused"` plus a `refusal.code` object.
-      const refused = structured.effect === "refused" || structured.status === "refused";
+      // Only an explicit native pre-dispatch verdict proves no input. The
+      // host taxonomy also uses `not-dispatched`; legacy menu tools instead
+      // publish status/refusal without an effect. An explicit uncertain
+      // effect wins over conflicting legacy status or a refusal-looking code.
+      const refused =
+        structured.effect === "refused" ||
+        structured.effect === "not-dispatched" ||
+        (structured.effect === undefined && structured.status === "refused");
       const refusal = record(structured.refusal);
-      const message =
+      let message =
         (result.content ?? [])
           .map((c) => c.text ?? "")
           .join("\n")
@@ -589,14 +601,24 @@ export class CuaComputerBackend implements ComputerBackend {
         text(refusal.message) ||
         text(structured.reason) ||
         "The native operation could not complete.";
-      const code = text(structured.code) || text(refusal.code) || "cua_refusal";
-      if (refused && code === "desktop_input_paused") {
+      const nativeCode =
+        text(structured.code) ||
+        text(refusal.code) ||
+        (refused ? "cua_refusal" : "cua_action_failed");
+      // Older driver hosts used a second spelling for the same pause latch.
+      const code = nativeCode === "desktop_input_paused" ? "computer_input_paused" : nativeCode;
+      if (code === "same_pid_keyboard_ambiguity") {
+        message +=
+          " Inspect computer_get_state for this exact window_id, then use computer_type_text with an observed ref (or label and role), or computer_set_value to replace the field. " +
+          "These semantic writes do not send keydown/keyup events. Do not retry physical keys or activate the app without the user's visible-use request.";
+      }
+      if (refused && code === "computer_input_paused") {
         this.observedGeometry.clear();
       }
       const inputPause =
         refused &&
         (code === "target_not_on_active_space" ||
-          code === "desktop_input_paused" ||
+          code === "computer_input_paused" ||
           code === "auth_sheet_focused") &&
         Number.isSafeInteger(args.pid) &&
         Number.isSafeInteger(args.window_id)
@@ -607,6 +629,10 @@ export class CuaComputerBackend implements ComputerBackend {
         mutation && !refused ? "dispatched-unknown" : "not-dispatched",
         code,
         inputPause,
+        parseCuaActionDiagnostics(structured),
+        structured.layer === "driver-host" || nativeCode === "desktop_input_paused"
+          ? "driver-host"
+          : "native-driver",
       );
     }
     return result;
@@ -1634,7 +1660,12 @@ export class CuaComputerBackend implements ComputerBackend {
     return this.input(
       "click",
       {
-        force_synthetic: true,
+        // Revision 34 checks advertised AXPress and suppresses activation on
+        // hit-test clicks. Older/unknown drivers retain the previous route.
+        // A modified click stays physical because AXPress would lose its keys.
+        ...((this.driverNativeRevision ?? 0) < 34 || modifiers?.length
+          ? { force_synthetic: true }
+          : {}),
         count: 1,
         ...(modifiers?.length ? { modifier: modifiers.map(cuaKey) } : {}),
       },
@@ -2198,11 +2229,9 @@ export class CuaComputerBackend implements ComputerBackend {
         "not-dispatched",
         "invalid_arguments",
       );
-    // Two routes, one driver tool. `windowId` keeps the exact-window
-    // semantics; the windowless form resolves the application-level
-    // AXMenuBar of the named pid without targeting, focusing, or raising
-    // any window, so its result carries no window id — nothing else may
-    // fabricate one.
+    // Two routes, one potentially activating driver tool. The manager gates
+    // both on visible-use authorization. The windowless form names only the
+    // application's AXMenuBar, so its result must not fabricate a window id.
     let result: CuaToolResult;
     let windowId: string | undefined;
     if ("windowId" in target) {

@@ -42,6 +42,11 @@ async function fixture(
     metadataPidOffset?: number;
     metadataDelayMs?: number;
     failAction?: boolean;
+    actionResult?: Record<string, unknown>;
+    cursorUnavailable?: boolean;
+    logCursorState?: boolean;
+    cursorEnableFailures?: number;
+    cursorHideFailures?: number;
     crash?: boolean;
     sessionDeathOnce?: boolean;
     sessionDeathTransport?: boolean;
@@ -105,11 +110,11 @@ const write=event=>fs.appendFileSync(log,JSON.stringify({event,pid:process.pid,t
 write('start');
 if(!options.unpatched){
   if(!process.argv.includes('--compact-cursor')) throw new Error('Missing compact cursor profile');
-  if(process.argv[process.argv.indexOf('--idle-hide-ms')+1]!=='900') throw new Error('Missing cursor idle deadline');
+  if(process.argv[process.argv.indexOf('--idle-hide-ms')+1]!=='60000') throw new Error('Missing cursor idle deadline');
 }
 if(options.unpatched&&(process.argv.includes('--compact-cursor')||process.argv.includes('--idle-hide-ms'))) throw new Error('Upstream driver cannot parse Synara cursor flags');
 const socket=process.argv[process.argv.indexOf('--socket')+1];
-let action, timer, inputEpoch=0, interruptions=0, browserCleanupPending=false;
+let action, timer, inputEpoch=0, interruptions=0, browserCleanupPending=false, cursorEnables=0, cursorHides=0;
 net.createServer(s=>{
   const reply=result=>s.end(JSON.stringify({ok:true,result})+'\\n');
   s.once('data',b=>{
@@ -139,8 +144,8 @@ net.createServer(s=>{
         reply({pid:process.pid+(options.cleanup==='wrong-pid'?1:0),input_admission_closed:options.cleanup==='missing-admission'?undefined:true,cleanup_complete:!browserCleanupPending&&options.cleanup!=='incomplete',pending_input:browserCleanupPending||options.cleanup==='incomplete'?1:0});
       },30);
     }
-    else if(options.sessionDeathOnce && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); reply({isError:true, content:[{type:'text', text:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id."}], structuredContent:{effect:'not-dispatched'}}); }
-    else if(options.sessionDeathTransport && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); s.end(JSON.stringify({ok:false,error:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id.",effect:'not-dispatched'})+'\\n'); }
+    else if(options.sessionDeathOnce && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && r.name!=='set_agent_cursor_enabled' && r.name!=='get_agent_cursor_state' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); reply({isError:true, content:[{type:'text', text:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id."}], structuredContent:{effect:'not-dispatched'}}); }
+    else if(options.sessionDeathTransport && r.method==='call' && r.args && r.args.session && r.name!=='start_session' && r.name!=='set_agent_cursor_motion' && r.name!=='set_agent_cursor_style' && r.name!=='set_agent_cursor_enabled' && r.name!=='get_agent_cursor_state' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag, '1'); s.end(JSON.stringify({ok:false,error:"session '"+r.args.session+"' has ended; tool call '"+r.name+"' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id.",effect:'not-dispatched'})+'\\n'); }
     else if(r.name==='type_text') {
       if(!options.unpatched&&r.expected_input_epoch!==inputEpoch) { reply({isError:true,structuredContent:{effect:'refused',code:'input_admission_closed'}}); return; }
       write('dispatch'); action=s;
@@ -151,11 +156,20 @@ net.createServer(s=>{
     else if(options.hangSession && r.name==='start_session' && !fs.existsSync(options.deathFlag)) { fs.writeFileSync(options.deathFlag,'1'); write('session-hang'); }
     else if(r.name==='set_agent_cursor_motion') { write('motion-'+r.args.glide_duration_ms+'-'+r.args.dwell_after_click_ms); reply({}); }
     else if(r.name==='set_agent_cursor_style') { write('style:'+JSON.stringify(r.args)); reply({}); }
+    else if(r.name==='set_agent_cursor_enabled') {
+      if(options.logCursorState) write('cursor-enabled:'+r.args.enabled+':'+r.args.session);
+      const failed=r.args.enabled?cursorEnables++<(options.cursorEnableFailures??0):cursorHides++<(options.cursorHideFailures??0);
+      reply(failed?{isError:true}:{});
+    }
+    else if(r.name==='get_agent_cursor_state') {
+      if(options.logCursorState) write('cursor-state:'+r.args.session);
+      reply(options.cursorUnavailable?{isError:true,content:[{type:'text',text:'private overlay error'}]}:{structuredContent:{session:r.args.session,enabled:true,position:{x:10,y:20},motion:{idle_hide_ms:60000},overlay_ready:true,render_visible:true,overlay_scope:'main_display'}});
+    }
     else if(options.browserInputControl===1&&['clipboard_read','clipboard_write','kill_app','move_cursor'].includes(r.name)) {
       if(r.expected_input_epoch!==inputEpoch) { reply({isError:true,structuredContent:{effect:'refused',code:'input_admission_closed'}}); return; }
       write('permitted-native:'+r.name); reply({});
     }
-    else if(r.name==='press_key') { if(!options.unpatched&&r.expected_input_epoch!==inputEpoch) { reply({isError:true,structuredContent:{effect:'refused',code:'input_admission_closed'}}); return; } write('key'); write('observation-budget-'+process.env.SYNARA_CUA_FOREGROUND_OBSERVATION_MS); reply({}); }
+    else if(r.name==='press_key') { if(!options.unpatched&&r.expected_input_epoch!==inputEpoch) { reply({isError:true,structuredContent:{effect:'refused',code:'input_admission_closed'}}); return; } write('key'); write('observation-budget-'+process.env.SYNARA_CUA_FOREGROUND_OBSERVATION_MS); reply(options.actionResult??{}); }
     else if(r.name==='get_window_state' && !r.args?.empty) { write('observe'); setTimeout(()=>reply({structuredContent:{elements:[],pid:r.args?.pid,window_id:r.args?.fixture_wrong_window?99999:r.args?.window_id}}),options.delayObservation?60:0); }
     else if(r.name==='get_desktop_state') reply({content:[{type:'image',data:'fixture-image'}]});
     else if(r.name==='list_windows') { write('list-windows'); reply({structuredContent:{windows:options.listWindows||[]}}); }
@@ -447,7 +461,7 @@ describe("Cua macOS host retirement", () => {
     await expect(press()).resolves.toMatchObject({
       result: {
         isError: true,
-        structuredContent: { code: "desktop_input_paused", effect: "refused" },
+        structuredContent: { code: "computer_input_paused", effect: "refused" },
       },
     });
     await expect(f.events()).rejects.toMatchObject({ code: "ENOENT" });
@@ -480,13 +494,13 @@ describe("Cua macOS host retirement", () => {
     expect(paused.desktopPauses).toEqual(["screen-lock", "system-sleep"]);
     expect(paused.desktopInterruptions).toBe(2);
     // Refusals carry the same state: a paused action reports the reasons and
-    // the count alongside its desktop_input_paused result.
+    // the count alongside its computer_input_paused result.
     await expect(
       cuaRequest<CuaReply>(f.endpoint, { method: "call", name: "press_key" }),
     ).resolves.toMatchObject({
       desktopPauses: ["screen-lock", "system-sleep"],
       desktopInterruptions: 2,
-      result: { structuredContent: { code: "desktop_input_paused" } },
+      result: { structuredContent: { code: "computer_input_paused" } },
     });
     // The reasons net back to empty on resume while the count keeps the
     // proof that the interruption cycle ran.
@@ -711,7 +725,7 @@ describe("Cua macOS host retirement", () => {
     await expect(interrupted).resolves.toMatchObject({
       result: {
         isError: true,
-        structuredContent: { code: "desktop_input_paused" },
+        structuredContent: { code: "computer_input_paused" },
       },
     });
     await observe();
@@ -1554,6 +1568,156 @@ describe("per-agent cursor identity", () => {
       ...(task ? { task } : {}),
     });
 
+  it("parks between actions, hides only the completed turn and preserves its session", async () => {
+    const f = await fixture(capability, { logSessions: true, logCursorState: true });
+    const first = { threadId: "cursor-thread", turnId: "turn-1" };
+    const next = { threadId: "cursor-thread", turnId: "turn-2" };
+    await press(f.endpoint, first);
+    await press(f.endpoint, next);
+    await cuaRequest(f.endpoint, { method: "end_task", task: first });
+    expect((await f.events()).map((e) => e.event)).not.toContain(
+      "cursor-enabled:false:agent·cursor-thread",
+    );
+    await cuaRequest(f.endpoint, { method: "end_task", task: next });
+    let events = (await f.events()).map((e) => e.event);
+    expect(events).toContain("cursor-enabled:false:agent·cursor-thread");
+    expect(events.some((e) => e.includes("end_session"))).toBe(false);
+    await press(f.endpoint, { ...next, turnId: "turn-3" });
+    events = (await f.events()).map((e) => e.event);
+    expect(events.filter((e) => e === "cursor-enabled:true:agent·cursor-thread")).toHaveLength(2);
+    expect(events.filter((e) => e === "start")).toHaveLength(1);
+  });
+
+  it("reads cursor state only on mint/first action and logs no labels or content", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const f = await fixture(capability, { logCursorState: true });
+      const task = { threadId: "cursor-thread", turnId: "turn-1", label: "PRIVATE LABEL" };
+      await cuaRequest(f.endpoint, { method: "call", name: "get_window_state", args: {}, task });
+      await press(f.endpoint, task);
+      await press(f.endpoint, task);
+      expect((await f.events()).filter((e) => e.event.startsWith("cursor-state:"))).toHaveLength(2);
+      const logs = info.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logs).toContain('"stage":"session-created"');
+      expect(logs).toContain('"stage":"first-action"');
+      expect(logs).toContain('"overlay_scope":"main_display"');
+      expect(logs).not.toContain("PRIVATE LABEL");
+      expect(logs).not.toContain('"x":10');
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("retries unacknowledged cursor visibility without retrying input", async () => {
+    const f = await fixture(capability, {
+      logCursorState: true,
+      cursorEnableFailures: 1,
+      cursorHideFailures: 1,
+    });
+    const task = { threadId: "cursor-retry", turnId: "turn-1" };
+    await press(f.endpoint, task);
+    await press(f.endpoint, task);
+    await cuaRequest(f.endpoint, { method: "end_task", task });
+    await cuaRequest(f.endpoint, { method: "end_task", task });
+    await cuaRequest(f.endpoint, { method: "end_task", task });
+    const events = (await f.events()).map((e) => e.event);
+    expect(events.filter((e) => e === "cursor-enabled:true:agent·cursor-retry")).toHaveLength(2);
+    expect(events.filter((e) => e === "cursor-enabled:false:agent·cursor-retry")).toHaveLength(2);
+    expect(events.filter((e) => e === "key")).toHaveLength(2);
+  });
+
+  it("starts preview and shield cleanup before waiting for the cursor queue", async () => {
+    const frameEnded = deferred<void>();
+    const shieldEnded = deferred<void>();
+    const task = { threadId: "queued-cleanup", turnId: "turn-1" };
+    const f = await fixture(capability, {
+      inputDelayMs: 300,
+      frameTap: {
+        update: () => {},
+        endTask: async () => {
+          frameEnded.resolve();
+        },
+        stop: async () => {},
+        dispose: async () => {},
+      },
+      shield: {
+        engage: async () => {},
+        release: async () => {},
+        releaseAll: async () => 0,
+        endTask: async () => {
+          shieldEnded.resolve();
+        },
+        stop: async () => {},
+        dispose: async () => {},
+      },
+    });
+    const action = cuaRequest(f.endpoint, {
+      method: "call",
+      name: "type_text",
+      args: { text: "fixture" },
+      task,
+    });
+    await waitForEvent(f, "dispatch");
+    const end = cuaRequest(f.endpoint, { method: "end_task", task });
+    await Promise.all([frameEnded.promise, shieldEnded.promise]);
+    expect((await f.events()).some((e) => e.event === "effect")).toBe(false);
+    await Promise.all([action, end]);
+  });
+
+  it("reports a failed cursor query without replaying input or retiring the driver", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const f = await fixture(capability, { cursorUnavailable: true });
+      await expect(press(f.endpoint, { threadId: "cursor-thread" })).resolves.toMatchObject({
+        ok: true,
+      });
+      await expect(press(f.endpoint, { threadId: "cursor-thread" })).resolves.toMatchObject({
+        ok: true,
+      });
+      const events = (await f.events()).map((e) => e.event);
+      expect(events.filter((e) => e === "key")).toHaveLength(2);
+      expect(events.filter((e) => e === "start")).toHaveLength(1);
+      const logs = info.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logs).toContain('"status":"unavailable"');
+      expect(logs).not.toContain("private overlay error");
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("logs structured actuator failures with attribution but no raw native message", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const f = await fixture(capability, {
+        actionResult: {
+          isError: true,
+          content: [{ type: "text", text: "PRIVATE FIELD VALUE" }],
+          structuredContent: {
+            effect: "dispatched-unknown",
+            diagnostics: {
+              delivery_path: "ax",
+              actuator: "ax_press",
+              error_code: "ax_dispatch_failed",
+              ax_error: -25204,
+              message: "PRIVATE FIELD VALUE",
+              title: "PRIVATE WINDOW",
+            },
+          },
+        },
+      });
+      await press(f.endpoint, { threadId: "failure-thread", turnId: "failure-turn" });
+      const logs = info.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(logs).toContain('"event":"computer_action"');
+      expect(logs).toContain('"turn":"failure-turn"');
+      expect(logs).toContain('"ax_error":-25204');
+      expect(logs).toContain("The accessibility actuator reported a native error.");
+      expect(logs).not.toContain("PRIVATE FIELD VALUE");
+      expect(logs).not.toContain("PRIVATE WINDOW");
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("dispatches each task's calls under its own cursor session label", async () => {
     const f = await fixture(capability, { logSessions: true });
     await expect(
@@ -1827,7 +1991,7 @@ describe("physical Escape interrupt", () => {
       ok: true,
       result: {
         isError: true,
-        structuredContent: { effect: "refused", code: "desktop_input_paused" },
+        structuredContent: { effect: "refused", code: "computer_input_paused" },
       },
     });
     await expect(
@@ -1838,7 +2002,7 @@ describe("physical Escape interrupt", () => {
     // or target-readiness probe cannot clear the model-observation gate.
     await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({
-      result: { structuredContent: { code: "desktop_input_paused" } },
+      result: { structuredContent: { code: "computer_input_paused" } },
       desktopInterruptions: 0,
     });
     await cuaRequest(f.endpoint, { method: "call", name: "get_window_state" });
@@ -2002,7 +2166,7 @@ describe("physical Escape interrupt", () => {
     await waitForEvent(f, "interrupt-ack");
     expect((await f.events()).filter((event) => event.event === "interrupt")).toHaveLength(1);
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({
-      result: { structuredContent: { code: "desktop_input_paused" } },
+      result: { structuredContent: { code: "computer_input_paused" } },
       desktopInterruptions: 0,
     });
     const observation = cuaRequest(f.endpoint, {
@@ -2179,7 +2343,7 @@ describe("physical Escape interrupt", () => {
     });
     state = { ready: true };
     await expect(pressKey(f.endpoint)).resolves.toMatchObject({
-      result: { structuredContent: { code: "desktop_input_paused" } },
+      result: { structuredContent: { code: "computer_input_paused" } },
     });
     await cuaRequest(f.endpoint, {
       method: "call",
@@ -2339,7 +2503,7 @@ describe("physical Escape interrupt", () => {
     await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
     await expect(click(taskA, windowA)).resolves.toMatchObject({ ok: true, result: {} });
     await expect(click(taskB, windowB)).resolves.toMatchObject({
-      result: { structuredContent: { code: "desktop_input_paused" } },
+      result: { structuredContent: { code: "computer_input_paused" } },
       desktopInterruptions: 0,
     });
     await observe(taskB, windowB);
@@ -2393,7 +2557,7 @@ describe("physical Escape interrupt", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
       await expect(action()).resolves.toMatchObject({
-        result: { structuredContent: { code: "desktop_input_paused" } },
+        result: { structuredContent: { code: "computer_input_paused" } },
         desktopInterruptions: 0,
       });
       await observe(browser);
@@ -2435,7 +2599,7 @@ describe("physical Escape interrupt", () => {
     await waitForEvent(f, "browser-observe");
     expect(f.host.physicalInput({ type: "physical-input", kind: "keyboard", pid: 700 })).toBe(true);
     await expect(reading).resolves.toMatchObject({
-      result: { structuredContent: { code: "desktop_input_paused" } },
+      result: { structuredContent: { code: "computer_input_paused" } },
     });
     await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
     await expect(
@@ -2472,22 +2636,22 @@ describe("physical Escape interrupt", () => {
     f.host.resumeDesktop("screen-lock");
     await expect(
       call("browser_prepare", { pid: 700, allow_launch: true, profile: { mode: "isolated_new" } }),
-    ).resolves.toMatchObject({ result: { structuredContent: { code: "desktop_input_paused" } } });
+    ).resolves.toMatchObject({ result: { structuredContent: { code: "computer_input_paused" } } });
     expect(
       (await call("browser_prepare", { allow_launch: true, profile: { mode: "isolated_new" } }))
         .result,
     ).toEqual({});
     await expect(call("browser_navigate", newTarget)).resolves.toMatchObject({
-      result: { structuredContent: { code: "desktop_input_paused" } },
+      result: { structuredContent: { code: "computer_input_paused" } },
     });
     await call("get_browser_state", { pid: 701, fixture_target_id: "new-browser" }, true);
     await expect(call("browser_navigate", newTarget)).resolves.toMatchObject({
-      result: { structuredContent: { code: "desktop_input_paused" } },
+      result: { structuredContent: { code: "computer_input_paused" } },
     });
     await call("get_browser_state", newTarget, true);
     expect((await call("browser_navigate", newTarget)).result).toEqual({});
     await expect(call("browser_navigate", oldTarget)).resolves.toMatchObject({
-      result: { structuredContent: { code: "desktop_input_paused" } },
+      result: { structuredContent: { code: "computer_input_paused" } },
     });
     await call("get_browser_state", oldTarget, true);
     expect((await call("browser_navigate", oldTarget)).result).toEqual({});

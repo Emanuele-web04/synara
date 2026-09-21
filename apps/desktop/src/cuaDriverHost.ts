@@ -32,6 +32,20 @@ import {
 } from "./cuaRuntimeOwnership";
 import type { ComputerShieldHost } from "./computerShield";
 import type { ComputerInputMonitorState, PhysicalComputerInput } from "./escapeKillSwitchMonitor";
+import {
+  cuaActionDiagnosticMessage,
+  parseCuaActionDiagnostics,
+} from "@synara/shared/cuaActionDiagnostics";
+
+interface TaskCursor {
+  task: CuaComputerTask;
+  firstActionObserved: boolean;
+  enabled: boolean;
+}
+
+// Keep the marker through ordinary model turns, with a native expiry backstop
+// if task-end cleanup cannot reach the overlay. This wait does not repaint.
+export const CUA_CURSOR_IDLE_HIDE_MS = 60_000;
 
 interface ControlledTarget {
   pid: number;
@@ -110,6 +124,8 @@ interface Generation {
    * task that never had custom colors sends nothing.
    */
   appliedSessionCursorStyles: Map<string, string>;
+  /** Latest turn using each cursor label. A delayed old-turn end cannot hide it. */
+  taskCursors: Map<string, TaskCursor>;
   retirement?: Promise<void>;
 }
 
@@ -198,6 +214,25 @@ function permissionsChanged(a: HostPermissions, b: HostPermissions): boolean {
 }
 
 const log = (message: string) => console.info(`[desktop-cua] ${message}`);
+const safeNativeId = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 0xffffffff
+    ? value
+    : undefined;
+const LOGGABLE_CUA_CODES = new Set([
+  "computer_input_paused",
+  "desktop_input_paused",
+  "same_pid_keyboard_ambiguity",
+  "cua_action_failed",
+  "cua_refusal",
+  "invalid_arguments",
+  "input_admission_closed",
+  "target_not_on_active_space",
+  "target_unavailable",
+  "auth_sheet_focused",
+  "input_monitor_unavailable",
+  "gui_host_required",
+  "background_pixel_focus_unavailable",
+]);
 
 /**
  * How long a physical Escape keeps new mutating dispatch refused while the
@@ -519,6 +554,58 @@ export class CuaDriverHost {
   }
 
   private async handle(request: Record<string, unknown>, connection: Socket): Promise<CuaReply> {
+    const name = typeof request.name === "string" ? request.name : "";
+    if (request.method !== "call" || !CUA_ACTION_TOOLS.has(name))
+      return this.handleRequest(request, connection);
+    const started = Date.now();
+    let reply: CuaReply | undefined;
+    try {
+      reply = await this.handleRequest(request, connection);
+      return reply;
+    } finally {
+      const task = reply ? parseCuaComputerTask(request.task) : undefined;
+      const args =
+        request.args && typeof request.args === "object"
+          ? (request.args as Record<string, unknown>)
+          : {};
+      const structured = reply?.result?.structuredContent;
+      const diagnostics = parseCuaActionDiagnostics(structured);
+      const effect = structured?.effect ?? reply?.effect;
+      const refusal = structured?.refusal as Record<string, unknown> | undefined;
+      const code = structured?.code ?? refusal?.code;
+      log(
+        JSON.stringify({
+          event: "computer_action",
+          ts: new Date().toISOString(),
+          thread: task?.threadId,
+          turn: task?.turnId,
+          tool: name,
+          layer: "driver-host",
+          code: typeof code === "string" && LOGGABLE_CUA_CODES.has(code) ? code : undefined,
+          pid: safeNativeId(args.pid),
+          windowId: safeNativeId(args.window_id),
+          effect:
+            typeof effect === "string" &&
+            ["refused", "not-dispatched", "dispatched-unknown", "verified"].includes(effect)
+              ? effect
+              : "unknown",
+          failed: !reply?.ok || reply.result?.isError === true,
+          ...(diagnostics
+            ? {
+                diagnostics,
+                reason: cuaActionDiagnosticMessage(diagnostics),
+              }
+            : {}),
+          ms: Date.now() - started,
+        }),
+      );
+    }
+  }
+
+  private async handleRequest(
+    request: Record<string, unknown>,
+    connection: Socket,
+  ): Promise<CuaReply> {
     const supplied =
       typeof request.capability === "string" ? Buffer.from(request.capability) : Buffer.alloc(0);
     const expected = Buffer.from(this.options.capability);
@@ -572,10 +659,14 @@ export class CuaDriverHost {
         this.rememberTask(this.endedFrameTasks, this.frameTapTask);
         this.frameTapTask = undefined;
       }
-      await this.options.frameTap?.endTask(task);
       // The same task boundary ends its shield lease: an activation whose
-      // task is gone has no remaining authority to keep a mask up.
-      await this.options.shield?.endTask(task);
+      // task is gone has no remaining authority to keep a mask up. Start
+      // preview/shield cleanup now, independent of the queued cursor update.
+      await Promise.all([
+        this.options.frameTap?.endTask(task),
+        this.options.shield?.endTask(task),
+        this.endTaskCursors(task),
+      ]);
       return { ok: true };
     }
     if (request.method === "shield") {
@@ -1087,6 +1178,7 @@ export class CuaDriverHost {
   ): Promise<CuaReply> {
     let generation: Generation | undefined;
     let dispatched = false;
+    let cursorEnabled: boolean | undefined;
     const admittedEpoch = this.epoch;
     const admittedDesktopEpoch = this.desktopEpoch;
     const isBrowser = CUA_BROWSER_TOOLS.has(name);
@@ -1194,6 +1286,11 @@ export class CuaDriverHost {
         // session cursor from its launch template. The user's colors must be
         // applied to the session the action actually paints, once per task.
         if (agentLabel) await this.applyCursorStyleForSession(generation, agentLabel);
+        if (agentLabel && !generation.taskCursors.get(agentLabel)?.enabled) {
+          // Showing/hiding a cursor must not end its driver session: that
+          // session can still own retained accessibility refs across turns.
+          cursorEnabled = await this.setTaskCursorEnabled(generation, agentLabel, true);
+        }
         // Session setup can await I/O. Stop must win even if it arrived after
         // the initial dispatch guard and before the native request is sent.
         if (admittedEpoch !== this.epoch || connection.destroyed || callCancel.signal.aborted) {
@@ -1344,6 +1441,32 @@ export class CuaDriverHost {
       }
       if (name === "get_desktop_state" && reply.result && this.options.normalizeOverview)
         this.options.normalizeOverview(reply.result);
+      if (agentLabel && task && !isDriverSessionDeath(reply)) {
+        const cursor = generation.taskCursors.get(agentLabel);
+        const sameTurn = cursor && cuaComputerTaskKey(cursor.task) === cuaComputerTaskKey(task);
+        const firstAction = mutation && (!sameTurn || !cursor.firstActionObserved);
+        generation.taskCursors.delete(agentLabel);
+        generation.taskCursors.set(agentLabel, {
+          task,
+          firstActionObserved: mutation || (sameTurn && cursor.firstActionObserved) || false,
+          enabled: cursorEnabled ?? cursor?.enabled ?? false,
+        });
+        if (!cursor || firstAction)
+          await this.logCursorState(
+            generation,
+            agentLabel,
+            task,
+            firstAction ? "first-action" : "session-created",
+          );
+        while (generation.taskCursors.size > 256) {
+          const oldest = generation.taskCursors.keys().next().value!;
+          if (!(await this.endCursorSession(generation, oldest))) {
+            // Native idle expiry bounds a failed cosmetic cleanup. Preserve
+            // retries under normal load without unbounded per-label metadata.
+            generation.taskCursors.delete(oldest);
+          }
+        }
+      }
       return reply;
     } catch (error) {
       let detail = String(error);
@@ -1370,6 +1493,109 @@ export class CuaDriverHost {
       connection.removeListener("close", abort);
       this.inFlightInputInterrupts.delete(callCancel);
     }
+  }
+
+  /** A single bounded read after mint/first action, never periodic polling.
+   * Enabled/position are driver state, not proof of pixels reaching a display. */
+  private async logCursorState(
+    generation: Generation,
+    label: string,
+    task: CuaComputerTask,
+    stage: "session-created" | "first-action",
+  ): Promise<void> {
+    if (this.observedNativeRevision === 0) return;
+    const fields: Record<string, unknown> = {
+      event: "computer_cursor",
+      ts: new Date().toISOString(),
+      thread: task.threadId,
+      turn: task.turnId,
+      stage,
+    };
+    try {
+      const reply = await cuaRequest<CuaReply>(
+        generation.socket,
+        {
+          method: "call",
+          name: "get_agent_cursor_state",
+          args: { session: label },
+        },
+        { timeoutMs: 250 },
+      );
+      const state = reply.result?.structuredContent;
+      const motion = state?.motion as Record<string, unknown> | undefined;
+      fields.status = reply.ok && !reply.result?.isError ? "reported" : "unavailable";
+      if (typeof state?.enabled === "boolean") fields.enabled = state.enabled;
+      if (state && "position" in state) fields.has_position = state.position != null;
+      if (typeof motion?.idle_hide_ms === "number" && Number.isFinite(motion.idle_hide_ms))
+        fields.idle_hide_ms = motion.idle_hide_ms;
+      if (typeof state?.overlay_ready === "boolean") fields.overlay_ready = state.overlay_ready;
+      if (typeof state?.render_visible === "boolean") fields.render_visible = state.render_visible;
+      if (state?.overlay_scope === "main_display") fields.overlay_scope = state.overlay_scope;
+    } catch {
+      fields.status = "query-failed";
+    }
+    log(JSON.stringify(fields));
+  }
+
+  private async endCursorSession(generation: Generation, label: string): Promise<boolean> {
+    const cursor = generation.taskCursors.get(label);
+    const hidden = await this.setTaskCursorEnabled(generation, label, false);
+    // A lost reply can mean either visible or hidden. Keep its cleanup handle
+    // until acknowledged, and re-enable explicitly if a later action reuses it.
+    if (hidden) generation.taskCursors.delete(label);
+    else if (cursor) cursor.enabled = false;
+    log(
+      JSON.stringify({
+        event: "computer_cursor",
+        ts: new Date().toISOString(),
+        thread: cursor?.task.threadId,
+        turn: cursor?.task.turnId,
+        stage: "task-end",
+        status: hidden ? "hidden" : "hide-failed",
+      }),
+    );
+    return hidden;
+  }
+
+  private async setTaskCursorEnabled(
+    generation: Generation,
+    label: string,
+    enabled: boolean,
+  ): Promise<boolean> {
+    try {
+      const reply = await cuaRequest<CuaReply>(
+        generation.socket,
+        {
+          method: "call",
+          name: "set_agent_cursor_enabled",
+          args: { session: label, enabled },
+        },
+        { timeoutMs: 500 },
+      );
+      return reply.ok && !reply.result?.isError;
+    } catch {
+      return false;
+    }
+  }
+
+  /** End only the latest matching turn, in the same queue as native dispatch.
+   * A late terminal for turn A must not remove turn B's reused cursor. */
+  private async endTaskCursors(task: CuaComputerTask): Promise<void> {
+    const previous = this.operations;
+    const operation = (async () => {
+      await previous;
+      const generation = this.generation;
+      if (!generation || generation.retired || generation.didExit) return;
+      for (const [label, cursor] of generation.taskCursors) {
+        if (
+          cursor.task.threadId === task.threadId &&
+          (task.turnId === undefined || cursor.task.turnId === task.turnId)
+        )
+          await this.endCursorSession(generation, label);
+      }
+    })();
+    this.operations = operation.catch(() => undefined);
+    await operation;
   }
 
   /**
@@ -1473,8 +1699,10 @@ export class CuaDriverHost {
         process.platform === "win32"
           ? `\\\\.\\pipe\\synara-cua-driver-${randomUUID().slice(0, 8)}`
           : join(this.directory, `driver-${randomUUID().slice(0, 8)}.sock`);
-      // The compact cursor and its idle-hide tuning are patch additions —
-      // an unpatched upstream driver rejects flags it does not know.
+      // Park the compact cursor between actions until end_task removes it,
+      // with a one-minute native expiry if cleanup cannot be acknowledged.
+      // Idle compact cursors sleep without repainting; model latency must not
+      // make the only agent indicator disappear. Upstream cannot parse these flags.
       const expectsPatched = this.options.nativeRevision !== null;
       const child = spawn(
         this.options.binaryPath,
@@ -1483,7 +1711,9 @@ export class CuaDriverHost {
           "--embedded",
           "--socket",
           endpoint,
-          ...(expectsPatched ? ["--compact-cursor", "--idle-hide-ms", "900"] : []),
+          ...(expectsPatched
+            ? ["--compact-cursor", "--idle-hide-ms", String(CUA_CURSOR_IDLE_HIDE_MS)]
+            : []),
         ],
         {
           stdio: ["pipe", "ignore", "pipe"],
@@ -1516,9 +1746,28 @@ export class CuaDriverHost {
       // after the fact; payloads may be private, so only lines are kept and only
       // surfaced on exit, never streamed.
       const stderrTail: string[] = [];
+      let stderrPending = "";
       child.stderr?.on("data", (chunk: Buffer) => {
-        for (const line of chunk.toString("utf8").split("\n")) {
+        const lines = (stderrPending + chunk.toString("utf8")).split("\n");
+        stderrPending = lines.pop()!.slice(-4096);
+        for (const line of lines) {
           if (!line.trim()) continue;
+          // These native literals carry no app content. Other stderr remains
+          // private to the bounded shutdown tail; never stream arbitrary text.
+          const overlay = line.match(
+            /^synara_cua_overlay_init code=(overlay_display_unavailable|overlay_window_unavailable)$/,
+          );
+          const restore = line.match(
+            /^synara_cua_focus_restore status=(not-needed|restored|failed|unobservable|user-changed)$/,
+          );
+          if (overlay || restore)
+            log(
+              JSON.stringify({
+                event: overlay ? "computer_cursor_init" : "computer_focus_restore",
+                ts: new Date().toISOString(),
+                ...(overlay ? { code: overlay[1] } : { status: restore![1] }),
+              }),
+            );
           stderrTail.push(line.slice(0, 200));
           if (stderrTail.length > 20) stderrTail.shift();
         }
@@ -1550,6 +1799,7 @@ export class CuaDriverHost {
         endedTaskSessions: new Set<string>(),
         appliedCursorStyle: "",
         appliedSessionCursorStyles: new Map<string, string>(),
+        taskCursors: new Map<string, TaskCursor>(),
       };
       this.generation = generation;
       this.updateInputMonitorArmed();
@@ -2103,6 +2353,22 @@ export class CuaDriverHost {
       this.desktopObservationRequired ||
       this.browserObservationRequired ||
       this.takeoverTargets.size > 0;
+    if (!alreadyPaused) {
+      log(
+        JSON.stringify({
+          event: "computer_physical_input",
+          ts: new Date().toISOString(),
+          pid: safeNativeId(event.pid),
+          windowId: safeNativeId(event.windowId),
+          targets: affected.map(([, target]) => ({
+            thread: target.threadId,
+            pid: target.pid,
+            windowId: target.windowId,
+          })),
+          foreground: this.activeForegroundInput,
+        }),
+      );
+    }
     for (const [key, target] of affected) this.takeoverTargets.set(key, { ...target });
     if (this.activeForegroundInput && affected.length === 0) {
       this.desktopObservationRequired = true;
@@ -2509,7 +2775,8 @@ export class CuaDriverHost {
         content: [{ type: "text", text: message }],
         structuredContent: {
           effect: "refused",
-          code: "desktop_input_paused",
+          code: "computer_input_paused",
+          layer: "driver-host",
           message,
         },
       },
@@ -2554,7 +2821,8 @@ export class CuaDriverHost {
         content: [{ type: "text", text: message }],
         structuredContent: {
           effect: "refused",
-          code: "desktop_input_paused",
+          code: "computer_input_paused",
+          layer: "driver-host",
           message,
         },
       },

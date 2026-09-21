@@ -18,6 +18,7 @@ import {
 } from "../computer/ComputerBackend.ts";
 import { ComputerTargetError } from "../computer/uiTreeTargeting.ts";
 import { ComputerManager } from "../computer/ComputerManager.ts";
+import { CuaActionError } from "../computer/CuaComputerBackend.ts";
 import { desktopDeliveryMode } from "../computer/DesktopOperationQueue.ts";
 import { FakeComputerBackend } from "../computer/FakeComputerBackend.ts";
 import { isModelDesktopObservationActive } from "../computer/modelDesktopObservation.ts";
@@ -391,13 +392,14 @@ describe("agent gateway computer tools", () => {
     expect(names).toEqual(["Luna"]);
   });
 
-  it("exposes the native batch fast path behind computer:control, with 14 specialist tools hidden", async () => {
+  it("exposes the native batch fast path behind computer:control, with 15 specialist tools hidden", async () => {
     const { byName, tools } = await setup();
-    // 32 registered desktop tools: 18 advertised, including the batch fast
-    // path, plus 14 specialists. The 7 recording/replay tools, the three click
+    // 33 registered desktop tools: 18 advertised, including the batch fast
+    // path, plus 15 specialists. The 7 recording/replay tools, the three click
     // variants and computer_hotkey are gone entirely — their behavior folded
     // into computer_click's count/button and computer_press_key's chord.
     expect(tools.map((tool) => tool.definition.name)).toEqual([
+      "computer_spaces",
       "computer_list_windows",
       "computer_get_state",
       "computer_screenshot",
@@ -458,6 +460,7 @@ describe("agent gateway computer tools", () => {
     expect(
       tools.filter((tool) => tool.discoveryOnly === true).map((tool) => tool.definition.name),
     ).toEqual([
+      "computer_spaces",
       "computer_read_clipboard",
       "computer_zoom",
       "computer_get_accessibility_tree",
@@ -882,11 +885,11 @@ describe("agent gateway computer tools", () => {
       x: 1_055,
       y: 125,
     });
-    await call("computer_click", { x: 5, y: 5, include_screenshot: false });
-    // Back in the workspace frame, whose 1536-wide picture covers 1920 desktop
-    // points: five screenshot pixels are six desktop points, and the server is
-    // what converts them.
-    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 6, y: 6 });
+    // Use a different point so the generic uncertain-action loop guard does
+    // not preempt this coordinate-frame assertion.
+    await call("computer_click", { x: 8, y: 8, include_screenshot: false });
+    // Back in the workspace frame: eight screenshot pixels cover ten desktop points.
+    expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 10, y: 10 });
 
     // An id this conversation was never given is refused, naming the ones it
     // has. Fresh coordinates keep the repeat guard — which strips
@@ -1402,6 +1405,10 @@ describe("agent gateway computer tools", () => {
     expect(resultJson(first)).toMatchObject({
       action: "computer_scroll",
       scroll: { traveledY: 0 },
+      scrollObservation: {
+        status: "no-visible-movement",
+        message: expect.stringContaining("dropped delivery"),
+      },
     });
 
     const second = await call("computer_scroll", otherArgs);
@@ -1427,7 +1434,7 @@ describe("agent gateway computer tools", () => {
     expect(changed.content.map((entry) => entry.type)).toEqual(["text", "image"]);
 
     // Counter restarted: the next scroll is allowed, not refused.
-    const after = await call("computer_scroll", args);
+    const after = await call("computer_scroll", otherArgs);
     expect(after.isError).not.toBe(true);
     expect(backend.callsFor("scroll").length).toBeGreaterThan(3);
   });
@@ -1476,6 +1483,117 @@ describe("agent gateway computer tools", () => {
       error: { code: "repeated_unverified_action" },
     });
     expect(backend.callsFor("pressKey")).toHaveLength(2);
+  });
+  it("does not turn lease refusals into repeated input or block a later corrected call", async () => {
+    const { backend, manager, call } = await setup();
+    try {
+      await manager.pressKey("owner", "tab");
+      const args = { key: "enter", include_screenshot: false };
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const refused = await call("computer_press_key", args);
+        expect(resultJson(refused)).toMatchObject({
+          error: { code: "computer_controlled_by_other_thread" },
+        });
+      }
+      expect(backend.callsFor("pressKey")).toHaveLength(1);
+      await manager.releaseDesktopControl("owner");
+      expect((await call("computer_press_key", args)).isError).not.toBe(true);
+      expect(backend.callsFor("pressKey")).toHaveLength(2);
+    } finally {
+      await manager.dispose();
+    }
+  });
+  it("does not count native admission refusals as dispatched input", async () => {
+    const { backend, manager, call } = await setup();
+    const key = vi
+      .spyOn(backend, "pressKey")
+      .mockRejectedValue(
+        new CuaActionError("No input was sent.", "not-dispatched", "same_pid_keyboard_ambiguity"),
+      );
+    try {
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        expect(
+          resultJson(await call("computer_press_key", { key: "enter", include_screenshot: false })),
+        ).toMatchObject({
+          error: "same_pid_keyboard_ambiguity",
+          effect: "not-dispatched",
+        });
+      }
+      expect(key).toHaveBeenCalledTimes(4);
+    } finally {
+      key.mockRestore();
+      await manager.dispose();
+    }
+  });
+  it("retains uncertain native errors and their diagnostics in the audit", async () => {
+    const { backend, manager, call } = await setup();
+    const diagnostics = {
+      delivery_path: "ax" as const,
+      actuator: "ax_press" as const,
+      ax_error: -25202,
+    };
+    const key = vi
+      .spyOn(backend, "pressKey")
+      .mockRejectedValue(
+        new CuaActionError(
+          "Native action failed.",
+          "dispatched-unknown",
+          "cua_action_failed",
+          undefined,
+          diagnostics,
+        ),
+      );
+    const audit = vi.spyOn(manager, "recordComputerAudit");
+    try {
+      const args = { key: "enter", include_screenshot: false };
+      expect(resultJson(await call("computer_press_key", args))).toMatchObject({
+        error: "cua_action_failed",
+        effect: "dispatched-unknown",
+        diagnostics,
+      });
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          effect: "dispatched-unknown",
+          code: "cua_action_failed",
+          diagnostics,
+        }),
+      );
+      await call("computer_press_key", args);
+      expect(resultJson(await call("computer_press_key", args))).toMatchObject({
+        error: { code: "repeated_unverified_action" },
+      });
+      expect(key).toHaveBeenCalledTimes(2);
+    } finally {
+      key.mockRestore();
+      await manager.dispose();
+    }
+  });
+  it("does not mistake an uncertain first batch step for a pre-dispatch refusal", async () => {
+    const { backend, manager, call } = await setup();
+    const key = vi
+      .spyOn(backend, "pressKey")
+      .mockRejectedValue(
+        new CuaActionError("Input may have been sent.", "dispatched-unknown", "cua_action_failed"),
+      );
+    const audit = vi.spyOn(manager, "recordComputerAudit");
+    const args = { steps: [{ type: "press_key", key: "enter", window_id: "fake-calculator" }] };
+    try {
+      expect(resultJson(await call("computer_run", args))).toMatchObject({
+        completed: 0,
+        steps: [{ ok: false, error: { effect: "dispatched-unknown" } }],
+      });
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({ tool: "computer_run", effect: "dispatched-unknown" }),
+      );
+      await call("computer_run", args);
+      expect(resultJson(await call("computer_run", args))).toMatchObject({
+        error: { code: "repeated_unverified_action" },
+      });
+      expect(key).toHaveBeenCalledTimes(2);
+    } finally {
+      key.mockRestore();
+      await manager.dispose();
+    }
   });
 
   it("refuses the repeat before the approval prompt and before dispatch", async () => {
@@ -2031,7 +2149,7 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("readClipboard")).toHaveLength(0);
   });
 
-  it("refuses a second thread's actions with a retryable error and keeps its perception", async () => {
+  it("refuses a second thread's actions without encouraging retry loops and keeps its perception", async () => {
     const { backend, call, manager, see } = await setup();
     await see("thread-a");
 
@@ -2044,7 +2162,7 @@ describe("agent gateway computer tools", () => {
     expect(resultJson(blocked)).toMatchObject({
       error: {
         code: "computer_controlled_by_other_thread",
-        retryable: true,
+        retryable: false,
         message: expect.stringContaining("another conversation"),
       },
     });
@@ -2163,7 +2281,8 @@ describe("agent gateway computer tools", () => {
     expect(description).toContain("scroll.traveledY");
     // macOS now measures and gears like the other platforms; the description
     // must not carry the old "no corrective retries" caveat.
-    expect(description).toContain("pre-divides later requests by what it learned");
+    expect(description).toContain("delta_x and delta_y");
+    expect(description).toContain("edge or dropped input");
     // The advice that replaced scroll-hunting stays.
     expect(description).toContain("computer_get_state");
   });
@@ -3305,6 +3424,45 @@ it("allows human input between conditional wait observations and stops polling w
 
 describe("computer never-raise gate", () => {
   const refusing = async () => ({ userRequestedVisibleUse: false });
+
+  it("gates exact-window and app menu calls and batched menu steps as foreground", async () => {
+    const backend = new FakeComputerBackend();
+    const approval = vi.fn(async () => true);
+    const { call, manager } = await setup(backend, approval, refusing);
+    try {
+      for (const target of [{ window_id: "fake-calculator" }, { pid: 1_002 }]) {
+        expect(
+          resultJson(await call("computer_invoke_menu", { ...target, path: ["File"] })),
+        ).toMatchObject({
+          error: "foreground_not_requested",
+          effect: "not-dispatched",
+        });
+      }
+      expect(approval).toHaveBeenCalledWith(
+        "computer_invoke_menu",
+        expect.objectContaining({ delivery_mode: "foreground" }),
+        expect.anything(),
+        expect.anything(),
+      );
+      const batch = resultJson(
+        await call("computer_run", {
+          steps: [{ type: "invoke_menu", app: "Calculator", path: ["File"] }],
+        }),
+      );
+      expect(batch).toMatchObject({
+        completed: 0,
+        stopped: true,
+        steps: [
+          { ok: false, error: { code: "foreground_not_requested", effect: "not-dispatched" } },
+        ],
+      });
+      expect(backend.callsFor("invokeMenu")).toHaveLength(0);
+      expect(backend.callsFor("raiseWindow")).toHaveLength(0);
+      expect(backend.callsFor("focusWindow")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
 
   it("refuses activate without the user's task-text authorization, and raises nothing", async () => {
     const backend = new FakeComputerBackend();

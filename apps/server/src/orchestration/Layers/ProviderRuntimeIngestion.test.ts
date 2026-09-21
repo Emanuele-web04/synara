@@ -53,6 +53,9 @@ import {
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import { ComputerManager } from "../../computer/ComputerManager.ts";
+import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
+import { ComputerService } from "../../computer/Services/ComputerService.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -367,6 +370,7 @@ describe("ProviderRuntimeIngestion", () => {
   async function createHarness(options?: {
     readonly startIngestion?: boolean;
     readonly persistedStream?: boolean;
+    readonly computerManager?: ComputerManager;
   }) {
     const workspaceRoot = makeTempDir("synara-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
@@ -383,6 +387,15 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(
+        options?.computerManager
+          ? Layer.succeed(ComputerService, {
+              supported: true,
+              availability: { kind: "available", backend: "test" },
+              manager: options.computerManager,
+            })
+          : Layer.empty,
+      ),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
@@ -487,6 +500,171 @@ describe("ProviderRuntimeIngestion", () => {
       readProjectedThread,
     };
   }
+
+  it.each([
+    { type: "turn.completed", payload: { state: "completed" } },
+    { type: "turn.completed", payload: { state: "failed" } },
+    { type: "turn.completed", payload: { state: "interrupted" } },
+    { type: "turn.aborted", payload: { reason: "User interrupted" } },
+    { type: "session.exited", payload: { exitKind: "graceful" } },
+    { type: "session.state.changed", payload: { state: "stopped" } },
+    { type: "session.state.changed", payload: { state: "error" } },
+    { type: "runtime.error", payload: { message: "Provider stopped" } },
+  ])("releases computer control on $type $payload without idle expiry", async (terminal) => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend(), now: () => 0 });
+    try {
+      const harness = await createHarness({ computerManager: manager });
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("computer-turn-1");
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("computer-turn-started"),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt: new Date().toISOString(),
+      });
+      await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+      await manager.withAgentActivity(
+        threadId,
+        () => manager.typeText(threadId, "first"),
+        undefined,
+        turnId,
+      );
+      await expect(manager.typeText("thread-2", "second")).rejects.toMatchObject({
+        code: "computer_controlled_by_other_thread",
+      });
+      harness.emit({
+        ...terminal,
+        eventId: asEventId("computer-turn-terminal"),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      await expect(manager.typeText("thread-2", "second")).resolves.toMatchObject({
+        action: "computer_type_text",
+      });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each([
+    { type: "turn.completed", payload: { state: "completed" } },
+    { type: "session.exited", payload: { exitKind: "graceful" } },
+    { type: "runtime.error", payload: { message: "Old provider stopped" } },
+  ])(
+    "does not let a delayed computer terminal $type release a newer turn's desktop",
+    async (terminal) => {
+      const manager = new ComputerManager({ backend: new FakeComputerBackend(), now: () => 0 });
+      try {
+        const harness = await createHarness({ computerManager: manager });
+        const threadId = asThreadId("thread-1");
+        const oldTurnId = asTurnId("computer-old-turn");
+        const newTurnId = asTurnId("computer-new-turn");
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId("computer-old-started"),
+          provider: "codex",
+          threadId,
+          turnId: oldTurnId,
+          createdAt: new Date().toISOString(),
+        });
+        await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === oldTurnId);
+        // The gateway has already admitted the next turn while ingestion is
+        // still catching up with the previous turn's terminal event.
+        await manager.withAgentActivity(
+          threadId,
+          () => manager.typeText(threadId, "new turn"),
+          undefined,
+          newTurnId,
+        );
+        harness.emit({
+          ...terminal,
+          eventId: asEventId("computer-old-completed"),
+          provider: "codex",
+          threadId,
+          turnId: oldTurnId,
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        await expect(manager.typeText("thread-2", "second")).rejects.toMatchObject({
+          code: "computer_controlled_by_other_thread",
+        });
+        harness.emit({
+          type: "turn.completed",
+          eventId: asEventId("computer-new-completed"),
+          provider: "codex",
+          threadId,
+          turnId: newTurnId,
+          createdAt: new Date().toISOString(),
+          payload: { state: "completed" },
+        });
+        await harness.drain();
+        await expect(manager.typeText("thread-2", "second")).resolves.toMatchObject({
+          action: "computer_type_text",
+        });
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps computer control on an ambiguous turnless terminal (session ready: %s)",
+    async (sessionReady) => {
+      const manager = new ComputerManager({ backend: new FakeComputerBackend(), now: () => 0 });
+      try {
+        const harness = await createHarness({ computerManager: manager });
+        const threadId = asThreadId("thread-1");
+        for (const turnId of ["computer-overlap-one", "computer-overlap-two"]) {
+          harness.emit({
+            type: "turn.started",
+            eventId: asEventId(`${turnId}-started`),
+            provider: "codex",
+            threadId,
+            turnId: asTurnId(turnId),
+            createdAt: new Date().toISOString(),
+          });
+          await harness.drain();
+        }
+        if (sessionReady) {
+          harness.emit({
+            type: "session.state.changed",
+            eventId: asEventId("computer-overlap-session-ready"),
+            provider: "codex",
+            threadId,
+            createdAt: new Date().toISOString(),
+            payload: { state: "ready" },
+          });
+          await harness.drain();
+          await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === null);
+        }
+        await manager.withAgentActivity(
+          threadId,
+          () => manager.typeText(threadId, "active overlapping turn"),
+          undefined,
+          "computer-overlap-two",
+        );
+        harness.emit({
+          type: "turn.completed",
+          eventId: asEventId("computer-ambiguous-completed"),
+          provider: "codex",
+          threadId,
+          createdAt: new Date().toISOString(),
+          payload: { state: "completed" },
+        });
+        await harness.drain();
+        await expect(manager.typeText("thread-2", "second")).rejects.toMatchObject({
+          code: "computer_controlled_by_other_thread",
+        });
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
 
   it("REL-01C gate: replays output persisted before subscription without duplicate acceptance", async () => {
     const harness = await createHarness({ startIngestion: false });

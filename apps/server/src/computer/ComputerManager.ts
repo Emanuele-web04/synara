@@ -117,18 +117,17 @@ export const COMPUTER_FRAME_SOCKET_BUDGET_BYTES = 2 * 1024 * 1024;
  * Crash backstop for the desktop lease, not the normal release path.
  *
  * There is one desktop, one cursor and one focused keyboard stream, so exactly
- * one thread may drive those shared resources at a time. Exact semantic text
- * mutations are exempt: they address independently verified accessibility
- * elements and never use that shared focus stream. Ownership is released the
- * moment the owner's turn ends (`releaseDesktopControl`, driven by the provider
+ * one thread may drive those shared resources at a time. Exact-window
+ * `type_text` can use a separate semantic lane; other mutations still share
+ * this lease. Ownership is released the moment the owner's turn ends
+ * (`releaseDesktopControl`, driven by the provider
  * runtime's terminal turn and session events), because a takeover mid-turn
  * corrupts the owner: its drag is teleported, its typing is retargeted. Idle
  * expiry only covers the case where that signal never arrives — a provider
  * process that died without a terminal event — and so is deliberately long: a
  * model can think for minutes between two tool calls, and expiring under a live
  * turn is the failure this whole mechanism exists to prevent. Five minutes
- * matches the KWin plugin's own session idle timeout, the point past which the
- * desktop session is being torn down anyway.
+ * leaves a long-running model's legitimate thinking time undisturbed.
  */
 export const COMPUTER_LEASE_IDLE_MS = 300_000;
 
@@ -336,9 +335,8 @@ export type ComputerActionObservation =
 /**
  * Refusal raised when another thread owns the desktop. It extends
  * `ComputerBackendError` so every existing catch site keeps classifying it,
- * and carries `retryable` because the desktop does come free again — the
- * message tells the model to come back rather than to give up or find another
- * way in.
+ * and explicitly discourages immediate retries: time spent repeating the
+ * same refusal cannot free the other conversation's desktop lease.
  */
 export class ComputerLeaseError extends ComputerBackendError {
   readonly code = "computer_controlled_by_other_thread";
@@ -346,9 +344,11 @@ export class ComputerLeaseError extends ComputerBackendError {
   constructor() {
     super(
       "The shared pointer and focused keyboard are controlled by another conversation; " +
-        "try again when it is free. Reading the desktop still works, and exact-window " +
-        "focus-neutral semantic text can proceed independently.",
-      { retryable: true },
+        "no input was sent. Do not retry this blocked action or switch tools to bypass " +
+        "the lease. Wait until that conversation's turn ends. Reading the desktop still " +
+        "works; computer_type_text can proceed independently when it names an exact " +
+        "window and accessibility element for focus-neutral semantic insertion.",
+      { retryable: false },
     );
     this.name = "ComputerLeaseError";
   }
@@ -1866,8 +1866,10 @@ export class ComputerManager {
    * Invoke a menu-bar path on the app the target names: one exact window
    * (validated against a fresh listing, with the owning app's consent and
    * denylist gates exactly as before), or the application-level menu bar of
-   * a running app/pid — no window is resolved, focused, or raised, which is
-   * the only route for an app that has no windows. An app name resolves to a
+   * a running app/pid, which also works for an app without windows. Native
+   * menu execution may activate the app, so both routes require the same
+   * visible-use authorization and restoration as other foreground actions.
+   * An app name resolves to a
    * live pid through the same process list the visibility tool consults; an
    * unresolvable name refuses with the list_apps pointer. A named pid rides
    * through, and the driver's own refusal names an unknown process.
@@ -1876,38 +1878,48 @@ export class ComputerManager {
     threadId: string | undefined,
     target: ComputerMenuTarget,
     path: readonly string[],
+    authorization?: ComputerForegroundAuthorization,
   ): Promise<ComputerActionResult> {
-    return this.withDesktopControl(threadId, async () => {
-      const invoke = this.backend.invokeMenu?.bind(this.backend);
-      if (!invoke) throw new ComputerBackendError("This backend cannot invoke menu items.");
-      if ("windowId" in target) {
-        const window = await this.resolveWindowTarget(threadId, target.windowId);
-        if (window.pid !== undefined)
-          await this.assertSpaceAppMutationAllowed(threadId, window.pid);
-        const result = await timedComputerLeg("dispatch", () =>
-          invoke({ windowId: target.windowId }, path),
-        );
-        return this.actionResult(
-          threadId,
-          "computer_invoke_menu",
-          undefined,
-          result,
-          target.windowId,
-        );
-      }
-      // Application-level: the denylist keys on the app this target
-      // provably names, the same split set_app_visibility makes.
-      const resolved = await timedComputerLeg("resolve", () => this.resolveMenuAppTarget(target));
-      const consentKey = "app" in target ? target.app : (resolved.name ?? `pid ${target.pid}`);
-      this.assertDrivenAppAllowed(consentKey);
-      if (agentThreadId(threadId) !== undefined) {
-        const denied = await this.deniedMatchForPid(resolved.pid, resolved.name);
-        if (denied) throw new ComputerDenylistError(denied.app, denied.matched);
-      }
-      await this.assertSpaceAppMutationAllowed(threadId, resolved.pid);
-      const result = await timedComputerLeg("dispatch", () => invoke({ pid: resolved.pid }, path));
-      return this.actionResult(threadId, "computer_invoke_menu", undefined, result);
-    });
+    return this.withForegroundRestore(
+      threadId,
+      () =>
+        withDesktopDeliveryMode("foreground", async () => {
+          const invoke = this.backend.invokeMenu?.bind(this.backend);
+          if (!invoke) throw new ComputerBackendError("This backend cannot invoke menu items.");
+          if ("windowId" in target) {
+            const window = await this.resolveWindowTarget(threadId, target.windowId);
+            if (window.pid !== undefined)
+              await this.assertSpaceAppMutationAllowed(threadId, window.pid);
+            const result = await timedComputerLeg("dispatch", () =>
+              invoke({ windowId: target.windowId }, path),
+            );
+            return this.actionResult(
+              threadId,
+              "computer_invoke_menu",
+              undefined,
+              result,
+              target.windowId,
+            );
+          }
+          // Application-level: the denylist keys on the app this target
+          // provably names, the same split set_app_visibility makes.
+          const resolved = await timedComputerLeg("resolve", () =>
+            this.resolveMenuAppTarget(target),
+          );
+          const consentKey = "app" in target ? target.app : (resolved.name ?? `pid ${target.pid}`);
+          this.assertDrivenAppAllowed(consentKey);
+          if (agentThreadId(threadId) !== undefined) {
+            const denied = await this.deniedMatchForPid(resolved.pid, resolved.name);
+            if (denied) throw new ComputerDenylistError(denied.app, denied.matched);
+          }
+          await this.assertSpaceAppMutationAllowed(threadId, resolved.pid);
+          const result = await timedComputerLeg("dispatch", () =>
+            invoke({ pid: resolved.pid }, path),
+          );
+          return this.actionResult(threadId, "computer_invoke_menu", undefined, result);
+        }),
+      authorization,
+    );
   }
 
   /**
@@ -3796,12 +3808,36 @@ export class ComputerManager {
           }
         : {}),
     };
+    if (heldStale) {
+      this.recordLeaseLifecycle("stale-reclaimed", held, {
+        idleMs: now - held.lastActivityMs,
+        nextThreadId: owner,
+      });
+    }
+    if (changed || heldStale || held?.turnId !== this.lease.turnId) {
+      this.recordLeaseLifecycle("acquired", this.lease);
+    }
     if (changed) {
       await this.announceDrivingAgent(owner);
       // Both panels change: the new owner stops being blocked, and every other
       // thread starts being.
       await this.publishAllThreads();
     }
+  }
+
+  /** Lifecycle evidence contains identities and timing, never input or titles. */
+  private recordLeaseLifecycle(
+    event: "acquired" | "release-requested" | "released" | "stale-reclaimed",
+    lease: DesktopLease,
+    detail?: { readonly idleMs: number; readonly nextThreadId: string },
+  ): void {
+    console.info("[computer] desktop lease", {
+      ts: new Date(this.now()).toISOString(),
+      event,
+      threadId: lease.threadId,
+      ...(lease.turnId ? { turnId: lease.turnId } : {}),
+      ...detail,
+    });
   }
 
   /**
@@ -3859,44 +3895,57 @@ export class ComputerManager {
     const owner = agentThreadId(threadId);
     if (owner === undefined) return;
     this.spaceBroker.release(owner, turnId);
-    // Capture cleanup must not delay or prevent release of desktop control —
-    // the catch is part of the promise, so the finally-await below can never
-    // re-throw a wedged or refused endTask. A cleanup failure is evidence on
-    // the owner's state (a stale preview may linger), not a claim that the
-    // release itself failed.
-    const previewStopped = this.backend.endTask?.(owner, turnId)?.catch((error: unknown) => {
-      void this.recordThreadError(owner, `Preview cleanup failed: ${errorMessage(error)}`).catch(
-        () => undefined,
-      );
-    });
-    try {
-      if (this.lease?.threadId !== owner) return;
-      if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
-      if ((this.agentCallsInFlight.get(owner) ?? 0) > 0) {
-        this.lease.releaseRequested = true;
-        // A thread-level release names no turn: stamp whoever holds the lease
-        // at request time so a newer turn's renewal is not torn down by a
-        // stale deferred release.
-        this.lease.releaseRequestedTurnId = turnId ?? this.lease.turnId;
-        return;
-      }
-      await this.operations.run(async () => {
-        if (this.lease?.threadId !== owner) return;
-        if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
-        await this.backend.clearFocusWindow?.();
-        this.lease = null;
-        // The released turn is no longer this thread's authority: a later
-        // turnId-less caller must claim anonymously, not inherit a stale
-        // stamp a duplicate release could still match.
-        this.authorityTurns.delete(owner);
-        const runtime = this.threads.get(owner);
-        if (runtime) runtime.paneSurfaced = false;
-        await this.announceDrivingAgent(null);
+    // A normal thread-level completion must keep its queued preview/cursor
+    // cleanup on the observed turn, just like the lease release below. Real
+    // control revocation/removal is thread-wide and also closes older tasks.
+    const cleanupTurnId =
+      turnId ??
+      (!this.controlDisabled(owner) &&
+      !this.suspendedThreads.has(owner) &&
+      this.lease?.threadId === owner
+        ? this.lease.turnId
+        : undefined);
+    // Preview teardown must not block lifecycle ingestion or an in-flight
+    // operation's finalizer. In particular, awaiting it on the deferred path
+    // would prevent the operation from draining and leave the lease held.
+    void Promise.resolve()
+      .then(() => this.backend.endTask?.(owner, cleanupTurnId))
+      .catch((error: unknown) => {
+        void this.recordThreadError(owner, `Preview cleanup failed: ${errorMessage(error)}`).catch(
+          () => undefined,
+        );
       });
-      await this.publishAllThreads();
-    } finally {
-      await previewStopped;
+    if (this.lease?.threadId !== owner) return;
+    if (turnId && this.lease.turnId && this.lease.turnId !== turnId) return;
+    if ((this.agentCallsInFlight.get(owner) ?? 0) > 0) {
+      if (!this.lease.releaseRequested) {
+        this.recordLeaseLifecycle("release-requested", this.lease);
+      }
+      this.lease.releaseRequested = true;
+      // A thread-level release names no turn: stamp whoever holds the lease
+      // at request time so a newer turn's renewal is not torn down by a
+      // stale deferred release.
+      this.lease.releaseRequestedTurnId = turnId ?? this.lease.turnId;
+      return;
     }
+    const releasedTurnId = this.lease.turnId;
+    await this.operations.run(async () => {
+      if (this.lease?.threadId !== owner) return;
+      // The queue can admit a newer turn before this release gets its slot.
+      // Even a thread-level teardown belongs to the turn observed above.
+      if (this.lease.turnId !== releasedTurnId) return;
+      await this.backend.clearFocusWindow?.();
+      this.recordLeaseLifecycle("released", this.lease);
+      this.lease = null;
+      // The released turn is no longer this thread's authority: a later
+      // turnId-less caller must claim anonymously, not inherit a stale
+      // stamp a duplicate release could still match.
+      this.authorityTurns.delete(owner);
+      const runtime = this.threads.get(owner);
+      if (runtime) runtime.paneSurfaced = false;
+      await this.announceDrivingAgent(null);
+    });
+    await this.publishAllThreads();
   }
 
   /**

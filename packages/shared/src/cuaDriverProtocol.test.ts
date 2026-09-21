@@ -11,7 +11,7 @@ import {
 
 /**
  * The macOS cua-driver tool inventory at the pinned release (driver 0.28.2,
- * native revision 18, embedded serve). `platform-macos` `tools::register_all`
+ * Synara native patch, embedded serve). `platform-macos` `tools::register_all`
  * registers the platform and core tools; the cua-driver binary adds
  * `check_for_update` and — only under the upstream preview admission the
  * embedded host never grants — `history_status`/`history_query`.
@@ -25,6 +25,7 @@ import {
 const REGISTERED_MACOS_TOOLS = [
   // Agent-facing reads.
   "list_windows",
+  "list_spaces",
   "list_apps",
   "get_window_state",
   "get_desktop_state",
@@ -42,8 +43,7 @@ const REGISTERED_MACOS_TOOLS = [
   "press_key",
   "hotkey",
   "set_value",
-  // Registered by the pending native select-text patch (native revision 19);
-  // allowlisted here so the name is admitted the moment that patch lands.
+  // Native revision 19's semantic text selection.
   "select_text",
   "clipboard_read",
   "clipboard_write",
@@ -124,6 +124,7 @@ describe("cuaDriverProtocol tool boundary", () => {
         "get_screen_size",
         "get_window_state",
         "list_apps",
+        "list_spaces",
         "list_windows",
         "verify_state",
         "wait_for_settle",
