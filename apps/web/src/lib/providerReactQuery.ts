@@ -11,6 +11,12 @@ import {
 import { queryOptions } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
 import { ensureNativeApi } from "../nativeApi";
+import {
+  expensiveReadErrorRefetchInterval,
+  expensiveReadRetryDelay,
+  isRpcCapacityExceededError,
+  shouldRetryExpensiveRead,
+} from "./expensiveReadRetry";
 
 interface CheckpointDiffQueryInput {
   threadId: ThreadId | null;
@@ -115,12 +121,21 @@ export function resolveCheckpointDiffQueryDisplayState(input: {
   isFetching: boolean;
   data: unknown;
   error: unknown;
-}): { isLoading: boolean; error: string | null } {
+}): { isLoading: boolean; error: string | null; refreshStatus: string | null } {
   const hasData = input.data != null;
+  const capacityDelayed =
+    isRpcCapacityExceededError(input.error) && input.error.retryable !== false;
   return {
     isLoading: input.isLoading || (input.isFetching && !hasData),
     error:
-      input.isFetching || input.error == null ? null : normalizeCheckpointErrorMessage(input.error),
+      input.isFetching || input.error == null || capacityDelayed
+        ? null
+        : normalizeCheckpointErrorMessage(input.error),
+    refreshStatus: capacityDelayed
+      ? input.isFetching
+        ? "Refreshing diff..."
+        : "Diff refresh delayed."
+      : null,
   };
 }
 
@@ -140,22 +155,34 @@ export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
         }
         return await api.orchestration.getTurnDiff(decodedRequest.value.input);
       } catch (error) {
+        // Keep the transport's typed backpressure contract for retry and display policies.
+        if (isRpcCapacityExceededError(error)) throw error;
         throw new Error(normalizeCheckpointErrorMessage(error), { cause: error });
       }
     },
     enabled: (input.enabled ?? true) && !!input.threadId && decodedRequest._tag === "Some",
     staleTime: Infinity,
     retry: (failureCount, error) => {
+      if (isRpcCapacityExceededError(error)) {
+        return shouldRetryExpensiveRead(failureCount, error);
+      }
       if (isCheckpointTemporarilyUnavailable(error)) {
         return failureCount < 12;
       }
       return failureCount < 3;
     },
-    retryDelay: (attempt, error) =>
-      isCheckpointTemporarilyUnavailable(error)
+    retryDelay: (attempt, error) => {
+      if (isRpcCapacityExceededError(error)) {
+        return expensiveReadRetryDelay(attempt, error);
+      }
+      return isCheckpointTemporarilyUnavailable(error)
         ? Math.min(5_000, 250 * 2 ** (attempt - 1))
-        : Math.min(1_000, 100 * 2 ** (attempt - 1)),
+        : Math.min(1_000, 100 * 2 ** (attempt - 1));
+    },
     refetchInterval: (query) => {
+      if (isRpcCapacityExceededError(query.state.error)) {
+        return expensiveReadErrorRefetchInterval(query);
+      }
       const temporaryError = query.state.error;
       if (!temporaryError || !isCheckpointTemporarilyUnavailable(temporaryError)) {
         return false;
