@@ -104,7 +104,7 @@ export const MAC_DEVICE_HELPER_ASAR_EXCLUSION = `!${MAC_DEVICE_HELPER_STAGE_PATH
  * the source-build fallback, which is macOS-only. A Windows or Linux artifact
  * carrying them ships a compiler input for an OS it will never run on.
  */
-export const NON_MAC_FILES = ["**/*", MAC_COMPUTER_HELPER_SOURCES_ASAR_EXCLUSION] as const;
+const NON_MAC_FILE_EXCLUSIONS = [MAC_COMPUTER_HELPER_SOURCES_ASAR_EXCLUSION] as const;
 export const WINDOWS_INSTALLER_GUID = "368107a8-afe6-5db5-ab3b-d4f331684868";
 // Asset catalog name of the compiled Icon Composer icon. macOS 26 reads
 // CFBundleIconName out of Assets.car and renders that layered icon with the
@@ -290,7 +290,7 @@ export function createDesktopPlatformBuildConfig(
   if (input.platform === "linux") {
     return {
       ...nativePackaging,
-      files: [...NON_MAC_FILES],
+      files: [...files, ...NON_MAC_FILE_EXCLUSIONS],
       linux: {
         target: [input.target],
         executableName: "synara",
@@ -307,7 +307,7 @@ export function createDesktopPlatformBuildConfig(
 
   return {
     ...nativePackaging,
-    files: [...NON_MAC_FILES],
+    files: [...files, ...NON_MAC_FILE_EXCLUSIONS],
     // Keep the Windows product registration stable while the public app ID changes.
     // This lets NSIS updates replace the existing installation and own its uninstaller.
     nsis: {

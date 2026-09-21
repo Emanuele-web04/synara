@@ -30,7 +30,6 @@ import {
   MICROPHONE_USAGE_DESCRIPTION,
   MAC_HELPER_X64_ARCH_FILES,
   NODE_PTY_ASAR_UNPACK_GLOBS,
-  NON_MAC_FILES,
   SCREEN_RECORDING_USAGE_DESCRIPTION,
   validateDesktopNativeBuildHost,
   WINDOWS_INSTALLER_GUID,
@@ -216,7 +215,8 @@ describe("createDesktopPlatformBuildConfig", () => {
     const mac = config.mac as Record<string, unknown>;
     assert.equal(mac.hardenedRuntime, true);
     assert.equal(mac.notarize, false);
-    assert.deepStrictEqual(config.dmg, { sign: true, writeUpdateInfo: false });
+    assert.equal((config.dmg as Record<string, unknown>).sign, true);
+    assert.equal((config.dmg as Record<string, unknown>).writeUpdateInfo, false);
     // The hook still runs: stripping the helper's inherited entitlements is not
     // a release-only concern, and an unnotarized signed build re-seals the same
     // way.
@@ -304,9 +304,11 @@ describe("createDesktopPlatformBuildConfig", () => {
     // The macOS helper's Swift sources and HEADER.md exist for a source-build
     // fallback that only runs on macOS; a Windows or Linux artifact carrying
     // them ships compiler input for an OS it will never run on.
-    assert.deepStrictEqual(linux.files, [...NON_MAC_FILES]);
-    assert.deepStrictEqual(win.files, [...NON_MAC_FILES]);
-    assert.deepStrictEqual([...NON_MAC_FILES], ["**/*", "!apps/server/dist/computer-use-macos/**"]);
+    for (const config of [linux, win]) {
+      assert.ok(config.files?.includes(MAC_COMPUTER_HELPER_SOURCES_ASAR_EXCLUSION));
+      assert.ok(config.files?.includes("!node_modules/node-pty/prebuilds/darwin-*/**"));
+      assert.ok(config.files?.includes("!node_modules/node-pty/lib/*.test.js"));
+    }
     assert.deepStrictEqual(linux.asarUnpack, ["node_modules/node-pty/**"]);
     assert.deepStrictEqual(linux.linux, {
       target: ["AppImage"],

@@ -254,7 +254,7 @@ describe("Production audit: desired invariants", () => {
     backend.focusWindow = async (id) => {
       aim = id;
     };
-    backend.clearFocusWindow = async () => {
+    backend.resetInputDelivery = async () => {
       aim = undefined;
     };
     backend.typeText = async (text) => {
@@ -275,7 +275,7 @@ describe("Production audit: desired invariants", () => {
     const backend = new FakeComputerBackend();
     let resets = 0;
     let aim: string | undefined = "previous-task-window";
-    backend.clearFocusWindow = async () => {
+    backend.resetInputDelivery = async () => {
       if (++resets === 1) throw new Error("Helper unavailable");
       aim = undefined;
     };
@@ -351,7 +351,9 @@ describe("Additional production invariants", () => {
       const backend = new FakeComputerBackend();
       const manager = new ComputerManager({ backend, actionSettleMs: 0 });
       let allowed = false;
-      const authorizeAction = vi.fn(async () => allowed);
+      const authorizeAction = vi.fn(async () => ({
+        decision: allowed ? ("accept" as const) : ("decline" as const),
+      }));
       const tool = makeAgentGatewayComputerTools({ manager, authorizeAction }).find(
         (tool) => tool.definition.name === "computer_type_text",
       )!;
