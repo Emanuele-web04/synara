@@ -443,15 +443,21 @@ it.layer(TestLayer)("group library", (it) => {
     }),
   );
 
-  it.effect("refuses to adopt a foreign git repository as a library", () =>
+  it.effect("backfills the marker onto a pre-marker library repository", () =>
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
-      const foreign = path.join(root, "foreign");
-      yield* Effect.promise(() => fs.mkdir(path.join(foreign, ".git"), { recursive: true }));
-      const error = yield* failureOf(ensureLibraryRepo(git, foreign));
-      expect(error).toBeInstanceOf(LibraryError);
-      if (error instanceof LibraryError) expect(error.code).toBe("conflict");
+      yield* ensureLibraryRepo(git, root);
+      // Libraries created before the marker existed have .git but no marker;
+      // ensureLibraryRepo adopts them and lazily writes the marker.
+      yield* Effect.promise(() => fs.rm(path.join(root, ".synara-library")));
+      yield* ensureLibraryRepo(git, root);
+      const marker = yield* Effect.promise(() =>
+        fs.readFile(path.join(root, ".synara-library"), "utf8"),
+      );
+      expect(marker).toBe("synara-library\n");
+      const history = yield* libraryHistory(git, root);
+      expect(history.length).toBe(1);
     }),
   );
 

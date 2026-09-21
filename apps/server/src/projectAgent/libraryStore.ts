@@ -317,14 +317,17 @@ export function ensureLibraryRepo(
       try: () => fs.mkdir(root, { recursive: true }),
       catch: (cause) => new LibraryError({ message: "Failed to create the library root.", cause }),
     });
+    // Foreign-repo adoption is gated earlier: assertLibraryRootLocation only
+    // lets a custom path carrying a marker through, and the default root under
+    // project-context is always ours. A pre-marker library (created before the
+    // marker existed) keeps working — the marker is written lazily so moves and
+    // future checks can still distinguish provenance.
     if (yield* pathExists(path.join(root, GIT_DIR_SEGMENT))) {
-      // Never adopt a foreign repository: only trees we seeded carry the marker
-      // (moves copy it across), so anything else here is user content.
       if (!(yield* pathExists(path.join(root, LIBRARY_MARKER_NAME)))) {
-        return yield* fail(
-          `Directory "${root}" is a git repository that was not created by Synara; refusing to use it as a library.`,
-          "conflict",
-        );
+        yield* Effect.tryPromise({
+          try: () => fs.writeFile(path.join(root, LIBRARY_MARKER_NAME), LIBRARY_MARKER_CONTENTS),
+          catch: toPathError("Could not write the library marker."),
+        });
       }
       return;
     }

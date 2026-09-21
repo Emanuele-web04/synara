@@ -157,6 +157,7 @@ export function useGroupLibrary(input: {
       if (projectIdRef.current === projectId) {
         await reloadLoadedDirectories();
         await refreshStatus(projectId);
+        setError(null);
       }
       succeeded = true;
     } catch (cause) {
@@ -225,6 +226,7 @@ export function useGroupLibrary(input: {
         } else {
           await reloadLoadedDirectories();
           await refreshStatus(projectId);
+          setError(null);
           succeeded = true;
         }
       } else {
