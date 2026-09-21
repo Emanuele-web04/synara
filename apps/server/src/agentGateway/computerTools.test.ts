@@ -4409,12 +4409,8 @@ describe("computer_get_state diff", () => {
       expect(baseline.elementChanges.removed).toEqual([]);
       expect(baseline.elementChanges.changed).toEqual([]);
 
-      await call("computer_set_value", {
-        label: "Display",
-        window_id: "fake-calculator",
-        value: "468",
-        include_screenshot: false,
-      });
+      // Change outside the tool surface so its automatic diff does not move this baseline.
+      await manager.setValue(THREAD, { label: "Display", windowId: "fake-calculator" }, "468");
       const diff = resultJson(
         await call("computer_get_state", {
           window_id: "fake-calculator",
@@ -4478,6 +4474,268 @@ describe("computer_get_state diff", () => {
         elementChanges: { added: unknown[] };
       };
       expect(other.elementChanges.added.length).toBeGreaterThan(0);
+    } finally {
+      await manager.dispose();
+    }
+  });
+});
+
+describe("computer action element diffs", () => {
+  const windowId = "fake-calculator";
+  const tree = (
+    labels: readonly string[],
+    value = "before",
+    truncated = false,
+  ): ComputerUiNode => ({
+    role: "window",
+    label: null,
+    value: null,
+    description: null,
+    frame: { x: 100, y: 100, width: 900, height: 700 },
+    activationPoint: null,
+    onScreen: true,
+    windowId,
+    truncated,
+    children: labels.map((label) => ({
+      role: "text-field",
+      label,
+      value,
+      description: null,
+      frame: { x: 120, y: 120, width: 100, height: 30 },
+      activationPoint: null,
+      onScreen: true,
+      windowId,
+      children: [],
+    })),
+  });
+
+  it("attaches a click diff, preserves delivery, and advances the baseline without a screenshot", async () => {
+    const { backend, manager, call } = await setup(
+      new FakeComputerBackend({ root: tree(["Field"]) }),
+    );
+    try {
+      await call("computer_get_state", { window_id: windowId });
+      const read = vi.spyOn(backend, "getState");
+      const click = vi.spyOn(manager, "click");
+      const originalClick = backend.click.bind(backend);
+      vi.spyOn(backend, "click").mockImplementation(async (...args) => {
+        const result = await originalClick(...args);
+        const state = await backend.getState({ includeTree: true });
+        read.mockResolvedValue({ ...state, root: tree(["Field"], "after") });
+        return {
+          ...result,
+          deliveryPath: "ax",
+          verified: "unverifiable",
+          effect: "dispatched-unknown",
+        };
+      });
+      const response = await call("computer_click", {
+        window_id: windowId,
+        label: "Field",
+        include_screenshot: false,
+      });
+      const result = resultJson(response);
+      expect(result).toMatchObject({
+        elementWindowId: windowId,
+        elementChanges: {
+          added: [],
+          removed: [],
+          changed: [{ label: "Field", was: "before", value: "after", ref: 0 }],
+        },
+        delivery: (await click.mock.results[0]!.value).delivery,
+      });
+      expect(response.content.every((part) => part.type === "text")).toBe(true);
+      expect(read).toHaveBeenLastCalledWith(
+        expect.objectContaining({ includeTree: true, includeScreenshot: false, windowId }),
+      );
+      expect(backend.calls.filter((entry) => entry.method === "captureScreenshot")).toHaveLength(0);
+      expect(
+        resultJson(await call("computer_get_state", { window_id: windowId, diff: true })),
+      ).toMatchObject({
+        elementChanges: { added: [], removed: [], changed: [] },
+      });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each(["none", "filtered", "other-window", "other-thread"])(
+    "attaches nothing with a %s baseline",
+    async (scope) => {
+      const { manager, call } = await setup();
+      try {
+        if (scope !== "none")
+          await call(
+            "computer_get_state",
+            {
+              window_id: scope === "other-window" ? "fake-editor" : windowId,
+              ...(scope === "filtered" ? { label_contains: "Display" } : {}),
+            },
+            undefined,
+            scope === "other-thread" ? "other-thread" : THREAD,
+          );
+        const read = vi.spyOn(manager, "getState");
+        const result = resultJson(
+          await call("computer_set_value", {
+            window_id: windowId,
+            label: "Display",
+            value: "123",
+            include_screenshot: false,
+          }),
+        );
+        expect(result).not.toHaveProperty("elementChanges");
+        expect(read).not.toHaveBeenCalled();
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it.each([
+    ["computer_type_text", { text: "hello there" }],
+    ["computer_paste", { text: "hello there" }],
+    ["computer_set_value", { label: "Display", value: "123" }],
+    ["computer_perform_action", { label: "Calculate", action: "activate" }],
+    ["computer_invoke_menu", { path: ["File", "Save"] }],
+  ])("attaches a scoped diff for %s", async (tool, args) => {
+    const { manager, call } = await setup(new FakeComputerBackend(), async () => true);
+    try {
+      await call("computer_get_state", { window_id: windowId });
+      const result = await call(tool, { ...args, window_id: windowId, include_screenshot: false });
+      expect(result.isError).not.toBe(true);
+      expect(resultJson(result)).toHaveProperty("elementChanges");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("propagates cancellation during the action tree read", async () => {
+    const { manager, call, byName } = await setup();
+    const controller = new AbortController();
+    try {
+      await call("computer_get_state", { window_id: windowId });
+      const state = await manager.getState({ windowId, includeTree: true });
+      vi.spyOn(manager, "getState").mockImplementation(async () => {
+        controller.abort();
+        return state;
+      });
+      await expect(
+        Effect.runPromise(
+          byName.get("computer_click")!.handler(
+            {
+              window_id: windowId,
+              label: "Calculate",
+              include_screenshot: false,
+            },
+            makeContext(),
+          ),
+          { signal: controller.signal },
+        ),
+      ).rejects.toThrow();
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("caps added, removed and changed entries together and counts omissions", async () => {
+    const labels = Array.from({ length: 40 }, (_, i) => `Field ${i}`);
+    const { backend, manager, call } = await setup(new FakeComputerBackend({ root: tree(labels) }));
+    try {
+      await call("computer_get_state", { window_id: windowId });
+      const original = backend.getState.bind(backend);
+      vi.spyOn(backend, "getState").mockImplementation(async (args) => ({
+        ...(await original(args)),
+        root: tree(
+          [...labels.slice(0, 20), ...Array.from({ length: 25 }, (_, i) => `New ${i}`)],
+          "after",
+        ),
+      }));
+      const result = resultJson(
+        await call("computer_press_key", {
+          window_id: windowId,
+          key: "tab",
+          include_screenshot: false,
+        }),
+      ) as {
+        elementChanges: { added: unknown[]; removed: { ref?: number }[]; changed: unknown[] };
+        elementChangesOmitted: number;
+      };
+      expect(Object.values(result.elementChanges).flat()).toHaveLength(40);
+      expect(result.elementChangesOmitted).toBe(25);
+      expect(result.elementChanges.removed.every((entry) => entry.ref === undefined)).toBe(true);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each(["before", "after"])("marks a truncated %s tree as incomplete", async (side) => {
+    const { backend, manager, call } = await setup(
+      new FakeComputerBackend({ root: tree(["Field"], "before", side === "before") }),
+    );
+    try {
+      await call("computer_get_state", { window_id: windowId });
+      const state = await backend.getState({});
+      vi.spyOn(backend, "getState").mockResolvedValue({
+        ...state,
+        root: tree(["Field"], "after", side === "after"),
+      });
+      expect(
+        resultJson(
+          await call("computer_press_key", {
+            window_id: windowId,
+            key: "tab",
+            include_screenshot: false,
+          }),
+        ),
+      ).toHaveProperty("elementChangesIncomplete", true);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("returns the unchanged action result if the tree read fails", async () => {
+    const { manager, call } = await setup();
+    try {
+      await call("computer_get_state", { window_id: windowId });
+      const action = vi.spyOn(manager, "click");
+      vi.spyOn(manager, "getState").mockRejectedValue(new Error("tree unavailable"));
+      const result = resultJson(
+        await call("computer_click", {
+          window_id: windowId,
+          label: "Calculate",
+          include_screenshot: false,
+        }),
+      ) as Record<string, unknown>;
+      const { disclosure: _disclosure, ...payload } = result;
+      expect(payload).toEqual(await action.mock.results[0]!.value);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("attaches one final batch diff without per-step observations", async () => {
+    const { manager, call } = await setup();
+    try {
+      await call("computer_get_state", { window_id: windowId });
+      const read = vi.spyOn(manager, "getState");
+      const result = resultJson(
+        await call("computer_run", {
+          steps: [
+            { type: "set_value", window_id: windowId, label: "Display", value: "1" },
+            { type: "set_value", window_id: windowId, label: "Display", value: "12" },
+          ],
+        }),
+      ) as { steps: { result: unknown }[] };
+      expect(result).toMatchObject({
+        elementChanges: {
+          added: [],
+          removed: [],
+          changed: [{ label: "Display", was: "0", value: "12" }],
+        },
+      });
+      expect(result.steps).toHaveLength(2);
+      for (const step of result.steps) expect(step.result).not.toHaveProperty("elementChanges");
+      expect(read).toHaveBeenCalledTimes(1);
     } finally {
       await manager.dispose();
     }

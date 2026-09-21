@@ -1446,6 +1446,88 @@ export function makeAgentGatewayComputerTools(
     labelContains: string | undefined,
   ): string => JSON.stringify([threadId, windowId ?? null, labelContains ?? null]);
 
+  /** One diff and wire format for explicit reads and best-effort action observations. */
+  const elementChangeFields = (
+    before: ComputerActionableElements | undefined,
+    stable: ComputerActionableElements,
+    limit = Infinity,
+  ) => {
+    const changes = diffActionableElements(before?.items ?? [], stable.items);
+    let remaining = limit;
+    const take = <T>(items: readonly T[]): readonly T[] => {
+      const selected = items.slice(0, remaining);
+      remaining -= selected.length;
+      return selected;
+    };
+    const added = take(changes.added);
+    // A removed entry's ref is a dead handle — the element is
+    // gone — so showing it would make it look citable.
+    const removed = take(changes.removed).map(({ ref: _ref, ...entry }) => entry);
+    const changed = take(changes.changed);
+    const omitted =
+      changes.added.length +
+      changes.removed.length +
+      changes.changed.length -
+      added.length -
+      removed.length -
+      changed.length;
+    // One window id for the whole change set when every entry
+    // names the same window; per entry otherwise, because that
+    // is what tells the model which window to address.
+    const elementWindowId = uniformElementWindowId([
+      ...changes.added,
+      ...changes.changed,
+      ...changes.removed,
+    ]);
+    return {
+      elementChanges: {
+        added: elementWindowId === undefined ? added : stripElementWindowId(added),
+        removed: elementWindowId === undefined ? removed : stripElementWindowId(removed),
+        changed: elementWindowId === undefined ? changed : stripElementWindowId(changed),
+      },
+      ...(omitted > 0 ? { elementChangesOmitted: omitted } : {}),
+      ...(elementWindowId === undefined ? {} : { elementWindowId }),
+      // Either side reporting less than the full tree makes the
+      // diff itself partial — removals beyond a cap are invisible.
+      ...((before !== undefined && !before.complete) || !stable.complete
+        ? { elementChangesIncomplete: true }
+        : {}),
+    };
+  };
+
+  const withActionElementChanges = async (
+    result: ComputerActionResult,
+    context: ToolContext,
+  ): Promise<ComputerActionResult> => {
+    const windowId = result.windowId;
+    if (windowId === undefined) return result;
+    const key = digestScopeKey(context.callerThreadId, windowId, undefined);
+    const before = elementDigests.get(key);
+    if (before === undefined) return result;
+    try {
+      assertDesktopOperationActive();
+      const { root } = await manager.getState({
+        windowId,
+        includeTree: true,
+        includeText: false,
+        includeScreenshot: false,
+      });
+      assertDesktopOperationActive();
+      if (root === undefined) return result;
+      const stable = rememberDigest(
+        context.callerThreadId,
+        key,
+        actionableElements(root, { windowId }),
+      );
+      return { ...result, ...elementChangeFields(before, stable, 40) };
+    } catch {
+      // The input already ran. Read failures do not change its delivery result;
+      // cancellation still ends the operation instead of publishing stale state.
+      assertDesktopOperationActive();
+      return result;
+    }
+  };
+
   /**
    * PNG bytes travel as MCP image content and the metadata as the text part.
    * Delivering is also remembering: the screenshot becomes the frame the
@@ -2227,9 +2309,20 @@ export function makeAgentGatewayComputerTools(
             throw new Error("wait_for_label requires the action screenshot.");
         }
         const outcome = await run(args, context);
+        const result = "result" in outcome ? outcome.result : outcome;
+        const observed = [
+          "computer_click",
+          "computer_press_key",
+          "computer_type_text",
+          "computer_paste",
+          "computer_set_value",
+          "computer_perform_action",
+        ].includes(name)
+          ? await withActionElementChanges(result, context)
+          : result;
         return "result" in outcome && args.wait_for_label === undefined
-          ? withObservation(context, outcome.result, outcome.observation)
-          : observeAfterAction(args, "result" in outcome ? outcome.result : outcome, context);
+          ? withObservation(context, observed, outcome.observation)
+          : observeAfterAction(args, observed, context);
       },
       annotations,
     );
@@ -2952,20 +3045,26 @@ export function makeAgentGatewayComputerTools(
     // reported beside them rather than converting a finished run into an error.
     const stateFields = await (async (): Promise<Record<string, unknown>> => {
       try {
+        assertDesktopOperationActive();
         const state = await manager.getState({
           includeTree: true,
+          includeText: false,
+          includeScreenshot: false,
           ...(lastWindowId ? { windowId: lastWindowId } : {}),
         });
+        assertDesktopOperationActive();
         const { text: _text, root, screenshot: _screenshot, ...rest } = state;
         const elements = root
           ? actionableElements(root, lastWindowId === undefined ? {} : { windowId: lastWindowId })
           : undefined;
-        const stable =
-          elements === undefined
-            ? undefined
-            : rememberDigest(threadId, digestScopeKey(threadId, lastWindowId, undefined), elements);
+        const key = digestScopeKey(threadId, lastWindowId, undefined);
+        const before = elementDigests.get(key);
+        const stable = elements === undefined ? undefined : rememberDigest(threadId, key, elements);
         const wire = stable === undefined ? undefined : hoistElementWindowId(stable.items);
         return {
+          ...(lastWindowId !== undefined && before !== undefined && stable !== undefined
+            ? elementChangeFields(before, stable, 40)
+            : {}),
           state: {
             ...rest,
             ...(stable !== undefined && wire !== undefined
@@ -3196,41 +3295,7 @@ export function makeAgentGatewayComputerTools(
           ...(wantText && text !== undefined ? { text } : {}),
           ...(stable
             ? wantDiff
-              ? (() => {
-                  const changes = diffActionableElements(before?.items ?? [], stable.items);
-                  // A removed entry's ref is a dead handle — the element is
-                  // gone — so showing it would make it look citable.
-                  const removed = changes.removed.map(({ ref: _ref, ...entry }) => entry);
-                  // One window id for the whole change set when every entry
-                  // names the same window; per entry otherwise, because that
-                  // is what tells the model which window to address.
-                  const elementWindowId = uniformElementWindowId([
-                    ...changes.added,
-                    ...changes.changed,
-                    ...changes.removed,
-                  ]);
-                  return {
-                    elementChanges: {
-                      ...changes,
-                      added:
-                        elementWindowId === undefined
-                          ? changes.added
-                          : stripElementWindowId(changes.added),
-                      removed:
-                        elementWindowId === undefined ? removed : stripElementWindowId(removed),
-                      changed:
-                        elementWindowId === undefined
-                          ? changes.changed
-                          : stripElementWindowId(changes.changed),
-                    },
-                    ...(elementWindowId === undefined ? {} : { elementWindowId }),
-                    // Either side reporting less than the full tree makes the
-                    // diff itself partial — removals beyond a cap are invisible.
-                    ...((before !== undefined && !before.complete) || !stable.complete
-                      ? { elementChangesIncomplete: true }
-                      : {}),
-                  };
-                })()
+              ? elementChangeFields(before, stable)
               : (() => {
                   const wire = hoistElementWindowId(stable.items);
                   return {
@@ -3922,11 +3987,14 @@ export function makeAgentGatewayComputerTools(
         async (args, context) => {
           const target = readMenuTargetArg(args);
           const path = readMenuPathArg(args, "computer_invoke_menu");
-          return manager.invokeMenu(
-            context.callerThreadId,
-            target,
-            path,
-            await foregroundAuthorization(context),
+          return withActionElementChanges(
+            await manager.invokeMenu(
+              context.callerThreadId,
+              target,
+              path,
+              await foregroundAuthorization(context),
+            ),
+            context,
           );
         },
       ),
