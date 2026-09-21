@@ -1377,6 +1377,49 @@ describe("DesktopBrowserAutomationHost", () => {
     );
   });
 
+  it.each([true, false])(
+    "preserves human takeover while browser_open reuse=%s waits for a lock",
+    async (reuse) => {
+      const { manager, raw } = createManager();
+      const host = new DesktopBrowserAutomationHost(manager);
+      const lock = deferred<void>();
+      const prepared = deferred<void>();
+      const tabId = reuse ? TAB_ID : "3ca91001-21c0-4f73-a579-7d64f80c15b0";
+      const lockKey = reuse ? `visibility:${THREAD_ID}` : `tab:${THREAD_ID}:${tabId}`;
+      const tails = (host as unknown as { lockTails: Map<string, Promise<void>> }).lockTails;
+      tails.set(lockKey, lock.promise);
+      let takeControl!: (tabId: string) => void;
+      raw.subscribeAutomationHumanControl.mockImplementation((_threadId, listener) => {
+        takeControl = listener;
+        return () => undefined;
+      });
+      if (!reuse)
+        raw.prepareAutomationTab.mockImplementation(() => {
+          prepared.resolve();
+          return { ...raw.getState(), automationTabId: tabId };
+        });
+      const operation = host.executeTool({
+        sessionId: `open-wait-${reuse}`,
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_open",
+        arguments: { reuse, url: "https://new.example/", idempotencyKey: "open-wait" },
+      });
+      const rejected = expect(operation).rejects.toMatchObject({
+        browserError: { code: "BrowserInterruptedByHuman" },
+      });
+      if (!reuse) await prepared.promise;
+      takeControl(tabId);
+      lock.resolve();
+      await rejected;
+      await host.waitForIdle();
+      expect(raw.getAutomationRuntime).not.toHaveBeenCalled();
+      expect(raw.prepareAutomationNavigation).not.toHaveBeenCalled();
+      if (reuse) expect(raw.prepareAutomationTab).not.toHaveBeenCalled();
+      await host.dispose();
+    },
+  );
+
   it("interrupts the active chain immediately when the user takes native control", async () => {
     const { manager, raw, webContents } = createManager();
     const layout = deferred<{

@@ -386,27 +386,34 @@ export class DesktopBrowserAutomationHost {
     const interruptByHuman = (error: BrowserAutomationHostError) => controller.abort(error);
     request.signal?.addEventListener("abort", abortForRequest, { once: true });
     if (request.signal?.aborted) abortForRequest();
-    const requestedTabId = typeof input.tabId === "string" ? input.tabId : affinity.tabId;
+    let humanControlTarget =
+      request.name === "browser_open" && input.reuse === false
+        ? null
+        : typeof input.tabId === "string"
+          ? input.tabId
+          : affinity.tabId;
+    const takenOverTabIds = new Set<string>();
+    const interruptForHuman = () =>
+      interruptByHuman(
+        new BrowserAutomationHostError({
+          code: "BrowserInterruptedByHuman",
+          retryable: true,
+          phase: actionStarted ? "runtime" : "queue",
+          effectMayHaveCommitted: actionStarted && !definition.annotations.readOnlyHint,
+          ...(humanControlTarget ? { tabId: humanControlTarget as BrowserTabId } : {}),
+        }),
+      );
+    const selectHumanControlTarget = (tabId: string) => {
+      humanControlTarget = tabId;
+      if (takenOverTabIds.has(tabId)) interruptForHuman();
+      throwIfAborted(controller.signal);
+    };
     const unsubscribeHumanControl =
       request.name === "browser_status" || request.name === "browser_tabs"
         ? undefined
         : this.browserManager.subscribeAutomationHumanControl(request.threadId, (eventTabId) => {
-            const currentTarget =
-              request.name === "browser_open" && input.reuse === false
-                ? null
-                : typeof input.tabId === "string"
-                  ? input.tabId
-                  : affinity.tabId;
-            if (eventTabId !== undefined && eventTabId !== currentTarget) return;
-            interruptByHuman(
-              new BrowserAutomationHostError({
-                code: "BrowserInterruptedByHuman",
-                retryable: true,
-                phase: "runtime",
-                effectMayHaveCommitted: !definition.annotations.readOnlyHint,
-                ...(requestedTabId ? { tabId: requestedTabId as BrowserTabId } : {}),
-              }),
-            );
+            if (eventTabId !== undefined) takenOverTabIds.add(eventTabId);
+            if (eventTabId === undefined || eventTabId === humanControlTarget) interruptForHuman();
           });
 
     const run = (): Promise<unknown> => {
@@ -423,6 +430,7 @@ export class DesktopBrowserAutomationHost {
                 runtimeTimeoutError,
                 interruptByHuman,
                 () => (actionStarted = true),
+                selectHumanControlTarget,
               ),
             controller.signal,
             queuedTimeoutError,
@@ -690,12 +698,6 @@ export class DesktopBrowserAutomationHost {
       effectMayHaveCommitted,
       tabId: tabId as BrowserTabId,
     });
-    const unsubscribe = this.browserManager.subscribeAutomationHumanControl(
-      threadId,
-      (eventTabId) => {
-        if (eventTabId === undefined || eventTabId === tabId) interrupt(humanError);
-      },
-    );
     try {
       if (
         this.browserManager.isHumanBrowserOperationActive() ||
@@ -717,8 +719,6 @@ export class DesktopBrowserAutomationHost {
       }
       if (signal.aborted) throw abortReason(signal);
       throw error;
-    } finally {
-      unsubscribe();
     }
   }
 
@@ -897,6 +897,7 @@ export class DesktopBrowserAutomationHost {
     abortError: BrowserAutomationHostError,
     interruptByHuman: (error: BrowserAutomationHostError) => void,
     markActionStarted: () => void,
+    selectHumanControlTarget: (tabId: string) => void,
   ): Promise<unknown> {
     switch (request.name) {
       case "browser_status":
@@ -911,6 +912,7 @@ export class DesktopBrowserAutomationHost {
           abortError,
           interruptByHuman,
           markActionStarted,
+          selectHumanControlTarget,
         );
     }
 
@@ -934,6 +936,7 @@ export class DesktopBrowserAutomationHost {
       affinity.tabId = annotationTarget.tabId;
     }
     const targetTabId = annotationTarget?.tabId ?? this.resolveTabId(affinity, input.tabId);
+    selectHumanControlTarget(targetTabId);
     return this.withLock(
       `tab:${affinity.threadId}:${targetTabId}`,
       () =>
@@ -1213,6 +1216,7 @@ export class DesktopBrowserAutomationHost {
     abortError: BrowserAutomationHostError,
     interruptByHuman: (error: BrowserAutomationHostError) => void,
     markActionStarted: () => void,
+    selectHumanControlTarget: (tabId: string) => void,
   ): Promise<BrowserOpenOutput> {
     throwIfAborted(signal);
     const url = input.url === undefined ? undefined : validateWebUrl(input.url);
@@ -1221,17 +1225,20 @@ export class DesktopBrowserAutomationHost {
     const preferred = before.tabs.some((tab) => tab.id === affinity.tabId)
       ? affinity.tabId
       : before.activeTabId;
+    if ((input.reuse ?? true) && preferred) selectHumanControlTarget(preferred);
     const prepared = await this.withVisibilityLock(
       affinity.threadId,
       signal,
       abortError,
       async () => {
         markActionStarted();
-        return this.browserManager.prepareAutomationTab({
+        const prepared = this.browserManager.prepareAutomationTab({
           threadId: affinity.threadId,
           reuse: input.reuse ?? true,
           ...((input.reuse ?? true) && preferred ? { tabId: preferred } : {}),
         });
+        selectHumanControlTarget(prepared.automationTabId);
+        return prepared;
       },
     );
     const selected = prepared.automationTabId;
