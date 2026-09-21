@@ -157,7 +157,6 @@ jobs:
     name: Build ${{ matrix.label }}
     needs: preflight
     runs-on: ${{ matrix.runner }}
-    # Includes a cold release compile of the patched Cua Driver on mac and Linux.
     timeout-minutes: 60
     permissions:
       contents: read
