@@ -50,6 +50,7 @@ import {
   type BrowserNavigationMark,
   type BrowserNavigationObservation,
 } from "./navigationTracker";
+import { withBrowserToolPageFocus } from "./browserToolPageFocus";
 import { runBetterwright } from "./betterwrightRuntime";
 import type { BrowserVault } from "./browserVault";
 import type { BrowserVaultCapture } from "./browserVaultCapture";
@@ -1082,7 +1083,7 @@ export class DesktopBrowserAutomationHost {
     if (!BROWSER_TOOL_DEFINITIONS_BY_NAME[request.name].annotations.readOnlyHint) {
       this.options.vaultCapture?.noteAgentActivity(runtime);
     }
-    const output = await this.withDialogs(runtime, signal, async () => {
+    const output = await this.withFocusedDialogs(request.name, runtime, signal, async () => {
       switch (request.name) {
         case "browser_resize":
           return this.resize(runtime, input as BrowserResizeInput, request.sessionId, signal);
@@ -1430,6 +1431,17 @@ export class DesktopBrowserAutomationHost {
       } as T;
     }
     return { ...value, dialogs: [...handled.dialogs] } as T;
+  }
+
+  private async withFocusedDialogs<T>(
+    toolName: BrowserToolName,
+    runtime: BrowserAutomationVisibleRuntime,
+    signal: AbortSignal,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return withBrowserToolPageFocus(runtime, toolName, () =>
+      this.withDialogs(runtime, signal, operation),
+    );
   }
 
   private async resize(
