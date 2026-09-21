@@ -6,6 +6,7 @@ import type {
 } from "@synara/contracts";
 import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 
+import { canonicalSynaraComputerToolName } from "../../agentGateway/computerToolPermission.ts";
 import { computeUsagePercent, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
 import { ACP_SUBAGENT_TOOL_KIND, canonicalItemTypeFromAcpToolKind } from "./AcpAdapterSupport.ts";
 
@@ -468,6 +469,16 @@ function makeToolCallState(
   }
   if (command) {
     data.command = command;
+  }
+  // Native name fields identify the tool; provider titles are presentation only.
+  // Keep arguments intact in rawInput, never promote their values into a title.
+  const computerToolName = isRecord(input.rawInput)
+    ? canonicalSynaraComputerToolName(
+        input.rawInput._toolName ?? input.rawInput.toolName ?? input.rawInput.tool_name,
+      )
+    : undefined;
+  if (computerToolName) {
+    data.toolName = computerToolName;
   }
   if (input.rawInput !== undefined) {
     data.rawInput = input.rawInput;

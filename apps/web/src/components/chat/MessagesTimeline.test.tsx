@@ -3051,6 +3051,52 @@ describe("MessagesTimeline", () => {
     expect(presentationOnlyMarkup).toContain('data-tool-icon="browser"');
   });
 
+  it.each([
+    "computer_click",
+    "mcp__synara__computer_click",
+    "synara_computer_click",
+    "computer_browser_click",
+    "mcp__synara__computer_browser_click",
+  ])("uses the requested cursor and contextual label for %s", async (toolName) => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "computer-human-label",
+          kind: "tool.completed",
+          summary: "Tool",
+          payload: {
+            itemType: "mcp_tool_call",
+            toolName,
+            arguments: { label: "Search", app: "Safari", x: 123, y: 456 },
+          },
+        }),
+      ],
+      undefined,
+    );
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "computer-row",
+            kind: "work",
+            createdAt: entry!.createdAt,
+            entry: entry!,
+          },
+        ]}
+      />,
+    );
+    expect(markup).toContain('data-tool-icon="computer"');
+    expect(markup).toContain("central-icons-reversed/cursor-1.svg");
+    expect(markup).toContain(
+      toolName.includes("browser") ? "Click in the browser" : "Click on “Search” in Safari",
+    );
+    expect(markup).not.toContain("Synara clicked the desktop");
+    expect(markup).not.toContain("123, 456");
+    expect(markup).not.toContain('data-tool-icon="mcp"');
+  });
+
   it("hides raw `ToolName: {json}` argument details behind the humanized heading", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const baseProps = makeTimelineBaseProps();

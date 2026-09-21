@@ -88,6 +88,8 @@ interface ChatTranscriptPaneProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onOpenAutomation?: ComponentProps<typeof MessagesTimeline>["onOpenAutomation"];
+  computerControlEnabled?: ComponentProps<typeof MessagesTimeline>["computerControlEnabled"];
+  onEnableComputerControl?: ComponentProps<typeof MessagesTimeline>["onEnableComputerControl"];
   onRevertUserMessage: (messageId: MessageId) => void;
   onUndoTurnFiles?: ComponentProps<typeof MessagesTimeline>["onUndoTurnFiles"];
   onRespondToAsyncUserInput?: ComponentProps<typeof MessagesTimeline>["onRespondToAsyncUserInput"];
@@ -164,6 +166,8 @@ export function ChatTranscriptPane({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
+  computerControlEnabled,
+  onEnableComputerControl,
   onRevertUserMessage,
   onUndoTurnFiles,
   onEditUserMessage,
@@ -271,6 +275,8 @@ export function ChatTranscriptPane({
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
             {...(onOpenAutomation ? { onOpenAutomation } : {})}
+            {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+            {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
             revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
             onRevertUserMessage={onRevertUserMessage}
             {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}

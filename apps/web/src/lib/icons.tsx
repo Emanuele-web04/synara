@@ -47,6 +47,7 @@ import {
   IconMaximize,
   IconMinimize,
   IconMinus,
+  IconDeviceDesktop,
   IconDeviceLaptop,
   IconDeviceMobileRotated,
   IconPlugOff,
@@ -101,6 +102,7 @@ export const AppsIcon: LucideIcon = (props) => (
 // Composer stacked-panel glyphs (subagent strip / workflow run card).
 export const BackgroundTrayIcon: LucideIcon = centralIconWrapper("arrow-down-wall");
 export const ContextCompactionIcon: LucideIcon = centralIconWrapper("arrows-hide");
+export const ComputerUseIcon: LucideIcon = centralIconWrapper("cursor-1");
 export const PanelExpandIcon: LucideIcon = centralIconWrapper("expand-45");
 export const PanelCollapseIcon: LucideIcon = centralIconWrapper("minimize-45");
 export const BackToParentIcon: LucideIcon = centralIconWrapper("arrow-share-left");
@@ -248,6 +250,8 @@ export const HistoryIcon = adaptIcon(IconHistory);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const KanbanIcon = centralIconWrapper("columns-3-wide");
 export const KeyboardIcon: LucideIcon = centralIconWrapper("keyboard");
+/** Take-control affordance for the computer dock pane. */
+export const CursorClickIcon: LucideIcon = centralIconWrapper("cursor-click");
 export const ListChecksIcon = adaptIcon(IconListCheck);
 export const ListTodoIcon = adaptIcon(IconListDetails);
 export const Loader2Icon = adaptIcon(IconLoader2);
@@ -297,6 +301,7 @@ export const StarFilledIcon = adaptIcon(IconStarFilled);
 export const SunIcon = adaptIcon(IconSun);
 export const MoonIcon = adaptIcon(IconMoon);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
+export const MonitorIcon = adaptIcon(IconDeviceDesktop);
 export const StopIcon: LucideIcon = centralIconWrapper("stop", "fill");
 export const StopFilledIcon: LucideIcon = centralIconWrapper("stop", "fill");
 export const SquareSplitHorizontal: LucideIcon = (props) => (

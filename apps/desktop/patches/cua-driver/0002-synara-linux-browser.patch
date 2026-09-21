@@ -1,0 +1,802 @@
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
+index 2a10040..73150e1 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/engine.rs
+@@ -1751,6 +1751,17 @@ impl BrowserEngine {
+     ) -> Result<ValidatedTab, BrowserRefusal> {
+         let record = self.target_for(session, target_id).await?;
+ 
++        // Linux's embedded input owner covers only headless browser CDP.
++        // Observations of other bindings stay available, but no mutation may
++        // reach a visible or user-owned profile through that narrower contract.
++        #[cfg(target_os = "linux")]
++        if crate::embedded_mode() && !record.windowless {
++            return Err(refuse(
++                BrowserRefusalCode::BrowserActionUnavailable,
++                "Linux Computer browser actions require a driver-owned headless target; prepare an isolated headless browser first",
++            ));
++        }
++
+         if record.quality != BindingQuality::Exact {
+             return Err(refuse(
+                 BrowserRefusalCode::BrowserWrongTargetRefused,
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/mod.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/mod.rs
+index 1517fee..803895b 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/mod.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/mod.rs
+@@ -44,6 +44,7 @@ mod grant;
+ #[cfg(test)]
+ pub(crate) mod mock_cdp;
+ mod mutation;
++pub mod operation_gate;
+ pub mod platform;
+ pub mod pointer;
+ mod prepare;
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/operation_gate.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/operation_gate.rs
+new file mode 100644
+index 0000000..8c4ea41
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/operation_gate.rs
+@@ -0,0 +1,360 @@
++//! Lifetime and epoch admission for a driver-owned browser operation.
++//!
++//! This gate owns no desktop input or platform target state. The shared CDP
++//! cancellation scope checks its captured epoch before dispatch and reports
++//! unacknowledged matching releases. The admitted operation retains its lease
++//! until those releases finish, so an interruption never acknowledges a drain
++//! merely because a transport stopped awaiting the result.
++
++use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
++use std::time::{Duration, Instant};
++
++// The authenticated desktop host represents epochs as JavaScript integers.
++const MAX_INPUT_EPOCH: u64 = 9_007_199_254_740_991;
++
++#[derive(Default)]
++struct State {
++    epoch: u64,
++    interrupted: bool,
++    retired: bool,
++    operations: usize,
++    uncertain_releases: usize,
++}
++
++#[derive(Default)]
++pub struct OperationGate {
++    state: Mutex<State>,
++    changed: Condvar,
++}
++
++pub struct Interruption {
++    pub epoch: u64,
++    pub pending: usize,
++    pub resumed: bool,
++}
++
++pub fn gate() -> &'static OperationGate {
++    static GATE: OnceLock<OperationGate> = OnceLock::new();
++    GATE.get_or_init(OperationGate::default)
++}
++
++impl OperationGate {
++    fn lock(&self) -> MutexGuard<'_, State> {
++        self.state.lock().unwrap_or_else(|error| error.into_inner())
++    }
++
++    fn validate(state: &State, epoch: u64) -> anyhow::Result<()> {
++        if state.retired || state.interrupted || state.epoch != epoch {
++            anyhow::bail!("browser_input_cancelled: action admission was interrupted");
++        }
++        Ok(())
++    }
++
++    /// Admission is synchronous and must happen before asynchronous preflight.
++    /// A trusted host supplies the epoch it captured before writing the socket;
++    /// standalone calls capture here. Buffered old requests cannot be renewed.
++    pub fn admit(&self, expected_epoch: Option<u64>) -> anyhow::Result<OperationLease<'_>> {
++        let mut state = self.lock();
++        let epoch = expected_epoch.unwrap_or(state.epoch);
++        Self::validate(&state, epoch)?;
++        state.operations = state
++            .operations
++            .checked_add(1)
++            .ok_or_else(|| anyhow::anyhow!("browser operation accounting exhausted"))?;
++        Ok(OperationLease { gate: self, epoch })
++    }
++
++    pub fn checkpoint(&self, epoch: u64) -> anyhow::Result<()> {
++        Self::validate(&self.lock(), epoch)
++    }
++
++    pub fn has_unconfirmed_releases(&self) -> bool {
++        self.lock().uncertain_releases != 0
++    }
++
++    pub fn mark_unconfirmed_release(&self) {
++        let mut state = self.lock();
++        state.uncertain_releases = state.uncertain_releases.saturating_add(1);
++        state.interrupted = true;
++        self.changed.notify_all();
++    }
++
++    pub fn interrupt_and_wait(&self, timeout: Duration) -> Interruption {
++        let deadline = Instant::now() + timeout;
++        let mut state = self.lock();
++        state.interrupted = true;
++        match state
++            .epoch
++            .checked_add(1)
++            .filter(|epoch| *epoch <= MAX_INPUT_EPOCH)
++        {
++            Some(epoch) => state.epoch = epoch,
++            None => state.retired = true,
++        }
++        let epoch = state.epoch;
++        self.changed.notify_all();
++        state = self.wait_for_drain(state, deadline);
++        let pending = state.operations.saturating_add(state.uncertain_releases);
++        let resumed = pending == 0 && !state.retired && state.epoch == epoch;
++        if resumed {
++            state.interrupted = false;
++        }
++        Interruption {
++            epoch,
++            pending,
++            resumed,
++        }
++    }
++
++    pub fn cancel_and_wait(&self, timeout: Duration) -> usize {
++        let deadline = Instant::now() + timeout;
++        let mut state = self.lock();
++        state.retired = true;
++        self.changed.notify_all();
++        let state = self.wait_for_drain(state, deadline);
++        state.operations.saturating_add(state.uncertain_releases)
++    }
++
++    fn wait_for_drain<'a>(
++        &self,
++        mut state: MutexGuard<'a, State>,
++        deadline: Instant,
++    ) -> MutexGuard<'a, State> {
++        while state.operations != 0 {
++            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
++                break;
++            };
++            let (next, timeout) = self
++                .changed
++                .wait_timeout(state, remaining)
++                .unwrap_or_else(|error| error.into_inner());
++            state = next;
++            if timeout.timed_out() {
++                break;
++            }
++        }
++        state
++    }
++}
++
++pub struct OperationLease<'a> {
++    gate: &'a OperationGate,
++    epoch: u64,
++}
++
++impl OperationLease<'_> {
++    pub fn epoch(&self) -> u64 {
++        self.epoch
++    }
++}
++
++impl Drop for OperationLease<'_> {
++    fn drop(&mut self) {
++        let mut state = self.gate.lock();
++        state.operations -= 1;
++        self.gate.changed.notify_all();
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::sync::Arc;
++
++    #[test]
++    fn buffered_pre_interrupt_epoch_is_rejected_after_acknowledged_reopen() {
++        let gate = OperationGate::default();
++        let interrupted = gate.interrupt_and_wait(Duration::ZERO);
++        assert_eq!(interrupted.epoch, 1);
++        assert_eq!(interrupted.pending, 0);
++        assert!(interrupted.resumed);
++        assert!(gate.admit(Some(0)).is_err());
++        assert!(gate.admit(Some(1)).is_ok());
++    }
++
++    #[test]
++    fn a_timed_out_operation_keeps_admission_closed_until_a_later_drain() {
++        let gate = OperationGate::default();
++        let operation = gate.admit(Some(0)).unwrap();
++        let interrupted = gate.interrupt_and_wait(Duration::ZERO);
++        assert_eq!(interrupted.pending, 1);
++        assert!(!interrupted.resumed);
++        assert!(gate.admit(Some(1)).is_err());
++        assert!(gate.checkpoint(operation.epoch()).is_err());
++        drop(operation);
++        let drained = gate.interrupt_and_wait(Duration::ZERO);
++        assert_eq!(drained.pending, 0);
++        assert!(drained.resumed);
++        assert!(gate.admit(Some(drained.epoch)).is_ok());
++    }
++
++    #[test]
++    fn uncertain_release_never_becomes_a_successful_drain() {
++        let gate = OperationGate::default();
++        let operation = gate.admit(Some(0)).unwrap();
++        gate.mark_unconfirmed_release();
++        drop(operation);
++        for _ in 0..2 {
++            let interrupted = gate.interrupt_and_wait(Duration::ZERO);
++            assert_eq!(interrupted.pending, 1);
++            assert!(!interrupted.resumed);
++        }
++        assert!(gate.has_unconfirmed_releases());
++        assert_eq!(gate.cancel_and_wait(Duration::ZERO), 1);
++    }
++
++    #[test]
++    fn retirement_cannot_reopen() {
++        let gate = OperationGate::default();
++        assert_eq!(gate.cancel_and_wait(Duration::ZERO), 0);
++        assert!(!gate.interrupt_and_wait(Duration::ZERO).resumed);
++        assert!(gate.admit(None).is_err());
++    }
++
++    #[test]
++    fn epoch_exhaustion_retires_instead_of_reusing_a_buffered_epoch() {
++        let gate = OperationGate::default();
++        gate.lock().epoch = MAX_INPUT_EPOCH;
++        let interrupted = gate.interrupt_and_wait(Duration::ZERO);
++        assert_eq!(interrupted.epoch, MAX_INPUT_EPOCH);
++        assert!(!interrupted.resumed);
++        assert!(gate.admit(Some(MAX_INPUT_EPOCH)).is_err());
++    }
++
++    #[tokio::test]
++    async fn interrupt_ack_waits_for_matching_cdp_release_and_next_operation_recovers() {
++        use crate::browser::cancellation::{scope, with_release};
++        use crate::browser::cdp_ws::CdpConnection;
++        use crate::browser::mock_cdp::{MockCdpServer, MockReply};
++        use serde_json::json;
++
++        let events = Arc::new(Mutex::new(Vec::new()));
++        let server_events = events.clone();
++        let server = MockCdpServer::start(Arc::new(move |call| {
++            server_events
++                .lock()
++                .unwrap()
++                .push((call.method.clone(), call.params.clone()));
++            MockReply::ok(json!({}))
++        }))
++        .await;
++        let connection = Arc::new(CdpConnection::connect(&server.ws_url()).await.unwrap());
++        let gate = Arc::new(OperationGate::default());
++        let action_gate = gate.clone();
++        let action_connection = connection.clone();
++        let (down, received_down) = tokio::sync::oneshot::channel();
++        let (resume, resumed) = tokio::sync::oneshot::channel();
++        let action = tokio::spawn(async move {
++            let operation = action_gate.admit(Some(0)).unwrap();
++            let epoch = operation.epoch();
++            let check_gate = action_gate.clone();
++            let uncertain_gate = action_gate.clone();
++            let result = scope(
++                Arc::new(move || check_gate.checkpoint(epoch)),
++                Arc::new(move || uncertain_gate.mark_unconfirmed_release()),
++                with_release(
++                    &action_connection,
++                    "tab",
++                    "Input.dispatchKeyEvent",
++                    json!({"type":"keyDown","key":"a"}),
++                    || json!({"type":"keyUp","key":"a"}),
++                    async {
++                        down.send(()).unwrap();
++                        resumed.await.unwrap();
++                        action_connection
++                            .call(Some("tab"), "Input.insertText", json!({"text":"old"}))
++                            .await?;
++                        Ok(())
++                    },
++                ),
++            )
++            .await;
++            drop(operation);
++            result
++        });
++        received_down.await.unwrap();
++        let pending = gate.interrupt_and_wait(Duration::ZERO);
++        assert_eq!(pending.pending, 1);
++        assert!(!pending.resumed);
++        let drain_gate = gate.clone();
++        let drain = tokio::task::spawn_blocking(move || {
++            drain_gate.interrupt_and_wait(Duration::from_secs(3))
++        });
++        resume.send(()).unwrap();
++        assert!(action.await.unwrap().is_err());
++        let acknowledged = drain.await.unwrap();
++        assert!(acknowledged.resumed);
++        assert_eq!(acknowledged.pending, 0);
++        assert_eq!(
++            events
++                .lock()
++                .unwrap()
++                .iter()
++                .map(|(_, params)| params["type"].clone())
++                .collect::<Vec<_>>(),
++            vec![json!("keyDown"), json!("keyUp")]
++        );
++
++        // Reads never install an input scope, so Stop does not remove vision.
++        connection
++            .call(Some("tab"), "Page.getFrameTree", json!({}))
++            .await
++            .unwrap();
++        let operation = gate.admit(Some(acknowledged.epoch)).unwrap();
++        let epoch = operation.epoch();
++        let check_gate = gate.clone();
++        let uncertain_gate = gate.clone();
++        scope(
++            Arc::new(move || check_gate.checkpoint(epoch)),
++            Arc::new(move || uncertain_gate.mark_unconfirmed_release()),
++            connection.call(Some("tab"), "Input.insertText", json!({"text":"new"})),
++        )
++        .await
++        .unwrap();
++        assert_eq!(events.lock().unwrap().last().unwrap().1["text"], "new");
++    }
++
++    #[tokio::test]
++    async fn a_failed_cdp_release_poison_is_retained_after_the_operation_drops() {
++        use crate::browser::cancellation::{scope, with_release};
++        use crate::browser::cdp_ws::CdpConnection;
++        use crate::browser::mock_cdp::{MockCdpServer, MockReply};
++        use serde_json::json;
++
++        let server = MockCdpServer::start(Arc::new(|call| {
++            if call.params["type"] == "mouseReleased" {
++                MockReply::err(-1, "release reply unavailable")
++            } else {
++                MockReply::ok(json!({}))
++            }
++        }))
++        .await;
++        let connection = CdpConnection::connect(&server.ws_url()).await.unwrap();
++        let gate = Arc::new(OperationGate::default());
++        let operation = gate.admit(Some(0)).unwrap();
++        let epoch = operation.epoch();
++        let check_gate = gate.clone();
++        let uncertain_gate = gate.clone();
++        let result = scope(
++            Arc::new(move || check_gate.checkpoint(epoch)),
++            Arc::new(move || uncertain_gate.mark_unconfirmed_release()),
++            with_release(
++                &connection,
++                "tab",
++                "Input.dispatchMouseEvent",
++                json!({"type":"mousePressed","button":"left","x":1,"y":1}),
++                || json!({"type":"mouseReleased","button":"left","x":1,"y":1}),
++                async { Ok(()) },
++            ),
++        )
++        .await;
++        assert!(result.is_err());
++        drop(operation);
++        assert!(gate.has_unconfirmed_releases());
++        let interrupted = gate.interrupt_and_wait(Duration::ZERO);
++        assert_eq!(interrupted.pending, 1);
++        assert!(!interrupted.resumed);
++        assert!(gate.admit(Some(interrupted.epoch)).is_err());
++        assert_eq!(gate.cancel_and_wait(Duration::ZERO), 1);
++    }
++}
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
+index f4ec029..f7b2684 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
+@@ -378,8 +378,10 @@ fn isolated_browser_command(executable: &str, profile: &Path, headless: bool) ->
+     }
+     #[cfg(target_os = "linux")]
+     {
+-        let native_wayland = std::env::var("XDG_SESSION_TYPE")
+-            .is_ok_and(|session| session.eq_ignore_ascii_case("wayland"))
++        // A real headless browser must not depend on a visible compositor.
++        let native_wayland = !headless
++            && std::env::var("XDG_SESSION_TYPE")
++                .is_ok_and(|session| session.eq_ignore_ascii_case("wayland"))
+             && std::env::var_os("WAYLAND_DISPLAY").is_some()
+             && std::env::var_os("DISPLAY").is_none();
+         let no_sandbox = std::env::var("CUA_E2E_BROWSER_NO_SANDBOX").as_deref() == Ok("1");
+@@ -669,6 +671,17 @@ fn mutation_checkpoint() -> Result<(), BrowserRefusal> {
+     })
+ }
+ 
++/// Refusal drops only the exact pending lifecycle. Its existing owner reaps
++/// the process group and removes the profile only while the marker matches.
++fn commit_prepared_browser(
++    browsers: &ManagedBrowsers,
++    browser: ManagedBrowser,
++) -> Result<(), BrowserRefusal> {
++    mutation_checkpoint()?;
++    browsers.lock().unwrap().push(browser);
++    Ok(())
++}
++
+ fn spawn_isolated_browser(command: &mut Command) -> Result<Child, BrowserRefusal> {
+     mutation_checkpoint()?;
+     command.spawn().map_err(|error| {
+@@ -738,6 +751,16 @@ impl BrowserEngine {
+         &self,
+         request: PrepareRequest,
+     ) -> Result<PrepareOutcome, BrowserRefusal> {
++        // The embedded Linux contract supports driver-owned headless profiles.
++        // Existing-profile setup can inject native UI input, and a windowed
++        // launch has desktop effects that this browser-only gate cannot own.
++        #[cfg(target_os = "linux")]
++        if crate::embedded_mode() && (request.windowed || request.strategy.is_some()) {
++            return Err(refusal(
++                BrowserRefusalCode::BrowserRouteUnavailable,
++                "Linux Computer browser control requires a driver-owned headless isolated profile; visible launch and existing-profile setup are unavailable",
++            ));
++        }
+         if request.strategy == Some(PrepareStrategy::ExistingProfile) {
+             return self.attach_existing_profile(request).await;
+         }
+@@ -805,33 +828,32 @@ impl BrowserEngine {
+         let prepared_profile = prepare_profile(profile_request)?;
+         let headless = !request.windowed;
+         let mut command = isolated_browser_command(&executable, &prepared_profile.path, headless);
+-        let mut child = spawn_isolated_browser(&mut command).map_err(|error| {
++        let child = spawn_isolated_browser(&mut command).map_err(|error| {
+             cleanup_created_profile(&prepared_profile);
+             error
+         })?;
+-        let endpoint = match wait_for_spawned_endpoint(&mut child, &prepared_profile.path).await {
+-            Ok(endpoint) => {
+-                match attest_spawned_endpoint(self, i64::from(child.id()), endpoint).await {
+-                    Ok(endpoint) => endpoint,
+-                    Err(error) => {
+-                        let _ = child.kill();
+-                        let _ = child.wait();
+-                        cleanup_created_profile(&prepared_profile);
+-                        return Err(error);
+-                    }
+-                }
+-            }
+-            Err(error) => {
+-                let _ = child.kill();
+-                let _ = child.wait();
+-                cleanup_created_profile(&prepared_profile);
+-                return Err(error);
++        let mut owner_sessions = vec![request.session];
++        if let Some(transport_session) = request.transport_session {
++            if !owner_sessions.contains(&transport_session) {
++                owner_sessions.push(transport_session);
+             }
++        }
++        // Establish RAII ownership before endpoint discovery's first await.
++        // Every error or dropped future reaps this exact pending process group
++        // and marked profile, using the same owner as a committed lifecycle.
++        let mut pending_browser = ManagedBrowser {
++            owned_pid: i64::from(child.id()),
++            child,
++            profile: prepared_profile.path,
++            delete_profile: prepared_profile.delete_on_cleanup,
++            marker: prepared_profile.marker,
++            owner_sessions: owner_sessions.clone(),
++            headless,
+         };
+-        // Nothing here hides, moves, or dresses a window. The default launch
+-        // is headless: no native window and no Dock entry exist to manage.
+-        // The explicit windowed opt-in creates a real browser window, which
+-        // is what the caller asked for.
++        let endpoint =
++            wait_for_spawned_endpoint(&mut pending_browser.child, &pending_browser.profile).await?;
++        let endpoint =
++            attest_spawned_endpoint(self, i64::from(pending_browser.child.id()), endpoint).await?;
+         let posture_note = if headless {
+             " The spawned browser is headless: no native window and no Dock entry."
+         } else {
+@@ -839,27 +861,15 @@ impl BrowserEngine {
+              browser window (and the browser's Dock entry)."
+         };
+         let prepared_pid = endpoint.ownership.owner_pid;
+-        let mut owner_sessions = vec![request.session];
+-        if let Some(transport_session) = request.transport_session {
+-            if !owner_sessions.contains(&transport_session) {
+-                owner_sessions.push(transport_session);
+-            }
+-        }
+-        if let Ok(fingerprint) = self.platform.process_fingerprint(prepared_pid).await {
++        pending_browser.owned_pid = prepared_pid;
++        let fingerprint = self.platform.process_fingerprint(prepared_pid).await;
++        commit_prepared_browser(&self.managed_browsers, pending_browser)?;
++        if let Ok(fingerprint) = fingerprint {
+             for owner in &owner_sessions {
+                 self.protected_resource_ownership
+                     .mark_driver_owned_process(owner, fingerprint.clone());
+             }
+         }
+-        self.managed_browsers.lock().unwrap().push(ManagedBrowser {
+-            child,
+-            owned_pid: prepared_pid,
+-            profile: prepared_profile.path,
+-            delete_profile: prepared_profile.delete_on_cleanup,
+-            marker: prepared_profile.marker,
+-            owner_sessions,
+-            headless,
+-        });
+         Ok(PrepareOutcome {
+             action: PrepareAction::LaunchedIsolatedBrowser,
+             endpoint: Some(endpoint),
+@@ -1346,6 +1356,69 @@ mod tests {
+         assert!(!marker.exists());
+     }
+ 
++    #[cfg(unix)]
++    #[tokio::test]
++    async fn interrupted_post_launch_reaps_the_owned_child_profile_and_never_commits() {
++        use super::super::operation_gate::OperationGate;
++        use std::os::unix::process::CommandExt;
++
++        let root = tempfile::tempdir().unwrap();
++        let profile = root.path().join("owned-profile");
++        fs::create_dir(&profile).unwrap();
++        let marker = ProfileMarker {
++            schema: PROFILE_SCHEMA.to_owned(),
++            mode: PrepareProfileMode::IsolatedNew,
++            name: None,
++        };
++        write_profile_marker(&profile, &marker).unwrap();
++        let unrelated = root.path().join("unrelated");
++        fs::write(&unrelated, "preserve").unwrap();
++        let child = Command::new("/bin/sleep")
++            .arg("60")
++            .process_group(0)
++            .stdin(Stdio::null())
++            .stdout(Stdio::null())
++            .stderr(Stdio::null())
++            .spawn()
++            .unwrap();
++        let pid = child.id();
++        let pending = ManagedBrowser {
++            child,
++            owned_pid: i64::from(pid),
++            profile: profile.clone(),
++            delete_profile: true,
++            marker,
++            owner_sessions: vec!["interrupted-launch".to_owned()],
++            headless: true,
++        };
++        let browsers = ManagedBrowsers::default();
++        let gate = Arc::new(OperationGate::default());
++        let operation = gate.admit(Some(0)).unwrap();
++        let epoch = operation.epoch();
++        let checkpoint_gate = gate.clone();
++        super::super::cancellation::scope(
++            Arc::new(move || checkpoint_gate.checkpoint(epoch)),
++            Arc::new(|| panic!("launch owns no CDP release")),
++            async {
++                // Stand in for asynchronous endpoint/fingerprint discovery.
++                tokio::task::yield_now().await;
++                assert!(!gate.interrupt_and_wait(Duration::ZERO).resumed);
++                assert!(commit_prepared_browser(&browsers, pending).is_err());
++            },
++        )
++        .await;
++        drop(operation);
++        assert!(gate.interrupt_and_wait(Duration::ZERO).resumed);
++        assert!(browsers.lock().unwrap().is_empty());
++        assert!(!profile.exists());
++        assert_eq!(fs::read_to_string(unrelated).unwrap(), "preserve");
++        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
++        assert_eq!(
++            std::io::Error::last_os_error().raw_os_error(),
++            Some(libc::ESRCH)
++        );
++    }
++
+     #[tokio::test]
+     async fn completed_claim_wins_while_optional_consent_is_absent() {
+         let mut claim = Box::pin(async {
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+index be5e28c..c665efb 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
+@@ -12,7 +12,7 @@ use cua_driver_core::{server::ToolProvider, CaptureScope};
+ use cua_driver_sdk::{CuaDriver, CuaDriverSession, TrustedSessionOptions};
+ use serde_json::{json, Value};
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "linux"))]
+ pub(crate) fn is_native_input_tool(name: &str) -> bool {
+     matches!(
+         name,
+@@ -263,6 +263,26 @@ impl SdkAdapter {
+         } else {
+             None
+         };
++        // Linux currently admits browser-only controlled input. The host keeps
++        // native desktop synthetic routes disabled; this shared operation gate
++        // owns no compositor, key state, pointer state, or macOS target logic.
++        // Retain the host-captured epoch through SDK preflight and every CDP send.
++        #[cfg(target_os = "linux")]
++        let linux_input = if is_native_input_tool(name) {
++            let gate = cua_driver_core::browser::operation_gate::gate();
++            match gate.admit(_expected_input_epoch) {
++                Ok(operation) => Some(operation),
++                Err(error) => {
++                    return Ok(json!({
++                        "isError": true,
++                        "content": [{"type": "text", "text": error.to_string()}],
++                        "structuredContent": {"effect": "refused", "code": "input_admission_closed", "input_cleanup_unconfirmed": gate.has_unconfirmed_releases()}
++                    }))
++                }
++            }
++        } else {
++            None
++        };
+         // Native-side authoritative secure-input refusal for keyboard delivery.
+         // macOS suppresses synthesized key events while a password field holds
+         // secure input, so refuse before target admission: nothing is prepared,
+@@ -414,7 +434,23 @@ impl SdkAdapter {
+         } else {
+             invocation.await
+         };
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(target_os = "linux")]
++        let result = if let Some(operation) = &linux_input {
++            let epoch = operation.epoch();
++            cua_driver_core::browser::cancellation::scope(
++                Arc::new(move || {
++                    cua_driver_core::browser::operation_gate::gate().checkpoint(epoch)
++                }),
++                Arc::new(|| {
++                    cua_driver_core::browser::operation_gate::gate().mark_unconfirmed_release()
++                }),
++                invocation,
++            )
++            .await
++        } else {
++            invocation.await
++        };
++        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+         let result = invocation.await;
+         let result = result.map_err(|error| {
+             if let Some((session, marker, previous)) = ending_tombstone {
+@@ -435,7 +471,13 @@ impl SdkAdapter {
+             format!("{name} returned invalid SDK result JSON: {error}")
+         })?;
+         #[cfg(target_os = "macos")]
+-        if platform_macos::input::cancellation::gate().has_unconfirmed_releases() {
++        let input_cleanup_unconfirmed =
++            platform_macos::input::cancellation::gate().has_unconfirmed_releases();
++        #[cfg(target_os = "linux")]
++        let input_cleanup_unconfirmed =
++            cua_driver_core::browser::operation_gate::gate().has_unconfirmed_releases();
++        #[cfg(any(target_os = "macos", target_os = "linux"))]
++        if input_cleanup_unconfirmed {
+             value["isError"] = Value::Bool(true);
+             if !value.get("structuredContent").is_some_and(Value::is_object) {
+                 value["structuredContent"] = json!({});
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index f499100..3949ad0 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -21,6 +21,11 @@
+ //! Source-installed local builds use the corresponding `cua-driver-local`
+ //! namespace on every platform.
+ 
++#[cfg(target_os = "linux")]
++use cua_driver_core::browser::operation_gate::gate as native_input_gate;
++#[cfg(target_os = "macos")]
++use platform_macos::input::cancellation::gate as native_input_gate;
++
+ use std::collections::{HashMap, HashSet};
+ use std::sync::{Mutex, OnceLock};
+ 
+@@ -467,7 +472,7 @@ fn observe_daemon_error(
+ /// This field belongs to the authenticated desktop host, outside public tool
+ /// arguments. Retaining the host's epoch rejects buffered pre-interrupt calls
+ /// even when the daemon starts parsing them only after the gate reopens.
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "linux"))]
+ fn host_input_epoch(
+     line: &str,
+     request: &DaemonRequest,
+@@ -708,14 +713,20 @@ fn permission_gate_response_for_state(
+ fn daemon_metadata_response() -> DaemonResponse {
+     let mut metadata = serde_json::to_value(cua_driver_core::daemon::current_daemon_metadata())
+         .expect("daemon metadata is serializable");
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "linux"))]
+     {
+         metadata["synara_native_revision"] = serde_json::json!(37);
+     }
++    #[cfg(target_os = "linux")]
++    {
++        // Browser admission/drain only. This is not a claim of target-scoped
++        // desktop synthetic input, which the Linux host still refuses.
++        metadata["synara_browser_input_control"] = serde_json::json!(1);
++    }
+     DaemonResponse::ok(metadata)
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "linux"))]
+ async fn cancel_input_response(request: &DaemonRequest, trusted_host: bool) -> DaemonResponse {
+     if !cua_driver_core::embedded_mode() || !trusted_host {
+         return DaemonResponse::err(
+@@ -737,8 +748,7 @@ async fn cancel_input_response(request: &DaemonRequest, trusted_host: bool) -> D
+     }
+     if request.method == "interrupt_input" {
+         let interrupted = tokio::task::spawn_blocking(|| {
+-            platform_macos::input::cancellation::gate()
+-                .interrupt_and_wait(std::time::Duration::from_secs(3))
++            native_input_gate().interrupt_and_wait(std::time::Duration::from_secs(3))
+         })
+         .await;
+         return match interrupted {
+@@ -756,8 +766,7 @@ async fn cancel_input_response(request: &DaemonRequest, trusted_host: bool) -> D
+         };
+     }
+     let pending = tokio::task::spawn_blocking(|| {
+-        platform_macos::input::cancellation::gate()
+-            .cancel_and_wait(std::time::Duration::from_secs(3))
++        native_input_gate().cancel_and_wait(std::time::Duration::from_secs(3))
+     })
+     .await;
+     match pending {
+@@ -990,7 +999,7 @@ mod peer_authentication_tests {
+         history_relaunch_state_response, shutdown_response, DaemonRequest, ToolObservationOrigin,
+     };
+ 
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "linux"))]
+     #[test]
+     fn native_input_epoch_is_host_owned_required_and_not_read_from_tool_args() {
+         let parse = |wire: &str, embedded, trusted| {
+@@ -1240,7 +1249,7 @@ pub async fn run_serve(
+                         ).await;
+ 
+                         match req.method.as_str() {
+-                            #[cfg(target_os = "macos")]
++                            #[cfg(any(target_os = "macos", target_os = "linux"))]
+                             "cancel_input" | "interrupt_input" => {
+                                 let resp = cancel_input_response(&req, trusted_host_connection).await;
+                                 let _ = writer.write_all(
+@@ -1368,9 +1377,9 @@ pub async fn run_serve(
+                                 ).await;
+                             }
+                             "call" => {
+-                                #[cfg(target_os = "macos")]
++                                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                                 let expected_epoch = host_input_epoch(&line, &req, embedded, trusted_host_connection);
+-                                #[cfg(not(target_os = "macos"))]
++                                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                                 let expected_epoch: Result<Option<u64>, String> = Ok(None);
+                                 let resp = match expected_epoch {
+                                     Ok(epoch) => invoke_daemon_tool(&reg, req, epoch).await,
+@@ -1603,12 +1612,11 @@ pub async fn run_serve(
+     // Host EOF and explicit shutdown must close input admission and let native
+     // owners submit their matching releases before task cancellation can drop
+     // the SDK action lease. Keep the runtime alive if cleanup is still pending.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "linux"))]
+     if embedded {
+         loop {
+             let pending = tokio::task::spawn_blocking(|| {
+-                platform_macos::input::cancellation::gate()
+-                    .cancel_and_wait(std::time::Duration::from_secs(3))
++                native_input_gate().cancel_and_wait(std::time::Duration::from_secs(3))
+             })
+             .await?;
+             if pending == 0 {

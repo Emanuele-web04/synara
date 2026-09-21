@@ -34,6 +34,8 @@ import {
 } from "@synara/shared/conversationEdit";
 import { Effect } from "effect";
 
+import { computerActivationMetadata } from "../computer/computerActivation.ts";
+
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { withProjectRelocationEvents } from "./projectRelocation.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
@@ -1879,6 +1881,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? { providerOptions: command.providerOptions }
           : {}),
         ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
+        ...computerActivationMetadata({ ...command, userMessageText: command.message.text }),
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
         dispatchOrigin: command.dispatchOrigin ?? "user",
@@ -2115,6 +2118,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { providerOptions: command.providerOptions }
             : {}),
           ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
+          ...computerActivationMetadata(command),
           assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
           dispatchMode: command.dispatchMode ?? "queue",
           dispatchOrigin: command.dispatchOrigin ?? "user",
@@ -2442,6 +2446,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.providerOptions !== undefined
             ? { providerOptions: command.providerOptions }
             : {}),
+          ...computerActivationMetadata({ ...command, userMessageText: command.text }),
           ...(command.assistantDeliveryMode !== undefined
             ? { assistantDeliveryMode: command.assistantDeliveryMode }
             : {}),

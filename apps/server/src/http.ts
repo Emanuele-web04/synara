@@ -53,8 +53,10 @@ import {
   reserveManagedAttachmentUpload,
 } from "./managedAttachmentStore";
 import { ManagedAttachmentRepository } from "./persistence/Services/ManagedAttachments";
+import { ComputerService } from "./computer/Services/ComputerService";
 import {
   authorizeDesktopShutdown,
+  DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH,
   DESKTOP_SHUTDOWN_ROUTE_PATH,
   type ServerShutdownController,
 } from "./serverShutdown";
@@ -198,6 +200,7 @@ export function makeEffectHttpRouteLayer(
   return Layer.mergeAll(
     makeHealthEffectRouteLayer(readiness),
     makeDesktopShutdownEffectRouteLayer(shutdownController),
+    makeDesktopComputerEmergencyStopRouteLayer(),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
     threadExportEffectRouteLayer,
@@ -236,6 +239,52 @@ export function makeDesktopShutdownEffectRouteLayer(shutdownController: ServerSh
       }
 
       yield* shutdownController.requestStop;
+      return HttpServerResponse.jsonUnsafe({ accepted: true }, { status: 202 });
+    }),
+  );
+}
+
+/**
+ * The desktop relays physical Escape presses here after its local host latch
+ * has already engaged. The manager-side latch is what keeps queued work from
+ * dispatching once the desktop side is dead or restarting; both sides fail
+ * closed independently rather than trusting a single transport.
+ */
+export function makeDesktopComputerEmergencyStopRouteLayer() {
+  return HttpRouter.add(
+    "POST",
+    DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH,
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const config = yield* ServerConfig;
+      const authorization = authorizeDesktopShutdown({
+        config,
+        remoteAddress: request.remoteAddress,
+        authorization: request.headers.authorization,
+      });
+
+      if (!authorization.authorized) {
+        return HttpServerResponse.jsonUnsafe(
+          { error: authorization.reason === "unavailable" ? "Not Found" : "Unauthorized" },
+          {
+            status: authorization.status,
+            ...(authorization.status === 401
+              ? { headers: { "WWW-Authenticate": 'Bearer realm="synara-desktop-emergency-stop"' } }
+              : {}),
+          },
+        );
+      }
+
+      const computerService = Option.getOrUndefined(yield* Effect.serviceOption(ComputerService));
+      if (!computerService) {
+        return HttpServerResponse.jsonUnsafe({ accepted: false }, { status: 404 });
+      }
+
+      yield* Effect.promise(() => computerService.manager.emergencyStopInput()).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("desktop computer emergency stop failed", Cause.pretty(cause)),
+        ),
+      );
       return HttpServerResponse.jsonUnsafe({ accepted: true }, { status: 202 });
     }),
   );

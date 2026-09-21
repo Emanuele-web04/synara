@@ -7,6 +7,14 @@ import { isLoopbackHost } from "./startupAccess";
 
 export const DESKTOP_SHUTDOWN_ROUTE_PATH = "/api/desktop/shutdown";
 
+/**
+ * Loopback-only route the desktop uses to relay a physical Escape press into
+ * the computer manager's host-wide kill. It shares the desktop-owner shutdown
+ * credential: the same trust domain that may stop the backend may also stop
+ * its computer input.
+ */
+export const DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH = "/api/desktop/computer/emergency-stop";
+
 export interface ServerShutdownController {
   /** Completes the stop signal once. `true` identifies the first request. */
   readonly requestStop: Effect.Effect<boolean, never>;

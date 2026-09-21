@@ -16,6 +16,7 @@ import {
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
+  COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   type OrchestrationReadModel,
   type ProjectId,
@@ -1461,7 +1462,8 @@ const worker = setupWorker(
         // default below answers with an Exit, which a stream RPC reads as the
         // socket dying and answers with a full reconnect. That loops forever
         // and starves the RPCs these tests are actually asserting on.
-        method === DEVICE_WS_METHODS.subscribeEvents
+        method === DEVICE_WS_METHODS.subscribeEvents ||
+        method === COMPUTER_WS_METHODS.subscribeEvents
       ) {
         return;
       }
@@ -4092,6 +4094,12 @@ describe("ChatView transcript geometry (full app)", () => {
         container.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -0.1 }));
         await waitForLayout();
       } else if (action === "nested wheel" || action === "nested key") {
+        if (action === "nested key") {
+          // The first native input activates the test iframe and replays pending
+          // composer focus. Settle that activation before testing a nested key.
+          await page.getByTestId("composer-editor").click();
+          await waitForLayout();
+        }
         const nested = document.createElement("div");
         const bounds = container.getBoundingClientRect();
         nested.style.cssText = `position: fixed; left: ${bounds.left + 20}px; top: ${bounds.top + 20}px; width: 180px; height: 96px; overflow: auto; overscroll-behavior: contain; z-index: 100;`;
@@ -4101,8 +4109,21 @@ describe("ChatView transcript geometry (full app)", () => {
           nested.scrollTop = 100;
           if (action === "nested key") {
             nested.tabIndex = 0;
-            nested.focus();
-            await userEvent.keyboard("{ArrowUp}");
+            // Focus through native input so Chromium directs keyboard scrolling
+            // to this nested viewport as it would after a reader clicks it.
+            await userEvent.click(nested);
+            expect(document.activeElement).toBe(nested);
+            let keyTarget: EventTarget | null = null;
+            const captureKeyTarget = (event: KeyboardEvent) => {
+              if (event.key === "ArrowUp") keyTarget = event.target;
+            };
+            nested.addEventListener("keydown", captureKeyTarget);
+            try {
+              await userEvent.keyboard("{ArrowUp}");
+            } finally {
+              nested.removeEventListener("keydown", captureKeyTarget);
+            }
+            expect(keyTarget).toBe(nested);
           } else {
             await userEvent.wheel(nested, { delta: { y: -30 } });
           }

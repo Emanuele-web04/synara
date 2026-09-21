@@ -296,6 +296,37 @@ describe("isSynaraBrowserToolCall", () => {
 });
 
 describe("deriveReadableToolTitle", () => {
+  it.each([
+    ["computer_click", "Click"],
+    ["computer_type_text", "Type"],
+    ["mcp__synara__computer_activate_window", "Activate a window"],
+    ["computer_list_apps", "List apps"],
+    ["computer_set_window_frame", "Move or resize a window"],
+    ["computer_invoke_menu", "Invoke a menu item"],
+    ["computer_verify_state", "Verify state"],
+    ["computer_zoom", "Zoom into a window"],
+    ["computer_get_accessibility_tree", "List apps and windows"],
+    ["computer_get_cursor_position", "Read the cursor position"],
+    ["mcp__synara__computer_kill_app", "Force-quit an app"],
+    ["computer_set_window_minimized", "Minimize or restore a window"],
+    ["synara_computer_set_app_visibility", "Hide or unhide an app"],
+    ["computer_inspect", "Inspect the computer"],
+    ["computer_spaces", "Inspect desktop Spaces"],
+    ["mcp__synara__computer_spaces", "Inspect desktop Spaces"],
+    ["computer_browser_state", "Read the browser page"],
+    ["mcp__synara__computer_browser_click", "Click in the browser"],
+    ["synara_computer_browser_navigate", "Open a browser page"],
+  ])("uses the curated Computer label for %s", (toolName, expected) => {
+    expect(
+      deriveReadableToolTitle({
+        title: "Tool",
+        fallbackLabel: "Tool",
+        itemType: "mcp_tool_call",
+        payload: { data: { item: { tool: toolName } } },
+      }),
+    ).toBe(expected);
+  });
+
   it("humanizes search commands even when wrapped in shell -lc", () => {
     expect(
       deriveReadableToolTitle({
@@ -410,6 +441,35 @@ describe("deriveReadableToolTitle", () => {
         },
       }),
     ).toBe("Computer Use: Get App State");
+  });
+
+  it("uses nested invocation metadata before a generic tool request kind", () => {
+    expect(
+      deriveReadableToolTitle({
+        title: "Tool",
+        fallbackLabel: "Tool",
+        itemType: "mcp_tool_call",
+        requestKind: "tool",
+        payload: {
+          data: {
+            invocation: {
+              server: "computer-use",
+              tool: "get_app_state",
+            },
+          },
+        },
+      }),
+    ).toBe("Computer Use: Get App State");
+  });
+
+  it("humanizes provider tool identifiers used as lifecycle titles", () => {
+    expect(
+      deriveReadableToolTitle({
+        title: "get_app_state",
+        fallbackLabel: "get_app_state",
+        itemType: "mcp_tool_call",
+      }),
+    ).toBe("Get App State");
   });
 });
 

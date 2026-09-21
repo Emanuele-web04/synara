@@ -1,6 +1,7 @@
 {
   "name": "@synara/monorepo",
   "private": true,
+  "license": "MIT",
   "workspaces": {
     "packages": [
       "apps/*",

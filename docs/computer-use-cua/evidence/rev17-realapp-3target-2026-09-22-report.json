@@ -1,0 +1,51 @@
+{
+  "run": "rev17-realapp-3target-2026-09-22",
+  "date": "2026-09-22",
+  "nativeBuild": {
+    "version": "0.28.2",
+    "nativeRevision": 17,
+    "patchSha256": "388f1693f94c32218d8a7b6c31c5280c6bae95341a64676b232b82dff7573259"
+  },
+  "host": "external trusted CuaDriverHost (shell-ancestry TCC)",
+  "targets": [
+    { "pid": 38638, "window_id": 523, "title": "Untitled", "element_token": "s00000001:1" },
+    { "pid": 38642, "window_id": 527, "title": "Untitled", "element_token": "s00000002:1" },
+    { "pid": 38640, "window_id": 529, "title": "Untitled", "element_token": "s00000003:1" }
+  ],
+  "writes": [
+    {
+      "pid": 38638,
+      "value": "REAL-APP-A-CONCURRENT",
+      "effect": "confirmed",
+      "route": "accessibility",
+      "evidence": ["value_readback"],
+      "readback": "REAL-APP-A-CONCURRENT",
+      "readbackMatch": true
+    },
+    {
+      "pid": 38642,
+      "value": "REAL-APP-B-CONCURRENT",
+      "effect": "confirmed",
+      "route": "accessibility",
+      "evidence": ["value_readback"],
+      "readback": "REAL-APP-B-CONCURRENT",
+      "readbackMatch": true
+    },
+    {
+      "pid": 38640,
+      "value": "REAL-APP-C-CONCURRENT",
+      "effect": "confirmed",
+      "route": "accessibility",
+      "evidence": ["value_readback"],
+      "readback": "REAL-APP-C-CONCURRENT",
+      "readbackMatch": true
+    }
+  ],
+  "concurrency": { "mode": "Promise.all", "wallMs": 3371 },
+  "focusInvariant": {
+    "frontmostBefore": "ghostty",
+    "frontmostAfter": "ghostty",
+    "theftFree": true
+  },
+  "summary": "3 concurrent real-app (3 distinct TextEdit pids) semantic writes all confirmed with value_readback evidence, independent read-backs exact, zero focus theft"
+}

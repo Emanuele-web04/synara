@@ -1,4 +1,9 @@
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
+import { resolveComputerInvocationMode } from "@synara/shared/computerInvocation";
+import {
+  prepareComputerPermissionGuide,
+  readLocalComputerPermissionBridge,
+} from "~/lib/computerProvisioning";
 import { useCallback } from "react";
 import {
   filterPromptProviderMentionReferences,
@@ -32,7 +37,10 @@ import {
   buildExpiredTerminalContextToastCopy,
   createWorktreeSetupResolution,
   deriveComposerSendState,
+  queuedChatTurnDispatchFields,
+  queuedPlanFollowUpDispatchFields,
   resolveEnvironmentPanelPreferenceAfterFirstSend,
+  resolveQueuedTurnDispatchSettings,
 } from "../ChatView.logic";
 import { toastManager } from "../ui/toast";
 import type { ChatTurnSubmissionInput } from "./chatSendTypes";
@@ -55,9 +63,6 @@ export function useChatTurnSubmission({
   isConnecting,
   sendPreflightInFlightRef,
   sendInFlightRef,
-  runtimeMode,
-  interactionMode,
-  envMode,
   showPlanFollowUpPrompt,
   activeProposedPlan,
   hasQueueableLiveTurn,
@@ -90,7 +95,6 @@ export function useChatTurnSubmission({
   createWorktreeMutation,
   isLocalDraftThread,
   threadNotes,
-  assistantDeliveryMode,
   setSettledThreadBranchWarningDismissedThreadId,
   setQueuedSteerGate,
   planSidebarDismissedForTurnRef,
@@ -158,8 +162,9 @@ export function useChatTurnSubmission({
   selectedProvider,
   selectedModel,
   selectedPromptEffort,
-  selectedModelSelection,
-  providerOptionsForDispatch,
+  turnDispatchSettings,
+  computerControlChangeSequence,
+  setComposerDraftComputerControlMode,
   pendingAutomationConversationRef,
   setPendingAutomationConversation,
   pendingAutomationConversation,
@@ -192,7 +197,8 @@ export function useChatTurnSubmission({
     runProjectScript,
     persistThreadSettingsForNextTurn,
     rememberCustomBinaryPathForDispatch,
-    assistantDeliveryMode,
+    computerControlChangeSequence,
+    setComposerDraftComputerControlMode,
     setSettledThreadBranchWarningDismissedThreadId,
     armLocalDispatchAckFallback,
     setQueuedSteerGate,
@@ -318,10 +324,28 @@ export function useChatTurnSubmission({
         return lateSendHandlers.advanceActivePendingUserInput(answerOverrides);
       }
       const queuedChatTurn = queuedTurn ?? null;
+      let dispatchSettings = resolveQueuedTurnDispatchSettings(
+        turnDispatchSettings,
+        queuedChatTurn,
+      );
+      const computerControlSequenceForSend = computerControlChangeSequence.current;
       const liveComposerSnapshot =
         queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
       let promptForSend =
         queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
+      if (queuedChatTurn === null) {
+        // Read the live editor snapshot, not an earlier React render. A queued
+        // command already froze its mode and generation and must not be inferred again.
+        const mode = resolveComputerInvocationMode({
+          messageText: promptForSend,
+          enableComputerControl: settings.computerControlEnabled,
+        });
+        dispatchSettings = {
+          ...dispatchSettings,
+          computerControlMode: mode,
+          enableComputerControl: mode !== "off",
+        };
+      }
       let composerImagesForSend =
         queuedChatTurn?.images ??
         useComposerDraftStore.getState().draftsByThreadId[activeThread.id]?.images ??
@@ -367,13 +391,11 @@ export function useChatTurnSubmission({
       const selectedModelForSend = queuedChatTurn?.selectedModel ?? selectedModel;
       const selectedPromptEffortForSend =
         queuedChatTurn?.selectedPromptEffort ?? selectedPromptEffort;
-      const selectedModelSelectionForSend =
-        queuedChatTurn?.modelSelection ?? selectedModelSelection;
-      const providerOptionsForDispatchForSend =
-        queuedChatTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
-      const runtimeModeForSend = queuedChatTurn?.runtimeMode ?? runtimeMode;
-      let interactionModeForSend = queuedChatTurn?.interactionMode ?? interactionMode;
-      const envModeForSend = queuedChatTurn?.envMode ?? envMode;
+      const selectedModelSelectionForSend = dispatchSettings.modelSelection;
+      const providerOptionsForDispatchForSend = dispatchSettings.providerOptions;
+      const runtimeModeForSend = dispatchSettings.runtimeMode;
+      let interactionModeForSend = dispatchSettings.interactionMode;
+      const envModeForSend = dispatchSettings.envMode;
       const {
         trimmedPrompt: trimmed,
         sendableTerminalContexts: sendableComposerTerminalContexts,
@@ -440,9 +462,7 @@ export function useChatTurnSubmission({
               selectedProvider,
               selectedModel,
               selectedPromptEffort,
-              modelSelection: selectedModelSelection,
-              ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
-              runtimeMode,
+              ...queuedPlanFollowUpDispatchFields(turnDispatchSettings),
             });
             return true;
           }
@@ -535,6 +555,36 @@ export function useChatTurnSubmission({
         if (handled) return true;
       }
       if (hasPendingCacheReview()) return false;
+      if (dispatchSettings.computerControlMode === "request") {
+        const appSnap = readLocalComputerPermissionBridge();
+        const activeThreadBeforeCheck = activeThreadIdRef.current;
+        const draftBeforeCheck = promptRef.current;
+        sendPreflightInFlightRef.current = true;
+        const ready = await prepareComputerPermissionGuide({
+          ...(appSnap
+            ? {
+                getPermissionState: appSnap.getState,
+                startPermissionSetup: appSnap.startPermissionSetup,
+              }
+            : {}),
+          isCurrent: () =>
+            activeThreadIdRef.current === activeThreadBeforeCheck &&
+            computerControlChangeSequence.current === computerControlSequenceForSend &&
+            (queuedChatTurn !== null || promptRef.current === draftBeforeCheck),
+        })
+          .catch((error) => {
+            toastManager.add({
+              type: "error",
+              title: "Computer permission setup could not start",
+              description: String(error),
+            });
+            return false;
+          })
+          .finally(() => {
+            sendPreflightInFlightRef.current = false;
+          });
+        if (!ready) return false;
+      }
       sendPreflightInFlightRef.current = true;
       const sendProviderAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: selectedModelSelectionForSend.provider,
@@ -607,13 +657,7 @@ export function useChatTurnSubmission({
           selectedProvider: selectedProviderForSend,
           selectedModel: selectedModelForSend,
           selectedPromptEffort: selectedPromptEffortForSend,
-          modelSelection: selectedModelSelectionForSend,
-          ...(providerOptionsForDispatchForSend
-            ? { providerOptionsForDispatch: providerOptionsForDispatchForSend }
-            : {}),
-          ...(sourceProposedPlanForSend ? { sourceProposedPlan: sourceProposedPlanForSend } : {}),
-          runtimeMode: runtimeModeForSend,
-          interactionMode: interactionModeForSend,
+          ...queuedChatTurnDispatchFields(dispatchSettings, sourceProposedPlanForSend),
           envMode: envModeForSend,
         });
         return true;
@@ -850,6 +894,8 @@ export function useChatTurnSubmission({
         nextAssociatedWorktreePath,
         nextAssociatedWorktreeBranch,
         nextAssociatedWorktreeRef,
+        turnDispatchSettings: dispatchSettings,
+        computerControlSequenceForSend,
         api,
         targetProjectCwdForSend,
         threadIdForSend,
@@ -901,9 +947,8 @@ export function useChatTurnSubmission({
       isConnecting,
       sendPreflightInFlightRef,
       sendInFlightRef,
-      runtimeMode,
-      interactionMode,
-      envMode,
+      turnDispatchSettings,
+      computerControlChangeSequence,
       showPlanFollowUpPrompt,
       activeProposedPlan,
       hasQueueableLiveTurn,
@@ -970,8 +1015,6 @@ export function useChatTurnSubmission({
       selectedProvider,
       selectedModel,
       selectedPromptEffort,
-      selectedModelSelection,
-      providerOptionsForDispatch,
       pendingAutomationConversationRef,
       setPendingAutomationConversation,
       pendingAutomationConversation,

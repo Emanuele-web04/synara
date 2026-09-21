@@ -899,6 +899,16 @@ export function useComposerSlashCommands(input: {
       if (!slashInvocation || slashInvocation.command === "model") {
         return false;
       }
+      if (slashInvocation.command === "computer-use") {
+        if (slashInvocation.args) return false; // The normal send freezes one-turn activation.
+        toastManager.add({
+          type: "info",
+          title: "Add a task after /computer-use",
+          description: "For example: /computer-use open Calculator and calculate 123 × 45.",
+        });
+        editorActions.scheduleComposerFocus();
+        return true;
+      }
       if (slashInvocation.command === "clear") {
         editorActions.clearComposerSlashDraft();
         await handleClearConversation();
@@ -1175,6 +1185,21 @@ export function useComposerSlashCommands(input: {
         );
         if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
+        }
+        return;
+      }
+
+      if (item.command === "computer-use") {
+        const replacement = "/computer-use ";
+        const applied = editorActions.applyPromptReplacement(
+          trigger.rangeStart,
+          trigger.rangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd) },
+        );
+        if (wasPromptReplacementApplied(applied)) {
+          editorActions.setComposerHighlightedItemId(null);
+          editorActions.scheduleComposerFocus();
         }
         return;
       }

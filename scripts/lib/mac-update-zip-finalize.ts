@@ -31,6 +31,10 @@ export interface FinalizeMacUpdateZipOptions {
   readonly stageDistDir: string;
   readonly signed: boolean;
   readonly verbose?: boolean;
+  /** Scripted-update flavors have no updater feed; artifact checks still run. */
+  readonly requireUpdateManifest?: boolean;
+  /** Also require a sealed app with this code and Info.plist identity. */
+  readonly expectedBundleIdentifier?: string;
 }
 
 export interface FinalizedMacUpdateZip {
@@ -124,12 +128,32 @@ function assertMacZipFrameworkSymlinks(zipPath: string): string {
   return appBundleName;
 }
 
-function verifyMacAppSignature(appBundlePath: string, requireSignature: boolean): void {
+export function verifyMacAppSignature(
+  appBundlePath: string,
+  requireSignature: boolean,
+  expectedBundleIdentifier?: string,
+): void {
   const codeResourcesPath = join(appBundlePath, "Contents", "_CodeSignature", "CodeResources");
+  if (expectedBundleIdentifier && !existsSync(codeResourcesPath)) {
+    throw new Error(`Expected a sealed macOS app signature for ${expectedBundleIdentifier}.`);
+  }
   if (!requireSignature && !existsSync(codeResourcesPath)) {
     return;
   }
-  runTextCommand("codesign", ["--verify", "--deep", "--strict", "--verbose=4", appBundlePath]);
+  const identityRequirement = expectedBundleIdentifier
+    ? [
+        "--test-requirement",
+        `=identifier ${JSON.stringify(expectedBundleIdentifier)} and info[CFBundleIdentifier] = ${JSON.stringify(expectedBundleIdentifier)}`,
+      ]
+    : [];
+  runTextCommand("codesign", [
+    "--verify",
+    "--deep",
+    "--strict",
+    "--verbose=4",
+    ...identityRequirement,
+    appBundlePath,
+  ]);
 }
 
 function computeSha512Base64(filePath: string): Promise<string> {
@@ -165,6 +189,7 @@ export async function finalizeMacUpdateZip(
   const appBundleName = basename(appBundlePath);
   const appBundleParent = dirname(appBundlePath);
 
+  verifyMacAppSignature(appBundlePath, options.signed, options.expectedBundleIdentifier);
   rmSync(zipPath, { force: true });
   runTextCommand("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", appBundleName, zipPath], {
     cwd: appBundleParent,
@@ -172,12 +197,15 @@ export async function finalizeMacUpdateZip(
   });
 
   const zippedAppBundleName = assertMacZipFrameworkSymlinks(zipPath);
-  verifyMacAppSignature(appBundlePath, options.signed);
 
   const extractedZipRoot = mkdtempSync(join(tmpdir(), "synara-mac-update-zip-"));
   try {
     runTextCommand("ditto", ["-x", "-k", zipPath, extractedZipRoot], { verbose });
-    verifyMacAppSignature(join(extractedZipRoot, zippedAppBundleName), options.signed);
+    verifyMacAppSignature(
+      join(extractedZipRoot, zippedAppBundleName),
+      options.signed,
+      options.expectedBundleIdentifier,
+    );
   } finally {
     rmSync(extractedZipRoot, { force: true, recursive: true });
   }
@@ -189,7 +217,9 @@ export async function finalizeMacUpdateZip(
   const sha512 = await computeSha512Base64(zipPath);
 
   const updatedManifestPaths: string[] = [];
-  for (const manifestName of resolveMacUpdateManifestFileNames(distEntries)) {
+  for (const manifestName of resolveMacUpdateManifestFileNames(distEntries, {
+    required: options.requireUpdateManifest ?? true,
+  })) {
     const manifestPath = join(options.stageDistDir, manifestName);
     const manifest = readFileSync(manifestPath, "utf8");
     const nextManifest = updateMacUpdateManifestZipEntry(manifest, zipFileName, {
