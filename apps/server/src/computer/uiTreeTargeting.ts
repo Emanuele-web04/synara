@@ -64,12 +64,19 @@ export class ComputerTargetError extends Error {
   readonly code: ComputerTargetErrorCode;
   readonly candidates: readonly ComputerTargetCandidate[];
   readonly notFound: boolean;
+  /**
+   * The window exists but its text field could not be singled out from the
+   * accessibility tree. Distinct from a missing window: the keyboard can still
+   * reach whatever field the app itself has focused.
+   */
+  readonly unresolvedTextControl: boolean;
 
   constructor(input: {
     readonly code: ComputerTargetErrorCode;
     readonly message: string;
     readonly candidates?: readonly ComputerTargetCandidate[];
     readonly notFound?: boolean;
+    readonly unresolvedTextControl?: boolean;
   }) {
     const candidates = input.candidates ?? [];
     // Candidates go in the message, not only in the field beside it. This error
@@ -83,6 +90,7 @@ export class ComputerTargetError extends Error {
     this.code = input.code;
     this.candidates = candidates;
     this.notFound = input.notFound ?? input.code === "computer_target_not_found";
+    this.unresolvedTextControl = input.unresolvedTextControl ?? false;
   }
 }
 
@@ -224,6 +232,7 @@ export function resolveComputerUniqueTextTarget(
         flattenUiTree(root, childrenOf).filter((node) => node.windowId === windowId),
       ),
       notFound: true,
+      unresolvedTextControl: true,
     });
   }
   if (candidates.length > 1) {
@@ -231,6 +240,7 @@ export function resolveComputerUniqueTextTarget(
       code: "computer_target_ambiguous",
       message: `Window ${JSON.stringify(windowId)} has more than one ${allowOffscreen ? "" : "visible "}writable text control. Pass the exact label and role.`,
       candidates: candidateDescriptions(candidates),
+      unresolvedTextControl: true,
     });
   }
   const node = candidates[0]!;

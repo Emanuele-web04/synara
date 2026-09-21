@@ -142,6 +142,34 @@ function backgroundTargetBackend() {
   );
 }
 
+describe("ComputerManager window-scoped typing", () => {
+  it("types through keyboard focus when the window's text field cannot be singled out", async () => {
+    const backend = backgroundTargetBackend();
+    // Two writable fields in one window: the unique-target rule cannot choose.
+    const root = semanticTextRoot(["editor-a", "editor-a"]);
+    Object.assign(backend, { currentRoot: root });
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+
+    await expect(manager.typeText("a", "hello world", "editor-a")).resolves.toMatchObject({
+      action: "computer_type_text",
+      windowId: "editor-a",
+    });
+    // One whole-string dispatch with no element target, not a refusal.
+    const call = backend.callsFor("typeText").at(-1);
+    expect(call?.args[0]).toBe("hello world");
+    expect(call?.args[2]).toBeUndefined();
+
+    // A window that does not exist still refuses before any key is sent.
+    const typeCalls = backend.callsFor("typeText").length;
+    await expect(manager.typeText("a", "x", "gone")).rejects.toMatchObject({
+      code: "computer_target_not_found",
+    });
+    expect(backend.callsFor("typeText")).toHaveLength(typeCalls);
+
+    await manager.dispose();
+  });
+});
+
 describe("ComputerManager background task ownership", () => {
   it("lets separate apps progress while protecting one app's keyboard and modal state", async () => {
     const backend = backgroundTargetBackend();

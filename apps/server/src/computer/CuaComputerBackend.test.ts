@@ -1022,16 +1022,20 @@ describe("Cua native boundary", () => {
       window_id: 20,
       element_token: "message-token",
       semantic_only: true,
+      // Overrides the driver's 30ms-per-character default pacing.
+      delay_ms: 0,
     });
     expect(f.calls.find((call) => call.name === "type_text")?.args).not.toHaveProperty(
       "force_synthetic",
     );
 
     await f.backend.typeText("keyboard", "cua:10:20");
-    expect(f.calls.filter((call) => call.name === "type_text")[1]?.args).toMatchObject({
-      text: "keyboard",
-      force_synthetic: true,
-    });
+    // No element: the driver's atomic focused-field insertion runs first, so
+    // key events are not forced.
+    const focusedFieldCall = f.calls.filter((call) => call.name === "type_text")[1]?.args;
+    expect(focusedFieldCall).toMatchObject({ text: "keyboard", delay_ms: 10 });
+    expect(focusedFieldCall).not.toHaveProperty("force_synthetic");
+    expect(focusedFieldCall).not.toHaveProperty("semantic_only");
   });
 
   it("types into web content through a composed set_value and verifies on re-read", async () => {

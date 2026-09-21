@@ -3288,7 +3288,24 @@ export class ComputerManager {
     windowId?: string,
   ): Promise<ComputerActionResult> {
     if (this.supportsFocusNeutralSemanticText && windowId) {
-      return this.typeTextAt(threadId, text, { windowId });
+      try {
+        return await this.typeTextAt(threadId, text, { windowId });
+      } catch (error) {
+        // Resolution failed before anything was sent. A rich editor is often
+        // absent from a truncated tree (Notes behind 240 list rows) or sits
+        // beside other fields; the agent then spelled the text out through
+        // computer_press_key, one round trip per character, over this very
+        // transport. Send the whole string through it once instead: the same
+        // exact-window keyboard admission applies, and it lands in the field
+        // the app has focused, exactly as those key presses did.
+        if (!(error instanceof ComputerTargetError) || !error.unresolvedTextControl) throw error;
+      }
+      return this.withBackgroundProcessControl(threadId, windowId, async () => {
+        const result = await this.runKeyboardDispatch(threadId, windowId, () =>
+          this.backend.typeText(text, windowId),
+        );
+        return this.actionResult(threadId, "computer_type_text", undefined, result, windowId);
+      });
     }
     return this.withDesktopControl(threadId, async () => {
       const result = await this.runKeyboardDispatch(threadId, windowId, () =>

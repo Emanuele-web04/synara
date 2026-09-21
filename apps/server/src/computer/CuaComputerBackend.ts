@@ -1948,11 +1948,26 @@ export class CuaComputerBackend implements ComputerBackend {
       }
       return this.webContentTypeText(target!.node, value);
     }
+    // Without an exact element the macOS driver inserts the whole string in one
+    // AXSelectedText write into the field the target window has focused, reads
+    // it back, and only then falls back to native key events. Forcing key
+    // events skipped that instant route and typed every sentence character by
+    // character. The driver's 30ms default gap is also overridden: exact
+    // semantic insertion is one acknowledged, cancellable write per character,
+    // so its pause is pure delay, while the key-event fallback keeps a short
+    // gap so apps do not drop characters. Other platforms run the strict
+    // upstream schema and keep their key-event route.
+    const macos = (this.hostPlatform ?? process.platform) === "darwin";
     return this.input(
       "type_text",
       {
         text: value,
-        ...(token ? { element_token: token, semantic_only: true } : { force_synthetic: true }),
+        ...(token
+          ? { element_token: token, semantic_only: true, ...(macos ? { delay_ms: 0 } : {}) }
+          : macos && desktopDeliveryMode() !== "foreground"
+            ? { delay_ms: 10 }
+            : // Approved foreground delivery is visible typing by request.
+              { force_synthetic: true }),
       },
       target?.node.windowId ?? w,
     );
