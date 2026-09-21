@@ -298,6 +298,7 @@ import type { GroupSettingsSection } from "./chat/group/groupSettingsDialog.logi
 import { CoordinatorSuggestions } from "./chat/project/CoordinatorSuggestions";
 import { shouldShowCoordinatorSuggestions } from "./chat/project/coordinatorSuggestions.logic";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
+import { LibraryPanel } from "./chat/group/LibraryPanel";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { useProjectInstructionsSource } from "./chat/project/useProjectInstructionsSource";
 import {
@@ -2735,6 +2736,15 @@ export default function ChatView({
     },
     [setEnvironmentPanelOpenPreference],
   );
+  const setLibraryFromAuxiliary = useCallback(
+    (open: boolean) => {
+      setAuxiliarySurface((current) => (open ? "library" : current === "library" ? null : current));
+      if (open) {
+        setEnvironmentPanelOpenPreference(false);
+      }
+    },
+    [setEnvironmentPanelOpenPreference],
+  );
   const githubRepositoryQuery = useQuery(
     gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
   );
@@ -4995,10 +5005,12 @@ export default function ChatView({
   // column is already narrow — right dock open or a split pane (same as header compact mode).
   // Terminal surfaces always float so opening Environment never resizes the terminal workspace.
   const projectPanelVisible = projectPanelEnabled && auxiliarySurface === "project";
+  const libraryPanelVisible = projectPanelEnabled && auxiliarySurface === "library";
   const environmentPanelVisibleEffective =
-    environmentPanelVisible && auxiliarySurface !== "project";
+    environmentPanelVisible && auxiliarySurface !== "project" && auxiliarySurface !== "library";
   const environmentAppliesContentInset =
-    (environmentPanelVisibleEffective || projectPanelVisible) && !environmentUsesFloatingOverlay;
+    (environmentPanelVisibleEffective || projectPanelVisible || libraryPanelVisible) &&
+    !environmentUsesFloatingOverlay;
   const environmentOverlayVariant = environmentUsesFloatingOverlay ? "floating" : "docked";
   const environmentHeaderState = environmentEnabled
     ? {
@@ -5010,6 +5022,12 @@ export default function ChatView({
     ? {
         open: projectPanelVisible,
         onOpenChange: setProjectFromAuxiliary,
+      }
+    : null;
+  const libraryHeaderState = projectPanelEnabled
+    ? {
+        open: libraryPanelVisible,
+        onOpenChange: setLibraryFromAuxiliary,
       }
     : null;
 
@@ -5591,6 +5609,7 @@ export default function ChatView({
           {...(onToggleRightDock ? { onToggleRightDock } : {})}
           environment={isEditorRail ? null : environmentHeaderState}
           projectPanel={isEditorRail ? null : projectHeaderState}
+          libraryPanel={isEditorRail ? null : libraryHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={
             surfaceMode === "single" && onSplitSurface
@@ -6005,6 +6024,14 @@ export default function ChatView({
                 setCoordinatorSettingsOpen(open);
                 if (!open) setCoordinatorSettingsSection(undefined);
               }}
+            />
+          ) : null}
+          {projectPanelEnabled ? (
+            <LibraryPanel
+              open={libraryPanelVisible}
+              variant={environmentOverlayVariant}
+              projectId={activeProjectId}
+              onClose={() => setLibraryFromAuxiliary(false)}
             />
           ) : null}
         </div>

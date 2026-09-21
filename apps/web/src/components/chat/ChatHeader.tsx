@@ -65,6 +65,7 @@ import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 import { ProjectToggle, type ProjectToggleState } from "./project/ProjectToggle";
+import { LibraryToggle } from "./group/LibraryToggle";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -118,6 +119,7 @@ interface ChatHeaderProps {
   // drives the Environment panel; otherwise the legacy cluster is rendered.
   environment?: EnvironmentToggleState | null;
   projectPanel?: ProjectToggleState | null;
+  libraryPanel?: ProjectToggleState | null;
   chatLayoutAction?: {
     kind: "split" | "maximize";
     label: string;
@@ -539,6 +541,7 @@ export function ChatHeader({
   isSidechat: isSidechatProp,
   environment: environmentProp,
   projectPanel = null,
+  libraryPanel = null,
   chatLayoutAction: chatLayoutActionProp,
   changeThreadAction: changeThreadActionProp,
   editorChatControls: editorChatControlsProp,
@@ -900,6 +903,7 @@ export function ChatHeader({
           <>
             <EnvironmentToggle environment={environment} />
             {projectPanel ? <ProjectToggle project={projectPanel} /> : null}
+            {libraryPanel ? <LibraryToggle library={libraryPanel} /> : null}
             {rightPanelToggleControl}
           </>
         ) : (

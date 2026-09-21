@@ -33,6 +33,10 @@ interface HotPathModule {
   // Exact multiset of bailout reasons that are deliberate and reviewed. Anything
   // else — including a second copy of an allowed reason — fails the test.
   readonly allowedBailoutReasons: readonly string[];
+  // Pure logic modules contain no component or hook for the compiler to emit a
+  // CompileSuccess for; they stay listed so a future hook/component that bails
+  // is caught. Defaults to true.
+  readonly requiresCompileSuccess?: boolean;
 }
 
 const HOT_PATH_MODULES: readonly HotPathModule[] = [
@@ -157,6 +161,26 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
     requiredFunction: "useChatTurnExecution",
     allowedBailoutReasons: [],
   },
+  {
+    relativePath: "chat/group/LibraryPanel.tsx",
+    requiredFunction: "LibraryPanel",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "chat/group/LibraryToggle.tsx",
+    requiredFunction: "LibraryToggle",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "chat/group/useGroupLibrary.ts",
+    requiredFunction: "useGroupLibrary",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "chat/group/libraryPanel.logic.ts",
+    allowedBailoutReasons: [],
+    requiresCompileSuccess: false,
+  },
   { relativePath: "Sidebar.tsx", allowedBailoutReasons: [] },
   {
     relativePath: "chat/MessagesTimeline.tsx",
@@ -218,7 +242,9 @@ describe("chat hot-path React Compiler coverage", () => {
             ),
           ).toBe(true);
         }
-        expect(events.some((event) => event.kind === "CompileSuccess")).toBe(true);
+        if (module.requiresCompileSuccess !== false) {
+          expect(events.some((event) => event.kind === "CompileSuccess")).toBe(true);
+        }
       },
       COMPILE_TIMEOUT_MS,
     );

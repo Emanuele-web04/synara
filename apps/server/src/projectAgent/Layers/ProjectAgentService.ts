@@ -36,6 +36,8 @@ import {
   coordinatorWelcomeText,
   isGroupCoordinatorHostProject,
 } from "../groupCoordinatorHost.ts";
+import { assertLibraryRootLocation, moveLibraryRoot, resolveLibraryRoot } from "../libraryStore.ts";
+import { withLibraryQueue } from "../libraryGit.ts";
 import {
   canWriteMemoryDocument,
   decodeProjectAgentListCursor,
@@ -848,6 +850,42 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const existingConfig = Option.isSome(existing) ? existing.value : null;
         if (input.libraryPath !== undefined && input.libraryPath !== null) {
           yield* assertAbsoluteLibraryPath(input.libraryPath);
+        }
+        // Changing libraryPath relocates the store: copy the whole tree
+        // (including .git history) to the new root before re-pointing the
+        // config. The previous location is left untouched so a failed save
+        // never strands the data.
+        if (input.libraryPath !== undefined && input.libraryPath !== existingConfig?.libraryPath) {
+          const previousRoot = yield* resolveLibraryRoot({
+            stateDir: serverConfig.stateDir,
+            projectId: input.projectId,
+            libraryPath: existingConfig?.libraryPath,
+          }).pipe(Effect.mapError(toServiceError("Failed to resolve the current library.")));
+          const nextRoot = yield* resolveLibraryRoot({
+            stateDir: serverConfig.stateDir,
+            projectId: input.projectId,
+            libraryPath: input.libraryPath,
+          }).pipe(Effect.mapError(toServiceError("Failed to resolve the new library.")));
+          yield* assertLibraryRootLocation({
+            root: nextRoot,
+            stateDir: serverConfig.stateDir,
+            groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+            studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
+            isCustomPath: true,
+          }).pipe(Effect.mapError(toServiceError("Failed to validate the new library path.")));
+          // Serialize with in-flight library mutations so a concurrent upload
+          // cannot write into the tree mid-copy.
+          const moveResult = yield* withLibraryQueue(
+            input.projectId,
+            moveLibraryRoot({ fromRoot: previousRoot, toRoot: nextRoot }),
+          ).pipe(
+            Effect.mapError((cause) =>
+              fail(`Could not move the group library: ${cause.message}`, "invalid"),
+            ),
+          );
+          if (moveResult.moved) {
+            yield* Effect.logInfo(`moved the group library from ${previousRoot} to ${nextRoot}`);
+          }
         }
         const config: ProjectAgentConfig = {
           projectId: input.projectId,

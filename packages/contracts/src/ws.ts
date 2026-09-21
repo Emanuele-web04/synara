@@ -38,6 +38,13 @@ import {
   ProjectAgentBackfillInput,
   ProjectAgentListThreadIndexInput,
   ProjectAgentListEvidenceInput,
+  ProjectAgentLibraryDeleteInput,
+  ProjectAgentLibraryHistoryInput,
+  ProjectAgentLibraryListInput,
+  ProjectAgentLibraryMkdirInput,
+  ProjectAgentLibraryRenameInput,
+  ProjectAgentLibraryRestoreInput,
+  ProjectAgentLibraryStatusInput,
 } from "./projectAgent";
 import {
   ClientOrchestrationCommand,
@@ -350,6 +357,13 @@ export const WS_METHODS = {
   projectAgentWriteDocument: "projectAgent.writeDocument",
   projectAgentExportDocuments: "projectAgent.exportDocuments",
   projectAgentRefreshDigest: "projectAgent.refreshDigest",
+  projectAgentLibraryList: "projectAgent.library.list",
+  projectAgentLibraryMkdir: "projectAgent.library.mkdir",
+  projectAgentLibraryRename: "projectAgent.library.rename",
+  projectAgentLibraryDelete: "projectAgent.library.delete",
+  projectAgentLibraryHistory: "projectAgent.library.history",
+  projectAgentLibraryRestore: "projectAgent.library.restore",
+  projectAgentLibraryStatus: "projectAgent.library.status",
   subscribeProjectAgentEvents: "projectAgent.subscribe",
 } as const;
 
@@ -587,6 +601,13 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectAgentWriteDocument, ProjectAgentWriteDocumentInput),
   tagRequestBody(WS_METHODS.projectAgentExportDocuments, ProjectAgentExportDocumentsInput),
   tagRequestBody(WS_METHODS.projectAgentRefreshDigest, ProjectAgentRefreshDigestInput),
+  tagRequestBody(WS_METHODS.projectAgentLibraryList, ProjectAgentLibraryListInput),
+  tagRequestBody(WS_METHODS.projectAgentLibraryMkdir, ProjectAgentLibraryMkdirInput),
+  tagRequestBody(WS_METHODS.projectAgentLibraryRename, ProjectAgentLibraryRenameInput),
+  tagRequestBody(WS_METHODS.projectAgentLibraryDelete, ProjectAgentLibraryDeleteInput),
+  tagRequestBody(WS_METHODS.projectAgentLibraryHistory, ProjectAgentLibraryHistoryInput),
+  tagRequestBody(WS_METHODS.projectAgentLibraryRestore, ProjectAgentLibraryRestoreInput),
+  tagRequestBody(WS_METHODS.projectAgentLibraryStatus, ProjectAgentLibraryStatusInput),
   tagRequestBody(WS_METHODS.subscribeProjectAgentEvents, ProjectAgentSubscribeInput),
 ]);
 

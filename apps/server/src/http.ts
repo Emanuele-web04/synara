@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import nodePath from "node:path";
 
 import Mime from "@effect/platform-node/Mime";
@@ -6,6 +7,7 @@ import {
   AuthCreatePairingCredentialInput,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
+  ProjectId,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES,
@@ -14,6 +16,7 @@ import {
 import {
   ATTACHMENT_CANCEL_ROUTE_PATH,
   ATTACHMENT_UPLOAD_ROUTE_PATH,
+  LIBRARY_UPLOAD_ROUTE_PATH,
   VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
 import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
@@ -32,6 +35,23 @@ import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
+import { writeFileStringAtomically } from "./atomicWrite";
+import { GitCore } from "./git/Services/GitCore";
+import { LibraryError } from "./projectAgent/Errors";
+import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
+import {
+  commitLibraryChange,
+  pushLibraryIfConfigured,
+  withLibraryQueue,
+} from "./projectAgent/libraryGit";
+import {
+  assertLibraryRootLocation,
+  ensureLibraryRepo,
+  normalizeLibraryRelativePath,
+  resolveLibraryRoot,
+  resolveLibraryWriteTarget,
+} from "./projectAgent/libraryStore";
+import { ProjectAgentRepository } from "./persistence/Services/ProjectAgentRepository";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
 import { resolveScratchWorkspacesRoot } from "./scratchWorkspaces.ts";
@@ -970,6 +990,128 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
     );
   }
 
+  if (url.pathname === LIBRARY_UPLOAD_ROUTE_PATH) {
+    const projectIdParam = url.searchParams.get("projectId")?.trim() ?? "";
+    const relativeDirectory = url.searchParams.get("relativePath")?.trim() ?? "";
+    const name = url.searchParams.get("name") ?? "";
+    if (!projectIdParam || !name) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Library upload metadata is invalid." },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const declaredLength = Number(request.headers["content-length"] ?? "0");
+    if (Number.isFinite(declaredLength) && declaredLength > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+      return HttpServerResponse.jsonUnsafe(
+        { error: "Request body too large." },
+        { status: 413, headers: corsHeaders },
+      );
+    }
+    return yield* Effect.gen(function* () {
+      const projectId = ProjectId.makeUnsafe(projectIdParam);
+      const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
+      const shell = yield* projectionReadModelQuery.getProjectShellById(projectId);
+      const isGroupContainer =
+        Option.isSome(shell) &&
+        isGroupCoordinatorHostProject({
+          kind: shell.value.kind,
+          workspaceRoot: shell.value.workspaceRoot,
+          groupsWorkspaceRoot: config.groupsWorkspaceRoot,
+          studioWorkspaceRoot: config.studioWorkspaceRoot,
+        });
+      if (!isGroupContainer) {
+        return yield* new LibraryError({
+          message: "The group library is only available on group containers.",
+          code: "forbidden",
+        });
+      }
+      const agentConfig = Option.getOrNull(
+        yield* (yield* ProjectAgentRepository).getConfig(projectId),
+      );
+      const root = yield* resolveLibraryRoot({
+        stateDir: config.stateDir,
+        projectId,
+        libraryPath: agentConfig?.libraryPath,
+      });
+      yield* assertLibraryRootLocation({
+        root,
+        stateDir: config.stateDir,
+        groupsWorkspaceRoot: config.groupsWorkspaceRoot,
+        studioWorkspaceRoot: config.studioWorkspaceRoot,
+        isCustomPath: agentConfig?.libraryPath !== undefined,
+      });
+      const normalizedName = yield* normalizeLibraryRelativePath(name);
+      if (normalizedName !== name || normalizedName.includes("/")) {
+        return yield* new LibraryError({
+          message: "Library upload name must be a file name, not a path.",
+          code: "invalid",
+        });
+      }
+      const bytes = yield* readEffectBinary(request, PROVIDER_SEND_TURN_MAX_FILE_BYTES);
+      const git = yield* GitCore;
+      return yield* withLibraryQueue(
+        projectId,
+        Effect.gen(function* () {
+          yield* ensureLibraryRepo(git, root);
+          const relativePath = relativeDirectory
+            ? `${yield* normalizeLibraryRelativePath(relativeDirectory)}/${normalizedName}`
+            : normalizedName;
+          const target = yield* resolveLibraryWriteTarget(root, relativePath);
+          yield* writeFileStringAtomically({ filePath: target, contents: bytes });
+          yield* commitLibraryChange(git, root, `Add ${relativePath}`);
+          yield* pushLibraryIfConfigured({
+            git,
+            root,
+            projectId,
+            libraryRemoteUrl: agentConfig?.libraryRemoteUrl,
+            libraryPushOnChange: agentConfig?.libraryPushOnChange,
+          });
+          const stat = yield* Effect.tryPromise({
+            try: () => fs.stat(target),
+            catch: () => new LibraryError({ message: "Library upload did not persist." }),
+          });
+          return {
+            name: normalizedName,
+            relativePath,
+            kind: "file" as const,
+            sizeBytes: bytes.length,
+            modifiedAt: stat.mtime.toISOString(),
+          };
+        }),
+      );
+    }).pipe(
+      Effect.map((entry) =>
+        HttpServerResponse.jsonUnsafe(entry, { status: 201, headers: corsHeaders }),
+      ),
+      // Errors become responses here (not in the outer catch) so they keep
+      // the CORS headers every other branch of this handler returns.
+      Effect.catch((cause) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: cause instanceof Error ? cause.message : "Library upload failed." },
+            {
+              status:
+                cause instanceof LibraryError
+                  ? cause.code === "forbidden"
+                    ? 403
+                    : cause.code === "not-found"
+                      ? 404
+                      : cause.code === "conflict"
+                        ? 409
+                        : 400
+                  : cause &&
+                      typeof cause === "object" &&
+                      typeof (cause as { status?: unknown }).status === "number"
+                    ? (cause as { status: number }).status
+                    : 500,
+              headers: corsHeaders,
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
   if (url.pathname === VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH) {
     const provider = url.searchParams.get("provider")?.trim() ?? "";
     const cwd = url.searchParams.get("cwd")?.trim() ?? "";
@@ -1044,12 +1186,11 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   ),
 );
 
-export const binaryUploadEffectRouteLayer = Layer.merge(
+export const binaryUploadEffectRouteLayer = Layer.mergeAll(
   HttpRouter.add("*", ATTACHMENT_UPLOAD_ROUTE_PATH, binaryUploadEffectHandler),
-  Layer.merge(
-    HttpRouter.add("*", ATTACHMENT_CANCEL_ROUTE_PATH, binaryUploadEffectHandler),
-    HttpRouter.add("*", VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH, binaryUploadEffectHandler),
-  ),
+  HttpRouter.add("*", ATTACHMENT_CANCEL_ROUTE_PATH, binaryUploadEffectHandler),
+  HttpRouter.add("*", VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH, binaryUploadEffectHandler),
+  HttpRouter.add("*", LIBRARY_UPLOAD_ROUTE_PATH, binaryUploadEffectHandler),
 );
 
 export const attachmentsEffectRouteLayer = HttpRouter.add(

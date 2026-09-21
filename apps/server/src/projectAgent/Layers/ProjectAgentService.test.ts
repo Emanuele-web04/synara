@@ -783,18 +783,20 @@ it.effect("round-trips library hosting fields and rejects a relative libraryPath
       ),
     );
     assert.equal(relative._tag, "Failure");
+    const config = yield* ServerConfig;
+    const customLibraryPath = `${config.stateDir}/group-library`;
     const overview = yield* service.configure(
       {
         requestId: "req-lib-ok",
         projectId: groupId,
         coordinatorModelSelection: modelSelection,
-        libraryPath: "/tmp/group-library",
+        libraryPath: customLibraryPath,
         libraryRemoteUrl: "https://example.com/library.git",
         libraryPushOnChange: true,
       },
       { kind: "user" },
     );
-    assert.equal(overview.config?.libraryPath, "/tmp/group-library");
+    assert.equal(overview.config?.libraryPath, customLibraryPath);
     assert.equal(overview.config?.libraryRemoteUrl, "https://example.com/library.git");
     assert.equal(overview.config?.libraryPushOnChange, true);
     const preserved = yield* service.configure(
@@ -806,7 +808,7 @@ it.effect("round-trips library hosting fields and rejects a relative libraryPath
       },
       { kind: "user" },
     );
-    assert.equal(preserved.config?.libraryPath, "/tmp/group-library");
+    assert.equal(preserved.config?.libraryPath, customLibraryPath);
     assert.equal(preserved.config?.libraryRemoteUrl, "https://example.com/library.git");
     assert.equal(preserved.config?.libraryPushOnChange, true);
     // `null` clears the column; absent (as above) preserves it.

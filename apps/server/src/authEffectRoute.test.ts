@@ -9,20 +9,31 @@ import { AuthSessionId } from "@synara/contracts";
 import {
   ATTACHMENT_CANCEL_ROUTE_PATH,
   ATTACHMENT_UPLOAD_ROUTE_PATH,
+  LIBRARY_UPLOAD_ROUTE_PATH,
   VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH,
 } from "@synara/shared/binaryTransfer";
-import { DateTime, Effect, Exit, Layer, Scope } from "effect";
+import { DateTime, Effect, Exit, Layer, Option, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { describe, expect, it, vi } from "vitest";
 
 import { AuthError, ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
+import { ProjectId } from "@synara/contracts";
 import {
   SessionCredentialService,
   type SessionCredentialServiceShape,
 } from "./auth/Services/SessionCredentialService";
 import { ServerConfig, type ServerConfigShape } from "./config";
+import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionSnapshotQueryShape,
+} from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
+import {
+  ProjectAgentRepository,
+  type ProjectAgentRepositoryShape,
+} from "./persistence/Services/ProjectAgentRepository";
 import {
   AUTH_JSON_BODY_MAX_BYTES,
   authEffectRouteLayer,
@@ -118,6 +129,8 @@ async function withAuthEffectServer(
   overrides?: {
     readonly providerAdapterRegistry?: ProviderAdapterRegistryShape;
     readonly serverSettingsLayer?: Layer.Layer<ServerSettingsService>;
+    readonly projectAgentRepository?: ProjectAgentRepositoryShape;
+    readonly snapshotQuery?: ProjectionSnapshotQueryShape;
   },
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
@@ -137,6 +150,24 @@ async function withAuthEffectServer(
             },
           ),
           overrides?.serverSettingsLayer ?? ServerSettingsService.layerTest(),
+          Layer.succeed(GitCore, {
+            execute: () => Effect.die("git is not used in this test"),
+          } as unknown as GitCoreShape),
+          Layer.succeed(
+            ProjectAgentRepository,
+            overrides?.projectAgentRepository ??
+              ({
+                getConfig: () => Effect.die("project agent repository is not used in this test"),
+              } as unknown as ProjectAgentRepositoryShape),
+          ),
+          Layer.succeed(
+            ProjectionSnapshotQuery,
+            overrides?.snapshotQuery ??
+              ({
+                getProjectShellById: () =>
+                  Effect.die("projection snapshot query is not used in this test"),
+              } as unknown as ProjectionSnapshotQueryShape),
+          ),
           ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
           NodeServices.layer,
         ),
@@ -515,6 +546,140 @@ describe("binaryUploadEffectRouteLayer", () => {
       );
     } finally {
       fs.rmSync(attachmentsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unauthenticated library uploads and oversized declared bodies", async () => {
+    const config = {
+      host: "0.0.0.0",
+      publicUrl: new URL("https://synara.example.test/"),
+      stateDir: fs.mkdtempSync(path.join(os.tmpdir(), "synara-library-upload-")),
+    } as ServerConfigShape;
+    try {
+      await withAuthEffectServer(
+        config,
+        makeServerAuth({ count: 0 }),
+        async (serverOrigin) => {
+          const params = new URLSearchParams({
+            projectId: "group-1",
+            name: "note.md",
+            mimeType: "text/markdown",
+          });
+          const url = `${serverOrigin}${LIBRARY_UPLOAD_ROUTE_PATH}?${params.toString()}`;
+
+          const unauthenticatedResponse = await fetch(url, {
+            method: "POST",
+            body: Uint8Array.from([1]),
+          });
+          expect(unauthenticatedResponse.status).toBe(401);
+
+          // Cookie-auth without a trusted origin is rejected before the body
+          // is read, same as the attachment upload path.
+          const cookieResponse = await fetch(url, {
+            method: "POST",
+            headers: { Cookie: "synara_session=cookie-token" },
+            body: Uint8Array.from([1]),
+          });
+          expect(cookieResponse.status).toBe(403);
+
+          const oversizedStatus = await new Promise<number>((resolve, reject) => {
+            const target = new URL(url);
+            const request = http.request(
+              {
+                hostname: target.hostname,
+                port: target.port,
+                path: `${target.pathname}${target.search}`,
+                method: "POST",
+                headers: {
+                  Authorization: "Bearer bearer-token",
+                  "Content-Length": String(25 * 1024 * 1024 + 1),
+                },
+              },
+              (response) => {
+                response.resume();
+                response.once("end", () => resolve(response.statusCode ?? 0));
+              },
+            );
+            request.once("error", reject);
+            request.end();
+          });
+          expect(oversizedStatus).toBe(413);
+
+          const missingMetadata = await fetch(`${serverOrigin}${LIBRARY_UPLOAD_ROUTE_PATH}`, {
+            method: "POST",
+            headers: { Authorization: "Bearer bearer-token" },
+            body: Uint8Array.from([1]),
+          });
+          expect(missingMetadata.status).toBe(400);
+        },
+        binaryUploadEffectRouteLayer,
+      );
+    } finally {
+      fs.rmSync(config.stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a name containing a slash and keeps CORS headers on error responses", async () => {
+    const groupsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-library-groups-"));
+    const config = {
+      host: "0.0.0.0",
+      publicUrl: new URL("https://synara.example.test/"),
+      stateDir: fs.mkdtempSync(path.join(os.tmpdir(), "synara-library-upload-")),
+      groupsWorkspaceRoot: groupsRoot,
+      studioWorkspaceRoot: groupsRoot,
+    } as ServerConfigShape;
+    const projectId = ProjectId.makeUnsafe("group-1");
+    const shell = {
+      id: projectId,
+      kind: "group" as const,
+      title: "Alpha",
+      workspaceRoot: `${groupsRoot}/alpha`,
+      defaultModelSelection: null,
+      scripts: [],
+      isPinned: false,
+      spaceId: null,
+      createdAt: "2026-09-20T00:00:00.000Z",
+      updatedAt: "2026-09-20T00:00:00.000Z",
+      deletedAt: null,
+    };
+    try {
+      await withAuthEffectServer(
+        config,
+        makeServerAuth({ count: 0 }),
+        async (serverOrigin) => {
+          const params = new URLSearchParams({ projectId, name: "nested/note.md" });
+          const response = await fetch(
+            `${serverOrigin}${LIBRARY_UPLOAD_ROUTE_PATH}?${params.toString()}`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: "Bearer bearer-token",
+                Origin: "https://synara.example.test",
+              },
+              body: Uint8Array.from([1]),
+            },
+          );
+          expect(response.status).toBe(400);
+          // Upload errors must keep the trusted-origin CORS headers so the web
+          // client can read the rejection instead of a network error.
+          expect(response.headers.get("access-control-allow-origin")).toBe(
+            "https://synara.example.test",
+          );
+        },
+        binaryUploadEffectRouteLayer,
+        {
+          projectAgentRepository: {
+            getConfig: () => Effect.succeed(Option.none()),
+          } as unknown as ProjectAgentRepositoryShape,
+          snapshotQuery: {
+            getProjectShellById: (id: ProjectId) =>
+              Effect.succeed(id === projectId ? Option.some(shell) : Option.none()),
+          } as unknown as ProjectionSnapshotQueryShape,
+        },
+      );
+    } finally {
+      fs.rmSync(config.stateDir, { recursive: true, force: true });
+      fs.rmSync(groupsRoot, { recursive: true, force: true });
     }
   });
 });

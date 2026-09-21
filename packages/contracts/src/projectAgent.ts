@@ -57,6 +57,15 @@ export const ProjectAgentWorkerRouting = Schema.Struct({
 });
 export type ProjectAgentWorkerRouting = typeof ProjectAgentWorkerRouting.Type;
 
+// Remote URLs are handed to `git remote add` and `git push`; `ext::sh -c ...`
+// executes on push and a leading `-` parses as an option, so only the safe
+// transports are allowed and the anchored pattern rejects option-looking input.
+export const LIBRARY_REMOTE_URL_PATTERN = /^(https|ssh):\/\/\S+$|^git@[A-Za-z0-9._-]+:\S+$/;
+export const LibraryRemoteUrl = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(2_048),
+  Schema.isPattern(LIBRARY_REMOTE_URL_PATTERN),
+);
+
 export const ProjectAgentConfig = Schema.Struct({
   projectId: ProjectId,
   coordinatorThreadId: ThreadId,
@@ -77,7 +86,7 @@ export const ProjectAgentConfig = Schema.Struct({
   autoMemoryEnabled: Schema.optional(Schema.Boolean),
   linkedProjectIds: Schema.optional(Schema.Array(ProjectId)),
   libraryPath: Schema.optional(TrimmedNonEmptyString),
-  libraryRemoteUrl: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
+  libraryRemoteUrl: Schema.optional(LibraryRemoteUrl),
   libraryPushOnChange: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentConfig = typeof ProjectAgentConfig.Type;
@@ -397,9 +406,7 @@ export const ProjectAgentConfigureInput = Schema.Struct({
   autoMemoryEnabled: Schema.optional(Schema.Boolean),
   userDisplayName: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
   libraryPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  libraryRemoteUrl: Schema.optional(
-    Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(2_048))),
-  ),
+  libraryRemoteUrl: Schema.optional(Schema.NullOr(LibraryRemoteUrl)),
   libraryPushOnChange: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentConfigureInput = typeof ProjectAgentConfigureInput.Type;
@@ -684,3 +691,98 @@ export const PROJECT_AGENT_RESERVED_PATHS = [
 export const PROJECT_AGENT_USER_WRITABLE_PATHS = ["instructions.md", "notes.md"] as const;
 export const PROJECT_AGENT_COORDINATOR_CURATED_PREFIXES = ["decisions.md", "docs/"] as const;
 export const PROJECT_AGENT_WORKER_INBOX_PREFIX = "inbox/";
+
+// ----- Group Library (git-versioned file store) -----
+
+export const LibraryEntry = Schema.Struct({
+  /** File or directory name, e.g. "notes.md". */
+  name: TrimmedNonEmptyString,
+  /** Path relative to the library root, e.g. "Artifacts/brief.pdf". */
+  relativePath: TrimmedNonEmptyString,
+  kind: Schema.Literals(["file", "directory"]),
+  /** 0 for directories. */
+  sizeBytes: NonNegativeInt,
+  modifiedAt: IsoDateTime,
+});
+export type LibraryEntry = typeof LibraryEntry.Type;
+
+export const LibraryCommit = Schema.Struct({
+  sha: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+  at: IsoDateTime,
+  author: TrimmedNonEmptyString,
+});
+export type LibraryCommit = typeof LibraryCommit.Type;
+
+export const ProjectAgentLibraryListInput = Schema.Struct({
+  projectId: ProjectId,
+  /** Directory to list, relative to the library root. Omit for the root. */
+  relativePath: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProjectAgentLibraryListInput = typeof ProjectAgentLibraryListInput.Type;
+
+export const ProjectAgentLibraryListResult = Schema.Struct({
+  root: TrimmedNonEmptyString,
+  entries: Schema.Array(LibraryEntry),
+});
+export type ProjectAgentLibraryListResult = typeof ProjectAgentLibraryListResult.Type;
+
+export const ProjectAgentLibraryMkdirInput = Schema.Struct({
+  projectId: ProjectId,
+  relativePath: TrimmedNonEmptyString,
+});
+export type ProjectAgentLibraryMkdirInput = typeof ProjectAgentLibraryMkdirInput.Type;
+
+export const ProjectAgentLibraryRenameInput = Schema.Struct({
+  projectId: ProjectId,
+  from: TrimmedNonEmptyString,
+  to: TrimmedNonEmptyString,
+});
+export type ProjectAgentLibraryRenameInput = typeof ProjectAgentLibraryRenameInput.Type;
+
+export const ProjectAgentLibraryDeleteInput = Schema.Struct({
+  projectId: ProjectId,
+  relativePath: TrimmedNonEmptyString,
+});
+export type ProjectAgentLibraryDeleteInput = typeof ProjectAgentLibraryDeleteInput.Type;
+
+/** Commit created by a library mutation (`sha` is the previous HEAD when the
+ *  mutation produced no index change). */
+export const ProjectAgentLibraryMutationResult = Schema.Struct({
+  commitSha: TrimmedNonEmptyString,
+});
+export type ProjectAgentLibraryMutationResult = typeof ProjectAgentLibraryMutationResult.Type;
+
+export const ProjectAgentLibraryHistoryInput = Schema.Struct({
+  projectId: ProjectId,
+  relativePath: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProjectAgentLibraryHistoryInput = typeof ProjectAgentLibraryHistoryInput.Type;
+
+export const ProjectAgentLibraryHistoryResult = Schema.Struct({
+  root: TrimmedNonEmptyString,
+  commits: Schema.Array(LibraryCommit),
+});
+export type ProjectAgentLibraryHistoryResult = typeof ProjectAgentLibraryHistoryResult.Type;
+
+export const ProjectAgentLibraryRestoreInput = Schema.Struct({
+  projectId: ProjectId,
+  relativePath: TrimmedNonEmptyString,
+  // Full 40-hex sha only: it lands in `git checkout <sha> -- <path>` where a
+  // leading dash or ref expression would become an option/attack surface.
+  sha: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
+});
+export type ProjectAgentLibraryRestoreInput = typeof ProjectAgentLibraryRestoreInput.Type;
+
+export const ProjectAgentLibraryStatusInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ProjectAgentLibraryStatusInput = typeof ProjectAgentLibraryStatusInput.Type;
+
+export const ProjectAgentLibraryStatusResult = Schema.Struct({
+  root: TrimmedNonEmptyString,
+  remoteConfigured: Schema.Boolean,
+  lastPushAt: Schema.NullOr(IsoDateTime),
+  lastPushError: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ProjectAgentLibraryStatusResult = typeof ProjectAgentLibraryStatusResult.Type;
