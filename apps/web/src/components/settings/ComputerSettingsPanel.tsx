@@ -250,7 +250,7 @@ export function ComputerSettingsPanel({
               title="Backend"
               description="Which computer backend serves perception and input."
               control={
-                <span className="text-sm text-muted-foreground">
+                <span className="text-ui text-muted-foreground">
                   {BACKEND_DISPLAY_NAMES[backend] ?? backend}
                 </span>
               }

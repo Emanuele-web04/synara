@@ -376,7 +376,7 @@ export default function ComputerPanel(props: {
   const header = (
     <div className="flex h-full w-full min-w-0 items-center gap-2">
       <MonitorIcon className="size-4 shrink-0 text-muted-foreground" />
-      <span className="truncate font-medium text-xs">Computer</span>
+      <span className="truncate font-medium text-ui-sm">Computer</span>
       {/* The pane a user watches the agent drive from is the one surface where
           the maturity of the feature is most worth repeating. */}
       <Badge variant="warning" size="sm" className="shrink-0">
@@ -483,7 +483,7 @@ export default function ComputerPanel(props: {
         ) : runtimeMode === "preview" ? (
           <button
             type="button"
-            className="rounded-full bg-white/95 px-3 py-1.5 font-medium text-[10px] text-black shadow-sm"
+            className="rounded-full bg-white/95 px-3 py-1.5 font-medium text-ui-xs text-black shadow-sm"
             onClick={props.onRequestLive}
           >
             Show the live computer
@@ -515,7 +515,7 @@ export default function ComputerPanel(props: {
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
             />
-            <div className="pointer-events-none absolute inset-x-0 bottom-3 flex flex-col items-center gap-0.5 px-4 text-center text-[10px] text-white/70">
+            <div className="pointer-events-none absolute inset-x-0 bottom-3 flex flex-col items-center gap-0.5 px-4 text-center text-ui-xs text-white/70">
               {/* What the agent last did to this desktop, in words. The server
                   has always pushed `computer.action` and the store has always
                   kept the newest one per thread; until now nothing read it, so a
@@ -570,7 +570,7 @@ export default function ComputerPanel(props: {
         className={disclosureFadeClassName(
           hasError || hasNotice,
           cn(
-            "line-clamp-2 flex shrink-0 items-center border-t px-3 text-xs",
+            "line-clamp-2 flex shrink-0 items-center border-t px-3 text-ui-sm",
             hasError ? "text-destructive" : "text-amber-600 dark:text-amber-400",
             hasError || hasNotice ? "border-border" : "border-transparent",
           ),
@@ -597,8 +597,8 @@ function ComputerAvailabilityMessage(props: {
   return (
     <div className="max-w-sm px-6 text-center text-white/80" role="status">
       <MonitorIcon className="mx-auto mb-3 size-8 text-white/45" />
-      <p className="font-medium text-sm text-white">{props.title}</p>
-      <p className="mt-1 text-xs leading-5 text-white/60">{props.description}</p>
+      <p className="font-medium text-ui text-white">{props.title}</p>
+      <p className="mt-1 text-ui-sm leading-5 text-white/60">{props.description}</p>
       {props.action ? <div className="mt-3 flex justify-center">{props.action}</div> : null}
     </div>
   );
@@ -609,7 +609,7 @@ function ComputerStreamStatus(props: {
 }) {
   if (props.status.kind === "connecting") {
     return (
-      <span className="flex items-center gap-2 text-xs text-white/65" role="status">
+      <span className="flex items-center gap-2 text-ui-sm text-white/65" role="status">
         <LoaderCircleIcon className="size-3.5 animate-spin" />
         Connecting to the desktop…
       </span>
@@ -617,11 +617,11 @@ function ComputerStreamStatus(props: {
   }
   if (props.status.kind === "unsupported") {
     return (
-      <span className="text-xs text-white/65">This browser cannot decode desktop frames.</span>
+      <span className="text-ui-sm text-white/65">This browser cannot decode desktop frames.</span>
     );
   }
   if (props.status.kind === "error") {
-    return <span className="max-w-xs text-xs text-white/70">{props.status.message}</span>;
+    return <span className="max-w-xs text-ui-sm text-white/70">{props.status.message}</span>;
   }
   return null;
 }

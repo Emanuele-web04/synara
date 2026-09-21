@@ -272,12 +272,12 @@ export function RuntimeUsageControls({
                 >
                   <span className="flex min-w-0 flex-col gap-0.5 py-0.5">
                     <span className="flex items-center gap-1.5">
-                      <span className="font-medium text-xs">Computer control</span>
+                      <span className="font-medium text-ui-sm">Computer control</span>
                       <Badge variant="warning" size="sm">
                         Beta
                       </Badge>
                     </span>
-                    <span className="text-[11px] leading-4 text-muted-foreground">
+                    <span className="text-ui-sm leading-4 text-muted-foreground">
                       {computerControlPending
                         ? "Stopping the previous session and changing its desktop permission…"
                         : computerControlAvailable
