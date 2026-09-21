@@ -1,3 +1,8 @@
+import {
+  type TurnDispatchSettings,
+  threadSettingsDispatchFields,
+  turnStartDispatchFields,
+} from "../ChatView.logic";
 import type {
   ProjectId,
   ProjectScript,
@@ -47,6 +52,7 @@ import {
 import type { ChatTurnSubmissionInput } from "./chatSendTypes";
 import { waitForSetupScriptTerminalActivity } from "./projectScriptRuntime";
 interface PreparedChatTurn {
+  dispatchSettingsForSend: TurnDispatchSettings;
   nextThreadEnvMode: DraftThreadEnvMode;
   nextThreadBranch: string | null;
   nextThreadWorktreePath: string | null;
@@ -157,7 +163,6 @@ export function useChatTurnExecution({
   runProjectScript,
   persistThreadSettingsForNextTurn,
   rememberCustomBinaryPathForDispatch,
-  assistantDeliveryMode,
   setSettledThreadBranchWarningDismissedThreadId,
   armLocalDispatchAckFallback,
   setQueuedSteerGate,
@@ -211,6 +216,7 @@ export function useChatTurnExecution({
         baseBranchForWorktree,
         worktreeCopiesLocalChanges,
         worktreeSetupScriptName,
+        dispatchSettingsForSend,
         selectedModelSelectionForSend,
         selectedModelForSend,
         targetProjectDefaultModelSelectionForSend,
@@ -520,9 +526,11 @@ export function useChatTurnExecution({
           await persistThreadSettingsForNextTurn({
             threadId: threadIdForSend,
             createdAt: messageCreatedAt,
-            modelSelection: selectedModelSelectionForSend,
-            runtimeMode: nextRuntimeModeForSend,
-            interactionMode: interactionModeForSend,
+            ...threadSettingsDispatchFields({
+              ...dispatchSettingsForSend,
+              runtimeMode: nextRuntimeModeForSend,
+              interactionMode: interactionModeForSend,
+            }),
           });
         }
 
@@ -598,14 +606,15 @@ export function useChatTurnExecution({
                   ? { mentions: mentionedPluginMentionsForSend }
                   : {}),
               },
-              modelSelection: selectedModelSelectionForSend,
-              ...(providerOptionsForDispatchForSend
-                ? { providerOptions: providerOptionsForDispatchForSend }
-                : {}),
-              assistantDeliveryMode,
-              dispatchMode,
-              runtimeMode: nextRuntimeModeForSend,
-              interactionMode: interactionModeForSend,
+              ...turnStartDispatchFields(
+                {
+                  ...dispatchSettingsForSend,
+                  // Both can be rewritten while the send prepares its workspace.
+                  runtimeMode: nextRuntimeModeForSend,
+                  interactionMode: interactionModeForSend,
+                },
+                dispatchMode,
+              ),
               ...(sourceProposedPlanForSend
                 ? { sourceProposedPlan: sourceProposedPlanForSend }
                 : {}),
@@ -836,7 +845,6 @@ export function useChatTurnExecution({
       runProjectScript,
       persistThreadSettingsForNextTurn,
       rememberCustomBinaryPathForDispatch,
-      assistantDeliveryMode,
       setSettledThreadBranchWarningDismissedThreadId,
       armLocalDispatchAckFallback,
       setQueuedSteerGate,

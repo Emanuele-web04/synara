@@ -1,3 +1,4 @@
+import type { TurnDispatchSettings } from "./ChatView.logic";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   MessageId,
@@ -3858,7 +3859,27 @@ export default function ChatView({
     sendPreflightInFlightRef,
   });
 
+  const turnDispatchSettings = useMemo<TurnDispatchSettings>(
+    () => ({
+      modelSelection: selectedModelSelection,
+      providerOptions: providerOptionsForDispatch,
+      assistantDeliveryMode,
+      runtimeMode,
+      interactionMode,
+      envMode,
+    }),
+    [
+      assistantDeliveryMode,
+      envMode,
+      interactionMode,
+      providerOptionsForDispatch,
+      runtimeMode,
+      selectedModelSelection,
+    ],
+  );
+
   const { onSend } = useChatTurnSubmission({
+    turnDispatchSettings,
     threadId,
     hasLiveTurn,
     lateComposerSendHandlersRef,
@@ -3999,6 +4020,7 @@ export default function ChatView({
     onResumeWorkflowRun,
     onImplementPlanInNewThread,
   } = useChatTurnFollowUps({
+    turnDispatchSettings,
     threadId,
     activeThread,
     isServerThread,

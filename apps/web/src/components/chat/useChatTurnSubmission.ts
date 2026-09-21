@@ -1,4 +1,9 @@
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
+import {
+  resolveQueuedTurnDispatchSettings,
+  queuedChatTurnDispatchFields,
+  queuedPlanFollowUpDispatchFields,
+} from "../ChatView.logic";
 import { useCallback } from "react";
 import {
   filterPromptProviderMentionReferences,
@@ -48,6 +53,7 @@ import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
 
 export function useChatTurnSubmission({
+  turnDispatchSettings,
   threadId,
   hasLiveTurn,
   lateComposerSendHandlersRef,
@@ -55,9 +61,6 @@ export function useChatTurnSubmission({
   isConnecting,
   sendPreflightInFlightRef,
   sendInFlightRef,
-  runtimeMode,
-  interactionMode,
-  envMode,
   showPlanFollowUpPrompt,
   activeProposedPlan,
   hasQueueableLiveTurn,
@@ -158,8 +161,6 @@ export function useChatTurnSubmission({
   selectedProvider,
   selectedModel,
   selectedPromptEffort,
-  selectedModelSelection,
-  providerOptionsForDispatch,
   pendingAutomationConversationRef,
   setPendingAutomationConversation,
   pendingAutomationConversation,
@@ -367,13 +368,17 @@ export function useChatTurnSubmission({
       const selectedModelForSend = queuedChatTurn?.selectedModel ?? selectedModel;
       const selectedPromptEffortForSend =
         queuedChatTurn?.selectedPromptEffort ?? selectedPromptEffort;
-      const selectedModelSelectionForSend =
-        queuedChatTurn?.modelSelection ?? selectedModelSelection;
-      const providerOptionsForDispatchForSend =
-        queuedChatTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
-      const runtimeModeForSend = queuedChatTurn?.runtimeMode ?? runtimeMode;
-      let interactionModeForSend = queuedChatTurn?.interactionMode ?? interactionMode;
-      const envModeForSend = queuedChatTurn?.envMode ?? envMode;
+      // A queued turn replays the settings it froze when it was queued; a live send
+      // uses the composer's current ones.
+      const dispatchSettingsForSend = resolveQueuedTurnDispatchSettings(
+        turnDispatchSettings,
+        queuedChatTurn,
+      );
+      const selectedModelSelectionForSend = dispatchSettingsForSend.modelSelection;
+      const providerOptionsForDispatchForSend = dispatchSettingsForSend.providerOptions;
+      const runtimeModeForSend = dispatchSettingsForSend.runtimeMode;
+      let interactionModeForSend = dispatchSettingsForSend.interactionMode;
+      const envModeForSend = dispatchSettingsForSend.envMode;
       const {
         trimmedPrompt: trimmed,
         sendableTerminalContexts: sendableComposerTerminalContexts,
@@ -440,9 +445,7 @@ export function useChatTurnSubmission({
               selectedProvider,
               selectedModel,
               selectedPromptEffort,
-              modelSelection: selectedModelSelection,
-              ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
-              runtimeMode,
+              ...queuedPlanFollowUpDispatchFields(dispatchSettingsForSend),
             });
             return true;
           }
@@ -607,14 +610,14 @@ export function useChatTurnSubmission({
           selectedProvider: selectedProviderForSend,
           selectedModel: selectedModelForSend,
           selectedPromptEffort: selectedPromptEffortForSend,
-          modelSelection: selectedModelSelectionForSend,
-          ...(providerOptionsForDispatchForSend
-            ? { providerOptionsForDispatch: providerOptionsForDispatchForSend }
-            : {}),
-          ...(sourceProposedPlanForSend ? { sourceProposedPlan: sourceProposedPlanForSend } : {}),
-          runtimeMode: runtimeModeForSend,
-          interactionMode: interactionModeForSend,
-          envMode: envModeForSend,
+          ...queuedChatTurnDispatchFields(
+            {
+              ...dispatchSettingsForSend,
+              // A plan follow-up carrying attachments rewrites the mode mid-send.
+              interactionMode: interactionModeForSend,
+            },
+            sourceProposedPlanForSend,
+          ),
         });
         return true;
       }
@@ -844,6 +847,7 @@ export function useChatTurnSubmission({
       }
 
       return executePreparedTurn({
+        dispatchSettingsForSend,
         nextThreadEnvMode,
         nextThreadBranch,
         nextThreadWorktreePath,
@@ -901,9 +905,6 @@ export function useChatTurnSubmission({
       isConnecting,
       sendPreflightInFlightRef,
       sendInFlightRef,
-      runtimeMode,
-      interactionMode,
-      envMode,
       showPlanFollowUpPrompt,
       activeProposedPlan,
       hasQueueableLiveTurn,
@@ -954,6 +955,7 @@ export function useChatTurnSubmission({
       composerPastedTexts,
       composerPullRequestContexts,
       restoredQueuedSourceProposedPlanRef,
+      turnDispatchSettings,
       enqueueQueuedComposerTurn,
       setComposerDraftPrompt,
       setComposerTrigger,
@@ -970,8 +972,6 @@ export function useChatTurnSubmission({
       selectedProvider,
       selectedModel,
       selectedPromptEffort,
-      selectedModelSelection,
-      providerOptionsForDispatch,
       pendingAutomationConversationRef,
       setPendingAutomationConversation,
       pendingAutomationConversation,
