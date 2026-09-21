@@ -1434,11 +1434,9 @@ export default function ChatView({
       : deriveActiveTaskListState(threadActivities, activeLatestTurn?.turnId);
   }, [activeLatestTurn?.turnId, latestTurnSettled, showDebugTaskBanner, threadActivities]);
   const activeBackgroundTasks = useMemo(
-    () =>
-      latestTurnSettled
-        ? null
-        : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
+    // Detached tasks can outlive their turn. Their own lifecycle clears the panel.
+    () => deriveActiveBackgroundTasksState(threadActivities),
+    [threadActivities],
   );
   // Detached work still running for the turn (backgrounded shell commands,
   // provider-native tasks) that no other composer panel represents: the
