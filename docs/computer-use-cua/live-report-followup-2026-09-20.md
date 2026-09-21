@@ -89,3 +89,36 @@ behavior. Final live acceptance still requires the following:
 
 Escape takeover, approval boundaries, Space confinement and uncertain-action
 refusals remain active throughout these tests.
+
+## Linux verification on September 21
+
+[The Linux CI run passed](https://github.com/Emanuele-web04/synara/actions/runs/35548988491)
+on Ubuntu 24.04 x64, using the pinned revision 34 source and both checked
+native/Linux patches. It compiled the Linux driver and cursor helper with
+Rust 1.97.1 and passed 741 regression tests: 175 desktop admission/host/Escape,
+40 shared protocol/diagnostic, 301 server lifecycle/browser/backend, 202 native
+browser and 23 compact-cursor tests.
+
+The new `Cua Linux checks` workflow also runs the actual Electron host and
+compiled driver on a disposable Xvfb X11 desktop with a root-managed Chrome
+installation. Its isolated headless browser launched, bound and navigated to
+a local fixture. Fresh semantic references drove a click and text insertion;
+independent HTTP events from the page confirmed both effects. Native pointer
+input and visible browser launch were refused. An X11-injected Escape reached
+the Electron global shortcut and paused the following mutation. Task completion
+unregistered Escape, and host disposal terminated the observed browser process.
+Both `LINUX_SMOKE_OK` and `LINUX_SMOKE_CLEANUP_OK` were emitted.
+
+The initial probe runs exposed test-fixture issues: hosted runner Chrome files
+and their `/opt` ancestors were writable by other users, which the driver
+correctly rejected, and the probe initially requested compatibility DOM refs
+while expecting semantic names. The workflow now installs the official Chrome
+package with root-managed permissions and explicitly requests `semantic_v2`.
+No production admission rule was relaxed to make the probe pass.
+
+This is component-level evidence with a debug driver build, not a packaged
+AppImage or live-provider qualification. Escape was injected through X11, not
+pressed on physical hardware. Wayland/XWayland refusal is covered by admission
+tests, not a live compositor run. Linux mutations remain limited to the
+attested isolated headless browser route on direct X11; this does not enable
+native desktop pointer/keyboard control or personal browser profiles.
