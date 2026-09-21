@@ -510,10 +510,16 @@ observability failures.
   activation, click and RAII restoration run on the same blocking worker, so
   cancellation of an async waiter cannot restore ahead of a detached click.
   Cleanup restores the exact native key window without re-entering a cancelled
-  input gate, preserves intervening user app/window/Space changes, and reports
-  failed or unobservable restoration instead of swallowing it. This reduces
+  input gate, leaves observed unexpected focus/Space changes untouched, and
+  reports failed or unobservable restoration instead of swallowing it. Snapshot
+  comparisons cannot identify whether the user or the action caused a change;
+  an unexpected target-owned window or sheet reports uncertain restoration. This reduces
   focus disruption; it does not make synthetic clicks safe for uninterrupted
-  simultaneous physical typing.
+  simultaneous physical typing. Capture and cleanup each have a 200 ms budget;
+  app and window AX reads use at most 25 ms messaging timeouts and reject late
+  results. Direct WindowServer/Space samples bracket each AX read, and a final
+  direct sample immediately precedes restoration so stale AX responses cannot
+  authorize a write after an observed focus switch.
 - Click and wheel results carry static actuator, delivery, focus and restoration
   metadata. AX failures preserve their numeric AXError in the structured result,
   alongside a fixed error code. Diagnostics never include titles, text or AX
@@ -539,6 +545,9 @@ The normal Apple build requires the Apple SDK, and exact focus restoration,
 continuous typing, Spaces and display painting still require native qualification.
 Both patches are regenerated against the pinned source; the Linux follow-on
 patch changes only revision context, preserving its existing browser-only scope.
+
+The report follow-up and remaining native qualification work are recorded in
+[`live-report-followup-2026-09-20.md`](../../../../docs/computer-use-cua/live-report-followup-2026-09-20.md).
 
 Current integration verification and limits are recorded in
 [`integration-refresh.md`](../../../../docs/computer-use-cua/integration-refresh.md).

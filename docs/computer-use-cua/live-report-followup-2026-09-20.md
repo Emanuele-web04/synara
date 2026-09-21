@@ -7,17 +7,23 @@ unchanged. No main commits or previous merge resolutions were discarded.
 
 ## Corrections
 
-| Report finding                                      | Change                                                                                                                                                                                                                                                                                           |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A completed turn holds the desktop for five minutes | The existing provider runtime ingestion releases the lease on terminal turn/session events. In-flight operations drain first. Turn identity protects a newer turn from late events; ambiguous untagged completions cannot release it. The idle timeout remains a crash fallback.                 |
-| Refused retries trigger the uncertain-action limit  | Only dispatched, unverified mutations contribute. A refusal also cannot erase previous uncertain delivery. A failed first step in a batch preserves its explicit uncertainty.                                                                                                                    |
-| Background coordinate clicks always skip AX         | Revision 34 permits the advertised, focus-suppressed AXPress route for an unmodified single left click. Modified, multiple and right clicks retain their required input recipe. Older/unknown native revisions retain the previous routing. No submitted AX action is replayed as a pixel click. |
-| Pixel activation loses the user's key window        | The native guard captures the exact prior PID/window and WindowServer state before deliberate activation, restores that exact window on success/error/unwind, and records the result. Unobservable prior state refuses activation. Observed human window/app/Space changes are preserved.        |
-| Keys on multi-window apps keep failing              | The ambiguity refusal remains: process-scoped keys cannot establish an exact destination. Guidance now points to observed elements with exact-window semantic typing, or set-value when replacement is intended. These writes do not promise keydown/keyup behavior.                             |
-| Menu invocation silently uses the foreground        | Standalone and batched menu invocation require the same explicit visible-use authorization as foreground actions. Explicit background menu mode refuses. Space confinement still applies.                                                                                                        |
-| Cursor is rarely visible                            | The compact marker stays parked between actions for up to 60 seconds, and task completion hides it. Idle waiting does not repaint continuously. Failed visibility updates can retry; metadata remains bounded. Cursor sessions and retained AX references survive hiding.                        |
-| Scroll dispatch produces no visible movement        | Existing measured scroll/screenshot evidence now immediately identifies no visible movement. It does not assert that the page is at its edge: dropped delivery is another possibility. Dispatch without evidence remains uncertain and must not be blindly replayed.                             |
-| Action failures lack diagnostic detail              | Allowlisted native actuator/path/focus/restore/error metadata reaches desktop logs and failed-action audit entries. Numeric AX errors survive. Raw driver messages, field values, window titles and cursor labels are excluded from the new records.                                             |
+| Report finding                                      | Change                                                                                                                                                                                                                                                                                                                                            |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A completed turn holds the desktop for five minutes | The existing provider runtime ingestion releases the lease on terminal turn/session events. In-flight operations drain first. Turn identity protects a newer turn from late events; ambiguous untagged completions cannot release it. The idle timeout remains a crash fallback.                                                                  |
+| Refused retries trigger the uncertain-action limit  | Only dispatched, unverified mutations contribute. A refusal also cannot erase previous uncertain delivery. A failed first step in a batch preserves its explicit uncertainty.                                                                                                                                                                     |
+| Background coordinate clicks always skip AX         | Revision 34 permits the advertised, focus-suppressed AXPress route for an unmodified single left click. Modified, multiple and right clicks retain their required input recipe. Older/unknown native revisions retain the previous routing. No submitted AX action is replayed as a pixel click.                                                  |
+| Pixel activation loses the user's key window        | The native guard captures the exact prior PID/window and WindowServer state before deliberate activation, restores that exact window on success/error/unwind, and records the result. Unobservable prior state refuses activation. Unexpected focus changes stop restoration; ambiguous target-owned window changes are reported as unobservable. |
+| Keys on multi-window apps keep failing              | The ambiguity refusal remains: process-scoped keys cannot establish an exact destination. Guidance now points to observed elements with exact-window semantic typing, or set-value when replacement is intended. These writes do not promise keydown/keyup behavior.                                                                              |
+| Menu invocation silently uses the foreground        | Standalone and batched menu invocation require the same explicit visible-use authorization as foreground actions. Explicit background menu mode refuses. Space confinement still applies.                                                                                                                                                         |
+| Cursor is rarely visible                            | The compact marker stays parked between actions for up to 60 seconds, and task completion hides it. Idle waiting does not repaint continuously. Failed visibility updates can retry; metadata remains bounded. Cursor sessions and retained AX references survive hiding.                                                                         |
+| Scroll dispatch produces no visible movement        | Existing measured scroll/screenshot evidence now immediately identifies no visible movement. It does not assert that the page is at its edge: dropped delivery is another possibility. Dispatch without evidence remains uncertain and must not be blindly replayed.                                                                              |
+| Action failures lack diagnostic detail              | Allowlisted native actuator/path/focus/restore/error metadata reaches desktop logs and failed-action audit entries. Numeric AX errors survive. Raw driver messages, field values, window titles and cursor labels are excluded from the new records.                                                                                              |
+
+The restore guard compares observable window, process and Space state; these
+snapshots cannot prove whether the user or the target app caused a change. A
+new target-owned sheet can therefore leave restoration uncertain. The existing
+AX focus-suppression observer also has no complete physical-input provenance.
+This is a narrower repair to restoration, not a guarantee of focus isolation.
 
 The lease is still global for shared pointer and physical keyboard actions.
 This change does not create independent desktop seats. Exact-window semantic
@@ -47,6 +53,15 @@ single main-display overlay. Secondary-display visibility and actual painting
 across Spaces require live reproduction; this change does not claim to fix them.
 
 ## Verification boundaries
+
+Local formatting, lint, seven-package typecheck and Windows runtime-boundary
+checks pass. The eight affected server suites pass all 686 tests. The broader
+`bun run test --continue` run records 14,286 passing tests, 144 failures from
+denied local Unix socket listeners, and one suite that cannot load the missing
+Electron runtime. These environment failures are not a passing full-suite gate.
+The shared package passes all 835 tests after repairing two pre-existing
+`list_spaces` inventory expectations. Turborepo checks use its documented
+`TURBO_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1` opt-out.
 
 Regression coverage includes terminal-event races, in-flight and queued lease
 release, uncertain-action accounting, menu authorization, old-driver routing,

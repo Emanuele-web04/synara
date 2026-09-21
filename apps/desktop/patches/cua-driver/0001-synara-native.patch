@@ -9710,7 +9710,7 @@ index 7893a0132..65ce34a3d 100644
      let bundle_id = NSString::from_str(bundle_id);
      let running =
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
-index 02ba09c01..67ce4b258 100644
+index 02ba09c01..61d90c410 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/ax/bindings.rs
 @@ -13,6 +13,7 @@
@@ -9826,7 +9826,79 @@ index 02ba09c01..67ce4b258 100644
      pub fn AXValueGetType(value: AXValueRef) -> AXValueType;
      pub fn AXValueGetValue(
          value: AXValueRef,
-@@ -655,16 +719,99 @@ pub unsafe fn set_size_attr(
+@@ -515,6 +579,71 @@ pub fn focused_window_id_of_pid(pid: i32) -> Option<u32> {
+     }
+ }
+
++/// Bounded focus proof used only by background-click restoration. `Ok(None)`
++/// is an explicit AXNoValue (a lost key window); timeout, malformed values and
++/// unreadable window identity are `Err`, never permission to restore focus.
++pub(crate) fn focused_window_id_for_restore(
++    pid: i32,
++    deadline: std::time::Instant,
++) -> Result<Option<u32>, ()> {
++    struct OwnedValue(CFTypeRef);
++    impl Drop for OwnedValue {
++        fn drop(&mut self) {
++            if !self.0.is_null() {
++                unsafe { CFRelease(self.0) };
++            }
++        }
++    }
++    unsafe fn set_timeout(
++        element: AXUIElementRef,
++        deadline: std::time::Instant,
++    ) -> Result<std::time::Instant, ()> {
++        let start = std::time::Instant::now();
++        let remaining = deadline.saturating_duration_since(start);
++        let timeout = crate::input::focus_restore_policy::bounded_ax_timeout(remaining).ok_or(())?;
++        let read_deadline = deadline.min(start + std::time::Duration::from_millis(25));
++        if AXUIElementSetMessagingTimeout(element, timeout) == kAXErrorSuccess
++            && std::time::Instant::now() < read_deadline
++        {
++            Ok(read_deadline)
++        } else {
++            Err(())
++        }
++    }
++    unsafe {
++        let app = AXUIElementCreateApplication(pid);
++        if app.is_null() {
++            return Err(());
++        }
++        let _app = OwnedValue(app as CFTypeRef);
++        let read_deadline = set_timeout(app, deadline)?;
++        let attr = CFStr::new("AXFocusedWindow");
++        let mut value: CFTypeRef = std::ptr::null();
++        let error = AXUIElementCopyAttributeValue(app, attr.as_concrete_TypeRef(), &mut value);
++        let _window = OwnedValue(value);
++        if std::time::Instant::now() >= read_deadline {
++            return Err(());
++        }
++        if error == kAXErrorNoValue {
++            return Ok(None);
++        }
++        if error != kAXErrorSuccess
++            || value.is_null()
++            || core_foundation::base::CFGetTypeID(value) != AXUIElementGetTypeID()
++        {
++            return Err(());
++        }
++        let window = value as AXUIElementRef;
++        // Returned elements do not necessarily inherit their app's timeout.
++        let read_deadline = set_timeout(window, deadline)?;
++        let window_id = ax_get_window_id(window).ok_or(())?;
++        if std::time::Instant::now() >= read_deadline {
++            return Err(());
++        }
++        Ok(Some(window_id))
++    }
++}
++
+ /// Get the children of an AX element.
+ ///
+ /// # Safety
+@@ -655,16 +784,99 @@ pub unsafe fn set_size_attr(
      result
  }
 
@@ -9928,7 +10000,7 @@ index 02ba09c01..67ce4b258 100644
  }
 
  /// Signal to a Chromium/Electron application root that a real assistive client
-@@ -748,6 +895,245 @@ pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
+@@ -748,6 +960,245 @@ pub unsafe fn copy_ax_windows(element: AXUIElementRef) -> Vec<AXUIElementRef> {
          .collect()
  }
 
@@ -13581,7 +13653,7 @@ index 2b9baf8e5..65eef4224 100644
 +    }
  }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
-index 7411233b9..ca17ff262 100644
+index 7411233b9..42e5a800c 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/mod.rs
 @@ -9,10 +9,13 @@
@@ -13589,7 +13661,7 @@ index 7411233b9..ca17ff262 100644
 
  pub mod ax_actions;
 +pub mod cancellation;
-+mod focus_restore_policy;
++pub(crate) mod focus_restore_policy;
  pub mod interactive;
  pub mod keyboard;
  pub mod mouse;
@@ -14410,7 +14482,7 @@ index 8ace326f7..0f24d558d 100644
 +    unsafe { CGEventSetLocation(event.as_ptr().cast(), x, y) };
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
-index a657ced2b..77d69a12d 100644
+index a657ced2b..48169006b 100644
 --- a/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs
 @@ -109,7 +109,7 @@ fn ensure_skylight_loaded() {
@@ -14442,7 +14514,7 @@ index a657ced2b..77d69a12d 100644
  }
 
  fn make_key_window_record(window_id: u32, event_kind: u8) -> [u8; 0xF8] {
-@@ -648,18 +650,178 @@ pub fn make_exact_window_key(target_pid: libc::pid_t, target_wid: u32) -> bool {
+@@ -648,18 +650,238 @@ pub fn make_exact_window_key(target_pid: libc::pid_t, target_wid: u32) -> bool {
 
      // kCPSUserGenerated = 0x200. Unlike kCPSNoWindows, this permits AppKit to
      // establish the requested native key window before it validates NSMenu.
@@ -14466,6 +14538,25 @@ index a657ced2b..77d69a12d 100644
      true
  }
 
++const BACKGROUND_FOCUS_BUDGET: std::time::Duration = std::time::Duration::from_millis(200);
++
++/// Read WindowServer directly, without AppKit's delayed frontmost notifications
++/// or an AX round-trip. Reject a Space transition inside this short sample.
++fn background_focus_stamp() -> Option<super::focus_restore_policy::FocusStamp> {
++    let space = get_active_space()?;
++    let get_front = get_front_process_fn()?;
++    let mut process = [0u8; 8];
++    if unsafe { get_front(process.as_mut_ptr().cast()) } != 0 || get_active_space() != Some(space) {
++        return None;
++    }
++    Some(super::focus_restore_policy::FocusStamp { process, space })
++}
++
++struct BackgroundFocusObservation {
++    stamp: super::focus_restore_policy::FocusStamp,
++    focused_window: Option<u32>,
++}
++
 +/// Captures the exact foreground window before a background pixel prologue.
 +/// Construct and drop this guard on the same blocking action task, so aborting
 +/// its async waiter cannot restore while detached native dispatch is still running.
@@ -14476,35 +14567,50 @@ index a657ced2b..77d69a12d 100644
 +    prior_space: u64,
 +    target_pid: i32,
 +    target_window_id: u32,
++    target_psn: [u8; 8],
 +    armed: bool,
 +}
 +
 +impl BackgroundFocusRestore {
 +    pub fn capture(target_pid: i32, target_window_id: u32) -> Option<Self> {
++        use super::focus_restore_policy::focus_sample_is_fresh;
++        let deadline = std::time::Instant::now() + BACKGROUND_FOCUS_BUDGET;
 +        // Refuse before deliberately defocusing the user unless the exact
 +        // window, WindowServer state and restoration SPIs are available.
 +        set_front_process_fn()?;
 +        post_event_record_to_fn()?;
++        let before = background_focus_stamp()?;
 +        let prior_pid = crate::apps::frontmost_pid()?;
-+        let prior_window_id = crate::ax::bindings::focused_window_id_of_pid(prior_pid)?;
++        let prior_window_id =
++            crate::ax::bindings::focused_window_id_for_restore(prior_pid, deadline).ok()??;
 +        if !matches!(
 +            crate::windows::resolve_window_owner(prior_pid, prior_window_id),
 +            crate::windows::WindowOwner::SamePid
-+        ) || front_process_matches(prior_pid, prior_window_id) != Some(true)
-+        {
++        ) {
 +            return None;
 +        }
 +        let mut prior_psn = [0u8; 8];
-+        if !get_process_psn_for_window(prior_window_id, prior_pid, &mut prior_psn) {
++        let mut target_psn = [0u8; 8];
++        if !get_process_psn_for_window(prior_window_id, prior_pid, &mut prior_psn)
++            || !get_process_psn_for_window(target_window_id, target_pid, &mut target_psn)
++        {
++            return None;
++        }
++        // No AX work follows this fresh sample before returning the proof.
++        let after = background_focus_stamp()?;
++        if before.process != prior_psn
++            || !focus_sample_is_fresh(before, after, std::time::Instant::now() < deadline)
++        {
 +            return None;
 +        }
 +        Some(Self {
 +            prior_pid,
 +            prior_window_id,
 +            prior_psn,
-+            prior_space: get_active_space()?,
++            prior_space: after.space,
 +            target_pid,
 +            target_window_id,
++            target_psn,
 +            armed: false,
 +        })
 +    }
@@ -14518,28 +14624,46 @@ index a657ced2b..77d69a12d 100644
 +        self.armed = true;
 +    }
 +
-+    fn decision(&self) -> super::focus_restore_policy::RestoreDecision {
-+        let Some(current_space) = get_active_space() else {
-+            return super::focus_restore_policy::RestoreDecision::Unobservable;
-+        };
-+        let prior = front_process_matches(self.prior_pid, self.prior_window_id);
-+        let target = front_process_matches(self.target_pid, self.target_window_id);
-+        let focused = if prior == Some(true) {
-+            crate::ax::bindings::focused_window_id_of_pid(self.prior_pid)
-+        } else if target == Some(true) {
-+            crate::ax::bindings::focused_window_id_of_pid(self.target_pid)
++    fn observe(
++        &self,
++        deadline: std::time::Instant,
++    ) -> Result<BackgroundFocusObservation, super::focus_restore_policy::RestoreDecision> {
++        use super::focus_restore_policy::{decide_restore, focus_sample_is_fresh, RestoreDecision};
++        let before = background_focus_stamp().ok_or(RestoreDecision::Unobservable)?;
++        let prior = before.process == self.prior_psn;
++        let target = before.process == self.target_psn;
++        if before.space != self.prior_space || (!prior && !target) {
++            return Err(RestoreDecision::UserChanged);
++        }
++        let focused_pid = if prior {
++            self.prior_pid
 +        } else {
-+            None
++            self.target_pid
 +        };
-+        super::focus_restore_policy::decide_restore(
-+            current_space == self.prior_space,
-+            prior,
-+            target,
-+            focused,
++        let focused_window =
++            crate::ax::bindings::focused_window_id_for_restore(focused_pid, deadline)
++                .map_err(|_| RestoreDecision::Unobservable)?;
++        // AX can block while the user switches apps/Spaces. Its old answer
++        // never authorizes a focus write after a fresh WindowServer change.
++        let after = background_focus_stamp().ok_or(RestoreDecision::Unobservable)?;
++        if !focus_sample_is_fresh(before, after, std::time::Instant::now() < deadline) {
++            return Err(RestoreDecision::Unobservable);
++        }
++        match decide_restore(
++            true,
++            Some(prior),
++            Some(target),
++            focused_window,
 +            self.prior_window_id,
 +            self.target_window_id,
 +            self.prior_pid == self.target_pid,
-+        )
++        ) {
++            RestoreDecision::Restore => Ok(BackgroundFocusObservation {
++                stamp: after,
++                focused_window,
++            }),
++            decision => Err(decision),
++        }
 +    }
 +
 +    pub fn restore(&mut self) -> &'static str {
@@ -14547,11 +14671,8 @@ index a657ced2b..77d69a12d 100644
 +        if !std::mem::replace(&mut self.armed, false) {
 +            return "not-needed";
 +        }
-+        match self.decision() {
-+            RestoreDecision::UserChanged => return "user-changed",
-+            RestoreDecision::Unobservable => return "unobservable",
-+            RestoreDecision::Restore => {}
-+        }
++        // One deadline covers preflight, every AX read and post-write proof.
++        let deadline = std::time::Instant::now() + BACKGROUND_FOCUS_BUDGET;
 +        if !matches!(
 +            crate::windows::resolve_window_owner(self.prior_pid, self.prior_window_id),
 +            crate::windows::WindowOwner::SamePid
@@ -14562,6 +14683,18 @@ index a657ced2b..77d69a12d 100644
 +        else {
 +            return "failed";
 +        };
++        let observation = match self.observe(deadline) {
++            Ok(observation) => observation,
++            Err(RestoreDecision::UserChanged) => return "user-changed",
++            Err(_) => return "unobservable",
++        };
++        // Last check immediately before the native write, with no intervening
++        // AX query, window enumeration or other potentially slow preparation.
++        if std::time::Instant::now() >= deadline
++            || background_focus_stamp() != Some(observation.stamp)
++        {
++            return "unobservable";
++        }
 +        // Cleanup is deliberately outside admission: Escape/retirement must
 +        // stop new actions, never prevent restoration of the captured key window.
 +        // Same exact-window recipe as make_exact_window_key; no all-window raise.
@@ -14574,23 +14707,22 @@ index a657ced2b..77d69a12d 100644
 +                return "failed";
 +            }
 +        }
-+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
 +        loop {
-+            match self.decision() {
-+                RestoreDecision::UserChanged => return "user-changed",
-+                RestoreDecision::Unobservable => return "unobservable",
-+                RestoreDecision::Restore => {}
-+            }
-+            if front_process_matches(self.prior_pid, self.prior_window_id) == Some(true)
-+                && crate::ax::bindings::focused_window_id_of_pid(self.prior_pid)
-+                    == Some(self.prior_window_id)
++            let observation = match self.observe(deadline) {
++                Ok(observation) => observation,
++                Err(RestoreDecision::UserChanged) => return "user-changed",
++                Err(_) => return "unobservable",
++            };
++            if observation.stamp.process == self.prior_psn
++                && observation.focused_window == Some(self.prior_window_id)
 +            {
 +                return "restored";
 +            }
-+            if std::time::Instant::now() >= deadline {
++            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
++            if remaining.is_zero() {
 +                return "failed";
 +            }
-+            std::thread::sleep(std::time::Duration::from_millis(10));
++            std::thread::sleep(remaining.min(std::time::Duration::from_millis(10)));
 +        }
 +    }
 +}
@@ -14623,7 +14755,7 @@ index a657ced2b..77d69a12d 100644
  /// Tool-agnostic foreground-assist: briefly front `window_id`, wait for the
  /// activation to actually land, run `body` (which posts the synthetic input),
  /// then restore the prior frontmost process.
-@@ -700,6 +862,7 @@ pub fn with_foreground_assist(
+@@ -700,6 +922,7 @@ pub fn with_foreground_assist(
          Some(f) => f,
          None => {
              // SPIs unavailable — run body anyway without activation.
@@ -14631,7 +14763,7 @@ index a657ced2b..77d69a12d 100644
              body()?;
              return Ok(false);
          }
-@@ -712,26 +875,28 @@ pub fn with_foreground_assist(
+@@ -712,26 +935,28 @@ pub fn with_foreground_assist(
 
      let mut target_psn = [0u8; 8];
      if !get_process_psn_for_window(target_wid, target_pid, &mut target_psn) {
@@ -14676,7 +14808,7 @@ index a657ced2b..77d69a12d 100644
      Ok(true)
  }
 
-@@ -760,16 +925,17 @@ const ACTIVATION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_
+@@ -760,16 +985,17 @@ const ACTIVATION_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_
  /// A `false` return is not fatal: the caller proceeds with delivery regardless,
  /// because a target that never reports focus is exactly the case the pre-existing
  /// best-effort contract already covered.
@@ -14698,7 +14830,7 @@ index a657ced2b..77d69a12d 100644
      }
  }
 
-@@ -806,30 +972,35 @@ pub fn with_foreground_hid_activation(
+@@ -806,30 +1032,35 @@ pub fn with_foreground_hid_activation(
          // renderer focus even though WindowServer keeps the app frontmost.
          // The AX window proof lets us deliver directly without weakening the
          // exact-window guard or disturbing the current key target.
@@ -14755,7 +14887,7 @@ index a657ced2b..77d69a12d 100644
  }
 
  fn preserves_exact_existing_focus(
-@@ -861,6 +1032,7 @@ pub fn with_menu_shortcut_activation(
+@@ -861,6 +1092,7 @@ pub fn with_menu_shortcut_activation(
          Some(f) => f,
          None => {
              // SPIs unavailable — run action anyway without activation.
@@ -14763,7 +14895,7 @@ index a657ced2b..77d69a12d 100644
              action()?;
              return Ok(false);
          }
-@@ -876,28 +1048,51 @@ pub fn with_menu_shortcut_activation(
+@@ -876,28 +1108,51 @@ pub fn with_menu_shortcut_activation(
      let mut target_psn = [0u8; 8];
      let target_ok = get_process_psn_for_window(target_wid, target_pid, &mut target_psn);
      if !target_ok {
@@ -21033,16 +21165,36 @@ index 000000000..d60432f6a
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/input/focus_restore_policy.rs b/libs/cua-driver/rust/crates/platform-macos/src/input/focus_restore_policy.rs
 new file mode 100644
-index 000000000..af96eeffb
+index 000000000..3a5fcc69f
 --- /dev/null
 +++ b/libs/cua-driver/rust/crates/platform-macos/src/input/focus_restore_policy.rs
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,163 @@
 +//! Pure cleanup policy: restore the captured key window without undoing human focus changes.
 +#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 +pub enum RestoreDecision {
 +    Restore,
 +    UserChanged,
 +    Unobservable,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct FocusStamp {
++    pub process: [u8; 8],
++    pub space: u64,
++}
++
++/// A zero AX messaging timeout restores the platform default instead of timing
++/// out immediately. Do not start a remote read with an exhausted/tiny budget.
++pub fn bounded_ax_timeout(remaining: std::time::Duration) -> Option<f32> {
++    (remaining >= std::time::Duration::from_millis(1)).then(|| {
++        remaining
++            .min(std::time::Duration::from_millis(25))
++            .as_secs_f32()
++    })
++}
++
++pub fn focus_sample_is_fresh(before: FocusStamp, after: FocusStamp, within_budget: bool) -> bool {
++    within_budget && before == after
 +}
 +
 +pub fn decide_restore(
@@ -21061,14 +21213,20 @@ index 000000000..af96eeffb
 +        // None includes a key window lost to the synthetic defocus record.
 +        return match focused_window {
 +            Some(wid) if wid != prior_window && !(same_process && wid == target_window) => {
-+                RestoreDecision::UserChanged
++                if same_process {
++                    RestoreDecision::Unobservable
++                } else {
++                    RestoreDecision::UserChanged
++                }
 +            }
 +            _ => RestoreDecision::Restore,
 +        };
 +    }
 +    if front_is_target == Some(true) {
 +        return match focused_window {
-+            Some(wid) if wid != target_window => RestoreDecision::UserChanged,
++            // The action itself can open a sheet/window. Preserve the new
++            // focus, but do not claim this proves a human changed it.
++            Some(wid) if wid != target_window => RestoreDecision::Unobservable,
 +            _ => RestoreDecision::Restore,
 +        };
 +    }
@@ -21102,12 +21260,10 @@ index 000000000..af96eeffb
 +    }
 +
 +    #[test]
-+    fn human_app_window_and_space_changes_are_preserved() {
++    fn unexpected_app_window_and_space_changes_are_preserved() {
 +        for facts in [
 +            (true, Some(false), Some(false), Some(30), false),
 +            (true, Some(true), Some(false), Some(30), false),
-+            (true, Some(true), Some(true), Some(30), true),
-+            (true, Some(false), Some(true), Some(30), false),
 +            (false, Some(false), Some(true), Some(20), false),
 +        ] {
 +            assert_eq!(
@@ -21115,6 +21271,51 @@ index 000000000..af96eeffb
 +                RestoreDecision::UserChanged
 +            );
 +        }
++    }
++
++    #[test]
++    fn unexpected_target_sheet_is_uncertain_not_proven_human_takeover() {
++        assert_eq!(
++            decide_restore(true, Some(false), Some(true), Some(30), 10, 20, false),
++            RestoreDecision::Unobservable
++        );
++        assert_eq!(
++            decide_restore(true, Some(true), Some(true), Some(30), 10, 20, true),
++            RestoreDecision::Unobservable
++        );
++    }
++
++    #[test]
++    fn ax_timeout_never_resets_to_platform_default_or_exceeds_budget() {
++        use std::time::Duration;
++        assert_eq!(bounded_ax_timeout(Duration::ZERO), None);
++        assert_eq!(bounded_ax_timeout(Duration::from_micros(500)), None);
++        assert_eq!(bounded_ax_timeout(Duration::from_millis(1)), Some(0.001));
++        assert_eq!(bounded_ax_timeout(Duration::from_millis(10)), Some(0.010));
++        assert_eq!(bounded_ax_timeout(Duration::from_secs(1)), Some(0.025));
++    }
++
++    #[test]
++    fn focus_sample_expires_on_slow_ax_or_intervening_process_or_space_change() {
++        let before = FocusStamp {
++            process: [1; 8],
++            space: 7,
++        };
++        assert!(focus_sample_is_fresh(before, before, true));
++        assert!(!focus_sample_is_fresh(before, before, false));
++        assert!(!focus_sample_is_fresh(
++            before,
++            FocusStamp {
++                process: [2; 8],
++                ..before
++            },
++            true
++        ));
++        assert!(!focus_sample_is_fresh(
++            before,
++            FocusStamp { space: 8, ..before },
++            true
++        ));
 +    }
 +
 +    #[test]
