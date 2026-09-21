@@ -37,6 +37,7 @@ import {
 } from "@synara/contracts";
 import { prewarmChatGptVoiceTranscriptionConnection } from "@synara/shared/chatGptVoiceTranscription";
 import { normalizeModelSlug } from "@synara/shared/model";
+import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import {
   JsonRpcStdioRequestRegistry,
   type JsonRpcPendingRequest,
@@ -64,6 +65,7 @@ import {
 import { SYNARA_GATEWAY_HARNESS_POLICY } from "./agentGateway/harnessPolicy.ts";
 import {
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
+  type AgentGatewayCapabilityInput,
   type AgentGatewaySessionLease,
 } from "./agentGateway/sessionLease.ts";
 import { CodexSessionStartError, isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
@@ -99,6 +101,9 @@ import {
 
 const log = createLogger("codex");
 
+const MCP_SERVER_ELICITATION_REQUEST_METHOD = "mcpServer/elicitation/request";
+const MCP_TOOL_CALL_APPROVAL_KIND = "mcp_tool_call";
+
 type PendingRequestKey = string;
 type PendingRequest = JsonRpcPendingRequest;
 
@@ -109,7 +114,8 @@ interface PendingApprovalRequest {
     | "item/commandExecution/requestApproval"
     | "item/fileChange/requestApproval"
     | "item/fileRead/requestApproval"
-    | "item/permissions/requestApproval";
+    | "item/permissions/requestApproval"
+    | typeof MCP_SERVER_ELICITATION_REQUEST_METHOD;
   requestKind: ProviderRequestKind;
   threadId: ThreadId;
   turnId?: TurnId;
@@ -118,6 +124,7 @@ interface PendingApprovalRequest {
   providerThreadId?: string;
   providerParentThreadId?: string;
   requestedPermissions?: Record<string, unknown>;
+  mcpSessionPersistenceAdvertised?: boolean;
 }
 
 function isPermissionApprovalRequest(request: PendingApprovalRequest): boolean {
@@ -307,6 +314,8 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly forkSourceResumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
+  /** Session-start facts the gateway lease derives its capabilities from. */
+  readonly agentGatewayCapabilityInput?: AgentGatewayCapabilityInput;
   readonly runtimeMode: RuntimeMode;
 }
 
@@ -1036,7 +1045,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly agentGatewayMcp:
     | {
         readonly endpointUrl: () => string;
-        readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
+        readonly acquireSessionLease: (
+          threadId: ThreadId,
+          capabilityInput?: AgentGatewayCapabilityInput,
+        ) => AgentGatewaySessionLease;
       }
     | undefined;
   private readonly spawnAppServer: typeof spawnCodexAppServer;
@@ -1049,7 +1061,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       readonly synaraSkillsDir?: string;
       readonly agentGatewayMcp?: {
         readonly endpointUrl: () => string;
-        readonly acquireSessionLease: (threadId: ThreadId) => AgentGatewaySessionLease;
+        readonly acquireSessionLease: (
+          threadId: ThreadId,
+          capabilityInput?: AgentGatewayCapabilityInput,
+        ) => AgentGatewaySessionLease;
       };
       readonly spawnAppServer?: typeof spawnCodexAppServer;
       readonly teardownProcessTree?: typeof teardownProviderProcessTree;
@@ -1165,7 +1180,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
+      gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(
+        threadId,
+        input.agentGatewayCapabilityInput,
+      );
       const child = this.spawnAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
@@ -2301,13 +2319,25 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         : {}),
     };
     const result =
-      pendingRequest.method === "item/permissions/requestApproval"
+      pendingRequest.method === MCP_SERVER_ELICITATION_REQUEST_METHOD
         ? {
-            permissions:
-              decision === "accept" || decision === "acceptForSession" ? grantedPermissions : {},
-            scope: decision === "acceptForSession" ? ("session" as const) : ("turn" as const),
+            action:
+              decision === "accept" || decision === "acceptForSession"
+                ? ("accept" as const)
+                : decision,
+            content: null,
+            _meta:
+              decision === "acceptForSession" && pendingRequest.mcpSessionPersistenceAdvertised
+                ? { persist: "session" as const }
+                : null,
           }
-        : { decision };
+        : pendingRequest.method === "item/permissions/requestApproval"
+          ? {
+              permissions:
+                decision === "accept" || decision === "acceptForSession" ? grantedPermissions : {},
+              scope: decision === "acceptForSession" ? ("session" as const) : ("turn" as const),
+            }
+          : { decision };
     await this.writeMessage(context, {
       id: pendingRequest.jsonRpcId,
       result,
@@ -2342,7 +2372,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
   ): Promise<void> {
     const remainingRequests = Array.from(context.pendingApprovals.values()).filter(
-      (request) => !isPermissionApprovalRequest(request),
+      (request) =>
+        !isPermissionApprovalRequest(request) &&
+        approvalSessionGrantWidensSessionPolicy(request.requestKind),
     );
     for (const pendingRequest of remainingRequests) {
       context.pendingApprovals.delete(pendingRequest.requestId);
@@ -2363,14 +2395,24 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     context.pendingApprovals.delete(requestId);
     const isPermissionRequest = isPermissionApprovalRequest(pendingRequest);
-    if (decision === "acceptForSession" && !isPermissionRequest) {
+    // The session override widens every later approval — commands and file
+    // changes included — so only the kinds `approvalSessionGrant` calls
+    // session-policy may set it. A tool call keeps its own, properly scoped
+    // channel: `acceptForSession` on an MCP tool request rides back as
+    // `_meta.persist: "session"`, which is the persistence Codex itself
+    // advertised, not a blanket grant.
+    const overridesSessionPolicy =
+      decision === "acceptForSession" &&
+      !isPermissionRequest &&
+      approvalSessionGrantWidensSessionPolicy(pendingRequest.requestKind);
+    if (overridesSessionPolicy) {
       context.sessionApprovalOverride = CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES;
     }
     await this.resolveApprovalRequest(context, pendingRequest, decision);
     if (decision === "cancel" && isPermissionRequest) {
       await this.interruptTurn(threadId, pendingRequest.turnId, pendingRequest.providerThreadId);
     }
-    if (decision === "acceptForSession" && !isPermissionRequest) {
+    if (overridesSessionPolicy) {
       await this.resolveRemainingSessionApprovalRequests(context);
     }
   }
@@ -3614,8 +3656,30 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       providerThreadId,
       providerParentThreadId,
     } = resolvedCollaborationRoute;
-    const requestKind = this.requestKindForMethod(request.method);
+    const isMcpToolCallApproval =
+      request.method === MCP_SERVER_ELICITATION_REQUEST_METHOD &&
+      this.isMcpToolCallApprovalRequest(request.params);
+    if (request.method === MCP_SERVER_ELICITATION_REQUEST_METHOD && !isMcpToolCallApproval) {
+      await this.writeMessage(context, {
+        id: request.id,
+        result: {
+          action: "cancel",
+          content: null,
+          _meta: null,
+        },
+      });
+      this.emitErrorEvent(
+        context,
+        "mcpServer/elicitation/request/unrenderable",
+        "Synara declined an MCP elicitation it cannot render yet.",
+      );
+      return;
+    }
+    const requestKind = isMcpToolCallApproval ? "tool" : this.requestKindForMethod(request.method);
     let requestId: ApprovalRequestId | undefined;
+    const mcpSessionPersistenceAdvertised = isMcpToolCallApproval
+      ? this.readArray(this.readObject(request.params, "_meta"), "persist")?.includes("session")
+      : undefined;
     if (requestKind) {
       requestId = ApprovalRequestId.makeUnsafe(randomUUID());
       const requestedPermissions =
@@ -3634,8 +3698,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(providerThreadId ? { providerThreadId } : {}),
         ...(providerParentThreadId ? { providerParentThreadId } : {}),
         ...(requestedPermissions ? { requestedPermissions } : {}),
+        ...(isMcpToolCallApproval
+          ? { mcpSessionPersistenceAdvertised: mcpSessionPersistenceAdvertised === true }
+          : {}),
       };
-      if (context.sessionApprovalOverride && !isPermissionApprovalRequest(pendingRequest)) {
+      // A session grant answers the command/file-change prompts it came from.
+      // Tool calls are gated on their own channel (see respondToRequest), so
+      // they neither set the override nor get swept up by it.
+      if (
+        context.sessionApprovalOverride &&
+        !isPermissionApprovalRequest(pendingRequest) &&
+        approvalSessionGrantWidensSessionPolicy(requestKind)
+      ) {
         await this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
         return;
       }
@@ -3679,7 +3753,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       ...(providerParentThreadId ? { providerParentThreadId } : {}),
       requestId,
       requestKind,
-      payload: request.params,
+      // The composer offers "Always allow this session" unless told otherwise;
+      // an MCP approval that did not advertise session persistence cannot honor it.
+      payload:
+        isMcpToolCallApproval && mcpSessionPersistenceAdvertised !== true
+          ? { ...asObject(request.params), sessionApprovalAvailable: false }
+          : request.params,
     });
 
     if (requestKind) {
@@ -4001,6 +4080,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     return undefined;
+  }
+
+  private isMcpToolCallApprovalRequest(params: unknown): boolean {
+    return (
+      this.readString(this.readObject(params, "_meta"), "codex_approval_kind") ===
+      MCP_TOOL_CALL_APPROVAL_KIND
+    );
   }
 
   private parseThreadSnapshot(method: string, response: unknown): CodexThreadSnapshot {

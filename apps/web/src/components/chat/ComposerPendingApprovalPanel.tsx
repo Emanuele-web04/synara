@@ -75,6 +75,7 @@ const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
   "file-read": "Approve reading this file?",
   "file-change": "Approve this file change?",
   permissions: "Grant these permissions?",
+  tool: "Approve this tool call?",
 };
 
 export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPanel({
@@ -136,9 +137,9 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
           {KIND_PROMPT[approval.requestKind]}
-          {parsed.tool ? (
+          {(approval.toolName ?? parsed.tool) ? (
             <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
-              {parsed.tool}
+              {approval.toolName ?? parsed.tool}
             </span>
           ) : null}
         </p>
@@ -150,7 +151,12 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       </div>
       <ApprovalDetail
         parsed={parsed}
+        isToolCall={approval.requestKind === "tool"}
         {...(approval.permissionProfile ? { permissionProfile: approval.permissionProfile } : {})}
+        {...(approval.toolName ? { toolName: approval.toolName } : {})}
+        {...(approval.toolSource ? { toolSource: approval.toolSource } : {})}
+        {...(approval.toolDetailsReported ? { toolDetailsReported: true } : {})}
+        {...(approval.toolParamsDisplay ? { toolParamsDisplay: approval.toolParamsDisplay } : {})}
       />
       <div className="mt-2.5 space-y-0.5">
         {actions.map((action, index) => (
@@ -172,9 +178,19 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
 function ApprovalDetail({
   parsed,
   permissionProfile,
+  isToolCall,
+  toolName,
+  toolSource,
+  toolDetailsReported,
+  toolParamsDisplay,
 }: {
   parsed: ParsedApproval;
   permissionProfile?: Record<string, unknown>;
+  isToolCall?: boolean;
+  toolName?: string;
+  toolSource?: string;
+  toolDetailsReported?: boolean;
+  toolParamsDisplay?: PendingApproval["toolParamsDisplay"];
 }) {
   if (permissionProfile) {
     return (
@@ -190,6 +206,44 @@ function ApprovalDetail({
         >
           <code>{JSON.stringify(permissionProfile, null, 2)}</code>
         </pre>
+      </div>
+    );
+  }
+
+  if (isToolCall || toolName || (toolParamsDisplay?.length ?? 0) > 0) {
+    return (
+      <div className="mt-2">
+        {toolSource ? (
+          // Who is asking always comes from Synara's own view of the request.
+          // When the name and parameters below are the runtime's self-reported
+          // display copy, they are attributed here rather than shown as fact.
+          <p
+            className="mb-1.5 truncate text-ui-xs leading-tight text-muted-foreground/55"
+            data-testid="approval-tool-source"
+            data-details-reported={toolDetailsReported ? "true" : "false"}
+            title={toolSource}
+          >
+            via {toolSource}
+            {toolDetailsReported ? " · details self-reported" : null}
+          </p>
+        ) : null}
+        {parsed.fallback ? (
+          <p className="text-ui-sm leading-snug text-muted-foreground/70">{parsed.fallback}</p>
+        ) : null}
+        {toolParamsDisplay && toolParamsDisplay.length > 0 ? (
+          <dl className="mt-2 space-y-1 rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 text-ui-sm leading-snug">
+            {toolParamsDisplay.map((parameter) => (
+              <div className="grid grid-cols-[auto_1fr] gap-x-2" key={parameter.name}>
+                <dt className="font-medium text-muted-foreground/65">
+                  {parameter.displayName ?? parameter.name}
+                </dt>
+                <dd className="min-w-0 break-words font-mono text-foreground/80">
+                  {formatToolParameterValue(parameter.value)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        ) : null}
       </div>
     );
   }
@@ -228,6 +282,20 @@ function ApprovalDetail({
   }
 
   return <p className="mt-2 text-ui text-muted-foreground/65">Review the request to continue.</p>;
+}
+
+function formatToolParameterValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null) {
+    return "null";
+  }
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 /**

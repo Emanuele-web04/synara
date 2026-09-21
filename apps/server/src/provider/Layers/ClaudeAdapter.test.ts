@@ -7804,7 +7804,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       if (agentRequested._tag !== "Some" || agentRequested.value.type !== "request.opened") {
         return;
       }
-      assert.equal(agentRequested.value.payload.requestType, "dynamic_tool_call");
+      assert.equal(agentRequested.value.payload.requestType, "tool_approval");
       assert.equal(
         (agentRequested.value.payload.args as Record<string, unknown>).sessionApprovalAvailable,
         false,
@@ -7842,6 +7842,234 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       );
       yield* Stream.runHead(adapter.streamEvents);
       yield* Effect.promise(() => grepPermissionPromise);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("classifies generic and MCP tool approvals as canonical tool approvals", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const requestTypeFor = (toolName: string, input: Record<string, unknown>) =>
+        Effect.gen(function* () {
+          const permissionPromise = canUseTool(toolName, input, {
+            signal: new AbortController().signal,
+            toolUseID: `tool-use-${toolName}`,
+            requestId: `request-${toolName}`,
+          });
+          const requested = yield* Stream.runHead(adapter.streamEvents);
+          assert.equal(requested._tag, "Some");
+          if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
+            return undefined;
+          }
+          const opened = requested.value;
+          yield* adapter.respondToRequest(
+            session.threadId,
+            ApprovalRequestId.makeUnsafe(String(opened.requestId)),
+            "accept",
+          );
+          yield* Stream.runHead(adapter.streamEvents);
+          yield* Effect.promise(() => permissionPromise);
+          return opened;
+        });
+
+      // MCP tools are the case that regressed: they classify as `mcp_tool_call`
+      // item-wise, and the approval must still carry the canonical request type.
+      const mcpOpened = yield* requestTypeFor("mcp__synara__tool", {
+        app: "kcalc",
+      });
+      assert.equal(mcpOpened?.payload.requestType, "tool_approval");
+      assert.deepEqual(mcpOpened?.payload.args as Record<string, unknown> | undefined, {
+        toolName: "mcp__synara__tool",
+        input: { app: "kcalc" },
+        sessionApprovalAvailable: false,
+        toolUseId: "tool-use-mcp__synara__tool",
+      });
+
+      const genericOpened = yield* requestTypeFor("WebFetch", { url: "https://example.com" });
+      assert.equal(genericOpened?.payload.requestType, "tool_approval");
+
+      const bashOpened = yield* requestTypeFor("Bash", { command: "ls" });
+      assert.equal(bashOpened?.payload.requestType, "command_execution_approval");
+
+      const editOpened = yield* requestTypeFor("Edit", { file_path: "/tmp/a.ts" });
+      assert.equal(editOpened?.payload.requestType, "file_change_approval");
+
+      const readOpened = yield* requestTypeFor("Read", { file_path: "/tmp/a.ts" });
+      assert.equal(readOpened?.payload.requestType, "file_read_approval");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("scopes a tool approval session grant to the tool that was shown", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const suggestions = [
+        {
+          type: "addRules" as const,
+          rules: [{ toolName: "mcp__synara__tool" }],
+          behavior: "allow" as const,
+          destination: "session" as const,
+        },
+      ];
+      const toolPermission = canUseTool(
+        "mcp__synara__tool",
+        { app: "kcalc" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-use-session-grant",
+          requestId: "request-session-grant",
+          suggestions,
+        },
+      );
+
+      const toolRequested = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(toolRequested._tag, "Some");
+      if (toolRequested._tag !== "Some" || toolRequested.value.type !== "request.opened") {
+        return;
+      }
+      assert.equal(toolRequested.value.payload.requestType, "tool_approval");
+
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.makeUnsafe(String(toolRequested.value.requestId)),
+        "acceptForSession",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      const toolResult = (yield* Effect.promise(() => toolPermission)) as {
+        readonly behavior?: string;
+        readonly updatedPermissions?: unknown;
+      } | null;
+      assert.equal(toolResult?.behavior, "allow");
+      // The grant travels as Claude's own scoped permission update, not as a
+      // blanket "allow everything from now on" flag.
+      assert.deepEqual(toolResult?.updatedPermissions, suggestions);
+
+      const bashPermission = canUseTool(
+        "Bash",
+        { command: "ls" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-use-after-session-grant",
+          requestId: "request-after-session-grant",
+        },
+      );
+
+      const bashRequested = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(bashRequested._tag, "Some");
+      if (bashRequested._tag !== "Some" || bashRequested.value.type !== "request.opened") {
+        return;
+      }
+      assert.equal(bashRequested.value.payload.requestType, "command_execution_approval");
+
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.makeUnsafe(String(bashRequested.value.requestId)),
+        "decline",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      const bashResult = yield* Effect.promise(() => bashPermission);
+      assert.equal((bashResult as PermissionResult | null)?.behavior, "deny");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps the session-wide grant for command approvals", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const bashPermission = canUseTool(
+        "Bash",
+        { command: "ls" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-use-command-grant",
+          requestId: "request-command-grant",
+        },
+      );
+
+      const bashRequested = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(bashRequested._tag, "Some");
+      if (bashRequested._tag !== "Some" || bashRequested.value.type !== "request.opened") {
+        return;
+      }
+      assert.equal(bashRequested.value.payload.requestType, "command_execution_approval");
+
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.makeUnsafe(String(bashRequested.value.requestId)),
+        "acceptForSession",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      const bashResult = yield* Effect.promise(() => bashPermission);
+      assert.equal((bashResult as PermissionResult | null)?.behavior, "allow");
+
+      // Resolves with no card at all: the command grant is session-wide, so no
+      // approval request is opened and nothing responds to this call.
+      const editResult = yield* Effect.promise(() =>
+        canUseTool(
+          "Edit",
+          { file_path: "/tmp/a.ts" },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "tool-use-after-command-grant",
+            requestId: "request-after-command-grant",
+          },
+        ),
+      );
+      assert.equal((editResult as PermissionResult | null)?.behavior, "allow");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

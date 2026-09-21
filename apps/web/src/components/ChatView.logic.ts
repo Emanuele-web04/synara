@@ -16,6 +16,7 @@ import {
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
 } from "@synara/contracts";
+import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
@@ -127,10 +128,14 @@ export function resolveRuntimeModeAfterApprovalDecision(
   decision: ProviderApprovalDecision,
   requestKind?: ProviderRequestKind,
 ): RuntimeMode | null {
-  // Permission-profile grants are narrower than a runtime-mode override.
-  // Their acceptForSession decision is persisted by the provider for only
-  // that permission set and must not silently broaden the whole thread.
-  if (requestKind === "permissions") {
+  // Request-scoped grants (permission profiles, tool calls) are narrower than a
+  // runtime-mode override: the server records them only for the permission set
+  // or the single tool that was shown (see `@synara/shared/approvalSessionGrant`,
+  // which both sides share so the client's supervision badge cannot disagree
+  // with what the provider actually enforces). Flipping the thread to
+  // full-access here would un-supervise commands and file changes the user
+  // never saw.
+  if (!approvalSessionGrantWidensSessionPolicy(requestKind)) {
     return null;
   }
   if (decision === "acceptForSession" && currentRuntimeMode === "approval-required") {
