@@ -402,11 +402,11 @@ export const ProjectAgentConfigureInput = Schema.Struct({
     Schema.String.check(Schema.isMaxLength(PROJECT_AGENT_DOCUMENT_MAX_BYTES)),
   ),
   goal: Schema.optional(Schema.String.check(Schema.isMaxLength(8_000))),
-  icon: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  icon: Schema.optional(Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(64)))),
   autoMemoryEnabled: Schema.optional(Schema.Boolean),
   userDisplayName: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
-  libraryPath: Schema.optional(TrimmedNonEmptyString),
-  libraryRemoteUrl: Schema.optional(LibraryRemoteUrl),
+  libraryPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  libraryRemoteUrl: Schema.optional(Schema.NullOr(LibraryRemoteUrl)),
   libraryPushOnChange: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentConfigureInput = typeof ProjectAgentConfigureInput.Type;

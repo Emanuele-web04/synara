@@ -294,6 +294,7 @@ import {
   EnvironmentPanel,
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
+import type { GroupSettingsSection } from "./chat/group/groupSettingsDialog.logic";
 import { CoordinatorSuggestions } from "./chat/project/CoordinatorSuggestions";
 import { shouldShowCoordinatorSuggestions } from "./chat/project/coordinatorSuggestions.logic";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
@@ -1641,10 +1642,15 @@ export default function ChatView({
     activeThread && coordinatorThreadIds.has(activeThread.id),
   );
   const [coordinatorSettingsOpen, setCoordinatorSettingsOpen] = useState(false);
-  const showCoordinatorSuggestions = shouldShowCoordinatorSuggestions({
-    isCoordinatorThread: isCoordinatorConversation,
-    messages: activeThread?.messages ?? EMPTY_MESSAGES,
-  });
+  const [coordinatorSettingsSection, setCoordinatorSettingsSection] = useState<
+    GroupSettingsSection | undefined
+  >(undefined);
+  const showCoordinatorSuggestions =
+    isGroupContainer &&
+    shouldShowCoordinatorSuggestions({
+      isCoordinatorThread: isCoordinatorConversation,
+      messages: activeThread?.messages ?? EMPTY_MESSAGES,
+    });
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
@@ -5894,7 +5900,10 @@ export default function ChatView({
                   />
                   {showCoordinatorSuggestions ? (
                     <CoordinatorSuggestions
-                      onOpenSettings={() => setCoordinatorSettingsOpen(true)}
+                      onOpenSettings={(section) => {
+                        setCoordinatorSettingsSection(section);
+                        setCoordinatorSettingsOpen(true);
+                      }}
                     />
                   ) : null}
                 </div>
@@ -6010,7 +6019,11 @@ export default function ChatView({
               onOpenThread={(threadId) => onNavigateToThread(threadId)}
               onClose={() => setProjectFromAuxiliary(false)}
               settingsDialogOpen={coordinatorSettingsOpen}
-              onSettingsDialogOpenChange={setCoordinatorSettingsOpen}
+              settingsInitialSection={coordinatorSettingsSection}
+              onSettingsDialogOpenChange={(open) => {
+                setCoordinatorSettingsOpen(open);
+                if (!open) setCoordinatorSettingsSection(undefined);
+              }}
             />
           ) : null}
           {projectPanelEnabled ? (

@@ -223,12 +223,10 @@ import {
   SidebarThreadRowContent,
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
-import { ProjectAgentDialog } from "./chat/project/ProjectAgentDialog";
+import { GroupSettingsDialog } from "./chat/group/GroupSettingsDialog";
 import {
-  defaultProjectAgentName,
   isProjectAgentRowVisible,
   resolveProjectAgentRowLabel,
-  saveProjectAgentDialog,
 } from "./chat/project/projectAgentDialog.logic";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { RenameDialog } from "./RenameDialog";
@@ -413,8 +411,6 @@ import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { hasThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
-import { toDisplayName } from "./profile/profileFormatting";
-import { useProfileName } from "./profile/useProfileName";
 import type {
   SidebarSearchAction,
   SidebarSearchProject,
@@ -1418,14 +1414,6 @@ export default function Sidebar() {
     (store) => store.prunePinnedProjectAgents,
   );
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
-  const { name: userDisplayName } = useProfileName(
-    toDisplayName(
-      (homeDir ?? "")
-        .replace(/[\\/]+$/, "")
-        .split(/[\\/]/)
-        .pop() ?? "there",
-    ),
-  );
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
   const navigate = useNavigate();
@@ -1631,10 +1619,8 @@ export default function Sidebar() {
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectAgentDialogState, setProjectAgentDialogState] = useState<{
     projectId: ProjectId;
-    mode: "setup" | "edit";
+    mode: "onboarding" | "edit";
   } | null>(null);
-  const [projectAgentDialogBusy, setProjectAgentDialogBusy] = useState(false);
-  const [projectAgentDialogError, setProjectAgentDialogError] = useState<string | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
   // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
@@ -1729,8 +1715,7 @@ export default function Sidebar() {
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
-  const { summariesByProjectId, applyOverview, summaryFor, coordinatorThreadIds } =
-    useProjectAgentSummaries();
+  const { summariesByProjectId, summaryFor, coordinatorThreadIds } = useProjectAgentSummaries();
   const displaySidebarThreads = useMemo(
     () => excludeHiddenProjectAgentCoordinatorThreads(sidebarThreads, coordinatorThreadIds),
     [coordinatorThreadIds, sidebarThreads],
@@ -3630,10 +3615,9 @@ export default function Sidebar() {
         return;
       }
       if (clicked === "edit-project-agent") {
-        setProjectAgentDialogError(null);
         setProjectAgentDialogState({
           projectId,
-          mode: summaryFor(projectId)?.configured ? "edit" : "setup",
+          mode: summaryFor(projectId)?.configured ? "edit" : "onboarding",
         });
         return;
       }
@@ -5038,10 +5022,9 @@ export default function Sidebar() {
               activateThreadFromSidebarIntent(projectAgentSummary.coordinatorThreadId);
               return;
             }
-            setProjectAgentDialogError(null);
             setProjectAgentDialogState({
               projectId: project.id,
-              mode: projectAgentConfigured ? "edit" : "setup",
+              mode: projectAgentConfigured ? "edit" : "onboarding",
             });
           }}
         >
@@ -7110,62 +7093,29 @@ export default function Sidebar() {
         }}
       />
 
-      <ProjectAgentDialog
-        open={projectAgentDialogState !== null && projectAgentDialogProject !== null}
-        mode={projectAgentDialogState?.mode ?? "setup"}
-        projectId={projectAgentDialogProject?.id ?? null}
-        projectName={projectAgentDialogProject?.name ?? ""}
-        agentName={
-          projectAgentDialogProject
-            ? (summaryFor(projectAgentDialogProject.id)?.coordinatorName ??
-              defaultProjectAgentName(projectAgentDialogProject.name))
-            : undefined
-        }
-        workspacePath={
-          projectAgentDialogProject
-            ? abbreviateHomePath(projectAgentDialogProject.cwd, homeDir)
-            : ""
-        }
-        projectCwd={projectAgentDialogProject?.cwd ?? ""}
-        defaultModelSelection={projectAgentDialogProject?.defaultModelSelection ?? null}
-        expectedRevision={
-          projectAgentDialogState?.mode === "edit" && projectAgentDialogProject
-            ? (summaryFor(projectAgentDialogProject.id)?.revision ?? undefined)
-            : undefined
-        }
-        busy={projectAgentDialogBusy}
-        error={projectAgentDialogError}
-        onOpenChange={(open) => {
-          if (!open) {
-            setProjectAgentDialogState(null);
-            setProjectAgentDialogError(null);
-            setProjectAgentDialogBusy(false);
-          }
-        }}
-        onSave={async ({ coordinatorName, modelSelection, expectedRevision, requestId }) => {
-          const project = projectAgentDialogProject;
-          const api = readNativeApi();
-          setProjectAgentDialogBusy(true);
-          setProjectAgentDialogError(null);
-          const result = await saveProjectAgentDialog({
-            projectId: project?.id ?? null,
-            coordinatorName,
-            modelSelection,
-            expectedRevision,
-            userDisplayName,
-            requestId,
-            configure: api?.projectAgent ? (payload) => api.projectAgent!.configure(payload) : null,
-          });
-          if (result.ok) {
-            applyOverview(result.overview);
-            setProjectAgentDialogState(null);
-            setProjectAgentDialogBusy(false);
-            return;
-          }
-          setProjectAgentDialogError(result.error);
-          setProjectAgentDialogBusy(false);
-        }}
-      />
+      {projectAgentDialogProject ? (
+        <GroupSettingsDialog
+          key={projectAgentDialogProject.id}
+          open={projectAgentDialogState !== null}
+          mode={projectAgentDialogState?.mode ?? "onboarding"}
+          projectId={projectAgentDialogProject.id}
+          projectName={projectAgentDialogProject.name}
+          workspacePath={projectAgentDialogProject.cwd}
+          defaultModelSelection={projectAgentDialogProject.defaultModelSelection ?? null}
+          onOpenChange={(open) => {
+            if (!open) {
+              setProjectAgentDialogState(null);
+            }
+          }}
+          onSaved={(overview) => {
+            if (projectAgentDialogState?.mode !== "onboarding") return;
+            const coordinatorThreadId = overview.config?.coordinatorThreadId;
+            if (coordinatorThreadId) {
+              activateThreadFromSidebarIntent(coordinatorThreadId);
+            }
+          }}
+        />
+      ) : null}
 
       {searchPaletteOpen ? (
         <SidebarSearchPaletteController

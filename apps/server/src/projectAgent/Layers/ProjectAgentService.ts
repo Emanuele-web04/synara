@@ -848,7 +848,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           });
         }
         const existingConfig = Option.isSome(existing) ? existing.value : null;
-        if (input.libraryPath !== undefined) {
+        if (input.libraryPath !== undefined && input.libraryPath !== null) {
           yield* assertAbsoluteLibraryPath(input.libraryPath);
         }
         // Changing libraryPath relocates the store: copy the whole tree
@@ -864,7 +864,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
           const nextRoot = yield* resolveLibraryRoot({
             stateDir: serverConfig.stateDir,
             projectId: input.projectId,
-            libraryPath: input.libraryPath,
+            // `null` clears to the default per-project library root.
+            libraryPath: input.libraryPath ?? undefined,
           }).pipe(Effect.mapError(toServiceError("Failed to resolve the new library.")));
           yield* assertLibraryRootLocation({
             root: nextRoot,
@@ -909,23 +910,30 @@ export const makeProjectAgentService = Effect.gen(function* () {
             : existingConfig?.goal
               ? { goal: existingConfig.goal }
               : {}),
-          ...(input.icon !== undefined
-            ? { icon: input.icon }
-            : existingConfig?.icon
-              ? { icon: existingConfig.icon }
-              : {}),
+          // `null` clears the field; absent keeps the stored value.
+          ...(input.icon === null
+            ? {}
+            : input.icon !== undefined
+              ? { icon: input.icon }
+              : existingConfig?.icon
+                ? { icon: existingConfig.icon }
+                : {}),
           autoMemoryEnabled: input.autoMemoryEnabled ?? existingConfig?.autoMemoryEnabled ?? false,
           linkedProjectIds: existingConfig?.linkedProjectIds ?? [],
-          ...(input.libraryPath !== undefined
-            ? { libraryPath: input.libraryPath }
-            : existingConfig?.libraryPath
-              ? { libraryPath: existingConfig.libraryPath }
-              : {}),
-          ...(input.libraryRemoteUrl !== undefined
-            ? { libraryRemoteUrl: input.libraryRemoteUrl }
-            : existingConfig?.libraryRemoteUrl
-              ? { libraryRemoteUrl: existingConfig.libraryRemoteUrl }
-              : {}),
+          ...(input.libraryPath === null
+            ? {}
+            : input.libraryPath !== undefined
+              ? { libraryPath: input.libraryPath }
+              : existingConfig?.libraryPath
+                ? { libraryPath: existingConfig.libraryPath }
+                : {}),
+          ...(input.libraryRemoteUrl === null
+            ? {}
+            : input.libraryRemoteUrl !== undefined
+              ? { libraryRemoteUrl: input.libraryRemoteUrl }
+              : existingConfig?.libraryRemoteUrl
+                ? { libraryRemoteUrl: existingConfig.libraryRemoteUrl }
+                : {}),
           libraryPushOnChange:
             input.libraryPushOnChange ?? existingConfig?.libraryPushOnChange ?? false,
         };

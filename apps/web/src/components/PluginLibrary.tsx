@@ -362,7 +362,11 @@ function SectionHeader({ title }: { title: string }) {
 
 // ── Main component ─────────────────────────────────────────────────────────
 
-export function PluginLibrary() {
+export function PluginLibrary(props?: {
+  readonly cwd?: string | null;
+  readonly embedded?: boolean;
+}) {
+  const embedded = props?.embedded ?? false;
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
@@ -455,11 +459,13 @@ export function PluginLibrary() {
           : providerCapabilities[provider].skills,
       ) ?? selectedProvider);
 
-  const discoveryCwd = resolveProviderDiscoveryCwd({
-    activeThreadWorktreePath: activeThread?.worktreePath ?? null,
-    activeProjectCwd: activeProject?.cwd ?? null,
-    serverCwd: serverConfigQuery.data?.cwd ?? null,
-  });
+  const discoveryCwd = embedded
+    ? (props?.cwd?.trim() ?? "") || null
+    : resolveProviderDiscoveryCwd({
+        activeThreadWorktreePath: activeThread?.worktreePath ?? null,
+        activeProjectCwd: activeProject?.cwd ?? null,
+        serverCwd: serverConfigQuery.data?.cwd ?? null,
+      });
 
   const providerLabel = PROVIDER_DISPLAY_NAMES[effectiveProvider];
   const canListPlugins = providerCapabilities[effectiveProvider].plugins;
@@ -531,7 +537,180 @@ export function PluginLibrary() {
 
   // ── Render ───────────────────────────────────────────────────────────────
 
-  return (
+  const tabsAndProviderPicker = (
+    <>
+      <div className="flex items-end gap-3">
+        <TabButton
+          label="Plugins"
+          active={selectedTab === "plugins"}
+          onClick={() => setSelectedTab("plugins")}
+        />
+        <TabButton
+          label="Skills"
+          active={selectedTab === "skills"}
+          onClick={() => setSelectedTab("skills")}
+        />
+      </div>
+      <div className="flex-1" />
+      <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
+        {DEFAULT_PROVIDER_ORDER.map((provider) => {
+          const capabilities = providerCapabilities[provider];
+          const label = PROVIDER_DISPLAY_NAMES[provider];
+          return (
+            <ProviderToggleButton
+              key={provider}
+              label={label}
+              provider={provider}
+              active={effectiveProvider === provider}
+              disabled={!capabilities.plugins && !capabilities.skills}
+              onClick={() => {
+                setSelectedProvider(provider);
+                if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
+                  setSelectedTab("skills");
+                }
+                if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
+                  setSelectedTab("plugins");
+                }
+              }}
+            />
+          );
+        })}
+      </div>
+    </>
+  );
+
+  const body = (
+    <div className={embedded ? undefined : "min-h-0 flex-1 overflow-y-auto"}>
+      {/* Hero */}
+      {!embedded ? (
+        <div className="px-6 py-10 text-center">
+          <h1 className="text-[28px] font-semibold text-foreground">
+            Make {providerLabel} work your way
+          </h1>
+        </div>
+      ) : null}
+
+      {/* Search */}
+      <div className="mx-auto max-w-2xl px-6 pb-6">
+        <InputGroup className="rounded-xl bg-background/70 shadow-xs">
+          <InputGroupAddon>
+            <InputGroupText>
+              <SearchIcon className="size-4 text-muted-foreground/60" />
+            </InputGroupText>
+          </InputGroupAddon>
+          <InputGroupInput
+            value={selectedTab === "plugins" ? pluginSearch : skillSearch}
+            onChange={(e) => {
+              if (selectedTab === "plugins") setPluginSearch(e.target.value);
+              else setSkillSearch(e.target.value);
+            }}
+            placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
+            className="text-sm"
+          />
+        </InputGroup>
+      </div>
+
+      {/* Warnings */}
+      {((!discoveryCwd && selectedTab === "skills") ||
+        (selectedTab === "plugins" && !!pluginsQuery.data?.remoteSyncError) ||
+        (selectedTab === "plugins" &&
+          (pluginsQuery.data?.marketplaceLoadErrors.length ?? 0) > 0)) && (
+        <div className="mx-auto max-w-2xl space-y-1.5 px-6 pb-4">
+          {!discoveryCwd && selectedTab === "skills" ? (
+            <InlineWarning>
+              Skills need a workspace path. Open a project or thread first.
+            </InlineWarning>
+          ) : null}
+          {selectedTab === "plugins" && pluginsQuery.data?.remoteSyncError ? (
+            <InlineWarning>{pluginsQuery.data.remoteSyncError}</InlineWarning>
+          ) : null}
+          {selectedTab === "plugins" &&
+          (pluginsQuery.data?.marketplaceLoadErrors.length ?? 0) > 0 ? (
+            <InlineWarning>
+              {pluginsQuery.data?.marketplaceLoadErrors
+                .map((err) => `${sectionTitle(err.marketplacePath)}: ${err.message}`)
+                .join(" • ")}
+            </InlineWarning>
+          ) : null}
+        </div>
+      )}
+
+      {/* Grid content */}
+      <div className="px-3 pb-10 sm:px-5">
+        {selectedTab === "plugins" ? (
+          <>
+            {!canListPlugins ? (
+              <div className="mx-auto max-w-2xl">
+                <EmptyPanel
+                  title={`Plugins unavailable for ${providerLabel}`}
+                  description="This provider does not expose plugin discovery."
+                />
+              </div>
+            ) : pluginsQuery.isLoading && pluginEntries.length === 0 ? (
+              <div className="space-y-1">
+                {["1", "2", "3", "4", "5", "6"].map((k) => (
+                  <Skeleton key={k} className="h-[68px] w-full rounded-xl" />
+                ))}
+              </div>
+            ) : filteredPluginEntries.length === 0 ? (
+              <EmptyPanel
+                title="No installed plugins found"
+                description="This view only shows plugins already available in your Codex setup."
+              />
+            ) : (
+              <div className="space-y-6">
+                {marketplaceSections.map((section) => (
+                  <div key={section.key}>
+                    <SectionHeader title={section.title} />
+                    <div className="grid grid-cols-1 sm:grid-cols-2">
+                      {section.entries.map((entry) => (
+                        <PluginGridItem key={pluginEntryKey(entry)} entry={entry} />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {!canListSkills ? (
+              <div className="mx-auto max-w-2xl">
+                <EmptyPanel
+                  title={`Skills unavailable for ${providerLabel}`}
+                  description="This provider does not expose skill discovery."
+                />
+              </div>
+            ) : skillsQuery.isLoading && discoveredSkills.length === 0 ? (
+              <div className="space-y-1">
+                {["1", "2", "3", "4", "5", "6"].map((k) => (
+                  <Skeleton key={k} className="h-[68px] w-full rounded-xl" />
+                ))}
+              </div>
+            ) : filteredSkills.length === 0 ? (
+              <EmptyPanel title="No skills found" description="No skills match this search." />
+            ) : (
+              <div>
+                <SectionHeader title="Skills" />
+                <div className="grid grid-cols-1 sm:grid-cols-2">
+                  {filteredSkills.map((skill) => (
+                    <SkillGridItem key={skill.path} skill={skill} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  return embedded ? (
+    <div className="flex flex-col">
+      <div className="flex flex-wrap items-center gap-3 pb-2">{tabsAndProviderPicker}</div>
+      {body}
+    </div>
+  ) : (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden isolate">
       <div className="flex h-full flex-col">
         {/* ── Top nav ───────────────────────────────────────────────────── */}
@@ -543,167 +722,9 @@ export function PluginLibrary() {
           )}
         >
           <SidebarHeaderNavigationControls />
-          <div className="flex items-end gap-3">
-            <TabButton
-              label="Plugins"
-              active={selectedTab === "plugins"}
-              onClick={() => setSelectedTab("plugins")}
-            />
-            <TabButton
-              label="Skills"
-              active={selectedTab === "skills"}
-              onClick={() => setSelectedTab("skills")}
-            />
-          </div>
-          <div className="flex-1" />
-          <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
-            {DEFAULT_PROVIDER_ORDER.map((provider) => {
-              const capabilities = providerCapabilities[provider];
-              const label = PROVIDER_DISPLAY_NAMES[provider];
-              return (
-                <ProviderToggleButton
-                  key={provider}
-                  label={label}
-                  provider={provider}
-                  active={effectiveProvider === provider}
-                  disabled={!capabilities.plugins && !capabilities.skills}
-                  onClick={() => {
-                    setSelectedProvider(provider);
-                    if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
-                      setSelectedTab("skills");
-                    }
-                    if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
-                      setSelectedTab("plugins");
-                    }
-                  }}
-                />
-              );
-            })}
-          </div>
+          {tabsAndProviderPicker}
         </div>
-
-        {/* ── Scrollable body ───────────────────────────────────────────── */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {/* Hero */}
-          <div className="px-6 py-10 text-center">
-            <h1 className="text-[28px] font-semibold text-foreground">
-              Make {providerLabel} work your way
-            </h1>
-          </div>
-
-          {/* Search */}
-          <div className="mx-auto max-w-2xl px-6 pb-6">
-            <InputGroup className="rounded-xl bg-background/70 shadow-xs">
-              <InputGroupAddon>
-                <InputGroupText>
-                  <SearchIcon className="size-4 text-muted-foreground/60" />
-                </InputGroupText>
-              </InputGroupAddon>
-              <InputGroupInput
-                value={selectedTab === "plugins" ? pluginSearch : skillSearch}
-                onChange={(e) => {
-                  if (selectedTab === "plugins") setPluginSearch(e.target.value);
-                  else setSkillSearch(e.target.value);
-                }}
-                placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
-                className="text-sm"
-              />
-            </InputGroup>
-          </div>
-
-          {/* Warnings */}
-          {((!discoveryCwd && selectedTab === "skills") ||
-            (selectedTab === "plugins" && !!pluginsQuery.data?.remoteSyncError) ||
-            (selectedTab === "plugins" &&
-              (pluginsQuery.data?.marketplaceLoadErrors.length ?? 0) > 0)) && (
-            <div className="mx-auto max-w-2xl space-y-1.5 px-6 pb-4">
-              {!discoveryCwd && selectedTab === "skills" ? (
-                <InlineWarning>
-                  Skills need a workspace path. Open a project or thread first.
-                </InlineWarning>
-              ) : null}
-              {selectedTab === "plugins" && pluginsQuery.data?.remoteSyncError ? (
-                <InlineWarning>{pluginsQuery.data.remoteSyncError}</InlineWarning>
-              ) : null}
-              {selectedTab === "plugins" &&
-              (pluginsQuery.data?.marketplaceLoadErrors.length ?? 0) > 0 ? (
-                <InlineWarning>
-                  {pluginsQuery.data?.marketplaceLoadErrors
-                    .map((err) => `${sectionTitle(err.marketplacePath)}: ${err.message}`)
-                    .join(" • ")}
-                </InlineWarning>
-              ) : null}
-            </div>
-          )}
-
-          {/* Grid content */}
-          <div className="px-3 pb-10 sm:px-5">
-            {selectedTab === "plugins" ? (
-              <>
-                {!canListPlugins ? (
-                  <div className="mx-auto max-w-2xl">
-                    <EmptyPanel
-                      title={`Plugins unavailable for ${providerLabel}`}
-                      description="This provider does not expose plugin discovery."
-                    />
-                  </div>
-                ) : pluginsQuery.isLoading && pluginEntries.length === 0 ? (
-                  <div className="space-y-1">
-                    {["1", "2", "3", "4", "5", "6"].map((k) => (
-                      <Skeleton key={k} className="h-[68px] w-full rounded-xl" />
-                    ))}
-                  </div>
-                ) : filteredPluginEntries.length === 0 ? (
-                  <EmptyPanel
-                    title="No installed plugins found"
-                    description="This view only shows plugins already available in your Codex setup."
-                  />
-                ) : (
-                  <div className="space-y-6">
-                    {marketplaceSections.map((section) => (
-                      <div key={section.key}>
-                        <SectionHeader title={section.title} />
-                        <div className="grid grid-cols-1 sm:grid-cols-2">
-                          {section.entries.map((entry) => (
-                            <PluginGridItem key={pluginEntryKey(entry)} entry={entry} />
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                {!canListSkills ? (
-                  <div className="mx-auto max-w-2xl">
-                    <EmptyPanel
-                      title={`Skills unavailable for ${providerLabel}`}
-                      description="This provider does not expose skill discovery."
-                    />
-                  </div>
-                ) : skillsQuery.isLoading && discoveredSkills.length === 0 ? (
-                  <div className="space-y-1">
-                    {["1", "2", "3", "4", "5", "6"].map((k) => (
-                      <Skeleton key={k} className="h-[68px] w-full rounded-xl" />
-                    ))}
-                  </div>
-                ) : filteredSkills.length === 0 ? (
-                  <EmptyPanel title="No skills found" description="No skills match this search." />
-                ) : (
-                  <div>
-                    <SectionHeader title="Skills" />
-                    <div className="grid grid-cols-1 sm:grid-cols-2">
-                      {filteredSkills.map((skill) => (
-                        <SkillGridItem key={skill.path} skill={skill} />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        </div>
+        {body}
       </div>
     </SidebarInset>
   );
