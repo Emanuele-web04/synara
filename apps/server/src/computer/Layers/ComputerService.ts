@@ -3,6 +3,7 @@ import type { ComputerAvailability } from "@synara/contracts";
 
 import { ComputerApprovalGate } from "../ComputerApprovalGate.ts";
 import { ComputerManager } from "../ComputerManager.ts";
+import { MacComputerBackend } from "../MacComputerBackend.ts";
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
 import { UnavailableComputerBackend } from "../UnavailableComputerBackend.ts";
 import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
@@ -33,6 +34,7 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
       const backend =
         options.backend ??
         (requestedBackend === "fake" ? new FakeComputerBackend() : undefined) ??
+        (platform === "darwin" ? new MacComputerBackend({ platform }) : undefined) ??
         new UnavailableComputerBackend(
           `No computer backend is configured for this server running on ${platform}.`,
           { availability: unavailableAvailability },
@@ -53,8 +55,7 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
         };
       }
       return {
-        // A configured fake is supported for tests. Every other default is an
-        // unavailable backend whose handlers refuse safely.
+        // Supported backends remain routable even before setup grants access.
         supported: options.supported ?? !(backend instanceof UnavailableComputerBackend),
         availability,
         manager,
