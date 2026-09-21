@@ -1,4 +1,5 @@
 import type { DesktopUpdateState } from "@synara/contracts";
+import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 
 export type DownloadProgressSample = {
   readonly percent?: number | null;
@@ -130,6 +131,34 @@ export function isUpdateVersionNewer(currentVersion: string, candidateVersion: s
   // Treat stable as newer than the same prerelease, but never reinstall the
   // exact same stable version from a stale updater cache.
   return current.prerelease !== null && candidate.prerelease === null;
+}
+
+/**
+ * Whether a release is on this flavor's lane. Electron-updater's GitHub
+ * provider falls back to `latest-mac.yml` when the channel manifest is absent,
+ * so without this gate a beta install offers the newest *stable* build — and
+ * installing it would silently swap the app to a different flavor and home
+ * directory. Flavors are install identities, not in-place channels: a beta
+ * only updates to `*-beta.*` releases and a production build only takes stable
+ * ones; upgrading lanes always happens by installing the other app.
+ */
+export function isUpdateVersionAllowedForFlavor(
+  candidateVersion: string,
+  flavor: SynaraDesktopFlavor,
+): boolean {
+  const candidate = parseUpdateVersion(candidateVersion);
+  if (!candidate) {
+    // Unparseable versions keep the pre-existing "differs means newer"
+    // behavior in isUpdateVersionNewer; gate only what we can identify.
+    return true;
+  }
+  if (flavor === "beta") {
+    return candidate.prerelease === "beta" || (candidate.prerelease?.startsWith("beta.") ?? false);
+  }
+  if (flavor === "production") {
+    return candidate.prerelease === null;
+  }
+  return true;
 }
 
 export function nextStatusAfterDownloadFailure(

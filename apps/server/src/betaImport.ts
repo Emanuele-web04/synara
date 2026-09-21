@@ -40,7 +40,12 @@ const EXCLUDED_STATE_ENTRIES = new Set([
   BETA_IMPORT_RESULT_FILE_NAME,
 ]);
 
-const EXCLUDED_STATE_PREFIXES = ["state.sqlite.import"];
+/**
+ * `state.sqlite` plus every adjacent sidecar that belongs to the live
+ * database — WAL/SHM/journal files, the `.lifecycle-lock/` directory, and the
+ * importer's own `.import-*` staging files all share this stem.
+ */
+const STATE_DB_ENTRY_PATTERN = /^state\.sqlite(?:[.-].*)?$/;
 
 const sqlStringLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
@@ -78,8 +83,8 @@ function copyStateEntries(sourceStateDir: string, targetStateDir: string): void 
   mkdirSync(targetStateDir, { recursive: true });
   for (const entry of readdirSync(sourceStateDir)) {
     if (EXCLUDED_STATE_ENTRIES.has(entry)) continue;
-    if (entry === "state.sqlite" || entry.startsWith("state.sqlite-")) continue;
-    if (EXCLUDED_STATE_PREFIXES.some((prefix) => entry.startsWith(prefix))) continue;
+    if (STATE_DB_ENTRY_PATTERN.test(entry)) continue;
+    if (entry.endsWith(".lifecycle-lock")) continue;
     const sourcePath = join(sourceStateDir, entry);
     const targetPath = join(targetStateDir, entry);
     try {
@@ -95,22 +100,64 @@ function copyStateEntries(sourceStateDir: string, targetStateDir: string): void 
   }
 }
 
+const SNAPSHOT_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
+
+async function vacuumInto(sourceDbPath: string, targetPath: string): Promise<void> {
+  const { DatabaseSync } = await import("node:sqlite");
+  const database = new DatabaseSync(sourceDbPath);
+  try {
+    database.exec(`VACUUM INTO ${sqlStringLiteral(targetPath)}`);
+  } finally {
+    database.close();
+  }
+}
+
+/**
+ * File-level snapshot of a database another process holds open. The stable
+ * server keeps `state.sqlite` under `PRAGMA locking_mode = EXCLUSIVE`, so no
+ * second connection can `VACUUM INTO` it while it runs. Copying the sidecars
+ * first and the main file last yields a crash-consistent pair: a checkpoint or
+ * commit landing between the copies can only add committed state, and a torn
+ * WAL tail is discarded by SQLite's frame checksums on recovery.
+ */
+function copyLiveDatabase(sourceDbPath: string, stagingDir: string): string {
+  mkdirSync(stagingDir, { recursive: true });
+  for (const suffix of SNAPSHOT_SIDECAR_SUFFIXES) {
+    const sidecarPath = `${sourceDbPath}${suffix}`;
+    if (!existsSync(sidecarPath)) continue;
+    try {
+      if (statSync(sidecarPath).isFile()) {
+        cpSync(sidecarPath, join(stagingDir, `state.sqlite${suffix}`), { force: true });
+      }
+    } catch {
+      // A sidecar vanishing mid-import means the source checkpointed; the copy
+      // of the main file below already carries that state.
+    }
+  }
+  const stagedDbPath = join(stagingDir, "state.sqlite");
+  cpSync(sourceDbPath, stagedDbPath, { force: true });
+  return stagedDbPath;
+}
+
 async function snapshotStableDatabase(sourceDbPath: string, targetDbPath: string): Promise<void> {
   const stagingPath = `${targetDbPath}.import-${process.pid}`;
+  const stagingDir = `${stagingPath}.src`;
   rmSync(stagingPath, { force: true });
-  // `VACUUM INTO` gives a consistent point-in-time snapshot even while the
-  // stable server holds the source database open in WAL mode.
+  rmSync(stagingDir, { recursive: true, force: true });
   try {
-    const { DatabaseSync } = await import("node:sqlite");
-    const database = new DatabaseSync(sourceDbPath);
     try {
-      database.exec(`VACUUM INTO ${sqlStringLiteral(stagingPath)}`);
-    } finally {
-      database.close();
+      await vacuumInto(sourceDbPath, stagingPath);
+    } catch {
+      const stagedDbPath = copyLiveDatabase(sourceDbPath, stagingDir);
+      // Opening the staged copy replays its WAL, so the vacuumed output is a
+      // fully checkpointed database — and a corrupt copy surfaces here as an
+      // error instead of landing in the beta home.
+      await vacuumInto(stagedDbPath, stagingPath);
     }
     renameSync(stagingPath, targetDbPath);
   } finally {
     rmSync(stagingPath, { force: true });
+    rmSync(stagingDir, { recursive: true, force: true });
   }
 }
 

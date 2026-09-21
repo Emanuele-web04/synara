@@ -202,6 +202,7 @@ import {
   getDownloadStallTimeoutMessage,
   hasDownloadProgressAdvanced,
   isExpectedStalledDownloadCancellationError,
+  isUpdateVersionAllowedForFlavor,
   isUpdateVersionNewer,
   shouldBroadcastDownloadProgress,
   shouldCheckForUpdatesOnForeground,
@@ -2865,8 +2866,19 @@ function shouldEnableAutoUpdates(): boolean {
   return resolveAutoUpdateDisabledReason() === null;
 }
 
-function isKnownUpdateVersionNewer(version: string | null | undefined): boolean {
-  return typeof version === "string" && isUpdateVersionNewer(app.getVersion(), version);
+function isAcceptableUpdateVersion(version: string | null | undefined): boolean {
+  return (
+    typeof version === "string" &&
+    isUpdateVersionAllowedForFlavor(version, desktopFlavor) &&
+    isUpdateVersionNewer(app.getVersion(), version)
+  );
+}
+
+function describeRejectedUpdateVersion(version: string): string {
+  if (!isUpdateVersionAllowedForFlavor(version, desktopFlavor)) {
+    return `version ${version} is not on the "${desktopFlavor}" flavor's update lane`;
+  }
+  return `version ${version} is not newer than current ${app.getVersion()}`;
 }
 
 function getUpdaterCachePathArgs(): {
@@ -3242,12 +3254,14 @@ async function downloadAvailableUpdate(): Promise<{
   if (!updaterConfigured || updateDownloadInFlight || updateState.status !== "available") {
     return { accepted: false, completed: false };
   }
-  if (!isKnownUpdateVersionNewer(updateState.availableVersion)) {
-    await clearPendingUpdateCache("available version is not newer than current app");
+  if (!isAcceptableUpdateVersion(updateState.availableVersion)) {
+    const rejected =
+      typeof updateState.availableVersion === "string"
+        ? describeRejectedUpdateVersion(updateState.availableVersion)
+        : "no acceptable update version recorded";
+    await clearPendingUpdateCache(`staged update rejected: ${rejected}`);
     setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
-    console.info(
-      `[desktop-updater] Ignoring stale available update ${updateState.availableVersion ?? "unknown"} for current ${app.getVersion()}.`,
-    );
+    console.info(`[desktop-updater] Ignoring stale available update: ${rejected}.`);
     return { accepted: false, completed: false };
   }
   updateDownloadInFlight = true;
@@ -3435,12 +3449,13 @@ async function runDownloadedUpdateInstall(
   completed: boolean;
 }> {
   const versionToInstall = updateState.downloadedVersion ?? updateState.availableVersion;
-  if (!versionToInstall || !isKnownUpdateVersionNewer(versionToInstall)) {
-    await clearPendingUpdateCache("downloaded version is not newer than current app");
+  if (!versionToInstall || !isAcceptableUpdateVersion(versionToInstall)) {
+    const rejected = versionToInstall
+      ? describeRejectedUpdateVersion(versionToInstall)
+      : "no update version recorded";
+    await clearPendingUpdateCache(`downloaded update rejected: ${rejected}`);
     setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
-    console.info(
-      `[desktop-updater] Ignoring stale downloaded update ${versionToInstall ?? "unknown"} for current ${app.getVersion()}.`,
-    );
+    console.info(`[desktop-updater] Ignoring stale downloaded update: ${rejected}.`);
     return { accepted: false, completed: false };
   }
 
@@ -3553,21 +3568,25 @@ async function installDownloadedUpdate(): Promise<{
 
 async function recordDownloadedUpdateIdentity(info: UpdateDownloadedEvent): Promise<void> {
   clearUpdateDownloadStallTimer();
-  if (!isUpdateVersionNewer(app.getVersion(), info.version)) {
+  if (!isAcceptableUpdateVersion(info.version)) {
     downloadedUpdateArtifact = null;
-    clearPendingUpdateCacheWhenSafe("downloaded version is not newer than current app");
+    clearPendingUpdateCacheWhenSafe(
+      `downloaded update rejected: ${describeRejectedUpdateVersion(info.version)}`,
+    );
     setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
     console.info(
-      `[desktop-updater] Ignoring downloaded non-newer update ${info.version}; current version is ${app.getVersion()}.`,
+      `[desktop-updater] Ignoring downloaded update: ${describeRejectedUpdateVersion(info.version)}.`,
     );
     return;
   }
 
   try {
     const identity = await fingerprintUpdateArtifact(info.downloadedFile);
-    if (!isUpdateVersionNewer(app.getVersion(), info.version)) {
+    if (!isAcceptableUpdateVersion(info.version)) {
       downloadedUpdateArtifact = null;
-      clearPendingUpdateCacheWhenSafe("downloaded version became stale during fingerprinting");
+      clearPendingUpdateCacheWhenSafe(
+        `downloaded update rejected after fingerprinting: ${describeRejectedUpdateVersion(info.version)}`,
+      );
       setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
       return;
     }
@@ -3654,12 +3673,14 @@ function configureAutoUpdater(): void {
   autoUpdater.on("update-available", (info) => {
     clearUpdateCheckTimeoutTimer();
     downloadedUpdateArtifact = null;
-    if (!isUpdateVersionNewer(app.getVersion(), info.version)) {
-      void clearPendingUpdateCache("available version is not newer than current app");
+    if (!isAcceptableUpdateVersion(info.version)) {
+      void clearPendingUpdateCache(
+        `available update rejected: ${describeRejectedUpdateVersion(info.version)}`,
+      );
       setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
       lastLoggedDownloadMilestone = -1;
       console.info(
-        `[desktop-updater] Ignoring non-newer update ${info.version}; current version is ${app.getVersion()}.`,
+        `[desktop-updater] Ignoring available update: ${describeRejectedUpdateVersion(info.version)}.`,
       );
       return;
     }
@@ -5068,7 +5089,13 @@ function registerIpcHandlers(): void {
     homeDir: OS.homedir(),
     betaHomeDir: resolveBetaHomeDir(),
     flavor:
-      desktopFlavor === "beta" ? "beta" : desktopFlavor === "canary" ? "canary" : "production",
+      desktopFlavor === "beta"
+        ? "beta"
+        : desktopFlavor === "canary"
+          ? "canary"
+          : desktopFlavor === "cua"
+            ? "cua"
+            : "production",
   });
 
   ipcMain.removeHandler(IPC.beta.getState);

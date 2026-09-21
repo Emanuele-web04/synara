@@ -1,7 +1,15 @@
 // FILE: betaImport.test.ts
 // Purpose: Coverage for the beta-side stable-data snapshot import.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -91,6 +99,64 @@ describe("runBetaImportIfRequested", () => {
     expect(existsSync(join(betaState, "secrets", "token.json"))).toBe(true);
     expect(existsSync(join(betaState, "logs"))).toBe(false);
     expect(existsSync(join(betaState, "server-runtime.json"))).toBe(false);
+  });
+
+  it("never carries database sidecars or lifecycle locks into the beta home", async () => {
+    const root = await seedStableHome(makeRoot());
+    const stableState = join(root, "userdata");
+    const lockDir = join(stableState, "state.sqlite.lifecycle-lock");
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(join(lockDir, "lock.json"), JSON.stringify({ pid: 9999, token: "x" }));
+    writeFileSync(join(stableState, "state.sqlite.import-999"), "stale staging file");
+    writeFileSync(join(stableState, "other.sqlite.lifecycle-lock"), "foreign lock");
+
+    const betaHome = join(root, ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    writeMarker(betaHome, root);
+
+    const outcome = await runBetaImportIfRequested({ betaHomeDir: betaHome, stateDir: betaState });
+    expect(outcome).toEqual({ consumed: true, ok: true });
+    expect(existsSync(join(betaState, "state.sqlite"))).toBe(true);
+    // Only the checkpointed snapshot lands — no live-database sidecars.
+    expect(readdirSync(betaState).filter((entry) => entry.startsWith("state.sqlite"))).toEqual([
+      "state.sqlite",
+    ]);
+    expect(existsSync(join(betaState, "other.sqlite.lifecycle-lock"))).toBe(false);
+  });
+
+  it("imports while the stable database is held under an exclusive lock", async () => {
+    const root = await seedStableHome(makeRoot());
+    const stableState = join(root, "userdata");
+    const betaHome = join(root, ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    writeMarker(betaHome, root);
+
+    // The live stable server holds state.sqlite under
+    // `PRAGMA locking_mode = EXCLUSIVE` (see persistence/Layers/Sqlite.ts), so
+    // VACUUM INTO against it always reports "database is locked" — the importer
+    // must fall back to a file-level snapshot of db + WAL.
+    const { DatabaseSync } = await import("node:sqlite");
+    const liveDb = new DatabaseSync(join(stableState, "state.sqlite"));
+    try {
+      liveDb.exec("PRAGMA journal_mode = WAL");
+      liveDb.exec("PRAGMA locking_mode = EXCLUSIVE");
+      liveDb.exec("INSERT INTO threads VALUES ('t2', 'written while locked')");
+
+      const outcome = await runBetaImportIfRequested({
+        betaHomeDir: betaHome,
+        stateDir: betaState,
+      });
+      expect(outcome).toEqual({ consumed: true, ok: true });
+    } finally {
+      liveDb.close();
+    }
+
+    const db = new DatabaseSync(join(betaState, "state.sqlite"), { readOnly: true });
+    const titles = (
+      db.prepare("SELECT title FROM threads ORDER BY id").all() as Array<{ title: string }>
+    ).map((row) => row.title);
+    db.close();
+    expect(titles).toEqual(["hello stable", "written while locked"]);
   });
 
   it("refuses an import that points at the beta home itself", async () => {

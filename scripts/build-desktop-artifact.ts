@@ -357,7 +357,6 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     flavor,
     target,
     arch,
-    flavor,
     version,
     sourceCommit,
     sourceTag,
@@ -839,6 +838,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: string | undefined,
+  flavor: SynaraPackagedDesktopFlavor,
 ) {
   const buildConfig: Record<string, unknown> = {
     ...artifactIdentity.buildConfig,
@@ -882,7 +882,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     target,
     signed,
     adHocSign: artifactIdentity.identity.usesScriptedUpdates && !signed,
-    flavor: artifactIdentity.identity.flavor,
+    flavor,
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
 
@@ -1229,6 +1229,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     options.signed,
     options.mockUpdates,
     options.mockUpdateServerPort,
+    options.flavor,
   );
 
   const stagePackageJson: StagePackageJson = {

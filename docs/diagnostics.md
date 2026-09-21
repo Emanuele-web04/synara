@@ -6,8 +6,9 @@ authoritative description of what leaves your computer.
 
 **Stable builds collect nothing.** The diagnostics module is only constructed
 when the packaged build's `synaraFlavor` field equals `"beta"` — a field baked
-in at build time that cannot be flipped by an environment variable. In a stable
-build there is no sender code path to enable.
+in at build time that cannot be flipped by an environment variable. (The module
+source is bundled into the shared desktop code, but in a stable build it is
+never instantiated: no UI, environment variable, or IPC can enable it.)
 
 ## What is collected
 

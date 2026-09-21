@@ -32,9 +32,17 @@ published by the same release workflow as stable, and it updates through
 - Beta releases publish `beta-*.yml` manifests only; the `synara` and `latest`
   aliases stay on stable releases. A beta release can never be offered to a stable
   install, and a stable release never carries beta manifests.
+- The desktop additionally gate-checks every candidate's version against its
+  lane (`isUpdateVersionAllowedForFlavor`): beta installs accept only
+  `*-beta.*` versions and production installs accept only stable versions.
+  This matters because electron-updater's GitHub provider falls back to
+  `latest-mac.yml` when the channel manifest is absent — without the gate, a
+  beta install could be offered a stable build, and installing it would
+  silently swap the app to the other flavor and home directory. Crossing lanes
+  always happens by installing the other app, never by update.
 - `allowDowngrade` stays `false` on both trains; moving back to stable means
   reinstalling stable.
-- Pending-update caches are scoped per flavor (`~/Library/Caches/synara-beta-desktop-updater`
+- Pending-update caches are scoped per flavor (`~/Library/Caches/synara-desktop-beta-updater`
   on macOS), so a downloaded beta update never collides with stable's pending
   update state.
 
@@ -84,11 +92,15 @@ The stable app offers a one-click handoff under **Settings → General → Synar
   detected.
 - **Copy my data and open** writes a marker at
   `~/.synara-beta/import-requested.json` and launches the beta app. On its next
-  startup the beta server consumes the marker, snapshots stable's database with
-  `VACUUM INTO` (a consistent point-in-time copy that works while stable is
-  running), copies settings and provider secrets, then deletes the marker. The
-  outcome is written to `~/.synara-beta/import-result.json` so the stable
-  settings card can report success or the failure reason.
+  startup the beta server consumes the marker, snapshots stable's database,
+  copies settings and provider secrets, then deletes the marker. The snapshot
+  uses `VACUUM INTO` when the source is quiescent; while stable is running it
+  holds `state.sqlite` under `PRAGMA locking_mode = EXCLUSIVE`, so the importer
+  falls back to a file-level copy of the database and its WAL/SHM sidecars and
+  vacuums that staged copy into a checkpointed snapshot. Either way the result
+  is a consistent point-in-time copy and the outcome is written to
+  `~/.synara-beta/import-result.json` so the stable settings card can report
+  success or the failure reason.
 - **Open Beta** launches the installed beta app without touching data.
 - The import button is disabled while a beta server is running so an in-flight
   beta never reads a half-written snapshot; quit beta first, then import.
@@ -100,8 +112,11 @@ The marker format lives in `packages/shared/src/betaChannel.ts`
 `apps/server/src/betaImport.ts`.
 
 The import copies settings, provider secrets, and a database snapshot. It never
-copies logs, diagnostics queues, runtime files, or other import markers, and it
-never writes into the stable home except the one marker file.
+copies logs, diagnostics queues, runtime files, other import markers, database
+sidecars (`state.sqlite-wal`/`-shm`/`-journal`), or `*.lifecycle-lock`
+directories — a leaked lock directory would make beta refuse to start while the
+stable process is alive. It never writes into the stable home except the one
+marker file.
 
 ## Diagnostics
 

@@ -83,12 +83,7 @@ export function resolveSynaraDesktopRuntimeFlavor(input: {
 }): SynaraDesktopFlavor {
   if (input.isPackaged && input.packagedFlavor !== undefined) {
     const flavor = input.packagedFlavor;
-    if (
-      flavor === "production" ||
-      flavor === "canary" ||
-      flavor === "cua" ||
-      flavor === "beta"
-    ) {
+    if (flavor === "production" || flavor === "canary" || flavor === "cua" || flavor === "beta") {
       return flavor;
     }
     throw new Error("The packaged Synara desktop flavor is invalid. Rebuild the application.");

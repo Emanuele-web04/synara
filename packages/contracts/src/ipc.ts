@@ -351,9 +351,9 @@ export interface DesktopUpdateState {
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
   installFailureCount: number;
-  // Build flavor of the running desktop app ("production" | "beta" | "canary").
+  // Build flavor of the running desktop app ("production" | "beta" | "canary" | "cua").
   // The web UI uses it for beta-only branding; production builds never see it.
-  flavor: "production" | "beta" | "canary";
+  flavor: "production" | "beta" | "canary" | "cua";
   // Public URL where the user can manually download the release when the
   // in-app updater cannot apply it (silent installer failure, unsigned build,
   // read-only install location, unsupported platform). Null when no GitHub
@@ -372,7 +372,7 @@ export interface DesktopBetaChannelState {
   /** False on web builds and unsupported probing environments. */
   readonly supported: boolean;
   /** Flavor of the running desktop app; the card only acts on "production". */
-  readonly flavor: "production" | "beta" | "canary";
+  readonly flavor: "production" | "beta" | "canary" | "cua";
   readonly installed: boolean;
   readonly version: string | null;
   /** Beta's server pid is alive (its launch marker/runtime file says so). */

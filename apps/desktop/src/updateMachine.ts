@@ -5,7 +5,7 @@ import { getCanRetryAfterDownloadFailure, nextStatusAfterDownloadFailure } from 
 export function createInitialDesktopUpdateState(
   currentVersion: string,
   runtimeInfo: DesktopRuntimeInfo,
-  flavor: "production" | "beta" | "canary" = "production",
+  flavor: "production" | "beta" | "canary" | "cua" = "production",
 ): DesktopUpdateState {
   return {
     enabled: false,

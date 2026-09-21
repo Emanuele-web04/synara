@@ -42,7 +42,7 @@ interface BetaChannelDeps {
   readonly homeDir: string;
   readonly betaHomeDir: string;
   /** Flavor of the running app; only "production" may initiate the handoff. */
-  readonly flavor: "production" | "beta" | "canary";
+  readonly flavor: "production" | "beta" | "canary" | "cua";
 }
 
 const readRegistryValue = (key: string, value: string): string | null => {
