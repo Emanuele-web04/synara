@@ -39,7 +39,11 @@ import {
 } from "./lib/toolCallDetails";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
-import type { ChatMessage, ProposedPlan } from "./types";
+import type { ChatMessage, ProposedPlan, ThreadSession } from "./types";
+import {
+  backgroundTaskSessionBoundary,
+  collectExplicitBackgroundTaskIds,
+} from "./backgroundTaskLifecycle";
 
 export type WorkLogRequestKind = ApprovalRequestKind;
 
@@ -291,6 +295,7 @@ export function deriveWorkLogEntries(
   latestTurnId: TurnId | undefined,
   options: {
     visibleTurnIds?: ReadonlySet<TurnId | string>;
+    session?: Pick<ThreadSession, "status" | "updatedAt"> | null;
     activeTurnId?: TurnId | null;
     activeTurnStartedAt?: string | null;
     latestTurnState?: OrchestrationLatestTurnState | null;
@@ -308,6 +313,7 @@ export function deriveWorkLogEntries(
         activity.kind !== "task.completed",
     )
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
+    .filter((activity) => activity.kind !== "provider.session.boundary")
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
     .filter(
       (activity) =>
@@ -1359,7 +1365,15 @@ function collectBackgroundTaskLinks(
 ): Map<string, BackgroundTaskLink> {
   const linksByToolUseId = new Map<string, BackgroundTaskLink>();
   const toolUseIdByTaskId = new Map<string, string>();
+  const explicitBackgroundTaskIds = collectExplicitBackgroundTaskIds(activities);
   for (const activity of activities) {
+    const boundary = backgroundTaskSessionBoundary(activity);
+    if (boundary) {
+      for (const link of linksByToolUseId.values()) {
+        link.settled ??= { state: boundary, settledAt: activity.createdAt };
+      }
+      continue;
+    }
     if (
       activity.kind !== "task.started" &&
       activity.kind !== "task.updated" &&
@@ -1377,7 +1391,7 @@ function collectBackgroundTaskLinks(
       // Task-tool subagents own a collab row with its own lifecycle and strip;
       // only detached shell work needs its tool row tied to the task.
       const isDetachedCommand =
-        payload?.isBackgrounded === true || asTrimmedString(payload?.taskType) === "local_bash";
+        explicitBackgroundTaskIds.has(taskId) && payload?.subagentType === undefined;
       if (!toolUseId || !isDetachedCommand) {
         continue;
       }
@@ -1467,6 +1481,7 @@ function reconcileSettledLiveActivities(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
   options: {
+    session?: Pick<ThreadSession, "status" | "updatedAt"> | null;
     activeTurnId?: TurnId | null;
     activeTurnStartedAt?: string | null;
     latestTurnState?: OrchestrationLatestTurnState | null;
@@ -1530,6 +1545,14 @@ function reconcileSettledLiveActivities(
     // Linked detached commands settle through their task lifecycle, even after
     // the originating turn ends or another turn becomes active.
     if (liveActivity.background) {
+      if (options.session?.status === "closed" || options.session?.status === "error") {
+        const state = options.session.status === "error" ? "failed" : "cancelled";
+        return {
+          ...entry,
+          toolStatus: state,
+          liveActivity: settleWorkLogLiveActivity(liveActivity, state, options.session.updatedAt),
+        };
+      }
       return entry;
     }
 
