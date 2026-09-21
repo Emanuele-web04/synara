@@ -9771,7 +9771,7 @@ describe("ChatView transcript geometry (full app)", () => {
           ...snapshot,
           threads: snapshot.threads.map((thread) => ({
             ...thread,
-            session: thread.session ? { ...thread.session, provider } : null,
+            session: thread.session ? { ...thread.session, providerName: provider } : null,
           })),
         },
       });
