@@ -302,7 +302,7 @@ export function buildTranscriptTailKey(
 }
 
 export function resolveThreadArtifactWorkspaceRoot(input: {
-  readonly isStudioContainer: boolean;
+  readonly isGroupContainer: boolean;
   readonly projectCwd: string | null;
   readonly threadWorkspaceCwd: string | null;
 }): string | null {
@@ -310,9 +310,9 @@ export function resolveThreadArtifactWorkspaceRoot(input: {
     return input.threadWorkspaceCwd;
   }
   // A normal thread can expose project files while a requested worktree is
-  // still being materialized. Studio has no equivalent project-root fallback:
+  // still being materialized. Groups has no equivalent project-root fallback:
   // its selected working directory is the artifact boundary.
-  return input.isStudioContainer ? null : input.projectCwd;
+  return input.isGroupContainer ? null : input.projectCwd;
 }
 
 export interface PromptHistoryNavigationState {
@@ -608,13 +608,13 @@ export function resolveEnvironmentPanelVisible(input: {
   return input.environmentEnabled && input.environmentPanelOpen;
 }
 
-// Normal project toolbars stay stable while repository discovery is pending. Studio folders are
+// Normal project toolbars stay stable while repository discovery is pending. Group folders are
 // casual context, however, so they must opt into Git UI only after a positive repository result.
 export function resolveGitRepoUiState(input: {
-  isStudioContainer: boolean;
+  isGroupContainer: boolean;
   queriedIsRepo: boolean | undefined;
 }): boolean {
-  return input.queriedIsRepo ?? !input.isStudioContainer;
+  return input.queriedIsRepo ?? !input.isGroupContainer;
 }
 
 export interface SettledThreadBranchMismatch {

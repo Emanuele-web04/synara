@@ -293,10 +293,13 @@ export const AppSettingsSchema = Schema.Struct({
   showPullRequestDiffColors: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
-  // (rootless chats not tied to a project). `showStudioSection` controls the
-  // optional Studio tab in the section switcher.
+  // (rootless chats not tied to a project). `showGroupsSection` controls the
+  // optional Groups tab in the section switcher.
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
-  showStudioSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  showGroupsSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Deprecated rename bridge from the Studio surface. Normalization migrates this
+  // value onto `showGroupsSection` once and then omits the key.
+  showStudioSection: Schema.optionalKey(Schema.Boolean),
   // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban,
   // Pull requests, Automations): drag-to-reorder order plus explicitly hidden items.
   // An item whose route is currently active stays visible regardless (mirrors
@@ -605,11 +608,15 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     enableAppshots: legacyEnableAppshots,
     geminiBinaryPath: legacyGeminiBinaryPath,
     customGeminiModels: legacyCustomGeminiModels,
+    showStudioSection: legacyShowStudioSection,
     ...currentSettings
   } = settings;
   return {
     ...currentSettings,
     enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
+    // Read the legacy Studio key once: it defaults to true, so only an explicit
+    // `false` carries over onto the renamed Groups section.
+    showGroupsSection: settings.showGroupsSection && legacyShowStudioSection !== false,
     // Password fields are accepted only as write-only update patches. Never retain
     // reusable provider credentials in browser state or localStorage.
     openCodeServerPassword: "",

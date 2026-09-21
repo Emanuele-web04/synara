@@ -4,9 +4,10 @@
 // Layer: Web orchestration helper
 // Exports: Group container lookup and creation helpers.
 
-import { type ProjectId } from "@synara/contracts";
+import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 
+import { useComposerDraftStore, type DraftThreadState } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
@@ -77,6 +78,72 @@ export function collectGroupProjectIds<T extends Pick<Project, "id" | "cwd" | "k
       .filter((project) => isGroupContainerProject(project, paths))
       .map((project) => project.id),
   );
+}
+
+// The pre-Groups Studio container is adopted as a group in place: retitling it
+// "Groups" keeps its chats under the new surface without moving workspaces.
+// Idempotent by title — once renamed it no longer matches.
+export function findLegacyStudioContainerForAdoption<
+  T extends Pick<Project, "id" | "cwd" | "kind" | "name">,
+>(projects: readonly T[], paths: ServerWorkspacePaths): T | null {
+  return (
+    projects.find(
+      (project) =>
+        project.kind === "studio" &&
+        project.name === "Studio" &&
+        isGroupContainerProject(project, paths),
+    ) ?? null
+  );
+}
+
+export function findGroupDraftThreadId(input: {
+  readonly groupProjectIds: ReadonlySet<ProjectId>;
+  readonly projectDraftThreadIdByProjectId: Readonly<Record<string, ThreadId>>;
+  readonly draftThreadsByThreadId: Readonly<Record<string, DraftThreadState>>;
+}): ThreadId | null {
+  for (const projectId of input.groupProjectIds) {
+    const draftThreadId = input.projectDraftThreadIdByProjectId[projectId];
+    if (!draftThreadId) {
+      continue;
+    }
+    const draftThread = input.draftThreadsByThreadId[draftThreadId];
+    if (
+      draftThread &&
+      draftThread.projectId === projectId &&
+      draftThread.entryPoint === "chat" &&
+      draftThread.promotedTo === undefined
+    ) {
+      return draftThreadId;
+    }
+  }
+  return null;
+}
+
+// New chats inside a group inherit the coordinator's worker routing defaults:
+// model selection goes straight onto the draft, and provider start options ride
+// on the draft so the first send dispatches with them.
+export async function applyGroupWorkerRoutingDefaults(input: {
+  readonly groupProjectId: ProjectId;
+  readonly threadId: ThreadId;
+}): Promise<void> {
+  const api = readNativeApi();
+  if (!api) {
+    return;
+  }
+  const overview = await api.projectAgent
+    .getOverview({ projectId: input.groupProjectId })
+    .catch(() => null);
+  const workerRouting = overview?.config?.workerRouting;
+  if (!workerRouting) {
+    return;
+  }
+  const draftStore = useComposerDraftStore.getState();
+  if (workerRouting.modelSelection) {
+    draftStore.setModelSelection(input.threadId, workerRouting.modelSelection);
+  }
+  if (workerRouting.providerOptions) {
+    draftStore.setProviderOptionsForDispatch(input.threadId, workerRouting.providerOptions);
+  }
 }
 
 function findGroupContainerCandidateById<

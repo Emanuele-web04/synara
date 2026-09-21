@@ -56,7 +56,6 @@ import { isMacNavigatorPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
-import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
@@ -2128,7 +2127,6 @@ describe("ChatView transcript geometry (full app)", () => {
     await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
     await resetHomeChatProjectPrewarmStateForTests();
-    await resetStudioProjectPrewarmStateForTests();
     await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
     attachmentUploadSequence = 0;
@@ -2141,6 +2139,7 @@ describe("ChatView transcript geometry (full app)", () => {
       homeDir: null,
       chatWorkspaceRoot: null,
       studioWorkspaceRoot: null,
+      groupsWorkspaceRoot: null,
     });
     document.body.innerHTML = "";
     wsRequests.length = 0;
@@ -2187,7 +2186,6 @@ describe("ChatView transcript geometry (full app)", () => {
 
   afterEach(async () => {
     await resetHomeChatProjectPrewarmStateForTests();
-    await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
   });
@@ -6955,7 +6953,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("coalesces repeated Studio new-chat clicks and stays in Studio after navigation settles", async () => {
+  it("coalesces repeated group new-chat clicks and stays in Groups after navigation settles", async () => {
     useComposerDraftStore.setState({
       draftThreadsByThreadId: {
         [STUDIO_DRAFT_THREAD_ID]: {
@@ -6976,9 +6974,9 @@ describe("ChatView transcript geometry (full app)", () => {
 
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      // Keep one non-Studio server thread in the snapshot. This matches the real failure: Studio
+      // Keep one non-group server thread in the snapshot. This matches the real failure: Groups
       // has no persisted chats, while the global missing-thread recovery sees known threads and
-      // immediately redirects a transiently-cleared Studio draft to the home index.
+      // immediately redirects a transiently-cleared group draft to the home index.
       snapshot: withStudioProject(
         withHomeChatProject(
           createSnapshotForTargetUser({
@@ -7000,8 +6998,8 @@ describe("ChatView transcript geometry (full app)", () => {
 
     try {
       const newStudioChatButton = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[aria-label="New studio chat"]'),
-        "Unable to find the Studio new-chat action.",
+        () => document.querySelector<HTMLButtonElement>('button[aria-label*="New group chat"]'),
+        "Unable to find the group new-chat action.",
       );
       newStudioChatButton.click();
       newStudioChatButton.click();
@@ -7009,7 +7007,7 @@ describe("ChatView transcript geometry (full app)", () => {
       const newThreadPath = await waitForURL(
         mounted.router,
         (path) => UUID_ROUTE_RE.test(path),
-        "A fresh Studio chat should navigate to a new draft UUID.",
+        "A fresh group chat should navigate to a new draft UUID.",
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
@@ -7056,7 +7054,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       // A superseded navigation resolves the older navigate() promise before the newer route has
       // committed. Give route effects enough time to expose a late Home redirect, then assert the
-      // stable final state and cleanup of the displaced Studio draft.
+      // stable final state and cleanup of the displaced group draft.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
       await vi.waitFor(
         () => {

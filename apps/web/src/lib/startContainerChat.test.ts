@@ -11,6 +11,7 @@ const paths = {
   homeDir: "/Users/tester",
   chatWorkspaceRoot: "/Users/tester/Documents/Synara/Chats",
   studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+  groupsWorkspaceRoot: "/Users/tester/Documents/Synara/Groups",
 };
 
 function successfulHandler() {
@@ -18,39 +19,59 @@ function successfulHandler() {
 }
 
 describe("startFreshChatForActiveSurface", () => {
-  it("keeps the global New chat action in Studio", async () => {
+  it("keeps the global New chat action in a group container", async () => {
     const handleNewChat = successfulHandler();
-    const handleNewStudioChat = successfulHandler();
+    const handleNewGroupChat = successfulHandler();
+
+    await startFreshChatForActiveSurface({
+      activeProject: {
+        kind: "group",
+        cwd: "/Users/tester/Documents/Synara/Groups/Team A",
+      },
+      isGroupsRoute: false,
+      paths,
+      handleNewChat,
+      handleNewGroupChat,
+    });
+
+    expect(handleNewGroupChat).toHaveBeenCalledOnce();
+    expect(handleNewGroupChat).toHaveBeenCalledWith({ fresh: true });
+    expect(handleNewChat).not.toHaveBeenCalled();
+  });
+
+  it("keeps the global New chat action in the legacy Studio container", async () => {
+    const handleNewChat = successfulHandler();
+    const handleNewGroupChat = successfulHandler();
 
     await startFreshChatForActiveSurface({
       activeProject: {
         kind: "studio",
         cwd: "/Users/tester/Documents/Synara/Studio",
       },
-      isStudioRoute: false,
+      isGroupsRoute: false,
       paths,
       handleNewChat,
-      handleNewStudioChat,
+      handleNewGroupChat,
     });
 
-    expect(handleNewStudioChat).toHaveBeenCalledOnce();
-    expect(handleNewStudioChat).toHaveBeenCalledWith({ fresh: true });
+    expect(handleNewGroupChat).toHaveBeenCalledOnce();
+    expect(handleNewGroupChat).toHaveBeenCalledWith({ fresh: true });
     expect(handleNewChat).not.toHaveBeenCalled();
   });
 
-  it("keeps the global New chat action on the Studio landing route", async () => {
+  it("keeps the global New chat action on the Groups landing route", async () => {
     const handleNewChat = successfulHandler();
-    const handleNewStudioChat = successfulHandler();
+    const handleNewGroupChat = successfulHandler();
 
     await startFreshChatForActiveSurface({
       activeProject: null,
-      isStudioRoute: true,
+      isGroupsRoute: true,
       paths,
       handleNewChat,
-      handleNewStudioChat,
+      handleNewGroupChat,
     });
 
-    expect(handleNewStudioChat).toHaveBeenCalledOnce();
+    expect(handleNewGroupChat).toHaveBeenCalledOnce();
     expect(handleNewChat).not.toHaveBeenCalled();
   });
 
@@ -60,21 +81,21 @@ describe("startFreshChatForActiveSurface", () => {
       null,
     ]) {
       const handleNewChat = successfulHandler();
-      const handleNewStudioChat = successfulHandler();
+      const handleNewGroupChat = successfulHandler();
 
       await startFreshChatForActiveSurface({
         activeProject,
-        isStudioRoute: false,
+        isGroupsRoute: false,
         paths,
         handleNewChat,
-        handleNewStudioChat,
+        handleNewGroupChat,
       });
 
       expect(handleNewChat).toHaveBeenCalledOnce();
       // Home chat reuses the stored draft thread when one exists (so an in-progress
       // draft survives switching threads) instead of forcing a fresh thread.
       expect(handleNewChat).toHaveBeenCalledWith();
-      expect(handleNewStudioChat).not.toHaveBeenCalled();
+      expect(handleNewGroupChat).not.toHaveBeenCalled();
     }
   });
 });
@@ -102,9 +123,9 @@ describe("startContainerChat", () => {
     });
   });
 
-  it("clears a stored Studio draft's inherited worktree metadata without overriding its cwd", async () => {
-    const projectId = ProjectId.makeUnsafe("studio-project");
-    const threadId = ThreadId.makeUnsafe("studio-thread");
+  it("clears a stored group draft's inherited worktree metadata without overriding its cwd", async () => {
+    const projectId = ProjectId.makeUnsafe("group-project");
+    const threadId = ThreadId.makeUnsafe("group-thread");
     const handleNewThread = vi.fn(async () => threadId);
 
     await startContainerChat({
@@ -119,5 +140,24 @@ describe("startContainerChat", () => {
       branch: null,
       worktreePath: null,
     });
+  });
+
+  it("applies container thread defaults (e.g. a group's worker routing) to the new chat", async () => {
+    const projectId = ProjectId.makeUnsafe("group-project");
+    const threadId = ThreadId.makeUnsafe("group-thread");
+    const handleNewThread = vi.fn(async () => threadId);
+    const applyThreadDefaults = vi.fn(async () => {});
+
+    await expect(
+      startContainerChat({
+        ensureProjectId: async () => projectId,
+        handleNewThread,
+        forceLocalWorkspace: true,
+        applyThreadDefaults,
+        errorLabel: "failed",
+      }),
+    ).resolves.toEqual({ ok: true, threadId });
+
+    expect(applyThreadDefaults).toHaveBeenCalledWith(threadId);
   });
 });

@@ -215,7 +215,10 @@ export function useChatProviderModels({
     selectedProvider,
     selectedRuntimeModel,
   ]);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    () => composerDraft.providerOptionsForDispatch ?? getProviderStartOptions(settings),
+    [composerDraft.providerOptionsForDispatch, settings],
+  );
   const selectedModelForPicker =
     selectedModelSelection.provider === selectedProvider
       ? selectedModelSelection.model

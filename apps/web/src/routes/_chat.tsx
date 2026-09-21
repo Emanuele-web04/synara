@@ -14,7 +14,7 @@ import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
 import { isElectron } from "../env";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
-import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
+import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
 import { useTemporaryThreadLifecycle } from "../hooks/useTemporaryThreadLifecycle";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useRecentViewSwitcher } from "../hooks/useRecentViewSwitcher";
@@ -29,6 +29,8 @@ import { resolveInheritedThreadContext } from "../lib/threadBootstrap";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { startFreshChatForActiveSurface } from "../lib/startContainerChat";
+import { resolveGroupChatTargetProjectId } from "../components/SidebarGroupsSurface.logic";
+import { isGroupContainerProject } from "../lib/groupProjects";
 import { isOrdinarySpaceProject } from "../lib/spaces";
 import { isKeyboardShortcutsHelpShortcut, resolveShortcutCommand } from "../keybindings";
 import { useStore } from "../store";
@@ -204,8 +206,9 @@ function isRecentViewSwitcherCommitKey(event: KeyboardEvent): boolean {
 
 function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
-  const isStudioRoute = useLocation({
-    select: (location) => location.pathname.startsWith("/studio"),
+  const isGroupsRoute = useLocation({
+    select: (location) =>
+      location.pathname.startsWith("/groups") || location.pathname.startsWith("/studio"),
   });
   const { toggleSidebar } = useSidebar();
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
@@ -232,10 +235,11 @@ function ChatRouteGlobalShortcuts() {
     projects,
   });
   const { handleNewChat } = useHandleNewChat();
-  const { handleNewStudioChat } = useHandleNewStudioChat();
+  const { handleNewGroupChat } = useHandleNewGroupChat();
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
+  const groupsWorkspaceRoot = useWorkspacePathsStore((state) => state.groupsWorkspaceRoot);
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const setLatestProjectId = useLatestProjectStore((state) => state.setLatestProjectId);
   const clearLatestProjectId = useLatestProjectStore((state) => state.clearLatestProjectId);
@@ -265,14 +269,22 @@ function ChatRouteGlobalShortcuts() {
   // Shortcuts that target "a project" must stay inside the Space you are looking at, or
   // mod+alt+arrow would switch Space and the next new-thread shortcut would drop you back
   // out of it.
+  const workspacePaths = useMemo(
+    () => ({ homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot }),
+    [chatWorkspaceRoot, groupsWorkspaceRoot, homeDir, studioWorkspaceRoot],
+  );
   const activeSpaceProjects = useMemo(
     () =>
       projects.filter(
         (project) =>
-          isOrdinarySpaceProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }) &&
+          isOrdinarySpaceProject(project, workspacePaths) &&
           (project.spaceId ?? null) === activeSpaceId,
       ),
-    [activeSpaceId, chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
+    [activeSpaceId, projects, workspacePaths],
+  );
+  const groupProjects = useMemo(
+    () => projects.filter((project) => isGroupContainerProject(project, workspacePaths)),
+    [projects, workspacePaths],
   );
   const currentProjectId = resolveCurrentProjectTargetId(
     activeSpaceProjects,
@@ -292,24 +304,34 @@ function ChatRouteGlobalShortcuts() {
   // Deliberately unscoped: the persisted id is only cleared once the project is gone from
   // the app entirely, not merely absent from the Space you happen to be in.
   const persistedLatestProjectStillExists = resolveLatestProjectTargetId(projects, latestProjectId);
+  // A bare "new chat" on the Groups surface lands in the active (or first) group; with
+  // no groups at all there is no implicit container — the /groups empty state shows.
+  const handleNewGroupChatForSurface = useCallback(
+    (options?: { fresh?: boolean }) => {
+      const targetProjectId = resolveGroupChatTargetProjectId({
+        activeProject,
+        groupProjects,
+      });
+      if (!targetProjectId) {
+        return navigate({ to: "/groups" }).then((): { ok: true; threadId: null } => ({
+          ok: true,
+          threadId: null,
+        }));
+      }
+      return handleNewGroupChat(targetProjectId, options);
+    },
+    [activeProject, groupProjects, handleNewGroupChat, navigate],
+  );
   const handleNewChatForActiveSurface = useCallback(
     () =>
       startFreshChatForActiveSurface({
         activeProject,
-        isStudioRoute,
-        paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot },
+        isGroupsRoute,
+        paths: workspacePaths,
         handleNewChat,
-        handleNewStudioChat,
+        handleNewGroupChat: handleNewGroupChatForSurface,
       }),
-    [
-      activeProject,
-      chatWorkspaceRoot,
-      handleNewChat,
-      handleNewStudioChat,
-      homeDir,
-      isStudioRoute,
-      studioWorkspaceRoot,
-    ],
+    [activeProject, handleNewChat, handleNewGroupChatForSurface, isGroupsRoute, workspacePaths],
   );
 
   useEffect(() => {

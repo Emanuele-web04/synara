@@ -108,7 +108,7 @@ export function ProjectPanel({
   const content = (
     <div className="flex flex-col gap-0.5 p-1.5">
       <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
-        <EnvironmentPanelTitle>Project</EnvironmentPanelTitle>
+        <EnvironmentPanelTitle>Group</EnvironmentPanelTitle>
         {configured ? (
           <div className="flex items-center gap-0.5">
             {agent.overview?.goal?.status === "active" ? (
@@ -123,8 +123,8 @@ export function ProjectPanel({
             ) : null}
             <IconButton
               type="button"
-              label="Project settings"
-              tooltip="Project settings"
+              label="Group settings"
+              tooltip="Group settings"
               className="-mr-[7px] sm:-mr-[5px]"
               onClick={() => setAgentDialogOpen(true)}
             >

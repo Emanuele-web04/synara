@@ -291,6 +291,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
     Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
   ),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
+  providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
 });
@@ -1043,6 +1044,11 @@ function normalizePersistedDraftsByThreadId(
       activeProvider = modelSelection?.provider ?? null;
     }
 
+    const providerOptionsForDispatch = Schema.is(ProviderStartOptions)(
+      draftCandidate.providerOptionsForDispatch,
+    )
+      ? draftCandidate.providerOptionsForDispatch
+      : undefined;
     const normalizedQueuedTurns = queuedTurns ?? [];
     const restoredSourceProposedPlan = Schema.is(PersistedRestoredSourceProposedPlan)(
       draftCandidate.restoredSourceProposedPlan,
@@ -1068,6 +1074,7 @@ function normalizePersistedDraftsByThreadId(
       !hasQueuedTurns &&
       restoredSourceProposedPlan === null &&
       !hasModelData &&
+      providerOptionsForDispatch === undefined &&
       !runtimeMode &&
       !interactionMode
     ) {
@@ -1089,6 +1096,7 @@ function normalizePersistedDraftsByThreadId(
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
       ...(restoredSourceProposedPlan ? { restoredSourceProposedPlan } : {}),
       ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
+      ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
     };
@@ -1237,6 +1245,7 @@ export function partializeComposerDraftStoreState(
       !hasQueuedTurns &&
       draft.restoredSourceProposedPlan == null &&
       !hasModelData &&
+      draft.providerOptionsForDispatch == null &&
       draft.runtimeMode === null &&
       draft.interactionMode === null
     ) {
@@ -1386,6 +1395,9 @@ export function partializeComposerDraftStoreState(
             modelSelectionByProvider: draft.modelSelectionByProvider,
             activeProvider: draft.activeProvider,
           }
+        : {}),
+      ...(draft.providerOptionsForDispatch
+        ? { providerOptionsForDispatch: draft.providerOptionsForDispatch }
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),

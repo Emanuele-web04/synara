@@ -55,7 +55,7 @@ interface Input {
   activeProject: Project;
   chatWorkspaceRoot: string | null;
   isHomeChatContainer: boolean;
-  isStudioContainer: boolean;
+  isGroupContainer: boolean;
   resolvedThreadWorktreePath: string | null;
   runtimeModeForSend: RuntimeMode;
   envModeForSend: DraftThreadEnvMode;
@@ -91,7 +91,7 @@ export async function prepareChatSendWorkspace({
   activeProject,
   chatWorkspaceRoot,
   isHomeChatContainer,
-  isStudioContainer,
+  isGroupContainer,
   resolvedThreadWorktreePath,
   runtimeModeForSend,
   envModeForSend,
@@ -156,10 +156,10 @@ export async function prepareChatSendWorkspace({
     defaultModelSelection: firstSendDefaultModelSelection,
     isFirstMessage,
     isHomeChatContainer,
-    isStudioContainer,
+    isGroupContainer,
     projects: currentStoreState.projects,
-    // Studio reference folders change the thread cwd without moving the chat out of
-    // the managed Studio project. Home-chat folder selection keeps its project routing.
+    // Group reference folders change the thread cwd without moving the chat out of
+    // the managed group project. Home-chat folder selection keeps its project routing.
     selectedWorkspaceRoot: isHomeChatContainer ? (resolvedThreadWorktreePath ?? null) : null,
     title,
     titleSeed,
@@ -181,18 +181,18 @@ export async function prepareChatSendWorkspace({
     : firstSendTarget.target;
   let nextRuntimeModeForSend = runtimeModeForSend;
   let nextThreadEnvMode = envModeForSend;
-  let nextThreadBranch = isStudioContainer ? null : activeThread.branch;
-  let nextThreadWorktreePath = isStudioContainer ? null : activeThread.worktreePath;
-  let nextThreadWorkingDirectory = isStudioContainer
+  let nextThreadBranch = isGroupContainer ? null : activeThread.branch;
+  let nextThreadWorktreePath = isGroupContainer ? null : activeThread.worktreePath;
+  let nextThreadWorkingDirectory = isGroupContainer
     ? resolvedThreadWorkingDirectory
     : (activeThread.workingDirectory ?? null);
-  let nextAssociatedWorktreePath = isStudioContainer
+  let nextAssociatedWorktreePath = isGroupContainer
     ? null
     : (activeThread.associatedWorktreePath ?? null);
-  let nextAssociatedWorktreeBranch = isStudioContainer
+  let nextAssociatedWorktreeBranch = isGroupContainer
     ? null
     : (activeThread.associatedWorktreeBranch ?? null);
-  let nextAssociatedWorktreeRef = isStudioContainer
+  let nextAssociatedWorktreeRef = isGroupContainer
     ? null
     : (activeThread.associatedWorktreeRef ?? null);
   const shouldResumeSettledLocalThread =

@@ -107,7 +107,7 @@ describe("isHomeChatContainerProject", () => {
 
   it("trusts the chat kind before any server workspace path resolves", () => {
     // Boot window: neither homeDir nor chatWorkspaceRoot known yet — the kind alone decides,
-    // mirroring isStudioContainerProject, so chat rows aren't mis-partitioned during startup.
+    // mirroring isGroupContainerProject, so chat rows aren't mis-partitioned during startup.
     expect(
       isHomeChatContainerProject(
         {

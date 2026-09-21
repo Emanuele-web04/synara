@@ -60,7 +60,10 @@ function threadSuggestionTitle(title: string): string {
 function threadSuggestionContainerName(project: Project | undefined): string {
   if (!project) return "Unknown project";
   if (project.kind === "chat") return "Chats";
-  if (project.kind === "studio") return "Studio";
+  // Group containers (legacy "studio" included) use their own title in mentions.
+  if (project.kind === "group" || project.kind === "studio") {
+    return project.name.trim() || "Groups";
+  }
   return project.name.trim() || project.folderName.trim() || "Untitled project";
 }
 
