@@ -635,3 +635,23 @@ correct the macOS signed-wheel direction, and retain launch focus observations.
 Pure native policy and cancellation checks do not qualify Resolve dialogs,
 Helium browser chrome, or another machine's permission state; those still need
 an application-specific trace and observed outcome.
+
+### Revision 38: atomic text into the target window's own focused element
+
+`type_text` without an element refused with `same_pid_keyboard_ambiguity`
+whenever the application owned a sibling top-level window, before its AX rung
+could run. Notes always owns one, so every sentence degraded to one
+`press_key` call per character. That refusal protects against process-scoped
+key events reaching a sibling; the AX rung posts none. It writes
+`AXSelectedText` into `focused_element_in_window(pid, window_id)`, an element
+proven to belong to the exact target window.
+
+When `InsertText` is refused for that reason, semantic AX admission still
+executes, and the target window has its own focused element, the policy is now
+`SemanticFocused`: one atomic `AXSelectedText` write with AX read-back, under
+the existing process mutation lease and cancellation gate. The CGEvent rung
+stays refused with the original refusal, so a write that does not land returns
+`same_pid_keyboard_ambiguity` exactly as before and nothing is retried. Explicit
+`semantic_only` requests keep their character-paced exact-element contract, and
+hotkeys (including paste) are unchanged. Not qualified: web-content fields,
+where `AXValue` read-back is not renderer evidence.

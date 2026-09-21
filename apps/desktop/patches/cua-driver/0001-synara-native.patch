@@ -24628,3 +24628,109 @@ diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/set_value.rs b
 
      #[test]
      fn read_only_facts_select_one_typed_write_route() {
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index 4fdecf6..1930b66 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -710,7 +710,7 @@ fn daemon_metadata_response() -> DaemonResponse {
+         .expect("daemon metadata is serializable");
+     #[cfg(target_os = "macos")]
+     {
+-        metadata["synara_native_revision"] = serde_json::json!(37);
++        metadata["synara_native_revision"] = serde_json::json!(38);
+     }
+     DaemonResponse::ok(metadata)
+ }
+diff --git a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+index d83a772..b55c744 100644
+--- a/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
++++ b/libs/cua-driver/rust/crates/platform-macos/src/tools/type_text.rs
+@@ -306,7 +306,7 @@ impl Tool for TypeTextTool {
+         if let (Some(cx), Some(cy)) = (px, py) {
+             // The px form has no exact element for a semantic-only write; when
+             // the keyboard rung is refused, refuse before the focus click too.
+-            if let BackgroundKeyboardPolicy::SemanticOnly(ref refusal) = keyboard_policy {
++            if let Some(refusal) = keyboard_policy.semantic_refusal() {
+                 let wid = window_id.expect("gate ran only with window_id");
+                 return super::background_refusal_result(pid, wid, refusal);
+             }
+@@ -804,6 +804,21 @@ enum BackgroundKeyboardPolicy {
+     /// process-scoped CGEvent rung is refused with this refusal — carried so
+     /// the exact reason is returned if the AX write does not land.
+     SemanticOnly(BackgroundRefusal),
++    /// No element was addressed and process-scoped keys are refused (the app
++    /// owns sibling windows), but the target window's own focused element is
++    /// proven: one atomic `AXSelectedText` write into it may run. Like
++    /// `SemanticOnly`, the CGEvent rung stays refused with this refusal.
++    SemanticFocused(BackgroundRefusal),
++}
++
++impl BackgroundKeyboardPolicy {
++    /// The refusal to return when only the semantic AX rung may run.
++    fn semantic_refusal(&self) -> Option<&BackgroundRefusal> {
++        match self {
++            Self::Allowed => None,
++            Self::SemanticOnly(refusal) | Self::SemanticFocused(refusal) => Some(refusal),
++        }
++    }
+ }
+ 
+ /// Delivery envelope for `type_text_blocking`: either an actuator ran
+@@ -887,11 +902,30 @@ async fn background_keyboard_policy(
+     match decide_background_input(target, &facts, BackgroundAction::InsertText) {
+         BackgroundInputDecision::Execute { .. } => Ok((lease, BackgroundKeyboardPolicy::Allowed)),
+         BackgroundInputDecision::Refuse(refusal) => {
+-            let semantic_available = element_ptr.is_some()
+-                && decide_background_input(target, &facts, BackgroundAction::AxSemantic)
+-                    .is_execute();
+-            if semantic_available {
+-                Ok((lease, BackgroundKeyboardPolicy::SemanticOnly(refusal)))
++            let semantic_executes =
++                decide_background_input(target, &facts, BackgroundAction::AxSemantic).is_execute();
++            if semantic_executes && element_ptr.is_some() {
++                return Ok((lease, BackgroundKeyboardPolicy::SemanticOnly(refusal)));
++            }
++            // No element was addressed. Process-scoped keys stay refused, but
++            // the AX rung never posts them: it writes `AXSelectedText` into
++            // the element the target window itself has focused, which cannot
++            // reach a sibling window. Admit that single exact write.
++            let focused_in_window = semantic_executes
++                && refusal.code == refusal_codes::SAME_PID_KEYBOARD_AMBIGUITY
++                && tokio::task::spawn_blocking(move || unsafe {
++                    match crate::ax::exact_target::focused_element_in_window(pid, window_id) {
++                        Some(element) => {
++                            CFRelease(element as _);
++                            true
++                        }
++                        None => false,
++                    }
++                })
++                .await
++                .unwrap_or(false);
++            if focused_in_window {
++                Ok((lease, BackgroundKeyboardPolicy::SemanticFocused(refusal)))
+             } else {
+                 Err(super::background_refusal_result(pid, window_id, &refusal))
+             }
+@@ -1292,8 +1326,8 @@ fn type_text_blocking(
+         // A terminal insert has no semantic AX rung: when the exact-target
+         // decision restricted this request to semantic-only, there is nothing
+         // safe to run — refuse before posting anything.
+-        if let BackgroundKeyboardPolicy::SemanticOnly(refusal) = keyboard_policy {
+-            return Ok(TypeTextDelivery::Refused(refusal));
++        if let Some(refusal) = keyboard_policy.semantic_refusal() {
++            return Ok(TypeTextDelivery::Refused(refusal.clone()));
+         }
+         if let Some(refusal) = synthesis_preflight(
+             TextDeliveryRoute::UnicodeSynthesis,
+@@ -1485,8 +1519,8 @@ fn type_text_blocking(
+     // The semantic AX rung did not land and this request is restricted to it:
+     // the process-scoped CGEvent rung could reach a sibling window, so return
+     // the structured refusal instead of escalating.
+-    if let BackgroundKeyboardPolicy::SemanticOnly(refusal) = keyboard_policy {
+-        return Ok(TypeTextDelivery::Refused(refusal));
++    if let Some(refusal) = keyboard_policy.semantic_refusal() {
++        return Ok(TypeTextDelivery::Refused(refusal.clone()));
+     }
+ 
+     if let Some(refusal) = synthesis_preflight(
