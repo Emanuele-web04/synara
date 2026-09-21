@@ -343,6 +343,8 @@ import {
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
   resolveActiveSidebarThreadId,
+  archiveThreadsForFolderRemoval,
+  deleteThreadsForFolderRemoval,
   resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
@@ -1723,6 +1725,11 @@ export default function Sidebar() {
     null,
   );
   const [threadFolderDropTargetKey, setThreadFolderDropTargetKey] = useState<string | null>(null);
+  // Mirrors whether the in-flight drag carries folder members. Kept as state (not a
+  // ref read) because the project row renders from it and React Compiler bails out
+  // on ref reads during render.
+  const [sidebarThreadDragIncludesFolderMember, setSidebarThreadDragIncludesFolderMember] =
+    useState(false);
   const optimisticPinnedStateByProjectIdRef = useRef(new Map<ProjectId, boolean>());
   const latestPinnedMutationVersionByProjectIdRef = useRef(new Map<ProjectId, number>());
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
@@ -1741,15 +1748,11 @@ export default function Sidebar() {
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const threadFolders = useSidebarThreadFolderStore((state) => state.folders);
   const folderIdByThreadId = useSidebarThreadFolderStore((state) => state.folderIdByThreadId);
-  const collapsedThreadFolderIds = useSidebarThreadFolderStore(
-    (state) => state.collapsedFolderIds,
-  );
+  const collapsedThreadFolderIds = useSidebarThreadFolderStore((state) => state.collapsedFolderIds);
   const createThreadFolder = useSidebarThreadFolderStore((state) => state.createFolder);
   const renameThreadFolder = useSidebarThreadFolderStore((state) => state.renameFolder);
   const assignThreadsToFolder = useSidebarThreadFolderStore((state) => state.assignThreads);
-  const setThreadFolderCollapsed = useSidebarThreadFolderStore(
-    (state) => state.setFolderCollapsed,
-  );
+  const setThreadFolderCollapsed = useSidebarThreadFolderStore((state) => state.setFolderCollapsed);
   const archiveThreadFolder = useSidebarThreadFolderStore((state) => state.archiveFolder);
   const restoreThreadFolder = useSidebarThreadFolderStore((state) => state.restoreFolder);
   const deleteThreadFolder = useSidebarThreadFolderStore((state) => state.deleteFolder);
@@ -1928,13 +1931,7 @@ export default function Sidebar() {
       }
       if (hasActiveAssignedThread) restoreThreadFolder(folder.id);
     }
-  }, [
-    folderIdByThreadId,
-    restoreThreadFolder,
-    sidebarThreads,
-    threadFolders,
-    threadsHydrated,
-  ]);
+  }, [folderIdByThreadId, restoreThreadFolder, sidebarThreads, threadFolders, threadsHydrated]);
   const {
     pinnedThreadIds,
     pinnedThreadIdSet,
@@ -3060,6 +3057,7 @@ export default function Sidebar() {
   const clearSidebarThreadDrag = useCallback(() => {
     sidebarThreadDragIdsRef.current = [];
     setSidebarThreadDragProjectId(null);
+    setSidebarThreadDragIncludesFolderMember(false);
     setThreadFolderDropTargetKey(null);
   }, []);
 
@@ -3084,11 +3082,7 @@ export default function Sidebar() {
   );
 
   const handleThreadFolderDragOver = useCallback(
-    (
-      event: ReactDragEvent<HTMLElement>,
-      projectId: ProjectId,
-      targetFolderId: string | null,
-    ) => {
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
       if (!isThreadDragTransfer(event.dataTransfer)) return;
       // A folder owns its whole subtree as a drop target. Blocking the project-root
       // parent prevents dropping on the current folder from accidentally extracting it.
@@ -3111,11 +3105,7 @@ export default function Sidebar() {
   );
 
   const handleThreadFolderDragLeave = useCallback(
-    (
-      event: ReactDragEvent<HTMLElement>,
-      projectId: ProjectId,
-      targetFolderId: string | null,
-    ) => {
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
       if (!isThreadDragTransfer(event.dataTransfer)) return;
       const relatedTarget = event.relatedTarget as Node | null;
       if (relatedTarget && event.currentTarget.contains(relatedTarget)) return;
@@ -3126,11 +3116,7 @@ export default function Sidebar() {
   );
 
   const handleThreadFolderDrop = useCallback(
-    (
-      event: ReactDragEvent<HTMLElement>,
-      projectId: ProjectId,
-      targetFolderId: string | null,
-    ) => {
+    (event: ReactDragEvent<HTMLElement>, projectId: ProjectId, targetFolderId: string | null) => {
       if (!isThreadDragTransfer(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -3177,34 +3163,26 @@ export default function Sidebar() {
       try {
         if (mode === "archive") {
           pendingThreadFolderArchiveIdsRef.current.add(folder.id);
-          for (const threadId of topLevelIds) {
-            const thread = getThreadFromState(useStore.getState(), threadId);
-            if (thread && (thread.archivedAt ?? null) === null) await archiveThread(threadId);
-          }
+          await archiveThreadsForFolderRemoval({
+            threadIds: topLevelIds,
+            getThread: (threadId) => getThreadFromState(useStore.getState(), threadId),
+            archiveThread,
+          });
           archiveThreadFolder(folder.id);
           removeFromSelection(topLevelIds);
           return;
         }
 
-        const deletedIds = new Set<ThreadId>(topLevelIds);
-        const successfullyDeletedIds: ThreadId[] = [];
-        try {
-          for (const threadId of topLevelIds) {
-            await deleteThread(threadId, {
-              deletedThreadIds: deletedIds,
-              reconcileDeletedThread: false,
-            });
-            successfullyDeletedIds.push(threadId);
-          }
-        } finally {
-          if (successfullyDeletedIds.length > 0) {
-            await reconcileDeletedThreadsFromClient({
-              threadIds: successfullyDeletedIds,
+        await deleteThreadsForFolderRemoval({
+          threadIds: topLevelIds,
+          deleteThread,
+          reconcileDeletedThreads: (threadIds) =>
+            reconcileDeletedThreadsFromClient({
+              threadIds,
               removeDeletedThreadFromClientState:
                 useStore.getState().removeDeletedThreadFromClientState,
-            });
-          }
-        }
+            }),
+        });
         deleteThreadFolder(folder.id);
         removeFromSelection(topLevelIds);
       } catch (error) {
@@ -3246,7 +3224,10 @@ export default function Sidebar() {
       }
       if (clicked === "move-to-project") {
         moveThreadsToFolder(
-          getThreadIdsInFolder(useSidebarThreadFolderStore.getState().folderIdByThreadId, folder.id),
+          getThreadIdsInFolder(
+            useSidebarThreadFolderStore.getState().folderIdByThreadId,
+            folder.id,
+          ),
           null,
         );
         return;
@@ -3632,12 +3613,13 @@ export default function Sidebar() {
           (thread) =>
             thread.projectId === selectedProjectId && (thread.parentThreadId ?? null) === null,
         );
-      const projectFolders = canOrganizeSelection && selectedProjectId !== null
-        ? getProjectThreadFolders(
-            useSidebarThreadFolderStore.getState().folders,
-            selectedProjectId,
-          )
-        : [];
+      const projectFolders =
+        canOrganizeSelection && selectedProjectId !== null
+          ? getProjectThreadFolders(
+              useSidebarThreadFolderStore.getState().folders,
+              selectedProjectId,
+            )
+          : [];
       const folderAssignments = useSidebarThreadFolderStore.getState().folderIdByThreadId;
       const hasFolderAssignment = ids.some((id) => folderAssignments[id] !== undefined);
 
@@ -5283,6 +5265,11 @@ export default function Sidebar() {
                   setSidebarThreadDragProjectId(
                     draggableFolderThreadIds.length > 0 ? thread.projectId : null,
                   );
+                  setSidebarThreadDragIncludesFolderMember(
+                    draggableFolderThreadIds.some(
+                      (threadId) => folderIdByThreadId[threadId] !== undefined,
+                    ),
+                  );
                   setThreadFolderDropTargetKey(null);
                   beginThreadDrag(event, thread.id);
                 }}
@@ -5439,12 +5426,10 @@ export default function Sidebar() {
             }}
           >
             <FoldersIcon className="size-3 shrink-0 text-muted-foreground/65" aria-hidden />
-            <span className="min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui-xs,11px)] font-normal text-muted-foreground/82">
+            <span className="min-w-0 flex-1 truncate text-ui-xs font-normal text-muted-foreground/82">
               {folder.name}
             </span>
-            <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/42">
-              {totalThreadCount}
-            </span>
+            <span className="shrink-0 text-ui-xs text-muted-foreground/42">{totalThreadCount}</span>
             <DisclosureChevron open={open} className="size-3 text-muted-foreground/55" />
           </SidebarMenuSubButton>
         </SidebarMenuSubItem>
@@ -5498,10 +5483,7 @@ export default function Sidebar() {
     const projectRootDropKey = threadFolderDropKey(project.id, null);
     const projectRootDropActive = threadFolderDropTargetKey === projectRootDropKey;
     const showProjectRootDropTarget =
-      sidebarThreadDragProjectId === project.id &&
-      sidebarThreadDragIdsRef.current.some(
-        (threadId) => folderIdByThreadId[threadId] !== undefined,
-      );
+      sidebarThreadDragProjectId === project.id && sidebarThreadDragIncludesFolderMember;
     const projectFolderIconClassName = isProjectPinned
       ? "opacity-0"
       : sidebarHoverRevealHideClassName("project-header");
@@ -5734,7 +5716,7 @@ export default function Sidebar() {
                 <SidebarMenuSubItem className="w-full">
                   <div
                     className={cn(
-                      "mx-1 flex h-7 items-center gap-1.5 rounded-md border border-dashed border-border/60 px-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/72 transition-colors",
+                      "mx-1 flex h-7 items-center gap-1.5 rounded-md border border-dashed border-border/60 px-2 text-ui text-muted-foreground/72 transition-colors",
                       projectRootDropActive &&
                         "border-info/70 bg-info/14 text-foreground ring-1 ring-info/45",
                     )}
@@ -7630,9 +7612,7 @@ export default function Sidebar() {
           onOpenChange={(nextOpen) => {
             if (!nextOpen) setThreadFolderRemovalState(null);
           }}
-          onConfirm={(disposition) =>
-            runThreadFolderRemoval(threadFolderRemovalState, disposition)
-          }
+          onConfirm={(disposition) => runThreadFolderRemoval(threadFolderRemovalState, disposition)}
         />
       ) : null}
 

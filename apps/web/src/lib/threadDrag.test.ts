@@ -29,7 +29,9 @@ describe("threadDrag", () => {
 
   it("rejects malformed and empty payloads", () => {
     expect(readThreadDragPayload(dataTransfer({ payload: "{" }))).toBeNull();
-    expect(readThreadDragPayload(dataTransfer({ payload: JSON.stringify({ threadId: "" }) }))).toBeNull();
+    expect(
+      readThreadDragPayload(dataTransfer({ payload: JSON.stringify({ threadId: "" }) })),
+    ).toBeNull();
   });
 
   it("treats the folder's left gutter as the project root", () => {

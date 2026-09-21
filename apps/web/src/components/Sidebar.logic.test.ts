@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildProjectThreadTree,
@@ -39,6 +39,8 @@ import {
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveActiveSidebarThreadId,
+  archiveThreadsForFolderRemoval,
+  deleteThreadsForFolderRemoval,
   resolveSidebarNewThreadEnvMode,
   resolveSidebarProjectRowLabel,
   resolveThreadHoverCardMetadata,
@@ -2498,5 +2500,120 @@ describe("sortProjectsForSidebar", () => {
     );
 
     expect(timestamp).toBe(Date.parse("2026-03-09T10:10:00.000Z"));
+  });
+});
+
+describe("archiveThreadsForFolderRemoval", () => {
+  const firstThreadId = ThreadId.makeUnsafe("thread-first");
+  const secondThreadId = ThreadId.makeUnsafe("thread-second");
+
+  it("archives only the threads that are not archived yet", async () => {
+    const archived: ThreadId[] = [];
+
+    await archiveThreadsForFolderRemoval({
+      threadIds: [firstThreadId, secondThreadId],
+      getThread: (threadId) => ({ archivedAt: threadId === firstThreadId ? "2026-03-09" : null }),
+      archiveThread: async (threadId) => {
+        archived.push(threadId);
+        return true;
+      },
+    });
+
+    expect(archived).toEqual([secondThreadId]);
+  });
+
+  it("skips threads that are missing from the store", async () => {
+    const archiveThread = vi.fn(async () => true);
+
+    await archiveThreadsForFolderRemoval({
+      threadIds: [firstThreadId],
+      getThread: () => undefined,
+      archiveThread,
+    });
+
+    expect(archiveThread).not.toHaveBeenCalled();
+  });
+
+  it("excludes every folder member from the routed fallback", async () => {
+    const excludedSets: Array<ReadonlySet<ThreadId>> = [];
+
+    await archiveThreadsForFolderRemoval({
+      threadIds: [firstThreadId, secondThreadId],
+      getThread: () => ({ archivedAt: null }),
+      archiveThread: async (_threadId, options) => {
+        excludedSets.push(options.fallbackExcludedThreadIds);
+        return true;
+      },
+    });
+
+    expect(excludedSets).toHaveLength(2);
+    expect([...excludedSets[0]!]).toEqual([firstThreadId, secondThreadId]);
+  });
+
+  it("rejects when a member archive is already in flight", async () => {
+    await expect(
+      archiveThreadsForFolderRemoval({
+        threadIds: [firstThreadId, secondThreadId],
+        getThread: () => ({ archivedAt: null }),
+        archiveThread: async (threadId) => threadId !== secondThreadId,
+      }),
+    ).rejects.toThrow("A thread could not be archived.");
+  });
+});
+
+describe("deleteThreadsForFolderRemoval", () => {
+  const firstThreadId = ThreadId.makeUnsafe("thread-first");
+  const secondThreadId = ThreadId.makeUnsafe("thread-second");
+
+  it("reconciles the deleted threads after every delete succeeds", async () => {
+    const deletedIds: ThreadId[] = [];
+    const reconciled: ThreadId[][] = [];
+
+    await deleteThreadsForFolderRemoval({
+      threadIds: [firstThreadId, secondThreadId],
+      deleteThread: async (threadId) => {
+        deletedIds.push(threadId);
+      },
+      reconcileDeletedThreads: async (threadIds) => {
+        reconciled.push([...threadIds]);
+      },
+    });
+
+    expect(deletedIds).toEqual([firstThreadId, secondThreadId]);
+    expect(reconciled).toEqual([[firstThreadId, secondThreadId]]);
+  });
+
+  it("reconciles the already-deleted threads and rethrows when a delete fails", async () => {
+    const reconciled: ThreadId[][] = [];
+
+    await expect(
+      deleteThreadsForFolderRemoval({
+        threadIds: [firstThreadId, secondThreadId],
+        deleteThread: async (threadId) => {
+          if (threadId === secondThreadId) throw new Error("delete failed");
+        },
+        reconcileDeletedThreads: async (threadIds) => {
+          reconciled.push([...threadIds]);
+        },
+      }),
+    ).rejects.toThrow("delete failed");
+
+    expect(reconciled).toEqual([[firstThreadId]]);
+  });
+
+  it("does not reconcile when the first delete fails", async () => {
+    const reconcileDeletedThreads = vi.fn();
+
+    await expect(
+      deleteThreadsForFolderRemoval({
+        threadIds: [firstThreadId],
+        deleteThread: async () => {
+          throw new Error("delete failed");
+        },
+        reconcileDeletedThreads,
+      }),
+    ).rejects.toThrow("delete failed");
+
+    expect(reconcileDeletedThreads).not.toHaveBeenCalled();
   });
 });

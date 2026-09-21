@@ -562,7 +562,10 @@ export function useSidebarThreadActions(input: {
   );
 
   const archiveThread = useCallback(
-    async (threadId: ThreadId): Promise<boolean> => {
+    async (
+      threadId: ThreadId,
+      options?: { fallbackExcludedThreadIds?: ReadonlySet<ThreadId> },
+    ): Promise<boolean> => {
       const api = readNativeApi();
       if (!api) return false;
       const thread = getThreadFromState(useStore.getState(), threadId);
@@ -577,7 +580,9 @@ export function useSidebarThreadActions(input: {
           const fallbackThreadId = getFallbackThreadIdAfterDelete({
             threads: sidebarThreads,
             deletedThreadId: threadId,
-            deletedThreadIds: new Set<ThreadId>(),
+            // A folder archive must not route into a member that is about to be
+            // archived in the same batch.
+            deletedThreadIds: options?.fallbackExcludedThreadIds ?? new Set<ThreadId>(),
             sortOrder: appSettings.sidebarThreadSortOrder,
           });
           if (fallbackThreadId) {

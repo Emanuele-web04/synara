@@ -870,6 +870,77 @@ export function resolveActiveSidebarThreadId(input: {
 }): ThreadId | null {
   return input.optimisticThreadId ?? input.focusedThreadId ?? input.routeThreadId;
 }
+
+// `??` inside a `try` body bails the React Compiler out of memoizing the sidebar,
+// so the folder-archive predicate lives here instead of inline; see
+// chatHotPath.compiler.test.ts.
+export function shouldArchiveThreadInFolder(
+  thread: { archivedAt?: string | null } | undefined,
+): boolean {
+  return thread !== undefined && (thread.archivedAt ?? null) === null;
+}
+
+// Archives every not-yet-archived thread of a folder. Module scope for the same
+// compiler reason as `deleteThreadsForFolderRemoval` below: `for...of` lowers to a
+// value block, and value blocks inside a component's `try` bail the whole sidebar
+// out of memoization.
+export async function archiveThreadsForFolderRemoval(input: {
+  threadIds: readonly ThreadId[];
+  getThread: (threadId: ThreadId) => { archivedAt?: string | null } | undefined;
+  archiveThread: (
+    threadId: ThreadId,
+    options: { fallbackExcludedThreadIds: ReadonlySet<ThreadId> },
+  ) => Promise<boolean>;
+}): Promise<void> {
+  const folderThreadIds = new Set(input.threadIds);
+
+  for (const threadId of input.threadIds) {
+    const thread = input.getThread(threadId);
+    if (!shouldArchiveThreadInFolder(thread)) continue;
+
+    // A false result means another archive for the same thread is already in
+    // flight. Abort the folder archive instead of hiding a member that is still
+    // active; the caller clears its pending marker and surfaces the failure.
+    const archived = await input.archiveThread(threadId, {
+      fallbackExcludedThreadIds: folderThreadIds,
+    });
+    if (!archived) {
+      throw new Error(
+        "A thread could not be archived. Wait for any pending archive to finish, then try again.",
+      );
+    }
+  }
+}
+
+// Deletes every thread of a folder one by one and reconciles the ones that were
+// deleted even when a later delete fails. Lives at module scope (not inside the
+// Sidebar component) because `try/finally` and `throw` inside a try body bail the
+// React Compiler out of memoizing the sidebar; see chatHotPath.compiler.test.ts.
+export async function deleteThreadsForFolderRemoval(input: {
+  threadIds: readonly ThreadId[];
+  deleteThread: (
+    threadId: ThreadId,
+    options: { deletedThreadIds: ReadonlySet<ThreadId>; reconcileDeletedThread: boolean },
+  ) => Promise<void>;
+  reconcileDeletedThreads: (threadIds: readonly ThreadId[]) => Promise<void>;
+}): Promise<void> {
+  const deletedThreadIds = new Set(input.threadIds);
+  const successfullyDeletedIds: ThreadId[] = [];
+
+  try {
+    for (const threadId of input.threadIds) {
+      await input.deleteThread(threadId, {
+        deletedThreadIds,
+        reconcileDeletedThread: false,
+      });
+      successfullyDeletedIds.push(threadId);
+    }
+  } finally {
+    if (successfullyDeletedIds.length > 0) {
+      await input.reconcileDeletedThreads(successfullyDeletedIds);
+    }
+  }
+}
 export interface SidebarThreadTreeRow<
   T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
 > {
