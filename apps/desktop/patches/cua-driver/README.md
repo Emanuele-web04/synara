@@ -655,3 +655,29 @@ stays refused with the original refusal, so a write that does not land returns
 `semantic_only` requests keep their character-paced exact-element contract, and
 hotkeys (including paste) are unchanged. Not qualified: web-content fields,
 where `AXValue` read-back is not renderer evidence.
+
+### Revision 39: exclude proven non-keyboard sibling windows
+
+The same-pid keyboard ambiguity check still requires independently AX-mapped,
+non-minimized top-level siblings. It now excludes a sibling whose known AX
+subrole is not `AXStandardWindow`, `AXDialog`, `AXSystemDialog`, or
+`AXFloatingWindow`, or whose WindowServer record explicitly says off-screen
+and whose AX main/focused state is proven false. `AXFocusedWindow` also
+identifies the app's keyboard window when a per-window focus attribute is absent.
+No size, stacking-order, or recency heuristic participates in native admission.
+
+Missing/empty/`AXUnknown` subroles remain potential keyboard destinations.
+WindowServer visibility is retained as optional internal evidence: a missing or
+malformed `kCGWindowIsOnscreen` must not become proof of off-screen status.
+Unknown AX main/focus facts likewise keep the sibling counted. On-screen standard
+windows, dialogs and floating windows, and off-screen main/focused windows still
+preserve the ambiguity refusal. Exact window/element identity, cancellation,
+leases, and revision 38's atomic text path are unchanged.
+
+The exact-target tests cover compositor surfaces, real siblings, known accessory
+subroles, off-screen non-key windows, focused/main off-screen windows, all four
+keyboard subroles, and missing visibility/subrole/focus evidence. The type-text
+suite preserves revision 38 behavior. A staged macOS arm64 build is source/build
+proof only: live Notes behavior, fewer tool calls, hotkey/paste delivery, other
+apps, Intel/Windows/Linux runtime behavior, and signed release distribution are
+not qualified by these checks.

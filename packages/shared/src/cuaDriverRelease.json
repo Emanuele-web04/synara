@@ -2,9 +2,9 @@
   "version": "0.28.2",
   "source": "7fe7c33f741ee2dd5961ba80044d59f93b48ba47",
   "sha256": "d0c276a933465e70765d60e1c244d803276b5b5805e6b9e4311841169620470e",
-  "nativeRevision": 38,
-  "patchSha256": "41d21e762341bce3c077e924461570da2fc1b6594c373b86de7e07471fd1f976",
-  "linuxBrowserPatchSha256": "720511471a12e11f3b5a4e136381e7fb5e4bfc123d5591cadd20a4edb19f73d7",
+  "nativeRevision": 39,
+  "patchSha256": "e52de8a375e5d6e3c09241241eed15215bacdf81c14ee0f31ca2c3cb88b5e321",
+  "linuxBrowserPatchSha256": "3f720f97e616e96dc2a533154aeebf3862f5b5722ec7acaf1fd1daabde5fc5c4",
   "linuxBrowserInputControl": 1,
   "rustVersion": "1.97.1"
 }

@@ -5,7 +5,7 @@ not a release certification. Results belong to the exact application, driver
 revision, platform and provider named in each report; an older passing fixture
 does not qualify the current branch.
 
-The current driver is Cua 0.28.2 with Synara native revision 38. The
+The current driver is Cua 0.28.2 with Synara native revision 39. The
 [release manifest](../../packages/shared/src/cuaDriverRelease.json) is the source
 of truth for source, patch checksum and Rust version. Packaging must verify the
 staged artifact against that manifest. The checked-in

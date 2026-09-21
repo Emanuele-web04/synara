@@ -719,7 +719,7 @@ index f499100..3949ad0 100644
 -    #[cfg(target_os = "macos")]
 +    #[cfg(any(target_os = "macos", target_os = "linux"))]
      {
-         metadata["synara_native_revision"] = serde_json::json!(38);
+         metadata["synara_native_revision"] = serde_json::json!(39);
      }
 +    #[cfg(target_os = "linux")]
 +    {
