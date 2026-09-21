@@ -5842,6 +5842,28 @@ describe("computer_help", () => {
     }
   });
 
+  it("puts macOS menu commands before coordinate clicks and teaches whole-string insertion", async () => {
+    const { call, manager } = await setup(new FakeComputerBackend({ agentDialect: "macos" }));
+    try {
+      const menus = resultJson(await call("computer_help", { topic: "menus" })) as { text: string };
+      expect(menus.text).toContain("On macOS");
+      expect(menus.text).toContain("exact menu path first");
+      expect(menus.text).toContain("absent from both the element list and the menu bar");
+      expect(menus.text.indexOf("computer_invoke_menu")).toBeLessThan(
+        menus.text.indexOf("coordinate click"),
+      );
+      const editors = resultJson(await call("computer_help", { topic: "editors" })) as {
+        text: string;
+      };
+      expect(editors.text).toContain(
+        "computer_type_text with window_id alone inserts the whole string",
+      );
+      expect(editors.text).toContain("never spell text out through computer_press_key");
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("serves one chapter verbatim on its topic", async () => {
     const { call, manager } = await setup();
     try {

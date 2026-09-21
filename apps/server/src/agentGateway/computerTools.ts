@@ -133,7 +133,7 @@ export const COMPUTER_CONTROL_FIRST_MUTATION_DISCLOSURE =
   "Computer control ON for this turn: the agent is driving the desktop and the user can switch it off in Settings.";
 
 const COMPUTER_TOOL_REFRESH_GUIDANCE =
-  "Computer routing reminder: observe with computer_get_state and exact window_id before acting; prefer labels and roles over screenshot coordinates. Background text is focus-neutral only when Cua proves one writable Accessibility target. Foreground delivery requires the user's visible-use authorization; never replay uncertain delivery; off-Space pixels are not live.";
+  "Computer routing reminder: observe with computer_get_state and exact window_id before acting; try computer_invoke_menu with an exact path for app commands first (visible-use consent required). Use coordinates only for controls absent from both elements and menus. computer_type_text with window_id alone inserts the whole string into the focused field; never spell text through computer_press_key. Background text is focus-neutral only when Cua proves one writable Accessibility target. Foreground delivery requires the user's visible-use authorization; never replay uncertain delivery; off-Space pixels are not live.";
 
 /**
  * Attached to every null-window launch result, always rather than on
