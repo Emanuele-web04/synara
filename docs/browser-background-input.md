@@ -11,7 +11,8 @@ The worker's page focus is emulated until its execution and transport have drain
 emulation is not proof of input isolation: the runtime test also checks both destination fields,
 trusted click outcomes, unexpected composer blur events and native focus calls.
 
-Human focus or input on the target page interrupts its active automation. An already focused
+Human focus or input on the target page interrupts its active automation. Events on another tab
+do not cancel the action or clear its download/credential attribution. An already focused
 page rejects new automation until the user leaves it. Typing in the composer or changing chats
 does not transfer focus to the agent page. Closing a background agent tab preserves the selected
 tab. Existing input provenance, download guards, upload scope and cancellation remain in effect.
@@ -30,7 +31,7 @@ bun run --cwd apps/desktop smoke:browser-background
 
 This uses Electron and the actual BetterWright worker, a temporary profile, a loopback server
 on an ephemeral port, and synthetic pages. It checks visible/hidden native views, simultaneous
-composer input, switching to another chat during execution, page identity/state, popup opener,
+composer input, switching to another chat or selecting another tab and hiding its panel during execution, page identity/state, popup opener,
 cancellation and simulated manual takeover. The default test window stays hidden. “Visible” in
 this test means an attached native view; it does not mean the OS window is foreground.
 

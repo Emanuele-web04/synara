@@ -75,9 +75,13 @@ export class BrowserVaultCapture {
     }
   }
 
-  noteHumanActivity(threadId: string): void {
+  noteHumanActivity(threadId: string, tabId?: string): void {
     for (const page of this.pages) {
-      if (page.runtime.threadId === threadId) page.lastAgentActivity = 0;
+      if (
+        page.runtime.threadId === threadId &&
+        (tabId === undefined || page.runtime.tabId === tabId)
+      )
+        page.lastAgentActivity = 0;
     }
   }
 

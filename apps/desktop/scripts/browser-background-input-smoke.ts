@@ -112,7 +112,13 @@ async function smoke() {
       return;
     }
     const expected = { one: "", two: "" };
-    for (const mode of ["visible", "hidden", "switch-chat"] as const) {
+    let expectedClicks = 0;
+    for (const mode of ["visible", "hidden", "switch-chat", "other-tab"] as const) {
+      const manualTabId =
+        mode === "other-tab"
+          ? manager.newTab({ threadId: agentThread, url: `http://127.0.0.1:${port}/manual` })
+              .activeTabId
+          : null;
       manager.setPanelBounds({ threadId: agentThread, surface: "native", bounds });
       if (mode === "hidden") manager.hide({ threadId: agentThread });
       let active: "one" | "two" = "one";
@@ -127,6 +133,10 @@ async function smoke() {
       });
       let writes = 0;
       while (!done) {
+        if (manualTabId && writes === 5) {
+          manager.selectTab({ threadId: agentThread, tabId: manualTabId });
+          manager.hide({ threadId: agentThread });
+        }
         if (mode === "switch-chat" && writes === 5) {
           active = "two";
           await window.webContents.executeJavaScript("selectChat('two')");
@@ -145,6 +155,8 @@ async function smoke() {
         value: { value: string; clicks: number; trusted: boolean; sentinel: string };
       };
       assert.equal(result.value.value, "agent-7");
+      expectedClicks += 8;
+      assert.equal(result.value.clicks, expectedClicks);
       assert.equal(result.value.trusted, true);
       assert.equal(result.value.sentinel, "preserved");
       const human = await window.webContents.executeJavaScript(
@@ -172,6 +184,7 @@ async function smoke() {
         }),
       );
     }
+    await window.webContents.executeJavaScript("selectChat('two')");
     const selected = manager.getState({ threadId: agentThread }).activeTabId;
     const popup = (await command("browser_run", {
       idempotencyKey: "popup",
@@ -234,6 +247,7 @@ async function smoke() {
       assert.equal(nativeFocusCalls, 0);
       console.log(`${interruption}: rejected, same page preserved, zero native focus calls`);
     }
+    if (selected) manager.selectTab({ threadId: agentThread, tabId: selected });
     const linked = (await command("browser_run", {
       idempotencyKey: "link-popup",
       code: "await page.evaluate(()=>{window.open('/next','_blank')});return 'opened';",

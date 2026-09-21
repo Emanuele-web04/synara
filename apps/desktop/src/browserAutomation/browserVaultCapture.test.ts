@@ -46,6 +46,44 @@ function fixture() {
 }
 
 describe("native credential capture lifecycle", () => {
+  it("does not attribute an agent credential submission to activity on another tab", async () => {
+    const f = fixture();
+    const saveCaptured = vi.fn();
+    Object.assign(f.vault, { saveCaptured });
+    f.update({ settings: { offerSave: true, autosave: false, agentUse: true } });
+    await vi.waitFor(() => expect(mocks.install).toHaveBeenCalled());
+    const context = mocks.install.mock.calls[0]![0] as CaptureContextShim;
+    const runtime = {
+      threadId: "thread",
+      tabId: "agent",
+      webContents: { isDestroyed: () => false },
+    } as unknown as BrowserAutomationVisibleRuntime;
+    f.capture.register(runtime);
+    f.capture.noteAgentActivity(runtime);
+    f.capture.noteHumanActivity("thread", "manual");
+    const save = () =>
+      mocks.install.mock.calls[0]![1].vaultCallAtOrigin(
+        context.pages()[0],
+        "https://example.test",
+        "save",
+        { username: "fixture", password: "synthetic-password", label: "Fixture" },
+      );
+    await save();
+    expect(saveCaptured).toHaveBeenLastCalledWith(
+      "https://example.test",
+      expect.anything(),
+      "agent",
+    );
+    f.capture.noteHumanActivity("thread", "agent");
+    await save();
+    expect(saveCaptured).toHaveBeenLastCalledWith(
+      "https://example.test",
+      expect.anything(),
+      "user",
+    );
+    await f.capture.dispose();
+  });
+
   it("does not install sensors without consent and removes them when the vault locks", async () => {
     const f = fixture();
     await new Promise((resolve) => setTimeout(resolve, 0));

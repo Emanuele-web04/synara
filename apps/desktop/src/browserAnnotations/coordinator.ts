@@ -39,7 +39,7 @@ interface BrowserAnnotationCoordinatorOptions {
   readonly resolveRuntimeByWebContentsId: (
     webContentsId: number,
   ) => BrowserAnnotationRuntime | null;
-  readonly markHumanControl: (threadId: ThreadId) => void;
+  readonly markHumanControl: (threadId: ThreadId, tabId: string) => void;
 }
 
 interface ReadyDocument {
@@ -144,7 +144,7 @@ export class BrowserAnnotationCoordinator {
 
     // Starting the picker is an explicit human takeover. This interrupts any
     // in-flight agent command before the guest becomes interactive.
-    this.options.markHumanControl(input.threadId);
+    this.options.markHumanControl(input.threadId, input.tabId);
     const session: ActiveSession = {
       sessionId: Crypto.randomUUID(),
       runtime,
@@ -334,9 +334,13 @@ export class BrowserAnnotationCoordinator {
     });
   }
 
-  isInteractive(threadId: ThreadId): boolean {
+  isInteractive(threadId: ThreadId, tabId?: string): boolean {
     for (const session of this.sessionsByRuntimeKey.values()) {
-      if (session.runtime.threadId === threadId) return true;
+      if (
+        session.runtime.threadId === threadId &&
+        (tabId === undefined || session.runtime.tabId === tabId)
+      )
+        return true;
     }
     return false;
   }

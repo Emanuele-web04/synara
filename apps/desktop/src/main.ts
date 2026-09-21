@@ -444,7 +444,7 @@ let browserSessionRestore: BrowserSessionRestore | undefined;
 const browserVaultCapture = new BrowserVaultCapture(browserVault);
 const browserManager = new DesktopBrowserManager({
   onRuntimeReady: (runtime) => browserVaultCapture.register(runtime),
-  onHumanControl: (threadId) => browserVaultCapture.noteHumanActivity(threadId),
+  onHumanControl: (threadId, tabId) => browserVaultCapture.noteHumanActivity(threadId, tabId),
   annotationPreloadPath: annotationGuestPreload,
   beforeInputEvent: (event, input) => {
     if (

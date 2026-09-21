@@ -334,8 +334,7 @@ export class DesktopBrowserAutomationHost {
     if (
       request.name !== "browser_status" &&
       request.name !== "browser_tabs" &&
-      (this.browserManager.isAnnotationInteractive(request.threadId) ||
-        this.browserManager.isHumanBrowserOperationActive())
+      this.browserManager.isHumanBrowserOperationActive()
     ) {
       throw new BrowserAutomationHostError({
         code: "BrowserInterruptedByHuman",
@@ -391,7 +390,14 @@ export class DesktopBrowserAutomationHost {
     const unsubscribeHumanControl =
       request.name === "browser_status" || request.name === "browser_tabs"
         ? undefined
-        : this.browserManager.subscribeAutomationHumanControl(request.threadId, () => {
+        : this.browserManager.subscribeAutomationHumanControl(request.threadId, (eventTabId) => {
+            const currentTarget =
+              request.name === "browser_open" && input.reuse === false
+                ? null
+                : typeof input.tabId === "string"
+                  ? input.tabId
+                  : affinity.tabId;
+            if (eventTabId !== undefined && eventTabId !== currentTarget) return;
             interruptByHuman(
               new BrowserAutomationHostError({
                 code: "BrowserInterruptedByHuman",
@@ -676,7 +682,7 @@ export class DesktopBrowserAutomationHost {
     interrupt: (error: BrowserAutomationHostError) => void,
     action: () => Promise<T> | T,
   ): Promise<T> {
-    const epoch = this.browserManager.getAutomationHumanControlEpoch(threadId);
+    const epoch = this.browserManager.getAutomationHumanControlEpoch(threadId, tabId);
     const humanError = new BrowserAutomationHostError({
       code: "BrowserInterruptedByHuman",
       retryable: true,
@@ -684,26 +690,35 @@ export class DesktopBrowserAutomationHost {
       effectMayHaveCommitted,
       tabId: tabId as BrowserTabId,
     });
+    const unsubscribe = this.browserManager.subscribeAutomationHumanControl(
+      threadId,
+      (eventTabId) => {
+        if (eventTabId === undefined || eventTabId === tabId) interrupt(humanError);
+      },
+    );
     try {
       if (
         this.browserManager.isHumanBrowserOperationActive() ||
-        this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch
+        this.browserManager.isAnnotationInteractive(threadId, tabId) ||
+        this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch
       ) {
         interrupt(humanError);
       }
       throwIfAborted(signal);
       const result = await action();
-      if (this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch) {
+      if (this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch) {
         interrupt(humanError);
       }
       throwIfAborted(signal);
       return result;
     } catch (error) {
-      if (this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch) {
+      if (this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch) {
         interrupt(humanError);
       }
       if (signal.aborted) throw abortReason(signal);
       throw error;
+    } finally {
+      unsubscribe();
     }
   }
 

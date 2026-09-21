@@ -360,7 +360,7 @@ const createManager = () => {
     getState: vi.fn(() => state),
     getAutomationHumanControlEpoch: vi.fn(() => 0),
     subscribeAutomationHumanControl: vi.fn(
-      (_threadId: ThreadId, _listener: () => void) => () => undefined,
+      (_threadId: ThreadId, _listener: (tabId?: string) => void) => () => undefined,
     ),
     trackAutomationWindowOpen: vi.fn(
       (_input: { threadId: ThreadId; tabId: string }, _listener: (event: unknown) => void) => () =>
@@ -1395,14 +1395,17 @@ describe("DesktopBrowserAutomationHost", () => {
       return original(method, params);
     });
     let epoch = 0;
-    let takeControl!: () => void;
+    const listeners = new Set<(tabId?: string) => void>();
+    const takeControl = (tabId?: string) => {
+      if (tabId === undefined || tabId === TAB_ID) epoch += 1;
+      for (const listener of listeners) listener(tabId);
+    };
     raw.getAutomationHumanControlEpoch.mockImplementation(() => epoch);
     raw.subscribeAutomationHumanControl.mockImplementation((_threadId, listener) => {
-      takeControl = () => {
-        epoch += 1;
-        listener();
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
       };
-      return () => undefined;
     });
     const host = new DesktopBrowserAutomationHost(manager);
     const operation = host.executeTool({
@@ -1414,7 +1417,19 @@ describe("DesktopBrowserAutomationHost", () => {
     });
 
     await layoutStarted.promise;
-    takeControl();
+    let settled = false;
+    void operation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    takeControl("unrelated-manual-tab");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    takeControl(TAB_ID);
     await expect(operation).rejects.toMatchObject({
       browserError: { code: "BrowserInterruptedByHuman" },
     });

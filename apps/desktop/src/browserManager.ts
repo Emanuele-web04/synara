@@ -78,7 +78,7 @@ const BROWSER_ERROR_ABORTED = -3;
 
 type BrowserStateListener = (state: ThreadBrowserState) => void;
 type BrowserCopyLinkListener = (event: BrowserCopyLinkEvent) => void;
-type BrowserHumanControlListener = () => void;
+type BrowserHumanControlListener = (tabId?: string) => void;
 type BrowserAutomationWindowOpenListener = (event: BrowserAutomationWindowOpenEvent) => void;
 type BrowserAutomationDownloadListener = (event: BrowserAutomationDownloadEvent) => void;
 
@@ -230,7 +230,7 @@ export interface BrowserAutomationDownloadEvent {
 
 export interface DesktopBrowserManagerOptions {
   onRuntimeReady?: (runtime: BrowserAutomationVisibleRuntime) => () => void;
-  onHumanControl?: (threadId: ThreadId) => void;
+  onHumanControl?: (threadId: ThreadId, tabId?: string) => void;
   beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
   annotationPreloadPath?: string;
 }
@@ -427,6 +427,7 @@ export class DesktopBrowserManager {
   >();
   private readonly lastEmittedVersionByThreadId = new Map<ThreadId, number>();
   private readonly humanControlEpochByThreadId = new Map<ThreadId, number>();
+  private readonly humanControlEpochByRuntimeKey = new Map<string, number>();
   private readonly humanControlListenersByThreadId = new Map<
     ThreadId,
     Set<BrowserHumanControlListener>
@@ -504,7 +505,7 @@ export class DesktopBrowserManager {
       },
       resolveRuntimeByWebContentsId: (webContentsId) =>
         this.toAnnotationRuntime(this.findRuntimeByWebContentsId(webContentsId)),
-      markHumanControl: (threadId) => this.markHumanControl(threadId),
+      markHumanControl: (threadId, tabId) => this.markHumanControl(threadId, tabId),
     });
   }
 
@@ -591,8 +592,8 @@ export class DesktopBrowserManager {
     this.annotations.handleGuestMessage(sender, payload);
   }
 
-  isAnnotationInteractive(threadId: ThreadId): boolean {
-    return this.annotations.isInteractive(threadId);
+  isAnnotationInteractive(threadId: ThreadId, tabId?: string): boolean {
+    return this.annotations.isInteractive(threadId, tabId);
   }
 
   isTrustedRenderer(webContentsId: number): boolean {
@@ -639,7 +640,7 @@ export class DesktopBrowserManager {
   ): () => void {
     const key = buildRuntimeKey(input.threadId, input.tabId);
     const listeners = this.automationDownloadListenersByRuntimeKey.get(key) ?? new Set();
-    const humanControlEpoch = this.getAutomationHumanControlEpoch(input.threadId);
+    const humanControlEpoch = this.getAutomationHumanControlEpoch(input.threadId, input.tabId);
     const lease: BrowserAutomationDownloadLease = {
       listener,
       humanControlEpoch,
@@ -876,7 +877,7 @@ export class DesktopBrowserManager {
       return;
     }
     const runtimeKey = buildRuntimeKey(context.threadId, context.tabId);
-    const currentHumanEpoch = this.getAutomationHumanControlEpoch(context.threadId);
+    const currentHumanEpoch = this.getAutomationHumanControlEpoch(context.threadId, context.tabId);
     const provenance = this.automationSideEffectProvenanceByRuntimeKey.get(runtimeKey);
     if (!provenance || provenance.humanControlEpoch !== currentHumanEpoch) {
       // A manual download after genuine user input remains native Electron
@@ -898,8 +899,14 @@ export class DesktopBrowserManager {
     const provenance = this.automationSideEffectProvenanceByRuntimeKey.get(
       buildRuntimeKey(opener.threadId, opener.tabId),
     );
-    if (provenance?.humanControlEpoch === this.getAutomationHumanControlEpoch(opener.threadId)) {
-      this.automationSideEffectProvenanceByRuntimeKey.set(childKey, { ...provenance });
+    if (
+      provenance?.humanControlEpoch ===
+      this.getAutomationHumanControlEpoch(opener.threadId, opener.tabId)
+    ) {
+      this.automationSideEffectProvenanceByRuntimeKey.set(childKey, {
+        ...provenance,
+        humanControlEpoch: this.humanControlEpochByRuntimeKey.get(childKey) ?? 0,
+      });
     }
   }
 
@@ -1147,7 +1154,7 @@ export class DesktopBrowserManager {
       if (input.type !== "keyDown") {
         return;
       }
-      this.markHumanControl(runtime.threadId);
+      this.markHumanControl(runtime.threadId, runtime.tabId);
       const key = input.key.toLowerCase();
       const isCloseChord =
         key === "escape" ||
@@ -1169,7 +1176,7 @@ export class DesktopBrowserManager {
         input.type === "mouseWheel" ||
         input.type === "contextMenu"
       ) {
-        this.markHumanControl(runtime.threadId);
+        this.markHumanControl(runtime.threadId, runtime.tabId);
       }
     };
     webContents.on("before-mouse-event", markPopupPointerControl);
@@ -1289,6 +1296,7 @@ export class DesktopBrowserManager {
     this.snapshotCacheByThreadId.clear();
     this.lastEmittedVersionByThreadId.clear();
     this.humanControlEpochByThreadId.clear();
+    this.humanControlEpochByRuntimeKey.clear();
     this.humanControlListenersByThreadId.clear();
     this.expectedAutomationInputsByRuntimeKey.clear();
     this.automationGestureDepthByRuntimeKey.clear();
@@ -1314,8 +1322,10 @@ export class DesktopBrowserManager {
     };
   }
 
-  getAutomationHumanControlEpoch(threadId: ThreadId): number {
-    return this.humanControlEpochByThreadId.get(threadId) ?? 0;
+  getAutomationHumanControlEpoch(threadId: ThreadId, tabId?: string): number {
+    return tabId === undefined
+      ? (this.humanControlEpochByThreadId.get(threadId) ?? 0)
+      : (this.humanControlEpochByRuntimeKey.get(buildRuntimeKey(threadId, tabId)) ?? 0);
   }
 
   private humanBrowserOperations = 0;
@@ -1691,13 +1701,7 @@ export class DesktopBrowserManager {
 
   hide(input: BrowserThreadInput): void {
     const state = this.states.get(input.threadId);
-    const activeTab = state ? this.getActiveTab(state) : null;
-    const keepsAgentRuntimeAlive = Boolean(
-      activeTab && this.automationRuntimeKeys.has(buildRuntimeKey(input.threadId, activeTab.id)),
-    );
-    if (!keepsAgentRuntimeAlive) {
-      this.markHumanControl(input.threadId);
-    }
+    // Hiding a panel or switching chats does not take control of any page.
     // A hidden browser must never leave the miniature presentation zoom on a
     // runtime that automation or a later screenshot can reacquire.
     this.resetRuntimePageZoomForThread(input.threadId);
@@ -1990,9 +1994,9 @@ export class DesktopBrowserManager {
   }
 
   navigate(input: BrowserNavigateInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
+    this.markHumanControl(input.threadId, tab.id);
     const nextUrl = normalizeUrlInput(input.url);
     tab.url = nextUrl;
     tab.title = defaultTitleForUrl(nextUrl);
@@ -2028,9 +2032,9 @@ export class DesktopBrowserManager {
   }
 
   reload(input: BrowserTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
+    this.markHumanControl(input.threadId, tab.id);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, tab.id));
     if (runtime) {
       runtime.webContents.reload();
@@ -2042,7 +2046,7 @@ export class DesktopBrowserManager {
   }
 
   goBack(input: BrowserTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
+    this.markHumanControl(input.threadId, input.tabId);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
     if (runtime && canWebContentsGoBack(runtime.webContents)) {
       runtime.webContents.goBack();
@@ -2051,7 +2055,7 @@ export class DesktopBrowserManager {
   }
 
   goForward(input: BrowserTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
+    this.markHumanControl(input.threadId, input.tabId);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
     if (runtime && canWebContentsGoForward(runtime.webContents)) {
       runtime.webContents.goForward();
@@ -2060,10 +2064,10 @@ export class DesktopBrowserManager {
   }
 
   newTab(input: BrowserNewTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
     const state = this.ensureWorkspace(input.threadId);
     const tab = createBrowserTab(normalizeUrlInput(input.url));
     state.tabs = [...state.tabs, tab];
+    this.markHumanControl(input.threadId, tab.id);
     if (input.activate !== false || !state.activeTabId) {
       state.activeTabId = tab.id;
     }
@@ -2085,7 +2089,7 @@ export class DesktopBrowserManager {
   }
 
   closeTab(input: BrowserTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
+    this.markHumanControl(input.threadId, input.tabId);
     const state = this.ensureWorkspace(input.threadId);
     let nextTabs = state.tabs.filter((tab) => tab.id !== input.tabId);
     if (nextTabs.length === state.tabs.length) {
@@ -2131,9 +2135,9 @@ export class DesktopBrowserManager {
   }
 
   selectTab(input: BrowserTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
+    this.markHumanControl(input.threadId, tab.id);
     this.activateTab(input.threadId, state, tab);
 
     if (this.activeThreadId === input.threadId) {
@@ -2148,9 +2152,9 @@ export class DesktopBrowserManager {
   }
 
   openDevTools(input: BrowserTabInput): void {
-    this.markHumanControl(input.threadId);
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
+    this.markHumanControl(input.threadId, tab.id);
     this.activateTab(input.threadId, state, tab);
 
     this.resumeThread(input.threadId);
@@ -2973,7 +2977,7 @@ export class DesktopBrowserManager {
     // The native page owns keyboard focus while browsing, so the renderer never sees the
     // shell's physical zoom fallback or copy-link chord. Give the shell first refusal,
     // then handle browser-local chords here.
-    const onFocus = () => this.markHumanControl(threadId);
+    const onFocus = () => this.markHumanControl(threadId, tabId);
     webContents.on("focus", onFocus);
     runtime.listenerDisposers.push(() => webContents.removeListener("focus", onFocus));
     const beforeInputEvent = (event: Electron.Event, input: Electron.Input) => {
@@ -2995,7 +2999,7 @@ export class DesktopBrowserManager {
       ) {
         return;
       }
-      this.markHumanControl(threadId);
+      this.markHumanControl(threadId, tabId);
       const matches = isBrowserCopyLinkChord(
         {
           meta: input.meta,
@@ -3034,7 +3038,7 @@ export class DesktopBrowserManager {
         ) {
           return;
         }
-        this.markHumanControl(threadId);
+        this.markHumanControl(threadId, tabId);
       }
     };
     webContents.on("before-mouse-event", beforeMouseEvent);
@@ -3444,8 +3448,8 @@ export class DesktopBrowserManager {
     }
   }
 
-  private markHumanControl(threadId: ThreadId): void {
-    this.options.onHumanControl?.(threadId);
+  private markHumanControl(threadId: ThreadId, tabId?: string): void {
+    this.options.onHumanControl?.(threadId, tabId);
     const state = this.states.get(threadId);
     const activeTab = state ? this.getActiveTab(state) : null;
     if (activeTab) {
@@ -3455,14 +3459,25 @@ export class DesktopBrowserManager {
       threadId,
       (this.humanControlEpochByThreadId.get(threadId) ?? 0) + 1,
     );
+    const affectedTabIds = tabId === undefined ? (state?.tabs.map((tab) => tab.id) ?? []) : [tabId];
+    for (const affectedTabId of affectedTabIds) {
+      const key = buildRuntimeKey(threadId, affectedTabId);
+      this.humanControlEpochByRuntimeKey.set(
+        key,
+        (this.humanControlEpochByRuntimeKey.get(key) ?? 0) + 1,
+      );
+    }
     for (const [key, provenance] of this.automationSideEffectProvenanceByRuntimeKey) {
-      if (provenance.threadId === threadId) {
+      if (
+        provenance.threadId === threadId &&
+        (tabId === undefined || key === buildRuntimeKey(threadId, tabId))
+      ) {
         this.automationSideEffectProvenanceByRuntimeKey.delete(key);
       }
     }
     for (const listener of [...(this.humanControlListenersByThreadId.get(threadId) ?? [])]) {
       try {
-        listener();
+        listener(tabId);
       } catch {
         // Input delivery must never be disrupted by an automation observer.
       }
@@ -3530,7 +3545,10 @@ export class DesktopBrowserManager {
 
   private emitAutomationDownload(event: BrowserAutomationDownloadEvent): void {
     const key = buildRuntimeKey(event.threadId, event.sourceTabId);
-    const humanControlEpoch = this.getAutomationHumanControlEpoch(event.threadId);
+    const humanControlEpoch = this.getAutomationHumanControlEpoch(
+      event.threadId,
+      event.sourceTabId,
+    );
     for (const lease of [...(this.automationDownloadListenersByRuntimeKey.get(key) ?? [])]) {
       if (lease.humanControlEpoch !== humanControlEpoch) continue;
       try {
