@@ -149,6 +149,9 @@ export function useProjectAgent(input: {
       autoMemoryEnabled?: boolean | undefined;
       userDisplayName?: string | undefined;
       requestId?: string | undefined;
+      libraryPath?: string | undefined;
+      libraryRemoteUrl?: string | undefined;
+      libraryPushOnChange?: boolean | undefined;
     }) =>
       runMutation(async (projectAgent, projectId) => {
         const overview = await projectAgent.configure({
@@ -172,6 +175,39 @@ export function useProjectAgent(input: {
           ...(input.userDisplayName?.trim()
             ? { userDisplayName: input.userDisplayName.trim() }
             : {}),
+          ...(input.libraryPath !== undefined ? { libraryPath: input.libraryPath } : {}),
+          ...(input.libraryRemoteUrl !== undefined
+            ? { libraryRemoteUrl: input.libraryRemoteUrl }
+            : {}),
+          ...(input.libraryPushOnChange !== undefined
+            ? { libraryPushOnChange: input.libraryPushOnChange }
+            : {}),
+        });
+        useProjectAgentSummariesStore.getState().applyOverview(overview);
+      }),
+    [runMutation],
+  );
+
+  const linkProject = useCallback(
+    async (linkedProjectId: ProjectId) =>
+      runMutation(async (projectAgent, projectId) => {
+        const overview = await projectAgent.linkProject({
+          requestId: crypto.randomUUID(),
+          projectId,
+          linkedProjectId,
+        });
+        useProjectAgentSummariesStore.getState().applyOverview(overview);
+      }),
+    [runMutation],
+  );
+
+  const unlinkProject = useCallback(
+    async (linkedProjectId: ProjectId) =>
+      runMutation(async (projectAgent, projectId) => {
+        const overview = await projectAgent.unlinkProject({
+          requestId: crypto.randomUUID(),
+          projectId,
+          linkedProjectId,
         });
         useProjectAgentSummariesStore.getState().applyOverview(overview);
       }),
@@ -389,6 +425,8 @@ export function useProjectAgent(input: {
     busy,
     load,
     configure,
+    linkProject,
+    unlinkProject,
     startGoal,
     pauseGoal,
     resumeGoal,

@@ -11,7 +11,7 @@ import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import type { Project } from "../types";
-import { slugifyChatWorkspaceSeed } from "./chatWorkspaceFolders";
+import { slugifyGroupTitle } from "@synara/shared/groupSlug";
 import {
   extractDuplicateProjectCreateProjectId,
   findContainerCandidateById,
@@ -102,10 +102,7 @@ export async function createGroupProject(input: {
     return null;
   }
 
-  const workspaceRoot = joinGroupWorkspacePath(
-    groupsWorkspaceRoot,
-    slugifyChatWorkspaceSeed(input.title),
-  );
+  const workspaceRoot = joinGroupWorkspacePath(groupsWorkspaceRoot, slugifyGroupTitle(input.title));
   const projectId = newProjectId();
   try {
     await api.orchestration.dispatchCommand({

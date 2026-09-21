@@ -26,6 +26,7 @@ import {
   WS_METHODS,
   WsCompatibilityError,
   WsFeatureRpcGroup,
+  WsProjectAgentLinkRpcGroup,
   type AutomationStreamEvent,
   type GitActionProgressEvent,
   type GitCreateDetachedWorktreeResult,
@@ -212,7 +213,9 @@ function awaitWithAbort<A>(promise: Promise<A>, signal: AbortSignal | undefined)
 // server is the authority that refuses them off darwin, and the pane needs a
 // real RPC error (or an `unsupported-platform` availability) to render its
 // blocked state. Merging here keeps one socket and one client.
-const makeRpcClient = RpcClient.make(WsFeatureRpcGroup.merge(WsDeviceRpcGroup));
+const makeRpcClient = RpcClient.make(
+  WsFeatureRpcGroup.merge(WsDeviceRpcGroup).merge(WsProjectAgentLinkRpcGroup),
+);
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
 const FEATURE_CONNECTION_PROBE_TIMEOUT_MS = 10_000;
