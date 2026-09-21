@@ -195,7 +195,6 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"));
     const taskListEntries = entries.filter((entry) => entry.activityKind === "turn.tasks.updated");
     expect(taskListEntries).toHaveLength(1);
-    // Anchored at the first snapshot (stable id/createdAt), showing the latest state.
     expect(taskListEntries[0]?.id).toBe("tasks-1");
     expect(taskListEntries[0]?.createdAt).toBe("2026-02-23T00:00:01.000Z");
     expect(taskListEntries[0]?.sequence).toBe(1);
@@ -1084,8 +1083,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    // Without id-based collapse this is 4 rows (a started, b started, a completed,
-    // b completed); each tool call must merge to one row, kept at its start position.
+    // Without id-based collapse this is 4 rows (a started, b started, a completed, b completed); each tool call must merge to one row, kept at its start position.
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => entry.id)).toEqual(["a-started", "b-started"]);
     expect(entries.map((entry) => entry.createdAt)).toEqual([
@@ -3238,8 +3236,7 @@ describe("deriveWorkLogEntries", () => {
       detail: 'Read: {"file_path":"/tmp/app.ts"}',
       itemType: "dynamic_tool_call",
       toolTitle: "Read",
-      // toolName must survive derivation so the timeline can pick the file-read
-      // (search) icon instead of the generic wrench fallback.
+      // toolName must survive derivation so the timeline can pick the file-read (search) icon instead of the generic wrench fallback.
       toolName: "Read",
     });
   });
@@ -3390,8 +3387,7 @@ describe("deriveWorkLogEntries", () => {
     expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
   });
 
-  // Providers stream the agent tool call before its receivers, so the routed
-  // entry only becomes recognizable once the later update merges into it.
+  // Providers stream the agent tool call before its receivers, so the routed entry only becomes recognizable once the later update merges into it.
   it("omits routed collab entries that gain their receivers from a merged update", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -3506,7 +3502,6 @@ describe("deriveWorkLogEntries", () => {
   });
 
   it("renders Cursor ACP subagent task rows with the description heading and prompt", () => {
-    // Shape emitted by AcpRuntimeModel for Cursor's `Task` tool (kind "agent").
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "cursor-task-start",
@@ -3734,8 +3729,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    // The task update + completion share a tool-call id and merge into one row even
-    // though a runtime error arrived between them; the runtime error stays separate.
+    // The task update + completion share a tool-call id and merge into one row even though a runtime error arrived between them; the runtime error stays separate.
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries).toHaveLength(2);
     expect(entries.find((entry) => entry.itemType === "collab_agent_tool_call")).toEqual(
@@ -4206,9 +4200,6 @@ describe("deriveTimelineEntries", () => {
       ],
     );
 
-    // The whole-message row is replaced by one row per segment, each anchored
-    // at its own start time, and the tool rows interleave between them exactly
-    // like the CLI execution order.
     expect(entries.map((entry) => entry.kind)).toEqual([
       "message-segment",
       "work",
@@ -4246,7 +4237,6 @@ describe("deriveTimelineEntries", () => {
           text,
         })),
       };
-      // The same shape arrives from both a live detail update and a reopened snapshot.
       for (const incoming of [message, JSON.parse(JSON.stringify(message)) as ChatMessage]) {
         expect(deriveTimelineEntries([incoming], [], [])).toEqual([
           { id: message.id, kind: "message", createdAt: message.createdAt, message: incoming },

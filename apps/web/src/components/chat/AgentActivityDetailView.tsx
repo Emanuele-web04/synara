@@ -1,8 +1,3 @@
-// FILE: AgentActivityDetailView.tsx
-// Purpose: Full-width transcript replacement for inspecting agent activity without opening side UI.
-// Layer: Chat presentation component
-// Depends on: agentActivity.logic and ChatMarkdown
-
 import { pluralize } from "@synara/shared/text";
 import { type CSSProperties, type ReactNode } from "react";
 import { BotIcon, ChevronLeftIcon } from "~/lib/icons";

@@ -1,7 +1,3 @@
-// FILE: DownloadButton.tsx
-// Purpose: OS-aware hero CTA that routes to the installer page.
-// Layer: Client component
-
 "use client";
 
 import { useSyncExternalStore } from "react";

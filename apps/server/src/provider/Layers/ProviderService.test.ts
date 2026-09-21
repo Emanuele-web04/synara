@@ -1,8 +1,3 @@
-// FILE: ProviderService.test.ts
-// Purpose: Verifies cross-provider routing, persistence, recovery, and runtime lifecycle behavior.
-// Layer: Provider service integration tests
-// Depends on: ProviderServiceLive with in-memory adapter and SQLite fakes.
-
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -110,7 +105,6 @@ it("bounds durable quarantine cause details while preserving diagnostics", () =>
   assert.equal(summary.cause.includes("\uFFFD"), false);
 });
 
-// Converts deferred listSessions callbacks into typed release handles for race tests.
 function requireReleaseListSessions(release: ReleaseListSessions | undefined): ReleaseListSessions {
   if (typeof release !== "function") {
     assert.fail("Expected listSessions release callback");
@@ -525,7 +519,6 @@ replacementRouting.layer("Claude replacement preparation", (it) => {
                   preparedInput.runtimeMode,
                   failure === "background" ? "full-access" : "auto",
                 );
-                // Background output arrives during asynchronous preparation with no activeTurnId.
                 replacementRouting.claude.emit({
                   type: "content.delta",
                   eventId: asEventId(`${failure}-background-output`),
@@ -1645,10 +1638,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const threadId = asThreadId("thread-stale-terminal-no-generation");
         yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
 
-        // A thread with no current lifecycle generation (retired/stopped runtime)
-        // must still accept the old session's terminal events: they are the only
-        // signal left that can settle the binding and projection. Non-terminal
-        // stale events stay dropped.
+        // a thread with no current generation must still accept the old session's terminal events — the only signal left to settle binding+projection; non-terminal stale events stay dropped
         staleSettlementRouting.codex.emit({
           type: "content.delta",
           eventId: asEventId("stale-delta-no-generation"),
@@ -1716,9 +1706,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
         assert.equal(typeof activeTurnId, "string");
 
-        // A stale terminal event that still names the binding's active turn is
-        // accepted (it settles the same turn a newer epoch has not replaced); a
-        // stale terminal event for a different turn stays dropped.
+        // a stale terminal naming the binding's active turn is accepted; one naming a different turn stays dropped
         staleSettlementRouting.codex.emit({
           type: "turn.aborted",
           eventId: asEventId("stale-abort-matching-turn"),
@@ -1766,10 +1754,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           cwd: "/tmp/project",
           runtimeMode: "full-access",
         });
-        // Rotate the runtime generation (as a stop does), keep a live adapter
-        // session around (the zombie), and rewind the persisted binding to the
-        // old generation — a turn send must not fast-path into that session,
-        // whose events the stale-generation gate would reject.
+        // rotate the generation, keep a live zombie session, rewind the binding — a send must not fast-path into the session whose events the stale-generation gate rejects
         assert.equal(typeof provider.stopRuntimeSession, "function");
         if (!provider.stopRuntimeSession) assert.fail("Expected stopRuntimeSession");
         yield* provider.stopRuntimeSession({ threadId });
@@ -1792,8 +1777,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         yield* provider.sendTurn({ threadId, input: "after the wedge", attachments: [] });
         assert.equal(staleSettlementRouting.codex.sendTurn.mock.calls.length, sendCallsBefore + 1);
 
-        // Recovery re-adopts the persisted generation, so the still-live
-        // session's events become visible again instead of being dropped.
+        // recovery re-adopts the persisted generation so the still-live session's events become visible again
         staleSettlementRouting.codex.emit({
           type: "content.delta",
           eventId: asEventId("stale-binding-delta"),
@@ -2782,8 +2766,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.match(failure.issue, /could not be retired safely/);
       }
 
-      // An explicit session replacement is the recovery authority after a
-      // failed teardown and clears the fail-closed fence.
+      // An explicit session replacement is the recovery authority after a failed teardown and clears the fail-closed fence.
       yield* provider.startSession(threadId, {
         provider: "codex",
         threadId,
@@ -3870,9 +3853,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       yield* provider.sendTurn({ threadId, input: "spawn a subagent", attachments: [] });
       yield* routing.codex.waitForRuntimeSubscribers();
 
-      // A stopped subagent completes its child turn and flips its child session
-      // to ready — both events ride the parent thread id with the child
-      // identity in providerRefs. Neither may clear the parent's active turn.
+      // a stopped subagent's child events ride the parent thread id with child identity in providerRefs — neither may clear the parent's active turn
       const subagentRefs = {
         providerThreadId: "toolu_subagent_1",
         providerParentThreadId: String(threadId),
@@ -5288,8 +5269,6 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       assert.equal(typeof binding?.lifecycleGeneration, "string");
       const lifecycleGeneration = String(binding?.lifecycleGeneration);
 
-      // Park the idle stop inside its lifecycle run, right where it re-checks
-      // whether new work displaced it.
       const defaultHasSession = idleCleanup.codex.hasSession.getMockImplementation();
       if (!defaultHasSession) assert.fail("Expected the fake adapter hasSession implementation");
       let releaseIdleStop: () => void = () => undefined;
@@ -5319,8 +5298,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       yield* waitUntil(() => idleStopParked, 2000, 10, "idle stop reaching the session probe");
 
-      // New runtime work displaces the idle stop while it is parked, so the
-      // stop must abandon itself without touching the still-live session.
+      // new runtime work displacing a parked idle stop must abandon it without touching the still-live session
       idleCleanup.codex.emit({
         type: "task.started",
         eventId: asEventId("runtime-idle-superseded-task"),
@@ -5342,8 +5320,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
       assert.equal(yield* idleCleanup.codex.hasSession(threadId), true);
 
-      // The abandoned stop must leave the live runtime's generation intact:
-      // otherwise every later event from that runtime is silently dropped.
+      // the abandoned stop must leave the live generation intact — otherwise every later runtime event is silently dropped
       const turnId = asTurnId("turn-after-superseded-idle-stop");
       idleCleanup.codex.emit({
         type: "turn.started",
@@ -5831,8 +5808,6 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       requireReleaseListSessions(release)([staleReadySession]);
       yield* Fiber.join(stopFiber);
 
-      // The explicit stop also crosses the idempotent cleanup barrier after
-      // the idle stop settles, even though the session is no longer routable.
       assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 2);
       assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], threadId);
     }),
@@ -6700,15 +6675,11 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       const threadId = asThreadId("thread-live-fallback-settled");
       const turnId = asTurnId("turn-live-fallback-settled");
 
-      // The adapter owns a live session but startSession has not persisted a
-      // binding row yet (the startup window resolveRoutableSession allows).
       liveFallback.codex.hasSession.mockImplementation((candidate: ThreadId) =>
         Effect.succeed(candidate === threadId),
       );
       liveFallback.codex.sendTurn.mockImplementationOnce((input: ProviderSendTurnInput) =>
         Effect.gen(function* () {
-          // The terminal runtime event is fully processed before sendTurn
-          // returns, so the post-dispatch write takes the settled-turn branch.
           liveFallback.codex.emit({
             type: "turn.completed",
             eventId: asEventId("evt-live-fallback-settled"),

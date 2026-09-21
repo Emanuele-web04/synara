@@ -1,8 +1,3 @@
-// FILE: theme.logic.ts
-// Purpose: Owns the Codex-style theme model, share-string parsing, and derived CSS token math.
-// Layer: Web appearance domain logic
-// Exports: Theme types, normalization helpers, import/export utilities, and CSS variable builders.
-
 import { THEME_SEED_CATALOG } from "./theme.seed.generated";
 import {
   normalizeFontFamilyCssValue,
@@ -43,7 +38,7 @@ export interface ThemeState {
   chromeThemes: Record<ThemeVariant, ChromeTheme>;
   codeThemeIds: Record<ThemeVariant, string>;
   mode: ThemeMode;
-  /** Ignore the theme pack's custom UI font and let the native system stack apply. */
+  /** ignore the theme pack's custom UI font — the native system stack applies */
   systemUiFont: boolean;
 }
 
@@ -140,8 +135,7 @@ const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const THEME_SHARE_PREFIX = "codex-theme-v1:";
 const CONTRAST_CURVE_BELOW_BASELINE = 0.7;
 const CONTRAST_CURVE_ABOVE_BASELINE = 2;
-// Keep Codex's original curve anchors even though Synara presets start at zero.
-// This makes the new default render exactly like manually moving the old slider to zero.
+// keep Codex's original curve anchors so the new default renders like the old slider at zero
 const CONTRAST_CURVE_BASELINE: Record<ThemeVariant, number> = {
   dark: 60,
   light: 45,
@@ -203,8 +197,7 @@ const CODE_THEME_SEED_PATCH_METADATA: Partial<
   },
 };
 
-// Mirror the packaged Codex catalog closely enough that share-string validation
-// can preserve the "known theme + variant availability" behavior.
+// mirror the packaged Codex catalog so share-string validation keeps "known theme + variant" behavior
 export const CODE_THEME_OPTIONS: readonly CodeThemeOption[] = [
   { id: "absolutely", label: "Absolutely", variants: ["light", "dark"] },
   { id: "ayu", label: "Ayu", variants: ["dark"] },
@@ -278,8 +271,6 @@ export const DEFAULT_THEME_STATE: ThemeState = {
   mode: "system",
 };
 
-// ─── Theme catalog helpers ────────────────────────────────────────────────
-
 export function isThemeMode(value: unknown): value is ThemeMode {
   return value === "light" || value === "dark" || value === "system";
 }
@@ -308,8 +299,6 @@ export function normalizeCodeThemeId(
     typeof codeThemeId === "string" ? codeThemeId.trim().toLowerCase() : "";
   return isCodeThemeAvailable(normalizedCodeThemeId, variant) ? normalizedCodeThemeId : fallback;
 }
-
-// ─── Theme normalization ──────────────────────────────────────────────────
 
 export function normalizeThemeFonts(value: unknown): ThemeFonts {
   const fonts = isRecord(value) ? value : {};
@@ -398,8 +387,7 @@ export function normalizeThemeState(value: unknown): ThemeState {
       light: normalizeCodeThemeId(codeThemeIds.light ?? legacyLightPack.codeThemeId, "light"),
     },
     mode: isThemeMode(state.mode) ? state.mode : DEFAULT_THEME_STATE.mode,
-    // Preserve the UI font older theme states already rendered. New/default states use the
-    // native stack, while an explicit preference always wins after the first save.
+    // preserve the UI font older theme states rendered; an explicit preference wins after the first save
     systemUiFont:
       typeof state.systemUiFont === "boolean" ? state.systemUiFont : !hasStoredCustomUiFont(state),
   };
@@ -426,8 +414,6 @@ export function parseStoredThemeState(rawValue: string | null | undefined): Them
 export function serializeThemeState(state: ThemeState): string {
   return JSON.stringify(state);
 }
-
-// ─── Share-string import / export ─────────────────────────────────────────
 
 export function createThemeShareString(variant: ThemeVariant, pack: ThemePack): string {
   return `${THEME_SHARE_PREFIX}${JSON.stringify({
@@ -506,8 +492,6 @@ export function updateThemePackFromShareString(
     },
   };
 }
-
-// ─── Granular pack mutators ───────────────────────────────────────────────
 
 export function updateChromeTheme(
   state: ThemeState,
@@ -675,8 +659,6 @@ export function areThemePacksEqual(left: ThemePack, right: ThemePack): boolean {
   );
 }
 
-// ─── Theme derivation ─────────────────────────────────────────────────────
-
 export function resolveThemeVariant(mode: ThemeMode, systemDark: boolean): ThemeVariant {
   if (mode === "system") {
     return systemDark ? "dark" : "light";
@@ -692,38 +674,27 @@ export function buildThemeCssVariables(
   const resolvedTokens = buildResolvedThemeTokens(pack, variant);
   const codexVariables = resolvedTokens.codexVariables;
   const readCodexVariable = (name: string) => getRequiredVariable(codexVariables, name);
-  // The translucent shell relies on macOS window vibrancy as its backing
-  // material. Windows/Linux have no equivalent, so a translucent shell there
-  // leaves the transparent body and backdrop-filter surfaces bleeding through
-  // and (on fractional DPI) rendering blurry. Restrict translucency to macOS.
+  // translucency needs macOS window vibrancy — other platforms bleed through and render blurry on fractional DPI
   const material: WindowMaterial =
     options?.electron === true && options?.isMac === true && !pack.theme.opaqueWindows
       ? "translucent"
       : "opaque";
   const warningColor = WARNING_COLOR_BY_VARIANT[variant];
-  // Codex paints the app sidebar with the PRIMARY surface (--color-background-surface,
-  // mapped through --color-token-side-bar-background), not the darker "under" surface.
-  // The under-surface is reserved for the window body behind the content (see
-  // --app-shell-background / --background). Sourcing the sidebar from the primary
-  // surface keeps its pure color matching Codex in both light and dark.
+  // Codex paints the sidebar from the PRIMARY surface, not the darker under-surface — mirror in light and dark
   const sidebarSurface = readCodexVariable("--color-background-surface");
   const settingsSurface = readCodexVariable("--color-background-surface");
   const composerSurface =
     variant === "dark"
       ? readCodexVariable("--color-background-control-opaque")
       : "color-mix(in oklab, var(--color-background-control) 90%, transparent)";
-  // Mirrors Codex Electron's [cmdk-root] dropdown shell: thin the dropdown-background
-  // token by 5% in oklab over the existing backdrop blur. Light vs dark is already
-  // handled by --color-background-control-opaque (white in light, dark control in dark).
+  // mirror Codex's cmdk shell: thin the dropdown-background token 5% in oklab over the backdrop blur
   const composerPickerMenuSurface = "color-mix(in oklab, var(--popover) 70%, transparent)";
   const composerFocusBorder = buildComposerFocusBorder(
     pack,
     variant,
     resolvedTokens.computed.panel,
   );
-  // Shared surface for the user message bubble and fenced code blocks so both
-  // read as the same "input/source" affordance inside the transcript. Sourced
-  // from the user-message token so code blocks pick up the bubble's color.
+  // shared surface for user bubble and code fences — code blocks pick up the bubble's color
   const chatCodeSurface = readCodexVariable("--color-background-user-message");
   const appVariables: Record<string, string> = {
     "--accent": readCodexVariable("--color-background-accent"),
@@ -733,35 +704,23 @@ export function buildThemeCssVariables(
         ? "transparent"
         : readCodexVariable("--color-background-surface-under"),
     "--app-composer-focus-border": composerFocusBorder,
-    // Frosted blur only when the shell is translucent (macOS). On an opaque
-    // shell this promotes the surface to a GPU layer that Chromium rasterizes at
-    // the wrong scale on fractional DPI (Windows), so text reads blurry until a
-    // repaint. Keep it "none" off macOS.
-    // NOTE: this gates window-vibrancy frosting only. The composer's own glass
-    // (`.chat-composer-surface`, index.css) frosts page content, not the window
-    // material, so — like the floating menus — it stays on across platforms.
+    // frosted blur only on translucent shells (macOS) — on opaque shells it becomes a GPU layer rasterized blurry on fractional DPI
     "--app-composer-picker-backdrop-filter": material === "translucent" ? "blur(32px)" : "none",
     "--app-composer-picker-surface": composerPickerMenuSurface,
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": chatCodeSurface,
     "--app-sidebar-backdrop-filter":
       material === "translucent" ? "blur(4px) saturate(130%)" : "none",
-    // Settings mirrors the chat surface (opaque --color-background-surface) so every
-    // settings element reads as outline-only. With an opaque page there is nothing to
-    // frost, so we skip the backdrop blur (and its compositing cost) entirely.
+    // opaque settings page → nothing to frost; skip the blur and its compositing cost
     "--app-settings-backdrop-filter": "none",
-    // Translucent shell: a sheer fill so the desktop clearly shows through, paired
-    // with a very light blur that only takes the edge off the backdrop. Dark themes
-    // deepen the fill toward black and keep it denser so the sidebar reads as
-    // charcoal glass. Keep in sync with the `:root` / `.dark` fallbacks in index.css.
+    // sheer fill + light blur over the desktop; dark deepens toward black — keep in sync with index.css :root/.dark fallbacks
     "--app-sidebar-surface":
       material === "translucent"
         ? variant === "dark"
           ? `color-mix(in srgb, color-mix(in srgb, ${sidebarSurface} 80%, black) 72%, transparent)`
           : `color-mix(in srgb, ${sidebarSurface} 38%, transparent)`
         : sidebarSurface,
-    // Always opaque so the settings page background matches the chat surface exactly,
-    // regardless of window material.
+    // always opaque so settings matches the chat surface regardless of window material
     "--app-settings-surface": settingsSurface,
     "--background": readCodexVariable("--color-background-surface-under"),
     "--border": readCodexVariable("--color-border"),
@@ -772,8 +731,7 @@ export function buildThemeCssVariables(
     "--destructive-foreground": pack.theme.surface,
     "--foreground": readCodexVariable("--color-text-foreground"),
     "--info": pack.theme.accent,
-    // Keep legacy app-level "info" consumers on Codex's accent-text path so
-    // links, file labels, and similar affordances inherit the real light/dark logic.
+    // legacy "info" consumers ride Codex's accent-text path so affordances inherit the real light/dark logic
     "--info-foreground": readCodexVariable("--color-text-accent"),
     "--input": readCodexVariable("--color-background-control-opaque"),
     "--muted": readCodexVariable("--color-background-elevated-secondary"),
@@ -788,7 +746,7 @@ export function buildThemeCssVariables(
     "--sidebar": readCodexVariable("--color-background-surface"),
     "--sidebar-accent": readCodexVariable("--color-background-button-secondary-hover"),
     "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary-hover"),
-    // Selected sidebar row shares the user-message bubble gray so it pairs with the theme.
+    // selected sidebar row shares the user-message bubble gray
     "--sidebar-selected": chatCodeSurface,
     "--sidebar-accent-foreground": readCodexVariable("--color-text-foreground"),
     "--sidebar-border": readCodexVariable("--color-border"),
@@ -796,8 +754,7 @@ export function buildThemeCssVariables(
     "--success": pack.theme.semanticColors.diffAdded,
     "--success-foreground": pack.theme.surface,
     "--theme-font-code-family": normalizeMonospaceFontFamilyCssValue(pack.theme.fonts.code) ?? "",
-    // Empty string → the applier removes the property, so the base -apple-system stack
-    // (SF Pro on macOS) takes over when the user prefers the native font.
+    // empty string → the applier removes the property so the native stack (SF Pro on macOS) takes over
     "--theme-font-ui-family": options?.systemUiFont
       ? ""
       : (normalizeFontFamilyCssValue(pack.theme.fonts.ui) ?? ""),
@@ -901,8 +858,7 @@ function buildCodexCssVariables(
     "--color-background-panel": panelBackground,
     "--color-background-surface": theme.theme.surface,
     "--color-background-surface-under": theme.surfaceUnder,
-    // The user message bubble has always reused the subtle secondary surface
-    // (theme ink at ~4% over the background); keep it sourced from there.
+    // the user bubble reuses the subtle secondary surface (ink ~4% over background)
     "--color-background-user-message": derivedTokens.buttonSecondaryBackground,
     "--color-border": derivedTokens.border,
     "--color-border-focus": derivedTokens.borderFocus,
@@ -953,7 +909,7 @@ function buildCodexCssVariables(
 }
 
 function buildTerminalAnsiGreen(diffAddedColor: string): string {
-  // Terminal success green should read calmer than diff decorations on a white shell.
+  // terminal success green should read calmer than diff decorations on a white shell
   return mixHex(diffAddedColor, "#000000", 0.18);
 }
 
@@ -1065,7 +1021,7 @@ function getRequiredVariable(variables: Record<string, string>, name: string): s
 }
 
 function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
-  // Mirrors Codex Electron's light chrome derivation from chrome-theme-C3NmvE0H.js.
+  // mirrors Codex Electron's light chrome derivation (chrome-theme-C3NmvE0H.js)
   const controlBase = mixRgb(theme.surface, WHITE, 0.09 + theme.contrast * 0.04);
   const elevatedSecondaryBase = mixRgb(theme.surface, WHITE, 0.08 + theme.contrast * 0.08);
   const elevatedPrimaryBase = mixRgb(theme.surface, WHITE, 0.16 + theme.contrast * 0.12);
@@ -1082,9 +1038,7 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
       theme.theme.accent,
       0.12 + theme.contrast * 0.045,
     ),
-    // Light borders run slightly stronger than Codex's base derivation so the chat
-    // seam (--color-border) and chat/header dividers (--color-border-light) read
-    // clearly on white surfaces. Keep the bump small; don't exceed borderHeavy.
+    // light borders run slightly stronger than Codex's base so seams read on white — don't exceed borderHeavy
     border: formatRgba(theme.ink, 0.09 + theme.contrast * 0.04),
     borderFocus: theme.theme.accent,
     borderHeavy: formatRgba(theme.ink, 0.09 + theme.contrast * 0.06),
@@ -1122,7 +1076,7 @@ function buildLightDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
 }
 
 function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
-  // Mirrors Codex Electron's dark chrome derivation from chrome-theme-C3NmvE0H.js.
+  // mirrors Codex Electron's dark chrome derivation (chrome-theme-C3NmvE0H.js)
   const controlBase = mixRgb(theme.surface, theme.ink, 0.06 + theme.contrast * 0.05);
   const focusBase = mixRgb(theme.accent, WHITE, 0.3 + theme.contrast * 0.15);
   const elevatedPrimaryBase = mixRgb(theme.surface, theme.ink, 0.08 + theme.contrast * 0.08);
@@ -1135,9 +1089,7 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     borderFocus: formatRgba(focusBase, 0.7 + theme.contrast * 0.1),
     borderHeavy: formatRgba(theme.ink, 0.16 + theme.contrast * 0.06),
     borderLight: formatRgba(theme.ink, 0.06 + theme.contrast * 0.02),
-    // High-contrast primary button (white-on-dark) mirroring the light-mode
-    // derivation (bg = ink, text = surface). Intentionally diverges from Codex
-    // Electron's dark elevated primary so the primary action reads as filled.
+    // high-contrast primary (white-on-dark) mirrors the light-mode derivation — intentionally diverges from Codex's dark elevated primary
     buttonPrimaryBackground: theme.theme.ink,
     buttonPrimaryBackgroundActive: formatRgba(theme.ink, 0.07 + theme.contrast * 0.05),
     buttonPrimaryBackgroundHover: formatRgba(theme.ink, 0.04 + theme.contrast * 0.03),
@@ -1164,8 +1116,7 @@ function buildDarkDerivedTokens(theme: ReturnType<typeof buildComputedTheme>) {
     iconSecondary: formatRgba(theme.ink, 0.65 + theme.contrast * 0.1),
     iconTertiary: formatRgba(theme.ink, 0.45 + theme.contrast * 0.1),
     simpleScrim: formatRgba(theme.ink, 0.08 + theme.contrast * 0.04),
-    // Codex brightens dark accent affordances through the same focus mix used
-    // for the border, rather than using the raw accent directly.
+    // Codex brightens dark accent affordances via the same focus mix as the border
     textAccent: formatOpaqueRgb(focusBase),
     textButtonPrimary: theme.theme.surface,
     textButtonSecondary: mixHex(theme.theme.ink, theme.theme.surface, 0.7 + theme.contrast * 0.1),
@@ -1223,8 +1174,6 @@ function normalizeContrastStrength(value: number, variant: ThemeVariant): number
 
   return baselineRatio + (curvedValue - baselineRatio) * CONTRAST_CURVE_ABOVE_BASELINE;
 }
-
-// ─── Parsing helpers ──────────────────────────────────────────────────────
 
 function parseThemeSharePayload(value: unknown): ThemeSharePayload {
   if (!isRecord(value)) {
@@ -1352,8 +1301,6 @@ function normalizeFontSelection(value: unknown): string | null {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-// ─── Color math ───────────────────────────────────────────────────────────
 
 function parseHexColor(value: string): RgbColor {
   const hexValue = value.slice(1);

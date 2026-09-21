@@ -1,11 +1,3 @@
-/**
- * CursorAcpSupport - helpers for Cursor ACP sessions and model selection.
- *
- * Owns spawn input construction, model picker flattening, and ACP config
- * mutations used by the Cursor provider adapter.
- *
- * @module CursorAcpSupport
- */
 import { type CursorModelOptions, type ProviderModelDescriptor } from "@synara/contracts";
 import { formatModelDisplayName, parseCursorCliReasoningEffort } from "@synara/shared/model";
 import { Effect, Layer, Schema, Scope, ServiceMap } from "effect";
@@ -57,7 +49,6 @@ export interface CursorAcpModelSelectionNotice {
   readonly reason: "model-unavailable" | "model-rejected";
   readonly message: string;
   readonly requestedModel: string;
-  /** Model the session keeps running with, when one could be applied. */
   readonly appliedModel?: string;
   readonly cause?: AcpErrors.AcpError;
 }
@@ -420,20 +411,11 @@ export function parseCursorCliModelList(stdout: string): ReadonlyArray<ProviderM
   return models;
 }
 
-// ── ACP parameterized model discovery (cursor/list_available_models) ───
-//
-// The headless `cursor-agent models` CLI list pins every model to a single
-// context window, so it can't surface the 300k/1m (etc.) choice the native TUI
-// exposes. The richer per-model matrix lives behind the ACP extension method
-// `cursor/list_available_models`, which returns every model alongside its own
-// config options (context, effort/reasoning, thinking, fast). We project those
-// into ProviderModelDescriptors so the composer can offer the same selectors as
-// the built-in Claude models.
+// the headless CLI list pins every model to one context window — the ACP extension cursor/list_available_models returns the full per-model matrix (context/effort/thinking/fast)
 
 export const CURSOR_LIST_AVAILABLE_MODELS_METHOD = "cursor/list_available_models";
 
-// Cursor exposes "auto" as a `default` model id over ACP; keep Synara's "auto"
-// slug so the picker and DEFAULT_MODEL_BY_PROVIDER stay consistent.
+// Cursor exposes "auto" as a `default` model id over ACP — keep Synara's "auto" slug so picker and defaults stay consistent
 const CURSOR_ACP_AUTO_MODEL_ID = "default";
 
 const CursorAcpAvailableModel = Schema.Struct({
@@ -551,9 +533,6 @@ export function buildCursorAcpModelDescriptorsFromAvailableModels(
   return descriptors;
 }
 
-// Calls the Cursor ACP extension method and projects the response into model
-// descriptors. Decode failures surface as AcpError so the adapter can fall back
-// to the flat CLI list.
 export function fetchCursorAcpModelDescriptors(
   runtime: Pick<AcpSessionRuntimeShape, "request">,
   sessionId: string,
@@ -581,8 +560,7 @@ function normalizeCursorCliBaseModelId(model: string): string {
     .replace(/-thinking$/u, "")
     .replace(/-fast$/u, "")
     .replace(/-(?:extra-high|none|low|medium|high|xhigh)$/u, "")
-    // `cursor-agent models` namespaces Grok as `cursor-grok-*`, while the ACP
-    // session model option exposes the same model as `grok-*`.
+    // `cursor-agent models` namespaces Grok as cursor-grok-* while ACP exposes the same model as grok-*
     .replace(/^cursor-(?=grok-)/u, "")
     .replace(/^claude-(\d+(?:\.\d+)?)-([a-z]+)-max$/u, "claude-$1-$2")
     .replace(/-preview$/u, "");
@@ -874,8 +852,7 @@ function cursorModelOptionValueSupported(input: {
   }
   if (typeof input.value === "boolean") {
     if (input.parameterKey === "fast" || input.parameterKey === "thinking") {
-      // Off is always pass-through-safe. On is also valid when ACP advertises
-      // the parameter at all (often as false); parameterized slugs can flip it.
+      // off is always pass-through-safe; on is valid when ACP advertises the parameter at all — parameterized slugs can flip it
       return (
         input.value === false ||
         cursorBooleanParameterExposed(input.choices, input.baseModel, input.parameterKey)
@@ -992,11 +969,7 @@ function collectCursorAcpConfigUpdates(
     updates.push({ configId: option.id, value: configValue });
   };
 
-  // Cursor's persisted/current preference can be true even when Synara has no
-  // fast-mode override. The composer treats the lightning bolt as off unless
-  // fastMode is explicitly true, so make that default authoritative whenever
-  // the selected model exposes a dedicated ACP option. Apply effort last:
-  // Cursor's fast variants default to a lower reasoning level (Grok fast → low).
+  // persisted fastMode can be true without a Synara override — the composer treats the bolt as off unless explicitly true; apply effort last since fast variants default to lower reasoning
   pushUpdate(["fast", "fast mode"], options?.fastMode ?? false);
   pushUpdate(["thinking"], options?.thinking);
   pushUpdate(["context", "context size", "context window"], options?.contextWindow);
@@ -1115,11 +1088,7 @@ function cursorModelChoiceSupportsRequestedParameters(choice: string, requested:
     if (choiceValue === requestedValue) {
       continue;
     }
-    // Thinking-off is often omitted from advertised ACP slugs, so a requested
-    // thinking=false still matches the advertised thinking=true default.
-    // Fast mode must not follow that path: Cursor's advertised slugs frequently
-    // bake in fast=true, and substituting that value would keep fast mode on
-    // after the composer lightning bolt is turned off.
+    // thinking=false matches an advertised thinking=true default (off is often omitted from slugs) — but fast must NOT follow that path since advertised slugs often bake in fast=true
     if (key === "thinking" && requestedValue === "false") {
       continue;
     }
@@ -1146,8 +1115,7 @@ function resolveCursorAutoModelValue(
   );
 }
 
-// The session's own selection is the safest degrade target; the agent's default
-// ("auto") is the last resort. Both are session-advertised by construction.
+// The session's own selection is the safest degrade target; the agent's default ("auto") is the last resort. Both are session-advertised by construction.
 function resolveCursorSessionModelValue(
   configOptions: ReadonlyArray<Acp.SessionConfigOption>,
   choices: ReadonlyArray<CursorAcpModelChoice>,
@@ -1161,7 +1129,6 @@ function resolveCursorSessionModelValue(
 }
 
 type CursorAcpModelSelectionOutcome =
-  /** Nothing to apply: no model requested, or the agent picks it ("auto"). */
   | { readonly _tag: "None" }
   | { readonly _tag: "Resolved"; readonly value: string }
   | { readonly _tag: "Fallback"; readonly value: string; readonly requested: string }
@@ -1217,9 +1184,7 @@ function resolveCursorAcpModelSelection(
     const hasFastConfig = findCursorFastConfigOption(configOptions) !== undefined;
     const requestedFast = parseCursorModelParameters(resolvedModel).get("fast");
     const advertisedFast = parseCursorModelParameters(relaxedIgnoringFast).get("fast");
-    // Without a dedicated fast config option, substituting the advertised slug
-    // would keep whatever fast= Cursor baked in. Only reuse it when we can
-    // still apply the requested value via session/set_config_option.
+    // without a dedicated fast option, substituting the advertised slug keeps baked-in fast= — reuse it only when the requested value can still be applied via set_config_option
     if (hasFastConfig || requestedFast === advertisedFast) {
       return { _tag: "Resolved", value: relaxedIgnoringFast };
     }
@@ -1229,10 +1194,7 @@ function resolveCursorAcpModelSelection(
     return { _tag: "Resolved", value: relaxedMatch };
   }
 
-  // Parameterized ids ("model[context=1m,effort=high]") are accepted even though
-  // only base ids are advertised, so a parameterized value whose base is
-  // advertised still passes through. An unadvertised base never does: Cursor
-  // rejects it with -32602 and that used to abort the whole session start.
+  // parameterized ids (model[context=1m,...]) pass when their base is advertised; an unadvertised base never does — Cursor rejects -32602 and that used to abort session start
   const resolvedBase = stripCursorParameterizedSuffix(resolvedModel);
   if (choices.some((choice) => stripCursorParameterizedSuffix(choice.slug) === resolvedBase)) {
     return { _tag: "Resolved", value: resolvedModel };
@@ -1356,16 +1318,12 @@ export function applyCursorAcpModelSelection<E>(input: {
       shouldApplyRequestedOptions = selection._tag === "Resolved" && modelApplied;
     }
 
-    // A fallback keeps a different model than the one whose options were
-    // requested. Applying the requested fast/effort values to that model can
-    // silently mutate an unrelated session configuration.
+    // a fallback model ≠ the requested model — applying the requested fast/effort values to it silently mutates an unrelated session config
     if (!shouldApplyRequestedOptions) {
       return;
     }
 
-    // Re-read after setModel: Auto/default often has no fast/effort options,
-    // so the first pass would drop fast=true and then write fast=false once
-    // GPT/Grok's dedicated toggles appear.
+    // re-read after setModel: Auto/default often lacks fast/effort options, so the first pass drops fast=true then writes fast=false once the toggles appear
     const appliedConfigOptions = yield* readConfigOptions;
     const appliedChoices = flattenCursorAcpModelChoices(appliedConfigOptions);
     const appliedOptions = resolveCursorMergedSessionOptions({

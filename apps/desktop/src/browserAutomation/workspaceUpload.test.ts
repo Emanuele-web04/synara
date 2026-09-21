@@ -234,9 +234,6 @@ describe("workspace-confined browser upload", () => {
     const { lifecycle, runtime } = createRuntime(
       async (files) => {
         stagedPath = files[0] ?? "";
-        // This callback is the deterministic hand-off boundary: resolution and
-        // staging have completed, but the fake Chromium consumer has not opened
-        // the path yet.
         await rm(workspaceFile);
         await symlink(outside, workspaceFile);
         bytesSeenByChromium = await readFile(stagedPath, "utf8");

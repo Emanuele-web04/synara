@@ -1,8 +1,3 @@
-// FILE: wsNativeApi.ts
-// Purpose: NativeApi implementation backed by the browser WebSocket RPC transport.
-// Layer: Web transport adapter
-// Exports: createWsNativeApi and event subscription helpers for server push channels.
-
 import {
   type AuthBearerBootstrapResult,
   type AuthBootstrapInput,
@@ -99,9 +94,7 @@ function createListenerRegistry<T>() {
       for (const listener of listeners) {
         try {
           listener(payload);
-        } catch {
-          // A listener must not prevent delivery to the remaining subscribers.
-        }
+        } catch {}
       }
     },
     clear() {
@@ -121,9 +114,7 @@ function subscribeWithReplay<T>(input: {
   if (input.latest) {
     try {
       input.listener(input.latest);
-    } catch {
-      // Replay follows the same listener isolation as live delivery.
-    }
+    } catch {}
   }
   return () => void unsubscribe();
 }
@@ -347,20 +338,11 @@ function resolveFallbackBrowserTab(state: ThreadBrowserState, tabId?: string) {
   return tab;
 }
 
-/**
- * Subscribe to the server welcome message. If a welcome was already received
- * before this call, the listener fires synchronously with the cached payload.
- * This avoids the race between WebSocket connect and React effect registration.
- */
 export function onServerWelcome(listener: (payload: WsWelcomePayload) => void): () => void {
   const latestWelcome = instance?.transport.getLatestPush(WS_CHANNELS.serverWelcome)?.data ?? null;
   return subscribeWithReplay({ registry: welcomeListeners, listener, latest: latestWelcome });
 }
 
-/**
- * Subscribe to server config update events. Replays the latest update for
- * late subscribers to avoid missing config validation feedback.
- */
 export function onServerConfigUpdated(
   listener: (payload: ServerConfigUpdatedPayload) => void,
 ): () => void {
@@ -373,9 +355,6 @@ export function onServerConfigUpdated(
   });
 }
 
-/**
- * Subscribe to provider status updates without forcing a full config reload.
- */
 export function onServerProviderStatusesUpdated(
   listener: (payload: ServerProviderStatusesUpdatedPayload) => void,
 ): () => void {
@@ -412,11 +391,6 @@ export function onServerSettingsUpdated(
   });
 }
 
-/**
- * Subscribe to unrecoverable per-thread stream failures (retries and reconnect
- * exhausted). Lets thread-detail consumers surface a failed hydration state
- * instead of rendering an empty conversation.
- */
 export function onThreadStreamFailure(
   listener: (failure: WsThreadStreamFailure) => void,
 ): () => void {
@@ -571,15 +545,12 @@ export function createWsNativeApi(): NativeApi {
           return;
         }
 
-        // Some mobile browsers can return null here even when the tab opens.
-        // Avoid false negatives and let the browser handle popup policy.
         window.open(externalUrl, "_blank", "noopener,noreferrer");
       },
       showInFolder: async (path) => {
         if (window.desktopBridge) {
           await window.desktopBridge.showInFolder(path);
         }
-        // No-op in browser - this is a desktop-only feature
       },
     },
     git: {
@@ -601,8 +572,6 @@ export function createWsNativeApi(): NativeApi {
       listBranches: (input) => transport.request(WS_METHODS.gitListBranches, input),
       listRecentCommits: (input) => transport.request(WS_METHODS.gitListRecentCommits, input),
       createWorktree: (input) => transport.request(WS_METHODS.gitCreateWorktree, input),
-      // Worktree materialization scales with checkout size; progress events
-      // keep the UI honest while the stream runs, so no fixed timeout.
       createDetachedWorktree: (input) =>
         transport.request(WS_METHODS.gitCreateDetachedWorktree, input, {
           timeoutMs: null,
@@ -642,7 +611,6 @@ export function createWsNativeApi(): NativeApi {
         position?: { x: number; y: number },
       ): Promise<T | null> => {
         if (window.desktopBridge) {
-          // Native icons are macOS-only; other platforms keep the plain menu.
           const desktopItems = isMacNavigatorPlatform() ? await withNativeMenuIcons(items) : items;
           return window.desktopBridge.showContextMenu(desktopItems, position);
         }
@@ -705,8 +673,6 @@ export function createWsNativeApi(): NativeApi {
       refreshExternalMcpPairing: (input: ExternalMcpRefreshPairingInput) =>
         transport.request(WS_METHODS.serverRefreshExternalMcpPairing, input),
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
-      // Provider updates run up to 2 minutes server-side; callers wrap this in
-      // withProviderUpdateTimeout, which owns the client-side watchdog.
       updateProvider: (input) =>
         transport.request(WS_METHODS.serverUpdateProvider, input, { timeoutMs: null }),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
@@ -747,8 +713,6 @@ export function createWsNativeApi(): NativeApi {
     provider: {
       getComposerCapabilities: (input) =>
         transport.request(WS_METHODS.providerGetComposerCapabilities, input),
-      // Compaction is capped server-side per provider (ACP providers allow up
-      // to the 10-minute turn-idle ceiling), so the server owns this bound.
       compactThread: (input) =>
         transport.request(WS_METHODS.providerCompactThread, input, { timeoutMs: null }),
       listCommands: (input) => transport.request(WS_METHODS.providerListCommands, input),
@@ -834,7 +798,6 @@ export function createWsNativeApi(): NativeApi {
     },
     device: {
       list: (input) => transport.request(DEVICE_WS_METHODS.list, input),
-      // Booting a cold simulator routinely outruns the default RPC deadline.
       boot: (input) => transport.request(DEVICE_WS_METHODS.boot, input, { timeoutMs: null }),
       shutdown: (input) => transport.request(DEVICE_WS_METHODS.shutdown, input),
       attach: (input) => transport.request(DEVICE_WS_METHODS.attach, input),
@@ -855,7 +818,6 @@ export function createWsNativeApi(): NativeApi {
       stopRecording: (input) =>
         transport.request(DEVICE_WS_METHODS.stopRecording, input, { timeoutMs: null }),
       describeUi: (input) => transport.request(DEVICE_WS_METHODS.describeUi, input),
-      // A scroll loop runs several swipe/describe round-trips on the device.
       scrollToElement: (input) =>
         transport.request(DEVICE_WS_METHODS.scrollToElement, input, { timeoutMs: null }),
       onEvent: deviceEventListeners.subscribe,
@@ -1068,8 +1030,6 @@ export function createWsNativeApi(): NativeApi {
   return api;
 }
 
-// Browser-mode tests mount full app roots repeatedly in one page; reset the
-// singleton so each test gets a fresh WebSocket stream and cached push state.
 export async function resetWsNativeApiForTest(): Promise<void> {
   const transport = instance?.transport;
   instance = null;

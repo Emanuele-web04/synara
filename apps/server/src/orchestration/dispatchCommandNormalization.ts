@@ -7,13 +7,7 @@ import { createAttachmentId } from "../attachmentStore";
 
 export interface DispatchCommandNormalizerResult<E> {
   readonly command: OrchestrationCommand;
-  /**
-   * Deferred workspace-root scaffolding decided during normalization but NOT yet executed.
-   * Callers must run this only after the normalized command has been successfully accepted
-   * by the orchestration decider (e.g. after `orchestrationEngine.dispatch` resolves), so a
-   * rejected dispatch (for example a cross-kind workspace-root ownership conflict) never
-   * mutates the filesystem.
-   */
+  /** callers must run this only after the decider accepted the command — a rejected dispatch never mutates the filesystem */
   readonly prepareWorkspaceRoot: Effect.Effect<void, E> | null;
 }
 
@@ -31,28 +25,13 @@ export interface DispatchCommandNormalizerOptions<E> {
   readonly prepareStudioWorkspaceRoot?: (workspaceRoot: string) => Effect.Effect<void, E>;
 }
 
-// Deferred workspace-root scaffolding (mkdir of managed subdirectories like Inbox/Outbox/
-// work/outputs) can transiently fail on a flaky filesystem even though the underlying
-// operation is safe to retry (it's idempotent recursive directory creation). Since this runs
-// AFTER the orchestration decider has already accepted the dispatch (see wsRpc), a single
-// transient failure here would otherwise permanently strand the project row without its
-// managed subdirectories — Studio self-heals via studio.listThreadOutputs, but per-thread CHAT
-// workspace roots have no other re-run site. Retry a bounded number of times with a short
-// backoff before letting the failure surface to the caller.
+// scaffolding (idempotent mkdir) can transiently fail on a flaky fs; running AFTER acceptance means one failure would permanently strand the project row — chat roots have no other re-run site, so retry bounded with backoff
 const WORKSPACE_ROOT_PREPARE_RETRY_SCHEDULE = Schedule.exponential("100 millis").pipe(
   Schedule.take(2),
 );
 
 export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormalizerOptions<E>) {
-  // Shared "should we scaffold this managed workspace root's subdirectories" guard for both
-  // container kinds. The two kinds intentionally differ in exactly one respect
-  // (`prepareWhenEqualToRoot`):
-  //   - chat: per-thread project workspace roots always live strictly WITHIN chatWorkspaceRoot
-  //     (see buildChatWorkspaceFolderPath in chatFirstSend.ts); the shared chatWorkspaceRoot
-  //     itself is never used directly as a project's root, so exact equality must be excluded
-  //     to avoid ever scaffolding "work"/"outputs" straight into the shared parent directory.
-  //   - studio: the Studio container project's workspace root IS exactly studioWorkspaceRoot
-  //     (see ensureStudioProject in studioProjects.ts), so exact equality must trigger prepare.
+  // the kinds differ only in prepareWhenEqualToRoot: chat roots always live strictly WITHIN chatWorkspaceRoot (equality excluded — never scaffold into the shared parent), while the Studio container's root IS studioWorkspaceRoot (equality triggers)
   const maybePrepareWorkspaceRoot = (input: {
     readonly kind: "chat" | "studio";
     readonly command: Extract<
@@ -119,10 +98,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       prepareWhenEqualToRoot: true,
     });
 
-  // Combines the chat + studio scaffolding decisions into a single deferred effect. The
-  // decision logic (kinds, prepareWhenEqualToRoot, isWorkspaceRootWithin/workspaceRootsEqual)
-  // is evaluated eagerly here (it's pure and side-effect-free), but the resulting `prepare`
-  // effect is only *constructed*, never run, until the caller explicitly executes it.
+  // the decision logic is evaluated eagerly here (pure, side-effect-free) but the `prepare` effect is only constructed, never run until the caller executes it
   const deferredPrepareWorkspaceRoot = (
     command: Extract<
       ClientOrchestrationCommand,
@@ -140,11 +116,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
 
   return Effect.fnUntraced(function* (input: { readonly command: ClientOrchestrationCommand }) {
     if (input.command.type === "project.create") {
-      // Known trade-off: canonicalization may create the (empty) root directory before the
-      // decider validates ownership — realpath-based canonicalization needs the directory to
-      // exist, and comparing lexical paths instead would mis-handle symlinked roots. A rejected
-      // command can therefore leave an empty directory behind, but never scaffolding: the
-      // subdirectory prepare is deferred until the dispatch is accepted (see wsRpc).
+      // canonicalization may create the (empty) root before the decider validates ownership — realpath needs it to exist and lexical comparison mishandles symlinks; a rejected command can leave an empty dir but never scaffolding
       const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
         input.command.workspaceRoot,
         {
@@ -206,9 +178,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
             };
           }
 
-          // Binary attachment metadata is resolved from the durable managed
-          // attachment ledger by OrchestrationEngine immediately before its
-          // atomic event/receipt claim. Client metadata is never authoritative.
+          // binary attachment metadata resolves from the durable ledger immediately before the atomic event/receipt claim — client metadata is never authoritative
           return attachment;
         }),
       { concurrency: 1 },

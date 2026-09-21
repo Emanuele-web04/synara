@@ -1,8 +1,3 @@
-// FILE: effectRpcWebSocketMock.ts
-// Purpose: Tiny browser-test adapter for Effect RPC's JSON WebSocket frames.
-// Layer: Web test utility
-// Exports: helpers for request parsing plus Exit/Chunk/Pong responses.
-
 import {
   WS_BOOTSTRAP_METHOD,
   WS_PROTOCOL_EPOCH,

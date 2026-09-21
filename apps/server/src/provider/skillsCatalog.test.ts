@@ -1,8 +1,3 @@
-// FILE: skillsCatalog.test.ts
-// Purpose: Verifies the unified cross-provider skills catalog discovery, dedup
-//          precedence, merge with provider-native results, and toggle filtering.
-// Layer: Server provider tests
-
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { access } from "node:fs/promises";
@@ -470,12 +465,10 @@ description: Direct Pi markdown skill
     const initial = await discoverSkillsCatalog({ homeDir, synaraBaseDir });
     expect(initial.map((skill) => skill.name)).toEqual(["first"]);
 
-    // A skill added after the first scan is invisible to the cached entry...
     await writeSkill(path.join(synaraBaseDir, "skills", "second"), "second", "Second skill");
     const cached = await discoverSkillsCatalog({ homeDir, synaraBaseDir });
     expect(cached.map((skill) => skill.name)).toEqual(["first"]);
 
-    // ...but forceReload bypasses the cache and refreshes it.
     const reloaded = await discoverSkillsCatalog({ homeDir, synaraBaseDir, forceReload: true });
     expect(reloaded.map((skill) => skill.name).sort()).toEqual(["first", "second"]);
   });
@@ -494,8 +487,7 @@ description: Direct Pi markdown skill
   });
 
   it("keeps home origins when the cwd lives under the home dir", async () => {
-    // The home dir is an ancestor of the cwd here, so home skill folders are
-    // reachable as "project" roots too; they must keep their true origin.
+    // The home dir is an ancestor of the cwd here, so home skill folders are reachable as "project" roots too; they must keep their true origin.
     const cwd = path.join(homeDir, "projects", "app");
     await mkdir(cwd, { recursive: true });
     await writeSkill(path.join(homeDir, ".codex", "skills", "from-codex"), "from-codex", "Codex");

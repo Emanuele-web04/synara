@@ -1,7 +1,3 @@
-// FILE: terminalRuntime.ts
-// Purpose: Own the long-lived xterm runtime lifecycle behind the terminal runtime registry.
-// Layer: Terminal runtime infrastructure
-
 import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { ImageAddon } from "@xterm/addon-image";
@@ -139,9 +135,7 @@ function scheduleFontSettleRefit(entry: TerminalRuntimeEntry): void {
   const fontSize = Number(entry.terminal.options.fontSize ?? 12);
   void waitForTerminalFontReady({ fontFamily, fontSize }).then(() => {
     if (entry.disposed) return;
-    // Rebuild the WebGL glyph atlas: the immediate refit may have cached glyphs in
-    // the fallback font while the requested font was still loading, and a plain
-    // refresh would keep redrawing those stale glyphs.
+    // rebuild the WebGL glyph atlas: the immediate refit may have cached glyphs in the fallback font while the requested font was still loading
     runTerminalResize(entry, { clearTextureAtlas: true, refresh: true });
   });
 }
@@ -165,12 +159,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-// Fit xterm to its container, then clamp the result into the PTY contract bounds.
-// An ultrawide viewport at a small font can legitimately propose more than the
-// old 400-column cap, and a fit before fonts settle can momentarily report a
-// glitched (tiny char width -> huge column count) size. Forcing xterm back into
-// range keeps the open/resize payloads valid — so the terminal always opens —
-// and keeps the rendered grid consistent with what the backend PTY believes.
+// fit then clamp into PTY contract bounds: an ultrawide at small font can legitimately exceed the old cap, and a fit before fonts settle can report a glitched huge size
 function fitTerminal(entry: TerminalRuntimeEntry): void {
   entry.fitAddon.fit();
   const cols = clamp(entry.terminal.cols, TERMINAL_MIN_COLS, TERMINAL_MAX_COLS);
@@ -1211,8 +1200,7 @@ export function detachRuntimeFromContainer(entry: TerminalRuntimeEntry): void {
 export function disposeRuntimeEntry(entry: TerminalRuntimeEntry): void {
   detachRuntimeFromContainer(entry);
   entry.disposed = true;
-  // Closing a terminal should not synchronously paint queued output into a buffer
-  // that is about to be destroyed; acknowledge and drop it to keep close latency low.
+  // closing shouldn't synchronously paint queued output into a buffer about to be destroyed — acknowledge and drop to keep close latency low
   clearPendingWrites(entry);
   entry.unsubscribeTerminalEvents?.();
   entry.unsubscribeTerminalEvents = null;

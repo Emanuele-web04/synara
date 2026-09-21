@@ -1,8 +1,3 @@
-// FILE: AcpSessionRuntime.ts
-// Purpose: Owns one authenticated ACP process, session setup, configuration, and event stream.
-// Layer: Provider ACP runtime
-// Exports: AcpSessionRuntime and its typed runtime factory contracts.
-
 import { randomUUID } from "node:crypto";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { resolveExecutionWorkingDirectory } from "@synara/shared/wslBridge";
@@ -72,11 +67,7 @@ export interface AcpSessionStartupTimeouts {
   readonly totalMs: number;
 }
 
-// Every startup step is bounded because an agent can block indefinitely without
-// ever failing: `cursor-agent` authenticates through the macOS Keychain, whose
-// `security` call legitimately takes >10s and hangs forever when a Keychain
-// prompt cannot be displayed. Budgets are generous so slow-but-healthy
-// handshakes still succeed; adapters override them via `startupTimeouts`.
+// every startup step is bounded because an agent can block forever without failing — cursor-agent Keychain auth legitimately takes >10s and hangs when a prompt can't display; adapters override via startupTimeouts
 export const DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS: AcpSessionStartupTimeouts = {
   initializeMs: 20_000,
   authenticateMs: 30_000,
@@ -135,9 +126,7 @@ export function isAcpAuthRequiredError(error: AcpErrors.AcpError): boolean {
     return false;
   }
   const message = error.errorMessage ?? "";
-  // Protocol-level auth-required uses -32000 in ACP. Require a
-  // recognizable auth-failure phrase so a generic -32000 server error is not
-  // misclassified as an auth challenge.
+  // ACP auth-required is -32000 — require a recognizable auth-failure phrase so a generic server error isn't misclassified as an auth challenge
   return error.code === -32000 && messageLooksLikeAuthRequired(message);
 }
 
@@ -169,13 +158,7 @@ type AcpIncomingFrame =
   | { readonly _tag: "error"; readonly error: unknown }
   | { readonly _tag: "end" };
 
-/**
- * Drains the child agent's stderr for the lifetime of the session scope,
- * forwarding complete lines to the provider tap. The stream is consumed even
- * when no tap is installed: an unread stderr pipe eventually fills and blocks
- * the child's writes. A mid-life stream error or a throwing tap must not stop
- * the drain, so failures are logged and swallowed.
- */
+// stderr is always drained whether or not a tap exists — an unread pipe fills and blocks the child's writes; tap failures are logged and swallowed, never kill the drain
 export const runAcpChildStderrTap = <E>(
   stderr: Stream.Stream<Uint8Array, E>,
   onLine: ((line: string) => void) | undefined,
@@ -244,10 +227,7 @@ export type SessionEpoch = { generation: number; activeSessionId: Option.Option<
 const isActiveSessionId = (sessionId: string, epoch: SessionEpoch): boolean =>
   Option.isSome(epoch.activeSessionId) && epoch.activeSessionId.value === sessionId;
 
-// True when the session is still the active epoch's session. Every state
-// mutation path re-checks this before applying an update or offering an event,
-// so a stale in-flight handler can never mutate state or enqueue events after
-// the session has been replaced.
+// every mutation path re-checks epoch currency — a stale in-flight handler can never mutate state or enqueue events after the session is replaced
 const isCurrentSessionEpoch = (
   getSessionEpoch: () => Effect.Effect<SessionEpoch>,
   sessionId: string,
@@ -349,10 +329,6 @@ export interface AcpSessionRuntimeOptions {
   readonly validateInitializeResult?: (
     initializeResult: Acp.InitializeResponse,
   ) => Effect.Effect<void, AcpErrors.AcpError>;
-  /**
-   * Provider-specific metadata attached as `_meta` to session/new, session/load,
-   * and session/resume requests. Grok registers client hooks through it.
-   */
   readonly sessionMeta?: Record<string, unknown>;
   /**
    * Retries one fresh `session/new` when the failure matches the policy (e.g.
@@ -360,11 +336,6 @@ export interface AcpSessionRuntimeOptions {
    * resume/load, where repeating the request would make delivery ambiguous.
    */
   readonly freshSessionRetry?: AcpFreshSessionRetryPolicy;
-  /**
-   * Per-step startup budgets. Adapters with slow-but-healthy handshakes
-   * (Keychain prompts, enterprise proxies) override individual entries; the
-   * rest fall back to DEFAULT_ACP_SESSION_STARTUP_TIMEOUTS.
-   */
   readonly startupTimeouts?: Partial<AcpSessionStartupTimeouts>;
   /**
    * When to send the ACP `authenticate` request during start.
@@ -374,53 +345,27 @@ export interface AcpSessionRuntimeOptions {
    *   authenticate once, and retry the same setup operation once.
    */
   readonly authPolicy?: "always" | "on-demand";
-  /**
-   * Provider-specific predicate consulted during on-demand auth. After session
-   * setup returns while still unauthenticated, if this returns true the session
-   * is treated as an auth-required failure, discarded, authenticated once, and
-   * retried. Generic ACP only retries on a verified auth-required transport or
-   * request failure.
-   */
   readonly authSetupHeuristic?: (
     initializeResult: Acp.InitializeResponse,
     setupResult: Acp.NewSessionResponse | Acp.LoadSessionResponse | Acp.ResumeSessionResponse,
   ) => boolean;
-  /**
-   * MCP servers to attach to the session. Invoked after `initialize` so the
-   * builder can pick a transport based on the agent's advertised
-   * `mcpCapabilities` (e.g. HTTP vs stdio for the Synara agent gateway).
-   */
   readonly buildMcpServers?: (initializeResult: Acp.InitializeResponse) => Array<Acp.McpServer>;
   readonly authenticateMeta?: Record<string, unknown>;
-  /** Test/provider policy overrides for session/load transcript replay suppression. */
   readonly loadReplayPolicy?: {
     readonly quietMs?: number;
     readonly hardTimeoutMs?: number;
   };
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly normalizeIncomingMessage?: (message: unknown) => unknown;
-  /**
-   * Per-line tap on the child agent's stderr. The child mirrors its full log
-   * stream there (e.g. Devin's `affogato::stall_watch` warnings and exec
-   * `create_session` lifecycle lines), which is the only out-of-band liveness
-   * signal available when a child wedges while alive. The stderr stream is
-   * always drained so an unread pipe can never fill and block the child,
-   * whether or not a tap is installed.
-   */
+  // the child's stderr mirror is the only out-of-band liveness signal when it wedges while alive (e.g. Devin's stall_watch) — always drained so the pipe can't fill and block the child
   readonly onChildStderrLine?: (line: string) => void;
   readonly protocolLogging?: {
     readonly logIncoming?: boolean;
     readonly logOutgoing?: boolean;
     readonly logger?: (event: AcpProtocolLogEvent) => Effect.Effect<void, never>;
   };
-  /** Test seam for the single shared ACP subprocess teardown owner. */
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
-  /**
-   * Test seam signalled when setSessionEpoch has captured the pending buffer
-   * but has not yet installed the new epoch (the transition window).
-   */
   readonly __testTransitionReached?: Effect.Effect<void>;
-  /** Test seam awaited inside the transition window before the epoch installs. */
   readonly __testTransitionPause?: Effect.Effect<void>;
 }
 
@@ -487,14 +432,9 @@ export interface AcpSessionRuntimeShape {
     handler: AcpHandler<A, void>,
   ) => Effect.Effect<void>;
   readonly start: () => Effect.Effect<AcpSessionRuntimeStartResult, AcpErrors.AcpError>;
-  /** Completes when the owned ACP process exits, regardless of its exit status. */
   readonly awaitExit: Effect.Effect<void>;
   readonly getEvents: () => Stream.Stream<AcpParsedSessionEvent, never>;
-  // Count of processed, in-flight, or deliverable parsed session/update
-  // events. Adapters snapshot it and wait until their own processed count
-  // catches up, so turn attribution stays open until every deliverable event
-  // received during the turn has actually been handled — immune to stream
-  // chunk buffering and in-flight handlers.
+  // deliverable-event counter adapters snapshot and await — keeps turn attribution open until every event received during the turn is handled, immune to chunk buffering
   readonly sessionUpdatesEnqueuedCount: Effect.Effect<number>;
   readonly supportsSessionFork: Effect.Effect<boolean, AcpErrors.AcpError>;
   /** Whether a persisted session id can be reopened through resume or load. */
@@ -512,7 +452,6 @@ export interface AcpSessionRuntimeShape {
     ReadonlyArray<Acp.AvailableCommand>,
     AcpErrors.AcpError
   >;
-  /** Waits for session/load replay suppression to settle or reach its hard cap. */
   readonly awaitLoadReplayReady: Effect.Effect<void, AcpErrors.AcpError>;
   readonly prompt: (
     payload: Omit<Acp.PromptRequest, "sessionId">,
@@ -568,11 +507,7 @@ interface AcpOwnedChildProcess {
 export const awaitAcpChildExit = (child: AcpOwnedChildProcess): Effect.Effect<void> =>
   child.exitCode.pipe(Effect.exit, Effect.asVoid);
 
-/**
- * Bridges Effect's child-process exit signal into Synara's process-tree proof. This is deliberately
- * a finalizer defect on failure: adapter scope cleanup may ignore typed failures, but it must never
- * publish a successful stop when the ACP process tree has not been proven gone.
- */
+// deliberately a finalizer defect on failure: adapter cleanup may ignore typed failures but must never publish a successful stop without proven process-tree exit
 export const teardownAcpChildProcess = (
   child: AcpOwnedChildProcess,
   teardownProcessTree: typeof teardownProviderProcessTree = teardownProviderProcessTree,
@@ -602,8 +537,6 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
   runtimeScope: Scope.Scope,
   options: Pick<AcpSessionRuntimeOptions, "normalizeIncomingMessage" | "protocolLogging">,
 ) {
-  // The ACP SDK is only needed once a provider process is actually spawned, so
-  // it is imported here instead of at module scope (see AcpSdk.ts).
   const acpSdk = yield* Effect.promise(() => loadAcpSdk());
   type RequestPermissionHandler = Parameters<AcpSessionRuntimeShape["handleRequestPermission"]>[0];
   type ElicitationHandler = Parameters<AcpSessionRuntimeShape["handleElicitation"]>[0];
@@ -958,10 +891,7 @@ export function makeStartupInteractionRegistry<Req, Res>(
       readonly deferred: Deferred.Deferred<Res, AcpErrors.AcpError>;
       readonly generation: number;
     }
-    // Single atomic state machine (mirrors the pending-session state machine used
-    // by setSessionEpoch): every transition is one Ref.modify so a dispatch can
-    // never observe a partially applied begin/complete/register and end up
-    // stranded in the buffer or delivered twice.
+    // single atomic state machine: every transition is one Ref.modify so a dispatch never observes a partial begin/complete/register and gets stranded or double-delivered
     interface RegistryState {
       readonly generation: number;
       readonly started: boolean;
@@ -982,8 +912,7 @@ export function makeStartupInteractionRegistry<Req, Res>(
         { discard: true },
       );
 
-    // Items from a stale generation are answered with the safe default instead of
-    // being replayed to the next session's handler.
+    // stale-generation items are answered with the safe default instead of replayed to the next session's handler
     const deliverItems = (
       items: ReadonlyArray<PendingItem>,
       handler: Handler,
@@ -1078,7 +1007,6 @@ export function makeStartupInteractionRegistry<Req, Res>(
 
     const complete = Ref.modify(stateRef, (state): [CompleteDecision, RegistryState] => {
       if (Option.isNone(state.handler)) {
-        // No handler yet: keep buffering; register will flush once it arrives.
         return [{ _tag: "hold" }, { ...state, started: true }];
       }
       return [
@@ -1134,8 +1062,7 @@ const makeAcpSessionRuntime = (
     const availableCommandsRef = yield* Ref.make<ReadonlyArray<Acp.AvailableCommand>>([]);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallState>());
     const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
-    // Unique per runtime instance so assistant message ids never collide across
-    // server restarts or session resumes (segment index resets to 0 each time).
+    // unique per runtime instance so assistant message ids never collide across restarts/resumes (segment index resets each time)
     const runtimeInstanceId = randomUUID().slice(0, 8);
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const configOptionUpdateWaitersRef = yield* Ref.make<ReadonlyArray<ConfigOptionUpdateWaiter>>(
@@ -1143,9 +1070,7 @@ const makeAcpSessionRuntime = (
     );
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
 
-    // Single bounded pending-session state machine keyed by (provisional) session
-    // id. All session/update notifications that arrive before the final epoch is
-    // installed are held here, bounded by total count and per-session count.
+    // bounded pending-session buffer keyed by provisional session id — holds session/update notifications arriving before the final epoch installs
     interface PendingSessionState {
       readonly notifications: ReadonlyArray<Acp.SessionNotification>;
     }
@@ -1154,10 +1079,7 @@ const makeAcpSessionRuntime = (
     const acceptingSessionUpdatesRef = yield* Ref.make(false);
     const consumerAttachedRef = yield* Ref.make(false);
 
-    // Provisional startup registry for approval/elicitation interactions. They are
-    // buffered until the runtime reports startup complete, then promoted to the
-    // registered handlers. On startup failure, session replacement, or stale generation
-    // they are cancelled with safe defaults.
+    // provisional startup registry for approval/elicitation interactions — promoted to registered handlers on startup complete, cancelled with safe defaults on failure/replacement/stale generation
     const requestPermissionStartup = yield* makeStartupInteractionRegistry<
       Acp.RequestPermissionRequest,
       Acp.RequestPermissionResponse
@@ -1192,9 +1114,6 @@ const makeAcpSessionRuntime = (
     const getAvailableCommands = awaitLoadReplayReady.pipe(
       Effect.andThen(Ref.get(availableCommandsRef)),
     );
-    // Counts processed, in-flight, or deliverable events after cleanup drops.
-    // Plain mutable adjustments are fenced while session event offers are in
-    // flight; see sessionUpdatesEnqueuedCount on the shape.
     let sessionUpdatesEnqueued = 0;
     let sessionEventOffersInFlight = 0;
 
@@ -1272,8 +1191,7 @@ const makeAcpSessionRuntime = (
         const replay = options.replay ?? "all";
         const resetState = options.resetState ?? false;
 
-        // Atomically capture and clear pending state for the new session. Notifications
-        // belonging to other (e.g. discarded probe) sessions are discarded.
+        // atomically capture+clear pending state for the new session; notifications for discarded (e.g. probe) sessions are dropped
         const pending = yield* Ref.getAndSet(pendingSessionStateRef, new Map());
         const sessionPending = pending.get(sessionId) ?? { notifications: [] };
 
@@ -1284,8 +1202,7 @@ const makeAcpSessionRuntime = (
           yield* testTransitionPause;
         }
 
-        // Install the setup baseline first so early mode/config updates are replayed
-        // on top of the authoritative response, not overwritten by it.
+        // install the setup baseline first so early mode/config updates replay on top of the authoritative response, not overwritten by it
         yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
         const currentConfigOptions = yield* Ref.get(configOptionsRef);
         yield* Ref.set(
@@ -1327,10 +1244,7 @@ const makeAcpSessionRuntime = (
           yield* apply(notification);
         }
 
-        // Notifications can race into the pending buffer between the capture
-        // above and the epoch install. Drain the buffer until it is empty so
-        // every update that arrived during the transition window is applied
-        // exactly once and no pending state is left behind.
+        // notifications can race into the pending buffer between capture and epoch install — drain until empty so every transition-window update applies exactly once
         while (true) {
           const raced = yield* Ref.getAndSet(pendingSessionStateRef, new Map());
           const racedPending = raced.get(sessionId);
@@ -1377,11 +1291,7 @@ const makeAcpSessionRuntime = (
           ),
         );
 
-    // Closes the buffering-path TOCTOU: a session/update handler may read a
-    // pre-transition epoch and buffer its notification after setSessionEpoch
-    // has already drained the pending buffer. Rechecking here guarantees the
-    // notification is applied exactly once by whichever side wins the
-    // atomic getAndSet, leaving no pending state behind.
+    // closes the buffering TOCTOU: a handler may read a pre-transition epoch and buffer after the drain — the atomic getAndSet winner applies it exactly once
     const drainPendingForActiveSession = (): Effect.Effect<void> =>
       Effect.gen(function* () {
         while (true) {
@@ -1444,9 +1354,7 @@ const makeAcpSessionRuntime = (
         ),
       );
 
-    // A supplied environment is an exact capability set prepared by the
-    // provider boundary. Merging process.env here would silently restore
-    // stripped control-plane credentials and launcher capabilities.
+    // a supplied env is an exact capability set — merging process.env would silently restore stripped control-plane credentials
     const env = buildProviderChildEnvironment({
       provider: "acp",
       baseEnv: options.spawn.env ? { ...options.spawn.env } : process.env,
@@ -1470,12 +1378,9 @@ const makeAcpSessionRuntime = (
       );
 
     yield* Effect.addFinalizer(() => teardownAcpChildProcess(child, options.teardownProcessTree));
-    // Registered after child teardown so LIFO scope closure releases any first
-    // prompt/fork waiter before waiting for the child process to exit.
+    // registered after child teardown so LIFO releases any first prompt/fork waiter before waiting for process exit
     yield* Effect.addFinalizer(() => loadReplayGate?.release ?? Effect.void);
 
-    // Always drain the child's stderr (an unread pipe eventually fills and
-    // blocks the child's writes) and forward lines to the provider tap.
     yield* runAcpChildStderrTap(child.stderr, options.onChildStderrLine).pipe(
       Effect.forkIn(runtimeScope),
     );
@@ -1510,9 +1415,6 @@ const makeAcpSessionRuntime = (
         const epoch = yield* getSessionEpoch();
         const sessionId = notification.sessionId;
 
-        // No authoritative session id yet: buffer everything in one bounded state
-        // machine keyed by the provisional session id. setSessionEpoch will
-        // atomically install the setup baseline and replay only the matching session.
         if (Option.isNone(epoch.activeSessionId)) {
           yield* Ref.update(pendingSessionStateRef, (map) =>
             appendPendingNotification(map, sessionId, notification),
@@ -1526,7 +1428,6 @@ const makeAcpSessionRuntime = (
 
         const accepting = yield* Ref.get(acceptingSessionUpdatesRef);
         if (!accepting) {
-          // The gate is closed; hold the update until the consumer attaches.
           yield* Ref.update(pendingSessionStateRef, (map) =>
             appendPendingNotification(map, sessionId, notification),
           );
@@ -1558,8 +1459,7 @@ const makeAcpSessionRuntime = (
       }),
     );
 
-    // Register the startup dispatchers before any start() so ACP requests that
-    // arrive during session setup are held in the provisional registry.
+    // Register the startup dispatchers before any start() so ACP requests that arrive during session setup are held in the provisional registry.
     yield* acp.handleRequestPermission(requestPermissionStartup.dispatch);
     yield* acp.handleElicitation(elicitationStartup.dispatch);
 
@@ -1654,9 +1554,7 @@ const makeAcpSessionRuntime = (
         const waiter: ConfigOptionUpdateWaiter = { configId, value, deferred };
         yield* Ref.update(configOptionUpdateWaitersRef, (waiters) => [...waiters, waiter]);
 
-        // The notification may have arrived before the empty response was
-        // observed and this waiter was registered. Recheck the retained state
-        // after registration so both event orderings are race-safe.
+        // the notification may have arrived before the waiter registered — recheck retained state after registration so both orderings are race-safe
         const current = yield* Ref.get(configOptionsRef);
         const currentOption = findSessionConfigOption(current, configId);
         if (currentOption && configOptionCurrentValueMatches(currentOption, value)) {
@@ -1781,8 +1679,7 @@ const makeAcpSessionRuntime = (
           yield* options.validateInitializeResult(initializeResult);
         }
 
-        // Tracks whether authenticate has already been run so the on-demand
-        // path only retries session setup once.
+        // Tracks whether authenticate has already been run so the on-demand path only retries session setup once.
         const authenticatedRef = yield* Ref.make(false);
 
         const mcpServers = options.buildMcpServers?.(initializeResult) ?? [];
@@ -1822,13 +1719,10 @@ const makeAcpSessionRuntime = (
 
         const cleanupDiscardedAcpSession = (discardedSessionId: string) =>
           Effect.gen(function* () {
-            // Stop accepting new transcript updates and bump the session generation so
-            // any in-flight handlers that were admitted under the discarded epoch are
-            // rejected before they can mutate state or enqueue events.
+            // bump the session generation on discard so in-flight handlers admitted under the old epoch are rejected before mutating state or enqueueing events
             yield* Ref.set(acceptingSessionUpdatesRef, false);
             const pending = yield* clearSessionEpoch();
 
-            // Drain any events that were already enqueued for the discarded session.
             let queued = 0;
             while (true) {
               const event = yield* Queue.poll(eventQueue);
@@ -1841,8 +1735,7 @@ const makeAcpSessionRuntime = (
             }
             sessionUpdatesEnqueued -= pending + queued;
 
-            // Reset bounded state derived from the discarded session so it cannot leak
-            // into the final authenticated session.
+            // reset bounded state derived from the discarded session so it can't leak into the final authenticated one
             yield* Ref.set(availableCommandsRef, []);
             yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(undefined));
             yield* Ref.set(modeStateRef, undefined);
@@ -1910,17 +1803,13 @@ const makeAcpSessionRuntime = (
                     ),
                   );
                 })();
-            // Resume/load failure is terminal. Retrying as session/new would create a second
-            // conversation and make delivery outcome ambiguous.
+            // resume/load failure is terminal — retrying as session/new would create a second conversation and make delivery ambiguous
             sessionId = options.resumeSessionId;
             sessionSetupResult = resumed;
             resumedExistingSession = true;
             sessionSetupMethod = supportsResume ? "resume" : "load";
           } else {
-            // Fresh session: do not accept notifications until session/new has
-            // returned a concrete session id. This prevents notifications from a
-            // discarded probe session (e.g. on-demand auth) from being mistaken
-            // for the final authenticated session while the request is pending.
+            // fresh sessions accept no notifications until session/new returns a concrete id — a discarded probe session's updates can't be mistaken for the final session's
             yield* Ref.set(acceptingSessionUpdatesRef, false);
             const createPayload = {
               cwd: sessionCwd,
@@ -1944,10 +1833,6 @@ const makeAcpSessionRuntime = (
             sessionSetupMethod = "new";
           }
 
-          // On-demand authentication: consult the provider-specific heuristic to
-          // decide whether an unauthenticated setup result is an auth-required
-          // signal. The generic ACP path only retries on a verified auth-required
-          // transport/request failure.
           if (options.authPolicy === "on-demand" && !(yield* Ref.get(authenticatedRef))) {
             const authRequired =
               options.authSetupHeuristic?.(initializeResult, sessionSetupResult) ?? false;
@@ -1962,9 +1847,7 @@ const makeAcpSessionRuntime = (
             }
           }
 
-          // session/load may replay a large transcript before the consumer attaches;
-          // gate prompt/fork/config access and per-update suppression until the
-          // replay settles or reaches its hard cap.
+          // session/load may replay a large transcript before the consumer attaches — gate prompt/fork/config and per-update suppression until it settles or hits the cap
           if (sessionSetupMethod === "load") {
             const quietMs = options.loadReplayPolicy?.quietMs ?? ACP_LOAD_REPLAY_QUIET_MS;
             const hardTimeoutMs =
@@ -1983,10 +1866,7 @@ const makeAcpSessionRuntime = (
             });
           }
 
-          // Install the final session id, baseline, and replay policy. Fresh sessions
-          // replay all buffered updates; resumed sessions only apply bounded-state
-          // updates (commands/config/mode) because transcript replay before attachment
-          // is treated as historical context, not live output.
+          // fresh sessions replay all buffered updates; resumed sessions apply only bounded-state updates — pre-attach transcript replay is historical context, not live output
           yield* setSessionEpoch(sessionId, sessionSetupResult, {
             replay: resumedExistingSession ? "bounded-only" : "all",
             resetState: resumedExistingSession,
@@ -2016,9 +1896,6 @@ const makeAcpSessionRuntime = (
 
         const { sessionId, sessionSetupResult, sessionSetupMethod } = yield* setup;
 
-        // setSessionEpoch already installed the setup baseline and replayed pending
-        // updates through the same reducer, so no separate post-setup mutation is
-        // needed here.
         const nextState = {
           sessionId,
           initializeResult,
@@ -2045,8 +1922,7 @@ const makeAcpSessionRuntime = (
       return startupResult;
     });
 
-    // Backstop for a step that stays under its own budget while the handshake as
-    // a whole never settles (e.g. an agent that keeps answering slowly).
+    // Backstop for a step that stays under its own budget while the handshake as a whole never settles (e.g. an agent that keeps answering slowly).
     const boundedStartOnce = withStartupTimeout("startup", startupTimeouts.totalMs, startOnce);
 
     const start = Effect.gen(function* () {
@@ -2097,9 +1973,6 @@ const makeAcpSessionRuntime = (
       getEvents: () =>
         Stream.unwrap(
           Effect.gen(function* () {
-            // Attaching a consumer opens the gate and drains any events that were
-            // buffered while no consumer was attached. The stream begins with the
-            // drained events and then pulls from the live queue.
             const gate = loadReplayGate;
             if (gate !== undefined) {
               yield* gate.attachConsumer;
@@ -2290,7 +2163,6 @@ function mergeSessionConfigOptions(
   return result;
 }
 
-// Flattens grouped ACP select options so semantic configuration lookup stays provider-agnostic.
 export function flattenSessionConfigSelectOptions(
   options:
     | ReadonlyArray<Acp.SessionConfigSelectOption>
@@ -2536,8 +2408,7 @@ const ensureActiveAssistantSegment = ({
         if (current.activeItemId && requestedItemId === undefined) {
           return [{ itemId: current.activeItemId }, current] as const;
         }
-        // Cursor can provide stable message ids for chunks that resume after tool calls.
-        // Keep those ids so projection appends the pieces instead of displaying broken segments.
+        // Cursor provides stable message ids for chunks resuming after tool calls — keep them so projection appends pieces instead of broken segments
         const itemId =
           requestedItemId ??
           assistantItemId(sessionId, runtimeInstanceId, current.nextSegmentIndex);

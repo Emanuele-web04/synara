@@ -1,7 +1,3 @@
-// FILE: AcpLoadReplayGate.test.ts
-// Purpose: Proves load-replay suppression waits for quiet, stays bounded, and releases waiters.
-// Layer: Provider ACP helper tests
-
 import { it } from "@effect/vitest";
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";

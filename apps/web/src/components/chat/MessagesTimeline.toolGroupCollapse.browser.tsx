@@ -1,9 +1,3 @@
-// FILE: MessagesTimeline.toolGroupCollapse.browser.tsx
-// Purpose: Browser regressions for collapsing settled tool-call runs into
-//          summary rows ("Ran 4 commands") once a newer narration block starts,
-//          and for folding the live run to one line wearing its newest call.
-// Layer: Vitest browser tests
-
 import "../../index.css";
 
 import { MessageId, TurnId } from "@synara/contracts";
@@ -110,16 +104,14 @@ function findSummaryTrigger(label: string): HTMLButtonElement | null {
 }
 
 function isVisibleOutsideClosedDisclosure(text: string): boolean {
-  // The innermost element containing the text (command labels may span nested
-  // spans, so a leaf-only check would miss them).
+  // The innermost element containing the text (command labels may span nested spans, so a leaf-only check would miss them).
   const match = [...document.querySelectorAll<HTMLElement>("*")].findLast((element) =>
     (element.textContent ?? "").includes(text),
   );
   return match !== undefined && match.closest("[aria-hidden='true']") === null;
 }
 
-// The live run is one disclosure line wearing its newest call; the earlier
-// calls stay unmounted until that line is opened.
+// The live run is one disclosure line wearing its newest call; the earlier calls stay unmounted until that line is opened.
 async function expectLiveRunFoldedToNewestCall(): Promise<HTMLButtonElement> {
   const [earlierCommand, newestCommand] = LIVE_COMMANDS as [string, string];
   await expect.poll(() => findSummaryTrigger(newestCommand) !== null).toBe(true);
@@ -272,8 +264,7 @@ describe("MessagesTimeline tool group collapse", () => {
       const trigger = findSummaryTrigger("Ran 4 commands")!;
       expect(trigger.getAttribute("aria-expanded")).toBe("false");
 
-      // Closed groups do not mount every tool row; this keeps large settled
-      // transcripts cheap until the user asks to inspect the details.
+      // Closed groups do not mount every tool row; this keeps large settled transcripts cheap until the user asks to inspect the details.
       for (const command of SETTLED_COMMANDS) {
         expect(document.body.textContent ?? "").not.toContain(command);
       }
@@ -302,9 +293,7 @@ describe("MessagesTimeline tool group collapse", () => {
 
   it("collapses mid-turn as soon as a thinking block splits the live group", async () => {
     const host = createTimelineHost();
-    // One live inline group: settled commands, then a thinking boundary, then
-    // the live tail. The run before the boundary must collapse while the turn
-    // is still in progress — not only once it finishes.
+    // One live inline group: settled commands, then a thinking boundary, then the live tail. The run before the boundary must collapse while the turn is still in progress — not only once it finishes.
     const screen = await render(
       <ToolGroupCollapseTimeline
         timelineEntries={[

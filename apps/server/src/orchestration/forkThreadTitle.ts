@@ -1,7 +1,3 @@
-// FILE: forkThreadTitle.ts
-// Purpose: Assign stable, lineage-wide sequence titles to forked threads.
-// Layer: Orchestration domain helper
-
 interface ForkLineageThread {
   readonly id: string;
   readonly projectId: string;

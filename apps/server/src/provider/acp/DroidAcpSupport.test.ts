@@ -1,7 +1,3 @@
-// FILE: DroidAcpSupport.test.ts
-// Purpose: Verifies Droid ACP spawn, auth, mode, model, and discovery behavior.
-// Layer: Provider ACP support tests
-
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";

@@ -1,8 +1,3 @@
-// FILE: _chat.settings.tsx
-// Purpose: Render the dedicated settings experience with its own section sidebar and grouped panels.
-// Layer: Route screen
-// Exports: Settings route component for `/settings`
-
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
@@ -110,8 +105,6 @@ import {
 } from "../settingsNavigation";
 import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
 
-// ── Settings taxonomy ──────────────────────────────────────────────────────
-
 const UI_DENSITY_OPTIONS = [
   {
     value: "compact",
@@ -180,21 +173,13 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
 
-// ── Settings UI primitives ────────────────────────────────────────────────
-
-// Shared settings controls live in ~/components/settings/SettingControls.
-
 function isProviderSelectOption(value: string): value is ProviderKind {
   return PROVIDER_SELECT_OPTIONS.includes(value as ProviderKind);
 }
 
-// Keys of AppSettings whose value is a plain boolean — the only ones that can be
-// driven by the shared on/off toggle row below.
 type BooleanSettingKey = {
   [Key in keyof AppSettings]-?: AppSettings[Key] extends boolean ? Key : never;
 }[keyof AppSettings];
-
-// ── Route screen ───────────────────────────────────────────────────────────
 
 function SettingsRouteView() {
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
@@ -409,10 +394,6 @@ function SettingsRouteView() {
     setResetEpoch((current) => current + 1);
   }
 
-  // Shared on/off settings row: a labelled Switch bound to a boolean AppSettings
-  // key, with the standard "reset to default" affordance shown only when changed.
-  // Rows with bespoke controls (e.g. the desktop-notifications Test button) keep
-  // their own markup instead of using this helper.
   const renderBooleanSettingRow = (config: {
     settingKey: BooleanSettingKey;
     title: string;

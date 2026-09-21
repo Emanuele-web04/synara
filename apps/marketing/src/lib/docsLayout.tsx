@@ -1,8 +1,3 @@
-// FILE: lib/docsLayout.tsx
-// Purpose: Shared Fumadocs layout options styled after the site chrome —
-//          same wordmark, compact nav links, full-width Download CTA, and top-chrome theme toggle.
-// Layer: docs layout configuration (server-importable).
-
 import Image from "next/image";
 import Link from "next/link";
 import type { BaseLayoutProps } from "fumadocs-ui/layouts/shared";

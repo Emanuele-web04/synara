@@ -1,8 +1,3 @@
-// FILE: threadHandoff.ts
-// Purpose: Builds client-side handoff commands and imported transcript payloads.
-// Layer: Web handoff utilities
-// Exports: target-provider, title, transcript, and model-selection helpers.
-
 import {
   EventId,
   MessageId,
@@ -80,7 +75,6 @@ export function resolveThreadHandoffBadgeLabel(thread: Pick<Thread, "handoff">):
   return `Handoff from ${PROVIDER_DISPLAY_NAMES[thread.handoff.sourceProvider]}`;
 }
 
-// Preserve the visible source thread name when creating the destination thread.
 export function resolveThreadHandoffTitle(thread: Pick<Thread, "title">): string {
   const title = thread.title.trim().replace(/\s+/g, " ");
   return title.length > 0 ? title : "Handoff";
@@ -88,8 +82,7 @@ export function resolveThreadHandoffTitle(thread: Pick<Thread, "title">): string
 
 export function buildThreadHandoffImportedMessages(
   thread: Pick<Thread, "messages">,
-  // Forking from a message footer carries only the transcript up to that turn, so
-  // the new thread starts exactly where the user clicked. Omitted = whole thread.
+  // forking from a message footer carries only the transcript up to that turn — the new thread starts where the user clicked; omitted = whole thread
   options?: { readonly throughMessageId?: MessageId | null },
 ): ReadonlyArray<ThreadHandoffImportedMessage> {
   const importable = thread.messages.filter(isImportableThreadMessage);
@@ -107,10 +100,7 @@ export function buildThreadHandoffImportedMessages(
       const visibleAndContextText = stripEmbeddedAssistantSelections(
         extractedBrowserAnnotations.promptText,
       );
-      // Browser annotation ids and tab ids are scoped to the source thread's
-      // live browser session. Carrying them into a handoff would advertise an
-      // exact-page navigation target that the destination thread cannot
-      // resolve, so import only the visible user/context text.
+      // annotation ids and tab ids are scoped to the source thread's live browser session — carrying them would advertise an exact-page target the destination can't resolve, so import only visible text
       importedText = visibleAndContextText;
     }
     const importedMessage: ThreadHandoffImportedMessage = {
@@ -146,8 +136,7 @@ export function buildThreadHandoffImportedMessages(
 export function buildThreadHandoffImportedActivities(
   thread: Pick<Thread, "activities">,
 ): ReadonlyArray<OrchestrationThreadActivity> {
-  // Activity appends are not transactional. Start context history at the latest
-  // durable boundary so a partial handoff can never persist already-invalid usage.
+  // appends aren't transactional — start context history at the latest durable boundary so a partial handoff never persists already-invalid usage
   let latestCompactionIndex = -1;
   for (let index = thread.activities.length - 1; index >= 0; index -= 1) {
     const activity = thread.activities[index];

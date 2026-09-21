@@ -1,13 +1,3 @@
-// FILE: GitPanel.tsx
-// Purpose: Source-control staging pane for the right dock (staged/unstaged lists + per-file diff).
-// Layer: Chat right-dock UI
-// Depends on: gitReactQuery (diff queries + stage/unstage mutations), diffRendering (patch parsing),
-//             @pierre/diffs FileDiff for the per-file viewer.
-//
-// The pane derives its cwd like DockTerminalPane (thread worktree or project cwd) and reads the
-// staged/unstaged patches, parsing them into file lists. Stage/unstage are index mutations routed
-// through GitCore; on settle we invalidate the per-cwd git caches so both lists stay in sync.
-
 import { type FileDiffMetadata } from "@pierre/diffs/react";
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -45,9 +35,7 @@ import { PanelStateMessage } from "./PanelStateMessage";
 
 type GitPanelSection = "staged" | "unstaged";
 
-// Selection is keyed by section + working-tree path (not the content-hashed
-// render key) so it survives a file moving between the staged and unstaged
-// lists after a stage/unstage action.
+// Selection is keyed by section + working-tree path (not the content-hashed render key) so it survives a file moving between the staged and unstaged lists after a stage/unstage action.
 interface SelectedFile {
   section: GitPanelSection;
   path: string;
@@ -209,9 +197,7 @@ export function GitPanel(props: {
 
   const [selected, setSelected] = useState<SelectedFile | null>(null);
 
-  // No fixed polling: turn-driven file changes already push-invalidate the
-  // working-tree-diff cache (see __root.tsx), and focus + the Refresh button +
-  // post-mutation invalidation cover the rest. This keeps the pane cheap.
+  // no fixed polling: turn-driven changes push-invalidate the working-tree-diff cache; focus + Refresh + post-mutation invalidation cover the rest — keeps the pane cheap
   const stagedQuery = useQuery(gitWorkingTreeDiffQueryOptions({ cwd, scope: "staged" }));
   const unstagedQuery = useQuery(gitWorkingTreeDiffQueryOptions({ cwd, scope: "unstaged" }));
 
@@ -249,9 +235,7 @@ export function GitPanel(props: {
     });
   };
 
-  // Resolve the selected file by path, preferring its stored section but falling
-  // back to the other list so the diff (and row highlight) follow a file across a
-  // stage/unstage move instead of silently clearing.
+  // Resolve the selected file by path, preferring its stored section but falling back to the other list so the diff (and row highlight) follow a file across a stage/unstage move instead of silently clearing.
   let selectedResolved: { section: GitPanelSection; file: FileDiffMetadata } | null = null;
   if (selected) {
     const findInSection = (section: GitPanelSection) =>

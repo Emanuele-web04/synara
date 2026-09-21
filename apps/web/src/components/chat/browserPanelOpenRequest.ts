@@ -14,15 +14,13 @@ interface SingleBrowserPanelOpenRequestInput {
 export function routeSingleBrowserPanelOpenRequest(
   input: SingleBrowserPanelOpenRequestInput,
 ): void {
-  // Remember even when another chat is focused. The native runtime stays on
-  // the requested thread; returning to that chat should restore the card.
+  // Remember even when another chat is focused. The native runtime stays on the requested thread; returning to that chat should restore the card.
   input.rememberFloatingBrowser(input.requestedThreadId);
   if (input.requestedThreadId !== input.currentThreadId) {
     return;
   }
 
-  // Explicit same-thread requests must not wait for rAF, which Electron may
-  // suspend while the app is backgrounded.
+  // Explicit same-thread requests must not wait for rAF, which Electron may suspend while the app is backgrounded.
   input.requestImmediateBrowserHydration();
   input.showFloatingBrowser(input.currentThreadId);
 }

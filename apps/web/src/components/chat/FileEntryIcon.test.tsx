@@ -1,8 +1,3 @@
-// FILE: FileEntryIcon.test.tsx
-// Purpose: Guards colored file/folder glyph rendering in editor-style file lists.
-// Layer: Component rendering tests
-// Depends on: FileEntryIcon and React server rendering.
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 

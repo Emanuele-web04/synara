@@ -1,8 +1,3 @@
-// FILE: desktop-platform-build-config.ts
-// Purpose: Builds platform-specific electron-builder config fragments for desktop artifacts.
-// Layer: Release/build helper
-// Depends on: Desktop packaging policy and electron-builder config shape.
-
 import {
   createDesktopBundleFilePatterns,
   preserveDependencyDiagnostics,
@@ -20,9 +15,7 @@ export const MAC_APPSNAP_HELPER_BUNDLE_PATH = "Contents/Helpers/synara-appsnap-h
 export const MAC_DEVICE_HELPER_STAGE_PATH = "apps/server/dist/device-helper";
 export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
 export const WINDOWS_INSTALLER_GUID = "368107a8-afe6-5db5-ab3b-d4f331684868";
-// Asset catalog name of the compiled Icon Composer icon. macOS 26 reads
-// CFBundleIconName out of Assets.car and renders that layered icon with the
-// Liquid Glass material; older releases ignore it and keep using the ICNS.
+// macOS 26 reads CFBundleIconName from Assets.car for Liquid Glass; older releases ignore it and keep the ICNS
 export const MAC_ICON_ASSET_NAME = "Synara";
 export const MAC_ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
 export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car";
@@ -99,8 +92,7 @@ export function createDesktopPlatformBuildConfig(
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
       binaries: [MAC_APPSNAP_HELPER_BUNDLE_PATH],
-      // The universal build stages the same pre-lipo'd helper in both app trees.
-      // @electron/universal needs this pattern to preserve that existing fat binary.
+      // the universal build stages one pre-lipo'd helper in both app trees; this pattern preserves the fat binary
       x64ArchFiles: MAC_APPSNAP_HELPER_BUNDLE_PATH,
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
@@ -115,14 +107,12 @@ export function createDesktopPlatformBuildConfig(
         window: { width: 642, height: 406 },
         iconSize: 128,
         contents: [
-          // Omit path so electron-builder uses the packaged app and its actual filename.
+          // omit path so electron-builder uses the packaged app and its actual filename
           { x: 172, y: 135, type: "file" },
           { x: 514, y: 241, type: "link", path: "/Applications" },
         ],
         sign: input.signed === true,
-        // The signed release flow notarizes and staples the DMG after electron-builder exits.
-        // Do not emit a blockmap/update entry whose hashes would describe the pre-stapled image;
-        // macOS auto-updates use the separately finalized ZIP artifact.
+        // notarize+staple happen after electron-builder exits — no blockmap/update entry for the pre-stapled image
         writeUpdateInfo: false,
       },
       files: [...files, MAC_APPSNAP_HELPER_ASAR_EXCLUSION],
@@ -135,8 +125,7 @@ export function createDesktopPlatformBuildConfig(
           from: MAC_DEVICE_HELPER_STAGE_PATH,
           to: MAC_DEVICE_HELPER_RESOURCE_PATH,
         },
-        // electron-builder only knows how to place an ICNS; the compiled asset
-        // catalog has to be copied into Contents/Resources by hand.
+        // electron-builder only places an ICNS; the compiled asset catalog is copied into Resources by hand
         {
           from: MAC_ICON_ASSETS_CAR_STAGE_PATH,
           to: MAC_ICON_ASSETS_CAR_BUNDLE_PATH,
@@ -165,8 +154,7 @@ export function createDesktopPlatformBuildConfig(
 
   return {
     ...nativePackaging,
-    // Keep the Windows product registration stable while the public app ID changes.
-    // This lets NSIS updates replace the existing installation and own its uninstaller.
+    // keeps Windows product registration stable while the public app id changes, so NSIS updates own the uninstaller
     nsis: {
       guid: WINDOWS_INSTALLER_GUID,
     },

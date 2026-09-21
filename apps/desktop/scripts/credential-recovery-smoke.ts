@@ -8,7 +8,6 @@ import { runBetterwright } from "../src/browserAutomation/betterwrightRuntime";
 import { BrowserVault } from "../src/browserAutomation/browserVault";
 import { browserEvaluationOutput } from "../src/browserAutomation/waitAndEvaluate";
 
-// Hidden, synthetic-only regression for PR #1028. Never attaches to a user tab.
 const home = mkdtempSync(join(tmpdir(), "synara-credential-boundary-"));
 app.setPath("userData", join(home, "electron"));
 process.env.SYNARA_HOME = home;

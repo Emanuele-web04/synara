@@ -69,8 +69,7 @@ import { resetThreadDetailResumeCursorsForTests } from "../threadDetailResumeCur
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
 import { registerTerminalRuntimeCleanup } from "../lib/terminalStateCleanup";
-// Pre-transform the compiler-heavy component before the first hydration deadline.
-// This suite runs on its own CI shard, so ChatView's suite cannot warm it first.
+// pre-transform the compiler-heavy component before the first hydration deadline — this suite runs on its own CI shard so ChatView's suite can't warm it first
 import "./ChatView";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-root-browser-test");
@@ -371,10 +370,7 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
         method === WS_METHODS.subscribeProjectDevServerEvents ||
         method === WS_METHODS.subscribeAutomationEvents ||
-        // Left open like the rest: these are infinite subscriptions, and the
-        // default below answers with an Exit, which a stream RPC reads as the
-        // socket dying and answers with a full reconnect. That loops forever
-        // and starves the RPCs these tests are actually asserting on.
+        // left open: these are infinite subscriptions, and the default Exit answers as a socket death → full reconnect loop that starves the RPCs under test
         method === DEVICE_WS_METHODS.subscribeEvents
       ) {
         return;
@@ -454,8 +450,7 @@ async function mountApp(options?: {
           expectedThread.messages.every((message) => hydratedMessageIdSet.has(message.id)),
         ).toBe(true);
       },
-      // The first Chromium/MSW mount can spend more than 40 seconds compiling
-      // the full desktop route graph on a cold Windows dev cache.
+      // The first Chromium/MSW mount can spend more than 40 seconds compiling the full desktop route graph on a cold Windows dev cache.
       { timeout: 60_000, interval: 16 },
     );
   } catch (cause) {
@@ -1241,8 +1236,7 @@ describe("EventRouter scoped orchestration sync", () => {
         expect(getThreadDetailSnapshotRequestCount).toBe(1);
       }
 
-      // Each replay was empty, but skipped reconciles must not move the real-fetch
-      // deadline to 135 seconds by adding their backoff delays together.
+      // Each replay was empty, but skipped reconciles must not move the real-fetch deadline to 135 seconds by adding their backoff delays together.
       now = lastSnapshotAt + 72_000;
       await vi.waitFor(() => expect(getThreadDetailSnapshotRequestCount).toBe(2), {
         timeout: 4_000,
@@ -1389,9 +1383,7 @@ describe("EventRouter scoped orchestration sync", () => {
   }, 120_000);
 
   it("keeps the terminal fence until a post-settle snapshot includes the assistant reply", async () => {
-    // Mirrors #548: session-set lands (and a premature detail snapshot is taken)
-    // before buffered assistant finals are projected. Clearing the fence on that
-    // first snapshot left the UI spinning until a full reload.
+    // Mirrors #548: session-set lands (and a premature detail snapshot is taken) before buffered assistant finals are projected. Clearing the fence on that first snapshot left the UI spinning until a full reload.
     const turnId = TurnId.makeUnsafe("turn-fence-premature-snapshot");
     const finalMessageId = MessageId.makeUnsafe("msg-fence-premature-final");
     const startedAt = "2026-03-04T12:00:04.000Z";
@@ -1423,8 +1415,7 @@ describe("EventRouter scoped orchestration sync", () => {
 
     try {
       const currentThread = getThreadDetailFromFixtureSnapshot(THREAD_ID);
-      // Premature authoritative projection: terminal at the session-set sequence,
-      // with an assistantMessageId that has not been projected into messages yet.
+      // Premature authoritative projection: terminal at the session-set sequence, with an assistantMessageId that has not been projected into messages yet.
       fixture = {
         ...fixture,
         snapshot: {
@@ -1670,10 +1661,7 @@ describe("EventRouter scoped orchestration sync", () => {
         },
       };
 
-      // Deliver only the terminal session transition, not the final message.
-      // The reducer now considers the session and turn terminal, but the stale
-      // streaming message must keep projection repair eligible until the
-      // authoritative detail snapshot closes it.
+      // deliver only the terminal session transition, not the final message — the reducer now considers session+turn terminal but the stale streaming message must keep projection repair eligible until the authoritative detail snapshot closes it
       sendThreadEventPush({
         sequence: 3,
         eventId: EventId.makeUnsafe("event-missed-completion-session-ready"),
@@ -1808,8 +1796,7 @@ describe("EventRouter scoped orchestration sync", () => {
       });
 
       sendPendingThreadDetailSnapshotResponse();
-      // Let the RPC continuation run before asserting that the older snapshot
-      // did not roll back the just-applied stream event.
+      // Let the RPC continuation run before asserting that the older snapshot did not roll back the just-applied stream event.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
 
       expect(pendingThreadDetailSnapshotResponse).toBeNull();
@@ -2098,8 +2085,7 @@ describe("EventRouter scoped orchestration sync", () => {
         ],
       };
 
-      // Deliberately do not push either a shell upsert or a thread stream item.
-      // The periodic direct projection read must promote the visible draft.
+      // Deliberately do not push either a shell upsert or a thread stream item. The periodic direct projection read must promote the visible draft.
       await vi.waitFor(
         () => {
           expect(getThreadDetailSnapshotRequestCount).toBeGreaterThan(
@@ -2422,9 +2408,7 @@ describe("EventRouter scoped orchestration sync", () => {
     }
   });
 
-  // Perf probe (VITE_SYNARA_PERF=1): how many full thread-detail snapshot reconciles a
-  // running thread with a bursty stream triggers over a fixed window. Multiply by the
-  // number of subscribed running threads for the steady-state load.
+  // Perf probe (VITE_SYNARA_PERF=1): how many full thread-detail snapshot reconciles a running thread with a bursty stream triggers over a fixed window. Multiply by the number of subscribed running threads for the steady-state load.
   it.skipIf(import.meta.env.VITE_SYNARA_PERF !== "1")(
     "perf: bursty running thread projection reconcile count",
     async () => {
@@ -2489,11 +2473,9 @@ describe("EventRouter scoped orchestration sync", () => {
                 updatedAt: createdAt,
               },
             } satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
-            // The journal holds every streamed event, so a replay poll returns exactly
-            // what the live stream has not yet delivered (nothing, in steady state).
+            // The journal holds every streamed event, so a replay poll returns exactly what the live stream has not yet delivered (nothing, in steady state).
             replayEvents = [...replayEvents, streamedEvent];
-            // The projection cursor advances with the journal, so a reconcile snapshot
-            // taken after this event carries a fence at or past the client cursor.
+            // The projection cursor advances with the journal, so a reconcile snapshot taken after this event carries a fence at or past the client cursor.
             fixture = { ...fixture, snapshot: { ...fixture.snapshot, snapshotSequence: sequence } };
             sendThreadEventPush(streamedEvent);
             await new Promise<void>((resolve) => window.setTimeout(resolve, 100));

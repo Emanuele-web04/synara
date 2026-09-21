@@ -144,17 +144,8 @@ export function normalizeCommandPath(commandPath: string): string {
   return commandPath.replaceAll("\\", "/").toLowerCase();
 }
 
-/**
- * npm resolves its global prefix from the `node` binary that runs it, not from
- * npm's own location, so a bare `npm install -g` can write to a different
- * install tree than the one the detected provider binary lives in (e.g. a
- * Homebrew-prefix install checked by Synara while nvm's node makes npm install
- * into nvm's prefix). Derive the prefix that owns the detected binary so the
- * update can pin it explicitly.
- */
+// npm resolves its global prefix from the node that runs it — derive the prefix owning the detected binary so the update pins it instead of writing to another install tree
 export function deriveNpmGlobalPrefix(commandPath: string): string | null {
-  // normalizeCommandPath preserves length, so indices map back onto the
-  // original string, keeping its casing and separators intact.
   const normalized = normalizeCommandPath(commandPath);
   const unixIndex = normalized.indexOf("/lib/node_modules/");
   if (unixIndex > 0) {
@@ -351,8 +342,7 @@ function makeNativeProviderMaintenanceCapabilities(
   return makeProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: installSource === "homebrew" ? null : definition.npmPackageName,
-    // Prefer explicit upstream metadata for channels like third-party Homebrew taps,
-    // then fall back to the package manager channel when its public API is usable.
+    // Prefer explicit upstream metadata for channels like third-party Homebrew taps, then fall back to the package manager channel when its public API is usable.
     latestVersionSource: resolveLatestVersionSourceForInstallSource(definition, installSource),
     updateExecutable: executable ?? definition.nativeUpdate.executable,
     updateArgs: definition.nativeUpdate.args(installSource),
@@ -389,7 +379,6 @@ function makeProviderMaintenanceForInstallSource(input: {
   readonly homebrewPackage?: ProviderHomebrewPackageDefinition | null;
   readonly executable?: string | null;
   readonly pathPrepend?: string | null;
-  /** Path that matched install-source detection, used to pin the install tree. */
   readonly commandPath?: string | null;
 }): ProviderMaintenanceCapabilities {
   const { definition, installSource, homebrewPackage, executable, pathPrepend, commandPath } =
@@ -563,13 +552,7 @@ export const resolveProviderMaintenanceCapabilitiesEffect = Effect.fn(
     });
   }
 
-  // Existence, not executability: this is locating an installation to report on, so an
-  // extensionless Windows file still counts even though nothing could spawn it directly.
-  //
-  // `options.env` is used whole, with no per-key fallback to `process.env`. An earlier version
-  // read `options.env.PATH ?? process.env.PATH`, which could report a provider as installed
-  // because *this* process can see it while the child environment we were asked about cannot.
-  // The production caller passes `buildProviderChildEnvironment(...)`, which always carries PATH.
+  // existence, not executability; and options.env is used whole with no process.env fallback — an earlier version reported providers the queried child env can't see
   for (const candidate of executableCandidates(binaryPath, {
     ...(options?.platform === undefined ? {} : { platform: options.platform }),
     ...(options?.env === undefined ? {} : { env: options.env }),
@@ -632,9 +615,7 @@ export function createProviderVersionAdvisory(input: {
     status: advisory.status,
     currentVersion: input.currentVersion,
     latestVersion,
-    // Knowable when a registry can be queried, or when a latest version was already
-    // resolved. Self-updating CLIs satisfy neither, so their status is pinned to
-    // "unknown" and must not be presented as "an update is waiting".
+    // self-updating CLIs are pinned "unknown" — never present them as "an update is waiting"
     latestVersionKnowable: capabilities.latestVersionSource !== null || latestVersion !== null,
     updateCommand: capabilities.update?.command ?? null,
     canUpdate: capabilities.update !== null,

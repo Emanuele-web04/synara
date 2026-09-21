@@ -1,10 +1,3 @@
-// FILE: toolCallDetailsFormatting.ts
-// Purpose: Format captured tool-call commands and output for transcript detail views.
-// Layer: Web transcript presentation utility
-// Exports: formatShellCommand, formatShellTranscript, formatToolOutputText,
-//          createMarkdownCodeFence
-// Depends on: WorkLogToolOutputDetails shape from toolCallDetails
-
 import type { WorkLogToolOutputDetails } from "./toolCallDetails";
 
 export function formatShellCommand(command: string): string {

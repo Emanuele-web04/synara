@@ -32,7 +32,7 @@ export class CodexAppServerTransportError extends Error {
   }
 }
 
-/** Raw-byte JSONL framing so split UTF-8 sequences never decode prematurely. */
+/** raw-byte JSONL framing so split UTF-8 sequences never decode prematurely */
 export class CodexJsonlFramer {
   private readonly chunks: Buffer[] = [];
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
@@ -105,12 +105,11 @@ export class CodexJsonlFramer {
         maxBytes: this.maxFrameBytes,
         observedBytes,
       });
-      // Oversize input is terminal for this stream. Release already-buffered
-      // chunks immediately instead of retaining them until process teardown.
+      // oversize input is terminal — release buffered chunks immediately instead of retaining them until teardown
       this.reset();
       throw error;
     }
-    // Do not retain a large source chunk through one small trailing slice.
+    // don't retain a large source chunk through one small trailing slice
     this.chunks.push(Buffer.from(chunk));
     this.frameBytes = observedBytes;
   }
@@ -139,7 +138,7 @@ type PendingWrite = {
   readonly reject: (error: Error) => void;
 };
 
-/** Serializes JSONL writes, bounds retained frames, and honors stream drain. */
+/** serializes JSONL writes, bounds retained frames, honors stream drain */
 export class CodexJsonlWriter {
   private readonly pending: PendingWrite[] = [];
   private queuedBytes = 0;

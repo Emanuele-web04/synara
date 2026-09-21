@@ -24,10 +24,6 @@ const PROJECT_SOURCES: ReadonlyArray<{
   },
 ];
 
-/**
- * The compact raised-thumb picker previously used for the Synara/Studio switch,
- * adapted to choose how a project is added.
- */
 export function ProjectSourceSegmentedPicker(props: {
   readonly value: ProjectSource;
   readonly disabled: boolean;

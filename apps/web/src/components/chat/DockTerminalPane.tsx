@@ -1,12 +1,4 @@
-// FILE: DockTerminalPane.tsx
-// Purpose: Render an independent terminal workspace inside the right dock for a host thread.
-// Layer: Chat right-dock UI
-// Depends on: useTerminalSurfaceController (shared store wiring), ThreadTerminalDrawer.
-//
-// The dock terminal set is isolated from the bottom drawer via a synthetic scope id
-// (dockTerminalThreadId), so the two never share xterm instances. All store wiring is
-// shared with other terminal surfaces through useTerminalSurfaceController; only the
-// "ensure a terminal is open" policy is surface-specific (here: a single terminal-only page).
+// dock terminals isolated from the bottom drawer via a synthetic scope id so the two never share xterm instances; store wiring shared through useTerminalSurfaceController, only the "ensure a terminal is open" policy is surface-specific
 
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
@@ -27,8 +19,7 @@ import ThreadTerminalDrawer from "../ThreadTerminalDrawer";
 export function DockTerminalPane(props: {
   hostThreadId: ThreadId;
   projectId: ProjectId | null;
-  // When false the pane stays mounted but hidden (another dock tab is active),
-  // so the xterm runtime sleeps its visual work without detaching its DOM.
+  // When false the pane stays mounted but hidden (another dock tab is active), so the xterm runtime sleeps its visual work without detaching its DOM.
   isActive?: boolean;
   onClosePanel: () => void;
 }) {
@@ -72,8 +63,7 @@ export function DockTerminalPane(props: {
     readComposerTarget,
   );
 
-  // A dock terminal pane normally shows a live terminal. An `exit` is final,
-  // though: do not recreate a replacement terminal just as the panel closes.
+  // A dock terminal pane normally shows a live terminal. An `exit` is final, though: do not recreate a replacement terminal just as the panel closes.
   useEffect(() => {
     if (terminalState.terminalOpen || closedBySessionExitRef.current) {
       return;

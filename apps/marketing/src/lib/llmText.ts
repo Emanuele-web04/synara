@@ -1,7 +1,3 @@
-// FILE: lib/llmText.ts
-// Purpose: Builds plain-text AI discovery files from canonical site data.
-// Layer: server utility for /llms.txt, /llms-full.txt, and /ai.txt routes.
-
 import { FAQ_ITEMS } from "@/data/faqs";
 import { PRODUCT_CATEGORY, PRODUCT_PILLARS, SUPPORTED_PROVIDERS } from "@/data/product";
 import { getSortedReleases, toVersionSlug } from "@/lib/changelog";

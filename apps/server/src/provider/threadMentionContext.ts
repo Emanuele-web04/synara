@@ -1,7 +1,3 @@
-// FILE: threadMentionContext.ts
-// Purpose: Resolve thread:// composer references into bounded transcript prompt context.
-// Layer: Provider prompt compatibility
-
 import {
   ThreadId,
   type OrchestrationThread,
@@ -126,8 +122,7 @@ export function resolveThreadMentionPromptProjection(input: {
     (maxTotalContextChars + THREAD_MENTION_CONTEXT_SEPARATOR_CHARS) /
       (THREAD_MENTION_MIN_CONTEXT_CHARS + THREAD_MENTION_CONTEXT_SEPARATOR_CHARS),
   );
-  // A minimum useful block size also bounds projection reads: callers cannot
-  // submit an unbounded references array and make the server hydrate every thread.
+  // the minimum block size also bounds projection reads — callers can't submit an unbounded references array and make the server hydrate every thread
   const contextMentions = threadMentions.slice(0, maxResolvedMentionCount);
   if (contextMentions.length === 0) {
     return Effect.succeed({
@@ -174,10 +169,7 @@ export function resolveThreadMentionPromptProjection(input: {
   );
 }
 
-/**
- * Suffix appended after the provider input so mentioned-thread context never
- * lands inside `<latest_user_message>` wrappers. Empty when nothing resolved.
- */
+// suffix after the provider input so mentioned-thread context never lands inside <latest_user_message> wrappers
 export function threadMentionContextSuffix(contextBlocks: readonly string[]): string {
   return contextBlocks.length > 0 ? `\n\n${contextBlocks.join("\n\n")}` : "";
 }

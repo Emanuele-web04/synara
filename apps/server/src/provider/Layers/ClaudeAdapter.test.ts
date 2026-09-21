@@ -685,7 +685,6 @@ function effortLevelFromOptions(options: ClaudeQueryOptions | undefined): string
 const THREAD_ID = ThreadId.makeUnsafe("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.makeUnsafe("thread-claude-resume");
 
-// `name` or `name:alias`.
 function fakeSlashCommand(entry: string) {
   const [name = entry, alias] = entry.split(":");
   const command = { name, description: name, argumentHint: "" };
@@ -1007,7 +1006,7 @@ describe("ClaudeAdapterLive", () => {
       assert.include(systemPrompt.append ?? "", "worker-<tier>");
       assert.include(systemPrompt.append ?? "", SYNARA_HARNESS_POLICY_MARKER);
       assert.include(systemPrompt.append ?? "", "Synara is the host and harness");
-      // This characterization harness intentionally omits gateway credentials.
+      // this characterization harness intentionally omits gateway credentials
       assert.include(systemPrompt.append ?? "", "Synara MCP control is unavailable");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -1164,8 +1163,7 @@ describe("ClaudeAdapterLive", () => {
 
           const createInput = harness.getLastCreateQueryInput();
           assert.equal(createInput?.options.model, "claude-sonnet-5");
-          // Non-max effort rides in flag settings so it can change live;
-          // `max` has no Settings equivalent and stays a spawn option.
+          // non-max effort rides in flag settings so it can change live; `max` has no Settings equivalent and stays a spawn option
           if (effort === "max") {
             assert.equal(createInput?.options.effort, "max");
             assert.equal(effortLevelFromOptions(createInput?.options), undefined);
@@ -1425,9 +1423,7 @@ describe("ClaudeAdapterLive", () => {
         attachments: [],
       });
 
-      // The CLI already spawned in bypassPermissions (full-access). Re-sending the
-      // identical mode would block the first turn on the CLI init handshake, so the
-      // control request must be skipped entirely.
+      // a CLI spawned in bypassPermissions must not get the identical mode re-sent — the control request would block the first turn on the init handshake
       assert.deepEqual(harness.query.setPermissionModeCalls, []);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -1445,8 +1441,6 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
-      // First full-access turn: desired mode equals the spawn mode, so the
-      // redundant control request is skipped (provable first-turn state).
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "First turn",
@@ -1454,10 +1448,6 @@ describe("ClaudeAdapterLive", () => {
       });
       assert.deepEqual(harness.query.setPermissionModeCalls, []);
 
-      // Second turn wants the SAME desired mode, but the CLI's mode is no longer
-      // provable once a prompt has run, so the request is sent unconditionally
-      // (the pre-optimization behavior, with no equality skip against a tracked
-      // mode).
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "Second turn",
@@ -1499,7 +1489,6 @@ describe("ClaudeAdapterLive", () => {
         attachments: [],
       });
 
-      // The steer rides the live turn: same turn id, no new turn boundary.
       assert.equal(String(steered.turnId), String(turn.turnId));
 
       const createInput = harness.getLastCreateQueryInput();
@@ -1578,8 +1567,6 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
-      // Plan differs from the spawn mode (bypassPermissions) -> request is sent
-      // even though this is the first turn.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "Plan this",
@@ -1588,8 +1575,6 @@ describe("ClaudeAdapterLive", () => {
       });
       assert.deepEqual(harness.query.setPermissionModeCalls, ["plan"]);
 
-      // A following default turn auto-closes the stale plan turn and restores the
-      // base bypassPermissions mode -> request is sent again.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "Now build it",
@@ -1598,8 +1583,6 @@ describe("ClaudeAdapterLive", () => {
       });
       assert.deepEqual(harness.query.setPermissionModeCalls, ["plan", "bypassPermissions"]);
 
-      // The first-turn skip window has closed, so a third identical default turn
-      // re-sends unconditionally rather than skipping.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "Keep going",
@@ -1632,9 +1615,6 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
-      // Resume also spawns a fresh CLI in bypassPermissions, so the tracked mode is
-      // initialized correctly and the first turn after resume skips the redundant
-      // control request instead of blocking on the init handshake.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "Continue",
@@ -2664,9 +2644,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  // Subagent conversations arrive as complete assistant/user messages only — the CLI
-  // forwards no stream events for them — so every message after the first, and every
-  // tool call, must project from the snapshots alone.
+  // subagent conversations arrive as complete messages only (no stream events) — every message and tool call must project from snapshots alone
   it.effect("projects a complete-message subagent conversation onto the child thread", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -2790,7 +2768,6 @@ describe("ClaudeAdapterLive", () => {
         true,
       );
 
-      // Every assistant message's text projects — not just the first one.
       const childDeltaText = childEvents
         .filter((event) => event.type === "content.delta")
         .map((event) => (event.type === "content.delta" ? event.payload.delta : ""))
@@ -2803,8 +2780,6 @@ describe("ClaudeAdapterLive", () => {
       );
       assert.equal(childMessageCompletions.length, 2);
 
-      // Tool calls from complete assistant messages open on the child thread and
-      // complete when the matching tool_result arrives.
       const toolStarted = childEvents.find(
         (event) =>
           event.type === "item.started" && event.providerRefs?.providerItemId === "tool-grep-1",
@@ -2824,7 +2799,6 @@ describe("ClaudeAdapterLive", () => {
         assert.equal(toolCompleted.payload.status, "completed");
       }
 
-      // The subagent's internal tool never leaks onto the parent thread.
       assert.equal(
         runtimeEvents.some(
           (event) =>
@@ -2862,7 +2836,6 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-bg",
         uuid: "bg-change-1",
       } as unknown as SDKMessage);
-      // Same task again plus one addition: only the addition is announced.
       harness.query.emit({
         type: "system",
         subtype: "background_tasks_changed",
@@ -2873,7 +2846,6 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-bg",
         uuid: "bg-change-2",
       } as unknown as SDKMessage);
-      // Removal-only change announces nothing.
       harness.query.emit({
         type: "system",
         subtype: "background_tasks_changed",
@@ -2881,8 +2853,6 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-bg",
         uuid: "bg-change-3",
       } as unknown as SDKMessage);
-      // Sentinel unknown subtype closes the collection window; its warning
-      // arriving third proves the removal produced no notice.
       harness.query.emit({
         type: "system",
         subtype: "totally_unknown_subtype",
@@ -2898,8 +2868,6 @@ describe("ClaudeAdapterLive", () => {
       const firstNotice = warnings[0];
       assert.equal(firstNotice?.type, "runtime.warning");
       if (firstNotice?.type === "runtime.warning") {
-        // The SDK message rides on detail so ingestion can tell background
-        // notices apart from plain runtime warnings.
         const detail = firstNotice.payload.detail as Record<string, unknown>;
         assert.equal(detail.subtype, "background_tasks_changed");
       }
@@ -2935,8 +2903,6 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-vcs",
         uuid: "vcs-1",
       } as unknown as SDKMessage);
-      // Sentinel unknown subtype closes the collection window; the VCS event
-      // arriving first proves it did not surface as an unhandled warning.
       harness.query.emit({
         type: "system",
         subtype: "totally_unknown_subtype",
@@ -2978,9 +2944,7 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
-      // The SDK can patch the individual task before the aggregate snapshot
-      // lands. The patch must not pre-seed the announce diff, or the snapshot
-      // would treat the task as already known and never emit the notice.
+      // the per-task patch must not pre-seed the announce diff, or the aggregate snapshot treats the task as known and never emits the notice
       harness.query.emit({
         type: "system",
         subtype: "task_updated",
@@ -2996,8 +2960,6 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-bg-race",
         uuid: "bg-race-change-1",
       } as unknown as SDKMessage);
-      // Sentinel unknown subtype closes the collection window; the notice must
-      // arrive before it.
       harness.query.emit({
         type: "system",
         subtype: "totally_unknown_subtype",
@@ -3190,9 +3152,6 @@ describe("ClaudeAdapterLive", () => {
           usage: { input_tokens: 10, output_tokens: 5 },
         },
       } as unknown as SDKMessage);
-      // The user stopped the task; the SDK settles it — in the real stream a
-      // terminal task_updated patch lands first (retiring the run), then the
-      // task_notification follows.
       harness.query.emit({
         type: "system",
         subtype: "task_updated",
@@ -3212,9 +3171,7 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-zombie",
         uuid: "task-notification-zombie",
       } as unknown as SDKMessage);
-      // ...but a message already in flight arrives with the same tag. It must
-      // not resurrect the settled child (a new synthetic turn would pin the
-      // strip row on "Running" forever).
+      // a message in flight with a settled tag must not resurrect the child — the synthetic turn would pin the strip row on "Running" forever
       harness.query.emit({
         type: "assistant",
         session_id: "sdk-session-zombie",
@@ -3226,8 +3183,6 @@ describe("ClaudeAdapterLive", () => {
           usage: { input_tokens: 4, output_tokens: 2 },
         },
       } as unknown as SDKMessage);
-      // The Task tool_result for a stopped task arrives error-shaped; the
-      // settled status must stamp a "stopped" agent state onto the item.
       harness.query.emit({
         type: "user",
         session_id: "sdk-session-zombie",
@@ -3246,8 +3201,6 @@ describe("ClaudeAdapterLive", () => {
         },
       } as unknown as SDKMessage);
 
-      // Second subagent settles via task_notification alone (no terminal
-      // task_updated) — the other real-world settle order.
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -3305,8 +3258,6 @@ describe("ClaudeAdapterLive", () => {
         const childEvents = runtimeEvents.filter(
           (event) => event.providerRefs?.providerThreadId === toolUseId,
         );
-        // Exactly one child turn: started once, completed once at settle, and
-        // the zombie tail neither streams text nor reopens a turn.
         assert.equal(childEvents.filter((event) => event.type === "turn.started").length, 1);
         assert.equal(childEvents.filter((event) => event.type === "turn.completed").length, 1);
         const lastChildEvent = childEvents.at(-1);
@@ -3374,8 +3325,7 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(harness.query.interruptCalls.length, 0);
       assert.equal(harness.query.backgroundTasksCalls.length, 0);
 
-      // Without a known task id (task_started not seen yet) the stop is queued —
-      // never backgrounded — and fires the moment task_started maps the tool use.
+      // a stop before task_started is queued (never backgrounded) and fires the moment the tool_use→task mapping lands
       yield* adapter.interruptTurn(session.threadId, undefined, "tool-task-pending");
       assert.equal(harness.query.backgroundTasksCalls.length, 0);
       assert.deepEqual(harness.query.stopTaskCalls, ["task-stop-1"]);
@@ -3390,7 +3340,6 @@ describe("ClaudeAdapterLive", () => {
         session_id: "sdk-session-stop",
         uuid: "task-started-pending-1",
       } as unknown as SDKMessage);
-      // Wait for the stream handler to process the mapping and fire the queued stop.
       for (let i = 0; i < 10_000 && harness.query.stopTaskCalls.length < 2; i += 1) {
         yield* Effect.yieldNow;
       }
@@ -3429,9 +3378,7 @@ describe("ClaudeAdapterLive", () => {
         });
         const query = harness.queries[0]!;
 
-        // The child shares the parent's MCP transport. Stop only the child
-        // provider task, but tombstone/drain the parent gateway turn so an
-        // indistinguishable late child browser request cannot survive Stop.
+        // the child shares the parent's MCP transport — stop only the child task but tombstone the parent gateway turn so a late child browser request cannot survive Stop
         const childStopFiber = yield* adapter
           .interruptTurn(session.threadId, undefined, "tool-task-pending")
           .pipe(Effect.forkChild);
@@ -3572,14 +3519,12 @@ describe("ClaudeAdapterLive", () => {
         uuid: "task-started-steer-1",
       } as unknown as SDKMessage);
 
-      // No pending steer: the hook stays a clean passthrough.
       assert.deepEqual(yield* invokeHook("task-steer-1"), {});
 
       yield* adapter.steerSubagent(session.threadId, "tool-task-steer-1", {
         input: "Focus on the tests",
       });
 
-      // Main-thread hook calls carry no agent_id and must never drain the queue.
       assert.deepEqual(yield* invokeHook(undefined), {});
 
       const delivered = yield* invokeHook("task-steer-1");
@@ -3591,7 +3536,6 @@ describe("ClaudeAdapterLive", () => {
         },
       });
 
-      // The queue drained: a second delivery attempt passes through untouched.
       assert.deepEqual(yield* invokeHook("task-steer-1"), {});
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
@@ -3672,8 +3616,6 @@ describe("ClaudeAdapterLive", () => {
           ),
         );
 
-      // Drains the microtask queue so the stream fiber ingests task_started
-      // (and registers the subagent run) before the steer is queued.
       assert.deepEqual(yield* invokeHook(), {});
 
       yield* adapter.steerSubagent(session.threadId, "tool-task-steer-attach-1", {
@@ -3881,7 +3823,6 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
-      // Workflow run itself: no tool_use_id, identified by task_type/workflow_name.
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -3893,7 +3834,6 @@ describe("ClaudeAdapterLive", () => {
         uuid: "workflow-started-1",
       } as unknown as SDKMessage);
 
-      // Member agent spawned by the workflow: no Task tool call, so no tool_use_id.
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -3935,8 +3875,6 @@ describe("ClaudeAdapterLive", () => {
         uuid: "workflow-agent-notification-1",
       } as unknown as SDKMessage);
 
-      // Ambient shell tasks (each Bash call an agent makes) are not workflow
-      // members even while exactly one workflow is live.
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -3948,8 +3886,6 @@ describe("ClaudeAdapterLive", () => {
         uuid: "ambient-bash-started-1",
       } as unknown as SDKMessage);
 
-      // Task-tool subagent spawns (tool_use_id + subagent_type) belong to the
-      // subagent strip; they must not double as workflow member rows.
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -3961,8 +3897,6 @@ describe("ClaudeAdapterLive", () => {
         uuid: "strip-subagent-started-1",
       } as unknown as SDKMessage);
 
-      // A second concurrent workflow makes membership ambiguous: later agent
-      // tasks must stay untagged instead of guessing.
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -4204,7 +4138,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         },
       } as unknown as SDKMessage);
 
-      // task_started carries the full script text as `prompt`.
       harness.query.emit({
         type: "system",
         subtype: "task_started",
@@ -4218,8 +4151,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         uuid: "workflow-meta-started",
       } as unknown as SDKMessage);
 
-      // Member agents emit no task events of their own; the workflow's own
-      // progress carries "<phase>: <label>" descriptions.
       harness.query.emit({
         type: "system",
         subtype: "task_progress",
@@ -4231,8 +4162,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         uuid: "workflow-meta-progress",
       } as unknown as SDKMessage);
 
-      // Older Workflow results omit taskType but still carry the launch
-      // identifiers needed for resume and transcript polling.
       harness.query.emit({
         type: "user",
         session_id: "sdk-session-workflow-meta",
@@ -4268,8 +4197,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         uuid: "workflow-meta-updated",
       } as unknown as SDKMessage);
 
-      // The final notification can arrive after the terminal status patch. It
-      // must still backfill authoritative per-agent state from output_file.
       harness.query.emit({
         type: "system",
         subtype: "task_notification",
@@ -4421,8 +4348,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         session_id: "sdk-session-workflow-poll",
         uuid: "workflow-poll-started",
       } as unknown as SDKMessage);
-      // Progress description supplies the label the poller zips onto the
-      // journal's first started agent.
       harness.query.emit({
         type: "system",
         subtype: "task_progress",
@@ -4462,7 +4387,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
 
-      // Settle the workflow so the poller fiber is interrupted.
       harness.query.emit({
         type: "system",
         subtype: "task_notification",
@@ -4512,8 +4436,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         path.join(transcriptDir, "journal.jsonl"),
         `${JSON.stringify({ type: "started", key: "v2:abc", agentId: "agent-live-1" })}\n`,
       );
-      // The transcript is the only place effort appears: assistant lines carry
-      // it as a top-level field next to `message`.
+      // effort appears only on transcript lines as a top-level field next to `message`
       writeFileSync(
         path.join(transcriptDir, "agent-agent-live-1.jsonl"),
         `${JSON.stringify({
@@ -4528,7 +4451,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           timestamp: "2026-07-14T22:49:14.490Z",
         })}\n`,
       );
-      // The settled output file carries model/state but no effort.
       const outputFile = path.join(transcriptDir, "workflow-output.json");
       writeFileSync(
         outputFile,
@@ -4614,9 +4536,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         },
       } as unknown as SDKMessage);
 
-      // Wait for the poller to fold the transcript (and its effort) into the
-      // runtime state before the run settles. Real-time wait: the poller runs
-      // on the live runtime, while this test body is on the test clock.
       while (
         !seen.some(
           (event) => event.type === "task.progress" && event.payload.workflowAgents !== undefined,
@@ -4625,8 +4544,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 10)));
       }
 
-      // Regression: a terminal task_updated tears the poller down first; the
-      // later task_notification must still see the runtime state to backfill.
+      // regression: a terminal task_updated tears the poller down first; the later task_notification must still see runtime state to backfill
       harness.query.emit({
         type: "system",
         subtype: "task_updated",
@@ -4876,8 +4794,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           },
         } as unknown as SDKMessage);
 
-        // Claude Agent SDK currently follows the structured assistant error with a
-        // nominal success result. The structured error must remain authoritative.
+        // the SDK follows a structured assistant error with a nominal success result — the error must remain authoritative
         firstQuery.emit({
           type: "result",
           subtype: "success",
@@ -5147,7 +5064,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       yield* Effect.yieldNow;
       runtimeEventsFiber.interruptUnsafe();
 
-      // A graceful termination must not surface a runtime.error toast.
       assert.equal(
         runtimeEvents.some((event) => event.type === "runtime.error"),
         false,
@@ -5164,7 +5080,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         );
       }
 
-      // The session is torn down so the next message resumes from the cursor.
       assert.equal(
         runtimeEvents.some((event) => event.type === "session.exited"),
         true,
@@ -5463,8 +5378,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.equal(spawnCalls, 1);
       assert.equal(teardownCalls, 1);
 
-      // The second attempt retries teardown and fails before createQuery can
-      // spawn another process.
       assert.isTrue(Exit.isFailure(yield* Effect.exit(adapter.startSession(input))));
       assert.equal(createCalls, 1);
       assert.equal(spawnCalls, 1);
@@ -5537,8 +5450,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.equal(spawnCalls, 1);
       assert.equal(teardownCalls, 1);
 
-      // The retry must fail while reaping the retained owner, before another
-      // temporary process can be spawned.
       assert.isTrue(Exit.isFailure(yield* Effect.exit(listCommands(input))));
       assert.equal(spawnCalls, 1);
       assert.equal(teardownCalls, 2);
@@ -5705,12 +5616,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
   });
 
   it.effect("stopSession does not throw into the SDK prompt consumer", () => {
-    // The SDK consumes user messages via `for await (... of prompt)`.
-    // Stopping a session must end that loop cleanly — not throw an error.
-    //
-    // FakeClaudeQuery.close() masks this by resolving pending iterators
-    // before the shutdown propagates. Override it to match real SDK behavior
-    // where close() does not resolve the prompt consumer.
+    // stopping must end the SDK's `for await` prompt loop cleanly; FakeClaudeQuery.close() masks this, so override it to match real behavior
     const query = new FakeClaudeQuery();
     (query as { close: () => void }).close = () => {
       query.closeCalls += 1;
@@ -5720,11 +5626,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
     const layer = makeClaudeAdapterLive({
       createQuery: (input) => {
-        // Simulate the SDK consuming the prompt iterable
         (async () => {
           try {
             for await (const _message of input.prompt) {
-              /* SDK processes user messages */
             }
           } catch (error) {
             promptConsumerError = error;
@@ -5849,7 +5753,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           } as unknown as SDKMessage);
         }
 
-        // Incremental task patches we intentionally drop — must not warn either.
         for (let i = 0; i < 3; i += 1) {
           harness.query.emit({
             type: "system",
@@ -5859,8 +5762,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           } as unknown as SDKMessage);
         }
 
-        // Two distinct unknown subtypes, each emitted twice — each must surface
-        // exactly one warning (per-kind de-dup), so two warnings in total.
         for (const subtype of ["future_unknown_subtype", "another_unknown_subtype"]) {
           for (let i = 0; i < 2; i += 1) {
             harness.query.emit({
@@ -5872,7 +5773,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           }
         }
 
-        // Sentinel that produces a real event so the collector terminates.
         harness.query.emit({
           type: "system",
           subtype: "task_progress",
@@ -7713,9 +7613,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         "worker-xhigh",
       ]);
 
-      // Worker tiers carry only an effort override (model inherits so the Agent
-      // tool's `model` input composes), and the system prompt teaches the model
-      // to pick them per task complexity.
+      // worker tiers carry only an effort override — model inherits so the Agent tool's `model` input composes
       const workerHigh = createInput?.options.agents?.["worker-high"];
       assert.equal(workerHigh?.effort, "high");
       assert.equal(workerHigh?.model, undefined);
@@ -8421,7 +8319,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
             assert.deepEqual(harness.query.applyFlagSettingsCalls, []);
             assert.equal(harness.query.closeCalls, 0);
             assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
-            // The original profile remains usable after the rejected request.
             yield* adapter.sendTurn({
               threadId: THREAD_ID,
               input: "continue",
@@ -8469,8 +8366,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
-      // Neither model is pinned, so no flag setting is sent, but the effective
-      // budget still changes with the model and must be re-announced.
       assert.deepEqual(harness.query.setModelCalls, ["claude-fable-5-1[1m]"]);
       assert.deepEqual(harness.query.applyFlagSettingsCalls, []);
       const configuredEvents = Array.from(yield* Fiber.join(configuredEventsFiber));
@@ -8520,7 +8415,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       });
       assert.deepEqual(harness.query.applyFlagSettingsCalls, [{ alwaysThinkingEnabled: true }]);
 
-      // The same toggle value on the next turn stays quiet.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "continue",
@@ -8569,7 +8463,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         { effortLevel: "xhigh", ultracode: true, fastMode: true },
       ]);
 
-      // The same selection on the next turn stays quiet.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "continue",
@@ -8584,7 +8477,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         { effortLevel: "xhigh", ultracode: true, fastMode: true },
       ]);
 
-      // Returning to defaults clears the keys from the flag-settings layer.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "wrap up",
@@ -8599,7 +8491,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         { effortLevel: null, ultracode: null, fastMode: null },
       ]);
 
-      // No restart happened at any point: the original spawn is the only one.
       assert.deepEqual(harness.query.setModelCalls, []);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -8763,7 +8654,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
-      // Cache writes are separate from ordinary uncached input.
       const uncachedUsage = {
         input_tokens: 5_000,
         cache_creation_input_tokens: 55_000,
@@ -8986,11 +8876,9 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       } as unknown as SDKMessage);
       yield* Fiber.join(turnCompletedFiber);
 
-      // The reroute only covers the completed turn: completion switches the
-      // session back so the fallback cannot pin every subsequent turn to Opus.
+      // the reroute covers only the completed turn — completion restores the selection so the fallback cannot pin later turns
       assert.deepEqual(harness.query.setModelCalls, ["claude-fable-5"]);
 
-      // The next turn already runs on the selection; no extra control request.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "continue",
@@ -9521,8 +9409,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       });
       yield* Deferred.await(firstCompleted);
 
-      // Background output opens a synthetic UI turn. The next user prompt closes
-      // that turn before Claude emits an SDK result for it.
       emitAssistantUsage(
         harness.query,
         "sdk-resultless-accounting",
@@ -10077,8 +9963,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         assert.ok(warning.payload.message.includes("80%"));
       }
 
-      // The second oversized request must not emit another warning; the turn
-      // completed without a second runtime.warning in the stream.
       const thread = yield* adapter.readThread(session.threadId);
       assert.ok(thread.turns.length >= 1);
     }).pipe(
@@ -10511,7 +10395,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         runtimeMode: "full-access",
       });
 
-      // First turn in plan mode
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "plan this",
@@ -10519,7 +10402,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
-      // Complete the turn so we can send another
       const turnCompletedFiber = yield* Stream.filter(
         adapter.streamEvents,
         (event) => event.type === "turn.completed",
@@ -10536,7 +10418,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       yield* Fiber.join(turnCompletedFiber);
 
-      // Debug is a normal implementation turn and must leave native Plan mode.
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "now do it",
@@ -10544,7 +10425,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
-      // First call sets "plan", second call restores "bypassPermissions" (the base for full-access)
       assert.deepEqual(harness.query.setPermissionModeCalls, ["plan", "bypassPermissions"]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -10568,8 +10448,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
-      // The base (bypassPermissions) already matches the mode the CLI spawned in,
-      // so no redundant control request is issued on the first turn.
       assert.deepEqual(harness.query.setPermissionModeCalls, []);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -10899,14 +10777,12 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      // Start session in approval-required mode so canUseTool fires.
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "approval-required",
       });
 
-      // Drain the session startup events (started, configured, state.changed).
       yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
       yield* adapter.sendTurn({
@@ -10942,7 +10818,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         return;
       }
 
-      // Simulate Claude calling AskUserQuestion with structured questions.
       const askInput = {
         questions: [
           {
@@ -10963,7 +10838,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         requestId: "request-tool-ask-1",
       });
 
-      // The adapter should emit a user-input.requested event.
       const requestedEvent = yield* Stream.runHead(adapter.streamEvents);
       assert.equal(requestedEvent._tag, "Some");
       if (requestedEvent._tag !== "Some") {
@@ -10981,14 +10855,12 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         providerItemId: ProviderItemId.makeUnsafe("tool-ask-1"),
       });
 
-      // Respond with the user's answers.
       yield* adapter.respondToUserInput(
         session.threadId,
         ApprovalRequestId.makeUnsafe(requestId!),
         { Framework: "React" },
       );
 
-      // The adapter should emit a user-input.resolved event.
       const resolvedEvent = yield* Stream.runHead(adapter.streamEvents);
       assert.equal(resolvedEvent._tag, "Some");
       if (resolvedEvent._tag !== "Some") {
@@ -11005,13 +10877,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         providerItemId: ProviderItemId.makeUnsafe("tool-ask-1"),
       });
 
-      // The canUseTool promise should resolve with the answers in SDK format.
       const permissionResult = yield* Effect.promise(() => permissionPromise);
       assert.equal((permissionResult as PermissionResult).behavior, "allow");
       const updatedInput = (permissionResult as { updatedInput: Record<string, unknown> })
         .updatedInput;
       assert.deepEqual(updatedInput.answers, { "Which framework?": "React" });
-      // Original questions should be passed through.
       assert.deepEqual(updatedInput.questions, askInput.questions);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -11119,8 +10989,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      // In full-access mode, regular tools are auto-approved.
-      // AskUserQuestion should still go through the user-input flow.
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: "claudeAgent",
@@ -11156,7 +11024,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         requestId: "request-tool-ask-2",
       });
 
-      // Should still get user-input.requested even in full-access mode.
       const requestedEvent = yield* Stream.runHead(adapter.streamEvents);
       assert.equal(requestedEvent._tag, "Some");
       if (requestedEvent._tag !== "Some" || requestedEvent.value.type !== "user-input.requested") {
@@ -11171,7 +11038,6 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         { "Deploy to which env?": "Staging" },
       );
 
-      // Drain the resolved event.
       yield* Stream.runHead(adapter.streamEvents);
 
       const permissionResult = yield* Effect.promise(() => permissionPromise);
@@ -11895,8 +11761,7 @@ describe("ClaudeAdapterLive forkThread", () => {
           options: { dir: "/repo/source", upToMessageId: "assistant-uuid-9" },
         },
       ]);
-      // The SDK fork remaps message uuids, so the fork cursor must resume the
-      // new session id without inheriting `resumeSessionAt` or tracked tasks.
+      // the SDK fork remaps message uuids — the fork cursor must resume the new session id without inheriting resumeSessionAt or tracked tasks
       assert.deepEqual(result, {
         threadId: RESUME_THREAD_ID,
         resumeCursor: {
@@ -11977,8 +11842,7 @@ describe("ClaudeAdapterLive forkThread", () => {
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      // A live context restarts its turn log at [] on resume; the persisted
-      // cumulative count must win.
+      // a live context restarts its turn log at [] on resume — the persisted cumulative count must win
       yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: "claudeAgent",
@@ -12128,8 +11992,6 @@ describe("Claude explicit native compaction", () => {
             "turnId" in message &&
             message.turnId === first.turnId
           ) {
-            // Publish the terminal, then hold its producer until its consumer
-            // has inspected the session and dispatched the following turn.
             return offered.pipe(Effect.tap(() => Deferred.await(nextTurnStarted)));
           }
           return offered;
@@ -12252,7 +12114,6 @@ describe("Claude explicit native compaction", () => {
       });
       assert.equal(off.artifacts, "disabled");
       assert.equal(on.artifacts, "available");
-      // A later lookup still answers for its own opt-in.
       assert.equal((yield* discover(false)).artifacts, "disabled");
       assert.equal((yield* discover(true)).artifacts, "available");
     }).pipe(
@@ -12271,8 +12132,6 @@ describe("Claude explicit native compaction", () => {
         runtimeMode: "full-access",
         providerOptions: { claudeAgent: { enableArtifacts: true } },
       });
-      // The setting was turned off afterwards: a thread-less lookup describes a
-      // new session, which would not get Artifacts.
       const result = yield* adapter.listCommands!({
         provider: "claudeAgent",
         cwd: "/tmp/project",
@@ -12287,8 +12146,6 @@ describe("Claude explicit native compaction", () => {
 
   for (const enableArtifacts of [false, true]) {
     it.effect(`reports Claude artifact availability (setting ${enableArtifacts})`, () => {
-      // One session per harness: the fake query is shared, so stopping a first
-      // session would end the stream of a second one.
       const harness = makeHarness();
       harness.query.supportedCommandList = [fakeSlashCommand("design"), fakeSlashCommand("slides")];
       return Effect.gen(function* () {
@@ -12312,8 +12169,7 @@ describe("Claude explicit native compaction", () => {
         harness.query.supportedCommandList = [fakeSlashCommand("design")];
         const withoutSlides = yield* discover();
         assert.equal(withoutSlides.artifacts, enableArtifacts ? "unavailable" : "disabled");
-        // Claude stopped listing `/slides`; it stays discoverable so the composer can
-        // explain why, without duplicating the `/design` Claude still reports.
+        // Claude stopped listing /slides; it stays discoverable so the composer can explain why, without duplicating /design
         assert.deepEqual(
           withoutSlides.commands.map((command) => command.name),
           ["design", "slides"],

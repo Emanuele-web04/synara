@@ -19,8 +19,7 @@ export function pullRequestListCacheKey(
   return `${repository.trim().toLowerCase()}:${state}:${involvement}:${viewer.trim().toLowerCase()}`;
 }
 
-/** A force refresh invalidates every sibling involvement cache for the same repository/state.
- * The caller still decides which involvement queries are actually needed for the response. */
+/** a force refresh invalidates every sibling involvement cache for the same repo/state — the caller still decides which queries are needed */
 export function pullRequestListForceRefreshCacheKeys(input: {
   repository: string;
   state: PullRequestState;
@@ -31,7 +30,6 @@ export function pullRequestListForceRefreshCacheKeys(input: {
   );
 }
 
-/** Repository-wide PR identity used to coalesce the same remote lookup across local projects. */
 export function repositoryPullRequestIdentityKey(input: {
   repository: string;
   number: number;
@@ -39,9 +37,7 @@ export function repositoryPullRequestIdentityKey(input: {
   return `${input.repository.trim().toLowerCase()}\u0000${input.number}`;
 }
 
-/** Stable project-local identity for a pull request. Repository casing is not significant on
- * GitHub, while the project id deliberately remains part of the key so two projects pointing at
- * the same repository can prioritize the same PR independently. */
+/** repo casing isn't significant on GitHub while the project id stays in the key so two projects on the same repo can prioritize the same PR independently */
 export function projectPullRequestIdentityKey(input: {
   projectId: string;
   repository: string;
@@ -50,9 +46,7 @@ export function projectPullRequestIdentityKey(input: {
   return `${input.projectId}\u0000${input.repository.trim().toLowerCase()}\u0000${input.number}`;
 }
 
-/** Select only pins whose own project/repository batch was cut off by the list cap. This keeps
- * recovery from probing complete lists, and prevents a stale project pin from borrowing a matching
- * repository that happens to be configured by a different project in the same aggregate request. */
+/** only pins whose own batch was cut off by the list cap — keeps recovery from probing complete lists and prevents a stale project pin borrowing a repo configured by a different project */
 export function selectRecoverablePullRequestPins<
   P extends string,
   T extends { projectId: P; repositoryKey: string; number: number },
@@ -87,8 +81,7 @@ export function selectRecoverablePullRequestPins<
   });
 }
 
-/** One mapping from a gh list item to the wire entry, shared by the capped batch path and the
- * individual pinned-PR recovery path so the two can never drift. */
+/** one mapping shared by the capped batch path and pinned-PR recovery so the two can never drift */
 export function buildPullRequestListEntry(input: {
   project: { id: PullRequestListEntry["projectId"]; title: string };
   repository: string;
@@ -129,8 +122,7 @@ export function buildPullRequestListEntry(input: {
   };
 }
 
-/** Pinned work is the first thing the user sees; each section otherwise retains the existing
- * newest-updated-first ordering. */
+/** pinned work is first; each section otherwise keeps newest-updated-first */
 export function orderPullRequestListEntries(
   entries: readonly PullRequestListEntry[],
 ): PullRequestListEntry[] {
@@ -155,9 +147,7 @@ export function isViewerReviewRequested(
   );
 }
 
-/** Whether one exact PR belongs in an involvement-filtered result. `matchedReviewingQuery` carries
- * GitHub's authoritative search result when it is available, including team review requests that
- * cannot be inferred from the individual PR's user-only review-request logins. */
+/** matchedReviewingQuery carries GitHub's authoritative result incl. team review requests not inferable from the PR's user-only logins */
 export function pullRequestMatchesInvolvement(
   pullRequest: Pick<GitHubPullRequestListItem, "author" | "reviewRequestLogins">,
   involvement: PullRequestInvolvement,
@@ -176,8 +166,7 @@ export function pullRequestMatchesInvolvement(
   return pullRequest.author?.login.trim().toLowerCase() === viewer.trim().toLowerCase();
 }
 
-/** Closed and merged PRs cannot have an active review request, so the companion query only adds
- * information to the open all-involvement list. */
+/** closed/merged PRs can't have an active review request so the companion query only adds info to the open list */
 export function shouldLoadReviewingCompanion(
   state: PullRequestState,
   involvement: PullRequestInvolvement,

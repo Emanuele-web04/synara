@@ -240,8 +240,7 @@ describe("deriveThreadSummaryMetadata", () => {
   });
 
   it("orders unsorted activity arrays by sequence before replaying request lifecycles", () => {
-    // Resolution stored before its request: replayed in array order the request would win and
-    // stay pending; ordering by sequence must close it. Guards the sorted-input fast path.
+    // resolution stored before its request — ordering by sequence must close it (array order would keep it pending)
     const activities: OrchestrationThreadActivity[] = [
       {
         id: EventId.makeUnsafe("activity-2"),

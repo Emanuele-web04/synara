@@ -1,8 +1,3 @@
-// FILE: runningChatsQuitGuard.ts
-// Purpose: Coordinates the renderer Stay/Quit handshake before a user-initiated desktop quit.
-// Layer: Desktop quit policy
-// Depends on: Quit confirmation IPC payloads from the renderer.
-
 import type {
   DesktopQuitConfirmationChat,
   DesktopQuitConfirmationPresentation,

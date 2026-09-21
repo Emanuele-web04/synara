@@ -383,7 +383,7 @@ it("gives a resumed legacy row without an ordering sequence this delta's sequenc
   const system = await openSystem();
   try {
     await system.seed();
-    // Rows imported or migrated before sequences existed carry none.
+    // rows imported or migrated before sequences existed carry none
     await system.run(
       system.repository.upsert({
         messageId,
@@ -406,7 +406,7 @@ it("gives a resumed legacy row without an ordering sequence this delta's sequenc
       );
     const [first] = await readSequence();
     expect(first?.sequence).toEqual(expect.any(Number));
-    // First writer wins: later deltas never move the ordering sequence.
+    // first writer wins — later deltas never move the ordering sequence
     await system.delta("resume-legacy-2", " more");
     expect((await readSequence())[0]?.sequence).toBe(first?.sequence);
     await assertReaders(system, "legacy continued more");

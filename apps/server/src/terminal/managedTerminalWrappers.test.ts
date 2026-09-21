@@ -1,7 +1,4 @@
-// FILE: managedTerminalWrappers.test.ts
-// Purpose: Pin how the managed terminal wrappers locate the CLIs they shadow. The lookup runs
-//          against the caller's `baseEnv`, not this process's, because the wrapper is written for
-//          the terminal that env describes.
+// lookup runs against the caller's baseEnv, not this process's — the wrapper is written for the terminal that env describes
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -13,7 +10,7 @@ import {
   prepareManagedTerminalWrappers,
 } from "./managedTerminalWrappers.ts";
 
-// The whole feature short-circuits on Windows, so there is nothing to pin there.
+// the feature short-circuits on Windows — nothing to pin there
 const describeOnPosix = process.platform === "win32" ? describe.skip : describe;
 
 let dir: string;
@@ -65,8 +62,7 @@ describeOnPosix("prepareManagedTerminalWrappers", () => {
   it("does nothing when the supplied environment cannot see either CLI", () => {
     installFakeCli("codex");
 
-    // A PATH that does not contain the bin directory must not fall back to this process's PATH,
-    // which is exactly where a real `codex` would be found on a developer machine.
+    // a PATH without the bin dir must not fall back to this process's PATH — where a real `codex` would be found
     const state = prepare({ PATH: path.join(dir, "empty") });
 
     expect(state.targetPathByCliKind).toEqual({});
@@ -94,7 +90,7 @@ describeOnPosix("prepareManagedTerminalWrappers", () => {
 
     const wrapper = readFileSync(path.join(rootDir, "codex"), "utf8");
     expect(wrapper).toContain(codexPath);
-    // The wrapper must not re-enter itself: it shadows `codex` on PATH.
+    // the wrapper must not re-enter itself — it shadows `codex` on PATH
     expect(state.targetPathByCliKind.codex).not.toBe(path.join(rootDir, "codex"));
   });
 

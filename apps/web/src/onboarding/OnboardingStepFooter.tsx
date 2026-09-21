@@ -1,8 +1,3 @@
-// FILE: OnboardingStepFooter.tsx
-// Purpose: Shared footer for every welcome-tour step: progress dots, Skip, Back, primary.
-//          No divider — space alone separates the footer from the body.
-// Layer: Web UI component
-
 import { Button } from "~/components/ui/button";
 import { DialogFooter } from "~/components/ui/dialog";
 import { cn } from "~/lib/utils";
@@ -21,7 +16,6 @@ export function OnboardingStepFooter(props: {
   primaryBusy?: boolean;
   /** Blocks Back and Skip as well as the primary (a non-abortable operation is running). */
   navigationLocked?: boolean;
-  /** Optional secondary action rendered next to the primary (e.g. "Skip for now"). */
   secondaryLabel?: string;
   onSecondary?: () => void;
 }) {

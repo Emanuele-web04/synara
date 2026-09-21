@@ -1,12 +1,3 @@
-/**
- * ProviderAdapterRegistryLive - In-memory provider adapter lookup layer.
- *
- * Binds provider kinds (codex/claudeAgent/...) to concrete adapter services.
- * This layer only performs adapter lookup; it does not route session-scoped
- * calls or own provider lifecycle workflows.
- *
- * @module ProviderAdapterRegistryLive
- */
 import { Effect, Layer } from "effect";
 
 import { ProviderUnsupportedError, type ProviderAdapterError } from "../Errors.ts";

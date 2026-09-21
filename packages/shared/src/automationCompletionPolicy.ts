@@ -1,12 +1,4 @@
-// FILE: automationCompletionPolicy.ts
-// Purpose: Single source for translating a stop clause to the saved completion policy shape.
-// Layer: Shared runtime utility (web composer + server agent gateway)
-// Exports: stop-clause builders and extractors.
-// Depends on: automation contracts shared with the native API.
-//
-// Completion policies are deliberately independent of AutomationMode: a stop clause
-// describes when an automation retires, while the mode describes where its runs
-// execute. Every mode supports "ai-evaluated".
+// completion policies are independent of AutomationMode — a stop clause is when it retires, the mode is where runs execute
 
 import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,

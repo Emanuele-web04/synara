@@ -1,5 +1,3 @@
-// This file mostly exists because we want dev mode to say "Synara (Dev)" instead of "electron"
-
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
@@ -18,7 +16,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const desktopFlavor = resolveSynaraDesktopFlavor({
-  // Packaged apps launch their bundled main directly; this launcher is source-only.
   isDevelopment: true,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
 });
@@ -26,10 +23,6 @@ const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
 const LAUNCHER_VERSION = 3;
-// Kept in sync with BRAND_ASSET_PATHS.productionMacIconComposer and the macOS
-// icon constants in scripts/lib/desktop-platform-build-config.ts. The packaged
-// build compiles the same asset; this launcher does it for dev and Canary,
-// which run from a renamed Electron bundle instead of a packaged app.
 const ICON_COMPOSER_ASSET_NAME = "Synara";
 const ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
 const MICROPHONE_USAGE_DESCRIPTION =
@@ -57,28 +50,18 @@ function setPlistString(plistPath, key, value) {
   throw new Error(`Failed to update plist key "${key}" at ${plistPath}: ${details}`.trim());
 }
 
-// Same path as LSREGISTER_PATH in src/macIconCacheRefresh.ts; this launcher is
-// a standalone module and cannot import from the bundled sources.
 const LSREGISTER_PATH =
   "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister";
 
-// macOS caches bundle icons by identifier, so a rebuilt runtime keeps painting
-// the previous icon until Launch Services re-reads the bundle — re-registering
-// alone is not enough once an entry has gone stale. Best effort: a stale icon
-// is a better outcome than refusing to launch.
 function refreshLaunchServicesRegistration(appBundlePath) {
   if (!existsSync(LSREGISTER_PATH)) {
     return;
   }
   spawnSync(LSREGISTER_PATH, ["-u", appBundlePath], { encoding: "utf8" });
-  // Unregistering is not enough on its own: IconServices keeps serving the
-  // cached artwork until the bundle's own modification date moves forward.
   try {
     const now = new Date();
     utimesSync(appBundlePath, now, now);
-  } catch {
-    // A failed timestamp bump only costs a stale icon, so carry on.
-  }
+  } catch {}
   const result = spawnSync(LSREGISTER_PATH, ["-f", "-R", appBundlePath], { encoding: "utf8" });
   if (result.status !== 0) {
     const details = [result.error?.message, result.stderr].filter(Boolean).join("\n").trim();
@@ -102,9 +85,6 @@ function latestMtimeMs(entryPath) {
   return latest;
 }
 
-// macOS 26 renders the Liquid Glass material only from a compiled Icon Composer
-// asset, never from an ICNS. actool ships with Xcode, so this stays optional: a
-// machine without it keeps the flat icon instead of failing to launch.
 function compileGlassAppIcon(appBundlePath, iconComposerPath, scratchDir) {
   const resourcesDir = join(appBundlePath, "Contents", "Resources");
   const partialPlistPath = join(scratchDir, "icon-partial.plist");
@@ -239,7 +219,6 @@ function buildMacLauncher(electronBinaryPath) {
     sourceAppBundlePath,
     sourceAppMtimeMs: statSync(sourceAppBundlePath).mtimeMs,
     iconMtimeMs: statSync(iconPath).mtimeMs,
-    // Layered artwork lives in several files, so track the newest of them.
     iconComposerMtimeMs: hasIconComposerSource ? latestMtimeMs(iconComposerPath) : null,
   };
 

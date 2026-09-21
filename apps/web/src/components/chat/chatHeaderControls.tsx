@@ -1,16 +1,3 @@
-// FILE: chatHeaderControls.tsx
-// Purpose: Single source of truth for chat-header toolbar control sizing, radius,
-//          and tone so text buttons, icon-only buttons, and toggles line up on one
-//          baseline regardless of the underlying Button/Toggle variant.
-// Layer: Chat header UI primitive
-// Exports: ChatHeaderButton, ChatHeaderIconButton, tone helper, and the raw class
-//          tokens for call sites that can't use the wrappers (e.g. Toggle, segmented
-//          groups, render-prop triggers, right-dock tabs).
-// Why: The header previously mixed three heights (24/28/32px) and two radii because
-//      each control leaned on a different Button size + variant compound. Centralizing
-//      the chrome here keeps the row visually coherent and lets new controls opt in
-//      with one import instead of re-deriving the magic classes.
-
 import { forwardRef, type ComponentProps, type ReactNode } from "react";
 
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
@@ -45,16 +32,7 @@ export const CHAT_SURFACE_HEADER_HEIGHT_CLASS: `h-[${typeof CHAT_SURFACE_HEADER_
  */
 export const CHAT_SURFACE_HEADER_PADDING_X_CLASS = "px-3 sm:px-5";
 
-/**
- * Bottom hairline shared by every chat-surface chrome bar (chat header, workspace
- * header, dock pane + tab strip headers, diff panel header).
- * Implemented as the `.chat-surface-divider` component class (a 1px background gradient,
- * see index.css) rather than a CSS border: it reads from the SAME `--app-surface-divider`
- * token as the vertical sidebar↔chat seam, and — because it's a gradient — the seam corner
- * retracts it 1px so the horizontal hairline butts against the vertical seam instead of
- * crossing it (overlapping 1px lines double their alpha into a brighter dot). Apply
- * alongside {@link CHAT_SURFACE_HEADER_HEIGHT_CLASS} so heights and dividers line up.
- */
+// a 1px background gradient (not border): reads the same --app-surface-divider token as the sidebar seam, and the seam corner retracts it 1px so the hairline butts against the vertical seam instead of crossing (overlapping 1px lines double alpha into a brighter dot)
 export const CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME = "chat-surface-divider";
 
 /**
@@ -112,12 +90,7 @@ export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 );
 
-/**
- * Geometry shared by every chip glyph, muting excluded. Status glyphs (a pull
- * request's state, say) carry meaning in their color and want this one: fading
- * them washes the signal out, which is exactly what a chrome icon wants and a
- * status icon never does.
- */
+// status glyphs (PR state) carry meaning in their color — the chrome-icon fade would wash the signal out, which is what chrome wants and status never does
 export const CHAT_SURFACE_CHIP_GLYPH_CLASS_NAME = "size-3.5 shrink-0";
 
 /**
@@ -171,23 +144,7 @@ export const DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME =
 export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
   "absolute size-3.5 shrink-0 opacity-0 transition-opacity group-hover/dock-tab:opacity-100 group-focus-within/dock-tab:opacity-100";
 
-/**
- * Shared flat tab chip for every chat surface that renders a row of closable tabs —
- * the right-dock tab strip and both terminal tab bars (pane-local tabs + workspace
- * group tabs). At rest the chip shows {@link icon}; hovering or focusing within the
- * chip fades that glyph out and reveals a circular close affordance, but only when
- * an {@link onClose} handler is supplied (tabs that can't be closed render a static
- * icon slot instead).
- *
- * The icon→close-X reveal is driven entirely by the `group/dock-tab` named group
- * the chip declares here, so the hover wiring lives in exactly one place. Call
- * sites that hand-rolled the chip previously drifted to a mismatched group name
- * (`group/tab`), which silently broke the reveal — funneling them through this
- * component makes that class of bug unrepresentable.
- *
- * `leading`/`trailing` flank the truncating label (e.g. an activity indicator or a
- * tab count badge); `labelClassName` lets a call site cap the label width.
- */
+// the icon→close-X reveal is driven by the `group/dock-tab` named group declared here — call sites that hand-rolled the chip drifted to `group/tab` and silently broke the reveal
 export function SurfaceTabChip({
   icon,
   label,
@@ -259,9 +216,7 @@ export function SurfaceTabChip({
           {trailing}
         </button>
       ) : (
-        // Non-selectable chips (a lone tab that cannot switch to anything) render the
-        // label as static text so keyboard/AT users don't land on a button that does
-        // nothing.
+        // Non-selectable chips (a lone tab that cannot switch to anything) render the label as static text so keyboard/AT users don't land on a button that does nothing.
         <span
           className={cn("flex min-w-0 items-center gap-1.5 text-left", labelClassName)}
           title={title}

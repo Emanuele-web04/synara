@@ -9,7 +9,7 @@ export interface BrowserAutomationHostCall {
   readonly threadId: ThreadId;
   readonly name: BrowserToolName;
   readonly arguments: Record<string, unknown>;
-  /** Server-resolved authenticated thread workspace. Never accepted from MCP arguments. */
+  /** server-resolved authenticated thread workspace — never accepted from MCP arguments */
   readonly workspaceRoot?: string;
   readonly timeoutMs: number;
 }

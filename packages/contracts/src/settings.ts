@@ -27,8 +27,7 @@ export const ClaudeServerProviderSettings = Schema.Struct({
   launchArgs: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     Schema.withDecodingDefault(() => ""),
   ),
-  // Claude Code keeps Artifact publishing (and `/design`, `/slides`) off for
-  // Agent SDK sessions unless the host opts in.
+  // Claude Code keeps Artifact publishing off for Agent SDK sessions unless the host opts in
   enableArtifacts: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type ClaudeServerProviderSettings = typeof ClaudeServerProviderSettings.Type;
@@ -84,8 +83,7 @@ const DisabledSkillNames = Schema.Array(Schema.String.check(Schema.isMaxLength(2
   Schema.withDecodingDefault(() => []),
 );
 
-// User-level skill toggles. Skills are keyed by lowercased name because the
-// unified catalog dedupes provider copies of the same skill by name.
+// keyed by lowercased name — the unified catalog dedupes provider copies of the same skill
 export const SkillsServerSettings = Schema.Struct({
   disabled: DisabledSkillNames,
 });
@@ -114,16 +112,14 @@ export const ServerSettings = Schema.Struct({
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
-  // When the first-run welcome tour was completed or skipped. Server-backed so a
-  // browser-storage reset does not replay setup on an already configured install.
+  // server-backed so a browser-storage reset doesn't replay setup on a configured install
   onboardingCompletedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
 export const DEFAULT_SERVER_SETTINGS: ServerSettings = Schema.decodeSync(ServerSettings)({});
 
-// Public settings are structurally separate so the RPC contract can remain an
-// explicitly redacted boundary if server-only settings gain more fields later.
+// structurally separate so the RPC contract stays an explicitly redacted boundary
 export const ServerSettingsView = ServerSettings;
 export type ServerSettingsView = typeof ServerSettingsView.Type;
 

@@ -1,8 +1,3 @@
-// FILE: FactorySessionHistory.test.ts
-// Purpose: Verifies Factory JSONL imports exclude hidden context and preserve visible messages.
-// Layer: Provider persistence compatibility tests
-// Depends on: FactorySessionHistory and temporary filesystem fixtures.
-
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";

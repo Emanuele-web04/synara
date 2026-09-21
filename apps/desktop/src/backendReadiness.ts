@@ -1,8 +1,3 @@
-// FILE: backendReadiness.ts
-// Purpose: Waits for the desktop backend HTTP server to start accepting connections.
-// Layer: Desktop startup utility
-// Exports: waitForHttpReady, isBackendReadinessAborted, BackendReadinessAbortedError
-
 export interface WaitForHttpReadyOptions {
   readonly timeoutMs?: number | null;
   readonly intervalMs?: number;
@@ -55,7 +50,6 @@ export function isBackendReadinessAborted(error: unknown): error is BackendReadi
   return error instanceof BackendReadinessAbortedError;
 }
 
-// Poll the desktop backend until it accepts an HTTP request or the overall deadline expires.
 export async function waitForHttpReady(
   baseUrl: string,
   options?: WaitForHttpReadyOptions,
@@ -98,7 +92,6 @@ export async function waitForHttpReady(
       if (signal?.aborted) {
         throw new BackendReadinessAbortedError();
       }
-      // Retry until the backend becomes reachable or the deadline expires.
     } finally {
       clearTimeout(requestTimeout);
       signal?.removeEventListener("abort", abortRequest);

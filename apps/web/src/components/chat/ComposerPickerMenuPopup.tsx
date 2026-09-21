@@ -1,8 +1,3 @@
-// FILE: ComposerPickerMenuPopup.tsx
-// Purpose: Shared open-panel shell for picker menus (composer model/effort, handoff, git, etc.).
-// Layer: App picker presentation
-// Depends on: shared menu primitives and composer picker surface tokens in composerPickerStyles.
-
 import type { ComponentProps } from "react";
 
 import { cn } from "~/lib/utils";

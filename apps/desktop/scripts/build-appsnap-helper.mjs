@@ -190,8 +190,6 @@ export function buildAppSnapHelper({
       run("xcrun", ["lipo", "-create", ...thinBinaries, "-output", unsignedBinary]);
     }
 
-    // Dev helpers are ad-hoc signed. electron-builder replaces this signature
-    // with the release identity because the packaged path is listed in mac.binaries.
     run("codesign", ["--force", "--sign", "-", "--timestamp=none", unsignedBinary]);
 
     mkdirSync(dirname(resolvedOutputPath), { recursive: true });

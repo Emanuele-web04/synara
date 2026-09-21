@@ -1,9 +1,3 @@
-// FILE: ThreadStatusPillChip.tsx
-// Purpose: Dot + label rendering of a thread status pill, shared by kanban
-//          cards and the sidebar Activity rows so the two can never drift.
-// Layer: UI component (pure)
-// Exports: ThreadStatusPillChip
-
 import { cn } from "~/lib/utils";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 

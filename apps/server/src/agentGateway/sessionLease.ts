@@ -20,24 +20,13 @@ type AgentGatewaySessionLeaseCredentials = Pick<
 export const AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED = "agentGatewayCredentialRotationRequired";
 export const AGENT_GATEWAY_TURN_AUTHORITY_RETIRED = "synaraGatewayTurnAuthorityRetired";
 
-/**
- * One provider runtime's ownership of one gateway credential.
- *
- * Release is intentionally idempotent. Provider startup and teardown have
- * overlapping cleanup paths (scope finalizers, process exits, explicit stops,
- * and replacement sessions); whichever path wins revokes the credential once
- * and every later path becomes a no-op.
- */
+/** release is intentionally idempotent — startup/teardown have overlapping cleanup paths; whichever wins revokes once, later paths no-op */
 export interface AgentGatewaySessionLease {
   readonly connection: AgentGatewayMcpConnection;
-  /** Mint a fresh one-shot proxy credential for a provider turn. */
+  /** mint a fresh one-shot proxy credential for a provider turn */
   readonly issueStdioBootstrapToken?: () => string | null;
   readonly cancelTurn: (turnId: string) => Promise<void>;
-  /**
-   * Permanently retire write authority for a terminal turn while leaving the
-   * provider runtime available to drain background work. The admission fence
-   * is synchronous; the promise represents only request drainage.
-   */
+  /** permanently retire write authority for a terminal turn while leaving the runtime to drain; the admission fence is synchronous */
   readonly retireTurn: (turnId: string) => Promise<void>;
   readonly release: () => void;
 }
@@ -83,11 +72,7 @@ function startAgentGatewayTurnCancellation(
   );
 }
 
-/**
- * Tombstone one exact gateway turn and wait for every matching MCP request to
- * observe its AbortSignal. Cleanup failures are deliberately logged instead
- * of replacing the provider-native interrupt result.
- */
+/** tombstone one gateway turn and wait for matching MCP requests to observe their AbortSignal; cleanup failures are logged, not replacing the provider-native result */
 export function cancelAgentGatewayTurn(
   lease: AgentGatewaySessionLease | undefined,
   turnId: string | undefined,
@@ -99,11 +84,7 @@ export function cancelAgentGatewayTurn(
   );
 }
 
-/**
- * Run the provider-native stop and gateway stop concurrently, but do not let
- * an early provider failure interrupt the gateway cleanup. The caller gets the
- * original provider result only after the gateway cancellation barrier settles.
- */
+/** run provider-native stop and gateway stop concurrently; an early provider failure must not interrupt gateway cleanup */
 export function withAgentGatewayTurnCancellation<A, E, R>(
   lease: AgentGatewaySessionLease | undefined,
   turnId: string | undefined,
@@ -112,16 +93,10 @@ export function withAgentGatewayTurnCancellation<A, E, R>(
   if (lease === undefined) return providerInterrupt;
 
   return Effect.gen(function* () {
-    // Tombstone synchronously before the provider side can release the lease;
-    // the returned promise then drains concurrently with the native interrupt.
+    // tombstone synchronously before the provider side can release the lease
     const cancellation =
       turnId === undefined ? undefined : yield* startAgentGatewayTurnCancellation(lease, turnId);
-    // The bearer is session-scoped and cannot prove whether a late MCP call
-    // originated in this interrupted turn or a later one. Revoke it before
-    // the native interrupt starts; ProviderService retires this runtime and
-    // lazily resumes it with a fresh lease before the next main turn. A
-    // background child may outlive its parent turn; without an exact turn id,
-    // session revocation is still required and drains every in-flight request.
+    // the bearer can't prove whether a late MCP call is this turn or a later one — revoke before the native interrupt; a background child may outlive its parent turn
     const releaseExit = yield* Effect.exit(Effect.sync(lease.release));
     const [providerExit] = yield* Effect.all(
       [
@@ -180,12 +155,7 @@ export function acquireAgentGatewaySessionLease(
   };
 }
 
-/**
- * Revoke a lease when a provider process exits even if its adapter receives no
- * final protocol event. The watcher is detached because adapter-owned scopes
- * are themselves closed by normal teardown; the idempotent lease reconciles
- * whichever signal (explicit stop or process exit) arrives first.
- */
+/** revoke on provider process exit even without a final protocol event — detached watcher since adapter scopes close during normal teardown */
 export function startAgentGatewaySessionLeaseExitWatcher(
   lease: AgentGatewaySessionLease | undefined,
   awaitProviderExit: Effect.Effect<void>,
@@ -198,7 +168,7 @@ export function startAgentGatewaySessionLeaseExitWatcher(
   );
 }
 
-/** Guard provider startup awaits until the lease has an installed session owner. */
+/** guard startup awaits until the lease has an installed session owner */
 export function releaseAgentGatewaySessionLeaseOnInterrupt<A, E, R>(
   lease: AgentGatewaySessionLease | undefined,
   startup: Effect.Effect<A, E, R>,

@@ -1,13 +1,3 @@
-// FILE: pullRequestText.ts
-// Purpose: Semantic text roles for the pull request surfaces — sizes driven by the app
-//          typography variables so every label tracks the user's font-size setting exactly
-//          like the shared Button/Input controls do, plus the one quiet ink the ambient
-//          metadata shares. Pick the role, not a pixel size or a raw color — fixed text
-//          utilities are banned in this folder.
-// Layer: Pull request presentation
-// Exports: PR_SECTION_TITLE_TEXT_CLASS_NAME, PR_BODY_TEXT_CLASS_NAME, PR_META_TEXT_CLASS_NAME,
-//          PR_FINE_TEXT_CLASS_NAME, PR_QUIET_INK_CLASS_NAME
-
 /** Section titles (the Description / Checks / Comments disclosure headers). */
 export const PR_SECTION_TITLE_TEXT_CLASS_NAME =
   "text-[length:calc(var(--app-font-size-ui-lg,13px)*1.16)]";

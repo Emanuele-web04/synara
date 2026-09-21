@@ -1,11 +1,3 @@
-// FILE: usePdfDocument.ts
-// Purpose: React hook that fetches a PDF's bytes from the allowlisted local-file
-//          route, loads it through the pdf.js engine, and exposes the document
-//          proxy plus first-page size for layout. Owns cancellation + teardown so
-//          switching files never leaks a worker-backed document.
-// Layer: Web PDF rendering hook
-// Exports: usePdfDocument, PdfDocumentState
-
 import { useEffect, useState } from "react";
 
 import { loadPdfDocument, type PDFDocumentProxy } from "./pdfEngine";
@@ -17,7 +9,6 @@ export interface PdfDocumentState {
   status: PdfDocumentStatus;
   document: PDFDocumentProxy | null;
   numPages: number;
-  /** Size of page 1 at scale 1, used to lay out the scroll area before render. */
   firstPageSize: PdfPageIntrinsicSize | null;
   error: string | null;
 }
@@ -42,10 +33,7 @@ interface PdfLoadState {
 }
 
 export function usePdfDocument(url: string): PdfDocumentState {
-  // A generation distinguishes separate visits to the same URL. Without it,
-  // A -> B -> A can briefly revive A's old proxy after B's cleanup destroyed
-  // it. Adjusting keyed state during render makes the new visit loading before
-  // children can observe the stale resource.
+  // a generation distinguishes visits to the same URL — without it A→B→A can briefly revive A's old proxy after B's cleanup destroyed it; render-time adjust makes the new visit loading before children see the stale resource
   const [storedLoad, setStoredLoad] = useState<PdfLoadState>(() => ({
     url,
     generation: 0,
@@ -90,9 +78,7 @@ function destroySessionDocument(session: PdfLoadSession): void {
   }
 }
 
-// Module-level so the try/catch stays outside the compiled hook body — React
-// Compiler does not yet support try/catch and would otherwise skip optimizing
-// the whole hook.
+// module-level so the try/catch stays outside the compiled hook body — React Compiler doesn't yet support try/catch and would skip optimizing the whole hook
 async function loadPdfIntoState(
   url: string,
   session: PdfLoadSession,

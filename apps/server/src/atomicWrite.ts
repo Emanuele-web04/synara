@@ -48,8 +48,7 @@ async function ensurePrivateDirectory(directoryPath: string): Promise<void> {
       throw new Error(`Atomic write parent is not a real directory: ${missingDirectory}`);
     }
     if (created && supportsPosixPermissions()) {
-      // This exact entry was atomically created by this call, so repairing the
-      // umask-filtered mode cannot follow a pre-existing final symlink.
+      // entry was atomically created by this call — repairing the umask-filtered mode cannot follow a pre-existing final symlink
       await fs.chmod(missingDirectory, PRIVATE_DIRECTORY_MODE);
     } else if (supportsPosixPermissions() && (stat.mode & 0o022) !== 0) {
       throw new Error(`Atomic write parent directory is group/other writable: ${missingDirectory}`);

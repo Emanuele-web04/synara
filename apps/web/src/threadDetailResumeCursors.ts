@@ -1,21 +1,7 @@
-// FILE: threadDetailResumeCursors.ts
-// Purpose: Per-thread resume cursors so resubscribes replay only the event gap.
-// Layer: Web subscription utility
-// Exports: Cursor read/advance/clear helpers and the subscribe-input builder.
-
 import type { OrchestrationSubscribeThreadInput, ThreadId } from "@synara/contracts";
 
-// Invariant: a cursor exists for a thread only while the store's cached detail
-// is coherent up to that sequence. The store projection layer enforces this
-// structurally — every transition that wipes detail slices (thread removal,
-// eviction, full-sync pruning) drops the cursor in the same step — and the
-// subscription layer covers the store-independent paths (dead stream, snapshot
-// discarded before application). A cursor without its detail would make a
-// resubscribe resume on top of missing history.
-//
-// A cursor is also only meaningful against the server journal that issued its
-// sequences, so a server-identity change must drop all of them (see
-// resetThreadDetailResumeCursors).
+// invariant: a cursor exists only while cached detail is coherent up to that sequence — every detail-wipe transition drops it, and a cursor without detail would resume on top of missing history
+// a cursor is meaningful only against the journal that issued its sequences — a server-identity change must drop all of them
 const resumeCursorByThreadId = new Map<ThreadId, number>();
 
 /** Advance-only write for live/replayed events applied on top of cached detail. */

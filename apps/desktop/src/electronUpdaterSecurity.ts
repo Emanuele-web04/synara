@@ -1,8 +1,3 @@
-// FILE: electronUpdaterSecurity.ts
-// Purpose: Hardens electron-updater Windows process calls against Node deprecations.
-// Layer: Desktop update runtime
-// Exports: updater patching, shell-free PowerShell signature verification helpers.
-
 import type { ExecFileException } from "node:child_process";
 import * as Path from "node:path";
 

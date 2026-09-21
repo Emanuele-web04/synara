@@ -1,8 +1,3 @@
-// FILE: ComposerLocalDirectoryMenu.tsx
-// Purpose: Render the inline composer popup used for browsing local files and folders after `@local`.
-// Layer: Chat composer UI
-// Depends on: the same Command primitives used by ComposerCommandMenu so both pickers share chrome.
-
 import type { ProjectFileSystemEntry, ProjectLocalSearchEntry } from "@synara/contracts";
 import type { Ref } from "react";
 import { useEffect, useImperativeHandle, useRef, useState } from "react";
@@ -33,8 +28,7 @@ import {
 
 type EntriesByPath = Record<string, readonly ProjectFileSystemEntry[] | undefined>;
 
-// Delay search requests until the user stops typing — keeps chat input smooth
-// because every keystroke reshapes mentionQuery in the parent.
+// Delay search requests until the user stops typing — keeps chat input smooth because every keystroke reshapes mentionQuery in the parent.
 const LOCAL_SEARCH_DEBOUNCE_MS = 220;
 const LOCAL_SEARCH_MIN_QUERY_LENGTH = 2;
 
@@ -106,8 +100,7 @@ function deriveDirectoryAndFilter(mentionQuery: string): { directory: string; fi
   }
   const before = mentionQuery.slice(0, slashIndex);
   const after = mentionQuery.slice(slashIndex + 1);
-  // `/foo` (root) and `C:/foo` (drive) and `~/foo` (home) share a rule:
-  // the separator itself is the directory, everything before stays part of the root label.
+  // `/foo` (root) and `C:/foo` (drive) and `~/foo` (home) share a rule: the separator itself is the directory, everything before stays part of the root label.
   if (before === "" || /^[A-Za-z]:$/.test(before) || before === "~") {
     return { directory: mentionQuery.slice(0, slashIndex + 1), filter: after };
   }
@@ -126,8 +119,7 @@ function isRootDirectory(directoryPath: string): boolean {
   return false;
 }
 
-// Effect/fs errors come through with deep stack traces and absolute internal paths.
-// Surface a short, user-friendly reason so the popover stays tidy on missing/denied paths.
+// Effect/fs errors come through with deep stack traces and absolute internal paths. Surface a short, user-friendly reason so the popover stays tidy on missing/denied paths.
 function summarizeDirectoryLoadError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   if (/ENOENT|no such file or directory/i.test(raw)) {
@@ -153,8 +145,7 @@ export function ComposerLocalDirectoryMenu(props: {
   const { mentionQuery, rootLabel, homeDir, onSelectEntry, onNavigateFolder, handleRef } = props;
   const [entriesByPath, setEntriesByPath] = useState<EntriesByPath>({});
   const [loadingPaths, setLoadingPaths] = useState<ReadonlySet<string>>(() => new Set());
-  // Error keyed to the directory it was produced for: navigating away derives
-  // straight back to null with no state-resetting effect.
+  // Error keyed to the directory it was produced for: navigating away derives straight back to null with no state-resetting effect.
   const [errorState, setErrorState] = useState<{ dir: string; message: string } | null>(null);
   const [highlightState, setHighlightState] = useState<{
     dir: string;
@@ -177,15 +168,13 @@ export function ComposerLocalDirectoryMenu(props: {
   const setErrorMessage = (message: string | null) =>
     setErrorState(message === null ? null : { dir: expandedDirectory, message });
 
-  // Cache by the expanded absolute path so `~/Documents` and `/Users/me/Documents`
-  // share one entry instead of double-listing.
+  // Cache by the expanded absolute path so `~/Documents` and `/Users/me/Documents` share one entry instead of double-listing.
   useEffect(() => {
     if (!expandedDirectory) return;
     if (isAwaitingHomeDir) return;
     if (entriesByPath[expandedDirectory] !== undefined) return;
     if (loadingPaths.has(expandedDirectory)) return;
-    // Timeout-0 keeps every state write asynchronous (no wasted pre-paint
-    // render), which also keeps this component eligible for React Compiler.
+    // Timeout-0 keeps every state write asynchronous (no wasted pre-paint render), which also keeps this component eligible for React Compiler.
     let cancelled = false;
     const timeoutId = window.setTimeout(() => {
       if (cancelled) return;
@@ -227,8 +216,7 @@ export function ComposerLocalDirectoryMenu(props: {
 
   const normalizedFilter = filter.trim();
   const lowerFilter = normalizedFilter.toLowerCase();
-  // Dotfiles are hidden by default, but unhide them as soon as the user opts
-  // in by typing a leading `.` - devs want `.config`/`.ssh` to be reachable.
+  // Dotfiles are hidden by default, but unhide them as soon as the user opts in by typing a leading `.` - devs want `.config`/`.ssh` to be reachable.
   const includeDotfiles = normalizedFilter.startsWith(".");
   const folders: ProjectFileSystemEntry[] = [];
   const files: ProjectFileSystemEntry[] = [];
@@ -241,15 +229,13 @@ export function ComposerLocalDirectoryMenu(props: {
     else files.push(entry);
   }
 
-  // Only offer "Use this folder" as a keyboard-accessible row when the user has
-  // navigated past the root - the root itself never makes sense as a mention.
+  // Only offer "Use this folder" as a keyboard-accessible row when the user has navigated past the root - the root itself never makes sense as a mention.
   const currentFolderRow: VisibleRow | null =
     !isRootDirectory(directory) && filter.trim().length === 0
       ? { kind: "use-current", separator: detectPathSeparator(directory) }
       : null;
 
-  // Debounce the raw filter so keystrokes don't fan out into fuzzy-search RPCs.
-  // The local listing still reacts immediately because it reads from `filter`.
+  // Debounce the raw filter so keystrokes don't fan out into fuzzy-search RPCs. The local listing still reacts immediately because it reads from `filter`.
   const [debouncedFilter] = useDebouncedValue(filter, {
     wait: LOCAL_SEARCH_DEBOUNCE_MS,
   });
@@ -290,9 +276,7 @@ export function ComposerLocalDirectoryMenu(props: {
   for (const entry of files) visibleRows.push({ kind: "entry", entry });
   for (const entry of searchRows) visibleRows.push({ kind: "search", entry });
 
-  // Highlight keyed to the (directory, filter) it was set under, clamped to
-  // the row count — navigation or filtering derives back to 0 in the same
-  // render, with no state-syncing effects.
+  // Highlight keyed to the (directory, filter) it was set under, clamped to the row count — navigation or filtering derives back to 0 in the same render, with no state-syncing effects.
   const rawHighlightedIndex =
     highlightState !== null && highlightState.dir === directory && highlightState.filter === filter
       ? highlightState.index
@@ -319,13 +303,11 @@ export function ComposerLocalDirectoryMenu(props: {
 
   const handleActivateEntry = (entry: ProjectFileSystemEntry) => {
     if (entry.kind === "directory") {
-      // Preserve the `~` prefix while the user keeps drilling in - the typed
-      // composer text stays short until they commit a final selection.
+      // Preserve the `~` prefix while the user keeps drilling in - the typed composer text stays short until they commit a final selection.
       const displayPath = joinDirectoryPath(directory, entry.name);
       onNavigateFolder(displayPath);
     } else {
-      // Commit with the fully expanded absolute path so the server receives
-      // a stable reference even if the user originally typed `~/`.
+      // Commit with the fully expanded absolute path so the server receives a stable reference even if the user originally typed `~/`.
       const absolute = joinDirectoryPath(expandedDirectory, entry.name);
       void onSelectEntry(absolute, entry);
     }
@@ -569,8 +551,7 @@ function buildSearchRowSubtitle(entry: ProjectLocalSearchEntry, rootPath: string
   const parent = entry.parentPath ?? "";
   if (!parent) return "";
   if (rootPath.length > 0 && parent.startsWith(rootPath)) {
-    // Strip the root prefix so long absolute paths don't eat the row; leave a leading
-    // separator so the relative hop stays readable (e.g. `/src/components`).
+    // Strip the root prefix so long absolute paths don't eat the row; leave a leading separator so the relative hop stays readable (e.g. `/src/components`).
     const relative = parent.slice(rootPath.length);
     if (relative.length === 0) return "";
     if (relative.startsWith("/") || relative.startsWith("\\")) return relative;

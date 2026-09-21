@@ -1,6 +1,3 @@
-// FILE: 084_AutomationNotificationPolicy.ts
-// Purpose: Adds the additive successful-run notification policy.
-
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

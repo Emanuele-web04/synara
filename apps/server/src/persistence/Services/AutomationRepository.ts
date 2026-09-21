@@ -302,8 +302,7 @@ export type RecordAutomationDefinitionRunFailureInput =
   typeof RecordAutomationDefinitionRunFailureInput.Type;
 
 export const RecordAutomationDefinitionRunFailureResult = Schema.Struct({
-  // Not the contract field: that one is optional with a decoding default for stale
-  // client caches, while a RETURNING row always carries the incremented count.
+  // not the contract field — that one is optional for stale client caches while a RETURNING row always carries the incremented count
   consecutiveFailureCount: NonNegativeInt,
   autoDisabled: Schema.Boolean,
 });
@@ -350,11 +349,7 @@ export interface AutomationRepositoryShape {
   readonly setDefinitionNextRunAt: (
     input: SetAutomationDefinitionNextRunAtInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;
-  /**
-   * Claim the thread a dedicated automation owns from now on. Succeeds only while the
-   * definition still has no continuation thread, so two concurrent first runs can never
-   * leave the automation pointing at the loser's thread.
-   */
+  /** succeeds only while the definition has no continuation thread — two concurrent first runs can never leave it pointing at the loser's thread */
   readonly attachDefinitionThread: (
     input: AttachAutomationDefinitionThreadInput,
   ) => Effect.Effect<boolean, AutomationRepositoryError>;
@@ -367,7 +362,7 @@ export interface AutomationRepositoryShape {
   readonly createRun: (
     input: CreateAutomationRunInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
-  /** Atomically inserts a fresh run, claims the definition, and advances its schedule. */
+  /** atomically inserts a fresh run, claims the definition, advances its schedule */
   readonly createRunAndIncrementDefinition: (
     input: CreateAutomationRunInput,
     scheduleAdvance?: {
@@ -398,10 +393,7 @@ export interface AutomationRepositoryShape {
   readonly markRunStarted: (
     input: MarkAutomationRunStartedInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
-  /**
-   * Atomically assigns a deferred heartbeat to its target thread when no other
-   * active automation run currently owns that thread.
-   */
+  /** atomically assigns a deferred heartbeat to its target thread when no other active run owns it */
   readonly reserveDeferredRun: (
     input: ReserveDeferredAutomationRunInput,
   ) => Effect.Effect<boolean, AutomationRepositoryError>;
@@ -417,12 +409,7 @@ export interface AutomationRepositoryShape {
   readonly markRunResult: (
     input: MarkAutomationRunResultInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
-  /**
-   * Like {@link markRunResult}, but preserves the run's triage fields
-   * (`archivedAt`/`unread`) from the current row instead of from the supplied
-   * result. Background result updates must not clobber a concurrent user
-   * archive/mark-read, so this write merges those fields atomically in SQL.
-   */
+  /** like markRunResult but preserves archivedAt/unread from the current row — a background result update must not clobber a concurrent archive/mark-read */
   readonly markRunResultPreservingTriage: (
     input: MarkAutomationRunResultInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
@@ -435,7 +422,7 @@ export interface AutomationRepositoryShape {
   readonly cancelRun: (
     input: AutomationCancelRunInput & { readonly now: string },
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
-  /** Returns the newest active run for a thread; terminal history rows are intentionally ignored. */
+  /** newest active run for a thread; terminal history intentionally ignored */
   readonly getRunByThreadId: (
     input: GetAutomationRunByThreadInput,
   ) => Effect.Effect<Option.Option<AutomationRun>, AutomationRepositoryError>;

@@ -1,10 +1,3 @@
-// FILE: ChangelogNav.tsx
-// Purpose: Sticky left-rail "on this page" menu (md+) for the changelog — lists
-//          every release, scroll-spies the one in view, and anchors to it on
-//          click (smooth, reduced-motion aware). Keeps the active row visible in
-//          the rail as you scroll the page.
-// Layer: Client component (interactive); data is passed in from the server page.
-
 "use client";
 
 import { useEffect, useRef } from "react";
@@ -16,7 +9,6 @@ export default function ChangelogNav({ items }: { items: ChangelogNavItem[] }) {
   const { active, jumpTo } = useActiveAnchor(items);
   const navRef = useRef<HTMLElement>(null);
 
-  // Keep the active row scrolled into view within the rail itself.
   useEffect(() => {
     if (!active || !navRef.current) return;
     const link = navRef.current.querySelector(`a[href="#${active}"]`);

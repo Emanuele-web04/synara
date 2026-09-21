@@ -1,9 +1,3 @@
-// FILE: sidebarNavOrdering.ts
-// Purpose: Keeps the primary sidebar nav (New thread, Kanban, Pull requests, Automations)
-//          order and visibility stable across the sidebar and persisted settings.
-// Layer: Web settings utility
-// Exports: nav item ids, default order, and normalization helpers.
-
 export const SIDEBAR_NAV_ITEM_IDS = ["newThread", "kanban", "pullRequests", "automations"] as const;
 
 export type SidebarNavItemId = (typeof SIDEBAR_NAV_ITEM_IDS)[number];

@@ -64,9 +64,6 @@ export class BrowserCookieImport {
       await assertTarget();
       await this.waitForAgents();
       await assertTarget();
-      // This signal only gates adapter connect(): upstream syncCookies takes
-      // no signal, so mid-sync cancellation works by revoking the transport
-      // (stop() below), not through this controller.
       const interrupt = new AbortController();
       const hostTarget = synaraHostTarget(runtime.webContents, {
         cookieImport: true,

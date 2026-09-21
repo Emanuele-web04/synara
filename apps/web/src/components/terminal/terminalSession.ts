@@ -1,37 +1,19 @@
-// FILE: terminalSession.ts
-// Purpose: Shared terminal-teardown routine reused by every terminal surface
-//          (chat drawer and right-dock pane): dispose + server-close with a
-//          fallback, a sequence that was duplicated verbatim.
-// Layer: Web terminal runtime helpers
-// Depends on: terminalRuntimeRegistry (xterm instances, loaded on demand),
-//             NativeApi terminal channel.
-// Note: the id factory lives in `terminalIds.ts` so eager consumers can import
-//       it without anchoring xterm into the initial bundle.
+// the id factory lives in terminalIds.ts so eager consumers can import it without anchoring xterm into the initial bundle
 
 import { type NativeApi } from "@synara/contracts";
 
-// The terminal runtime pulls in xterm and its addons (~223 KB gzip). Importing
-// the registry statically anchored the whole terminal stack into the eager
-// router graph via this module's callers, so every page load paid for it.
-// Closing a terminal is a rare user action and the chunk is already resident
-// whenever a terminal is actually on screen, so this resolves from the module
-// cache in practice.
+// the terminal runtime pulls in xterm + addons (~223 KB gzip); a static import anchored the whole stack into the eager router graph — dynamic import resolves from the module cache in practice
 async function disposeTerminalRuntime(threadId: string, terminalId: string): Promise<void> {
   try {
     const { terminalRuntimeRegistry } = await import("./terminalRuntimeRegistry");
     terminalRuntimeRegistry.disposeTerminal(threadId, terminalId);
   } catch (error) {
-    // A failed chunk fetch must not strand the server-side terminal: fall
-    // through to the close call below, which is the half that actually frees
-    // the PTY and its history.
+    // a failed chunk fetch must not strand the server-side terminal — fall through to the close call, the half that frees the PTY
     console.error("Failed to dispose terminal runtime", { threadId, terminalId, error });
   }
 }
 
-// Tear down a terminal everywhere it lives: drop the local xterm instance, then
-// ask the server to close it (deleting history) with a best-effort `exit` write
-// fallback for transports that lack a structured close. `clearHistoryBeforeClose`
-// mirrors the chat surface's behavior when closing the final terminal of a thread.
+// tear down everywhere: drop the local xterm, then server-close with a best-effort `exit` fallback for transports lacking a structured close
 export function disposeAndCloseTerminalSession(input: {
   api: NativeApi | undefined;
   threadId: string;
@@ -48,8 +30,7 @@ export function disposeAndCloseTerminalSession(input: {
     return api?.terminal.write({ threadId, terminalId, data: "exit\n" }).catch(() => undefined);
   };
 
-  // Local disposal stays ordered before the server close, as it was when the
-  // registry was imported statically.
+  // local disposal stays ordered before the server close, as when the registry was statically imported
   void (async () => {
     await disposeTerminalRuntime(threadId, terminalId);
 

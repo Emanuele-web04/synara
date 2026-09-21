@@ -1,7 +1,3 @@
-// FILE: GitCore.test.ts
-// Purpose: Exercises GitCore repository operations, branch/worktree flows, and status summaries.
-// Layer: Server Git service tests
-// Depends on: Effect test layers plus real temporary Git repositories.
 import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -17,8 +13,6 @@ import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { type ProcessRunResult, runProcess } from "../../processRunner.ts";
 import { ServerConfig } from "../../config.ts";
-
-// ── Helpers ──
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "synara-git-core-test-",
@@ -57,7 +51,6 @@ function readTextFile(
   });
 }
 
-/** Run a raw git command for test setup (not under test). */
 function git(
   cwd: string,
   args: ReadonlyArray<string>,
@@ -97,7 +90,6 @@ const makeIsolatedGitCore = (executeOverride: GitCoreShape["execute"]) =>
     Effect.provide(Layer.provideMerge(ServerConfigLayer, NodeServices.layer)),
   );
 
-/** Create a repo with an initial commit so branches work. */
 function initRepoWithCommit(
   cwd: string,
 ): Effect.Effect<
@@ -148,8 +140,6 @@ function commitWithDate(
     });
   });
 }
-
-// ── Tests ──
 
 it.layer(TestLayer)("git integration", (it) => {
   describe("shell process execution", () => {
@@ -822,8 +812,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* git(tmp, ["commit", "-m", "base"]);
         const mergeBase = yield* git(tmp, ["rev-parse", "HEAD"]);
         yield* git(tmp, ["checkout", "-b", "feature"]);
-        // The branch diff falls back to a default base branch name when the
-        // current branch tracks nothing; pin one so the fixture is deterministic.
+        // pin a default base branch so the fixture is deterministic when the current branch tracks nothing
         yield* git(tmp, ["branch", "-f", "main", mergeBase]);
         yield* writeTextFile(path.join(tmp, "src.ts"), "feature\n");
         yield* git(tmp, ["add", "."]);
@@ -875,8 +864,6 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
-  // ── initGitRepo ──
-
   describe("initGitRepo", () => {
     it.effect("creates a valid git repo", () =>
       Effect.gen(function* () {
@@ -897,8 +884,6 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
   });
-
-  // ── listGitBranches ──
 
   describe("listGitBranches", () => {
     it.effect("returns isRepo: false for non-git directory", () =>
@@ -963,7 +948,7 @@ it.layer(TestLayer)("git integration", (it) => {
           "newer branch change",
         );
 
-        // Switch away to show current branch is pinned, then remaining branches are recency-sorted.
+        // current branch pinned first; remaining branches recency-sorted
         yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "older-branch" });
 
         const result = yield* (yield* GitCore).listBranches({ cwd: tmp });
@@ -1118,8 +1103,6 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
   });
-
-  // ── checkoutGitBranch ──
 
   describe("checkoutGitBranch", () => {
     it.effect("checks out an existing branch", () =>
@@ -1408,8 +1391,7 @@ it.layer(TestLayer)("git integration", (it) => {
           yield* git(source, ["remote", "add", "origin", remote]);
           yield* git(source, ["push", "-u", "origin", defaultBranch]);
 
-          // Keep local branch but remove tracking so `--track origin/<branch>`
-          // would attempt to create an already-existing local branch.
+          // remove tracking so `--track origin/<branch>` attempts to create an already-existing local branch
           yield* git(source, ["branch", "--unset-upstream"]);
 
           yield* (yield* GitCore).checkoutBranch({
@@ -1429,27 +1411,22 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* initRepoWithCommit(tmp);
         yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "other" });
 
-        // Create a conflicting change: modify README on current branch
         yield* writeTextFile(path.join(tmp, "README.md"), "modified\n");
         yield* git(tmp, ["add", "README.md"]);
 
-        // First, checkout other branch cleanly
         yield* git(tmp, ["stash"]);
         yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "other" });
         yield* writeTextFile(path.join(tmp, "README.md"), "other content\n");
         yield* git(tmp, ["add", "."]);
         yield* git(tmp, ["commit", "-m", "other change"]);
 
-        // Go back to default branch
         const defaultBranch = (yield* (yield* GitCore).listBranches({ cwd: tmp })).branches.find(
           (b) => !b.current,
         )!.name;
         yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: defaultBranch });
 
-        // Make uncommitted changes to the same file
         yield* writeTextFile(path.join(tmp, "README.md"), "conflicting local\n");
 
-        // Checkout should fail due to uncommitted changes
         const result = yield* Effect.result(
           (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "other" }),
         );
@@ -1606,8 +1583,6 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
-  // ── createGitBranch ──
-
   describe("createGitBranch", () => {
     it.effect("creates a new branch visible in listGitBranches", () =>
       Effect.gen(function* () {
@@ -1677,8 +1652,6 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
   });
-
-  // ── renameGitBranch ──
 
   describe("renameGitBranch", () => {
     it.effect("renames the current branch", () =>
@@ -1795,8 +1768,6 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
-  // ── createGitWorktree + removeGitWorktree ──
-
   describe("createGitWorktree", () => {
     it.effect("creates a worktree with a new branch from the base branch", () =>
       Effect.gen(function* () {
@@ -1820,7 +1791,6 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(existsSync(wtPath)).toBe(true);
         expect(existsSync(path.join(wtPath, "README.md"))).toBe(true);
 
-        // Clean up worktree before tmp dir disposal
         yield* (yield* GitCore).removeWorktree({ cwd: tmp, path: wtPath });
       }),
     );
@@ -1842,7 +1812,6 @@ it.layer(TestLayer)("git integration", (it) => {
           path: wtPath,
         });
 
-        // Verify the worktree is on the new branch
         const branchOutput = yield* git(wtPath, ["branch", "--show-current"]);
         expect(branchOutput).toBe("wt-check");
 
@@ -2057,8 +2026,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* initRepoWithCommit(tmp);
         const core = yield* GitCore;
         const wtPath = path.join(tmp, "wt-rollback-branch");
-        // A plain file at the target path makes `git worktree add` fail after
-        // the branch has already been created.
+        // a plain file at the target path fails `git worktree add` after the branch was already created
         yield* writeTextFile(wtPath, "occupied\n");
 
         const result = yield* Effect.exit(
@@ -2267,13 +2235,11 @@ it.layer(TestLayer)("git integration", (it) => {
           path: wtPath,
         });
 
-        // listGitBranches from the worktree should show wt-list as current
         const wtBranches = yield* (yield* GitCore).listBranches({ cwd: wtPath });
         expect(wtBranches.isRepo).toBe(true);
         const wtCurrent = wtBranches.branches.find((b) => b.current);
         expect(wtCurrent!.name).toBe("wt-list");
 
-        // Main repo should still show the original branch as current
         const mainBranches = yield* (yield* GitCore).listBranches({ cwd: tmp });
         const mainCurrent = mainBranches.branches.find((b) => b.current);
         expect(mainCurrent!.name).toBe(mainBranch);
@@ -2337,8 +2303,6 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
-  // ── Full flow: local branch checkout ──
-
   describe("full flow: local branch checkout", () => {
     it.effect("init → commit → create branch → checkout → verify current", () =>
       Effect.gen(function* () {
@@ -2353,8 +2317,6 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
   });
-
-  // ── Full flow: worktree creation from base branch ──
 
   describe("full flow: worktree creation", () => {
     it.effect("creates worktree with new branch from current branch", () =>
@@ -2374,15 +2336,12 @@ it.layer(TestLayer)("git integration", (it) => {
           path: wtPath,
         });
 
-        // Worktree exists
         expect(existsSync(result.worktree.path)).toBe(true);
 
-        // Main repo still on original branch
         const mainBranches = yield* (yield* GitCore).listBranches({ cwd: tmp });
         const mainCurrent = mainBranches.branches.find((b) => b.current);
         expect(mainCurrent!.name).toBe(currentBranch);
 
-        // Worktree is on the new branch
         const wtBranch = yield* git(wtPath, ["branch", "--show-current"]);
         expect(wtBranch).toBe("feature-wt");
 
@@ -2447,8 +2406,6 @@ it.layer(TestLayer)("git integration", (it) => {
     );
   });
 
-  // ── Full flow: thread switching simulation ──
-
   describe("full flow: thread switching (checkout toggling)", () => {
     it.effect("checkout a → checkout b → checkout a → current matches", () =>
       Effect.gen(function* () {
@@ -2457,25 +2414,20 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "branch-a" });
         yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "branch-b" });
 
-        // Simulate switching to thread A's branch
         yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "branch-a" });
         let branches = yield* (yield* GitCore).listBranches({ cwd: tmp });
         expect(branches.branches.find((b) => b.current)!.name).toBe("branch-a");
 
-        // Simulate switching to thread B's branch
         yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "branch-b" });
         branches = yield* (yield* GitCore).listBranches({ cwd: tmp });
         expect(branches.branches.find((b) => b.current)!.name).toBe("branch-b");
 
-        // Switch back to thread A
         yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "branch-a" });
         branches = yield* (yield* GitCore).listBranches({ cwd: tmp });
         expect(branches.branches.find((b) => b.current)!.name).toBe("branch-a");
       }),
     );
   });
-
-  // ── Full flow: checkout conflict ──
 
   describe("full flow: checkout conflict", () => {
     it.effect("uncommitted changes prevent checkout to a diverged branch", () =>
@@ -2484,27 +2436,22 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* initRepoWithCommit(tmp);
         yield* (yield* GitCore).createBranch({ cwd: tmp, branch: "diverged" });
 
-        // Make diverged branch have different file content
         yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "diverged" });
         yield* writeTextFile(path.join(tmp, "README.md"), "diverged content\n");
         yield* git(tmp, ["add", "."]);
         yield* git(tmp, ["commit", "-m", "diverge"]);
 
-        // Actually, let's just get back to the initial branch explicitly
         const allBranches = yield* (yield* GitCore).listBranches({ cwd: tmp });
         const initialBranch = allBranches.branches.find((b) => b.name !== "diverged")!.name;
         yield* (yield* GitCore).checkoutBranch({ cwd: tmp, branch: initialBranch });
 
-        // Make local uncommitted changes to the same file
         yield* writeTextFile(path.join(tmp, "README.md"), "local uncommitted\n");
 
-        // Attempt checkout should fail
         const failedCheckout = yield* Effect.result(
           (yield* GitCore).checkoutBranch({ cwd: tmp, branch: "diverged" }),
         );
         expect(failedCheckout._tag).toBe("Failure");
 
-        // Current branch should still be the initial one
         const result = yield* (yield* GitCore).listBranches({ cwd: tmp });
         expect(result.branches.find((b) => b.current)!.name).toBe(initialBranch);
       }),
@@ -2902,7 +2849,7 @@ it.layer(TestLayer)("git integration", (it) => {
             return Effect.succeed({ code: 0, stdout: "vanished.txt\0", stderr: "" });
           }
           if (input.operation.endsWith(".untrackedNumstat")) {
-            // `--no-index` also exits 1 when the path cannot be read.
+            // `--no-index` also exits 1 when the path can't be read
             return Effect.succeed({
               code: 1,
               stdout: "",
@@ -2965,7 +2912,6 @@ it.layer(TestLayer)("git integration", (it) => {
           if (input.operation === "GitCore.readRefPatch.untrackedPatch") {
             requestedLimit = input.maxOutputBytes;
             requestedMode = input.outputMode;
-            // Exercise the real collector's truncate path with a small fixture.
             return realCore.execute({ ...input, maxOutputBytes: 128 });
           }
           return realCore.execute(input);
@@ -3603,7 +3549,6 @@ it.layer(TestLayer)("git integration", (it) => {
 
         yield* core.commit(tmp, "Add only a.txt", "");
 
-        // b.txt should still be untracked after commit
         const statusAfter = yield* git(tmp, ["status", "--porcelain"]);
         expect(statusAfter).toContain("b.txt");
         expect(statusAfter).not.toContain("a.txt");

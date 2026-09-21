@@ -1,15 +1,3 @@
-// FILE: PdfPageView.tsx
-// Purpose: Render a single PDF page for the in-app viewer: a HiDPI canvas plus a
-//          selectable text layer and a clickable link layer. Virtualized both
-//          ways — a page paints only while it is near the viewport and releases
-//          its canvas/text layer again once scrolled far away, so memory stays
-//          bounded on long documents. The placeholder box keeps its size either
-//          way so the scroll height (and page indicator) stay correct. The paint
-//          pipeline lives in usePdfPageRender; this component owns activation +
-//          layout markup.
-// Layer: Web PDF rendering component
-// Exports: PdfPageView
-
 import { useEffect, useRef, useState } from "react";
 
 import type { PDFDocumentProxy } from "~/lib/pdf/pdfEngine";
@@ -18,8 +6,7 @@ import { usePdfPageRender } from "~/lib/pdf/usePdfPageRender";
 import type { PdfPageIntrinsicSize } from "~/lib/pdf/pdfZoom";
 import { openExternalLink } from "~/lib/linkChips";
 
-// Prerender pages within roughly one viewport above/below so scrolling reveals
-// already-painted pages instead of blank boxes.
+// prerender pages within roughly one viewport above/below so scrolling reveals painted pages, not blank boxes
 const PAGE_PRERENDER_ROOT_MARGIN = "150% 0px";
 
 interface PdfPageViewProps {
@@ -55,10 +42,7 @@ export const PdfPageView = function PdfPageView({
     return () => registerElement(pageNumber, null);
   }, [pageNumber, registerElement]);
 
-  // Track viewport proximity both ways: the page paints while inside the
-  // prerender margin and releases its canvas/text layer (in usePdfPageRender)
-  // once it leaves, keeping memory bounded on long documents. Entries are
-  // batched, so only the most recent one reflects the current state.
+  // paint while inside the prerender margin, release canvas/text layer once out — entries are batched so only the most recent reflects current state
   useEffect(() => {
     const element = wrapperRef.current;
     if (!element) {

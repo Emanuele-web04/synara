@@ -37,13 +37,7 @@ function pullRequestsEqual(
   );
 }
 
-/**
- * Derives the durable thread metadata observed at a provider-turn boundary.
- *
- * A successful lookup may intentionally clear a prior PR when the current branch has none.
- * A transient lookup failure preserves a PR on an unchanged branch, but clears it when the
- * branch itself changed so the sidebar never labels the new branch with the previous branch's PR.
- */
+/** a successful lookup may intentionally clear a prior PR when the branch has none; a transient failure preserves it on an unchanged branch but clears when the branch changed — the sidebar never labels the new branch with the previous PR */
 export function deriveThreadGitMetadataPatch(input: {
   readonly currentBranch: string | null;
   readonly currentPullRequest: OrchestrationThreadPullRequest | null;

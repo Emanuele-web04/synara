@@ -1,8 +1,3 @@
-// FILE: WelcomeStep.tsx
-// Purpose: Intro of the welcome tour: the three ideas that shape everything that follows
-//          (local-first, bring your own agents, verify before done), one quiet tile each.
-// Layer: Web UI component
-
 import { BotIcon, CircleCheckIcon, FolderIcon, type LucideIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ONBOARDING_TILE_CLASS_NAME } from "../layout";

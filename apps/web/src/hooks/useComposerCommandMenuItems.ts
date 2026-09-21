@@ -104,10 +104,7 @@ function makeUniqueMentionName(input: {
   }
 }
 
-// Mention tokens/chips resolve back to their reference by name, so two chats
-// sharing a title would be indistinguishable once inserted (wrong provider
-// icon, ambiguous context). Build friendly project-qualified names first, then
-// guarantee uniqueness across the final serialized names with a stable id suffix.
+// mentions resolve back by name — two chats sharing a title would be indistinguishable once inserted, so project-qualify then dedupe with a stable id suffix
 function withDisambiguatedMentionNames(
   candidates: ReadonlyArray<Omit<ThreadMentionCandidate, "mentionName">>,
 ): ThreadMentionCandidate[] {
@@ -185,8 +182,6 @@ function buildThreadMentionCandidates(input: {
   );
 }
 
-// Resolves the mention a dropped chat row should insert: the exact name/path the
-// `@` menu would produce, or null when that chat is not mentionable here.
 export function resolveThreadMentionForThreadId(input: {
   readonly threads: readonly ComposerThreadMentionSource[];
   readonly projects: readonly Project[];
@@ -280,7 +275,6 @@ export function useComposerCommandMenuItems(input: {
   canOfferSideCommand: boolean;
   canOfferExportCommand: boolean;
   surfaceAppSlashCommands?: ReadonlySet<string>;
-  /** Artifact publishing state reported by provider command discovery. */
   providerArtifacts?: ProviderArtifactsState | undefined;
   dynamicAgents: readonly ProviderAgentDescriptor[];
   threadMentionSources?: {
@@ -311,12 +305,10 @@ export function useComposerCommandMenuItems(input: {
 
   if (!composerTrigger) return [];
 
-  // Keep trigger-specific discovery outside ChatView so the view mostly orchestrates state.
   if (composerTrigger.kind === "mention") {
     const query = normalizeProviderDiscoveryText(composerTrigger.query);
 
     const agentItems: ComposerCommandItem[] = (() => {
-      // Use dynamic agents when available, fallback to static
       if (dynamicAgents.length > 0) {
         return rankProviderDiscoveryItems(dynamicAgents, query, ({ name, displayName }) => [
           { value: name },
@@ -331,7 +323,6 @@ export function useComposerCommandMenuItems(input: {
           description: displayName,
         }));
       }
-      // Static fallback
       return rankProviderDiscoveryItems(
         getAgentMentionAutocompleteAliases(provider),
         query,
@@ -384,8 +375,7 @@ export function useComposerCommandMenuItems(input: {
           query: composerTrigger.query,
         })
       : [];
-    // Keep mention suggestions ordered by primary intent: plugins and chats
-    // first, then local context, then subagent delegation targets.
+    // mention suggestions ordered by primary intent: plugins/chats first, then local context, then subagent delegation targets
     return [...pluginItems, ...threadItems, ...localRootItems, ...pathItems, ...agentItems];
   }
 
@@ -447,8 +437,6 @@ export function useComposerCommandMenuItems(input: {
         artifacts: providerArtifacts,
       }),
     }));
-    // `/` is the universal picker surface; provider dispatch can adapt the
-    // visible slash token to backend-specific skill syntax when needed.
     const skillItems: ComposerCommandItem[] = rankProviderDiscoveryItems(
       providerSkills,
       query,

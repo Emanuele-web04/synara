@@ -1,6 +1,3 @@
-// FILE: 081_AutomationProposals.ts
-// Purpose: Adds the additive proposal lifecycle for agent-suggested automations.
-
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

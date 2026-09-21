@@ -1,8 +1,3 @@
-// FILE: RenameDialog.tsx
-// Purpose: Shared single-field rename dialog for threads and projects.
-// Layer: Shared UI component
-// Exports: RenameDialog
-
 import { useEffect, useRef, useState } from "react";
 import { Button } from "./ui/button";
 import {

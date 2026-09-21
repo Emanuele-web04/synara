@@ -1,10 +1,3 @@
-/**
- * ServerSettings - Server-authoritative settings persistence.
- *
- * Owns settings that affect server-side behavior. The web app can continue to
- * keep UI-only preferences in local storage while these values become durable
- * and process-authoritative on the server.
- */
 import {
   DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
@@ -231,9 +224,7 @@ function omitProviderPasswords(patch: ServerSettingsPatch): ServerSettingsPatch 
   };
 }
 
-// Migrate only portable Kilo state. Its model/options shape and enabled flag
-// remain meaningful, but Kilo binary paths, endpoints, and credentials are not
-// compatible with the OpenCode process protocol and must not be copied.
+// migrate only portable Kilo state — binary paths, endpoints, and credentials aren't compatible with the OpenCode process protocol and must not be copied
 function migrateRemovedKiloSettings(settings: unknown): unknown {
   if (settings === null || typeof settings !== "object" || Array.isArray(settings)) {
     return settings;

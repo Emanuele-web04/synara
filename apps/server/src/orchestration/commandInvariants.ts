@@ -34,14 +34,7 @@ function invariantError(commandType: string, detail: string): OrchestrationComma
   });
 }
 
-/**
- * True when the thread still has an in-flight / unsettled turn:
- * session mid-lifecycle ("starting"/"running"), a non-error session with an
- * activeTurnId, or a latestTurn still projected as "running".
- *
- * Runtime errors can retain the failed turn id for attribution even though the
- * session and turn are terminal, so an errored session's activeTurnId is stale.
- */
+/** runtime errors can retain the failed turn id for attribution though session and turn are terminal — an errored session's activeTurnId is stale */
 export function threadHasInFlightTurn(thread: {
   readonly session: Pick<OrchestrationSession, "status" | "activeTurnId"> | null;
   readonly latestTurn: Pick<OrchestrationLatestTurn, "state"> | null;
@@ -147,9 +140,7 @@ export function requireSpaceAbsent(input: {
   readonly command: OrchestrationCommand;
   readonly spaceId: SpaceId;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  // Aggregate ids are durable event-stream identities, not recyclable row ids. A deleted
-  // Space remains in the read model as a tombstone; recreating it would append a second
-  // `space.created` lifecycle to the same aggregate and make replay semantics ambiguous.
+  // aggregate ids are durable stream identities, not recyclable row ids — a deleted Space stays as a tombstone; recreating would append a second lifecycle making replay ambiguous
   if (!findSpaceById(input.readModel, input.spaceId)) {
     return Effect.void;
   }
@@ -192,14 +183,7 @@ export interface SpaceAssignmentWorkspacePaths {
   readonly chatWorkspaceRoot: string;
 }
 
-/**
- * Server half of the web's `isOrdinarySpaceProject` membership rule. Managed chat and
- * Studio containers are excluded by kind alone, but legacy Home chat containers kept
- * `kind: "project"` — they are recognizable by the reserved home/chat workspace root plus
- * their canonical "Home" title. Those containers are reachable from every Space, so they
- * must never belong to one. The decider rejects renaming this legacy row so the signal cannot
- * drift through supported commands.
- */
+/** server half of the web's membership rule: chat/Studio containers excluded by kind; legacy Home containers kept kind:"project" and are recognized by the home/chat root + "Home" title — reachable from every Space so must never belong to one; renaming the legacy row is rejected so the signal can't drift */
 export function isLegacyHomeChatContainerRow(input: {
   readonly projectTitle: string;
   readonly projectWorkspaceRoot: string;
@@ -216,11 +200,7 @@ export function isLegacyHomeChatContainerRow(input: {
   });
 }
 
-/**
- * Server half of the web's project partitioning: ordinary projects are the user-visible
- * ones. Managed chat and Studio containers are excluded by kind alone; the legacy Home
- * chat container kept `kind: "project"` and is recognized by its row shape instead.
- */
+/** ordinary projects are the user-visible ones — chat/Studio containers excluded by kind, the legacy Home container recognized by row shape */
 export function isOrdinaryProjectRow(input: {
   readonly projectKind: ProjectKind | undefined;
   readonly projectTitle: string;
@@ -239,7 +219,7 @@ export function isOrdinaryProjectRow(input: {
   });
 }
 
-/** The rejecting form for explicit assignment commands, where a bad target is an error. */
+/** the rejecting form for explicit assignment commands, where a bad target is an error */
 export function requireSpaceAssignableProject(input: {
   readonly command: OrchestrationCommand;
   readonly projectTitle: string;
@@ -257,7 +237,6 @@ export function requireSpaceAssignableProject(input: {
   );
 }
 
-// Finds active projects by workspace root using the same comparison rules as import flows.
 export function listActiveProjectsByWorkspaceRoot(
   readModel: OrchestrationReadModel,
   workspaceRoot: string,
@@ -324,8 +303,7 @@ export function requireProjectWorkspaceRootAvailable(input: {
   readonly excludeProjectId?: ProjectId;
   readonly kinds?: ReadonlySet<ProjectKind>;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  // Skip the excluded project BEFORE picking, not after: if corrupt state ever leaves two
-  // active owners on one root, the project being updated must not mask the other owner.
+  // skip the excluded project BEFORE picking — if corrupt state leaves two active owners, the project being updated must not mask the other
   const existingProject = listActiveProjectsByWorkspaceRoot(
     input.readModel,
     input.workspaceRoot,
@@ -470,20 +448,12 @@ export type ThreadResumePreconditionViolation =
   | "turn-in-flight";
 
 export interface ThreadResumePrecondition {
-  /** Turn in flight when the chat was recorded; null while the provider was still connecting. */
+  /** turn in flight when the chat was recorded; null while the provider was still connecting */
   readonly recordedTurnId: TurnId | null;
   readonly recordedAt: string;
 }
 
-/**
- * Shared by the boot-time quit-resume planner and the decider: a chat remembered
- * at quit is continued only while the thread is not archived, has nothing in
- * flight, and no turn finished on its own since the record was taken — neither
- * the recorded turn (it was running then, so it can only have completed later)
- * nor any newer one. A turn that completed before the record is the previous
- * turn of a chat that was still connecting and does not count; an interrupted or
- * errored turn is exactly what a continuation is for.
- */
+/** a recorded chat continues only while unarchived, nothing in flight, and no turn finished on its own since the record — neither the recorded turn (it was running, can only have completed later) nor a newer one; an interrupted/errored turn is exactly what a continuation is for */
 export function threadResumePreconditionViolation(
   thread: {
     readonly archivedAt?: string | null | undefined;
@@ -503,8 +473,7 @@ export function threadResumePreconditionViolation(
     latestTurn !== null &&
     latestTurn.state === "completed" &&
     (latestTurn.turnId === precondition.recordedTurnId ||
-      // A completed turn without a completion time is unknowable; stay on the
-      // side of not sending an unwanted message.
+      // a completed turn without a completion time is unknowable — stay on the side of not sending an unwanted message
       latestTurn.completedAt === null ||
       latestTurn.completedAt >= precondition.recordedAt)
   ) {

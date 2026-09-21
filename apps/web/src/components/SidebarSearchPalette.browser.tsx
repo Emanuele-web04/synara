@@ -60,8 +60,7 @@ it.each(["Dashboard", "control-panel", "Client work"])(
     const result = page.getByRole("option", { name: /Fix login flow/ });
     await expect.element(result).toBeVisible();
     await expect.element(result).toHaveTextContent("Project match");
-    // These matches have no message snippet. The matching metadata must still
-    // be shown and highlighted instead of returning an unexplained chat title.
+    // These matches have no message snippet. The matching metadata must still be shown and highlighted instead of returning an unexplained chat title.
     await expect.element(result).toHaveTextContent(query);
     const highlighted = result.element().querySelectorAll("mark");
     expect(Array.from(highlighted, (mark) => mark.textContent).join(" ")).toContain(query);

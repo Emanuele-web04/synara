@@ -1,8 +1,3 @@
-// FILE: FactoryPluginDiscovery.test.ts
-// Purpose: Verifies read-only mapping of Factory marketplace manifests into provider contracts.
-// Layer: Provider filesystem discovery tests
-// Depends on: FactoryPluginDiscovery and temporary filesystem fixtures.
-
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";

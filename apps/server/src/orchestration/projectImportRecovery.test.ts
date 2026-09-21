@@ -83,7 +83,7 @@ it.each(["pending", "completed"] as const)(
       const project = (await preview()).projects[0]!;
       const input = { projectKey: project.key, threadKey: project.threads[0]!.key };
       if (status === "pending") {
-        // Fail after durable message and archive commands have already been accepted.
+        // fail after durable message and archive commands were already accepted
         const complete = repository.complete;
         repository.complete = vi
           .fn(complete)
@@ -103,7 +103,7 @@ it.each(["pending", "completed"] as const)(
           threadId: original.threadId,
         }),
       );
-      // Reload the command model from SQLite, as happens when the server restarts.
+      // reload the command model from SQLite, as a server restart does
       await runtime.runPromise(engine.refreshCommandReadModel());
       expect((await preview()).projects[0]!.threads[0]!.alreadyImported).toBe(false);
 

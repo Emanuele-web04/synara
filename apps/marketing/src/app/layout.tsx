@@ -1,7 +1,3 @@
-// FILE: layout.tsx
-// Purpose: Root document shell with global fonts, metadata, analytics, and JSON-LD.
-// Layer: App Router layout.
-
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";

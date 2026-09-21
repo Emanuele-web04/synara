@@ -210,7 +210,7 @@ export function makePullRequestOperations(dependencies: {
   const setPinned: PullRequestServiceShape["setPinned"] = (input) =>
     Effect.gen(function* () {
       const project = yield* dependencies.findProject(input.projectId);
-      // Clearing an orphaned pin intentionally requires only a valid canonical repository key.
+      // clearing an orphaned pin intentionally requires only a valid canonical repository key
       const repository = yield* input.isPinned
         ? dependencies.validateProjectRepository(project, input.repository)
         : dependencies.validateRepository(input.repository);

@@ -12,12 +12,6 @@ function read(relativePath) {
   return readFileSync(path.join(ROOT, relativePath), "utf8");
 }
 
-/**
- * Copy assertions are about the words, not where the formatter chose to wrap
- * them. The repo formats JSX at a different width than this site used
- * standalone, so a phrase can span source lines; collapse whitespace before
- * matching so reflowing a paragraph never fails a copy test.
- */
 function readFlat(relativePath) {
   return read(relativePath).replace(/\s+/g, " ");
 }

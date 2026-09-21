@@ -6,9 +6,7 @@ export const TrimmedNonEmptyString = TrimmedString.check(Schema.isNonEmpty());
 export const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 export const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 
-// Shared schema for child-process environment overrides (terminals, dev servers).
-// Keys follow POSIX env-name rules; values and total size are capped to keep
-// requests bounded. Extracted here so terminal and project contracts stay in sync.
+// keys follow POSIX env-name rules; size-capped; shared so terminal and project contracts stay in sync
 const ProcessEnvKey = Schema.String.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/)).check(
   Schema.isMaxLength(128),
 );
@@ -21,9 +19,6 @@ export type ProcessEnvRecord = typeof ProcessEnvRecord.Type;
 export const IsoDateTime = Schema.String;
 export type IsoDateTime = typeof IsoDateTime.Type;
 
-/**
- * Construct a branded identifier. Enforces non-empty trimmed strings
- */
 const makeEntityId = <Brand extends string>(brand: Brand) =>
   TrimmedNonEmptyString.pipe(Schema.brand(brand));
 

@@ -308,8 +308,7 @@ describe("buildResolveConflictsPrompt", () => {
   });
 
   it("points at the current checkout instead of asserting the local branch name", () => {
-    // Fork threads check the PR out under `synara/pr-N/<branch>`, so the prompt must not
-    // claim the local branch is named after the GitHub head branch.
+    // fork threads check the PR out under `synara/pr-N/<branch>` — the prompt must not claim the local branch is named after the GitHub head branch
     const prompt = buildResolveConflictsPrompt({
       prNumber: 488,
       prUrl: "https://github.com/o/r/pull/488",

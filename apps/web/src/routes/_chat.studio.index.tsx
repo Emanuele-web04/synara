@@ -1,13 +1,3 @@
-// FILE: _chat.studio.index.tsx
-// Purpose: Landing for the Studio surface — restore the latest Studio chat or its draft, falling
-//          back to creating a fresh Studio chat. Reuses the shared restore/create route surface so
-//          Studio gets the same empty-bootstrap-snapshot recovery machinery as the home route
-//          (a hard refresh or deep link can otherwise land on a briefly-empty snapshot and create
-//          a duplicate Studio thread).
-// Layer: Routing
-// Depends on: Studio project lookup, the shared restore/create route surface, and the Studio
-//             new-chat hook.
-
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
@@ -26,8 +16,6 @@ import { collectStudioProjectIds, findStudioDraftThreadId } from "../lib/studioP
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 
-// How long the splash below waits for the welcome's Studio root before surfacing an error —
-// generous next to a normal welcome round-trip, mirroring the home route's eventual error+retry.
 const WORKSPACE_PATHS_TIMEOUT_MS = 10_000;
 
 function StudioIndexRouteView() {
@@ -49,17 +37,13 @@ function StudioIndexRouteView() {
     chatWorkspaceRoot,
     studioWorkspaceRoot,
   });
-  // The container's stored draft (if any). It's a valid remembered-route target below, and when
-  // nothing is remembered it wins over the latest thread: the resolver defers to
-  // `createFreshChat`, whose `handleNewStudioChat` reopens the stored draft.
+  // the stored draft wins over the latest thread when nothing is remembered — the resolver defers to createFreshChat, which reopens it
   const studioDraftThreadId = findStudioDraftThreadId({
     studioProjectIds,
     projectDraftThreadIdByProjectId,
     draftThreadsByThreadId,
   });
-  // Studio threads (sidebar summaries) backing both the remembered-route scope and the
-  // latest-thread fallback below. Archived chats are excluded — the sidebar hides them, so the
-  // landing must not resurrect one; an archived-only Studio opens the draft or a fresh chat.
+  // archived chats are excluded — the landing must not resurrect one; an archived-only Studio opens the draft or a fresh chat
   const studioThreadSummaries = threadIds.flatMap((threadId) => {
     const summary = sidebarThreadSummaryById[threadId];
     return summary &&
@@ -69,14 +53,9 @@ function StudioIndexRouteView() {
       ? [summary]
       : [];
   });
-  // The most recent Studio chat (if any), used to restore the surface instead of always opening
-  // a brand-new draft.
   const latestStudioThreadId =
     sortThreadsForSidebar(studioThreadSummaries, appSettings.sidebarThreadSortOrder)[0]?.id ?? null;
 
-  // Same landing policy as the Studio segment switch and settings back: remembered route first
-  // (scoped to Studio threads plus the stored draft), then the stored draft, then the latest
-  // Studio chat — so a refresh or deep link on /studio returns to the chat you last had open.
   const resolveRestoreRoute: RestoreRouteResolver = ({ availableSplitViewIds }) => {
     const availableThreadIds = new Set<string>(studioThreadSummaries.map((thread) => thread.id));
     if (studioDraftThreadId) {
@@ -96,13 +75,10 @@ function StudioIndexRouteView() {
     return { threadId: latestStudioThreadId };
   };
 
-  // Deliberately NOT `{ fresh: true }` (unlike the "/" route): when the resolver returns null
-  // because a Studio draft exists, handleNewStudioChat reopens that stored draft instead of
-  // minting a new one per visit — a fresh draft each landing would litter the hidden container.
+  // deliberately NOT fresh:true — when a stored Studio draft exists, handleNewStudioChat reopens it instead of minting a new draft per visit (which would litter the hidden container)
   const createFreshChat = () => handleNewStudioChat();
 
-  // A hidden Studio tab must never start the restore/create flow: a direct /studio link would
-  // otherwise race the sidebar's hidden-section redirect and could mint a hidden Studio draft.
+  // A hidden Studio tab must never start the restore/create flow: a direct /studio link would otherwise race the sidebar's hidden-section redirect and could mint a hidden Studio draft.
   const navigate = useNavigate();
   const studioSectionVisible = appSettings.showStudioSection;
   useEffect(() => {
@@ -111,9 +87,7 @@ function StudioIndexRouteView() {
     }
   }, [navigate, studioSectionVisible]);
 
-  // Don't wait on the splash below forever: if the welcome never delivers a Studio root
-  // (connection trouble, or a server that doesn't report one), surface an error with a retry
-  // that re-arms the wait — matching how the home route eventually surfaces failures.
+  // don't wait on the splash forever — if the welcome never delivers a Studio root, surface an error + retry that re-arms the wait
   const [pathsWaitTimedOut, setPathsWaitTimedOut] = useState(false);
   useEffect(() => {
     if (studioWorkspaceRoot || pathsWaitTimedOut) {
@@ -127,10 +101,7 @@ function StudioIndexRouteView() {
     return <SplashScreen />;
   }
 
-  // The resolver and `handleNewStudioChat` both read the server welcome's workspace paths.
-  // The shared restore/create machinery only guards against an empty *thread* snapshot, so hold
-  // the splash until the welcome arrives — otherwise a snapshot that hydrates first would make
-  // the resolver miss existing Studio threads and the fallback create fail against a null root.
+  // the shared machinery only guards an empty *thread* snapshot — hold the splash until the welcome arrives or hydration makes the resolver miss Studio threads and the create fails on a null root
   if (!studioWorkspaceRoot) {
     return (
       <SplashScreen

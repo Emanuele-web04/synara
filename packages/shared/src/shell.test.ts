@@ -19,7 +19,7 @@ describe("shell environment hydration marker", () => {
     expect(
       isShellEnvironmentHydrated({ [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "1", PATH: "/usr/bin" }),
     ).toBe(true);
-    // An inherited PATH alone must never suppress the probe.
+    // an inherited PATH alone must never suppress the probe
     expect(isShellEnvironmentHydrated({ PATH: "/usr/bin" })).toBe(false);
     expect(
       isShellEnvironmentHydrated({ [SHELL_ENVIRONMENT_HYDRATED_ENV_NAME]: "1", PATH: "   " }),

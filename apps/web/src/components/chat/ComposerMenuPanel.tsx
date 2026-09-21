@@ -1,9 +1,3 @@
-// FILE: ComposerMenuPanel.tsx
-// Purpose: Shared floating panel chrome + row layout for every composer menu (slash/mention
-//   command menu, the `+` extras panel) so all composer menus read as one surface.
-// Layer: Chat composer presentation
-// Depends on: Command primitives and the shared composer picker style tokens.
-
 import { memo, useEffect, useRef, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
@@ -27,9 +21,7 @@ export const COMPOSER_MENU_PANEL_GROUP_LABEL_CLASS_NAME =
 /** Glyph size shared by every panel row icon, whatever the menu. */
 export const COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME = "size-3.5";
 
-// Single icon column shared by every menu row. Rows differ only by the glyph,
-// its color, and the name — slot geometry stays constant so files, folders,
-// skills, plugins, commands, and agents line up identically.
+// Single icon column shared by every menu row. Rows differ only by the glyph, its color, and the name — slot geometry stays constant so files, folders, skills, plugins, commands, and agents line up identically.
 const COMPOSER_MENU_PANEL_ICON_SLOT_CLASS_NAME =
   "flex size-4 shrink-0 items-center justify-center text-muted-foreground/60";
 
@@ -118,11 +110,7 @@ export function ComposerMenuPanel(props: {
   );
 }
 
-// Props are destructured rather than read off a `props` object: `rowRef` lands on a JSX `ref`,
-// which makes React Compiler treat it as a ref — and through `props.rowRef` that verdict spreads
-// to the whole `props` object, so every later `props.x` read looks like a ref access during render
-// and the component bails out of compilation entirely. Separate bindings keep the verdict on
-// `rowRef` alone. Do not collapse these back into a `props` parameter.
+// props destructured not read off a `props` object: rowRef on a JSX ref makes React Compiler treat it as a ref, and via props.rowRef that verdict spreads to the whole object so every props.x read looks like a ref access in render → full bail. Do not collapse back into a props param.
 const ComposerMenuPanelItem = memo(function ComposerMenuPanelItem({
   row,
   isActive,

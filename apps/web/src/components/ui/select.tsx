@@ -20,10 +20,7 @@ import {
 
 const Select = SelectPrimitive.Root;
 
-// Every select popup uses a shared picker shell: "composer" is the app-wide
-// frosted picker (ComposerPickerSelectPopup), "settings" the settings variant
-// (SettingsSelectPopup). The legacy unstyled default surface was removed on
-// purpose — do not add it back.
+// every select popup uses a shared picker shell (composer frosted / settings variant); the legacy unstyled default was removed on purpose — do not add it back
 type SelectPopupSurface = "composer" | "settings";
 
 const settingsSelectOptionClassName = `[&>svg]:-mx-0.5 flex cursor-default select-none items-center ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} text-ui text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0 grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]`;

@@ -265,8 +265,7 @@ export function resolveCreatePrDialogExecution(
 export interface CreatePrDialogView {
   branchName: string | null;
   baseBranchName: string;
-  // The PR head does not exist on the remote yet: either the current branch is
-  // unpublished or a feature branch will be created off the default branch.
+  // The PR head does not exist on the remote yet: either the current branch is unpublished or a feature branch will be created off the default branch.
   isNewBranch: boolean;
   // Submitting creates an auto-named feature branch first (default-branch flow).
   willCreateFeatureBranch: boolean;
@@ -942,8 +941,7 @@ export function resolveLiveThreadBranchUpdate(input: {
     return null;
   }
 
-  // Branch list not ready yet — don't treat "status arrived first" as out-of-sync
-  // or we permanently invalidate and show "Refreshing git status...".
+  // Branch list not ready yet — don't treat "status arrived first" as out-of-sync or we permanently invalidate and show "Refreshing git status...".
   if (input.threadBranch === null) {
     return null;
   }

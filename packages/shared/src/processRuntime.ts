@@ -1,7 +1,3 @@
-// FILE: processRuntime.ts
-// Purpose: Spawns Node child processes from platform-neutral launch requests.
-// Layer: Shared platform runtime
-
 import {
   execFile as nodeExecFile,
   spawn as nodeSpawn,
@@ -24,7 +20,7 @@ export { didProcessFailToSpawn } from "./processSpawnOutcome";
 type ProcessPlanningOptions = Pick<ProcessLaunchInput, "platform" | "requireExecutable">;
 
 type ProcessGroupOptions = {
-  /** Own a POSIX process group while keeping Windows launches attached for tree control. */
+  /** own a POSIX process group while keeping Windows launches attached for tree control */
   readonly ownProcessGroup?: boolean;
 };
 
@@ -87,7 +83,6 @@ function runtimeOptions<T extends ProcessPlanningOptions & ProcessGroupOptions>(
   return nodeOptions;
 }
 
-/** Spawn a process without exposing platform-specific Node flags to callers. */
 export function spawnProcess(
   command: string,
   args: ReadonlyArray<string>,
@@ -121,7 +116,6 @@ export function spawnProcess(
   );
 }
 
-/** Spawn an already planned command. Used by infrastructure that logs the plan first. */
 export function spawnPlannedProcess(
   plan: ProcessLaunchPlan,
   options?: RuntimeSpawnOptions & { readonly stdio?: PipeStdio },
@@ -151,7 +145,7 @@ export function spawnPlannedProcess(
   );
 }
 
-/** Synchronous counterpart used by bounded discovery and compatibility probes. */
+/** sync counterpart used by bounded discovery and compatibility probes */
 export function spawnProcessSync(
   command: string,
   args: ReadonlyArray<string>,
@@ -176,7 +170,7 @@ export function spawnProcessSync(
   }) as SpawnSyncReturns<string> | SpawnSyncReturns<Buffer>;
 }
 
-/** Callback-compatible execFile for SDK hooks that require that interface. */
+/** callback-compatible execFile for SDK hooks that require that interface */
 export function execProcessFile(
   command: string,
   args: ReadonlyArray<string>,

@@ -1,8 +1,3 @@
-// FILE: -threadDetailOwnership.ts
-// Purpose: Decides which thread detail slices the event router may keep and which it must free.
-// Layer: Route utility
-// Depends on: Thread ids only, so the rule stays testable without a store or transport.
-
 import type { ThreadId } from "@synara/contracts";
 
 /**

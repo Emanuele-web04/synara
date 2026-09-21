@@ -1,8 +1,3 @@
-// FILE: automationFailurePolicy.test.ts
-// Purpose: Locks down the failure-policy vocabulary shared by the dialog and detail page.
-// Layer: Web lib test
-// Depends on: automationFailurePolicy converters and option builder.
-
 import { describe, expect, it } from "vitest";
 
 import {

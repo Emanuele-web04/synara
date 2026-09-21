@@ -1,8 +1,3 @@
-// FILE: starredModels.ts
-// Purpose: Storage schema + pure helpers for starred model presets (provider + model + traits).
-// Layer: Web local-storage helpers used by the composer model picker and model cycle shortcuts.
-// Depends on: legacy per-provider favorite slugs (modelFavorites) for the one-time seed.
-
 import type { ProviderKind } from "@synara/contracts";
 import { Schema } from "effect";
 
@@ -11,9 +6,7 @@ import { FAVORITE_MODEL_STORAGE_KEYS, readFavoriteModelSlugs } from "./modelFavo
 
 export const STARRED_MODELS_STORAGE_KEY = "synara:starred-models:v1";
 
-// A starred preset pins the traits the user composed once so one click restores them.
-// `null` traits mean "leave whatever the provider currently uses" (legacy favorites,
-// models without that control).
+// a starred preset pins the traits the user composed once; null traits = leave whatever the provider currently uses
 export const StarredModelSchema = Schema.Struct({
   provider: Schema.String,
   model: Schema.String,
@@ -46,8 +39,7 @@ export function starredModelKey(
   ]);
 }
 
-// Drops entries for providers this build no longer knows and de-duplicates by key,
-// preserving the user's order.
+// Drops entries for providers this build no longer knows and de-duplicates by key, preserving the user's order.
 export function normalizeStarredModels(
   stored: ReadonlyArray<StoredStarredModel>,
 ): ReadonlyArray<StarredModel> {

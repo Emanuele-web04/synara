@@ -1,13 +1,3 @@
-// FILE: EnvironmentPanel.tsx
-// Purpose: Codex-style "Environment" panel. Consolidates the chat-header diff toggle,
-//          the composer-footer env/branch pickers, the header git actions, and the
-//          "Open in editor" controls into one vertical list of full-width rows. Always
-//          rendered as the same rounded floating card; the only difference is whether it
-//          overlays pinned top-right of the chat column (p-3 gutters). Full-width single
-//          chat also reserves transcript/composer inset; split panes and an open right dock
-//          use floating overlay only. The card surface and content are identical either way.
-// Layer: Environment panel container
-
 import type {
   AutomationDefinition,
   EditorId,
@@ -69,10 +59,7 @@ import {
   EnvironmentSectionDivider,
 } from "./EnvironmentRow";
 
-// Horizontal space (px) the docked card reserves on the right edge of the chat area.
-// Mirrors the card footprint — w-72 (288px) plus the p-3 wrapper gutters — so insetting
-// the chat content by this amount clears the overlay while leaving the transcript's
-// scrollbar pinned to the viewport's far right.
+// px the docked card reserves on the chat area's right edge — w-72 plus p-3 gutters so the transcript scrollbar stays pinned to the viewport edge
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
 
 const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
@@ -99,20 +86,15 @@ export interface EnvironmentPanelProps {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   activeThreadId: ThreadId | null;
-  /** Active provider for the usage row (same chip the header shows). */
   activeProvider: ProviderKind;
   /**
    * Whether the active thread is a Studio chat. Studio chats show the Output section:
    * the Outbox files THIS chat produced, so its output stays attached to the chat.
    */
   isStudioChat: boolean;
-  /** Ordinary cwd selected for this Studio chat; this is not a Git worktree. */
   studioFolderPath?: string | null;
-  /** Whether the active runtime exposes git actions (hides "Commit and Push" otherwise). */
   showGitActions: boolean;
-  /** Current diff-panel open state, so the "Changes" row reflects/toggles it. */
   diffOpen: boolean;
-  /** Heartbeat automations whose target is the active thread. */
   threadAutomations: readonly EnvironmentAutomationPanelItem[];
   /** Child side chats for a host thread. Null suppresses the section in embedded side chats. */
   sidechats: readonly EnvironmentSidechatPanelItem[] | null;
@@ -122,47 +104,29 @@ export interface EnvironmentPanelProps {
   diffTotals: RepoDiffTotals;
   /** Env/branch picker config — `variant` is supplied by the panel. */
   branchToolbar: Omit<BranchToolbarProps, "variant">;
-  /** Compact idle-generated chat memory for the top of the panel. */
   recap?: {
     readonly text: string | null;
     readonly status: "idle" | "pending" | "error";
     readonly updatedAt: string | null;
   } | null;
-  /** Per-thread pinned-message checklist (server-synced). */
   pinnedMessages: readonly PinnedMessage[];
-  /** Live text of pinned messages still present in the transcript (for labels/availability). */
   pinnedMessageTextById: ReadonlyMap<MessageId, string>;
-  /** Per-thread freeform scratchpad notes (server-synced). */
   notes: string;
-  /** Active project whose local instructions should be edited. */
   activeProjectId: ProjectId | null;
-  /** Per-project freeform instructions, persisted locally and optionally copied into notes. */
   projectInstructions: string;
-  /** Whether the current thread is server-backed enough to accept notepad updates. */
   canCopyProjectInstructionsToNotes: boolean;
-  /** Persist local project instruction edits. */
   onProjectInstructionsChange: (projectId: ProjectId, instructions: string) => void;
-  /** Copy/append current project instructions into the active thread's notepad. */
   onCopyProjectInstructionsToNotes: () => void;
-  /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
-  /** Open the shared automation editor for a thread-bound automation row. */
   onOpenAutomation: (definition: AutomationDefinition) => void;
-  /** Open the repository URL in the in-app browser panel. */
   onOpenGithubRepository?: (url: string) => void;
-  /** Scroll the transcript to a pinned message. */
   onJumpToPinnedMessage: (messageId: MessageId) => void;
-  /** Toggle a pinned message's done state (strikethrough; stays pinned). */
   onTogglePinnedMessageDone: (messageId: MessageId) => void;
-  /** Remove a message from the pinned checklist. */
   onUnpinMessage: (messageId: MessageId) => void;
-  /** Set (`null` clears to auto) a pinned message's label. */
   onRenamePinnedMessage: (messageId: MessageId, label: string | null) => void;
   /** Persist updated notes for the given thread (bound per section instance, not the active thread). */
   onNotesChange: (threadId: ThreadId, notes: string) => Promise<void>;
-  /** Open the in-app editor workspace view (the Editor section's default first row). */
   onOpenEditorView?: (() => void) | null;
-  /** Dismiss the panel overlay — invoked after actions that open the dock. */
   onClose: () => void;
   /** Registers the panel's "Commit and Push" row as the target for the global shortcut. */
   onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
@@ -251,8 +215,7 @@ export function EnvironmentPanel({
   const openRightDockPane = useRightDockStore((store) => store.openPane);
   const { additions, deletions, hasChanges } = diffTotals;
 
-  // Disable the Changes row only when the diff cannot be opened *and* is not already open
-  // (so an open diff stays toggleable closed even when there are no pending changes).
+  // disable Changes only when the diff can't open AND isn't already open — an open diff must stay toggleable closed
   const changesDisabled = diffDisabledReason !== null && !diffOpen;
   const showRecap = Boolean(recap?.text) || recap?.status === "pending";
   const markdownCwd = openInTarget ?? gitCwd ?? undefined;
@@ -500,9 +463,7 @@ export function EnvironmentPanel({
     </div>
   );
 
-  // Top-right overlay pinned to the chat column with p-3 edge gutters (same footprint in
-  // split panes and when the right dock is open). Docked mode additionally insets transcript
-  // content; floating overlays only without stealing flex width from the narrow chat pane.
+  // top-right overlay pinned to the chat column; docked mode also insets transcript content, floating overlays only
   return (
     <div
       className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}

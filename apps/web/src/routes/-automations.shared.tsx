@@ -167,7 +167,6 @@ export {
   type ScheduleKind,
 };
 
-/** Starter prompts surfaced behind the composer's "Use template" button. */
 export const AUTOMATION_TEMPLATES: readonly {
   readonly label: string;
   readonly name: string;
@@ -229,7 +228,6 @@ export function runStatusVariant(
   }
 }
 
-/** Status-colored dot/icon class for a single run, shared by the detail history and triage rows. */
 export function runStatusDotClassName(status: AutomationRun["status"]): string {
   switch (runStatusVariant(status)) {
     case "success":
@@ -260,11 +258,6 @@ export function isRowInteractiveEventTarget(
   return Boolean(target.closest("button,a,input,textarea,select,[contenteditable='true']"));
 }
 
-/**
- * Leading status glyph for a single run row: a quiet check for success, otherwise a
- * status-colored dot. Shared by the detail history and the list triage rows so both
- * surfaces read identically.
- */
 export function RunStatusIndicator({
   status,
   className,
@@ -371,11 +364,6 @@ export function canCancelAutomationRun(run: AutomationRun): boolean {
   );
 }
 
-/**
- * Plain-language warning for a latest run that needs the user's attention, or null when
- * the run ended normally (or is still progressing). Drives the amber glyph and the
- * subtitle warning segment on automation list rows.
- */
 export function automationAttentionLabel(run: AutomationRun): string | null {
   switch (run.status) {
     case "waiting-for-approval":
@@ -404,20 +392,11 @@ export function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
   );
 }
 
-/**
- * Icon + tint for an automation list row's leading status glyph.
- * - Live runs spin with a circular loading glyph.
- * - Completed successful runs show a checkmark circle.
- * - Failed/cancelled/interrupted runs keep the warning exclamation.
- * - Scheduled (enabled with a future next run) shows a clock.
- * - Paused automations show a pause glyph.
- */
 export function automationListRowIcon(
   definition: AutomationDefinition,
   latestRun: AutomationRun | null,
 ): { readonly name: string; readonly className: string } {
-  // Pausing prevents future dispatches but does not cancel an in-flight run, so the
-  // active run state must take precedence over the definition's enabled flag.
+  // Pausing prevents future dispatches but does not cancel an in-flight run, so the active run state must take precedence over the definition's enabled flag.
   if (isLiveRun(latestRun)) {
     return {
       name: "loading-circle",
@@ -425,8 +404,7 @@ export function automationListRowIcon(
     };
   }
   if (!definition.enabled) {
-    // Auto-disabled after consecutive failures is a problem to look at, not a pause the
-    // user chose — keep the warning glyph so the row doesn't read as intentionally idle.
+    // Auto-disabled after consecutive failures is a problem to look at, not a pause the user chose — keep the warning glyph so the row doesn't read as intentionally idle.
     if (definition.disabledReason === "failures") {
       return { name: "exclamation-circle", className: "size-4 text-amber-500" };
     }
@@ -645,10 +623,7 @@ export function rollbackAutomationDefinitionPatch(
       const next: Record<string, unknown> = { ...definition };
       for (const key of Object.keys(input)) {
         if (key === "id") continue;
-        // A newer optimistic patch or authoritative stream event may already have
-        // replaced this field while the failed request was in flight. Only undo the
-        // value this mutation itself installed; otherwise an older failure can erase
-        // the newer edit.
+        // A newer optimistic patch or authoritative stream event may already have replaced this field while the failed request was in flight. Only undo the value this mutation itself installed; otherwise an older failure can erase the newer edit.
         if (!Object.is(next[key], (input as unknown as Record<string, unknown>)[key])) {
           continue;
         }
@@ -683,8 +658,7 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
     ...automationDefinitionUpdateMutationOptions((input) =>
       ensureNativeApi().automation.update(input),
     ),
-    // Optimistically merge the patch so inline edits on the detail page feel instant; the
-    // server's authoritative definition (with recomputed nextRunAt) arrives via the stream.
+    // Optimistically merge the patch so inline edits on the detail page feel instant; the server's authoritative definition (with recomputed nextRunAt) arrives via the stream.
     onMutate: (input) => {
       const previous = queryClient.getQueryData<AutomationListResult>(automationQueryKey);
       const previousDefinition =
@@ -705,9 +679,7 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: automationQueryKey }),
     onError: (error, input, context) => {
-      // A failed update would otherwise leave its optimistic merge in the cache until the
-      // next stream tick. Roll back just this patch's fields — not the whole snapshot, which
-      // would also erase concurrent edits' merges (see rollbackAutomationDefinitionPatch).
+      // roll back just this patch's fields, not the whole snapshot — that would also erase concurrent edits' optimistic merges
       const previousDefinition = context?.previousDefinition;
       if (previousDefinition) {
         queryClient.setQueryData<AutomationListResult>(automationQueryKey, (prev) =>
@@ -775,12 +747,10 @@ export function useAutomations(onRunStarted?: (threadId: ThreadId) => void) {
   };
 }
 
-/** Subtle labeled pill used in the automation composer toolbar. */
 const CHIP_CLASS =
   "gap-1.5 rounded-lg px-2 font-normal text-[var(--color-text-foreground-secondary)]";
 type CadenceOption = { readonly value: string; readonly label: string };
 
-/** Heartbeat run-count presets ("" = unlimited). */
 const MAX_ITERATION_PRESETS: readonly CadenceOption[] = [
   { value: "", label: "Unlimited" },
   { value: "10", label: "10 runs" },
@@ -804,8 +774,6 @@ export function maxIterationOptions(
   return [{ value, label: maxIterationLabel(value) }, ...MAX_ITERATION_PRESETS];
 }
 
-// Shown at the top of an automation's detail panel when saving or manual run actions need
-// one-time risk approval.
 export function AutomationApprovalBanner({
   warnings,
   busy,

@@ -1,8 +1,3 @@
-/**
- * Droid ACP support - builds the Factory Droid `droid exec --output-format acp` command and resolves auth.
- *
- * @module DroidAcpSupport
- */
 import { existsSync } from "node:fs";
 import * as nodeOs from "node:os";
 import * as nodePath from "node:path";
@@ -84,7 +79,6 @@ export interface DroidCliResolutionOptions {
   readonly pathExists?: (candidate: string) => boolean;
 }
 
-/** Uses shared executable resolution, then Factory's provider-specific POSIX fallback. */
 export function resolveDroidCliBinaryPath(
   binaryPath?: string | null,
   options: DroidCliResolutionOptions = {},
@@ -179,15 +173,7 @@ export const makeDroidAcpRuntime = (
     return ServiceMap.getUnsafe(acpContext, AcpSessionRuntime);
   });
 
-/**
- * Applies the requested model and reasoning effort over ACP. `droid exec`
- * ignores `-m`/`-r` when running in ACP mode (the session inherits the user's
- * `~/.factory` settings defaults), so `session/set_config_option` is the only
- * mechanism that actually switches the session's model. The model is applied
- * first because it determines which reasoning-effort values are valid. The
- * shared runtime validates values against the advertised options and skips
- * the RPC when the current value already matches.
- */
+// `droid exec` ignores -m/-r in ACP mode (session inherits ~/.factory defaults) — session/set_config_option is the only real switch; model first since it determines valid effort values
 export function applyDroidAcpModelSelection<E>(input: {
   readonly runtime: Pick<AcpSessionRuntimeShape, "setConfigOption">;
   readonly model: string;
@@ -212,7 +198,6 @@ export function applyDroidAcpModelSelection<E>(input: {
   });
 }
 
-/** Applies Droid's native read-only spec mode before a Plan-mode prompt is dispatched. */
 export function applyDroidAcpInteractionMode<E>(input: {
   readonly runtime: Pick<AcpSessionRuntimeShape, "setConfigOption" | "setMode">;
   readonly interactionMode?: ProviderInteractionMode;
@@ -284,10 +269,6 @@ function droidModelDescriptor(
   };
 }
 
-/**
- * Reads the model catalog from ACP and reselects each model so Droid returns that
- * model's current reasoning choices. Discovery runs in a disposable session.
- */
 export function discoverDroidAcpModels(
   runtime: Pick<AcpSessionRuntimeShape, "getConfigOptions" | "setConfigOption">,
 ): Effect.Effect<ProviderListModelsResult, AcpErrors.AcpError> {

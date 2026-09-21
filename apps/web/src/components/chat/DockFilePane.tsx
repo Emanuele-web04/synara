@@ -1,10 +1,3 @@
-// FILE: DockFilePane.tsx
-// Purpose: Right-dock pane that previews one workspace file through the shared
-//          WorkspaceFilePreview. Markdown opens already parsed (rendered); the
-//          shared header carries the source toggle and open-in-editor controls.
-// Layer: Chat right-dock UI
-// Exports: DockFilePane
-
 import type { ChatFileReference } from "~/lib/chatReferences";
 import type { FileCommentSelection } from "~/lib/fileComments";
 import { WorkspaceFilePreview } from "../WorkspaceFilePreview";

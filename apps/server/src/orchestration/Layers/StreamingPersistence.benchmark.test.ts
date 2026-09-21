@@ -26,7 +26,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 
-// Opt-in only. Each invocation uses a fresh process and a disposable database.
+// opt-in only — fresh process and disposable database per invocation
 it.skipIf(!process.env.SYNARA_STREAMING_BENCHMARK_OUTPUT)(
   "measures the production streaming engine",
   async () => {
@@ -110,7 +110,7 @@ it.skipIf(!process.env.SYNARA_STREAMING_BENCHMARK_OUTPUT)(
           const memory = process.memoryUsage();
           peakRss = Math.max(peakRss, memory.rss);
           peakHeapUsed = Math.max(peakHeapUsed, memory.heapUsed);
-          // Yield every 100 chunks so timer delay has a reproducible sampling window.
+          // yield every 100 chunks so timer delay has a reproducible sampling window
           await setImmediate();
         }
       }

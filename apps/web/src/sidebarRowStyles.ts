@@ -1,9 +1,3 @@
-// FILE: sidebarRowStyles.ts
-// Purpose: Shared layout and interaction tokens for sidebar header/thread rows.
-// Layer: Sidebar UI styling
-// Exports: row dimension, radius, hover/active, header + thread row class names
-
-/** Compact sidebar row height shared by projects, threads, chats, and settings nav. */
 export const SIDEBAR_ROW_HEIGHT_CLASS_NAME =
   "min-h-[var(--app-density-row-height,1.75rem)] h-[var(--app-density-row-height,1.75rem)]";
 
@@ -26,18 +20,10 @@ export const SIDEBAR_ROW_ACTIVE_CLASS_NAME =
 
 export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
 
-/**
- * Resting foreground for primary sidebar item labels and their accompanying
- * leading/pin icons (inactive thread name, project/folder name, folder + pin
- * glyphs). Sits just below the full-foreground active row so resting items read
- * clearly without competing with the selected thread.
- */
 export const SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME = "text-foreground/95";
 
-/** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
 export const SIDEBAR_SECTION_LABEL_CLASS_NAME = "text-ui font-normal text-muted-foreground/58";
 
-/** Project/chat/settings header rows and settings sidebar nav items. */
 export const SIDEBAR_HEADER_ROW_CLASS_NAME = [
   "flex w-full min-w-0 cursor-pointer items-center text-left select-none",
   SIDEBAR_ROW_HEIGHT_CLASS_NAME,
@@ -48,7 +34,6 @@ export const SIDEBAR_HEADER_ROW_CLASS_NAME = [
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
 ].join(" ");
 
-/** Thread rows nested under a project. */
 export const SIDEBAR_THREAD_ROW_BASE_CLASS_NAME = [
   "w-full translate-x-0 cursor-pointer justify-start text-left select-none",
   SIDEBAR_ROW_HEIGHT_CLASS_NAME,
@@ -57,12 +42,10 @@ export const SIDEBAR_THREAD_ROW_BASE_CLASS_NAME = [
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
 ].join(" ");
 
-/** Spacing between a header row and its nested thread list, and between thread rows. */
 export const SIDEBAR_NESTED_LIST_GAP_CLASS_NAME = "gap-0.5";
 
 export const SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME = "pt-0.5";
 
-/** Sidebar row groups whose resting status fades to yield its slot to a hover toolbar. */
 export type SidebarHoverRevealGroup = "activity-row" | "project-header" | "thread-row";
 
 /**

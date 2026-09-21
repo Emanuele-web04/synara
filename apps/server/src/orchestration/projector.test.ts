@@ -73,7 +73,6 @@ function makeSessionSetEvent(input: {
   });
 }
 
-// Projects "thread-1" through creation and a running session on "turn-1".
 async function projectThreadWithRunningTurn(input: { createdAt: string; startedAt: string }) {
   const afterCreate = await Effect.runPromise(
     projectEvent(
@@ -461,7 +460,6 @@ describe("orchestration projector", () => {
             occurredAt: now,
             commandId: "cmd-invalid",
             payload: {
-              // missing required threadId
               projectId: "project-1",
               title: "demo",
               modelSelection: {
@@ -811,8 +809,7 @@ describe("orchestration projector", () => {
 
     const afterRunning = await projectThreadWithRunningTurn({ createdAt, startedAt });
 
-    // Stop-requested flows emit "interrupted" while keeping the turn active until
-    // the provider's terminal event decides the real outcome.
+    // stop-requested flows emit "interrupted" while keeping the turn active until the provider's terminal event decides
     const afterStopRequested = await Effect.runPromise(
       projectEvent(
         afterRunning,
@@ -1122,7 +1119,7 @@ describe("orchestration projector", () => {
       completedAt,
       assistantMessageId: null,
     });
-    // The stale event's earlier occurredAt must not regress the thread stamp.
+    // the stale event's earlier occurredAt must not regress the thread stamp
     expect(afterStaleRunningSession.threads[0]?.updatedAt).toBe(completedAt);
   });
 
@@ -1986,8 +1983,7 @@ describe("orchestration projector", () => {
           role: "assistant",
           text: delta,
           streaming: true,
-          // First delta arrives without a turn binding; later deltas must not
-          // rebind an already-bound message.
+          // first delta arrives unbound — later deltas must not rebind an already-bound message
           turnId: index === 0 ? null : index === 3 ? "turn-other" : "turn-1",
         }),
       ),
@@ -1999,7 +1995,7 @@ describe("orchestration projector", () => {
         streaming: false,
         turnId: "turn-2",
       }),
-      // A late delta for an earlier message must update it in place.
+      // a late delta for an earlier message must update it in place
       messageEvent({
         sequence: 8,
         messageId: "assistant-1",
@@ -2028,7 +2024,6 @@ describe("orchestration projector", () => {
     expect(assistant?.turnId).toBe("turn-1");
     expect(thread?.messages[2]?.text).toBe("next");
 
-    // The non-streaming finalization replaces the accumulated text.
     const finalized = await Effect.runPromise(
       projectEvent(
         state,

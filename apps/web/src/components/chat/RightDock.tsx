@@ -1,8 +1,3 @@
-// FILE: RightDock.tsx
-// Purpose: Tabbed multi-pane right sidebar shell (browser, diff, terminal, sidechat, git).
-// Layer: Chat right-dock UI
-// Depends on: ui/sidebar primitive, right-dock pane metadata, and a caller-provided pane renderer.
-
 import {
   type CSSProperties,
   type ReactNode,
@@ -51,17 +46,11 @@ import {
 } from "./rightDockPaneMeta";
 import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 
-// Shared sizing defaults for dock hosts: the resize floor for a single readable pane and the
-// "half the shell, but never cramped" opening width. The thread route tunes its own values
-// around the composer; simpler hosts (e.g. the /pull-requests route) use these as-is.
+// shared dock sizing defaults: resize floor for a readable pane + "half the shell, never cramped" opening width
 export const RIGHT_DOCK_MIN_WIDTH = 26 * 16;
 export const RIGHT_DOCK_DEFAULT_WIDTH = "max(28rem, calc(50vw - 8rem))";
 
-// Pane kinds whose content has a natural width, opened at that size rather than
-// at the even split. The device pane frames a portrait phone, so its useful
-// width is whatever lets the phone reach full height: a ~19.5:9 chassis stays
-// height-bound well past 480px, and opening narrower only shrinks the device
-// while leaving empty space above and below it.
+// the device pane frames a portrait phone — a ~19.5:9 chassis stays height-bound well past 480px, so opening narrower only shrinks the device
 const RIGHT_DOCK_PREFERRED_WIDTH: Partial<Record<RightDockPaneKind, number>> = {
   device: 38 * 16,
 };
@@ -72,13 +61,11 @@ interface RightDockProps {
   defaultWidth: string;
   shouldAcceptWidth: (context: { nextWidth: number; wrapper: HTMLElement }) => boolean;
   paneLabelOverrides?: Record<string, string | undefined>;
-  // Per-pane tab glyph overrides (same shape as label overrides) — e.g. a pull request pane
-  // swapping the generic kind icon for its live state glyph.
+  // Per-pane tab glyph overrides (same shape as label overrides) — e.g. a pull request pane swapping the generic kind icon for its live state glyph.
   paneIconOverrides?: Record<string, ReactNode | undefined>;
   addMenuKinds: readonly RightDockPaneKind[];
   launcherItems?: readonly RightDockLauncherItem[];
-  // Single-pane hosts omit selection so their lone tab label is static; multi-pane chat hosts
-  // provide the callback and keep the normal selectable-tab behavior.
+  // Single-pane hosts omit selection so their lone tab label is static; multi-pane chat hosts provide the callback and keep the normal selectable-tab behavior.
   onSelectPane?: ((paneId: string) => void) | undefined;
   onClosePane: (paneId: string) => void;
   onCollapse: () => void;
@@ -143,12 +130,7 @@ function RightDockTab(props: {
   );
 }
 
-// Persist which keep-mounted panes (e.g. terminals) have been activated so they
-// stay in the DOM while another tab is selected, pruned to live panes so closed
-// panes drop out and the set never leaks across thread switches. The set is
-// The rendered set is derived synchronously so a kept pane never unmounts for a
-// frame. A layout effect commits that set for the next render without mutating a
-// ref during render (which is unsafe when React replays or abandons work).
+// keep-mounted panes stay in the DOM while another tab is selected; the set is derived synchronously so a kept pane never unmounts for a frame — a layout effect commits it for the next render without mutating a ref during render
 function useKeepMountedPaneIds(
   panes: readonly RightDockPane[],
   activePane: RightDockPane | null,
@@ -186,17 +168,12 @@ export function RightDock(props: RightDockProps) {
   const onSelectPane = props.onSelectPane;
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
   const browserRuntimeMode = props.browserRuntimeMode ?? "live";
-  // The dock is the right-most surface when open, so its header sits under the
-  // fixed Windows caption cluster — reserve the same gutter the chat header uses.
+  // The dock is the right-most surface when open, so its header sits under the fixed Windows caption cluster — reserve the same gutter the chat header uses.
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
 
   const keepMountedPaneIds = useKeepMountedPaneIds(props.state.panes, activePane);
-  // The dock must open as an exact 50/50 split of the chat shell. The CSS
-  // default can only approximate half (it cannot observe the resizable left
-  // sidebar), so on every open we measure the shell row hosting chat + dock and
-  // pin the dock width to exactly half of it. Mid-session drags still resize
-  // freely; the next open re-centers the split.
+  // dock must open as exact 50/50 of the chat shell — the CSS default can't observe the resizable sidebar, so on open measure the shell row and pin dock width to half; drags resize freely, next open re-centers
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const expansionKey = props.motionKey ?? "dock";
@@ -228,8 +205,7 @@ export function RightDock(props: RightDockProps) {
     }));
     siblings.forEach((element) => {
       element.inert = true;
-      // Electron drag regions can intercept clicks through an overlapping panel.
-      // Hide the covered surface as well as removing it from keyboard navigation.
+      // Electron drag regions can intercept clicks through an overlapping panel. Hide the covered surface as well as removing it from keyboard navigation.
       element.style.visibility = "hidden";
     });
     return () => {
@@ -254,9 +230,7 @@ export function RightDock(props: RightDockProps) {
     if (!wrapper || !shell) {
       return;
     }
-    // A phone-shaped pane has a natural width: half the shell leaves the device
-    // stranded in empty space, so kinds that render a fixed-aspect object open
-    // at their own comfortable size instead of the even split.
+    // A phone-shaped pane has a natural width: half the shell leaves the device stranded in empty space, so kinds that render a fixed-aspect object open at their own comfortable size instead of the even split.
     const preferredWidth = activePaneKind ? RIGHT_DOCK_PREFERRED_WIDTH[activePaneKind] : undefined;
     const openWidth = preferredWidth ?? Math.round(shell.getBoundingClientRect().width / 2);
     if (openWidth > 0) {
@@ -266,10 +240,7 @@ export function RightDock(props: RightDockProps) {
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );
-  // Motion allowance keyed to the current motionKey: a key change (reposition/
-  // remount) derives straight back to "suppressed" in that same render, and the
-  // rAF below re-enables motion once the suppressed frame has painted. Mounting
-  // with the dock open starts suppressed for the same reason.
+  // motion allowance keyed to motionKey: a key change derives back to suppressed in the same render; rAF re-enables once the suppressed frame paints
   const [motionState, setMotionState] = useState<{
     key: RightDockProps["motionKey"];
     allow: boolean;
@@ -286,10 +257,7 @@ export function RightDock(props: RightDockProps) {
     return () => window.cancelAnimationFrame(frameId);
   }, [props.motionKey, shouldSuppressChromeMotion]);
 
-  // Smooth drawer-style easing for the open/close slide. `ease-linear` (the
-  // sidebar default) reads as stepped/janky on the wide dock; this curve front-
-  // loads motion and settles softly. Applied to both the width gap and the
-  // sliding container so they stay in lockstep.
+  // smooth drawer easing — ease-linear reads stepped on the wide dock; applied to both width gap and sliding container so they stay in lockstep
   const chromeMotionClass = shouldSuppressChromeMotion
     ? SIDEBAR_OFFCANVAS_MOTION_SUPPRESSED_CLASS
     : SIDEBAR_OFFCANVAS_MOTION_CLASS;
@@ -404,9 +372,7 @@ export function RightDock(props: RightDockProps) {
             {renderedPanes.map((pane) => {
               const isActive = pane.id === activePane?.id;
               const isVisible = isActive && props.state.open;
-              // Keep-mounted panes that are not the active tab are already
-              // hydrated; browser panes may use an explicit runtime mode so a
-              // floating browser can own the live guest while the dock stays preview-only.
+              // Keep-mounted panes that are not the active tab are already hydrated; browser panes may use an explicit runtime mode so a floating browser can own the live guest while the dock stays preview-only.
               const runtimeMode: DockPaneRuntimeMode =
                 pane.kind === "browser"
                   ? browserRuntimeMode

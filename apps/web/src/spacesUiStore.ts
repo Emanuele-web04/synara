@@ -1,6 +1,3 @@
-// FILE: spacesUiStore.ts
-// Purpose: Keeps per-window Space selection and last working-context restoration.
-
 import type { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 

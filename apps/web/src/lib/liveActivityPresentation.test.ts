@@ -55,11 +55,9 @@ describe("live activity presentation", () => {
     expect(formatLiveActivityMeta(quietSubagent, nowMs, { subagent: true })).toBe(
       "Subagent working · 4m 55s elapsed",
     );
-    // Same activity without the subagent hint keeps the generic idle wording.
     expect(formatLiveActivityMeta(quietSubagent, nowMs)).toBe(
       "No activity for 4m 54s · 4m 55s elapsed",
     );
-    // Terminal states are unaffected by the hint.
     expect(
       formatLiveActivityMeta(
         { ...quietSubagent, state: "failed", lastActivityAt: "2026-07-26T14:04:55.000Z" },
@@ -77,7 +75,6 @@ describe("live activity presentation", () => {
       progress: 1,
     });
 
-    // A tool call that simply succeeded says so with its own verb; no status tail.
     expect(formatLiveActivityMeta(completed, Date.parse("2026-07-26T14:03:00.000Z"))).toBeNull();
 
     expect(

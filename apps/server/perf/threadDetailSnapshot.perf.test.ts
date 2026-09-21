@@ -1,6 +1,4 @@
-// Perf probe: cost of the per-thread detail snapshot RPC and the replay poll against a
-// copy of a real Synara database. Run with:
-//   SYNARA_PERF_DB=/tmp/synara-perf/state.copy.sqlite bunx vitest run perf/threadDetailSnapshot.perf.test.ts
+// perf probe: per-thread detail snapshot RPC + replay poll cost against a copy of a real Synara DB. Run: SYNARA_PERF_DB=/tmp/synara-perf/state.copy.sqlite bunx vitest run perf/threadDetailSnapshot.perf.test.ts
 import { writeFileSync } from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
@@ -77,7 +75,7 @@ describe.skipIf(!DB)("thread detail snapshot perf", () => {
               activities = snapshot.value.thread.activities.length;
             }
           }
-          // Replay poll: the client asks for thread events after its cursor; steady state = empty.
+          // replay poll = client's events-after-cursor request; steady state is empty
           const replayMs: number[] = [];
           for (let i = 0; i < SAMPLES; i += 1) {
             const t0 = performance.now();

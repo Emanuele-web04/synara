@@ -1,15 +1,4 @@
-// FILE: useThrottledStreamingValue.ts
-// Purpose: Rate-limit how often a fast-changing streamed value reaches an expensive
-//          consumer (e.g. a Shiki re-highlight of a growing code block) while a message is
-//          streaming, without ever dropping the final value.
-// Layer: Web UI streaming primitive
-// Exports: useThrottledStreamingValue, planThrottledCommit (pure, unit-tested)
-// Why: The reveal cadence (useSmoothStreamedText, ~25 commits/s) is right for prose but
-//      far too fast for consumers whose cost grows with the value — re-tokenizing a whole
-//      code block 25×/s is quadratic in its length. This hook passes the first change
-//      through immediately, then coalesces further changes to at most one per
-//      `intervalMs` (trailing edge always delivered). When `active` is false the value is
-//      returned verbatim, so settled content never lags.
+// reveal cadence is right for prose but too fast for consumers whose cost grows with the value (Shiki re-highlight) — first change passes through, then coalesces to trailing edge; inactive returns verbatim so settled content never lags
 
 import { useEffect, useRef, useState } from "react";
 
@@ -33,8 +22,7 @@ export function planThrottledCommit(
 }
 
 export function useThrottledStreamingValue<T>(value: T, active: boolean, intervalMs: number): T {
-  // Testable env: jsdom's timers are fake and performance.now() is mocked – throttling
-  // would coalesce indefinitely and make streaming appear stuck. Bypass.
+  // Testable env: jsdom's timers are fake and performance.now() is mocked – throttling would coalesce indefinitely and make streaming appear stuck. Bypass.
   const isTestableEnv =
     typeof window === "undefined" ||
     (typeof process !== "undefined" &&
@@ -66,7 +54,6 @@ export function useThrottledStreamingValue<T>(value: T, active: boolean, interva
       return;
     }
     if (timerRef.current !== null) {
-      // A trailing commit is already scheduled; it reads the latest value when it fires.
       return;
     }
     timerRef.current = window.setTimeout(() => {

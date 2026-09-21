@@ -73,7 +73,6 @@ let stagingBasePromise: Promise<string> | undefined;
 const testConfigurations = new WeakMap<WebContents, WorkspaceUploadTestConfiguration>();
 const testStagingBasePromises = new Map<string, Promise<string>>();
 
-/** Test-only injection for a sandbox-safe fake Electron userData root and small quota fixtures. */
 export const configureWorkspaceUploadForTests = (
   webContents: WebContents,
   configuration: WorkspaceUploadTestConfiguration,
@@ -174,11 +173,6 @@ const inspectWorkspaceUploadFiles = async (
   return { canonicalRoot, files };
 };
 
-/**
- * Resolve both the workspace and every requested file through the filesystem.
- * Checking the lexical candidate and final real path prevents `..`, absolute
- * paths and symlink/junction escapes on every supported platform.
- */
 export const resolveWorkspaceUploadFiles = async (
   workspaceRoot: string | null | undefined,
   paths: readonly string[],
@@ -216,9 +210,6 @@ const initializeStagingBase = async (userDataRoot: string): Promise<string> => {
   await mkdir(privateRuntimeRoot, { recursive: true, mode: 0o700 });
   await verifyPrivateDirectory(privateRuntimeRoot);
 
-  // A prior process may have crashed while Chromium still held staged paths.
-  // The application is single-instance per userData root, so replacing this
-  // private subtree once per process deterministically removes those leftovers.
   const stagingBase = join(privateRuntimeRoot, STAGING_DIRECTORY_NAME);
   await rm(stagingBase, { recursive: true, force: true });
   await mkdir(stagingBase, { mode: 0o700 });
@@ -306,8 +297,6 @@ const removeReservedDirectoryFromDisk = async (
     releaseAccounting(state, accounting);
     return true;
   } catch {
-    // Keep failed removals charged. This intentionally fails closed: a later
-    // upload cannot amplify disk or inode use merely because cleanup failed.
     return false;
   }
 };
@@ -328,8 +317,6 @@ const removeRetainedDirectory = (
       }
       return true;
     } catch {
-      // Leave both the entry and its accounting in place so a later lifecycle
-      // cleanup can retry without ever freeing quota for files still on disk.
       return false;
     }
   })();
@@ -470,9 +457,6 @@ const copyVerifiedFile = async (
       uploadError("BrowserUploadFileUnsupported");
     }
 
-    // The descriptor, not the mutable workspace path, is the source of every
-    // byte passed to Chromium. Rechecking the live path catches parent or final
-    // component swaps that happened while the descriptor was being opened.
     const livePath = await realpath(file.path);
     const liveStatus = await stat(livePath);
     if (livePath !== file.path || !hasSameFileIdentity(openedStatus, liveStatus)) {
@@ -575,11 +559,6 @@ export const uploadBrowserFiles = async (
     );
     throwIfAborted(signal);
 
-    // Retain the private staged copies before issuing the command. A failed CDP
-    // response can still mean the effect committed, so once Chromium has seen
-    // these paths they live until the document navigates or its WebContents is
-    // destroyed. This path is isolated from workspace-sandboxed providers;
-    // full-access mode is deliberately a trusted same-user filesystem mode.
     if (!retainReservedDirectory(runtime.webContents, reservation, staged.directory)) {
       untrackedStagingDirectory = staged.directory;
     }
@@ -613,9 +592,6 @@ await target.setInputFiles(${JSON.stringify(filesForChromium)});
 return {};`,
     });
     if (result.code) {
-      // These codes are decided before setInputFiles ran, so the staged copies
-      // can never be consumed; release them instead of holding the quota until
-      // the document navigates.
       const state = reservation?.state;
       const accounting = state?.directories.get(retainedDirectory);
       if (state && accounting)
@@ -642,9 +618,5 @@ return {};`,
     } else if (reservation && !reservation.settled) {
       releaseUnusedReservation(reservation);
     }
-    // Once the command was attempted, real Electron WebContents cleanup is
-    // owned by its lifecycle because the selection may already have committed
-    // despite a transport error. Synthetic runtimes without lifecycle events
-    // cannot retain a usable selection and are cleaned here.
   }
 };

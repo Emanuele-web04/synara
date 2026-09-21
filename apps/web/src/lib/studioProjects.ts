@@ -1,8 +1,3 @@
-// FILE: studioProjects.ts
-// Purpose: Manage the hidden Studio project container that backs Studio chat threads.
-// Layer: Web orchestration helper
-// Exports: Studio project lookup, creation, and prewarm helpers.
-
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import type { DraftThreadState } from "../composerDraftStore";
@@ -27,8 +22,7 @@ import { newCommandId, newProjectId } from "./utils";
 
 const pendingStudioCreationByWorkspaceRoot = new Map<string, Promise<ProjectId | null>>();
 
-// A successful create's follow-up sync gets a longer retry window than duplicate recovery
-// (~2.3s vs ~0.75s): the row is guaranteed to arrive eventually, so patience beats failing.
+// a successful create's follow-up sync gets a longer retry window than duplicate recovery (~2.3s vs ~0.75s) — the row is guaranteed to arrive eventually so patience beats failing
 const CREATED_CONTAINER_SYNC_MAX_ATTEMPTS = 10;
 
 interface StudioContainerCandidate {
@@ -46,10 +40,7 @@ export function isStudioContainerProject(
     return false;
   }
   const studioWorkspaceRoot = resolveServerStudioWorkspaceRoot(paths);
-  // Until the server welcome delivers the Studio root, trust the kind alone: rejecting here
-  // would briefly mis-partition Studio threads (sidebar segments, Kanban, empty landing) while
-  // the app boots. Once the root is known, keep the containment check so a container whose
-  // cwd drifted outside the configured root is treated as orphaned rather than as Studio.
+  // until the welcome delivers the Studio root trust the kind alone — rejecting would mis-partition Studio threads during boot; once known, keep the containment check so a drifted container is orphaned not Studio
   if (!studioWorkspaceRoot) {
     return true;
   }
@@ -73,10 +64,7 @@ export function findStudioContainerProject<T extends Pick<Project, "cwd" | "kind
   paths: ServerWorkspacePaths,
 ): T | null {
   const candidates = projects.filter((project) => isStudioContainerProject(project, paths));
-  // Prefer the canonical container (cwd exactly the Studio root) over any studio-kind row
-  // nested beneath it, so ensure/create flows never bind new Studio chats to a nested project.
-  // isStudioContainerProject stays broad on purpose: nested rows still classify as Studio for
-  // partitioning, they just never win the container lookup.
+  // prefer the canonical container (cwd exactly the root) over nested studio-kind rows so ensure/create never binds chats to a nested project; isStudioContainerProject stays broad on purpose — nested rows still classify as Studio for partitioning
   const studioWorkspaceRoot = resolveServerStudioWorkspaceRoot(paths);
   if (studioWorkspaceRoot) {
     const canonical = candidates.find((project) =>
@@ -112,10 +100,7 @@ export function findStudioDraftThreadId(input: {
   return null;
 }
 
-// Matches a container row by id + studio kind only. Root containment is deliberately NOT
-// required here: the id comes from our own create or the server's ownership error, and the
-// server stores the CANONICALIZED (realpath) root — comparing it against the raw configured
-// string would wrongly reject the container whenever the Studio path contains a symlink.
+// match by id+kind only — root containment deliberately NOT required: the server stores the CANONICALIZED root and comparing against the raw configured string would wrongly reject the container when the path contains a symlink
 function findStudioContainerCandidateById<T extends StudioContainerCandidate>(
   projects: readonly T[],
   projectId: ProjectId,
@@ -127,9 +112,7 @@ interface StudioRecoverySnapshot {
   readonly projects: readonly StudioContainerCandidate[];
 }
 
-// Waits (shared retry/backoff loop, see projectCreateRecovery.ts) until the given container id
-// is visible in the local store: checks the store first, then pulls fresh shell snapshots,
-// syncing one in only once it actually contains the project. Resolves null when it never shows.
+// wait until the container id is visible in the local store — check store first, then pull fresh shell snapshots, syncing one in only once it contains the project
 async function waitForStudioContainerInStore(
   api: NonNullable<ReturnType<typeof readNativeApi>>,
   projectId: ProjectId,
@@ -173,10 +156,7 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
     return null;
   }
 
-  // Same shape as ensureHomeChatProject: never consult the local store before the first shell
-  // snapshot. Store rows only ever come from server syncs today, but waiting first keeps this
-  // safe even if project rows ever become locally persisted or partially populated. Bound the
-  // wait so a stuck connection surfaces a user-visible error instead of hanging forever.
+  // never consult the local store before the first shell snapshot — waiting keeps this safe even if project rows ever become locally persisted; bound the wait so a stuck connection surfaces an error
   const hydrated = await waitForProjectSnapshotHydration({
     timeoutMs: PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS,
   });
@@ -219,9 +199,7 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
           if (recoveredProjectId) {
             return recoveredProjectId;
           }
-          // The root is owned by a project that isn't a Studio container (the server enforces
-          // cross-kind ownership). Adopting a user's visible project into the hidden container
-          // would make it vanish from Projects, so surface the conflict instead.
+          // the root owned by a non-Studio project: adopting a user's visible project into the hidden container would make it vanish from Projects — surface the conflict
           throw new Error(
             `Studio can't use "${workspaceRoot}" because another project already uses that folder. Remove or move that project, then retry.`,
             { cause: error },
@@ -230,10 +208,7 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
       }
       throw error;
     }
-    // Make the fresh container visible in the local store before returning, so segment
-    // derivation and thread partitioning never see a draft pointing at an unknown project.
-    // The result matters: returning the id anyway on a slow snapshot would reopen exactly
-    // that window, so fail with a retryable error instead — the retry finds the container.
+    // make the container visible in the store before returning so derivation/partitioning never see a draft pointing at an unknown project — returning the id anyway on a slow snapshot would reopen that window, so fail with a retryable error
     const syncedContainer = await waitForStudioContainerInStore(api, projectId, {
       maxAttempts: CREATED_CONTAINER_SYNC_MAX_ATTEMPTS,
     });
@@ -250,8 +225,7 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
 }
 
 export function prewarmStudioProject(paths: ServerWorkspacePaths): void {
-  // Prewarming is best-effort. The interactive creation path reports failures;
-  // background startup must not leak a rejected promise into the app or test runner.
+  // Prewarming is best-effort. The interactive creation path reports failures; background startup must not leak a rejected promise into the app or test runner.
   void ensureStudioProject(paths).catch(() => undefined);
 }
 

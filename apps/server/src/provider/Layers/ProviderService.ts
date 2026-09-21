@@ -1,14 +1,3 @@
-/**
- * ProviderServiceLive - Cross-provider orchestration layer.
- *
- * Routes validated transport/API calls to provider adapters through
- * `ProviderAdapterRegistry` and `ProviderSessionDirectory`, and exposes a
- * unified provider event stream for subscribers.
- *
- * It does not implement provider protocol details (adapter concern).
- *
- * @module ProviderServiceLive
- */
 import {
   EventId,
   ProviderCompactThreadInput,
@@ -110,7 +99,6 @@ export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
   readonly canonicalEventLogger?: EventNdjsonLogger;
   readonly runtimeIdleStopMs?: number;
-  /** Test/embedding override for the lossless runtime-event fan-out budget. */
   readonly runtimeEventBufferCapacity?: number;
   /** Production journal hook. The event must be durable before this effect returns. */
   readonly persistRuntimeEvent?: (
@@ -121,7 +109,6 @@ export interface ProviderServiceLiveOptions {
     event: ProviderRuntimeEvent,
     cause: string,
   ) => Effect.Effect<void, unknown>;
-  /** Test override for supervised event retry timing. */
   readonly runtimeEventRetryBaseDelayMs?: number;
   readonly runtimeEventRetryMaxDelayMs?: number;
   /** Server-authoritative start gate. Omit only in isolated tests and embedded callers. */
@@ -217,12 +204,7 @@ type InteractionResponse =
   | { readonly kind: "approval"; readonly input: ProviderRespondToRequestInput }
   | { readonly kind: "userInput"; readonly input: ProviderRespondToUserInputInput };
 
-/**
- * Hard deadlines for provider lifecycle calls. Every caller of these paths
- * holds a serialized resource (the per-thread lifecycle lock, an orchestration
- * command slot, or the provider command reactor's delivery lock), so an
- * unbounded adapter call is a process-wide stall, not a local one.
- */
+// hard deadlines on lifecycle calls: every caller holds a serialized resource (thread lifecycle lock, command slot, reactor delivery lock), so an unbounded adapter call is a process-wide stall
 const PROVIDER_START_SESSION_TIMEOUT = Duration.seconds(60);
 const PROVIDER_STOP_SESSION_TIMEOUT = Duration.seconds(10);
 const PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING = "priorTranscriptBootstrapPending";
@@ -275,9 +257,6 @@ function toRuntimePayloadFromSession(
     cwd: session.cwd ?? null,
     model: session.model ?? null,
     activeTurnId: nonEmptyTrimmed(session.activeTurnId) ?? null,
-    // `thread.session.set` types both as trimmed-non-empty-or-null, so a blank
-    // provider string has to become an explicit "absent" rather than reaching
-    // the schema as "".
     lastError: nonEmptyTrimmed(session.lastError) ?? null,
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(extra?.providerOptions !== undefined ? { providerOptions: extra.providerOptions } : {}),
@@ -333,12 +312,7 @@ function hasResumeCursor(value: unknown): boolean {
   return value !== null && value !== undefined;
 }
 
-/**
- * True for events that settle a turn/session lifecycle (as opposed to stream
- * or item-level events). Terminal events are the only stale-generation events
- * that may still be processed: they are the sole signal that can settle a
- * thread whose runtime died after its lifecycle generation was rotated away.
- */
+// terminal events are the only stale-generation events that may still process — the sole signal that can settle a thread whose runtime died after its generation rotated away
 function isTerminalRuntimeEvent(event: ProviderRuntimeEvent): boolean {
   return (
     event.type === "turn.completed" ||
@@ -367,8 +341,7 @@ function runtimeStatusForEvent(
     case "session.exited":
     case "turn.completed":
     case "turn.aborted":
-      // A completed turn can still carry a resume cursor, but it must not keep
-      // the desktop app treating the provider process as active after restart.
+      // a completed turn can carry a resume cursor but must not keep the app treating the provider process as active after restart
       return "stopped";
     case "runtime.error":
       return "error";
@@ -391,9 +364,7 @@ function shouldRefreshResumeCursorForEvent(event: ProviderRuntimeEvent): boolean
 }
 
 function runtimeLastErrorForEvent(event: ProviderRuntimeEvent): string | null | undefined {
-  // A blank message must not degrade to `null`: null means "clear the error",
-  // which would erase the very failure being reported. Fall back to an honest
-  // constant instead.
+  // a blank message must not degrade to null (which clears the error) — fall back to an honest constant
   if (event.type === "runtime.error")
     return nonEmptyTrimmed(event.payload.message) ?? "Provider runtime reported an error.";
   if (event.type === "session.state.changed")
@@ -486,8 +457,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const runtimeIdleTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
     const liveRuntimeTaskIds = new Map<ThreadId, Set<string>>();
     const runtimeTaskSettlementWaiters = new Map<ThreadId, Set<() => void>>();
-    // Fired idle callbacks outlive their timer map entry, so use generations to
-    // invalidate async stop work when new user work starts in that gap.
+    // fired idle callbacks outlive their timer map entry — generations invalidate async stop work when new work starts in the gap
     const runtimeIdleGenerations = new Map<ThreadId, symbol>();
     const runtimeIdleCleanupGenerations = new Map<ThreadId, symbol>();
     const runtimeIdleStopsInFlight = new Map<ThreadId, Promise<void>>();
@@ -530,9 +500,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const scheduleRuntimeIdleStop = (threadId: ThreadId) => {
       clearRuntimeIdleTimer(threadId);
-      // A parent turn can finish while provider-native tasks keep running in
-      // the same subprocess. Those tasks own the runtime until the last one
-      // settles, even though the adapter session otherwise looks idle-ready.
+      // provider-native tasks keep running in the same subprocess after the parent turn finishes — they own the runtime until the last settles
       if ((liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0) {
         return;
       }
@@ -586,8 +554,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (current?.size === 0) runtimeTaskSettlementWaiters.delete(threadId);
             }),
           ),
-          // A new task can become visible while the previous last task settles.
-          // Recheck before allowing credential rotation to stop the runtime.
+          // A new task can become visible while the previous last task settles. Recheck before allowing credential rotation to stop the runtime.
           Effect.andThen(waitForLiveRuntimeTasksToSettle(threadId)),
         );
       });
@@ -758,8 +725,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return;
         case "session.exited":
           clearLiveRuntimeTasks(event.threadId);
-          // Adapters may emit this before descendant cleanup is verified.
-          // An owned idle teardown must keep its retry until the barrier passes.
+          // Adapters may emit this before descendant cleanup is verified. An owned idle teardown must keep its retry until the barrier passes.
           if (runtimeIdleCleanupGenerations.has(event.threadId)) {
             return;
           }
@@ -864,9 +830,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       { readonly version: number; readonly resumeCursor: unknown }
     >();
 
-    // Runtime events are where adapters surface provider-native ids. Capture
-    // the live cursor before queueing the durable write so shutdown cannot
-    // delete the adapter session while an earlier event is waiting on SQLite.
+    // capture the live cursor before queueing the durable write — shutdown can't delete the session while an earlier event waits on SQLite
     const captureResumeCursorFromActiveSession = (
       event: ProviderRuntimeEvent,
     ): Effect.Effect<unknown | null | undefined> => {
@@ -891,15 +855,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       );
     };
 
-    // Turn ids whose terminal runtime event has already been observed, keyed by
-    // thread. sendTurn consults this immediately before its post-dispatch
-    // "running" upsert: a turn that settles before that write lands (e.g. a
-    // pre-start cancellation) must not be re-marked as running afterwards.
-    // A single slot per thread is not enough — sendTurn is not serialized per
-    // thread, so overlapping sends can both settle pre-write and the second
-    // completion would evict the first turn's marker before its send checked
-    // it. Markers are retained only while dispatches are in flight, and each
-    // sendTurn consumes its own marker.
+    // settled-turn markers per thread consulted before sendTurn's post-dispatch "running" upsert — a turn settled pre-write (e.g. pre-start cancel) must not be re-marked running; overlapping sends each consume their own marker
     const recentlyCompletedTurnsByThread = new Map<ThreadId, Set<string>>();
     const recordRecentlyCompletedTurn = (threadId: ThreadId, turnId: string): void => {
       let turns = recentlyCompletedTurnsByThread.get(threadId);
@@ -922,12 +878,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       return true;
     };
 
-    // Serializes binding writes for a thread between the runtime-event handler
-    // and sendTurn's post-dispatch write. Without it a terminal event could
-    // land between sendTurn's settled-turn check and its "running" upsert and
-    // still be overwritten. Lifecycle events are low-frequency, so a per-thread
-    // mutex adds no meaningful contention. Queue registration is synchronous,
-    // so concurrent callers cannot mint two locks or overtake an earlier write.
+    // serializes binding writes between the runtime-event handler and sendTurn's post-dispatch write — without it a terminal event could land between the settled-check and the upsert and be overwritten
     const bindingWriteLock = makeKeyedLock<ThreadId>();
     const withBindingWriteLock = bindingWriteLock.withLock;
 
@@ -1018,9 +969,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       return withBindingWriteLock(
         input.threadId,
         Effect.gen(function* () {
-          // Older successful results stay retained while newer invocations are
-          // unresolved. If every newer generation fails, settlement promotes
-          // the newest retained result through this same persistence path.
           if (getDispatchState(input.threadId).latestGeneration !== input.generation) {
             return;
           }
@@ -1033,10 +981,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           }
           persistenceAttempted = true;
           if (completedBeforePersistence) {
-            // An existing row may already belong to a newer overlapping turn;
-            // the delayed result must not overwrite any of its metadata. With
-            // no row, preserve the live-fallback behavior by creating an
-            // explicitly stopped binding from the settled dispatch result.
+            // an existing row may belong to a newer overlapping turn — the delayed result must not overwrite it; with no row, create an explicitly stopped binding from the settled dispatch
             if (Option.isSome(yield* directory.getBinding(input.threadId))) {
               markPersistenceSucceeded(false);
               return;
@@ -1054,9 +999,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             return;
           }
 
-          // Clear again under the binding lock. This orders active-turn writes
-          // against terminal-event scheduling even if dispatch took long
-          // enough for an older terminal event to arrive in the meantime.
+          // Clear again under the binding lock. This orders active-turn writes against terminal-event scheduling even if dispatch took long enough for an older terminal event to arrive in the meantime.
           clearRuntimeIdleTimer(input.threadId);
           yield* directory.upsert({
             threadId: input.threadId,
@@ -1126,11 +1069,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const updateSessionBindingFromRuntimeEvent = (
       event: ProviderRuntimeEvent,
     ): Effect.Effect<void> => {
-      // Subagent-scoped events carry the parent thread id with the child
-      // identity in providerRefs. Their turn/session lifecycle belongs to the
-      // child thread and must not touch the parent binding — a stopped
-      // subagent would otherwise clear the parent's active turn and break
-      // main-thread interrupts for the rest of the turn.
+      // subagent-scoped events carry the parent thread id with child identity in providerRefs — their lifecycle belongs to the child thread and must never clear the parent's active turn
       if (event.providerRefs?.providerParentThreadId !== undefined) {
         return Effect.void;
       }
@@ -1178,12 +1117,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               event.lifecycleGeneration !== undefined &&
               binding.lifecycleGeneration !== event.lifecycleGeneration
             ) {
-              // The pump gate lets a stale terminal event through only when it
-              // can safely settle the thread: no current generation exists, or
-              // the event still names the turn the binding has active. Mirror
-              // that acceptance here, otherwise the accepted event is journaled
-              // and published but the durable binding keeps the dead turn active
-              // forever and the thread stays a reconciliation candidate.
+              // mirror the pump gate's stale-terminal acceptance here — otherwise the event is journaled/published but the binding keeps the dead turn active forever
               const staleTerminalSettlesThread =
                 isTerminalRuntimeEvent(event) &&
                 (lifecycle.currentGeneration(event.threadId) === undefined ||
@@ -1257,9 +1191,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const lastError = runtimeLastErrorForEvent(event);
             const resumeCursor = liveResumeCursor ?? binding.resumeCursor;
             const eventStatus = runtimeStatusForEvent(event, activeTurnId);
-            // Cursor capture happens before the write lock. An event that began
-            // before shutdown can therefore queue behind the stopped snapshot;
-            // retain its cursor without reviving the durable runtime state.
+            // cursor capture precedes the write lock — an event that began before shutdown queues behind the stopped snapshot; retain its cursor without reviving runtime state
             const preserveShutdownStop =
               shutdownStartedAt !== undefined && eventStatus === "running";
 
@@ -1290,9 +1222,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             if (event.type === "session.exited") {
               const dispatchState = dispatchStateByThread.get(event.threadId);
               if (dispatchState) {
-                // Invalidate adapter calls that were already in flight when the
-                // session exited, then retain only the generations needed for
-                // their eventual settlement/cleanup.
+                // invalidate adapter calls already in flight at session exit, then retain only the generations needed for their settlement/cleanup
                 dispatchState.latestGeneration = dispatchState.nextGeneration + 1;
                 dispatchState.nextGeneration = dispatchState.latestGeneration;
                 dispatchState.outstandingTurnIds.clear();
@@ -1346,28 +1276,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             lifecycle.currentGeneration(event.threadId) !== event.lifecycleGeneration
           ) {
             const currentGeneration = lifecycle.currentGeneration(event.threadId);
-            // A stale-generation event is normally noise from a superseded
-            // session, but terminal events are the exception: they are the
-            // only signal that can settle a turn whose runtime died after its
-            // generation was rotated or retired (a stop, a recovery, or an
-            // idle retire). Dropping them strands the thread "working" with a
-            // dead runtime until the reconciler or an app restart intervenes,
-            // and silently discards the very error that explains the death.
-            //
-            // A stale terminal event is safe to let through when either:
-            //  - no current generation exists (nothing newer can be corrupted
-            //    by settling the old session's state), or
-            //  - the event still names the turn the binding considers active
-            //    (a newer epoch has not started a different turn, so settling
-            //    this turn cannot clobber newer state).
+            // stale-generation terminal events are the exception to dropping: they're the only signal that can settle a turn whose runtime died after rotation — safe when no current generation exists or the event still names the binding's active turn
             const staleTerminalIsSettling =
               isTerminalRuntimeEvent(event) &&
               (currentGeneration === undefined || event.turnId !== undefined);
             if (!staleTerminalIsSettling) {
-              // Warn, not debug: a persistent mismatch silently discards every
-              // runtime event for the thread — the provider runs, the UI shows
-              // nothing, and the runtime reconciler later settles the turn as
-              // interrupted. This log line is the only way to see it happening.
+              // warn, not debug: a persistent mismatch silently discards every runtime event for the thread — this log is the only way to see it
               return Effect.logWarning("provider.session.stale_generation_event_ignored", {
                 threadId: event.threadId,
                 provider: event.provider,
@@ -1377,9 +1291,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               });
             }
             if (currentGeneration !== undefined) {
-              // A newer generation exists: only accept the stale terminal event
-              // when it still names the turn the binding has active. If the
-              // binding already moved on (or is gone), keep dropping it.
               return directory.getBinding(event.threadId).pipe(
                 Effect.flatMap((maybeBinding) => {
                   const binding = Option.getOrUndefined(maybeBinding);
@@ -1408,8 +1319,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 }),
               );
             }
-            // No current generation and the event is terminal: fall through so
-            // the stale session's exit/error settles the binding and projection.
           }
           return journalAndPublish(canonicalEvent);
         }),
@@ -1437,10 +1346,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             ),
           );
 
-        // Keep the retiring runtime's generation current until all of its
-        // background work has settled and the process is stopped. Otherwise
-        // its terminal task event would be rejected as stale and this drain
-        // could wait forever.
+        // keep the retiring runtime's generation current until its background work settles and the process stops — otherwise its terminal task event is rejected as stale and the drain waits forever
         yield* lifecycle.runCurrent(threadId, () =>
           Effect.gen(function* () {
             let binding = yield* getCurrentBinding();
@@ -1459,8 +1365,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
             yield* waitForLiveRuntimeTasksToSettle(threadId);
 
-            // The drain may have waited for a while. Re-read all durable
-            // routing state before stopping anything.
+            // The drain may have waited for a while. Re-read all durable routing state before stopping anything.
             binding = yield* getCurrentBinding();
             if (
               runtimePayloadRecord(binding.runtimePayload)[
@@ -1502,8 +1407,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ] === true;
             const hasActiveSession = yield* adapter.hasSession(threadId);
 
-            // A concurrent recovery may have won between the drain and restart
-            // phases. Adopt its fresh runtime instead of replacing it again.
+            // A concurrent recovery may have won between the drain and restart phases. Adopt its fresh runtime instead of replacing it again.
             if (hasActiveSession && !requiresCredentialRotation) {
               const existing = (yield* adapter.listSessions()).find(
                 (session) => session.threadId === threadId,
@@ -1548,8 +1452,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ...(hasPersistedResumeCursor ? { resumeCursor: binding.resumeCursor } : {}),
               runtimeMode: binding.runtimeMode ?? "full-access",
             };
-            // Prompt construction has already happened here. Only explicit startup
-            // may replace lost native history and request a transcript recap.
+            // Prompt construction has already happened here. Only explicit startup may replace lost native history and request a transcript recap.
             const resumed = yield* adapter.startSession(resumeStartInput);
             if (resumed.provider !== adapter.provider) {
               return yield* toValidationError(
@@ -1598,9 +1501,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         retiredGatewaySessionRecoveries.add(event.threadId);
 
         return Effect.gen(function* () {
-          // The terminal event is already durable and published. Rotate the
-          // retired bearer now, while the user is reading the response, so the
-          // next turn does not pay for process teardown and thread/resume.
+          // rotate the retired bearer while the user reads the response so the next turn doesn't pay for teardown+resume
           yield* Effect.yieldNow;
           const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
           if (!binding) return;
@@ -1627,11 +1528,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       });
     };
 
-    // Each Adapter has one supervised journal-first pump. Per-event retry holds
-    // the current queue item until durable acceptance succeeds; stream restart
-    // covers unexpected completion/defects without provider-specific fallbacks.
-    // Start the pumps only after proactive recovery is installed so even an
-    // immediately queued terminal event can schedule credential rotation.
+    // per-event retry holds the queue item until durable acceptance succeeds; pumps start only after proactive recovery is installed so an immediately queued terminal event can schedule rotation
     yield* Effect.forEach(adapters, (adapter) =>
       runProviderRuntimeEventPump({
         provider: adapter.provider,
@@ -1677,8 +1574,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       Effect.gen(function* () {
         const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
         if (!binding) {
-          // Startup extension prompts can fire before startSession has persisted
-          // the provider binding, but the adapter already owns a live session.
+          // Startup extension prompts can fire before startSession has persisted the provider binding, but the adapter already owns a live session.
           const liveAdapter = yield* findLiveSessionAdapter(input.threadId);
           if (liveAdapter) {
             if (input.allowRecovery) {
@@ -1706,14 +1602,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           runtimePayloadRecord(binding.runtimePayload)[
             AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
           ] === true;
-        // A live adapter session whose persisted generation no longer matches
-        // the thread's current generation is a zombie: its runtime events are
-        // rejected by the stale-generation gate, so a turn routed into it can
-        // produce no visible output and the thread appears wedged. Recovery-
-        // capable callers (turn sends) must replace it instead of fast-pathing
-        // into it. Control-plane callers (interrupts, responses) keep routing
-        // to the live session — stopping a wedged runtime is the user's escape
-        // hatch and must keep working.
+        // a live session whose persisted generation no longer matches is a zombie — its events are rejected, so sends must replace it; control-plane calls (interrupts, responses) keep routing since stopping a wedged runtime is the user's escape hatch
         const bindingMatchesCurrentGeneration =
           binding.lifecycleGeneration === undefined ||
           binding.lifecycleGeneration === lifecycle.currentGeneration(input.threadId);
@@ -1773,10 +1662,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           input.provider,
           input.runtimeMode,
         );
-        // An explicit start is the recovery authority for a failed retirement,
-        // but it must never interleave with one still in progress. Capture the
-        // exact settled fence so this replacement cannot delete a newer fence
-        // that was published while provider startup was running.
+        // an explicit start is the recovery authority for failed retirement — capture the exact settled fence so this replacement can't delete a newer fence published during startup
         const replacementFence = yield* waitForCurrentInterruptionFence(threadId);
         clearRuntimeIdleTimer(threadId);
         yield* waitForRuntimeIdleStop(threadId);
@@ -1837,14 +1723,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     ? { resumeCursor: effectiveResumeCursor }
                     : {}),
                 };
-                // A provider start that never returns holds this thread's
-                // lifecycle lock and the caller's command slot forever. Bound it,
-                // retire whatever the adapter may have half-spawned, and fail
-                // with text the caller can surface as a session error.
+                // a provider start that never returns holds the thread's lifecycle lock and the caller's command slot forever — bound it, retire the half-spawn, fail with surfaceable text
                 startupLifecycle.transition("starting");
                 startupLifecycle.transition("handshaking");
-                // The lifecycle is updated inside observeProviderStartup; these taps
-                // only log the already-recorded outcome.
                 const started = yield* observeProviderStartup(
                   startAdapterWithStaleDevinFallback(
                     adapter,
@@ -1974,9 +1855,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   Exit.isSuccess(exit)
                     ? Effect.void
                     : Effect.gen(function* () {
-                        // A provider switch is stop-first so one thread is never dual-owned.
-                        // If anything after the stop fails, retire a partially started
-                        // replacement before restoring the exact previous generation.
+                        // provider switch is stop-first so one thread is never dual-owned; on later failure retire the partial replacement before restoring the previous generation
                         if (replacementStarted) {
                           yield* adapter.stopSession(threadId);
                         }
@@ -2010,10 +1889,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                             providerOptions: previousProviderOptions,
                           }),
                         );
-                        // The restored runtime stamps its events with the exact
-                        // generation persisted above, so the coordinator must end
-                        // the run owning that generation and not the abandoned
-                        // replacement's.
+                        // the restored runtime stamps the persisted generation — the coordinator must end owning that one, not the abandoned replacement's
                         lease.adopt(previousGeneration);
                       }),
                 ),
@@ -2137,12 +2013,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const forkedSession = (yield* adapter.listSessions()).find(
           (session) => session.threadId === input.threadId,
         );
-        // Register the fork under a committed lifecycle generation. Writing the
-        // binding outside the coordinator lands it on the directory's "legacy"
-        // default while the coordinator has no entry for the thread at all, and
-        // any later generation adoption from that row (session recovery, the
-        // startup broadcast) diverges from what the live runtime stamps —
-        // silently discarding the thread's runtime events.
+        // register the fork under a committed generation — outside the coordinator the binding lands on "legacy" default and later adoptions diverge from what the runtime stamps, silently discarding events
         yield* lifecycle.run(input.threadId, (lease) =>
           Effect.gen(function* () {
             if (forkedSession) {
@@ -2235,8 +2106,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 "This provider cannot copy native conversations.",
               );
             }
-            // An earlier interrupted import may still own a subprocess even when
-            // it never managed to persist a directory binding.
+            // an earlier interrupted import may still own a subprocess even when it never persisted a binding
             yield* adapter.stopSession(input.threadId);
             return yield* Effect.gen(function* () {
               const forkedOption = yield* adapter.forkThread!({
@@ -2300,8 +2170,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 lastRuntimeEvent: "provider.thread.imported",
                 lastRuntimeEventAt: new Date().toISOString(),
               };
-              // Persist the native copy's cursor, even if the runtime is already
-              // stopped (Claude forks transcript files without starting a query).
+              // persist the copy's cursor even if the runtime is stopped — Claude forks transcript files without starting a query
               yield* withBindingWriteLock(
                 input.threadId,
                 directory.upsert({
@@ -2377,15 +2246,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               lastRuntimeEvent: "provider.sendTurn",
             };
             rememberSuccessfulTurnDispatch(persistenceInput);
-            // A turn can settle before this write lands (e.g. a pre-start
-            // cancellation completes inside the adapter fork); re-marking the
-            // thread as running then would strand it with a stale active turn.
-            // Durable metadata (model selection, resume cursor) is still
-            // persisted — status stays untouched (upsert keeps the existing
-            // value when omitted) and runtimePayload merges per key. The
-            // binding-write lock makes the check and the write atomic with the
-            // runtime-event handler, so a terminal event cannot slip between
-            // them and then be overwritten.
+            // a turn can settle before this write lands — never re-mark running; durable metadata still persists and the binding lock makes check+write atomic against terminal events
             yield* persistStartedTurn(persistenceInput);
             return turn;
           }),
@@ -2491,8 +2352,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           payload: rawInput,
         });
         let rotationStarted = false;
-        // Urgent: an interrupt is the user's only escape hatch from a wedged
-        // turn, so it must not queue behind a lifecycle mutation that hangs.
+        // Urgent: an interrupt is the user's only escape hatch from a wedged turn, so it must not queue behind a lifecycle mutation that hangs.
         const runInterrupt =
           input.providerThreadId === undefined ? lifecycle.runCurrentUrgent : lifecycle.runCurrent;
         const interruptActiveTurn = runInterrupt(input.threadId, (currentGeneration) =>
@@ -2574,10 +2434,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             }
 
             if (input.providerThreadId !== undefined) {
-              // Child and parent share one provider MCP transport. The adapter
-              // revokes that lease while stopping the child; persist the need
-              // to replace the still-running parent runtime before its next
-              // turn receives browser authority.
+              // child and parent share one MCP transport — the adapter revokes that lease stopping the child; persist the need to replace the parent runtime before its next turn gets browser authority
               yield* withBindingWriteLock(
                 input.threadId,
                 directory.upsert({
@@ -2591,10 +2448,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 }),
               );
               if (targetedInterruptKey !== undefined) {
-                // The adapter revokes the shared bearer before attempting its
-                // provider-native child stop. Tombstone at the same admission
-                // boundary: even an uncertain native failure must not let a
-                // duplicate stale Stop revoke the replacement runtime's lease.
+                // tombstone at the admission boundary — even an uncertain native failure must not let a duplicate stale Stop revoke the replacement runtime's lease
                 rememberTargetedChildInterrupt(targetedInterruptKey, {
                   lifecycleGeneration: bindingGeneration,
                   state: "uncertain",
@@ -2618,9 +2472,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
         return yield* Effect.uninterruptible(
           Effect.gen(function* () {
-            // Publish and settle the fence inside the same masked region. If
-            // this interrupt fiber is itself cancelled while runtime teardown
-            // is blocked, deferred interruption must not skip resolve/delete.
+            // publish+settle the fence inside one masked region — deferred interruption while teardown is blocked must not skip resolve/delete
             const fence = yield* acquireProviderInterruptionFence(input.threadId);
             const rotationExit = yield* Effect.exit(
               input.providerThreadId === undefined
@@ -2852,9 +2704,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               retireRuntimeIdleGeneration(input.threadId);
               return;
             }
-            // Adapter stop is an idempotent cleanup barrier. Even when the
-            // routable session is inactive, the adapter may retain ownership
-            // from a teardown whose exit proof previously failed.
+            // adapter stop is an idempotent cleanup barrier — even an unroutable session may retain ownership from a teardown whose exit proof failed
             yield* routed.adapter.stopSession(input.threadId);
             clearLiveRuntimeTasks(input.threadId);
             yield* waitForRuntimeIdleStop(input.threadId);
@@ -2910,8 +2760,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 resumeCursor = activeSession.resumeCursor;
               }
             }
-            // A non-routable session may still own an unreaped process tree.
-            // Retry the cleanup barrier before recording a stopped binding.
+            // A non-routable session may still own an unreaped process tree. Retry the cleanup barrier before recording a stopped binding.
             if (!isExpectedIdleStopCurrent()) {
               return;
             }
@@ -2977,9 +2826,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           retireRuntimeIdleGeneration(threadId, generation);
           return;
         }
-        // Once cleanup starts the adapter can disappear from listSessions
-        // before its descendants exit. The same idle generation still owns
-        // that cleanup; new work invalidates it before acquiring the lease.
+        // once cleanup starts the adapter can vanish from listSessions before descendants exit — the same idle generation still owns cleanup; new work invalidates it before acquiring the lease
         if (cleanupStarted) {
           yield* stopRuntimeSessionInternal({ threadId }, generation);
           return;
@@ -3002,8 +2849,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           retireRuntimeIdleGeneration(threadId, generation);
           return;
         }
-        // Live adapter snapshots can temporarily omit cursors even though the
-        // directory already persisted one from an earlier runtime event.
+        // Live adapter snapshots can temporarily omit cursors even though the directory already persisted one from an earlier runtime event.
         if (!hasResumeCursor(session.resumeCursor) && !hasResumeCursor(binding.resumeCursor)) {
           retireRuntimeIdleGeneration(threadId, generation);
           return;
@@ -3056,8 +2902,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
         yield* waitForRuntimeIdleStop(input.threadId);
         clearRuntimeIdleTimer(input.threadId);
-        // Share the runtime-event binding lock so a delayed session.exited
-        // update cannot restore the stale cursor after this explicit clear.
+        // Share the runtime-event binding lock so a delayed session.exited update cannot restore the stale cursor after this explicit clear.
         yield* lifecycle.run(input.threadId, (lease) =>
           withBindingWriteLock(
             input.threadId,
@@ -3075,10 +2920,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               if (!preserveActive) {
                 clearLiveRuntimeTasks(input.threadId);
               }
-              // A preserved runtime keeps stamping its events with the
-              // generation it was started under, so clearing the cursor must
-              // not re-label the thread with a generation that runtime will
-              // never emit.
+              // a preserved runtime stamps the generation it started under — clearing the cursor must not re-label the thread with a generation it will never emit
               const effectiveGeneration = preserveActive
                 ? (binding.lifecycleGeneration ?? lease.generation)
                 : lease.generation;
@@ -3213,14 +3055,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const routed = yield* resolveRoutableSession({
               threadId: input.threadId,
               operation: "ProviderService.rollbackConversation",
-              // Restart-based rollback only needs the persisted binding and must
-              // not replay the stale native cursor merely to close it again.
+              // Restart-based rollback only needs the persisted binding and must not replay the stale native cursor merely to close it again.
               allowRecovery: false,
             });
             if (routed.adapter.capabilities.conversationRollback === "restart-session") {
-              // Some provider protocols can resume but cannot rewind. Clear their
-              // native cursor so edit-and-resend cannot continue from stale history;
-              // ProviderCommandReactor bootstraps the retained transcript next turn.
+              // resumable-but-not-rewindable providers get their native cursor cleared — the reactor bootstraps the retained transcript next turn
               yield* clearSessionResumeCursor({ threadId: input.threadId });
             } else {
               const active = routed.isActive
@@ -3342,10 +3181,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           { concurrency: "unbounded", discard: true },
         ).pipe(Effect.andThen(settleConcurrentTeardowns(adapters, (adapter) => adapter.stopAll())));
 
-        // Each active-session write signals after it is queued on its per-thread
-        // lock. Provider teardown can therefore begin without waiting for an
-        // earlier slow write, while terminal events still queue behind the stop
-        // snapshot and become the final writer.
+        // each write signals once queued on its per-thread lock — teardown begins without waiting on a slow earlier write while terminal events queue behind the stop snapshot
         const shutdownWork: ReadonlyArray<
           Effect.Effect<void, ProviderAdapterError | ProviderSessionDirectoryWriteError, never>
         > = [persistActiveSessions, persistInactiveSessions, stopAdapters];
@@ -3389,12 +3225,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ),
             ),
           ),
-          // Keep subscriptions alive until adapters have emitted terminal
-          // events. Closing waits for an in-flight canonical event because its
-          // persistence and publication section is uninterruptible.
+          // keep subscriptions alive until terminal events are emitted — closing waits for an in-flight event whose persistence+publication is uninterruptible
           Effect.andThen(Scope.close(runtimeEventProducerScope, Exit.void)),
-          // Downstream subscribers transfer every published event into their
-          // own drainable workers before the publication owner is shut down.
           Effect.andThen(awaitRuntimeEventFanoutDrained),
           Effect.andThen(PubSub.shutdown(runtimeEventPubSub)),
         ),
@@ -3430,9 +3262,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       compactThread,
       closeRuntimeEvents,
       getRuntimeEventPumpHealth: () => Effect.sync(runtimeEventPumpHealth.snapshot),
-      // Each access creates a fresh PubSub subscription so that multiple
-      // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
-      // independently receive all runtime events.
       get streamEvents(): ProviderServiceShape["streamEvents"] {
         return Stream.fromPubSub(runtimeEventPubSub).pipe(Stream.map(({ event }) => event));
       },

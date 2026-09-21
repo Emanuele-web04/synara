@@ -5,10 +5,7 @@ export const DEFAULT_TERMINAL_ID = "default";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 
-// Dimension bounds for a PTY window. The OS `winsize` fields (`ws_col`/`ws_row`)
-// are unsigned 16-bit, so the only hard ceiling is 65535; these caps stay well
-// below that while comfortably covering ultrawide displays at small font sizes
-// (legitimate fits can exceed 400 columns). The lower bounds keep a usable shell.
+// winsize fields are u16 so 65535 is the hard ceiling; caps stay below while covering ultrawide fits at small fonts
 export const TERMINAL_MIN_COLS = 20;
 export const TERMINAL_MAX_COLS = 2000;
 export const TERMINAL_MIN_ROWS = 5;
@@ -44,10 +41,7 @@ export const TerminalOpenInput = Schema.Struct({
   cols: Schema.optional(TerminalColsSchema),
   rows: Schema.optional(TerminalRowsSchema),
   env: Schema.optional(TerminalEnvSchema),
-  // When false, the PTY is still drained and history is still maintained, but
-  // live `output` events are not broadcast. Used for headless background
-  // sessions (e.g. dev servers) whose output no renderer consumes. Defaults to
-  // true so interactive terminals stream as usual.
+  // false = still drained with history maintained, but no live output broadcast — for headless sessions like dev servers
   streamOutput: Schema.optional(Schema.Boolean),
 });
 export type TerminalOpenInput = Schema.Codec.Encoded<typeof TerminalOpenInput>;

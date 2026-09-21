@@ -1,6 +1,3 @@
-// FILE: BrowserAnnotationStrip.test.tsx
-// Purpose: Guards the compact, fixed-row browser annotation presentation.
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 

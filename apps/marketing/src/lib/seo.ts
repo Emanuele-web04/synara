@@ -1,9 +1,4 @@
-// FILE: lib/seo.ts
-// Purpose: Single source of truth for crawlable metadata, canonical URLs,
-//          JSON-LD builders, crawler allow-lists, and page metadata helpers.
-// Layer: shared metadata (server-importable).
-// Note: Page-level `openGraph` replaces the layout's shallow-merged field, so
-//       `pageMetadata` re-adds the global image anywhere a route customizes SEO.
+// page-level openGraph replaces the layout's shallow-merged field — re-add the global image wherever a route customizes SEO
 
 import type { Metadata } from "next";
 import { FAQ_ITEMS } from "@/data/faqs";
@@ -29,14 +24,9 @@ export const GITHUB_SPONSORS_URL = "https://github.com/sponsors/Emanuele-web04";
 export const X_PROFILE_URL = "https://x.com/emanueledpt";
 export const YOUTUBE_URL = "https://youtube.com/@emanueledpt";
 
-/**
- * Search/share title — brand first, then the high-intent provider keywords.
- * Kept deliberately separate from `PRODUCT_HERO_TITLE`: the on-page H1 sells the
- * outcome, while this title has to win the SERP/share-card keyword match.
- */
+// brand-first title with high-intent keywords, deliberately separate from the on-page H1 — this has to win the SERP/share-card match, the H1 sells the outcome
 export const SITE_TITLE = `${SITE_NAME} — AI Coding Workspace for Claude Code, Codex & Cursor`;
 
-/** Concise search/share description. The full definition lives in product.ts. */
 export const SITE_DESCRIPTION = PRODUCT_META_DESCRIPTION;
 
 export const SEO_KEYWORDS = [
@@ -62,7 +52,6 @@ export const SEO_KEYWORDS = [
   "open source AI coding app",
 ];
 
-/** The official 1200×600 share image, served from public/og.png. */
 export const OG_IMAGE = {
   url: "/og.png",
   width: 1200,
@@ -77,7 +66,6 @@ export const SITE_IMAGES = {
   darkScreenshot: "/synara-ui-dark.png",
 };
 
-/** Builds an absolute production URL for metadata, sitemaps, and structured data. */
 export function absoluteUrl(path = "/") {
   return new URL(path, SITE_URL).toString();
 }
@@ -90,10 +78,6 @@ export function jsonLdScript(value: unknown) {
   return JSON.stringify(value).replace(/</g, "\\u003c");
 }
 
-/**
- * schema.org structured data (Organization + WebSite + SoftwareApplication).
- * Rendered once in the root layout so it applies to every route.
- */
 export const SITE_JSONLD = {
   "@context": "https://schema.org",
   "@graph": [
@@ -241,10 +225,6 @@ export function releaseJsonLd(entry: ChangelogEntry) {
   };
 }
 
-/**
- * Sponsorship tiers as an OfferCatalog hanging off the sponsor page, so the
- * prices are machine-readable rather than trapped in the layout.
- */
 export function sponsorJsonLd(
   tiers: ReadonlyArray<{ label: string; amount: number; tagline: string }>,
 ) {
@@ -281,15 +261,7 @@ export function sponsorJsonLd(
   };
 }
 
-/**
- * The sponsor wall as an ItemList of the people credited on it.
- *
- * Takes an already-resolved `url` per sponsor rather than building a GitHub
- * profile link here: `sponsorLink()` in lib/sponsors owns that choice (it
- * prefers a sponsor's own site over their GitHub profile), and this module
- * can't import it — lib/sponsors imports GITHUB_SPONSORS_URL from here, so
- * reaching back the other way would make the two files circular.
- */
+// takes a resolved url per sponsor because sponsorLink() owns that choice — importing it here would make the two files circular (lib/sponsors imports GITHUB_SPONSORS_URL from here)
 export function sponsorsPageJsonLd(sponsors: ReadonlyArray<{ name: string; url: string }>) {
   return {
     "@context": "https://schema.org",

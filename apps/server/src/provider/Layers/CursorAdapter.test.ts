@@ -1,7 +1,3 @@
-// FILE: CursorAdapter.test.ts
-// Purpose: Characterizes Cursor's private Synara host-policy delivery.
-// Layer: Provider adapter tests
-
 import { SYNARA_HARNESS_POLICY_MARKER } from "../../agentGateway/harnessPolicy.ts";
 import { describe, expect, it } from "vitest";
 

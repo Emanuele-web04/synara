@@ -1,7 +1,3 @@
-// FILE: claudeCredentialKeepalive.test.ts
-// Purpose: Regression tests for the macOS Claude credential keepalive helper.
-// Layer: Provider utility tests.
-// Exports: Vitest coverage for apps/server/src/provider/claudeCredentialKeepalive.ts.
 import { describe, it, assert } from "@effect/vitest";
 
 import {

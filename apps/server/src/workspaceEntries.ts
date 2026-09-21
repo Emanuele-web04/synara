@@ -74,7 +74,6 @@ interface WorkspaceIndex {
 interface SearchableWorkspaceEntry extends ProjectEntry {
   normalizedPath: string;
   normalizedName: string;
-  /** Number of path segments; used to break score ties towards shallower entries. */
   depth: number;
 }
 
@@ -120,11 +119,7 @@ function toSearchableWorkspaceEntry(entry: ProjectEntry): SearchableWorkspaceEnt
   };
 }
 
-// Local filesystem search keeps its own normalizer instead of the shared
-// normalizeWorkspaceEntrySearchQuery: here a leading "." is meaningful — it
-// switches the walk to include dotfiles — so only mention/path noise is
-// stripped ("@" and "/" prefixes plus "./" pairs) while a dotfile prefix
-// like ".env" survives.
+// local fs search keeps its own normalizer — a leading "." switches the walk to include dotfiles so only mention/path noise is stripped while ".env" survives
 function normalizeLocalSearchQuery(input: string): string {
   let query = input.trim();
   while (query.startsWith("@") || query.startsWith("/") || query.startsWith("./")) {
@@ -172,10 +167,7 @@ function scoreEntry(entry: SearchableWorkspaceEntry, query: string): number | nu
 
   const { normalizedPath, normalizedName } = entry;
 
-  // Every match on the entry's own name outranks every match that only exists in
-  // its ancestry. A single matching directory ("central-icons-fill") otherwise
-  // promotes each of its thousands of children to the same score, burying the
-  // handful of entries the user actually named.
+  // every match on the entry's own name outranks every ancestry-only match — a single matching directory would otherwise promote each of its thousands of children to the same score
   if (normalizedName === query) return 0;
   if (normalizedPath === query) return 1;
   if (normalizedName.startsWith(query)) return 2;
@@ -204,8 +196,7 @@ function compareRankedWorkspaceEntries(
 ): number {
   const scoreDelta = left.score - right.score;
   if (scoreDelta !== 0) return scoreDelta;
-  // Equally scored entries: surface the shallower one first, so a top-level hit
-  // never sits below a deeply nested namesake, then fall back to a stable order.
+  // equally scored: shallower first so a top-level hit never sits below a deeply nested namesake
   const depthDelta = left.entry.depth - right.entry.depth;
   if (depthDelta !== 0) return depthDelta;
   return left.entry.path.localeCompare(right.entry.path);
@@ -437,7 +428,7 @@ function splitNullSeparatedPaths(input: string, truncated: boolean): string[] {
   const parts = input.split("\0");
   if (parts.length === 0) return [];
 
-  // If output was truncated, the final token can be partial.
+  // if output was truncated the final token can be partial
   if (truncated && parts[parts.length - 1]?.length) {
     parts.pop();
   }
@@ -525,7 +516,6 @@ async function filterGitIgnoredPaths(cwd: string, relativePaths: string[]): Prom
       return false;
     }
 
-    // git-check-ignore exits with 1 when no paths match.
     if (checkIgnore.code !== 0 && checkIgnore.code !== 1) {
       return false;
     }
@@ -747,10 +737,7 @@ async function buildWorkspaceIndex(cwd: string): Promise<WorkspaceIndex> {
   };
 }
 
-// Bumped on every invalidation so a build that STARTED before the
-// invalidation can never re-populate the cache with a pre-invalidation
-// snapshot when it completes. One counter per cwd ever invalidated — same
-// cardinality as projects, so the map needs no eviction.
+// bumped on every invalidation so a build that STARTED before it can never re-populate the cache with a pre-invalidation snapshot; one counter per cwd ever invalidated — same cardinality as projects, no eviction needed
 const workspaceIndexGenerations = new Map<string, number>();
 
 async function getWorkspaceIndex(cwd: string): Promise<WorkspaceIndex> {
@@ -778,8 +765,7 @@ async function getWorkspaceIndex(cwd: string): Promise<WorkspaceIndex> {
       return next;
     })
     .finally(() => {
-      // Only clear our own registration: an invalidation may have replaced it
-      // with a newer in-flight build, which must stay awaitable.
+      // only clear our own registration — an invalidation may have replaced it with a newer in-flight build that must stay awaitable
       if (inFlightWorkspaceIndexBuilds.get(cwd) === nextPromise) {
         inFlightWorkspaceIndexBuilds.delete(cwd);
       }
@@ -794,10 +780,7 @@ export function clearWorkspaceIndexCache(cwd: string): void {
   workspaceIndexGenerations.set(cwd, (workspaceIndexGenerations.get(cwd) ?? 0) + 1);
 }
 
-// Kick off the workspace index build without waiting for it. The search
-// palette calls this when it opens; getWorkspaceIndex caches the in-flight
-// build, so the first real query awaits the same promise instead of paying
-// for a cold index scan on the first keystroke.
+// kick off the index build without waiting — getWorkspaceIndex caches the in-flight build so the first real query awaits it instead of paying a cold scan on the first keystroke
 export function prewarmWorkspaceSearchIndex(
   input: ProjectPrewarmSearchIndexInput,
 ): ProjectPrewarmSearchIndexResult {
@@ -891,8 +874,7 @@ export async function searchWorkspaceEntries(
 }
 
 const CONTENT_SEARCH_DEFAULT_LIMIT = 50;
-// Bounds shared with the contracts schema so a request the client considers
-// valid can never fail schema decode here.
+// bounds shared with the contracts schema so a request the client considers valid can never fail decode here
 const CONTENT_SEARCH_MAX_LIMIT = PROJECT_SEARCH_CONTENT_MAX_LIMIT;
 const CONTENT_SEARCH_MIN_QUERY_LENGTH = PROJECT_SEARCH_CONTENT_MIN_QUERY_LENGTH;
 const CONTENT_SEARCH_MAX_FILE_BYTES = 512 * 1024;
@@ -901,7 +883,6 @@ const CONTENT_SEARCH_TIME_BUDGET_MS = 4_000;
 const CONTENT_SEARCH_LINE_READ_CONCURRENCY = 8;
 const CONTENT_SEARCH_MAX_LINE_LENGTH = PROJECT_SEARCH_CONTENT_MAX_LINE_LENGTH;
 
-// A file is treated as binary when its first 8 KiB contains a null byte.
 const CONTENT_SEARCH_BINARY_SNIFF_BYTES = 8 * 1024;
 
 interface ContentSearchMatch {
@@ -950,12 +931,7 @@ async function searchFileContent(
     }
 
     const contents = await fileHandle.readFile("utf8");
-    // Whole-file miss check before the line split: most files don't contain
-    // the query at all, and skipping the split + per-line scan cuts 50-68% off
-    // scan cost for typical queries (measured on this repo). The pathological
-    // case — a query matching a third of all files — pays ~36% extra on the
-    // files it hits, but the overall collect limit stops the scan after a
-    // handful of such files anyway.
+    // whole-file miss check before the line split — most files don't contain the query; skipping the split cuts 50-68% off typical scans (measured); the collect limit stops the pathological case anyway
     if (!contents.toLowerCase().includes(normalizedQuery)) {
       return [];
     }
@@ -982,10 +958,6 @@ async function searchFileContent(
   }
 }
 
-// Grep-style keyword search over the project's tracked workspace files.
-// Reuses the workspace index (git ls-files when available) so the file set
-// respects .gitignore, then scans file contents with a hard time budget and
-// per-file match caps so a query in a large repository stays responsive.
 export async function searchWorkspaceContent(
   input: ProjectSearchContentInput,
 ): Promise<ProjectSearchContentResult> {
@@ -1000,9 +972,7 @@ export async function searchWorkspaceContent(
   );
 
   const index = await getWorkspaceIndex(input.cwd);
-  // Scan every indexed file: the time budget is the only scan bound. A fixed
-  // file-count cap over the localeCompare-sorted index would permanently
-  // exclude directories late in the alphabet, silently, on every query.
+  // the time budget is the only scan bound — a fixed file-count cap on the sorted index would permanently exclude directories late in the alphabet, silently, on every query
   const filePaths = index.entries
     .filter((entry) => entry.kind === "file")
     .map((entry) => entry.path);
@@ -1055,13 +1025,7 @@ export async function searchWorkspaceContent(
   };
 }
 
-// Resolve a workspace-relative reference that omits its leading directories.
-// Agents (and rendered chat links) frequently cite a file by just its basename
-// (e.g. `chatReferences.test.ts`) or a partial tail (`lib/chatReferences.ts`),
-// which resolves to a non-existent path under the workspace root. Match it
-// against the shared workspace index by exact path or `/`-anchored suffix and
-// only resolve when exactly one file matches, so an ambiguous name (many
-// `index.ts`) stays unresolved rather than opening the wrong file.
+// agents and rendered links frequently cite a file by basename or partial tail which resolves to a non-existent path — match exact path or `/`-anchored suffix and only resolve when exactly one file matches so an ambiguous name stays unresolved
 function normalizedWorkspaceFileReference(reference: string): string | null {
   const trimmed = reference.trim();
   if (!isWorkspaceRelativePathSafe(trimmed)) {
@@ -1168,10 +1132,7 @@ async function directoryHasChildDirectories(absolutePath: string): Promise<boole
   }
 }
 
-// Resolve a client-supplied relative directory against the workspace root and
-// refuse anything that escapes it (absolute paths, "..", "a/../../b", ...).
-// Same containment rule as WorkspacePaths.resolveRelativePathWithinRoot, but
-// the workspace root itself (empty relative path) is a valid listing target.
+// the workspace root itself (empty relative path) is a valid listing target
 function resolveDirectoryWithinRoot(cwd: string, relativePath: string): string {
   if (path.isAbsolute(relativePath) || isWindowsAbsolutePath(relativePath)) {
     throw new Error("Directory path is outside the workspace root.");
@@ -1195,7 +1156,7 @@ export async function listWorkspaceDirectories(
   const resolvedTarget = relativePath
     ? resolveDirectoryWithinRoot(input.cwd, relativePath)
     : input.cwd;
-  // String containment above cannot see symlinks; re-check on canonical paths.
+  // string containment can't see symlinks — re-check on canonical paths
   const targetDirectory = await resolveRealPathWithinRoot(input.cwd, resolvedTarget);
   if (targetDirectory === null) {
     throw new Error("Directory path is outside the workspace root.");
@@ -1248,9 +1209,7 @@ const LOCAL_SEARCH_MAX_DEPTH = 6;
 const LOCAL_SEARCH_DEFAULT_LIMIT = 50;
 const LOCAL_SEARCH_TIME_BUDGET_MS = 600;
 const LOCAL_SEARCH_READDIR_CONCURRENCY = 16;
-// Directory names to skip during recursive local search. These are either
-// high-volume caches or user-private areas that would blow up a walk without
-// producing useful matches for a composer mention.
+// high-volume caches or user-private areas that would blow up a walk without producing useful matches
 const LOCAL_SEARCH_IGNORED_DIRECTORY_NAMES = new Set([
   ".git",
   ".hg",
@@ -1346,8 +1305,7 @@ export async function searchLocalEntries(
     Math.min(input.limit ?? LOCAL_SEARCH_DEFAULT_LIMIT, LOCAL_SEARCH_DEFAULT_LIMIT),
   );
   const includeFiles = input.includeFiles !== false;
-  // When the user explicitly searches for a dotfile prefix (`.ss`, `.en`) surface
-  // hidden entries; otherwise skip them so the walk is bounded and predictable.
+  // an explicit dotfile prefix surfaces hidden entries; otherwise skip them so the walk stays bounded
   const includeDotfiles = normalizedQuery.startsWith(".");
   const deadline = Date.now() + LOCAL_SEARCH_TIME_BUDGET_MS;
 

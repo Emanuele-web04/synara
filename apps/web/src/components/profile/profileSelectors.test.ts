@@ -1,8 +1,3 @@
-// FILE: profileSelectors.test.ts
-// Purpose: Covers profile selectors that bridge fast core stats with slower
-// token telemetry.
-// Layer: web profile feature tests.
-
 import type { ProfileStats, ProfileTokenStats } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -59,9 +54,7 @@ describe("profile selectors", () => {
     });
   });
 
-  // #1007: a provider with real turns (Grok) that never emits token telemetry
-  // must not silently disappear from the ranking once any other provider has
-  // token stats — callers need the list to disclose it instead.
+  // #1007: a provider with real turns but no token telemetry must not silently disappear from the ranking once any other provider has token stats
   it("surfaces providers with turns but no token telemetry instead of dropping them", () => {
     const grokStats = {
       ...baseStats,
@@ -86,9 +79,7 @@ describe("profile selectors", () => {
   });
 
   it("reports no unavailable providers once telemetry fully falls back to turns", () => {
-    // available: false forces the turns-based branch; that branch's providers
-    // are all represented by definition, so the stale unavailableProviders
-    // list from a not-yet-available token payload must not leak through.
+    // available:false forces the turns-based branch where all providers are represented — the stale unavailableProviders list must not leak through
     const notAvailable = {
       ...tokenStats,
       available: false,

@@ -1,6 +1,3 @@
-// FILE: providerUsage/providers/cursor.test.ts
-// Purpose: Cursor usage looks up state.vscdb with each OS's real Cursor user-data path.
-
 import nodePath from "node:path";
 
 import { describe, expect, it } from "vitest";

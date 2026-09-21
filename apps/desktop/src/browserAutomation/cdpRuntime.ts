@@ -29,12 +29,6 @@ export const throwIfAborted = (signal?: AbortSignal): void => {
   if (signal?.aborted) throw abortReason(signal);
 };
 
-/**
- * Waits for an Electron operation to drain after cancellation. The public tool
- * call is raced at the host boundary, so callers still receive cancellation
- * immediately, while the per-tab lock remains held until Chromium has stopped
- * touching the shared renderer.
- */
 export const drainOnAbort = async <T>(
   operation: Promise<T>,
   signal?: AbortSignal,
@@ -52,9 +46,7 @@ export const drainOnAbort = async <T>(
         () => undefined,
         () => undefined,
       );
-    } catch {
-      // Cancellation cleanup is best-effort; the original operation is still drained.
-    }
+    } catch {}
   };
   signal.addEventListener("abort", handleAbort, { once: true });
   try {
@@ -66,9 +58,6 @@ export const drainOnAbort = async <T>(
     throw error;
   } finally {
     signal.removeEventListener("abort", handleAbort);
-    // A mutating command's compensating stop/release is part of draining the
-    // operation. Keep the internal tab lock until Chromium has acknowledged it,
-    // while the host's public abort race still rejects immediately.
     if (abortCleanup) await abortCleanup;
   }
 };
@@ -149,10 +138,6 @@ export const sendCdpCommand = async <Result = unknown>(
     if (signal?.aborted) throw abortReason(signal);
     if (error instanceof BrowserAutomationHostError) throw error;
     if (errorContext.effectMayHaveCommitted) {
-      // Chromium accepted the command before the transport failure. Reissuing
-      // an arbitrary page function/evaluation could double-submit, double-click
-      // or duplicate another irreversible effect. Force observation and a new
-      // intention instead of presenting the failure as safely retryable.
       browserHostError({ code: "BrowserAmbiguousResult", tabId: runtime.tabId as BrowserTabId });
     }
     browserHostError({
@@ -224,8 +209,6 @@ export const callFunctionOn = async <Result = unknown>(
     },
     options.signal,
     {
-      // callFunctionOn executes caller-supplied JavaScript. Default to the safe
-      // classification; observation-only callers can explicitly opt out.
       effectMayHaveCommitted: options.effectMayHaveCommitted ?? true,
       onAbort: options.onAbort,
     },
@@ -261,8 +244,6 @@ export const observePage = async (
       { signal },
     ),
   ]);
-  // Promise.all would reject on the first aborted command and release the tab
-  // lock while its sibling CDP command was still running. Always drain both.
   if (layoutResult.status === "rejected") throw layoutResult.reason;
   if (pageResult.status === "rejected") throw pageResult.reason;
   const layout = layoutResult.value;

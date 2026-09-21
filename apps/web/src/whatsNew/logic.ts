@@ -1,11 +1,4 @@
-// FILE: whatsNew/logic.ts
-// Purpose: Pure, stateless helpers for the "What's new" surfaces.
-// Layer: shared UI logic (importable by hook, components, and tests).
-// Depends on: nothing runtime — only types below.
-//
-// The logic here deliberately avoids React, storage, and the changelog data.
-// That lets us unit-test version arithmetic and selection rules in isolation
-// and keeps the hook thin.
+// deliberately no React, storage, or changelog data — version arithmetic and selection rules stay unit-testable in isolation
 
 /**
  * A single feature highlight inside a release. Modelled after the
@@ -60,10 +53,6 @@ export function parseVersion(version: string): readonly [number, number, number]
   ] as const;
 }
 
-/**
- * Three-way version comparison. Returns a negative number when `a < b`, zero
- * when equal, and a positive number when `a > b`. Suitable for `Array.sort`.
- */
 export function compareVersions(a: string, b: string): number {
   const [majorA, minorA, patchA] = parseVersion(a);
   const [majorB, minorB, patchB] = parseVersion(b);
@@ -142,15 +131,12 @@ export type WhatsNewState =
 export function resolveWhatsNewState(inputs: WhatsNewInputs): WhatsNewState {
   const { entries, currentVersion, lastSeenVersion } = inputs;
 
-  // First-ever launch: record the current version and stay quiet. Showing a
-  // "What's new" dialog to a brand-new user on their first boot would feel
-  // like marketing spam.
+  // First-ever launch: record the current version and stay quiet. Showing a "What's new" dialog to a brand-new user on their first boot would feel like marketing spam.
   if (lastSeenVersion === null) {
     return { kind: "silent-bootstrap", nextLastSeenVersion: currentVersion };
   }
 
-  // Already up to date, or the user somehow downgraded. Either way, don't
-  // surface anything — we only move the marker forward, never backward.
+  // Already up to date, or the user somehow downgraded. Either way, don't surface anything — we only move the marker forward, never backward.
   if (compareVersions(currentVersion, lastSeenVersion) <= 0) {
     return { kind: "noop" };
   }
@@ -159,8 +145,7 @@ export function resolveWhatsNewState(inputs: WhatsNewInputs): WhatsNewState {
     (entry) => compareVersions(entry.version, currentVersion) === 0,
   );
   if (!currentEntry) {
-    // No curated notes for the installed build — silently advance so we
-    // don't re-evaluate on every launch.
+    // No curated notes for the installed build — silently advance so we don't re-evaluate on every launch.
     return { kind: "silent-bootstrap", nextLastSeenVersion: currentVersion };
   }
 

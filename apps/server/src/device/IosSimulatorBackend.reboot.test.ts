@@ -22,14 +22,10 @@ const DEVICE_LIST_JSON = JSON.stringify({
   },
 });
 
-/**
- * Stands in for the helper process. It models the one behavior this defect is
- * about: an attachment is bound to a boot generation, and a descriptor from a
- * previous boot fails the way the real helper fails.
- */
+/** models the defect: an attachment is bound to a boot generation, and a descriptor from a previous boot fails the way the real helper fails */
 class FakeHelper {
   attachCalls: Array<{ readonly udid: string; readonly force: boolean }> = [];
-  /** Bumped by the test to simulate the simulator rebooting underneath us. */
+  /** bumped by the test to simulate the simulator rebooting underneath us */
   bootGeneration = 1;
   running = true;
 
@@ -68,7 +64,7 @@ class FakeHelper {
     return this.attachedDevice!;
   }
 
-  /** Set by a test to make the next N injections report non-delivery. */
+  /** set to make the next N injections report non-delivery */
   undeliverableCalls = 0;
   requestCalls: string[] = [];
 
@@ -106,8 +102,7 @@ function makeBackend() {
       return simctlResult("");
     },
   });
-  // The helper is normally compiled on first attach; the fake stands in for the
-  // compiled binary so these tests never touch the toolchain.
+  // the fake stands in for the compiled binary so these tests never touch the toolchain
   Object.defineProperty(backend, "compileHelperIfNeeded", {
     value: async () => "/tmp/synara-device-test-cache/synara-device-helper",
   });
@@ -121,7 +116,7 @@ describe("stale descriptor detection", () => {
   });
 
   it("does not treat unrelated failures as stale descriptors", () => {
-    // A genuine refusal must surface, not trigger a silent re-attach loop.
+    // a genuine refusal must surface, not trigger a silent re-attach loop
     expect(isStaleDescriptorError(new Error("simulator is not booted"))).toBe(false);
     expect(isStaleDescriptorError(new Error("unknown method 'tap'"))).toBe(false);
   });
@@ -136,8 +131,7 @@ describe("simulator reboot", () => {
     helper.bootGeneration = 2;
     await backend.tap(DEVICE, 20, 20);
 
-    // The shutdown dropped the cached attachment, so this is a clean re-attach
-    // rather than a forced retry.
+    // the shutdown dropped the cached attachment — this is a clean re-attach
     expect(helper.attachCalls).toEqual([
       { udid: DEVICE, force: false },
       { udid: DEVICE, force: false },
@@ -148,8 +142,7 @@ describe("simulator reboot", () => {
     const { backend, helper } = makeBackend();
     await backend.tap(DEVICE, 10, 10);
 
-    // No shutdown call to observe: Simulator.app or the agent's own shell did
-    // it, so the only signal is the failure itself.
+    // no shutdown call to observe — Simulator.app or the agent's shell did it; the only signal is the failure
     helper.bootGeneration = 2;
     await backend.tap(DEVICE, 20, 20);
 
@@ -165,7 +158,6 @@ describe("simulator reboot", () => {
       await backend.shutdown(DEVICE);
     }
 
-    // Every cycle worked; none fell into the permanent-failure state.
     expect(helper.attachCalls).toHaveLength(3);
     expect(helper.attachCalls.every((call) => !call.force)).toBe(true);
   });
@@ -199,13 +191,11 @@ describe("undelivered input recovery", () => {
     await backend.tap(DEVICE, 10, 10);
     helper.attachCalls.length = 0;
 
-    // A stale HID client accepts the call but the event never lands. Before the
-    // fix the helper acked this as success and the tap silently vanished.
+    // a stale HID client accepts the call but the event never lands — before the fix the helper acked success and the tap silently vanished
     helper.undeliverableCalls = 1;
     await backend.tap(DEVICE, 20, 20);
 
-    // The recovery path re-asserts the attachment and then forces a rebind, so
-    // the retry lands on a freshly built HID client.
+    // recovery re-asserts the attachment then forces a rebind — the retry lands on a freshly built HID client
     expect(helper.attachCalls.some((call) => call.force)).toBe(true);
   });
 

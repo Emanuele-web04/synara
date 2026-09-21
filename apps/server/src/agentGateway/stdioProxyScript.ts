@@ -1,22 +1,9 @@
-/**
- * Stdio-to-HTTP proxy script for the Synara agent gateway.
- *
- * Some MCP clients (ACP agents without `mcpCapabilities.http`) can only spawn
- * stdio MCP servers. This module materializes a small self-contained script
- * (runnable by both Node and Bun via `process.execPath`) that forwards each
- * newline-delimited JSON-RPC message from stdin to the gateway's streamable
- * HTTP endpoint and writes responses back to stdout. The endpoint URL and the
- * per-thread bearer token arrive via environment variables so the script file
- * itself is identical for every session.
- *
- * @module agentGateway/stdioProxyScript
- */
+/** self-contained stdio→HTTP proxy for stdio-only MCP clients, runnable by node or bun via process.execPath; URL+bearer arrive via env so the file is identical per session */
 import { Effect, FileSystem, Path } from "effect";
 
 export const AGENT_GATEWAY_STDIO_PROXY_FILE_NAME = "agent-gateway-mcp-proxy.mjs";
 
-// Kept dependency-free and ES2022-compatible: it must run on whichever
-// node/bun binary happens to back `process.execPath`.
+// dependency-free and ES2022: must run on whatever node/bun backs process.execPath
 const STDIO_PROXY_SCRIPT = `// Synara agent gateway stdio<->HTTP MCP proxy (generated file, do not edit).
 const url = process.env.SYNARA_AGENT_GATEWAY_URL;
 let token = process.env.SYNARA_AGENT_GATEWAY_TOKEN;
@@ -276,10 +263,7 @@ process.stdin.on("end", async () => {
 });
 `;
 
-/**
- * Write (or refresh) the proxy script under the server state dir and return
- * its absolute path. Idempotent; called once at credentials-layer build.
- */
+/** write/refresh the proxy script under the state dir; idempotent */
 export const ensureAgentGatewayStdioProxyScript = Effect.fn(function* (stateDir: string) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;

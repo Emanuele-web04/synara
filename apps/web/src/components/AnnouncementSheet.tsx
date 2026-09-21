@@ -1,14 +1,5 @@
-// FILE: AnnouncementSheet.tsx
-// Purpose: Shared one-time announcement sheet — hero, title, short pitch, then dismiss/confirm.
-// Layer: Root web overlay
-//
-// Geometry is matched to the macOS system announcement sheet it apes — 420px wide,
-// 20px padding, 64px hero, 32px buttons. Body copy and buttons follow the UI font size
-// from Settings; only the title is fixed.
-//
-// Uses the dialog system's opaque "solid" surface — the frosted composer default
-// reads translucent over the desktop, since the Electron window itself is
-// transparent under macOS vibrancy.
+// geometry matched to the macOS system sheet it apes (420px/20px/64px/32px); body copy + buttons follow the Settings UI font size, only the title is fixed
+// uses the opaque "solid" dialog surface — the frosted composer default reads translucent over desktop since the Electron window is transparent under macOS vibrancy
 
 import { useRef, type ReactNode } from "react";
 
@@ -30,19 +21,15 @@ export function AnnouncementSheet(props: {
   // Decorative hero rendered above the title; the sheet owns the spacing below it.
   hero: ReactNode;
   title: ReactNode;
-  // Two lines at 378px wide is the reference sheet's proportion; longer copy wraps to
-  // three and throws the whole vertical rhythm off.
+  // two lines at 378px is the reference sheet's proportion; longer copy wraps to three and breaks the vertical rhythm
   description: ReactNode;
   dismissLabel: string;
   confirmLabel: string;
-  // Fired by the dismiss button and by Escape / backdrop closes.
   onDismiss: () => void;
   onConfirm: () => void;
 }) {
   const sheetRef = useRef<HTMLDivElement>(null);
-  // Announcements probe independently at startup; only the slot holder is shown so two
-  // sheets never stack. The other opens once this one is dismissed, but not after a
-  // confirm, whose follow-on flow it would cover.
+  // announcements probe independently at startup; only the slot holder shows so two sheets never stack — the other opens once this one is dismissed, but not after a confirm whose follow-on flow it would cover
   const { open, handOff } = useAnnouncementSheetSlot(props.open);
   return (
     <Dialog

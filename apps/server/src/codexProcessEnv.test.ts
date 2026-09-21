@@ -112,7 +112,7 @@ describe("buildCodexProcessEnv", () => {
       const env = await buildCodexProcessEnv({ ...input, appendConfigToml: managedConfig });
       const overlayConfigPath = path.join(env.CODEX_HOME!, "config.toml");
       const cleanConfig = readFileSync(overlayConfigPath, "utf8");
-      // An external MCP registration can leave stdio fields in the saved HTTP block.
+      // an external MCP registration can leave stdio fields in the saved HTTP block
       writeFileSync(
         overlayConfigPath,
         cleanConfig

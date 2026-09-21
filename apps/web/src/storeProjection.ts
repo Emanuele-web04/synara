@@ -1,7 +1,3 @@
-// FILE: storeProjection.ts
-// Purpose: Owns normalized slice writes, sidebar projections, and snapshot integration.
-// Exports: Pure projection transitions used by the facade and orchestration reducer.
-
 import {
   type MessageId,
   type OrchestrationReadModel,
@@ -181,8 +177,7 @@ function buildNormalizedSlice<TId extends string, TValue>(
     previousItems.length === items.length &&
     previousIds.length === items.length
   ) {
-    // Object identity proves a slot is untouched with a pointer compare, so a no-op rewrite of the
-    // array (same contents, new reference) costs a scan instead of a rebuild.
+    // object identity proves a slot untouched with a pointer compare — a same-contents new array costs a scan, not a rebuild
     let firstChangedIndex = -1;
     for (let index = 0; index < items.length; index += 1) {
       if (previousItems[index] !== items[index]) {
@@ -657,13 +652,7 @@ function writeThreadDetailSyncState(
 }
 
 function clearThreadDetailSyncState(state: AppState, threadId: ThreadId): AppState {
-  // Single-thread detail-wipe choke point: every transition that removes or
-  // invalidates a thread's cached detail (removeThreadState, eviction, sync
-  // failure reset) funnels through here, so this is where the resume-cursor
-  // invariant is enforced — wiped detail must never leave a cursor that would
-  // let a resubscribe gap-replay on top of missing history. The full-sync
-  // paths cover their bulk invalidations separately: the shell snapshot prunes
-  // with `retainThreadDetailResumeCursors`, the read-model resync resets all.
+  // every detail-wipe transition funnels through here to enforce the resume-cursor invariant — wiped detail must never leave a cursor that would gap-replay on missing history; bulk sync paths cover theirs separately
   clearThreadDetailResumeCursor(threadId);
   if (
     state.threadDetailSyncById === undefined ||
@@ -679,11 +668,7 @@ export function markThreadDetailSyncFailedInClientState(
   state: AppState,
   threadId: ThreadId,
 ): AppState {
-  // A "synced" thread downgrades too: the caller reports a terminally dead
-  // stream, and keeping "synced" would let the client treat frozen cached
-  // detail as live. Cached timeline entries keep rendering regardless
-  // (resolveThreadDetailHydration treats a populated timeline as ready), so
-  // the downgrade only surfaces the failure, it never blanks applied detail.
+  // a terminally dead stream downgrades "synced" so frozen cached detail can't read as live — populated timelines still render, so the downgrade only surfaces the failure
   return writeThreadDetailSyncState(state, threadId, "failed");
 }
 
@@ -1029,12 +1014,7 @@ function isStaleSnapshot(state: AppState, snapshotSequence: number): boolean {
   return snapshotSequence < (state.shellSnapshotSequence ?? 0);
 }
 
-/**
- * Drops thread/project tombstones that `snapshot` has authoritatively confirmed absent.
- *
- * The sequence guard here only keeps retirement honest; it is not what stops a stale snapshot from
- * resurrecting a row. That is `isStaleSnapshot`, applied before any merge happens.
- */
+// the sequence guard keeps retirement honest; `isStaleSnapshot` is what actually stops a stale snapshot from resurrecting a row
 function retireConfirmedDeletionTombstones(
   state: AppState,
   snapshotSequence: number,
@@ -1162,8 +1142,6 @@ function commitThreadProjection(
 ): AppState {
   const shouldUpdateSidebarSummary = options?.updateSidebarSummary ?? true;
   const previousSummary = state.sidebarThreadSummaryById[threadId];
-  // Skip deriving the thread entirely when the summary is pinned to its previous value —
-  // this runs on the streaming hot path where most flushes change no summary input.
   if (!shouldUpdateSidebarSummary && previousSummary !== undefined) {
     return state;
   }
@@ -1286,8 +1264,6 @@ export function syncServerShellSnapshot(
   const snapshotProjects = snapshot.projects.filter(
     (project) => deletedProjectIdsById[project.id] === undefined,
   );
-  // The snapshot is the authoritative project set; drop remembered UI state that
-  // cannot match it before the new projects are normalized and remembered.
   resetStaleRememberedProjectState(
     new Set(snapshotProjects.map((project) => projectCwdKey(project.workspaceRoot))),
   );
@@ -1295,8 +1271,7 @@ export function syncServerShellSnapshot(
   const projects = mapProjects(snapshotProjects, state.projects);
   rememberProjectState(projects);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
-  // The retains below prune detail slices down to the snapshot's threads; any
-  // resume cursor for a pruned thread must fall with its detail.
+  // The retains below prune detail slices down to the snapshot's threads; any resume cursor for a pruned thread must fall with its detail.
   retainThreadDetailResumeCursors(nextThreadIds);
 
   const normalizedState: AppState = {
@@ -1447,8 +1422,6 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   rememberProjectState(state.projects);
   const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
-  // Ids the server still reports as live at this snapshot sequence; anything else is either
-  // absent or server-side soft-deleted, which is what lets a tombstone retire safely.
   const livePresentThreadIds = new Set<string>(
     readModel.threads.filter((thread) => thread.deletedAt === null).map((thread) => thread.id),
   );
@@ -1462,8 +1435,6 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   const liveProjects = readModel.projects.filter(
     (project) => project.deletedAt === null && deletedProjectIdsById[project.id] === undefined,
   );
-  // The read model is the authoritative project set; drop remembered UI state that
-  // cannot match it before the new projects are normalized and remembered.
   resetStaleRememberedProjectState(
     new Set(liveProjects.map((project) => projectCwdKey(project.workspaceRoot))),
   );
@@ -1487,11 +1458,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
       );
     });
   const nextThreadIds = new Set(nextThreads.map((thread) => thread.id));
-  // This full resync (including the "Repair local state" action) replaces
-  // every thread's detail wholesale: pruned threads lose their detail, and a
-  // surviving thread's cursor would vouch for history the replacement does not
-  // contain. No cursor survives — the next subscribe takes a snapshot and
-  // re-establishes one that matches what is actually cached.
+  // a full resync replaces every thread's detail wholesale — no cursor survives, since it would vouch for history the replacement doesn't contain
   resetThreadDetailResumeCursors();
   let normalizedState: AppState = {
     ...state,
@@ -1516,9 +1483,6 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     threadDetailSyncById: retainThreadScopedRecord(state.threadDetailSyncById, nextThreadIds),
   };
   for (const thread of nextThreads) {
-    // Read-model threads carry full detail (messages, activities), so they are synced by definition.
-    // The previous thread is a cache hit here (it was already materialized above) and lets the
-    // slice writer reuse untouched ids/records instead of rebuilding them.
     normalizedState = writeThreadDetailSyncState(
       writeThreadState(normalizedState, thread, getThreadFromState(state, thread.id)),
       thread.id,
@@ -1557,10 +1521,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     normalizedState.threadDetailSyncById === state.threadDetailSyncById &&
     state.threadsHydrated
   ) {
-    // Nothing to merge, but the snapshot is still authoritative at its own sequence. Recording it
-    // keeps `shellSnapshotSequence` honest, which is what later optimistic deletes derive their
-    // tombstone lower bound from — otherwise a tombstone created after this point could be retired
-    // by a snapshot that predates the deletion.
+    // record the snapshot sequence even with nothing to merge — it keeps shellSnapshotSequence honest, which later optimistic deletes derive their tombstone lower bound from
     const advanced =
       readModel.snapshotSequence > (state.shellSnapshotSequence ?? 0)
         ? { ...state, shellSnapshotSequence: readModel.snapshotSequence }

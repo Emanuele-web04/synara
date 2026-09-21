@@ -1,10 +1,3 @@
-// FILE: logic.ts
-// Purpose: Pure step, gate, and provider-classification rules for the first-run welcome tour.
-// Layer: Web domain helper (no React, no I/O)
-// Exports: ONBOARDING_STEPS, nextOnboardingStep, previousOnboardingStep, resolveOnboardingGate,
-//          resolveOnboardingCompletionToReconcile, resolveLocalOnboardingCompletion,
-//          classifyProviderSetup, summarizeProviderSetup, toggleSelection
-
 import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
 
 export const ONBOARDING_STEPS = [
@@ -62,14 +55,10 @@ export type OnboardingGate = "pending" | "show" | "hidden";
 export interface OnboardingGateInputs {
   /** Wait for an installation identity; config failures defer the tour without blocking the app. */
   readonly installationKeyStatus: "pending" | "success" | "error";
-  /** Local project state has been hydrated from the server at least once. */
   readonly threadsHydrated: boolean;
-  /** The server settings query has settled (success or error). */
   readonly settingsSettled: boolean;
-  /** Count of ordinary (non-container) projects. */
   readonly projectCount: number;
   readonly serverCompletedAt: string | null;
-  /** Already scoped to this installation via `resolveLocalOnboardingCompletion`. */
   readonly localCompletedAt: string | null;
 }
 
@@ -134,8 +123,7 @@ export function classifyProviderSetup(input: {
 }): ProviderSetupState {
   if (input.disabled) return "disabled";
   if (!input.status || !input.status.available) return "not-installed";
-  // Providers whose auth is not probed report "unknown"; treat a detected binary as
-  // usable rather than nagging for a sign-in Synara cannot verify.
+  // Providers whose auth is not probed report "unknown"; treat a detected binary as usable rather than nagging for a sign-in Synara cannot verify.
   return input.status.authStatus === "unauthenticated" ? "needs-sign-in" : "connected";
 }
 

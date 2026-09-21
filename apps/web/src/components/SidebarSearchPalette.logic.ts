@@ -1,6 +1,4 @@
-// Purpose: Scores sidebar palette results for actions, themes, projects, and chat threads.
-// Keeps search local and deterministic so the palette can rank title hits above
-// message-content hits while still surfacing a useful snippet for chat matches.
+// scores palette results locally and deterministically so title hits rank above message-content hits while still surfacing a snippet
 import type { ComponentType } from "react";
 
 import type { ProviderKind } from "@synara/contracts";

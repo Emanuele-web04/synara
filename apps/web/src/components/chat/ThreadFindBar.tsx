@@ -1,9 +1,3 @@
-// FILE: ThreadFindBar.tsx
-// Purpose: Compact in-thread find panel floating at the top-right of the chat
-//   column — field + close on top, prev/next + match count below.
-// Layer: Chat transcript presentation
-// Depends on: projected-message matching in threadFind.logic (not the DOM list).
-
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { IconButton } from "~/components/ui/icon-button";
@@ -91,8 +85,7 @@ export function ThreadFindBar({
     });
   }, [deferredQuery, matches, open]);
 
-  // Query changes jump after their deferred match pass. Streaming transcript
-  // rewrites only refresh matches and never yank the viewport mid-read.
+  // Query changes jump after their deferred match pass. Streaming transcript rewrites only refresh matches and never yank the viewport mid-read.
   useEffect(() => {
     if (!open) {
       return;
@@ -163,9 +156,7 @@ export function ThreadFindBar({
     }
   };
 
-  // The results row only exists while a query is typed, so the empty field is a
-  // clean pill; visibility keys off the synchronous query so the row expands on
-  // the first keystroke rather than after the deferred match pass.
+  // The results row only exists while a query is typed, so the empty field is a clean pill; visibility keys off the synchronous query so the row expands on the first keystroke rather than after the deferred match pass.
   const resultsRowVisible = query.trim().length > 0;
 
   return (
@@ -187,8 +178,7 @@ export function ThreadFindBar({
           aria-label="Find in thread"
           autoComplete="off"
           spellCheck={false}
-          // The unlayered utility overrides the global `input { font-family: mono }`
-          // reset — find is a UI field, not a code field.
+          // The unlayered utility overrides the global `input { font-family: mono }` reset — find is a UI field, not a code field.
           className="font-system-ui h-11 min-w-0 flex-1 bg-transparent text-ui text-foreground placeholder:text-muted-foreground focus:outline-none"
         />
         <div aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
@@ -254,8 +244,7 @@ export function ChatThreadFindHost({
   className?: string;
 }) {
   return (
-    // Mounted at the chat pane root so the panel overlays the header and the
-    // docked Environment overlay (z-20) alike, pinned to the top-right corner.
+    // Mounted at the chat pane root so the panel overlays the header and the docked Environment overlay (z-20) alike, pinned to the top-right corner.
     <div
       data-thread-find-host="true"
       className={cn("pointer-events-none absolute right-0 top-0 z-40", className)}

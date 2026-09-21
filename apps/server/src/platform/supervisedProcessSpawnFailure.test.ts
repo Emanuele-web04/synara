@@ -11,8 +11,7 @@ describe("failed-spawn teardown", () => {
       cwd: join(tmpdir(), `synara-missing-cwd-${crypto.randomUUID()}`),
     });
     const teardown = vi.fn(async () => ({ escalated: false, signalErrors: [] }));
-    // Teardown is deliberately requested from the first ordinary error handler,
-    // matching the SDK race that originally quarantined the thread.
+    // teardown is requested from the first ordinary error handler, matching the SDK race that quarantined the thread
     const result = await new Promise((resolve, reject) => {
       child.once("error", () => {
         void teardownChildProcessTree(child, teardown).then(resolve, reject);

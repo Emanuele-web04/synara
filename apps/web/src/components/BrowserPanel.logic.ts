@@ -1,9 +1,3 @@
-// FILE: BrowserPanel.logic.ts
-// Purpose: Holds address-bar rules plus renderer lifecycle guards for the in-app browser panel.
-// Layer: Component logic helper
-// Exports: address helpers, panel hide scheduling, and one-shot renderer-loss recovery
-// Depends on: shared browser URL rules, browser tab metadata, and thread-local browser history
-
 import {
   BROWSER_BLANK_URL,
   BROWSER_SEARCH_URL_PREFIX,
@@ -156,9 +150,7 @@ export function createBrowserPanelHideScheduler(
   }
 
   function acquire(threadId: string): () => void {
-    // A new live host takes over before the previous host's cleanup necessarily runs.
-    // Cancelling here also handles the opposite React commit order, where cleanup queued
-    // the hide before the replacement host mounted.
+    // a new live host can take over before the previous host's cleanup runs — cancelling here also handles the opposite commit order where cleanup queued the hide first
     cancel(threadId);
     liveHostCountByThreadId.set(threadId, (liveHostCountByThreadId.get(threadId) ?? 0) + 1);
 
@@ -233,9 +225,7 @@ export function hasObscuringHitStackElementAboveSurface<TElement>(
     }
   }
 
-  // If the surface is absent from the hit-test stack, the remaining entries are
-  // ambiguous (and commonly represent content behind the floating panel). Do
-  // not hide the browser based on that incomplete stack.
+  // if the surface is absent from the hit-test stack the remaining entries are ambiguous (usually content behind the floating panel) — don't hide on an incomplete stack
   return false;
 }
 
@@ -280,11 +270,7 @@ export interface BrowserChromeStatus {
   label: string;
 }
 
-// Address and tab controls share the same radius and border treatment;
-// the tab strip overrides the height and type size for compact chrome.
 export const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-ui leading-snug";
-// The address field's filled look, reused by the active tab so the selected tab visually
-// matches the search input (same border tone + faint fill).
 export const BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME = "border-border bg-background/70";
 
 export function browserAnnotationDraftFromCommittedEvent(
@@ -417,10 +403,7 @@ export function browserAnnotationTheme(
   return {
     mode,
     accent: resolvedBrowserAnnotationColor(root, "--color-text-accent", fallback.accent),
-    // The overlay renders inside the guest page without the backdrop blur the
-    // composer sits on, so a translucent surface (--composer-surface is ~14%
-    // transparent in light mode) would let page content show through the cards.
-    // The opaque control token is the same fill without the glass assumption.
+    // the overlay renders inside the guest page without the composer's backdrop blur, so a translucent surface would let page content show through — the opaque control token is the same fill without the glass assumption
     surface: resolvedBrowserAnnotationColor(
       root,
       "--color-background-control-opaque",
@@ -481,11 +464,9 @@ export function browserAddressDisplayValue(
   return nextUrl === BROWSER_BLANK_URL ? "" : nextUrl;
 }
 
-// Component-facing alias for the shared desktop/web browser URL normalizer.
 export const normalizeBrowserAddressInput = normalizeBrowserUrlInput;
 
-// A raw file:// URL must never reach Electron's renderer-owned <webview>. Main translates it
-// to Synara's directory-scoped preview protocol after adopting the guest.
+// a raw file:// URL must never reach the renderer-owned <webview> — main translates it to the directory-scoped preview protocol after adopting the guest
 export function browserWebviewInitialUrl(url: string): string {
   try {
     return new URL(url).protocol === "file:" ? BROWSER_BLANK_URL : url;
@@ -522,7 +503,6 @@ function pushSuggestion(
   suggestions.push(suggestion);
 }
 
-// Builds browser-like suggestions from the typed query, open tabs, and recent history.
 export function buildBrowserAddressSuggestions(
   input: BuildBrowserAddressSuggestionsInput,
 ): BrowserAddressSuggestion[] {
@@ -622,7 +602,6 @@ export function resolveBrowserChromeStatus(input: {
   return null;
 }
 
-// Decides when browser state should replace the visible address input.
 export function resolveBrowserAddressSync(
   input: ResolveBrowserAddressSyncInput,
 ): BrowserAddressSyncDecision {
@@ -661,8 +640,7 @@ export function resolveBrowserAddressSync(
   };
 }
 
-// Bounds keys used to include a bare ":hidden" suffix. Hidden keys now carry a
-// zoom token (`renderer:hidden:zoom-1`), so callers must not use endsWith(":hidden").
+// bounds keys used to include a bare ":hidden" suffix; hidden keys now carry a zoom token (renderer:hidden:zoom-1) so callers must not use endsWith(":hidden")
 export function isBrowserPanelBoundsHiddenKey(key: string): boolean {
   return key.includes(":hidden");
 }
@@ -671,8 +649,7 @@ export function applyBrowserWebviewPresentation(
   stage: HTMLElement,
   input: { floating: boolean; slotWidth: number; slotHeight: number },
 ): void {
-  // Scale a CSS stage around a frozen 1280×800 guest. Transforming the
-  // <webview> itself during drag/resize blacks the guest and can kill CDP.
+  // scale a CSS stage around a frozen 1280x800 guest — transforming the <webview> itself during drag/resize blacks the guest and can kill CDP
   if (!input.floating) {
     stage.style.position = "absolute";
     stage.style.inset = "0";

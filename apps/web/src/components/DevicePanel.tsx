@@ -1,10 +1,4 @@
-// FILE: DevicePanel.tsx
-// Purpose: Interactive iOS Simulator dock pane — live video, input injection, device picker, setup states.
-// Layer: Right-dock pane component
-// Depends on: deviceStateStore, nativeApi device namespace, useDeviceVideoStream, DevicePanel.logic
-//
-// Unlike BrowserPanel there is no native view to position: the simulator paints
-// into a canvas we own, so no bounds sync or occlusion machinery is needed.
+// simulator paints into a canvas we own — no native view, so no bounds sync or occlusion machinery
 
 import type {
   DeviceDescriptor,
@@ -75,9 +69,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
-// The plain manager, not the anchored one: anchored toasts are dropped unless
-// they carry `positionerProps.anchor`, so every notification this pane raised —
-// save confirmations and input errors alike — was silently discarded.
+// the plain manager, not the anchored one: anchored toasts are dropped unless they carry positionerProps.anchor — every notification this pane raised was silently discarded
 import { toastManager } from "./ui/toast";
 
 /**
@@ -110,23 +102,18 @@ export default function DevicePanel(props: {
   const [bootLimit, setBootLimit] = useState<{
     readonly limit: number;
     readonly candidates: readonly DeviceDescriptor[];
-    /** Retried automatically once the user frees a slot. */
     readonly pendingUdid: DeviceUdid;
-    /** Named in the dialog, so the trade being offered is concrete. */
     readonly pendingName: string;
   } | null>(null);
 
-  // The device the user just picked, shown until the server's thread state
-  // names it. Without this the picker read "Choose a simulator" and the screen
-  // stayed blank for the whole of a cold boot, so the click looked ignored.
+  // the device the user just picked, shown until the server's thread state names it — without this the picker read "Choose a simulator" and the screen stayed blank for a whole cold boot
   const [pendingDevice, setPendingDevice] = useState<PendingDeviceSelection | null>(null);
   const attachedDevice = resolveDisplayedDevice({ threadState, pending: pendingDevice });
   const availabilityView = resolveDeviceAvailabilityView(
     threadState?.availability ?? { kind: "available" },
   );
 
-  // The server has answered — with this device or another — so the optimistic
-  // one has done its job and the thread state takes over from here.
+  // The server has answered — with this device or another — so the optimistic one has done its job and the thread state takes over from here.
   const reportedUdid = threadState?.attachedDeviceUdid ?? null;
   useEffect(() => {
     setPendingDevice((current) =>
@@ -134,18 +121,11 @@ export default function DevicePanel(props: {
     );
   }, [reportedUdid]);
 
-  // A stable primitive rather than the view object: the effect below depends on
-  // it, and a fresh object each render would tear down and restart the poll.
+  // A stable primitive rather than the view object: the effect below depends on it, and a fresh object each render would tear down and restart the poll.
   const pollSetupState =
     availabilityView.kind === "blocked" && availabilityView.retryable ? "blocked" : null;
 
-  // The pane is the only reader of this thread's device state, so it seeds the
-  // store on mount; every later change arrives on the device.event push.
-  //
-  // Re-seeded whenever the socket comes back, because that push carries no
-  // snapshot: a boot, attach or shutdown that completed while the browser was
-  // disconnected is simply missed, and the pane would sit on the pre-outage
-  // phase and device list until some unrelated device event arrived.
+  // the pane is the only reader of this thread's device state so it seeds the store on mount; later changes arrive on device.event push. Re-seeded on socket reconnect because that push carries no snapshot — a boot/attach/shutdown during disconnect is simply missed and the pane would sit on the pre-outage phase
   useEffect(() => {
     let cancelled = false;
     const seed = () => {
@@ -155,20 +135,15 @@ export default function DevicePanel(props: {
           if (!cancelled) upsertThreadState(state);
         })
         .catch(() => {
-          // A refusal here is the off-macOS / no-engine case; the pane keeps
-          // rendering its blocked state from whatever availability it has.
+          // A refusal here is the off-macOS / no-engine case; the pane keeps rendering its blocked state from whatever availability it has.
         });
     };
     seed();
     const unsubscribe = addWsTransportStateListener((state) => {
       if (state === "open") seed();
     });
-    // Setup progress is the one state nothing pushes. Installing Xcode,
-    // accepting its licence or downloading a runtime all happen outside Synara
-    // and raise no device event, so a pane opened on the checklist would sit on
-    // a stale list and a spinner forever on a perfectly healthy connection.
-    // Polling only while the checklist is up and retryable, and only every few
-    // seconds, costs nothing once the environment is ready.
+    // setup progress is the one state nothing pushes — installing Xcode, accepting its licence, downloading a runtime all happen outside Synara and raise no device event, so a checklist pane would sit on a stale list and a spinner forever on a healthy connection
+    // Xcode install/licence/runtime download happen outside Synara and raise no device event — poll only while the checklist is up so the pane doesn't sit on a stale list forever
     const poll = pollSetupState !== null ? setInterval(seed, DEVICE_SETUP_POLL_INTERVAL_MS) : null;
     return () => {
       cancelled = true;
@@ -177,9 +152,7 @@ export default function DevicePanel(props: {
     };
   }, [threadId, upsertThreadState, pollSetupState]);
 
-  // Non-null while the attachment is still coming up, and names which stage: a
-  // cold boot spends most of a minute here, and "Starting up…" versus "Waiting
-  // for the screen…" is the difference between progress and a hang.
+  // non-null while attachment is coming up, and names which stage — a cold boot spends most of a minute here, and "Starting up…" vs "Waiting for the screen…" is the difference between progress and a hang
   const attachStatusLabel = attachedDevice
     ? deviceAttachStatusLabel({
         phase: threadState?.attachPhase,
@@ -194,9 +167,7 @@ export default function DevicePanel(props: {
     attachedDevice,
   });
 
-  // Resync is owned by the frame socket, not this component: `device.attach` on
-  // an already-attached device early-returns server-side, so it could never
-  // have recovered a frozen canvas.
+  // Resync is owned by the frame socket, not this component: `device.attach` on an already-attached device early-returns server-side, so it could never have recovered a frozen canvas.
   const { status: videoStatus, dimensions } = useDeviceVideoStream({
     canvasRef,
     udid: streamEnabled && attachedDevice ? attachedDevice.udid : null,
@@ -239,16 +210,14 @@ export default function DevicePanel(props: {
     (entry: (typeof pickerEntries)[number]) => {
       const udid = entry.device.udid;
       if (entry.action.kind === "wait") return;
-      // Set before the first await: the whole point is that the picker and the
-      // screen change on the click, not when a minute-long boot resolves.
+      // Set before the first await: the whole point is that the picker and the screen change on the click, not when a minute-long boot resolves.
       setPendingDevice({ device: entry.device, supersedes: reportedUdid });
       void runDeviceAction(async () => {
         try {
           if (entry.action.kind === "boot-then-attach") {
             const result = await ensureNativeApi().device.boot({ udid });
             if (result.kind === "boot-limit-reached") {
-              // A refusal, not a failure: hand the user the devices they can
-              // free instead of a dead end.
+              // A refusal, not a failure: hand the user the devices they can free instead of a dead end.
               setPendingDevice(null);
               setBootLimit({
                 limit: result.limit,
@@ -261,8 +230,7 @@ export default function DevicePanel(props: {
           }
           await attachDevice(udid);
         } catch (error) {
-          // The optimistic device would otherwise outlive the failure and leave
-          // the pane naming a simulator it never opened.
+          // The optimistic device would otherwise outlive the failure and leave the pane naming a simulator it never opened.
           setPendingDevice(null);
           throw error;
         }
@@ -277,8 +245,7 @@ export default function DevicePanel(props: {
       setBootLimit(null);
       if (!pending) return;
       const requested = threadState?.devices.find((device) => device.udid === pending.pendingUdid);
-      // Freeing a slot is the second half of a selection, so the pane commits
-      // to the device here too rather than going blank until the boot lands.
+      // Freeing a slot is the second half of a selection, so the pane commits to the device here too rather than going blank until the boot lands.
       if (requested) setPendingDevice({ device: requested, supersedes: reportedUdid });
       void runDeviceAction(async () => {
         try {
@@ -324,13 +291,9 @@ export default function DevicePanel(props: {
     [attachedDevice, runDeviceAction],
   );
 
-  // ── Recording ──────────────────────────────────────────────────────
-
   const [recording, setRecording] = useState(createDeviceRecordingState);
 
-  // A recording belongs to the device it was started on. When that device goes
-  // away the server has already stopped and finalised the file, so the pane
-  // drops its state rather than leaving a red button no click can clear.
+  // a recording belongs to the device it was started on — when that device goes away the server already stopped and finalised the file, so drop state rather than leave a red button no click can clear
   useEffect(() => {
     if (attachedDevice?.state === "booted") return;
     setRecording((state) => stepDeviceRecording(state, { kind: "device-lost" }));
@@ -392,18 +355,12 @@ export default function DevicePanel(props: {
   const saveScreenshot = useCallback(() => {
     if (!attachedDevice) return;
     void runDeviceAction(async () => {
-      // Saved by the server, beside the screen recordings. This used to hand
-      // the base64 to a browser download, which put the PNG wherever the
-      // browser chose — or nowhere at all where downloads are unavailable —
-      // while the record button wrote to the Desktop. Two capture buttons on
-      // one rail have to leave their output in the same place.
+      // saved by the server beside screen recordings — the old browser-download path put the PNG wherever the browser chose (or nowhere) while the record button wrote to Desktop; two capture buttons must leave output in the same place
       const shot = await ensureNativeApi().device.screenshot({
         udid: attachedDevice.udid,
         save: true,
       });
-      // `copyText` both expands the toast past its compact form — which shows
-      // only the title — and puts the path on the clipboard, which is the one
-      // thing you want after saving a file somewhere.
+      // copyText expands the toast past compact form and puts the path on the clipboard — the one thing you want after saving a file
       toastManager.add({
         type: "success",
         title: "Screenshot saved",
@@ -413,22 +370,16 @@ export default function DevicePanel(props: {
     }, "Could not save the screenshot");
   }, [attachedDevice, runDeviceAction]);
 
-  // ── Pointer input ──────────────────────────────────────────────────
-
   const pressRef = useRef<{ point: DevicePoint | null; startedAt: number } | null>(null);
 
-  // The accessibility tree's root frame is the device's screen in points, which
-  // is the unit the backend injects input in. Frames arrive in pixels (3x on a
-  // Retina phone), so without this the pane sends coordinates triple their true
-  // value and every tap lands off-screen, where the helper clamps it silently.
+  // the accessibility tree's root frame is the screen in points (the unit the backend injects input in); frames arrive in pixels (3x Retina) so without this every tap lands ~3x off-screen where the helper clamps silently
   const [measuredPointSize, setMeasuredPointSize] = useState<{
     readonly width: number;
     readonly height: number;
   } | null>(null);
   const attachedUdid = attachedDevice?.udid ?? null;
 
-  // Only a fallback: when the descriptor carries geometry, resolveDevicePointSize
-  // prefers it and this round trip would be spent on a value we discard.
+  // Only a fallback: when the descriptor carries geometry, resolveDevicePointSize prefers it and this round trip would be spent on a value we discard.
   const needsMeasuredPointSize = attachedDevice?.geometry === undefined;
 
   useEffect(() => {
@@ -443,8 +394,7 @@ export default function DevicePanel(props: {
         if (width > 0 && height > 0) setMeasuredPointSize({ width, height });
       })
       .catch(() => {
-        // Accessibility can be degraded while streaming and input still work;
-        // the inferred scale below keeps taps landing in that case.
+        // Accessibility can be degraded while streaming and input still work; the inferred scale below keeps taps landing in that case.
       });
     return () => {
       cancelled = true;
@@ -458,9 +408,7 @@ export default function DevicePanel(props: {
     measured: measuredPointSize,
   });
 
-  // The frame is drawn in device pixels. Derived from the point size rather
-  // than the stream's frame dimensions so the chassis keeps its shape before
-  // the first frame arrives and across stream restarts.
+  // derived from the point size rather than the stream's frame dimensions so the chassis keeps its shape before the first frame arrives and across stream restarts
   const deviceKind = attachedDevice ? deviceKindFor(attachedDevice) : "iPhone";
   const deviceScale = attachedDevice?.geometry?.scale ?? RESOLUTION_SCALE[deviceKind];
   const devicePixelSize = devicePointSize
@@ -480,10 +428,7 @@ export default function DevicePanel(props: {
         geometry: attachedDevice?.geometry,
         measured: measuredPointSize,
       });
-      // offsetX/offsetY rather than clientX minus the bounding rect: the canvas
-      // may be rotated for landscape, and offsets are reported in the target's
-      // own pre-transform box, so this needs no inverse rotation while the
-      // bounding rect would.
+      // offsetX/offsetY are reported in the target's own pre-transform box — the canvas may be rotated for landscape, and this needs no inverse rotation while a bounding-rect computation would
       return canvasPointToDevicePoint(
         {
           frameWidth: dimensions.width,
@@ -505,8 +450,7 @@ export default function DevicePanel(props: {
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       if (!attachedDevice) return;
       event.currentTarget.setPointerCapture(event.pointerId);
-      // Focus on press so keyboard passthrough follows the click without a
-      // separate tab stop.
+      // Focus on press so keyboard passthrough follows the click without a separate tab stop.
       event.currentTarget.focus();
       pressRef.current = { point: pointFromEvent(event.nativeEvent), startedAt: performance.now() };
     },
@@ -551,8 +495,6 @@ export default function DevicePanel(props: {
     [attachedDevice, pointFromEvent],
   );
 
-  // ── Keyboard passthrough ───────────────────────────────────────────
-
   const handleKey = useCallback(
     (event: React.KeyboardEvent<HTMLCanvasElement>, direction: "down" | "up") => {
       if (!attachedDevice) return;
@@ -564,8 +506,7 @@ export default function DevicePanel(props: {
         if (direction === "down") pressButton(hardwareButton);
         return;
       }
-      // Every other Cmd chord belongs to Synara (Cmd+W, Cmd+R, the dock
-      // shortcuts), so it is deliberately not injected.
+      // Every other Cmd chord belongs to Synara (Cmd+W, Cmd+R, the dock shortcuts), so it is deliberately not injected.
       if (event.metaKey || event.ctrlKey) return;
 
       const keyCode = deviceHidUsageForKey(event.key);
@@ -579,14 +520,11 @@ export default function DevicePanel(props: {
           direction,
         })
         .catch(() => {
-          // Dropping a keystroke is preferable to a toast per key; a broken
-          // input path already surfaces through the pointer handler.
+          // Dropping a keystroke is preferable to a toast per key; a broken input path already surfaces through the pointer handler.
         });
     },
     [attachedDevice, pressButton],
   );
-
-  // ── Toolbar ────────────────────────────────────────────────────────
 
   const deviceControlsDisabled = !attachedDevice || attachedDevice.state !== "booted" || busy;
 
@@ -615,11 +553,7 @@ export default function DevicePanel(props: {
     [detachDevice, pressButton, saveScreenshot, toggleRecording],
   );
 
-  // ── Render ─────────────────────────────────────────────────────────
-
-  // Nothing is selectable until the backend can list devices, so a blocked pane
-  // shows the pane's name where the picker would be rather than a menu whose
-  // every entry would be empty.
+  // nothing is selectable until the backend can list devices — a blocked pane shows the pane's name where the picker would be rather than a menu whose every entry would be empty
   const header = (
     <div className="flex h-full w-full min-w-0 items-center gap-1.5">
       {availabilityView.kind === "blocked" ? (
@@ -678,8 +612,7 @@ export default function DevicePanel(props: {
     </div>
   );
 
-  // Every state renders on the phone's screen, so the pane reads as one object
-  // rather than a video rectangle with chrome stacked around it.
+  // Every state renders on the phone's screen, so the pane reads as one object rather than a video rectangle with chrome stacked around it.
   const screen = (() => {
     if (availabilityView.kind === "blocked") {
       const action = resolveDeviceSetupAction(availabilityView.steps);
@@ -728,8 +661,7 @@ export default function DevicePanel(props: {
           ref={canvasRef}
           tabIndex={0}
           aria-label={`${attachedDevice.name} screen`}
-          // object-cover so the frame is filled edge to edge: the canvas already
-          // carries the device's own aspect ratio, so nothing is actually cropped.
+          // object-cover so the frame is filled edge to edge: the canvas already carries the device's own aspect ratio, so nothing is actually cropped.
           className={cn(
             "h-full w-full object-cover outline-none ring-inset focus-visible:ring-2 focus-visible:ring-ring/70",
             videoStatus.kind !== "streaming" && "invisible",

@@ -155,7 +155,7 @@ describe("Synara harness policy", () => {
   it("withholds device guidance from sessions with no gateway control", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: false });
 
-    // Promising tools this session cannot reach would be a lie.
+    // promising tools this session can't reach would be a lie
     assert.notInclude(policy, "device_list");
     assert.notInclude(policy, "device_describe_ui");
   });

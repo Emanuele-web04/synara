@@ -1,8 +1,3 @@
-// FILE: feedbackDialogStore.ts
-// Purpose: Owns the single global Feedback Synara dialog state.
-// Layer: Web UI state
-// Depends on: The feedback feature context contract and Zustand.
-
 import { create } from "zustand";
 
 import type { FeedbackThreadContext } from "./feedback";

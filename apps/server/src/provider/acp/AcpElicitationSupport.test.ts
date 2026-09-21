@@ -1,8 +1,3 @@
-// FILE: AcpElicitationSupport.test.ts
-// Purpose: Verifies ACP form schemas and Synara answers round-trip without losing primitive types.
-// Layer: Provider ACP tests
-// Depends on: AcpElicitationSupport.
-
 import { describe, expect, it } from "vitest";
 
 import {

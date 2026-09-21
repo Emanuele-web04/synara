@@ -1,7 +1,4 @@
-// Probe 2: hybrid steer escalation. Start a turn stuck on a long Bash call,
-// queue a steer mid-flight, then interrupt(). Question: does the CLI deliver
-// the queued steer right after the interrupt (auto-dispatching it as the next
-// prompt with full conversation context), and how fast?
+// probe: does the CLI deliver a queued steer right after interrupt(), and how fast?
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -96,8 +93,7 @@ for await (const message of q) {
     log("user(replay):", summary);
   } else if (message.type === "result") {
     log("RESULT:", message.subtype, JSON.stringify(message.result ?? "").slice(0, 200));
-    // Keep listening: after an interrupted result the queued steer may start
-    // a follow-up turn on the same session.
+    // keep listening — after an interrupted result the queued steer may start a follow-up turn on the same session
   } else if (message.type === "system") {
     log("system", message.subtype ?? "");
   } else {

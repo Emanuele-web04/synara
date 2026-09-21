@@ -5,7 +5,6 @@ import { DeviceManager } from "./DeviceManager.ts";
 
 const THREAD = "11111111-1111-4111-8111-111111111111";
 
-/** The cold-boot failure: booted, but no display published yet. */
 const NO_DISPLAY = "display has no framebuffer surface yet";
 
 async function waitFor(check: () => boolean, what: string): Promise<void> {
@@ -38,7 +37,7 @@ describe("cold-boot attach", () => {
 
     await waitFor(() => backend.hasStream(device.udid), "the retried attach to succeed");
     const settled = await manager.getThreadState(THREAD);
-    // The retry worked, so nothing about the transient failure survives it.
+    // the retry worked, so nothing about the transient failure survives it
     expect(settled.lastError).toBeNull();
     expect(settled.attachPhase).toBeNull();
     expect(backend.callsOfKind("attachStream").length).toBeGreaterThan(1);
@@ -70,13 +69,11 @@ describe("cold-boot attach", () => {
 
     await manager.attach(THREAD, device.udid);
 
-    // Names what to do instead of repeating the helper's complaint about a
-    // framebuffer surface, which tells the user nothing they can act on.
+    // names what to do instead of repeating the helper's "no framebuffer surface" complaint
     expect(await waitForError(manager)).toContain("never published a screen");
     const state = await manager.getThreadState(THREAD);
     expect(state.attachPhase).toBeNull();
-    // The attachment survives: input and the agent's tools still work, so the
-    // device stays selected rather than making the user pick it again.
+    // the attachment survives — input and tools still work, so the device stays selected
     expect(state.attachedDeviceUdid).toBe(device.udid);
   });
 
@@ -90,7 +87,7 @@ describe("cold-boot attach", () => {
     await manager.attach(THREAD, device.udid);
 
     expect(await waitForError(manager)).toContain("could not be built");
-    // One attempt: a helper that will not compile will not compile in a second.
+    // a helper that will not compile will not compile in a second
     expect(backend.callsOfKind("attachStream")).toHaveLength(1);
   });
 
@@ -108,8 +105,7 @@ describe("cold-boot attach", () => {
     await manager.attach(THREAD, second.udid);
 
     await waitFor(() => backend.hasStream(second.udid), "the second device to stream");
-    // A superseded retry loop must not write a phase or an error onto the
-    // device the user actually switched to.
+    // a superseded retry loop must not write a phase or an error onto the device the user switched to
     const state = await manager.getThreadState(THREAD);
     expect(state.attachedDeviceUdid).toBe(second.udid);
     expect(state.lastError).toBeNull();

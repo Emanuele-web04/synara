@@ -1,12 +1,4 @@
-// FILE: devicePromptContext.ts
-// Purpose: Attach a simulator screenshot when the composer prompt is clearly about the device screen.
-// Layer: Composer helper
-// Exports: prompt matchers, screenshot -> attachment conversion, and the resolution entry point
-// Depends on: nativeApi device namespace, composer image preparation
-//
-// Mirrors browserPromptContext: the agent can take its own screenshot through
-// MCP, but a user typing "what do you see on the simulator?" expects the image
-// to already be attached rather than to wait a round trip for the agent to ask.
+// the agent could take its own screenshot via MCP, but "what do you see on the simulator?" expects the image already attached rather than a round trip
 
 import type {
   DeviceScreenshotResult,
@@ -72,8 +64,7 @@ export function deviceScreenshotAttachmentName(input: DeviceScreenshotResult): s
 }
 
 function fileFromDeviceScreenshot(screenshot: DeviceScreenshotResult): File {
-  // Screenshots cross the JSON socket base64-encoded, unlike the browser's
-  // Electron-only Uint8Array path.
+  // screenshots cross the JSON socket base64-encoded, unlike the browser's Electron-only Uint8Array path
   const binary = atob(screenshot.bytesBase64);
   if (binary.length === 0) {
     throw new Error("Simulator screenshot is empty.");
@@ -118,8 +109,7 @@ export async function maybeResolveDevicePromptAttachment(input: {
   try {
     deviceState = await input.api.device.getThreadState({ threadId: input.threadId });
   } catch {
-    // Off-macOS or no engine: treat it as "nothing attached" rather than an
-    // error, since the user's prompt may simply not be about a simulator.
+    // off-macOS or no engine = nothing attached, not an error — the prompt may simply not be about a simulator
     return { requested: true, image: null, reason: "no-attached-device" };
   }
 

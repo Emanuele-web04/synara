@@ -1,8 +1,3 @@
-// FILE: threadMentions.ts
-// Purpose: Shared `thread://` mention path convention for composer chat mentions.
-// Layer: Shared runtime utilities (consumed by both server and web)
-// Exports: THREAD_MENTION_PATH_PREFIX, isThreadMentionPath, threadMentionPathForThreadId, threadIdFromThreadMentionPath
-
 export const THREAD_MENTION_PATH_PREFIX = "thread://";
 
 export function isThreadMentionPath(path: string): boolean {

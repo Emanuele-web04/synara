@@ -1,13 +1,3 @@
-/**
- * MigrationsLive - Migration runner with inline loader
- *
- * Uses Migrator.make with fromRecord to define migrations inline.
- * All migrations are statically imported - no dynamic file system loading.
- *
- * Migrations run automatically when the MigrationLayer is provided,
- * ensuring the database schema is always up-to-date before the application starts.
- */
-
 import * as Migrator from "effect/unstable/sql/Migrator";
 import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
@@ -15,7 +5,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { MigrationLineageError, MigrationSchemaTooNewError } from "./Errors.ts";
 
-// Import all migrations statically
+// import all migrations statically — no dynamic fs loading
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
 import Migration0002 from "./Migrations/002_OrchestrationCommandReceipts.ts";
 import Migration0003 from "./Migrations/003_CheckpointDiffBlobs.ts";
@@ -125,16 +115,7 @@ import ProjectImportOriginsMigration from "./Migrations/106_ProjectImportOrigins
 import Migration0108 from "./Migrations/108_GatewayCompletions.ts";
 import Migration0107 from "./Migrations/107_ProjectionThreadsHumanMessage.ts";
 
-/**
- * Migration loader with all migrations defined inline.
- *
- * Key format: "{id}_{name}" where:
- * - id: numeric migration ID (determines execution order)
- * - name: descriptive name for the migration
- *
- * Uses Migrator.fromRecord which parses the key format and
- * returns migrations sorted by ID.
- */
+/** key format "{id}_{name}"; Migrator.fromRecord sorts by id */
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
   [2, "OrchestrationCommandReceipts", Migration0002],
@@ -189,9 +170,7 @@ export const migrationEntries = [
   [51, "ProfileStatsDeletedTokensModel", Migration0051],
   [52, "ProjectionThreadUserMessageSummaryIndex", Migration0052],
   [53, "BackfillThreadActivitySequence", Migration0053],
-  // Private development builds briefly recorded this tracker identity while
-  // exercising provider delivery. Keep the ID/name canonical as a no-op; the
-  // production cutover is registered independently at migration 64.
+  // private dev builds briefly recorded this tracker identity; production cutover is migration 64
   [54, "DurableProviderCommandDelivery", Migration0054],
   [55, "ManagedAttachments", Migration0055],
   [56, "CommandReceiptFingerprints", Migration0056],
@@ -241,7 +220,7 @@ export const migrationEntries = [
   [100, "MessageTextChunks", Migration0100],
   [101, "RemoveTranscriptMarkers", Migration0101],
   [102, "ProjectionThreadMessagesTurnBoundary", Migration0102],
-  // Keep this ID literal: scripts/check-migration-lineage.ts parses this list.
+  // keep this ID literal — scripts/check-migration-lineage.ts parses this list
   [103, "ClaudeTokenAccounting", ClaudeTokenAccountingMigration],
   [104, "ProjectionThreadsClaudeCacheReview", Migration0104],
   [105, "AsyncUserInput", AsyncUserInputMigration],
@@ -259,19 +238,7 @@ export const makeMigrationLoader = (throughId?: number) =>
     ),
   );
 
-/**
- * Highest migration ID whose content is identical across every supported
- * imported lineage. A name mismatch at or below this ID
- * means the database does not come from any known lineage, so re-running
- * migrations could destroy data — refuse to start instead.
- *
- * This boundary cannot be raised past 16 today: predecessor-lineage imports
- * (see `Migrations/032_ReconcileImportedSchemaLineage.ts`) record foreign names
- * from ID 17 onward and are repaired by the replay path below. Exported because
- * `MigrationBackup.inspectMigrationBackupPlan` gates the same way when it decides
- * whether a pre-migration backup is warranted. Renumbering regressions are
- * prevented at the source instead, by `scripts/check-migration-lineage.ts`.
- */
+/** a name mismatch at or below this ID means the database is from no known lineage — refuse to start rather than replay destructively; can't be raised past 16: predecessor imports record foreign names from 17 onward; renumbering regressions prevented at the source by check-migration-lineage.ts */
 export const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
 const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id));
 
@@ -298,43 +265,14 @@ export function planLegacyMigration32Rename(
     : null;
 }
 
-/**
- * First canonical entry whose name is not recorded at the same ID, considering
- * only IDs the database claims to have applied.
- *
- * Shared by the alias pre-check, the replay path, and
- * `MigrationBackup.inspectMigrationBackupPlan`, so "this database will be
- * replayed" and "this database needs a backup first" can never disagree.
- */
+/** shared by the alias pre-check, the replay path, and inspectMigrationBackupPlan — "will be replayed" and "needs a backup" can never disagree */
 export const findFirstMigrationLineageDivergence = (
   recordedNamesById: ReadonlyMap<number, string>,
   highWaterMark: number,
 ) =>
   migrationEntries.find(([id, name]) => id <= highWaterMark && recordedNamesById.get(id) !== name);
 
-/**
- * A tracker identity that a *released* Synara build wrote for a migration whose
- * canonical ID later changed.
- *
- * v0.5.5 shipped `[54, "ProjectPullRequestPins"]`; v0.6.0 reserved 54 for the
- * private-build `DurableProviderCommandDelivery` identity and moved the pins
- * migration to 69. Without an entry here every v0.5.5 database is misread as a
- * foreign import, and the replay path wipes and re-runs every tracker row from
- * the divergence onward — destructive, and fatal on any database whose schema
- * is already partway into the newer range (migration 56 is a bare
- * `ALTER TABLE ... ADD COLUMN`, so it dies on `duplicate column name`).
- *
- * `historicalSlotRequiresRerun` is the reviewed answer to a single question:
- * does the migration Synara registers at `historicalId` *today* still need to
- * run on a database that recorded the historical identity? When it is `false`
- * the row is renamed to the canonical identity in place and nothing replays;
- * when it is `true` the row is removed so the migrator re-runs that one ID.
- *
- * The alias intentionally does *not* renumber the row to `currentId`: the
- * migrator gates purely on `max(migration_id)`, so moving the row to 69 would
- * skip migrations 54–68, which a v0.5.5 database has genuinely never applied.
- * The migration at `currentId` therefore re-runs, and must be idempotent.
- */
+/** a tracker identity a *released* build wrote for a migration whose ID later changed: v0.5.5 shipped [54, ProjectPullRequestPins], v0.6.0 reserved 54 and moved pins to 69 — without this every v0.5.5 db reads as foreign and the replay wipes/re-runs from the divergence (fatal: 56 is a bare ADD COLUMN); the alias intentionally does NOT renumber to currentId — the migrator gates on max(id) so that would skip 54–68; the currentId migration re-runs and must be idempotent */
 export interface MigrationLineageAlias {
   readonly historicalId: number;
   readonly historicalName: string;
@@ -344,9 +282,7 @@ export interface MigrationLineageAlias {
 
 export const MIGRATION_LINEAGE_ALIASES: readonly MigrationLineageAlias[] = [
   {
-    // Shipped in v0.5.5. Migration 54 is now `Effect.void` (see
-    // `Migrations/054_ReservedDurableProviderCommandDelivery.ts`), so the slot
-    // needs no work on a database that already recorded it.
+    // shipped in v0.5.5; migration 54 is now Effect.void so the slot needs no work on a db that recorded it
     historicalId: 54,
     historicalName: "ProjectPullRequestPins",
     currentId: 69,
@@ -358,24 +294,15 @@ export type MigrationLineageAliasRepair =
   | { readonly kind: "rename"; readonly migrationId: number; readonly name: string }
   | { readonly kind: "remove"; readonly migrationId: number };
 
-/**
- * Metadata-only repairs that turn a recorded tracker carrying known historical
- * identities into an exact prefix of the canonical lineage.
- *
- * Returns an empty list unless *every* remaining (id, name) pair lines up
- * afterwards, so a tracker that also diverges for unrelated reasons falls
- * through to the unchanged replay path.
- */
+/** metadata-only repairs turning a tracker with known historical identities into an exact canonical prefix; empty unless every pair lines up — unrelated divergence falls through to replay */
 export const planMigrationLineageAliasRepairs = (
   recordedNamesById: ReadonlyMap<number, string>,
 ): readonly MigrationLineageAliasRepair[] => {
   const applicable = MIGRATION_LINEAGE_ALIASES.filter(
     (alias) =>
       recordedNamesById.get(alias.historicalId) === alias.historicalName &&
-      // The historical identity must actually be a divergence today...
+      // the historical identity must actually be a divergence today, and the alias must still point where that migration now lives — a stale table degrades to old behavior instead of corrupting one
       canonicalMigrationNamesById.get(alias.historicalId) !== alias.historicalName &&
-      // ...and the alias must still point at where that migration now lives, so
-      // a stale table degrades to the old behavior instead of corrupting one.
       canonicalMigrationNamesById.get(alias.currentId) === alias.historicalName,
   );
   if (applicable.length === 0) {
@@ -402,36 +329,11 @@ export const planMigrationLineageAliasRepairs = (
   return repairs;
 };
 
-/**
- * Repairs the migration tracker of an imported legacy database before the
- * migrator runs.
- *
- * Imported databases can carry their own `effect_sql_migrations` rows,
- * recorded under that lineage's migration names
- * at the same numeric IDs. The migrator gates purely on max(migration_id), so
- * once the imported tracker's high-water mark reaches Synara's latest ID,
- * every Synara migration is skipped silently and startup crashes on missing
- * columns such as `projection_threads.env_mode`. Renumbering self-heal
- * migrations past the legacy IDs (#023, then #032) loses that race whenever
- * the legacy lineage ships more migrations.
- *
- * Instead, compare the recorded (id, name) pairs against Synara's lineage and
- * delete every tracker row from the first divergence onward. The migrator
- * then re-runs those migrations in order; every migration past
- * {@link LAST_SHARED_LINEAGE_MIGRATION_ID} is idempotent, so re-running them
- * over a legacy-evolved schema is safe and loses no data.
- *
- * Divergences caused by Synara renumbering one of its *own* released
- * migrations are handled first and separately, through
- * {@link MIGRATION_LINEAGE_ALIASES}: those trackers are repaired in place
- * rather than truncated, because the rows below the divergence are genuinely
- * ours and the schema they describe is genuinely applied.
- */
+/** imported DBs carry their own tracker rows under their lineage's names at the same IDs — the migrator gates on max(id), so once the imported mark reaches our latest ID every Synara migration is skipped and startup crashes on missing columns; instead compare (id,name) pairs and delete every row from the first divergence — migrations past the shared boundary are idempotent; Synara's own renumberings are repaired in place via MIGRATION_LINEAGE_ALIASES first */
 export const reconcileMigrationLineage = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // The tracker table (Migrator's default name) does not exist before the
-  // first migration run on a fresh database.
+  // the tracker table doesn't exist before the first migration run on a fresh database
   const trackerTables = yield* sql<{ readonly name: string }>`
     SELECT name FROM sqlite_master
     WHERE type = 'table' AND name = 'effect_sql_migrations'
@@ -457,10 +359,7 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
       SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id ASC
     `;
   }
-  // A released Synara build may have recorded a migration under an ID it no
-  // longer occupies. That is a tracker-metadata problem, not a foreign lineage:
-  // repair the affected rows in place and leave every other row untouched, so
-  // the migrator still runs exactly the migrations this database has not seen.
+  // a released build may have recorded a migration under an ID it no longer occupies — tracker metadata, not foreign lineage; repair in place so the migrator runs exactly what this db hasn't seen
   const aliasRepairs = planMigrationLineageAliasRepairs(
     new Map(recorded.map((row) => [row.migration_id, row.name])),
   );
@@ -501,10 +400,7 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
   const recordedNamesById = new Map(recorded.map((row) => [row.migration_id, row.name]));
   const diverged = findFirstMigrationLineageDivergence(recordedNamesById, highWaterMark);
   if (diverged === undefined) {
-    // An exact known prefix followed by unknown migrations is a database from
-    // a newer Synara build. Continuing would expose it to stale writable
-    // repositories and background services, so fail before the migrator can
-    // mutate either schema or tracker state.
+    // an exact known prefix followed by unknown migrations is a newer Synara build — fail before the migrator can mutate schema or tracker
     if (highWaterMark > LATEST_MIGRATION_ID) {
       return yield* Effect.fail(
         new MigrationSchemaTooNewError({
@@ -531,26 +427,14 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
   yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= ${firstDivergedId}`;
 });
 
-/**
- * Migrator run function - no schema dumping needed
- * Uses the base Migrator.make without platform dependencies
- */
+/** Migrator.make without platform dependencies */
 const run = Migrator.make({});
 
 export interface RunMigrationsOptions {
   readonly toMigrationInclusive?: number | undefined;
 }
 
-/**
- * Run all pending migrations.
- *
- * Creates the migrations tracking table (effect_sql_migrations) if it doesn't exist,
- * then runs any migrations with ID greater than the latest recorded migration.
- *
- * Returns array of [id, name] tuples for migrations that were run.
- *
- * @returns Effect containing array of executed migrations
- */
+/** runs pending migrations; creates the tracking table if missing; returns [id, name] tuples that ran */
 export const runMigrations = ({ toMigrationInclusive }: RunMigrationsOptions = {}) =>
   Effect.gen(function* () {
     yield* reconcileMigrationLineage;
@@ -566,21 +450,5 @@ export const runMigrations = ({ toMigrationInclusive }: RunMigrationsOptions = {
     return executedMigrations;
   });
 
-/**
- * Layer that runs migrations when the layer is built.
- *
- * Use this to ensure migrations run before your application starts.
- * Migrations are run automatically - no separate script is needed.
- *
- * @example
- * ```typescript
- * import { MigrationsLive } from "@acme/db/Migrations"
- * import * as SqliteClient from "@acme/db/SqliteClient"
- *
- * // Migrations run automatically when SqliteClient is provided
- * const AppLayer = MigrationsLive.pipe(
- *   Layer.provideMerge(SqliteClient.layer({ filename: "database.sqlite" }))
- * )
- * ```
- */
+/** migrations run when the layer is built — no separate script */
 export const MigrationsLive = Layer.effectDiscard(runMigrations());

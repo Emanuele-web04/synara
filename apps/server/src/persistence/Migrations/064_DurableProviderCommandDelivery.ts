@@ -3,10 +3,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { PROVIDER_COMMAND_REACTOR_CONSUMER } from "../Services/OrchestrationEventDeliveries.ts";
 
-// Activates durable provider-command delivery at the exact event-log high-water
-// mark. Older events were handled by the former live-only reactor and must not
-// be replayed into providers. Private builds that created these tables under
-// reserved migration 54 converge through the idempotent DDL and cursor insert.
+// activates durable delivery at the exact event-log high-water mark — older events were handled by the live-only reactor and must not be replayed; private builds converge through idempotent DDL + cursor insert
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const migratedAt = new Date().toISOString();

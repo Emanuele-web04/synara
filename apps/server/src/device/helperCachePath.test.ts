@@ -17,13 +17,7 @@ function result(stdout: string, code = 0): ProcessRunResult {
   return { stdout, stderr: "", code, signal: null, timedOut: false };
 }
 
-/**
- * The server builds the helper into a cache directory and
- * `scripts/device-helper-smoke.ts` builds it into one too. They used to derive
- * that path independently and disagreed ("26.2-17C52" vs "17C52"), so a
- * passing smoke run left a binary the server never found. These tests pin the
- * one derivation both now share.
- */
+/** server and smoke CLI used to derive the cache path independently and disagreed — a passing smoke run left a binary the server never found; these pin the one shared derivation */
 describe("helper cache path agreement", () => {
   it("builds into the directory the shared key names", async () => {
     const commands: Array<{ command: string; args: readonly string[] }> = [];
@@ -34,9 +28,7 @@ describe("helper cache path agreement", () => {
       run: async (command, args) => {
         commands.push({ command, args });
         if (command === "xcodebuild") return result(XCODEBUILD_OUTPUT);
-        // The build "succeeds" but writes nothing, so compilation fails after
-        // the output directory has already been chosen — which is all this
-        // test needs to observe.
+        // the build "succeeds" but writes nothing — compilation fails after the output dir is chosen, which is all this test needs to observe
         return result("");
       },
     });

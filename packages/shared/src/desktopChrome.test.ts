@@ -49,8 +49,7 @@ describe("resolveDesktopDipRectFromCssRect", () => {
   });
 
   it("shrinks the DIP rect when the shell is zoomed out", () => {
-    // The regression this guards: a zoomed-out shell measures a slot wider in CSS px
-    // than it physically occupies, so an unconverted rect overflowed the panel.
+    // regression: a zoomed-out shell measures a slot wider in CSS px than it physically occupies — an unconverted rect overflowed the panel
     expect(resolveDesktopDipRectFromCssRect(rect, 0.5)).toEqual({
       x: 160,
       y: 23,

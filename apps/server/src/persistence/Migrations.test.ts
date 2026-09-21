@@ -28,18 +28,13 @@ const projectionThreadsColumnNames = (sql: SqlClient.SqlClient) =>
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
 layer("reconcileMigrationLineage", (it) => {
-  // An imported database whose tracker high-water
-  // mark is at or beyond Synara's latest migration ID. The migrator's max-ID
-  // gate then skips every Synara migration — including the #032 self-heal —
-  // and startup crashes on the missing env_mode column.
+  // imported db whose tracker high-water mark reaches Synara's latest ID — the max-ID gate skips every migration including the #032 self-heal, and startup crashes on missing env_mode
   it.effect("re-runs skipped migrations when an imported tracker outruns Synara's latest ID", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // Bring the schema to the last shared migration.
       yield* runMigrations({ toMigrationInclusive: 16 });
 
-      // Record a foreign lineage from 17 through past Synara's latest ID.
       const latestSynaraId = Math.max(...migrationEntries.map(([id]) => id));
       for (let id = 17; id <= latestSynaraId + 3; id++) {
         yield* sql`
@@ -48,8 +43,7 @@ layer("reconcileMigrationLineage", (it) => {
         `;
       }
 
-      // The foreign lineage added some of the same columns, so the
-      // re-run must tolerate columns that already exist.
+      // the foreign lineage added some of the same columns — the re-run must tolerate existing columns
       yield* sql`ALTER TABLE projection_threads ADD COLUMN archived_at TEXT`;
 
       const beforeColumns = yield* projectionThreadsColumnNames(sql);
@@ -65,7 +59,6 @@ layer("reconcileMigrationLineage", (it) => {
       assert.include(afterColumns, "env_mode");
       assert.include(afterColumns, "archived_at");
 
-      // The tracker now mirrors the Synara lineage exactly; foreign rows are gone.
       const rows = yield* trackerRows(sql);
       assert.deepStrictEqual(
         rows.map((row) => [row.migration_id, row.name]),
@@ -131,7 +124,6 @@ layer("reconcileMigrationLineage", (it) => {
       const rows = yield* trackerRows(sql);
       assert.deepStrictEqual(rows, rowsBefore);
 
-      // The suite shares one in-memory database through the layer.
       yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = ${futureId}`;
     }),
   );
@@ -151,7 +143,6 @@ layer("reconcileMigrationLineage", (it) => {
       const error = yield* Effect.flip(runMigrations());
       assert.strictEqual(error._tag, "MigrationLineageError");
 
-      // Nothing was deleted on the unrecognized database.
       const rowsAfter = yield* trackerRows(sql);
       assert.deepStrictEqual(rowsAfter, rowsBefore);
     }),
@@ -517,8 +508,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 69 });
 
-      // Private builds of the original Spaces branch claimed migration 70 before
-      // current main assigned that ID to AgentGatewayOperations.
+      // private builds of the original Spaces branch claimed migration 70 before main assigned it to AgentGatewayOperations
       yield* SpacesMigration;
       yield* sql`
         INSERT INTO projection_spaces (
@@ -661,9 +651,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 74 });
 
-      // PR #365 previously published Spaces as migration 74. Main now owns 74–78 for
-      // External MCP, so lineage reconciliation must replay that canonical range and
-      // apply Spaces at 79 without dropping the already-created table or rows.
+      // PR #365 previously published Spaces as 74; main owns 74–78 for External MCP — reconciliation replays that range and applies Spaces at 79 without dropping the table
       yield* SpacesMigration;
       yield* sql`
         INSERT INTO projection_spaces (
@@ -917,8 +905,7 @@ managedAttachmentsIdempotencyLayer("managed attachment migration idempotency", (
 
 const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
 
-// `migrationEntries` is `as const`, so an inferred Map keys on the literal id union and rejects
-// the plain `number` ids these helpers are looked up with. Widen the key type once, here.
+// migrationEntries is `as const` — an inferred Map keys on the literal union and rejects plain `number`; widen once here
 const canonicalNamesById = new Map<number, string>(
   migrationEntries.map(([id, name]) => [id, name] as const),
 );
@@ -936,15 +923,13 @@ const trackerCreatedAtById = (sql: SqlClient.SqlClient) =>
 describe("migration lineage aliases", () => {
   it("keeps every declared alias consistent with the current lineage", () => {
     for (const alias of MIGRATION_LINEAGE_ALIASES) {
-      // The migration must still live at `currentId` under the historical name,
-      // otherwise the alias silently stops repairing the databases it names.
+      // the migration must still live at `currentId` under the historical name or the alias silently stops repairing the databases it names
       assert.strictEqual(
         canonicalNamesById.get(alias.currentId),
         alias.historicalName,
         `alias for ${alias.historicalName} no longer resolves to migration ${alias.currentId}`,
       );
-      // The historical slot must still be a real divergence, and must still be
-      // occupied — the repair renames the row to whatever lives there now.
+      // the historical slot must still be a real divergence, still occupied — the repair renames to whatever lives there now
       assert.isDefined(canonicalNamesById.get(alias.historicalId));
       assert.notStrictEqual(canonicalNamesById.get(alias.historicalId), alias.historicalName);
     }
@@ -962,7 +947,7 @@ describe("migration lineage aliases", () => {
   it("declines when the tracker also diverges outside the alias", () => {
     const recorded = canonicalTrackerThrough(53);
     recorded.set(54, "ProjectPullRequestPins");
-    // Development builds between v0.5.5 and v0.6.0 also claimed migration 55.
+    // dev builds between v0.5.5 and v0.6.0 also claimed migration 55
     recorded.set(55, "AgentGatewayOperations");
 
     assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), []);
@@ -987,8 +972,7 @@ releasedV055Layer("released v0.5.5 database", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // Reproduce a database written by v0.5.5: canonical rows 1-53, then the
-      // pins migration recorded under the ID that release shipped it at.
+      // a v0.5.5 database: canonical 1-53 then the pins migration at the ID that release shipped it at
       yield* runMigrations({ toMigrationInclusive: 53 });
       yield* ProjectPullRequestPinsMigration;
       yield* sql`
@@ -1003,7 +987,7 @@ releasedV055Layer("released v0.5.5 database", (it) => {
       const createdAtBefore = yield* trackerCreatedAtById(sql);
       const executed = yield* runMigrations();
 
-      // Migration 54 is never replayed: its tracker row was renamed in place.
+      // migration 54 is never replayed — its tracker row was renamed in place
       assert.deepStrictEqual(
         executed.map(([id]) => id),
         migrationEntries.map(([id]) => id).filter((id) => id >= 55),
@@ -1015,14 +999,13 @@ releasedV055Layer("released v0.5.5 database", (it) => {
         migrationEntries.map(([id, name]) => [id, name]),
       );
 
-      // Every pre-existing row survived as a row — a metadata fix-up, not a
-      // delete-and-replay. `created_at` would change if rows were re-inserted.
+      // every row survived as a row — a metadata fix-up, not delete-and-replay; created_at would change on re-insert
       const createdAtAfter = yield* trackerCreatedAtById(sql);
       for (const [id, createdAt] of createdAtBefore) {
         assert.strictEqual(createdAtAfter.get(id), createdAt, `migration ${id} row was recreated`);
       }
 
-      // The pins migration re-runs at 69 and must be a no-op over real data.
+      // the pins migration re-runs at 69 and must be a no-op over real data
       const pins = yield* sql<{ readonly projectId: string; readonly number: number }>`
         SELECT project_id AS "projectId", pull_request_number AS "number"
         FROM project_pull_request_pins
@@ -1039,9 +1022,7 @@ divergedBeyondAliasLayer("tracker that diverges beyond a known alias", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // A development build between v0.5.5 and v0.6.0: migration 54 matches the
-      // alias but 55 was claimed by an unrelated migration, so this is not a
-      // v0.5.5 database and must keep taking the existing replay path.
+      // a dev-build db where 54 matches the alias but 55 was claimed by an unrelated migration — not a v0.5.5 db, keeps the replay path
       yield* runMigrations({ toMigrationInclusive: 53 });
       yield* ProjectPullRequestPinsMigration;
       yield* sql`

@@ -1,7 +1,3 @@
-// FILE: MessagesTimeline.messageEnter.browser.tsx
-// Purpose: Browser regression for the subtle enter animation on newly sent user messages.
-// Layer: Vitest browser tests
-
 import "../../index.css";
 
 import { MessageId } from "@synara/contracts";

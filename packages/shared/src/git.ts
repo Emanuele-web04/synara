@@ -1,11 +1,7 @@
-/**
- * Sanitize an arbitrary string into a valid, lowercase git branch fragment.
- * Strips quotes, collapses separators, limits to 64 chars.
- */
+/** strips quotes, collapses separators, 64-char cap */
 export const WORKTREE_BRANCH_PREFIX = "synara";
 const TEMP_WORKTREE_BRANCH_PATTERN = /^([a-z0-9][a-z0-9-]*)\/[0-9a-f]{8}$/;
-// Exact 64-bit namespace fingerprints preserve pre-cutover worktrees without
-// retaining retired first-party names in source or matching arbitrary namespaces.
+// exact 64-bit namespace fingerprints preserve pre-cutover worktrees without retaining retired names or matching arbitrary namespaces
 const PRE_CUTOVER_WORKTREE_NAMESPACE_HASHES = new Set([0x8559131d2c062cf0n, 0xd53b4ab95395e345n]);
 
 function hashWorktreeNamespace(value: string): bigint {
@@ -39,10 +35,7 @@ export function sanitizeBranchFragment(raw: string): string {
   return branchFragment.length > 0 ? branchFragment : "update";
 }
 
-/**
- * Sanitize a string into a `feature/…` branch name.
- * Preserves an existing `feature/` prefix or slash-separated namespace.
- */
+/** preserves an existing `feature/` prefix or slash-separated namespace */
 export function sanitizeFeatureBranchName(raw: string): string {
   const sanitized = sanitizeBranchFragment(raw);
   if (sanitized.includes("/")) {
@@ -72,10 +65,7 @@ function resolveUniqueBranchName(
   return `${resolvedBase}-${suffix}`;
 }
 
-/**
- * Resolve a unique `feature/…` branch name that doesn't collide with
- * any existing branch. Appends a numeric suffix when needed.
- */
+/** appends a numeric suffix on collision */
 export function resolveAutoFeatureBranchName(
   existingBranchNames: readonly string[],
   preferredBranch?: string,
@@ -125,8 +115,7 @@ export function buildTemporaryWorktreeBranchName(): string {
   return `${WORKTREE_BRANCH_PREFIX}/${token}`;
 }
 
-// Preserve semantic thread branches when transient worktree placeholders briefly
-// appear in git status during rename/bootstrap transitions.
+// preserve semantic thread branches when transient worktree placeholders appear in git status during rename/bootstrap transitions
 export function resolveThreadBranchRegressionGuard(input: {
   currentBranch: string | null;
   nextBranch: string | null;

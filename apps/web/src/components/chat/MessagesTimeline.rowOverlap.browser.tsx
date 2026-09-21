@@ -1,11 +1,3 @@
-// FILE: MessagesTimeline.rowOverlap.browser.tsx
-// Purpose: Browser regression for virtualized row overlap — while a turn
-//          streams (tool calls landing one by one, narration growing, groups
-//          collapsing behind summaries, disclosures animating), LegendList's
-//          absolutely-positioned row containers must never draw on top of each
-//          other for more than a transient frame.
-// Layer: Vitest browser tests
-
 import "../../index.css";
 
 import { MessageId } from "@synara/contracts";
@@ -18,13 +10,9 @@ import { MessagesTimeline } from "./MessagesTimeline";
 import type { TimelineEntry } from "../../session-logic";
 
 const VIEWPORT_HEIGHT_PX = 480;
-// Entry transforms (`chat-message-send-enter`) and sub-pixel rounding shift a
-// row's rect by a few pixels without any layout fault; only deeper intrusions
-// count as overlap.
+// Entry transforms (`chat-message-send-enter`) and sub-pixel rounding shift a row's rect by a few pixels without any layout fault; only deeper intrusions count as overlap.
 const OVERLAP_SLACK_PX = 4;
-// A stale measurement that self-corrects on the next layout pass is the
-// virtualizer working as designed. The user-visible bug is overlap that
-// persists across frames.
+// A stale measurement that self-corrects on the next layout pass is the virtualizer working as designed. The user-visible bug is overlap that persists across frames.
 const MAX_TOLERATED_OVERLAP_STREAK_FRAMES = 4;
 
 function messageEntry(
@@ -247,10 +235,7 @@ describe("MessagesTimeline row overlap under streaming", () => {
       void handle().listRef.current?.scrollToEnd?.({ animated: false });
       await nextFrame();
 
-      // A real turn: anchored send, then narration + tool calls streaming in.
-      // The user is reading rather than following the live tail, so once the
-      // anchor releases the list runs with maintainVisibleContentPosition on —
-      // the mode where anchor-locked size updates defer position recalcs.
+      // once the anchor releases, the list runs with maintainVisibleContentPosition on — anchor-locked size updates defer position recalcs
       handle().send("overlap-sent-message");
       handle().setFollowLiveOutput(false);
 
@@ -261,14 +246,7 @@ describe("MessagesTimeline row overlap under streaming", () => {
       let overlapStreakFrames = 0;
       let worstOverlapStreakFrames = 0;
 
-      // Painted-state sampler. Rendered frames are only observable between the
-      // frame's ResizeObserver phase and its paint: rAF-time sampling would see
-      // React's between-frames commit (row already grown) without the same
-      // frame's pre-paint corrections, a state that never reaches the screen.
-      // A ResizeObserver created after the timeline mounted is delivered after
-      // the timeline's own observers, and resizing the probe every rAF forces
-      // it to fire every frame — so its callback sees exactly what this frame
-      // paints.
+      // rendered frames are only observable between a frame's ResizeObserver phase and its paint — rAF sampling would see a between-frames commit state that never reaches the screen
       const probe = document.createElement("div");
       probe.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;";
       document.body.append(probe);
@@ -290,21 +268,18 @@ describe("MessagesTimeline row overlap under streaming", () => {
 
       const applyStreamStep = (frame: number) => {
         handle().update((current) => {
-          // Rebuild the live turn's entries from scratch each step, the way the
-          // store re-derives the timeline from projected events.
+          // Rebuild the live turn's entries from scratch each step, the way the store re-derives the timeline from projected events.
           const next = current.filter(
             (entry) =>
               !entry.id.startsWith("entry-narration-") && !entry.id.startsWith("entry-stream-"),
           );
-          // Narration text grows on a token cadence.
           if (frame % 3 === 0 && frame < 90) {
             narrationText += "Streaming narration text that keeps growing. ";
           }
           if (frame >= 90 && frame % 3 === 0 && frame < 150) {
             secondNarrationText += "Second narration block after the tools ran. ";
           }
-          // Tool calls land one at a time; the previous one completes as the
-          // next starts.
+          // Tool calls land one at a time; the previous one completes as the next starts.
           if (frame % 8 === 4 && commandCount < STREAM_COMMANDS.length && frame < 90) {
             commandCount += 1;
           }
@@ -321,9 +296,7 @@ describe("MessagesTimeline row overlap under streaming", () => {
           }
           const boundaryIndex = rebuilt.length;
           rebuilt.push(...commands);
-          // Mid-turn a thinking boundary splits the run, collapsing the settled
-          // commands behind a "Ran N commands" summary (the structural remap
-          // that swings two row heights in one commit).
+          // Mid-turn a thinking boundary splits the run, collapsing the settled commands behind a "Ran N commands" summary (the structural remap that swings two row heights in one commit).
           if (frame >= 56 && commandCount > 2) {
             rebuilt.splice(
               boundaryIndex + commandCount - 1,
@@ -342,29 +315,22 @@ describe("MessagesTimeline row overlap under streaming", () => {
 
       for (let frame = 0; frame < 170; frame += 1) {
         applyStreamStep(frame);
-        // Mid-stream the tail anchor releases (the real hand-off once the
-        // response grows past the reserve), turning maintainVisibleContentPosition
-        // back on while data keeps changing — the mode where LegendList's
-        // anchor lock defers size-driven position recalcs past the paint.
+        // mid-stream the tail anchor releases (the real hand-off once the response outgrows the reserve), turning maintainVisibleContentPosition back on
         if (frame === 40) {
           handle().clearAnchor();
         }
-        // The reader has scrolled to the live tail; the frame-100 disclosure
-        // now animates above the viewport, so MVCP keeps compensating scroll
-        // while sizes change — the anchor-locked mode that defers recalcs.
+        // The reader has scrolled to the live tail; the frame-100 disclosure now animates above the viewport, so MVCP keeps compensating scroll while sizes change — the anchor-locked mode that defers recalcs.
         if (frame === 95) {
           void handle().listRef.current?.scrollToEnd?.({ animated: false });
         }
-        // Toggle a summary disclosure while content still streams, so the
-        // 220ms height animation overlaps live growth.
+        // Toggle a summary disclosure while content still streams, so the 220ms height animation overlaps live growth.
         if (frame === 100) {
           findSummaryTrigger()?.click();
         }
         if (frame === 120) {
           findSummaryTrigger()?.click();
         }
-        // Alternate the probe's size so the sampler observer fires during this
-        // frame's pre-paint ResizeObserver phase and records the painted state.
+        // Alternate the probe's size so the sampler observer fires during this frame's pre-paint ResizeObserver phase and records the painted state.
         sampleFrame = frame;
         probe.style.height = `${1 + (frame % 2)}px`;
         await nextFrame();

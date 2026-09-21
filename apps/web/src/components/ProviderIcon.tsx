@@ -1,9 +1,3 @@
-/**
- * ProviderIcon - shared provider glyphs for chat, sidebar, and picker surfaces.
- *
- * Centralizes provider-to-icon mapping so new providers do not need repeated
- * branching across every UI surface.
- */
 import { type ProviderKind } from "@synara/contracts";
 import type { ReactNode, SVGProps } from "react";
 
@@ -24,10 +18,7 @@ import {
 
 export type ProviderIconTone = "default" | "header";
 
-// The bundled SVG has a dark outer fill, so dark mode swaps to the reversed Central asset.
-// React's SVGProps has no `title`, so accept it via an explicit prop type and forward it
-// only to CentralIcon (an HTML span, which supports `title`); the light-mode SVG conveys
-// its accessible name through aria-label instead.
+// dark mode swaps to the reversed Central asset; React's SVGProps has no `title` so it forwards only to CentralIcon, while the light SVG uses aria-label
 const OpenCodeProviderIcon = ({
   className,
   style,

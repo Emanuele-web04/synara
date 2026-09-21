@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 export const useProjectImportDialogStore = create<{
   isOpen: boolean;
-  // Sources preselected for the next open; null keeps the panel default (all sources).
+  // preselected sources for the next open; null keeps the panel default
   initialProviders: readonly ProjectImportProvider[] | null;
   openDialog: (providers?: readonly ProjectImportProvider[]) => void;
   closeDialog: () => void;

@@ -1,8 +1,3 @@
-// FILE: Sidebar.uiState.ts
-// Purpose: Persists sidebar-only UI preferences plus the last chat route for restore flows.
-// Layer: Browser storage helper
-// Exports: sidebar UI state read/write helpers.
-
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import type { LastThreadRoute } from "../chatRouteRestore";
 
@@ -27,8 +22,7 @@ const DEFAULT_SIDEBAR_UI_STATE: SidebarUiState = {
   activityViewEnabled: false,
 };
 
-// Persisted paging is a request, not a promise: render-time clamping trims it to the real
-// thread count, so the cap here only guards against absurd/corrupted stored values.
+// persisted paging is a request, not a promise — render-time clamping trims it to the real thread count, so this cap only guards absurd/corrupted stored values
 const MAX_PERSISTED_THREAD_LIST_EXTRA_PAGES = 1000;
 
 export function normalizeSidebarProjectThreadListCwd(cwd: string): string {

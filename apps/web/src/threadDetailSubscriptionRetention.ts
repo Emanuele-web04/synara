@@ -1,20 +1,10 @@
-// FILE: threadDetailSubscriptionRetention.ts
-// Purpose: Keep recently used thread-detail subscriptions warm across route/sidebar switches.
-// Layer: Web subscription retention utility
-// Exports: retain/release helpers, the connection lease selector, and a React listener.
-
 import { WS_STREAM_LIMITS, type ThreadId } from "@synara/contracts";
 import { useSyncExternalStore } from "react";
 import { useStore } from "./store";
 import type { AppState } from "./storeState";
 
 const THREAD_DETAIL_RETENTION_EVICTION_MS = 15 * 60 * 1000;
-// This is a client-side memory cache, not a stream budget: concurrent server
-// subscriptions stay capped at `WS_STREAM_LIMITS.threadPerClient` by
-// `resolveThreadDetailSubscriptionLeaseIds`, so a larger cache never widens
-// admission. It must exceed everything that retains at once (sidebar prewarm
-// window + split-view threads + a parent's live subagent children), otherwise the
-// map sits permanently over capacity and evicts warm detail on every store write.
+// this is a memory cache, not a stream budget — concurrent subscriptions stay capped server-side, and the cache must exceed everything retaining at once or it evicts warm detail on every write
 export const MAX_CACHED_THREAD_DETAIL_SUBSCRIPTIONS = 32;
 
 type RetainedThreadEntry = {
@@ -81,10 +71,7 @@ function isThreadDetailEvictionUnsafe(threadId: ThreadId): boolean {
 
   const threadShell = state.threadShellById?.[threadId];
   if (!threadShell) {
-    // Claude subagent children can have detail without a shell/sidebar row.
-    // Their normalized lifecycle slices still tell us whether eviction would
-    // discard live work. Once terminal, the retain timeout and capacity limit
-    // must be allowed to reclaim them or every completed child leaks forever.
+    // Claude subagent children can have detail without a shell row — once terminal, the timeout and capacity limit must reclaim them or every completed child leaks forever
     const hiddenSession = state.threadSessionById?.[threadId];
     const hiddenTurnState = state.threadTurnStateById?.[threadId];
     return (
@@ -160,8 +147,7 @@ function evictEntry(
   if (!retainedThreadEntries.delete(threadId)) {
     return;
   }
-  // The store's detail-wipe transition also drops the thread's resume cursor,
-  // so a resubscribe after this eviction fetches a fresh snapshot.
+  // the detail-wipe transition also drops the resume cursor — a resubscribe after eviction fetches a fresh snapshot
   useStore.getState().evictThreadDetail(threadId);
   emitEviction(threadId);
   if (options?.notify !== false) {
@@ -231,12 +217,7 @@ function reconcileRetentionEntries(): void {
   evictIdleEntriesToCapacity();
 }
 
-// This reconcile is re-entrant by design: it can evict, and eviction writes to the
-// store, which synchronously runs this subscriber again. It stays correct because
-// `evictEntry` deletes its entry before touching the store, and every step re-reads
-// the live map, so a nested pass can only evict entries the outer pass has not
-// claimed. The eviction notice is the one part that must not run inline — lease
-// owners answer it by queueing a stream refresh rather than writing state here.
+// re-entrant by design: evictEntry deletes its entry before touching the store and every step re-reads the live map, so a nested pass only evicts unclaimed entries — the eviction notice must not run inline
 useStore.subscribe((current, previous) => {
   if (!shouldReconcileThreadDetailRetention(current, previous)) {
     return;
@@ -328,8 +309,7 @@ export function resolveThreadDetailSubscriptionLeaseIds(input: {
   const threadIds = new Set<ThreadId>();
   for (const threadId of input.visibleThreadIds) {
     if (threadIds.size >= WS_STREAM_LIMITS.threadPerClient) break;
-    // A visible draft needs a lease before its shell row exists so its first
-    // provider events cannot outrun promotion into the server snapshot.
+    // a visible draft needs a lease before its shell row exists so its first provider events can't outrun promotion into the server snapshot
     threadIds.add(threadId);
   }
   for (const threadId of input.retainedThreadIds) {

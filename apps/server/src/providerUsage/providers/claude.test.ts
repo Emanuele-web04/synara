@@ -1,8 +1,3 @@
-// FILE: providerUsage/providers/claude.test.ts
-// Purpose: Covers Claude's CLI-delegated token lifecycle — expired/rejected credentials trigger
-// a `claude auth status` nudge (never a direct OAuth token call, which would burn the CLI's
-// single-use rotating refresh token) — plus source fallthrough and rate-limit resilience.
-
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
@@ -84,8 +79,7 @@ function writeClaudeCreds(credentialsPath: string, creds: Record<string, unknown
   writeFileSync(credentialsPath, JSON.stringify({ claudeAiOauth: creds }), "utf8");
 }
 
-/** Install a nudge stub so no test can ever exec a real `claude` binary or take the shared
- * process-wide auth-status lock. */
+/** nudge stub so no test can exec a real `claude` binary or take the process-wide auth-status lock */
 function stubAuthNudge(
   runAuthStatus: (input: {
     binaryPath: string;
@@ -166,7 +160,7 @@ describe("claudeUsageFetcher", () => {
       subscriptionType: "pro",
     });
 
-    // The CLI refreshes and persists its own rotated credential when nudged.
+    // the CLI refreshes and persists its own rotated credential when nudged
     const runMock = stubAuthNudge(async () => {
       writeClaudeCreds(credentialsPath, {
         accessToken: "fresh-access-token",
@@ -274,7 +268,7 @@ describe("claudeUsageFetcher", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(runMock).toHaveBeenCalledTimes(1);
 
-    // Within the nudge cooldown, further polls do not re-spawn the CLI.
+    // inside the nudge cooldown, further polls don't re-spawn the CLI
     const again = await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 30_000 });
     expect(again.status).toBe("needs-auth");
     expect(runMock).toHaveBeenCalledTimes(1);
@@ -342,7 +336,7 @@ describe("claudeUsageFetcher", () => {
     expect(first.status).toBe("ok");
     expect(first.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(33);
 
-    // Next poll is throttled: keep the last values, mark them stale, and honor Retry-After (~2m).
+    // throttled: keep the last values marked stale, honor Retry-After (~2m)
     throttle = true;
     const throttled = await claudeUsageFetcher.fetch(ctx);
     expect(throttled.status).toBe("ok");
@@ -351,7 +345,7 @@ describe("claudeUsageFetcher", () => {
     expect(throttled.detail).toContain("~2m");
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
-    // While the cooldown is active, subsequent polls serve the cache without re-hitting Anthropic.
+    // while the cooldown is active, polls serve the cache without re-hitting Anthropic
     const cached = await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 30_000 });
     expect(cached.status).toBe("ok");
     expect(cached.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(33);
@@ -428,8 +422,7 @@ describe("claudeUsageFetcher", () => {
     expect(snapshot.limits).toHaveLength(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    // Even with no cached usage to show, the cooldown must stop us from hammering the throttled
-    // endpoint on every poll.
+    // even with no cached usage, the cooldown must stop polling the throttled endpoint
     const duringCooldown = await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 30_000 });
     expect(duringCooldown.status).toBe("error");
     expect(fetchMock).toHaveBeenCalledTimes(1);

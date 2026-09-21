@@ -1,7 +1,3 @@
-// FILE: useProviderUsageSummary.test.tsx
-// Purpose: Verifies how the shared provider-usage summary hook arbitrates live,
-// local, OpenUsage, and thread-derived fallback usage signals.
-
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -58,8 +54,7 @@ function readProviderUsageSummary(input: {
   providerSnapshot?: ServerProviderUsageSnapshot | undefined;
   fetchOpenUsageData?: boolean;
 }) {
-  // Capture into a ref-style holder: the hook only runs inside the closure, so a
-  // plain `let` would narrow to `never` after the guard (TS can't see <Probe/> run).
+  // Capture into a ref-style holder: the hook only runs inside the closure, so a plain `let` would narrow to `never` after the guard (TS can't see <Probe/> run).
   const captured: { current: ReturnType<typeof useProviderUsageSummary> | null } = {
     current: null,
   };

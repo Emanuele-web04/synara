@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-// FILE: smoke-mac-update-artifact.ts
-// Purpose: HEAD-only smoke test for macOS update artifacts without downloading the zip.
-// Layer: Release/build script
-// Depends on: build-desktop-artifact.ts and mac-update-zip helpers.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";

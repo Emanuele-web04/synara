@@ -105,8 +105,7 @@ function createProviderServiceHarness(options?: { readonly persistedStream?: boo
     compactThread: () => unsupported(),
     closeRuntimeEvents: Effect.void,
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
-    // Only the already-persisted path uses this; when present the ingestion
-    // ignores `streamEvents`, so ordinary harnesses must not provide it.
+    // only the already-persisted path uses this — when present the ingestion ignores streamEvents so ordinary harnesses must not provide it
     ...(options?.persistedStream === true
       ? { streamPersistedEvents: Stream.fromPubSub(persistedEventPubSub) }
       : {}),
@@ -397,8 +396,7 @@ describe("ProviderRuntimeIngestion", () => {
         message: "Recovered durable provider output",
       },
     };
-    // This is the exact command the runtime event dispatches. Persisting it
-    // first models a crash after orchestration acceptance but before cursor ack.
+    // persisting the command first models a crash after orchestration acceptance but before cursor ack
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.activity.append",
@@ -464,9 +462,7 @@ describe("ProviderRuntimeIngestion", () => {
         `provider:${collisionEvent.eventId}:thread-activity-append:${threadId}:runtime.warning:${collisionEvent.eventId}`,
       );
 
-      // Model a crash/upgrade boundary: this event's command id was accepted
-      // under an older projection shape, but its runtime-journal row was never
-      // acknowledged. Replaying the current shape must collide deterministically.
+      // model a crash/upgrade boundary — the command id was accepted under an older projection shape but the journal row never acknowledged; replaying the current shape must collide deterministically
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.activity.append",
@@ -547,8 +543,7 @@ describe("ProviderRuntimeIngestion", () => {
 
       if (failPrefixAck) {
         const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
-        // Only the completed prefix fails to ack: incorrectly skipping ahead
-        // through the rest of the page would succeed and hide this failure.
+        // only the completed prefix fails to ack — skipping ahead through the page would hide the failure
         await Effect.runPromise(sql`
         CREATE TRIGGER fail_prefix_ack BEFORE UPDATE ON provider_runtime_event_consumers
         WHEN NEW.last_acked_sequence = ${sql.literal(String(prefixRow.sequence))}
@@ -618,10 +613,7 @@ describe("ProviderRuntimeIngestion", () => {
       `provider:${rejectedEvent.eventId}:thread-activity-append:${lateThreadId}:runtime.warning:${rejectedEvent.eventId}`,
     );
 
-    // Model a durable rejection: the exact command this event replays into was
-    // already rejected by an invariant (thread-2 did not exist yet when it was
-    // first dispatched), so every replay raises PreviouslyRejected — retrying
-    // the journal row can never succeed.
+    // the exact command this event replays into was already durably rejected (thread-2 didn't exist at first dispatch) — every replay raises PreviouslyRejected so the row can never succeed
     await expect(
       Effect.runPromise(
         harness.engine.dispatch({
@@ -893,7 +885,6 @@ describe("ProviderRuntimeIngestion", () => {
           ...base,
           payload: { streamKind: "assistant_text", delta },
         });
-        // Untyped provider lifecycle notifications project no visible tool row.
         await push({
           type: "item.updated",
           eventId: asEventId(`cjk-update-${index}`),
@@ -934,7 +925,6 @@ describe("ProviderRuntimeIngestion", () => {
     const push = (event: ProviderRuntimeEvent) =>
       Effect.runPromise(harness.runtimeEventRepository.append(event));
     const eventId = (suffix: string) => asEventId(`evt-segment-${suffix}`);
-    // Plan text before any tool activity.
     await push({
       type: "content.delta",
       eventId: eventId("1"),
@@ -955,14 +945,12 @@ describe("ProviderRuntimeIngestion", () => {
       itemId,
       payload: { streamKind: "assistant_text", delta: "scan files." },
     });
-    // A tool call runs between the second and third text deltas.
     const toolItemId = asItemId("tool-segment-interleave");
     await push({
       type: "item.started",
       eventId: eventId("3"),
       provider: "pi",
-      // Provider events can share the same millisecond. The causal event
-      // boundary must still split assistant text around the tool row.
+      // provider events can share the same millisecond — the causal boundary must still split assistant text around the tool row
       createdAt: "2026-07-14T00:10:01.000Z",
       threadId,
       turnId,
@@ -1041,9 +1029,7 @@ describe("ProviderRuntimeIngestion", () => {
     ).toEqual([
       {
         startedAt: "2026-07-14T00:10:00.000Z",
-        // Live (streaming) delivery stamps each segment with its own last
-        // delta's emit time, so endedAt reflects when that slice actually
-        // finished arriving rather than the terminal event's time.
+        // live delivery stamps each segment with its own last delta's emit time — endedAt reflects when that slice finished arriving
         endedAt: "2026-07-14T00:10:01.000Z",
         text: "Plan: scan files.",
       },
@@ -1054,8 +1040,7 @@ describe("ProviderRuntimeIngestion", () => {
       },
       {
         startedAt: "2026-07-14T00:10:40.000Z",
-        // The trailing segment closes when the message completes rather than
-        // at its last delta, since no later boundary exists to stamp it.
+        // the trailing segment closes at message completion — no later boundary exists to stamp it
         endedAt: "2026-07-14T00:10:45.000Z",
         text: "Done.",
       },
@@ -1328,7 +1313,6 @@ describe("ProviderRuntimeIngestion", () => {
       ).toBe(false);
 
       if (outcome === "user-interrupt") {
-        // A user stop in the session gap pauses independently of provider events.
         await Effect.runPromise(
           harness.engine.dispatch({
             type: "thread.turn.interrupt",
@@ -1614,8 +1598,7 @@ describe("ProviderRuntimeIngestion", () => {
       const harness = await createHarness();
       const now = new Date().toISOString();
 
-      // A user-input request left behind by a previous runtime: its in-memory
-      // callback cannot survive the restart, so no response can ever consume it.
+      // a request left by a previous runtime — its in-memory callback can't survive restart so no response can ever consume it
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.activity.append",
@@ -1674,7 +1657,7 @@ describe("ProviderRuntimeIngestion", () => {
         ),
       });
 
-      // Re-ingesting another session start must not duplicate the settlement.
+      // re-ingesting another session start must not duplicate the settlement
       harness.emit({
         type: "session.started",
         eventId: asEventId("evt-session-restarted-orphaned-again"),
@@ -1912,8 +1895,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("recovers generated-image references from persisted turn activities", async () => {
-    // Simulates a server restart after the image activity was projected: this
-    // ingestion instance has no matching entry in its in-memory pending cache.
+    // simulates a restart after the image activity was projected — no matching entry in the in-memory cache
     const harness = await createHarness();
     const turnId = asTurnId("turn-image-persisted-recovery");
     const imagePath = "/tmp/provider-thread/persisted-recovery.png";
@@ -1993,11 +1975,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("attaches generated images to the empty terminal assistant message, not collapsed commentary", async () => {
-    // Regression: Codex emits commentary, then the image artifact, then a distinct
-    // *intentionally empty* final assistant item (the artifact is the answer). The
-    // image must end up on the terminal message the transcript keeps visible — an
-    // image attached to commentary is folded into the "Worked for…" disclosure and
-    // the visible row renders "(empty response)".
+    // Codex emits commentary, then the image artifact, then an intentionally empty final item (the artifact is the answer) — the image must land on the terminal message; on commentary it folds into the disclosure and the visible row renders "(empty response)"
     const harness = await createHarness();
     const turnId = asTurnId("turn-image-empty-final");
     const imagePath = "/tmp/provider-thread/empty-final.png";
@@ -2056,7 +2034,7 @@ describe("ProviderRuntimeIngestion", () => {
         data: { kind: "codex.generated_image", path: imagePath, callId: "image-call" },
       },
     });
-    // The empty final item: no deltas, no fallback detail — mirrors the real trace.
+    // the empty final item — no deltas, no fallback detail; mirrors the real trace
     harness.emit({
       type: "item.completed",
       eventId: asEventId("evt-empty-final-answer-complete"),
@@ -2086,8 +2064,6 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     );
 
-    // The terminal message owns the image; commentary stays untouched and no
-    // synthetic image-only message was created.
     const commentary = thread.messages.find((message) => message.id === "assistant:commentary");
     expect(commentary?.text).toBe("Generating the image now…");
     const messagesWithImage = thread.messages.filter((message) =>
@@ -2185,15 +2161,12 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     );
 
-    // Replay the same image_generation_end event with a fresh eventId (provider would use a
-    // new id even for an idempotent replay). The dedup guard should prevent any further
-    // delta or complete dispatches because the target message already references the image.
+    // replay the same event with a fresh eventId — the dedup guard must prevent further dispatches since the message already references the image
     harness.emit({
       ...imageEvent,
       eventId: asEventId("evt-replay-image-complete-2"),
     });
 
-    // Give the ingestion worker a beat to process the replay.
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const finalText = await Effect.runPromise(
@@ -2206,7 +2179,6 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     );
 
-    // Same text, still finalized, and the image markdown is not duplicated.
     expect(finalText).toBe(eventCountBeforeReplay);
     const occurrences = finalText.split(`![Generated image](${imagePath})`).length - 1;
     expect(occurrences).toBe(1);
@@ -3030,7 +3002,7 @@ describe("ProviderRuntimeIngestion", () => {
     const activity = thread.activities.find(
       (candidate: ProviderRuntimeTestActivity) => candidate.id === "evt-turn-completed-model-usage",
     );
-    // Zero-usage models are dropped; cache reads/writes fold into inputTokens.
+    // zero-usage models dropped; cache reads/writes fold into inputTokens
     expect(activity).toMatchObject({
       kind: "turn.completed",
       payload: {
@@ -3738,7 +3710,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    // Unbound turns default to streaming; buffered requires an explicit request.
+    // unbound turns default to streaming — buffered requires an explicit request
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -3828,7 +3800,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    // Unbound turns default to streaming; buffered requires an explicit request.
+    // unbound turns default to streaming — buffered requires an explicit request
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -4435,8 +4407,7 @@ describe("ProviderRuntimeIngestion", () => {
       secondThreadId,
     );
 
-    // A terminal event for the buffered turn must neither erase its policy for
-    // late events nor disturb the still-active streaming turn on another thread.
+    // a terminal event for the buffered turn must neither erase its policy for late events nor disturb the active streaming turn on another thread
     harness.emit({
       type: "content.delta",
       eventId: asEventId("evt-late-delta-overlap-buffered"),
@@ -4755,9 +4726,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
     await harness.drain();
 
-    // The causally earlier request can arrive late from the independent domain
-    // stream. It belongs to the already-settled unmatched turn and must be
-    // discarded rather than queued ahead of the next real request.
+    // a causally earlier request arriving late belongs to the already-settled unmatched turn — discarded rather than queued ahead of the next real one
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -7288,10 +7257,7 @@ describe("ProviderRuntimeIngestion", () => {
       }),
     );
 
-    // A later provider event for the same child must not try to resurrect the
-    // tombstoned thread: `thread.create` would be rejected, and the rejection is
-    // stored against a deterministic command id, so every later replay of this
-    // event would fail on the stored rejection.
+    // a later event for the tombstoned child must not resurrect it — thread.create would be rejected and the rejection stored against a deterministic id, failing every later replay
     harness.emit({
       ...collabEvent,
       eventId: asEventId("evt-collab-deleted-child-2"),
@@ -7303,8 +7269,7 @@ describe("ProviderRuntimeIngestion", () => {
     const child = readModel.threads.find((thread) => thread.id === childThreadId);
     expect(child?.deletedAt).not.toBeNull();
 
-    // The journal keeps flowing: a blocked row would pin the cursor and stall
-    // every thread's projection.
+    // the journal keeps flowing — a blocked row would pin the cursor and stall every thread's projection
     harness.emit({
       type: "runtime.warning",
       eventId: asEventId("evt-after-deleted-child"),
@@ -7347,10 +7312,7 @@ describe("ProviderRuntimeIngestion", () => {
       },
     };
 
-    // Bind the child-create command id to a rejected command, the way a build
-    // that reshaped provider command ids leaves receipts the next build can
-    // never reuse. The startup rebuild runs on the server's boot path, so a row
-    // it can never replay must degrade to a warning, not a crash loop.
+    // a row the startup rebuild can never replay must degrade to a warning, not a crash loop
     const rejected = await Effect.runPromise(
       Effect.result(
         harness.engine.dispatch({
@@ -7841,8 +7803,7 @@ describe("ProviderRuntimeIngestion", () => {
           }),
         );
       }
-      // Fail inside the real acknowledgement transaction. The bookkeeping
-      // variant aborts after the cursor UPDATE, which must also roll back.
+      // the bookkeeping variant aborts after the cursor UPDATE — that write must also roll back
       await Effect.runPromise(
         failure === "bookkeeping-error"
           ? sql`CREATE TRIGGER fail_page_ack BEFORE INSERT ON provider_runtime_open_turns
@@ -7919,8 +7880,7 @@ describe("ProviderRuntimeIngestion", () => {
         ),
       );
     }
-    // Every notification arrives while the first one's drain is still in
-    // flight, so the rest must be picked up as pages by that drain.
+    // every notification arrives while the first's drain is in flight — the rest get picked up as pages by that drain
     for (const row of rows) harness.emitPersisted(row);
     const target = rows.at(-1)!.sequence;
     const deadline = Date.now() + 5_000;
@@ -7939,8 +7899,7 @@ describe("ProviderRuntimeIngestion", () => {
       `,
     );
     expect(acks.at(-1)?.toSequence).toBe(target);
-    // One acknowledgement for the first notification, then the backlog in
-    // (at most) pages; never one transaction per event.
+    // one ack for the first notification, then the backlog in pages — never one transaction per event
     expect(acks.length).toBeLessThan(rows.length);
     expect(acks.length).toBeLessThanOrEqual(4);
   });

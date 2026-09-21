@@ -1,8 +1,3 @@
-// FILE: EditorWorkspaceView.test.tsx
-// Purpose: Guards the editor-style shell layout around file/diff sidebars.
-// Layer: Component rendering tests
-// Depends on: EditorWorkspaceView and React server rendering.
-
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { ProjectId } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -137,8 +132,7 @@ describe("EditorWorkspaceView", () => {
     expect(markup).toContain("-1");
     expect(markup).toContain('aria-label="Diff options"');
 
-    // Options sit in the "Changed files" header row; the +/- totals render in
-    // the stats row below it.
+    // Options sit in the "Changed files" header row; the +/- totals render in the stats row below it.
     const changedFilesIndex = markup.indexOf("Changed files");
     const optionsIndex = markup.indexOf('aria-label="Diff options"', changedFilesIndex);
     const additionsIndex = markup.indexOf(">+3<", optionsIndex);
@@ -277,9 +271,7 @@ describe("EditorWorkspaceView", () => {
       </QueryClientProvider>,
     );
 
-    // The custom viewer renders its own surface (here the initial loading state
-    // since document fetch runs in an effect) rather than the browser iframe or
-    // the text preview.
+    // The custom viewer renders its own surface (here the initial loading state since document fetch runs in an effect) rather than the browser iframe or the text preview.
     expect(markup).toContain('aria-label="Loading PDF..."');
     expect(markup).not.toContain("<iframe");
     expect(markup).not.toContain("editor-file-viewer__plain");
@@ -412,11 +404,9 @@ describe("EditorWorkspaceView", () => {
       </QueryClientProvider>,
     );
 
-    // The header renders a path breadcrumb (project › …dirs › file).
     expect(markup).toContain('aria-label="File path"');
     expect(markup).toContain("README.md");
-    // Markdown files surface their source/rendered toggle in the header next
-    // to the Open-in picker, whose editor menu trigger is always rendered.
+    // Markdown files surface their source/rendered toggle in the header next to the Open-in picker, whose editor menu trigger is always rendered.
     expect(markup).toContain('aria-label="Markdown view"');
     expect(markup).toContain('aria-label="Editor options"');
     // Editor view matches the dock file pane: first open lands on Preview.
@@ -540,8 +530,7 @@ describe("EditorWorkspaceView", () => {
       </QueryClientProvider>,
     );
 
-    // Files is the active mode with a visible sidebar, so its button reads as
-    // a sidebar collapse toggle; Diff stays a plain mode switch.
+    // Files is the active mode with a visible sidebar, so its button reads as a sidebar collapse toggle; Diff stays a plain mode switch.
     expect(markup).toContain('aria-label="Hide files sidebar"');
     expect(markup).toContain('aria-label="Diff"');
     expect(markup.match(/cursor-pointer/g)?.length).toBeGreaterThanOrEqual(2);

@@ -1,7 +1,4 @@
 import type { PendingUserInputRecoveryDraft } from "./pendingUserInputRecovery";
-// FILE: composerDraftDomain.ts
-// Purpose: Defines composer draft state, stable defaults, and content/project normalization.
-// Exports: Internal domain primitives plus public facade types.
 
 import {
   type ModelSelection,
@@ -170,10 +167,7 @@ export type QueuedComposerTurn = QueuedComposerChatTurn | QueuedComposerPlanFoll
 export interface ComposerThreadDraftState {
   pendingUserInputDrafts?: Record<string, PendingUserInputRecoveryDraft>;
   prompt: string;
-  // Non-null only while composer prompt-history browsing is active: the user's
-  // real draft, kept safe while `prompt` temporarily holds a recalled history
-  // entry. Restored (and cleared) when a browse is interrupted by a thread
-  // switch or reload.
+  // non-null only during prompt-history browsing: the user's real draft kept safe while `prompt` holds a recalled history entry
   promptHistorySavedDraft: ComposerPromptHistorySavedDraft | null;
   images: ComposerImageAttachment[];
   files: ComposerFileAttachment[];
@@ -206,8 +200,7 @@ export interface DraftThreadState {
   workingDirectory?: string | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   envMode: DraftThreadEnvMode;
-  // Goal staged before the thread exists server-side; persisted via
-  // `thread.meta.update` when the first send promotes the draft.
+  // goal staged before the thread exists server-side — persisted via `thread.meta.update` when the first send promotes the draft
   goal?: string;
   isTemporary?: boolean;
   promotedTo?: ThreadId;
@@ -219,9 +212,7 @@ interface DraftThreadMutationOptions {
   workingDirectory?: string | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   createdAt?: string;
-  // Explicitly `| undefined`: callers forward a `ThreadWorkspacePatch`, whose `envMode` is
-  // optional in the same way, and under `exactOptionalPropertyTypes` a bare `?:` would reject
-  // that spread even though the value sets are identical ("local" | "worktree").
+  // explicitly `| undefined`: callers spread ThreadWorkspacePatch, and under exactOptionalPropertyTypes a bare `?:` would reject it
   envMode?: DraftThreadEnvMode | undefined;
   runtimeMode?: RuntimeMode;
   interactionMode?: ProviderInteractionMode;
@@ -257,13 +248,7 @@ export interface ComposerDraftStoreState {
     threadId: ThreadId,
     options?: DraftThreadMutationOptions,
   ) => void;
-  /**
-   * Registers a standalone draft thread without claiming the project's
-   * composer-draft mapping. Unlike setProjectDraftThreadId this never replaces
-   * (and therefore never deletes) the mapped draft, so any number of standalone
-   * drafts — e.g. kanban tasks — can coexist per project. Create-only: an
-   * existing draft thread is left untouched.
-   */
+  // registers a standalone draft without claiming the project's draft mapping — never replaces/deletes the mapped draft, create-only
   registerDraftThread: (
     threadId: ThreadId,
     options: {
@@ -283,10 +268,6 @@ export interface ComposerDraftStoreState {
     threadId: ThreadId,
     options: DraftThreadMutationOptions & { projectId?: ProjectId },
   ) => void;
-  /**
-   * Moves an existing draft into a project's primary draft slot while deleting
-   * the draft that used to occupy that slot, if no other project still maps it.
-   */
   moveDraftThreadToProject: (
     threadId: ThreadId,
     projectId: ProjectId,
@@ -740,7 +721,6 @@ export function captureComposerPromptHistorySavedDraft(input: {
   const { threadId, draft, prompt } = input;
   return {
     prompt,
-    // Keep the same image objects here: ownership moves from visible composer to saved snapshot.
     images: [...draft.images],
     files: [...draft.files],
     nonPersistedImageIds: [...draft.nonPersistedImageIds],

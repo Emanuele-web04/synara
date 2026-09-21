@@ -1,7 +1,3 @@
-// FILE: projectCreateRecovery.ts
-// Purpose: Centralizes duplicate `project.create` error parsing and recovery helpers.
-// Exports: duplicate-create error guards plus snapshot matching for import recovery.
-
 import type { OrchestrationReadModel } from "@synara/contracts";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 
@@ -27,8 +23,7 @@ interface ProjectLookupInput {
   readonly workspaceRoot?: string | null | undefined;
 }
 
-// Defaults to the original "project" kind so existing callers keep their current behavior;
-// other providers (e.g. the Studio hidden container) can opt into their own kind set.
+// Defaults to the original "project" kind so existing callers keep their current behavior; other providers (e.g. the Studio hidden container) can opt into their own kind set.
 function isRecoverableProjectKind(
   kind: string | undefined,
   recoverableKinds: ReadonlySet<string> = DEFAULT_RECOVERABLE_PROJECT_KINDS,
@@ -51,9 +46,7 @@ function wait(ms: number): Promise<void> {
   });
 }
 
-// Generic retry-with-backoff loop shared by every duplicate-create recovery flow: poll
-// `loadSnapshot` with linear backoff, then fall back to `repairSnapshot` once before giving up.
-// This is the single source of the 6-attempt / 50ms-backoff shape used across recovery helpers.
+// single source of the 6-attempt/50ms-backoff shape used across recovery helpers
 export async function waitForSnapshotMatch<TSnapshot, TMatch>(input: {
   readonly loadSnapshot: () => Promise<TSnapshot | null>;
   readonly findMatch: (snapshot: TSnapshot) => TMatch | null;
@@ -94,9 +87,7 @@ export async function waitForSnapshotMatch<TSnapshot, TMatch>(input: {
   return { match: null, snapshot: latestSnapshot };
 }
 
-// Shared machinery behind the hidden-container candidate helpers used by Studio and home-chat
-// project recovery: normalizes the cwd/workspaceRoot field naming difference between local store
-// projects and shell-snapshot rows, and finds a candidate by id via a caller-supplied predicate.
+// normalizes the cwd/workspaceRoot naming difference between store projects and shell rows; finds a candidate by id via caller predicate
 export interface ContainerCandidateFields {
   readonly cwd?: string | undefined;
   readonly workspaceRoot?: string | undefined;

@@ -1,8 +1,3 @@
-// FILE: automationIntent.test.ts
-// Purpose: Locks down chat-composer automation intent parsing.
-// Layer: Web lib test
-// Depends on: parseChatAutomationIntent and cadence formatting.
-
 import { DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -508,8 +503,7 @@ describe("parseChatAutomationIntent", () => {
     expect(resolved).toMatchObject({
       source: "deterministic",
       mode: "heartbeat",
-      // The schedule parsed deterministically, but name/prompt are LLM-rewritten, so the
-      // draft must still go through human review even though needsConfirmation was false.
+      // schedule parsed deterministically but name/prompt are LLM-rewritten — the draft must still get human review even though needsConfirmation was false
       requiresReview: true,
       intent: {
         name: "Generated",
@@ -655,8 +649,7 @@ describe("parseChatAutomationIntent", () => {
   });
 
   it("keeps a generated dedicated mode instead of flattening it to standalone", () => {
-    // Outside the current thread there are two shapes, not one: a fresh thread per run
-    // (standalone) and one thread the automation reuses (dedicated).
+    // two shapes outside the current thread: fresh thread per run (standalone) and one reused thread (dedicated)
     const resolved = resolveChatAutomationIntent({
       deterministicIntent: null,
       generatedIntent: {
@@ -706,8 +699,7 @@ describe("parseChatAutomationIntent", () => {
     expect(resolved).toMatchObject({
       source: "generated",
       mode: "heartbeat",
-      // High-confidence (0.93), thread-scoped, no stop policy: must still require human
-      // review rather than silently auto-creating a recurring background automation.
+      // high-confidence thread-scoped intent with no stop policy must still require human review, not silently auto-create a recurring background automation
       requiresReview: true,
       intent: {
         name: "Controlla disponibilita",
@@ -717,9 +709,7 @@ describe("parseChatAutomationIntent", () => {
   });
 
   it("always requires review for generated intents, even high-confidence ones with no stop policy", () => {
-    // Safety invariant: an LLM-interpreted ("generated") intent must never auto-create.
-    // Only deterministic, explicitly-parsed intents may skip the confirmation dialog
-    // (e.g. the bounded-fast-loop case covered above, which keeps requiresReview false).
+    // safety invariant: a generated (LLM-interpreted) intent must never auto-create; only deterministic explicitly-parsed intents may skip the confirmation dialog
     const resolved = resolveChatAutomationIntent({
       deterministicIntent: null,
       generatedIntent: {

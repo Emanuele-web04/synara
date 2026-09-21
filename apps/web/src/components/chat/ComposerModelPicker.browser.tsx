@@ -362,8 +362,7 @@ describe("ComposerModelPicker", () => {
       const closedWidth = trigger.element().getBoundingClientRect().width;
       await trigger.click();
 
-      // The covered label keeps sizing the pill; a resize under the cursor would make
-      // Base UI cancel the open on mouseup.
+      // The covered label keeps sizing the pill; a resize under the cursor would make Base UI cancel the open on mouseup.
       await expect.element(page.getByText("Select effort")).toBeVisible();
       const slider = page.getByRole("slider", { name: "Reasoning effort" });
       await expect.element(slider).toBeVisible();

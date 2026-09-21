@@ -1,9 +1,3 @@
-// FILE: CreateProjectDialog.tsx
-// Purpose: Single entry point for adding a project — typed path, source folder
-//          (drag/drop or native browse), and destination Space.
-// Layer: Web UI dialog
-// Exports: CreateProjectDialog, CreateProjectSubmitValue
-
 import { type GitHubProjectProvisionProgressEvent, type SpaceId } from "@synara/contracts";
 import { parseGitHubRepositoryInput } from "@synara/shared/githubRepository";
 import { normalizeProjectDirectoryName } from "@synara/shared/projectDirectoryName";
@@ -47,9 +41,7 @@ import { CentralIcon } from "~/lib/central-icons";
 interface CreateLocalProjectSubmitValue {
   readonly source: "local";
   readonly workspaceRoot: string;
-  /** Destination Space; `null` is Void (unassigned). */
   readonly spaceId: SpaceId | null;
-  /** True when the path was typed/edited by hand, so a missing folder may be created. */
   readonly createIfMissing: boolean;
 }
 
@@ -137,8 +129,7 @@ export function CreateProjectDialog(props: {
     setIsPickingFolder(false);
     setSubmitting(false);
     setFormError(null);
-    // Deferred a frame: the dialog moves focus itself on open, so focusing the
-    // path field has to happen after that lands or it is immediately undone.
+    // deferred a frame: the dialog moves focus itself on open, so focusing the path field has to happen after that lands or it's immediately undone
     const frame = requestAnimationFrame(() => document.getElementById(pathInputId)?.focus());
     return () => cancelAnimationFrame(frame);
   }, [pathInputId, props.activeSpaceId, props.defaultCloneParent, props.open]);
@@ -216,8 +207,7 @@ export function CreateProjectDialog(props: {
     setIsPickingFolder(false);
   };
 
-  // While the dialog is open it is the only interactive surface, so a folder dropped
-  // anywhere in the window counts (see useWindowFolderDrop).
+  // while the dialog is open it's the only interactive surface, so a folder dropped anywhere in the window counts (see useWindowFolderDrop)
   const isDropTarget = useWindowFolderDrop({
     enabled: props.open && isElectron && source === "local",
     onFolder: applyPickedFolder,
@@ -226,8 +216,7 @@ export function CreateProjectDialog(props: {
 
   const submit = async () => {
     if (submitting) return;
-    // The confirm button stays enabled (and white) like the reference dialog;
-    // an empty submit explains what is missing instead of being unclickable.
+    // the confirm button stays enabled like the reference dialog — an empty submit explains what's missing instead of being unclickable
     if (source === "local" && trimmedPath.length === 0) {
       setFormError("Type a folder path, or drop a folder above.");
       return;
@@ -312,8 +301,7 @@ export function CreateProjectDialog(props: {
     props.onOpenChange(open);
   };
 
-  // The space is created right away (same command the sidebar uses) and picked
-  // as the destination, so one Create click ships the project into it.
+  // the space is created right away (same command the sidebar uses) and picked as the destination, so one Create click ships the project into it
   const handleCreateSpace = async (value: SpaceEditorValue) => {
     const api = readNativeApi();
     if (!api) throw new Error("The app server is unavailable.");
@@ -332,8 +320,7 @@ export function CreateProjectDialog(props: {
   };
 
   const selectedSpace = spaces.find((space) => space.id === selectedSpaceKey) ?? null;
-  // Only echo the drop/browse result while the path field still matches it;
-  // hand-editing the path afterwards puts the box back in its idle state.
+  // only echo the drop/browse result while the path field still matches it — hand-editing afterwards puts the box back in its idle state
   const pickedFolderName =
     pickedPath !== null && trimmedPath === pickedPath
       ? (pickedPath.split(/[/\\]/).filter(Boolean).at(-1) ?? pickedPath)

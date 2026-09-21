@@ -1,8 +1,3 @@
-// FILE: onboardingDialogStore.ts
-// Purpose: Open/close state for the welcome tour shared between the first-run gate, the
-//          Settings "replay" button, and the dialog itself.
-// Layer: Web UI store
-
 import { create } from "zustand";
 
 export type OnboardingOpenReason = "first-run" | "replay";
@@ -14,7 +9,6 @@ interface OnboardingDialogStore {
    * startup dialogs (AppSnap's announcement) wait for this so two modals never stack.
    */
   startupGateSettled: boolean;
-  /** Why the dialog is open; null when closed. */
   openReason: OnboardingOpenReason | null;
   /**
    * True once the user reached a setup step. A first-run dialog opened from a

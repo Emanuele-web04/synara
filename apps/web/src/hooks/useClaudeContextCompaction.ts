@@ -12,7 +12,6 @@ import {
   derivePendingUserInputs,
 } from "../session-logic";
 
-/** Request Claude's native command through the normal durable user-turn path. */
 export function useClaudeContextCompaction({
   threadId,
   disabledReason,

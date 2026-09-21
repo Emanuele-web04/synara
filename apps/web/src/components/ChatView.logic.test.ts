@@ -274,8 +274,7 @@ describe("transcript tail key", () => {
     };
     const before = buildTranscriptTailKey(settledTail);
 
-    // Projection repair can rewrite a settled message in place; the follow
-    // effect must re-stick because maintainScrollAtEnd is off once settled.
+    // Projection repair can rewrite a settled message in place; the follow effect must re-stick because maintainScrollAtEnd is off once settled.
     expect(buildTranscriptTailKey({ ...settledTail, text: "hello, repaired" })).not.toBe(before);
   });
 });
@@ -677,10 +676,7 @@ describe("prompt history navigation", () => {
   });
 
   it("does not navigate from lower lines even when the first line is long", () => {
-    // Cursor offsets are expanded (raw string indices). A collapsed cursor —
-    // where an inline chip like "@apps/web/src/components/ChatView.tsx" counts
-    // as one unit — would sit below the first line's raw end and wrongly hijack
-    // ArrowUp from the second line; expanded offsets must be used instead.
+    // cursor offsets are expanded (raw string indices) — a collapsed cursor (an inline chip counts as one unit) would sit below the first line's raw end and wrongly hijack ArrowUp from the second line
     const prompt = "@apps/web/src/components/ChatView.tsx fix this\nplease keep the draft";
     const secondLineCursor = prompt.indexOf("please") + "plea".length;
 
@@ -1335,7 +1331,6 @@ describe("resolveActiveTurnLiveDiffState", () => {
         latestTurnId: activeTurnId,
         turnDiffSummaries: [],
         workLogEntries: [
-          // Other turn / non-edit work is ignored.
           { turnId: TurnId.makeUnsafe("turn-previous"), itemType: "file_change" },
           { turnId: activeTurnId, requestKind: "command" },
           {

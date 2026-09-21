@@ -1,7 +1,4 @@
-/**
- * Adds durable pin state to projected projects so project sidebar pins survive
- * browser restarts and can be reflected in shell snapshots.
- */
+/** durable project pins surviving browser restarts */
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

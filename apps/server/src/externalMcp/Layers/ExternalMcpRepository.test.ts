@@ -385,9 +385,7 @@ layer("ExternalMcpRepository", (it) => {
         )
       `;
 
-      // A fresh repository value has no shared in-memory admission state. It
-      // must reconstruct the occupied slot from durable task/turn projections.
-      // The newer checkpoint-only row above must not mask the running turn.
+      // a fresh repository value has no in-memory admission state — reconstruct the slot from durable projections; the checkpoint-only row must not mask the running turn
       const restartedRepository = yield* makeExternalMcpRepository;
       const retry = yield* restartedRepository.reserveOperation({
         ...first,
@@ -658,7 +656,7 @@ layer("ExternalMcpRepository", (it) => {
           now: "2026-07-20T00:01:01.000Z",
         }),
       );
-      // Simulate registerTask failing before it can commit a durable task row.
+      // simulate registerTask failing before it can commit a durable task row
       yield* repository.markOperationCompensating({
         operationId: first.operationId,
         now: "2026-07-20T00:01:02.000Z",

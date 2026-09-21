@@ -33,7 +33,7 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
   droid: new Set(MODEL_OPTIONS_BY_PROVIDER.droid.map((option) => option.slug)),
   opencode: new Set(MODEL_OPTIONS_BY_PROVIDER.opencode.map((option) => option.slug)),
   pi: new Set<ModelSlug>(),
-  // Devin's built-in list is intentionally empty; its CLI supplies the live catalog.
+  // Devin's list is intentionally empty — its CLI supplies the live catalog
   devin: new Set<ModelSlug>(),
 };
 
@@ -91,10 +91,7 @@ const MODEL_TOKEN_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   xhigh: "XHigh",
 };
 
-// First tokens that mark a provider-supplied label as a model-family name
-// worth normalizing: the brand tokens plus families whose casing is already
-// title-case. Anything else (custom names like "MyModel", "K2P6") keeps its
-// original casing untouched.
+// first tokens marking a provider label as a model-family name worth normalizing — anything else keeps its casing
 const MODEL_FAMILY_TOKENS: ReadonlySet<string> = new Set([
   ...Object.keys(MODEL_TOKEN_DISPLAY_NAMES),
   "adaptive",
@@ -121,10 +118,7 @@ function humanizeModelToken(token: string): string {
 
 const MODEL_DATE_OR_BUILD_TOKEN_PATTERN = /^\d{8}$/u;
 
-// Rejoins version fragments split on "-"/"_": a pure-digit token merges onto a
-// preceding token that already ends in a digit, so "swe-1-6" reads as 1.6,
-// "claude-opus-4-8" as 4.8, and "kimi-k2-6" as K2.6. Zero-prefixed tokens and
-// eight-digit provider date/build stamps stay separate, never version minors.
+// a pure-digit token merges onto a preceding digit-ending token ("swe-1-6" → 1.6); zero-prefixed tokens and date/build stamps stay separate
 function joinModelVersionTokens(tokens: string[]): string[] {
   const merged: string[] = [];
   for (const token of tokens) {
@@ -144,15 +138,10 @@ function joinModelVersionTokens(tokens: string[]): string[] {
   return merged;
 }
 
-// Canonical brand shapes that differ from plain space-joined words.
 function restoreModelNameSeparators(name: string): string {
   return name.replace(/\bGPT (\d)/gu, "GPT-$1");
 }
 
-// Turns a raw model slug into a readable label when no built-in name exists.
-// Provider-scoped custom ids ("vendor/model") stay verbatim; everything else is
-// tokenized on -/_, version fragments rejoined with ".", known model-family
-// brands restored to their canonical casing, and GPT versions rehyphenated.
 export function humanizeModelSlug(slug: string): string {
   if (slug.includes("/")) {
     return slug;
@@ -161,14 +150,7 @@ export function humanizeModelSlug(slug: string): string {
   return restoreModelNameSeparators(tokens.join(" "));
 }
 
-/**
- * Normalizes a provider-supplied display name to Synara's canonical casing:
- * known brand tokens are re-cased ("Swe" → "SWE", "Deepseek" → "DeepSeek"),
- * slug separators become spaces ("GLM-5.3-Flash" → "GLM 5.3 Flash"), digit
- * fragments rejoin as versions, and GPT versions keep their hyphen. Gated on a
- * known family first token so freeform names keep their casing; non-brand
- * tokens and a parenthesized tail pass through unchanged.
- */
+/** gated on a known family first token so freeform names keep their casing; non-brand tokens and a parenthesized tail pass through */
 export function normalizeModelDisplayName(name: string): string {
   const trimmed = name.trim();
   const parenIndex = trimmed.indexOf("(");
@@ -201,8 +183,6 @@ export function formatModelDisplayName(model: string | null | undefined): string
 
   return MODEL_NAME_BY_SLUG.get(normalized.toLowerCase()) ?? humanizeModelSlug(normalized);
 }
-
-// ── Effort helpers ────────────────────────────────────────────────────
 
 export function parseCursorCliReasoningEffort(model: string): string | undefined {
   const tokens = model.trim().toLowerCase().split("-");
@@ -301,10 +281,7 @@ export function resolveDevinModelVariant(input: {
     reasoningEffort ?? trimOrNull(input.runtimeModel?.defaultReasoningEffort);
   const effectiveContextWindow =
     contextWindow ?? trimOrNull(input.runtimeModel?.defaultContextWindow);
-  // Thinking is on by default for Devin families that expose a thinking
-  // toggle. Keep the persisted option sparse, but use the effective
-  // default when resolving a non-default context window to its concrete
-  // process-start variant.
+  // keep the persisted option sparse but use the effective default when resolving a non-default window to its concrete variant
   const effectiveThinking =
     input.thinking ?? (input.runtimeModel?.supportsThinkingToggle === true ? true : undefined);
   const matches = (variant: ProviderModelVariantDescriptor): boolean => {
@@ -342,7 +319,7 @@ export function hasAutoCompactWindowOption(caps: ModelCapabilities, value: strin
   return caps.autoCompactWindowOptions?.some((option) => option.value === value) ?? false;
 }
 
-// Claude model ids may carry a context-window qualifier, e.g. `claude-fable-5-1[1m]`.
+// Claude ids may carry a context-window qualifier, e.g. `claude-fable-5-1[1m]`
 const CLAUDE_CONTEXT_WINDOW_SUFFIX_PATTERN = /\[([^\]]+)\]$/u;
 
 export function getClaudeContextWindowSuffix(model: string | null | undefined): string | null {
@@ -572,8 +549,6 @@ export function getProviderOptionCurrentValue(
   return descriptor.currentValue ?? descriptor.options.find((option) => option.isDefault)?.id;
 }
 
-// ── Data-driven capability resolver ───────────────────────────────────
-
 export function getModelCapabilities(
   provider: ProviderKind,
   model: string | null | undefined,
@@ -587,10 +562,7 @@ export function getModelCapabilities(
     return MODEL_CAPABILITIES_INDEX[provider][slug];
   }
   if (provider === "grok" && slug) {
-    // Grok exposes reasoning effort as a provider-level CLI option, while its
-    // runtime model catalog contains only model ids. New models inherit the
-    // matching CLI ladder (grok-build vs Grok 4.5 vs Grok 4.6+) before discovery
-    // returns a descriptor.
+    // Grok's runtime catalog contains only model ids — new models inherit the matching CLI ladder before discovery returns a descriptor
     return grokCapabilitiesForFamily(resolveGrokEffortFamily(slug));
   }
   return EMPTY_MODEL_CAPABILITIES;
@@ -610,9 +582,7 @@ export function resolveGrokEffortFamily(model: string): "build" | "4.5" | "4.6" 
 
   const version = /grok-(\d+)\.(\d+)/u.exec(slug);
   if (!version) {
-    // Preserve the legacy Grok Build ladder for custom or future aliases we
-    // cannot classify. Discovery can still opt known versioned models into
-    // the newer ladders without silently changing persisted custom models.
+    // preserve the legacy Grok Build ladder for unclassifiable aliases — discovery can opt known models into newer ladders without changing persisted custom models
     return "build";
   }
   const major = Number(version[1]);
@@ -740,11 +710,7 @@ export function trimOrNull<T extends string>(value: T | null | undefined): T | n
   return trimmed || null;
 }
 
-/**
- * Keeps only explicit Claude option overrides. The model-native auto-compact
- * window stays unset so Claude Code can apply server tuning, settings.json,
- * and CLAUDE_CODE_AUTO_COMPACT_WINDOW.
- */
+/** the model-native auto-compact window stays unset so Claude Code applies server tuning, settings.json, and CLAUDE_CODE_AUTO_COMPACT_WINDOW */
 export function normalizeClaudeModelOptions(
   model: string | null | undefined,
   modelOptions: ClaudeModelOptions | null | undefined,
@@ -793,11 +759,7 @@ export function resolveApiModelId(modelSelection: ModelSelection): string {
   return modelSelection.model;
 }
 
-/**
- * Map a requested Claude Code effort to the API effort passed at session spawn.
- * `ultrathink` is prompt-injected (no API effort); `ultracode` runs as xhigh plus
- * the `ultracode` session setting.
- */
+/** `ultrathink` is prompt-injected (no API effort); `ultracode` runs as xhigh plus the `ultracode` session setting */
 export function getEffectiveClaudeCodeEffort(
   effort: ClaudeCodeEffort | null | undefined,
 ): ClaudeApiEffort | null {
@@ -812,8 +774,7 @@ interface ClaudeSpawnProfile {
   readonly autoCompactWindow: string | undefined;
 }
 
-// Claude's live flag settings do not refresh the runtime auto-compaction window.
-// Keep this profile aligned with the adapter's normalized spawn settings.
+// Claude's live flag settings don't refresh the auto-compaction window — keep aligned with the adapter's spawn settings
 function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
   const caps = getModelCapabilities("claudeAgent", selection.model);
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
@@ -825,7 +786,7 @@ function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "clau
   } satisfies ClaudeSpawnProfile;
 }
 
-/** Restart only for spawn-fixed settings; resume preserves identity, not guaranteed cache hits. */
+/** restart only for spawn-fixed settings; resume preserves identity, not guaranteed cache hits */
 export function claudeSelectionRequiresRestart(
   previous: ModelSelection | undefined,
   next: ModelSelection,
@@ -834,16 +795,13 @@ export function claudeSelectionRequiresRestart(
     return false;
   }
   if (previous === undefined) {
-    // First observation in this process: the live session was started from the
-    // same selection source, so treat it as unchanged rather than replaying.
+    // first observation in this process — the session started from the same selection source, so treat as unchanged
     return false;
   }
   if (previous.provider !== "claudeAgent") {
     return true;
   }
-  // Normalize against each model before deciding a model-only switch is live:
-  // a persisted `max` request may become spawn-fixed (or stop being so) as the
-  // selected model's capabilities change.
+  // normalize against each model — a persisted `max` may become spawn-fixed as capabilities change
   const prev = claudeSpawnProfile(previous);
   const desired = claudeSpawnProfile(next);
   return (
@@ -858,8 +816,7 @@ export function normalizeCursorModelOptions(
 ): CursorModelOptions | undefined {
   const defaultReasoningEffort = getDefaultEffort(capabilities);
   const rawEffort = trimOrNull(modelOptions?.reasoningEffort);
-  // Cursor's fast variants use a different implicit default (Grok fast → low).
-  // Always send the UI-selected effort, including the composer default.
+  // Cursor's fast variants use a different implicit default — always send the UI-selected effort, including the composer default
   const reasoningEffort =
     rawEffort && hasEffortLevel(capabilities, rawEffort)
       ? rawEffort

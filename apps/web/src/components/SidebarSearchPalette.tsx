@@ -1,9 +1,3 @@
-/**
- * SidebarSearchPalette - Command-style palette for sidebar actions, threads, and projects.
- *
- * Keeps the sidebar search UX aligned with the shared command primitives so
- * keyboard navigation and shortcut labels behave like the rest of the app.
- */
 import {
   BugReportIcon,
   CheckIcon,
@@ -73,8 +67,7 @@ import {
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 
-// Palette skin — shared with the ⌘P workspace palette so both surfaces read as one
-// menu: 44px bare input, settings-scale type, 30px squircle rows, single keycap pills.
+// Palette skin — shared with the ⌘P workspace palette so both surfaces read as one menu: 44px bare input, settings-scale type, 30px squircle rows, single keycap pills.
 const PALETTE_INPUT_CLASS =
   "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-ui-lg text-foreground outline-none placeholder:text-muted-foreground/70";
 const PALETTE_GROUP_LABEL_CLASS =
@@ -87,7 +80,6 @@ const PALETTE_META_CLASS = "max-w-[45%] shrink-0 truncate text-ui-meta text-mute
 const PALETTE_KBD_CLASS = "h-[17px] min-w-0 rounded-md px-1.5 text-ui-xs text-muted-foreground/80";
 const PALETTE_STATUS_CLASS = "px-4 pt-1 pb-3 text-ui text-muted-foreground/79";
 
-// Actions that live under the "Settings" heading when the palette is idle.
 const SETTINGS_ACTION_IDS: ReadonlySet<string> = new Set([
   "settings",
   "usage-settings",
@@ -226,14 +218,12 @@ function createThemeCommandItem(
   };
 }
 
-// Treat any token of length >= 2 that is a prefix of `keyword` as a match,
-// so typing `th` / `the` already starts surfacing theme actions.
+// Treat any token of length >= 2 that is a prefix of `keyword` as a match, so typing `th` / `the` already starts surfacing theme actions.
 function hasTokenPrefixOf(query: string, keyword: string): boolean {
   return queryTokens(query).some((token) => token.length >= 2 && keyword.startsWith(token));
 }
 
-// Keep the palette quiet by default, then expose focused appearance actions
-// once the user is clearly asking about theme modes.
+// Keep the palette quiet by default, then expose focused appearance actions once the user is clearly asking about theme modes.
 function buildThemeCommandItems(input: {
   query: string;
   resolvedTheme: "light" | "dark";
@@ -378,13 +368,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const [importId, setImportId] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
-  // Derived fallback (no syncing effect): an unavailable provider renders as
-  // the first available one, and the user's pick resurfaces if it comes back.
+  // Derived fallback (no syncing effect): an unavailable provider renders as the first available one, and the user's pick resurfaces if it comes back.
   const importProvider = props.importProviders.includes(importProviderState)
     ? importProviderState
     : (props.importProviders[0] ?? "codex");
-  // Error keyed to the query it was produced for: editing the query derives
-  // straight back to null with no state-clearing effect.
+  // Error keyed to the query it was produced for: editing the query derives straight back to null with no state-clearing effect.
   const [addProjectErrorState, setAddProjectErrorState] = useState<{
     query: string;
     message: string;
@@ -401,8 +389,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     if (props.open) {
       return;
     }
-    // Timeout-0 keeps the reset writes asynchronous (the palette is already
-    // hidden), which keeps this component eligible for React Compiler.
+    // Timeout-0 keeps the reset writes asynchronous (the palette is already hidden), which keeps this component eligible for React Compiler.
     const timeoutId = window.setTimeout(() => {
       setQuery("");
       setHighlightedItemValue(null);
@@ -457,8 +444,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const canBrowseUp = canBrowse && canNavigateUp(query);
 
   const matchedActions = isBrowsing ? [] : matchSidebarSearchActions(props.actions, query);
-  // Idle: "Quick actions" then "Settings", like the ⌘P menu. Searching: one flat
-  // "Actions" group so a query never has to guess which heading a hit sits under.
+  // Idle: "Quick actions" then "Settings", like the ⌘P menu. Searching: one flat "Actions" group so a query never has to guess which heading a hit sits under.
   const quickActions = query
     ? matchedActions
     : matchedActions.filter((action) => !SETTINGS_ACTION_IDS.has(action.id));
@@ -555,8 +541,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     }
     setIsAddingProject(true);
     setAddProjectError(null);
-    // Promise chain instead of async/try-finally: React Compiler does not yet
-    // support try/finally, and it would skip optimizing this whole component.
+    // Promise chain instead of async/try-finally: React Compiler does not yet support try/finally, and it would skip optimizing this whole component.
     void Promise.resolve(
       props.onAddProjectPath(resolveBrowseSubmitPath(), {
         createIfMissing: willCreateMissingFolder,

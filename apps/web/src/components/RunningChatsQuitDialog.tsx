@@ -1,9 +1,3 @@
-// FILE: RunningChatsQuitDialog.tsx
-// Purpose: Confirms desktop quit while chats are still running.
-// Layer: Root web overlay
-// Depends on: Base UI alert-dialog primitives, the ⌘P palette surface, the shared running spinner,
-// and the persisted "resume chats after quit" app setting.
-
 import { AlertDialog as AlertDialogPrimitive } from "@base-ui/react/alert-dialog";
 import { useId } from "react";
 
@@ -42,9 +36,7 @@ export interface RunningChatsQuitDialogProps {
 
 const uiFont = "font-[family-name:var(--font-ui-family)]";
 
-// Same surface as the ⌘P palette: the body sits on the palette's list background and the footer
-// shows the popup's lighter overlay through, separated by a hairline — mirroring CommandPanel +
-// CommandFooter without the palette's scroll chrome.
+// Same surface as the ⌘P palette: the body sits on the palette's list background and the footer shows the popup's lighter overlay through, separated by a hairline — mirroring CommandPanel + CommandFooter without the palette's scroll chrome.
 const BODY_CLASS =
   "relative rounded-t-[calc(var(--radius-2xl)-1px)] border-b border-[color:var(--color-border-light)] bg-[var(--color-background-surface-under)] px-4 pt-3 pb-3.5";
 const FOOTER_CLASS = "relative flex items-center gap-2 px-3 py-2";

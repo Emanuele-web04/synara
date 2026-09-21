@@ -1,7 +1,3 @@
-// FILE: ProviderUsagePanelContent.tsx
-// Purpose: Render a provider usage summary panel that can show both classic
-// rate-limit rows and archive-derived local usage lines in the same popover.
-
 import type { ProviderKind, ServerCodexResetCredits } from "@synara/contracts";
 import { providerUsageLabel } from "@synara/shared/providerUsage";
 

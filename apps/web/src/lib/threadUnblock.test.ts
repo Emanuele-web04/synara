@@ -1,8 +1,3 @@
-// FILE: threadUnblock.test.ts
-// Purpose: Guards the "Unblock thread" recovery flow against reconciliation regressions.
-// Layer: Web orchestration helper tests
-// Depends on: threadUnblock helpers with a stubbed orchestration API.
-
 import type { OrchestrationListProviderDeliveryBlockersResult } from "@synara/contracts";
 import { ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";

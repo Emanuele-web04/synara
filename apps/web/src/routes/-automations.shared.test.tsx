@@ -1,8 +1,3 @@
-// FILE: -automations.shared.test.tsx
-// Purpose: Verifies pure automation UI helpers for schedule and triage behavior.
-// Layer: Web route helper test
-// Depends on: -automations.shared exported helper functions.
-
 import {
   AutomationId,
   AutomationRunId,
@@ -1005,8 +1000,7 @@ describe("automation shared route helpers", () => {
 
 describe("rollbackAutomationDefinitionPatch", () => {
   it("restores only the failed patch's fields, keeping a concurrent edit's merge intact", () => {
-    // The name patch failed while a prompt patch (still in flight) had already merged
-    // optimistically. Rolling back the name must not also revert the prompt.
+    // The name patch failed while a prompt patch (still in flight) had already merged optimistically. Rolling back the name must not also revert the prompt.
     const current = {
       definitions: [definitionWith({ name: "Optimistic name", prompt: "Optimistic prompt." })],
       runs: [],

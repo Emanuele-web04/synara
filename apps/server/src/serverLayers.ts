@@ -143,7 +143,7 @@ export function makeServerRuntimeServicesLayer(
     ),
     DeviceServiceLive,
   );
-  // Shares the single memoized TerminalManager with the top-level TerminalLayerLive.
+  // shares the single memoized TerminalManager with the top-level TerminalLayerLive
   const devServerManagerLayer = DevServerManagerLive.pipe(Layer.provide(TerminalLayerLive));
   const sessionCredentialLayer = SessionCredentialServiceLive.pipe(
     Layer.provide(ServerSecretStoreLive),
@@ -208,8 +208,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(BrowserAutomationHostLive),
-    // The gateway exposes device_* tools only where a backend can exist, but it
-    // resolves the service on every platform to make that decision.
+    // the gateway exposes device_* tools only where a backend can exist but resolves the service on every platform to make that decision
     Layer.provideMerge(DeviceServiceLive),
   );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
@@ -256,19 +255,13 @@ export function makeServerRuntimeServicesLayer(
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }
 
-/**
- * Compose the two top-level server graphs around one credential layer. Provider
- * adapters issue tokens from this registry and the HTTP gateway verifies those
- * same tokens, so constructing them independently would break scoped MCP.
- */
+/** provider adapters issue tokens from this registry and the HTTP gateway verifies them — constructing independently would break scoped MCP */
 export function makeServerApplicationLayers() {
   const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
   const runtimeServicesLayer = makeServerRuntimeServicesLayer({
     agentGatewayCredentialsLayer,
   });
-  // Provider start/discovery gates must observe the same settings instance as
-  // the RPC layer. Reusing this layer in the final graph lets Effect memoize a
-  // single ServerSettings service instead of capturing private defaults.
+  // provider start/discovery gates must observe the same settings instance as the RPC layer — reusing this layer lets Effect memoize one ServerSettings service
   const providerLayer = makeServerProviderLayer({ agentGatewayCredentialsLayer }).pipe(
     Layer.provideMerge(ServerSettingsLive),
   );

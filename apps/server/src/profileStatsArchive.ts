@@ -1,10 +1,3 @@
-// FILE: profileStatsArchive.ts
-// Purpose: Snapshot a thread's profile-stat aggregates into the durable
-// profile_stats_deleted_* tables, then hard-delete every row the thread owns
-// (projections, events, checkpoints, session runtime). This is what lets a
-// delete actually free disk space without shrinking the Profile page numbers.
-// Layer: server maintenance service (SqlClient).
-
 import {
   CheckpointRef,
   MessageId,
@@ -46,14 +39,10 @@ interface TurnEventRow {
 }
 
 interface TokenActivityRow {
-  // Cumulative counter (totalProcessedTokens) and context-window counter
-  // (usedTokens); which one drives the delta series is decided per thread,
-  // mirroring profileStats.queryTokenActivity.
+  // which counter drives the delta series is decided per thread, mirroring profileStats.queryTokenActivity
   readonly totalProcessedTokens: number | bigint | null;
   readonly usedTokens: number | bigint | null;
-  // Per-turn attribution resolved in SQL (turn-start modelSelection); NULL when
-  // the activity has no attributable turn, in which case the thread's own
-  // selection applies as the fallback.
+  // per-turn attribution resolved in SQL; NULL when no attributable turn, in which case the thread's own selection applies
   readonly provider: string | null;
   readonly model: string | null;
   readonly dispatchOrigin?: string | null;
@@ -94,8 +83,6 @@ export interface ThreadTokenSnapshotRow {
   readonly model: string | null;
   readonly tokens: number;
 }
-
-// ── Pure helpers ───────────────────────────────────────────────────────
 
 interface ModelSelectionLike {
   readonly provider: string | null;
@@ -200,8 +187,7 @@ function hasProfileStatsContribution(input: {
   );
 }
 
-// Mirrors the per-turn extraction in profileStats.queryTurnInsights: the turn
-// event's own modelSelection wins, otherwise the thread's selection applies.
+// mirrors profileStats.queryTurnInsights — the turn event's own modelSelection wins, else the thread's selection applies
 export function aggregateThreadTurnSnapshotRows(
   events: ReadonlyArray<TurnEventRow>,
   threadModelSelectionJson: string | null,
@@ -223,7 +209,7 @@ export function aggregateThreadTurnSnapshotRows(
           );
         }
       } catch {
-        // Malformed payload rows still count as a turn with the thread fallback.
+        // malformed payload rows still count as a turn with the thread fallback
       }
     }
     const selection = eventSelection ?? threadSelection;
@@ -278,21 +264,13 @@ function addTokenSnapshotRow(
   }
 }
 
-// Mirrors the LAG-based delta in profileStats.queryTokenActivity: rows must be
-// ordered the same way that query orders them, and the first total counts fully.
-// Cumulative rows stay thread-wide; usedTokens rows are counted only for
-// provider/model groups that never emit cumulative totals.
-// Deltas keep the original activity timestamp (raw, unparsed) so read-time
-// DATETIME(created_at, tz) bucketing stays identical to the live query for any
-// client UTC offset, and are keyed by the row's per-turn provider/model (the
-// thread's own selection fills in rows without turn attribution).
+// mirrors the LAG-based delta in queryTokenActivity — same ordering, first total counts fully; cumulative rows stay thread-wide while usedTokens rows count only for groups that never emit cumulative totals
+// deltas keep the raw activity timestamp so read-time DATETIME bucketing stays identical to the live query for any client UTC offset, keyed by the per-turn provider/model
 export function aggregateThreadTokenRows(
   rows: ReadonlyArray<TokenActivityRow>,
   fallbackSelection?: { readonly provider: string | null; readonly model: string | null },
 ): ThreadTokenSnapshotRow[] {
-  // Claude's verified turn results are snapshotted separately. Remove its old
-  // context rows before maintaining any delta state, otherwise a large Claude
-  // counter can reset or inflate the next provider's archived delta.
+  // Claude's verified turn results are snapshotted separately — remove its old context rows before maintaining delta state or a large counter can reset/inflate the next provider's archived delta
   const nonClaudeRows = rows.filter(
     (row) => resolveTokenProviderModel(row, fallbackSelection).provider !== "claudeAgent",
   );
@@ -369,22 +347,15 @@ export function aggregateThreadTokenRows(
   return [...tokensByKey.values()];
 }
 
-// ── Service ────────────────────────────────────────────────────────────
-
 export interface ProfileStatsArchiveShape {
-  /** True while hard deletion would erase unresolved provider delivery evidence. */
+  /** true while hard deletion would erase unresolved provider delivery evidence */
   readonly hasThreadPurgeFence: (input: {
     readonly threadId: string;
   }) => Effect.Effect<boolean, unknown>;
-  // Snapshots the thread's stat aggregates and hard-deletes all of its rows in
-  // one transaction. Returns false when the thread row is already gone.
   readonly purgeThreadWithStatsSnapshot: (input: {
     readonly threadId: string;
   }) => Effect.Effect<boolean, unknown>;
-  // Purges every soft-deleted thread that a recorded delete event proves was a
-  // manual delete; legacy retention deletes and unknown provenance are kept.
-  // Catches per-thread failures so one bad thread cannot stall the sweep;
-  // returns how many threads were purged.
+  // purges only threads a recorded delete event proves were manual — legacy retention deletes and unknown provenance are kept; per-thread failures caught so one bad thread can't stall the sweep
   readonly purgeSoftDeletedManualThreads: (input?: {
     readonly beforePurge?: (threadId: string) => Effect.Effect<boolean, unknown>;
   }) => Effect.Effect<number, unknown>;
@@ -507,8 +478,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       } satisfies ThreadCheckpointCleanup;
     });
 
-  // Stale/missing workspaces cannot contain reachable refs for us to delete; keep
-  // the DB purge moving, but fail normally once a usable Git repo is confirmed.
+  // stale/missing workspaces can't contain reachable refs — keep the db purge moving but fail normally once a usable repo is confirmed
   const deleteCheckpointRefsForPurge = (input: {
     readonly threadId: string;
     readonly cwd: string | null;
@@ -612,10 +582,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           AND COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id) = ${threadId}
           AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
       `;
-      // Same counters and per-turn attribution as the live
-      // profileStats.queryTokenActivity: both token counters come back raw so
-      // aggregateThreadTokenRows can split cumulative and used-only fallback
-      // series, and the turn join pins each delta to the selected model.
+      // same counters and per-turn attribution as the live query — both counters come back raw so aggregateThreadTokenRows can split cumulative vs used-only series, and the turn join pins each delta to the selected model
       const tokenActivityRows = yield* sql<TokenActivityRow>`
         WITH turn_model AS (
           ${turnModelSelectionCte(sql, { threadId })}
@@ -670,8 +637,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         provider: threadSelection?.provider ?? null,
         model: threadSelection?.model ?? null,
       });
-      // Preserve the same verified Claude rows as the live profile before the
-      // retained runtime fallback is purged along with this thread.
+      // preserve the same verified Claude rows as the live profile before the retained runtime fallback is purged
       const claudeTokenRows = yield* sql<ThreadTokenSnapshotRow>`
         WITH turn_model AS (${turnModelSelectionCte(sql, { threadId })}),
           ${claudeTokenActivityCtes(sql, { threadId })}
@@ -687,8 +653,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         skillRows,
       });
 
-      // Snapshot writes are idempotent per thread so an interrupted purge can
-      // safely re-run: wipe any partial snapshot before inserting the new one.
+      // snapshot writes are idempotent per thread so an interrupted purge re-runs safely — wipe any partial snapshot first
       yield* sql`DELETE FROM profile_stats_deleted_threads WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM profile_stats_deleted_prompts WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM profile_stats_deleted_turns WHERE thread_id = ${threadId}`;
@@ -737,14 +702,8 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         );
       }
 
-      // Hard delete: every table that stores rows for this thread. The delete
-      // receipts stay as tiny idempotency tombstones for command retries after
-      // the bulky event/projection rows are gone.
-      // The event delete mirrors the snapshot scope above (stream id OR
-      // payload threadId, thread aggregate only) so no snapshotted event can
-      // survive the purge.
-      // Settled delivery rows are no longer recovery evidence. Remove them
-      // before their source events; unresolved rows were fenced above.
+      // delete receipts stay as tiny idempotency tombstones for command retries after the bulky rows are gone; the event delete mirrors the snapshot scope (stream id OR payload threadId) so no snapshotted event survives
+      // settled delivery rows are no longer recovery evidence — remove before their source events; unresolved rows were fenced above
       yield* sql`
         DELETE FROM orchestration_event_deliveries
         WHERE consumer_name = ${PROVIDER_COMMAND_REACTOR_CONSUMER}
@@ -756,14 +715,8 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         WHERE thread_id = ${threadId}
           AND state IN ('promoted', 'cancelled')
       `;
-      // Completed/failed/reliably-unstarted gateway operations no longer have
-      // recovery value once their caller is explicitly purged. In-flight rows
-      // retain only deterministic ids and git ownership evidence until startup
-      // or live compensation terminalizes them; repository terminal writes
-      // then delete the caller-purged row atomically.
-      // External MCP task ownership outlives the projection for authorization
-      // and audit. Terminalize it in the same transaction before its projected
-      // turn disappears so durable capacity cannot be stranded by a purge.
+      // terminal gateway operations lose recovery value once the caller is purged; in-flight rows retain deterministic ids and git ownership evidence until terminalized — repository terminal writes then delete the caller-purged row atomically
+      // external MCP task ownership outlives the projection for authorization/audit — terminalize in the same transaction before its projected turn disappears so durable capacity can't be stranded
       yield* sql`
         UPDATE external_mcp_tasks
         SET status = 'failed', updated_at = ${deletedAt}
@@ -866,11 +819,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
     input,
   ) =>
     Effect.gen(function* () {
-      // Classify by the LATEST thread.deleted event's command id, which is the
-      // only delete provenance that survives this purge. Purging is irreversible,
-      // so it requires positive evidence of a manual delete: a soft-deleted thread
-      // with no recorded delete event (legacy import, truncated event log) is kept
-      // rather than guessed at.
+      // classify by the LATEST thread.deleted event's command id — the only delete provenance surviving this purge; requires positive evidence since a soft-deleted thread with no recorded event (legacy import, truncated log) is kept rather than guessed
       const candidates = yield* sql<{ readonly threadId: string }>`
           SELECT t.thread_id AS threadId
           FROM projection_threads t

@@ -1,9 +1,3 @@
-// FILE: terminalFontSettle.ts
-// Purpose: Refit xterm after web fonts finish loading so early measurements do not stick.
-// Layer: Terminal runtime utility
-// Exports: waitForTerminalFontReady
-// Depends on: Browser FontFaceSet API
-
 const DEFAULT_FONT_LOAD_TIMEOUT_MS = 2_000;
 
 // Waits for the configured terminal font, but never blocks resize recovery forever.

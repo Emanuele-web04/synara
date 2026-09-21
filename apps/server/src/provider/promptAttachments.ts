@@ -1,8 +1,3 @@
-// FILE: promptAttachments.ts
-// Purpose: Shared helpers for turning persisted chat attachments into provider-native prompt inputs.
-// Layer: Provider adapter utilities
-// Depends on: shared chat attachment contracts.
-
 import type { ChatAttachment, ChatImageAttachment, ProviderKind } from "@synara/contracts";
 import { Effect } from "effect";
 

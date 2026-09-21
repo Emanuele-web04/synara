@@ -1,8 +1,3 @@
-/**
- * GrokAdapter - Grok Build CLI ACP implementation of the generic provider contract.
- *
- * @module GrokAdapter
- */
 import { ServiceMap } from "effect";
 
 import type { ProviderAdapterError } from "../Errors.ts";

@@ -13,8 +13,7 @@ interface SingleDevicePaneOpenRequestInput {
  */
 export function routeSingleDevicePaneOpenRequest(input: SingleDevicePaneOpenRequestInput): void {
   if (input.requestedThreadId === input.currentThreadId) {
-    // Only hydrate the visible thread. Same-thread requests must not wait for
-    // rAF, which Chromium suspends for backgrounded windows.
+    // only hydrate the visible thread; same-thread requests must not wait for rAF, which Chromium suspends for backgrounded windows
     input.requestImmediateDeviceHydration();
   }
 

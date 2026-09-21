@@ -75,7 +75,7 @@ layer("gateway completion outbox", (it) => {
       expect(next).toContain("first result");
       expect(next).toContain("second result");
       expect(next).toContain("untrusted child output");
-      // A failed receipt settlement cannot consume results.
+      // a failed receipt settlement can't consume results
       yield* repository.settleContext(2, true, Effect.succeed(false));
       expect(yield* repository.claimContext("parent", 2, 16000)).toBe(next);
       yield* repository.settleContext(2, true, Effect.succeed(true));
@@ -275,7 +275,7 @@ layer("gateway completion outbox", (it) => {
       };
       yield* deliverGatewayCompletions(dependencies);
       expect(yield* repository.pending()).toHaveLength(1);
-      // Reconstruct the repository as a restarted server would; it has no memory of the first attempt.
+      // reconstruct the repository as a restarted server would
       const restarted = yield* makeCompletionRepository;
       yield* deliverGatewayCompletions({ ...dependencies, repository: restarted });
       expect(receipts.size).toBe(1);

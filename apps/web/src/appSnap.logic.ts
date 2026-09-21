@@ -1,8 +1,3 @@
-// FILE: appSnap.logic.ts
-// Purpose: Resolves recent-task targeting for incoming AppSnaps.
-// Layer: Web UI logic
-// Depends on: Thread identity only; no React or desktop APIs.
-
 import type { ThreadId } from "@synara/contracts";
 
 import { isComposerAppSnapCaptureSource } from "./lib/composerImageSource";
@@ -133,7 +128,6 @@ export function hasPersistedAppSnapCapture(
   return false;
 }
 
-/** True once persisted AppSnap metadata has also been restored into a composer image chip. */
 export function hasHydratedAppSnapCapture(
   drafts: Iterable<AppSnapCaptureDraft | undefined>,
   captureId: string,
@@ -151,7 +145,6 @@ export function hasHydratedAppSnapCapture(
   return false;
 }
 
-/** Blob keys backing every persisted draft attachment for a capture id. */
 export function persistedAppSnapCaptureBlobKeys(
   drafts: Iterable<AppSnapCaptureDraft | undefined>,
   captureId: string,
@@ -200,7 +193,7 @@ export function resolveAppSnapTarget(input: {
       ? lastAppSnap
       : null;
 
-  // A newer explicit task interaction overrides the affinity created by an older AppSnap.
+  // a newer explicit task interaction overrides the affinity of an older AppSnap
   if (recentInteraction && (!recentAppSnap || recentInteraction.atMs >= recentAppSnap.atMs)) {
     return {
       kind: "existing",
@@ -211,7 +204,7 @@ export function resolveAppSnapTarget(input: {
     };
   }
 
-  // Consecutive AppSnaps stay together even while the user remains in the external app.
+  // consecutive AppSnaps stay together while the user remains in the external app
   if (recentAppSnap) {
     return {
       kind: "existing",

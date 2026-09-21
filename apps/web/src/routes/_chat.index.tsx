@@ -1,9 +1,3 @@
-// FILE: _chat.index.tsx
-// Purpose: Restores the last chat route on app launch, falling back to a fresh home-chat draft.
-//          Also the landing for a Space that has nothing to open.
-// Layer: Routing
-// Depends on: the shared restore/create route surface plus the home-chat new-chat handler.
-
 import { SpaceId, type ProjectId } from "@synara/contracts";
 import { createFileRoute } from "@tanstack/react-router";
 
@@ -41,20 +35,14 @@ function ChatIndexRouteView() {
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
-  // A Space landing reuses the stored home-chat draft instead of minting one (same reasoning as
-  // the /studio landing): a fresh draft per visit would litter the Chats container every time
-  // someone clicked through their empty Spaces.
+  // A Space landing reuses the stored home-chat draft instead of minting one (same reasoning as the /studio landing): a fresh draft per visit would litter the Chats container every time someone clicked through their empty Spaces.
   const createFreshChat = () =>
     landingSpaceKey === undefined ? handleNewChat({ fresh: true }) : handleNewChat();
 
   const workspacePaths = { homeDir, chatWorkspaceRoot, studioWorkspaceRoot };
-  // Home chats restore the last visited route, except Studio threads — those belong to the
-  // /studio surface, and restoring one from "/" would silently switch the user into the Studio
-  // segment. A Studio lastThreadRoute falls through to a fresh home-chat draft instead.
+  // Studio threads belong to /studio — restoring one from "/" silently switches segment; a Studio lastThreadRoute falls through to a fresh home-chat draft
   const studioProjectIds = collectStudioProjectIds(projects, workspacePaths);
-  // Only plain, still-unsent chat drafts qualify as restore targets: a non-"chat" entry point
-  // isn't a home-chat draft, and `promotedTo` means the draft already became a real thread, so
-  // its stale id is no longer valid (matches the filtering findStudioDraftThreadId applies).
+  // only unsent "chat" drafts qualify — `promotedTo` means the draft already became a real thread and its stale id is invalid (matches findStudioDraftThreadId)
   const draftProjectIdByThreadId = new Map<string, ProjectId>();
   for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
     if (draft.entryPoint === "chat" && draft.promotedTo === undefined) {

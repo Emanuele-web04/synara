@@ -1,8 +1,3 @@
-// FILE: RouteInsetSurface.test.tsx
-// Purpose: Guards chat-style route card shells against sidebar peer/layout regressions.
-// Layer: Component rendering tests
-// Depends on: RouteInsetSurface and Sidebar layout primitives.
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 

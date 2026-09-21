@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 
-// Keep a fixed-size fingerprint, rather than retaining a second serialized copy
-// of every tool output. Original parts and emitted-text state remain intact.
+// fixed-size fingerprint instead of a second serialized copy of every tool output
 export function openCodeSnapshotKey(value: unknown): string {
   let serialized: string;
   try {
@@ -12,7 +11,6 @@ export function openCodeSnapshotKey(value: unknown): string {
   return createHash("sha256").update(serialized).digest("hex");
 }
 
-// Owns eviction of provider message state, including deltas received before a part snapshot.
 export interface OpenCodeMessageState<Part extends { readonly messageID: string }> {
   readonly messageRoleById: Map<string, "user" | "assistant">;
   readonly messageSnapshotKeyById: Map<string, string>;

@@ -1,11 +1,3 @@
-// FILE: SidebarLeadingIcon.tsx
-// Purpose: Standardized leading icon slot used by sidebar menu rows and section headers.
-// Layer: Sidebar UI primitive
-// Exports: SidebarLeadingIcon
-// Why: Collapses the repeated `inline-flex size-N items-center justify-center` icon
-//      containers into one component with size/tone variants so every sidebar glyph
-//      sits in an identically centered box.
-
 import { forwardRef, type HTMLAttributes } from "react";
 import { cn } from "~/lib/utils";
 
@@ -21,8 +13,7 @@ export type SidebarLeadingIconProps = HTMLAttributes<HTMLSpanElement> & {
   tone?: string;
 };
 
-// `tone` defaults to the shared muted glyph color so call sites only override when
-// the surrounding row intentionally dims its icon.
+// `tone` defaults to the shared muted glyph color so call sites only override when the surrounding row intentionally dims its icon.
 export const SidebarLeadingIcon = forwardRef<HTMLSpanElement, SidebarLeadingIconProps>(
   function SidebarLeadingIcon(
     { size: sizeProp, tone: toneProp, className, children, ...props },

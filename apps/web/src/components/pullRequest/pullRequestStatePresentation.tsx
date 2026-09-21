@@ -1,13 +1,3 @@
-// FILE: pullRequestStatePresentation.tsx
-// Purpose: Single source of truth for how a pull request's state renders across the app —
-//          the sidebar thread badge, kanban card chip, list rows, detail panel, and dock tab
-//          all resolve label, color, and glyph from here so no surface can drift. Icons come
-//          from the same three-node Central "reversed" family (pull-request / draft /
-//          request-closed / merged-simple).
-// Layer: Pull request presentation
-// Exports: PrStatePresentation, resolvePrStatePresentation, PR_STATE_PRESENTATION_ICONS,
-//          PullRequestConflictIcon
-
 import {
   GitMergeConflictIcon,
   GitMergedSimpleIcon,
@@ -45,8 +35,7 @@ export function resolvePrStatePresentation(pr: {
   mergeability?: "mergeable" | "conflicting" | "unknown" | undefined;
 }): PrStatePresentation {
   if (pr.state === "open") {
-    // Draft outranks conflicts: a draft isn't heading for a merge yet, so its state stays
-    // "draft" (git semantics). Conflicts surface once the PR is actually mergeable work.
+    // draft outranks conflicts: a draft isn't heading for a merge yet (git semantics); conflicts surface once the PR is mergeable work
     if (pr.isDraft === true) {
       return {
         label: "PR draft",

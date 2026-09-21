@@ -1,9 +1,3 @@
-// FILE: ComposerModelPickerTraitRows.tsx
-// Purpose: Footer of the composer model picker — one "<Trait> … <value> ›" row per control
-//   the selected model exposes (thinking, context, effort, speed, agent).
-// Layer: Chat composer presentation
-// Depends on: composer trait resolution, the shared trait commit hook, and menu primitives.
-
 import {
   type ProviderAgentDescriptor,
   type ProviderKind,
@@ -27,8 +21,7 @@ import {
 import { defaultAgentForProvider, getAgentOptions, getSelectedAgentValue } from "./TraitsPicker";
 import { useComposerTraitCommit } from "./useComposerTraitCommit";
 
-// Footer row "<Trait> ……… <value> ›" opening a radio submenu. Picking a value closes
-// only the submenu, so the user can compose model + traits and then star the result.
+// Footer row "<Trait> ……… <value> ›" opening a radio submenu. Picking a value closes only the submenu, so the user can compose model + traits and then star the result.
 export type ComposerEffortControl = "menu" | "slider";
 
 function TraitRow(props: {
@@ -79,8 +72,7 @@ export function ComposerModelPickerTraitRows(props: {
   modelOptions: ProviderOptions | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  // "slider" swaps the Effort and Speed rows for the stepped slider card, which owns
-  // both. Models without an effort ladder always keep the rows.
+  // "slider" swaps the Effort and Speed rows for the stepped slider card, which owns both. Models without an effort ladder always keep the rows.
   effortControl: ComposerEffortControl;
 }) {
   const { provider, threadId, model, modelOptions, prompt } = props;

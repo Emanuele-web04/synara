@@ -23,21 +23,14 @@ const projectionProjectsColumnNames = (sql: SqlClient.SqlClient) =>
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
 layer("032_ReconcileImportedSchemaLineage", (it) => {
-  // Simulates a legacy ~/.synara import where the imported `effect_sql_migrations`
-  // tracker has IDs 17-31 recorded under unrelated Synara names. The 17-31
-  // body never ran, so the columns those migrations would have added are
-  // missing. Without #032, the server crashes on the first SELECT that
-  // references env_mode.
+  // imported tracker has 17-31 under unrelated names so the migrations never ran — without #032 the server crashes on env_mode
   it.effect("heals an imported Synara DB whose tracker skipped 17-31", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // Bring the schema to where Synara and Synara last agreed.
       yield* runMigrations({ toMigrationInclusive: 16 });
 
-      // Mark IDs 17-31 applied under Synara's old names so the migrator
-      // skips Synara's renumbered 17-23. Names are illustrative; only the
-      // IDs matter to the migrator's "run anything past max(id)" gate.
+      // mark 17-31 applied under foreign names so the migrator skips renumbered 17-23; only the IDs matter to the max(id) gate
       const importedMigrationNames: ReadonlyArray<readonly [number, string]> = [
         [17, "ProjectionThreadsArchivedAt"],
         [18, "ProjectionThreadsArchivedAtIndex"],
@@ -62,8 +55,7 @@ layer("032_ReconcileImportedSchemaLineage", (it) => {
         `;
       }
 
-      // Seed a thread row with the Synara-era column set so the data-rewrite
-      // branches in #032 have something to operate on.
+      // seed a thread row with the foreign-era column set so #032's data-rewrite branches have something to operate on
       yield* sql`
         INSERT INTO projection_threads (
           thread_id,
@@ -173,32 +165,26 @@ layer("032_ReconcileImportedSchemaLineage", (it) => {
         )
       `;
 
-      // Sanity check: env_mode shouldn't exist yet.
       const beforeColumns = yield* projectionThreadsColumnNames(sql);
       assert.notInclude(beforeColumns, "env_mode");
 
-      // This is what runs on next launch.
       yield* runMigrations({ toMigrationInclusive: 32 });
 
       const afterThreadsColumns = yield* projectionThreadsColumnNames(sql);
       const afterMessagesColumns = yield* projectionThreadMessagesColumnNames(sql);
       const afterProjectsColumns = yield* projectionProjectsColumnNames(sql);
 
-      // #017 + #018 columns
       assert.include(afterThreadsColumns, "handoff_json");
       assert.include(afterMessagesColumns, "source");
       assert.include(afterMessagesColumns, "skills_json");
       assert.include(afterMessagesColumns, "mentions_json");
 
-      // #019 + the columns from #020-#023
       assert.include(afterThreadsColumns, "env_mode");
       assert.include(afterThreadsColumns, "fork_source_thread_id");
       assert.include(afterThreadsColumns, "associated_worktree_path");
       assert.include(afterThreadsColumns, "associated_worktree_branch");
       assert.include(afterThreadsColumns, "associated_worktree_ref");
 
-      // #024-#031 columns can be skipped by the same max-ID gate and must be
-      // healed before read-model queries touch them on startup.
       assert.include(afterThreadsColumns, "archived_at");
       assert.include(afterThreadsColumns, "parent_thread_id");
       assert.include(afterThreadsColumns, "subagent_agent_id");
@@ -213,8 +199,6 @@ layer("032_ReconcileImportedSchemaLineage", (it) => {
       assert.include(afterMessagesColumns, "dispatch_mode");
       assert.include(afterThreadsColumns, "create_branch_flow_completed");
 
-      // Data-rewrite branches: env_mode derived from worktree_path,
-      // associated_* mirrored from existing branch / worktree fields.
       const [seeded] = yield* sql<{
         readonly env_mode: string;
         readonly associated_worktree_path: string | null;
@@ -259,17 +243,15 @@ layer("032_ReconcileImportedSchemaLineage", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // Run the entire chain in order, the way a fresh install would.
+      // run the entire chain in order, the way a fresh install would
       yield* runMigrations();
 
-      // Nothing should blow up if we run it again.
       yield* runMigrations();
 
       const threadsColumns = yield* projectionThreadsColumnNames(sql);
       const messagesColumns = yield* projectionThreadMessagesColumnNames(sql);
 
-      // Columns from the regular in-order runs of 17-23 are still there,
-      // confirming #032 didn't try to ADD COLUMN on top of existing ones.
+      // columns from in-order runs of 17-23 still there — #032 didn't ADD COLUMN on top of existing ones
       assert.include(threadsColumns, "env_mode");
       assert.include(threadsColumns, "associated_worktree_ref");
       assert.include(threadsColumns, "create_branch_flow_completed");

@@ -1,7 +1,3 @@
-// FILE: deletedThreadClientReconciliation.test.ts
-// Purpose: Verifies immediate thread-delete UI reconciliation without rendering callers.
-// Layer: Web orchestration helper tests
-
 import { ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 

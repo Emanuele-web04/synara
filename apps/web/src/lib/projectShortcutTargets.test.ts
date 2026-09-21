@@ -96,8 +96,6 @@ describe("project shortcut targets", () => {
   });
 
   it("falls back to the last project written in, not the last project created", () => {
-    // The freshly created project has the newer metadata timestamp; the other one is where the
-    // user actually sent the most recent message.
     const written = {
       ...makeProject(CURRENT_PROJECT_ID),
       createdAt: "2026-07-10T09:00:00.000Z",

@@ -218,8 +218,7 @@ export const detectPrTemplate = Effect.fn("detectPrTemplate")(function* (
   executeGit: ExecuteGit,
 ) {
   return yield* Effect.gen(function* () {
-    // Resolve once and traverse only committed tree objects. No worktree path is opened, so
-    // repository-controlled symlinks and worktree path races cannot reach the host filesystem.
+    // traverse only committed tree objects — repo-controlled symlinks and worktree path races can't reach the host filesystem
     const rootTreeId = yield* resolveTreeId({ cwd, treeish, executeGit });
     const rootEntries = yield* listTreeEntries({
       cwd,
@@ -248,8 +247,7 @@ export const detectPrTemplate = Effect.fn("detectPrTemplate")(function* (
       ["docs", docsEntries],
     ]);
 
-    // GitHub checks the supported default-file locations in this order. A default file is
-    // automatically applied even when chooser-only templates also exist in a template directory.
+    // GitHub's default-file lookup order — a default file applies even when chooser-only templates also exist
     for (const rootDirectory of TEMPLATE_ROOT_DIRECTORIES) {
       const entries = entriesByRoot.get(rootDirectory) ?? [];
       const selection = yield* selectTemplate({

@@ -1,7 +1,3 @@
-// FILE: useProjectFileChangeSubscription.ts
-// Purpose: Keep one visible workspace-file watcher subscribed for a panel.
-// Layer: Web query invalidation hook
-
 import { WS_PROJECT_FILE_WATCH_CAPABILITY, type ProjectFileChangeEvent } from "@synara/contracts";
 import { useEffect, useSyncExternalStore } from "react";
 

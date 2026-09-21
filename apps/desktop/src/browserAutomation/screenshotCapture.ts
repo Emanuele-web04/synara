@@ -145,7 +145,6 @@ const captureFullPage = async (
   screenshotTooLarge(runtime);
 };
 
-/** Capture pixels from the same visible guest, serialized across Chromium. */
 export const captureBrowserScreenshot = async (
   runtime: BrowserAutomationVisibleRuntime,
   input: Pick<BrowserScreenshotInput, "fullPage">,

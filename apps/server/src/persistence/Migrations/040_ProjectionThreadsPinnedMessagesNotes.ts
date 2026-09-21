@@ -1,9 +1,4 @@
-/**
- * Adds durable per-thread workspace annotations to projected threads:
- * `pinned_messages_json` holds the sidebar checklist of pinned assistant
- * messages, and `notes` holds the freeform scratchpad. Both are server-owned
- * so they survive restarts/reconnects and sync across clients.
- */
+/** pinned_messages_json + notes, server-owned so they survive restarts and sync across clients */
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

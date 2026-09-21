@@ -27,8 +27,7 @@ const captured = vi.hoisted(() => ({
   stream: undefined as StreamFn | undefined,
 }));
 
-// Keep the real SDK session, agent loop, retry timers and cancellation. Replace
-// only model transport, and keep session files inside the test's isolated cwd.
+// keep the real SDK session/agent loop/retry/cancellation — replace only model transport and isolate session files to the test cwd
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   const sdk = await importOriginal<typeof import("@earendil-works/pi-coding-agent")>();
   return {
@@ -699,7 +698,6 @@ it("aborts a turn interrupted while its prompt is still committing", async () =>
     });
     const turn = await send(adapter);
     await waitFor(() => expect(spy).toHaveBeenCalled());
-    // prompt() is gated in preflight — nothing exists for abort() to reach.
     expect(session.isStreaming).toBe(false);
     await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
     releasePrompt();

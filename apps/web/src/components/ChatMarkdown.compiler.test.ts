@@ -1,10 +1,4 @@
-// FILE: ChatMarkdown.compiler.test.ts
-// Purpose: Regression guard — ChatMarkdown must stay fully compilable by React
-//          Compiler. Its manual memoization was removed on that premise: a
-//          single default value in parameter destructuring (BuildHIR
-//          AssignmentPattern bailout) would silently drop compiler coverage
-//          for the whole component, which renders every chat message.
-// Layer: Web build-integrity test
+// manual memoization was removed on the premise of compiler coverage — a single default value in destructuring (BuildHIR AssignmentPattern bailout) would silently drop it for this component, which renders every chat message
 
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";

@@ -1,8 +1,3 @@
-// FILE: useHandleNewStudioChat.ts
-// Purpose: Starts ordinary AI threads inside the hidden Studio project container.
-// Layer: Web hook
-// Exports: useHandleNewStudioChat
-
 import { ensureStudioProject } from "../lib/studioProjects";
 import { startContainerChat, type StartContainerChatResult } from "../lib/startContainerChat";
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -27,8 +22,7 @@ export function useHandleNewStudioChat() {
           .getDraftThreadByProjectId(projectId, "chat");
         return handleNewThread(projectId, {
           ...threadOptions,
-          // Migrate a pre-fix local draft in place: its ordinary reference folder was
-          // stored in worktreePath even though no Git worktree existed.
+          // migrate a pre-fix draft in place: its reference folder was stored in worktreePath though no Git worktree existed
           workingDirectory:
             threadOptions?.fresh === true
               ? null
@@ -36,8 +30,7 @@ export function useHandleNewStudioChat() {
         });
       },
       fresh: options?.fresh,
-      // Studio owns one durable local workspace. Reopening its stored draft must never
-      // inherit an old project/worktree environment.
+      // Studio owns one durable local workspace. Reopening its stored draft must never inherit an old project/worktree environment.
       forceLocalWorkspace: true,
       errorLabel: "Unable to prepare a new Studio chat.",
     });

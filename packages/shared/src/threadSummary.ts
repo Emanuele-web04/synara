@@ -67,9 +67,7 @@ function isActivityOrderStable(activities: ReadonlyArray<OrderableActivity>): bo
   return true;
 }
 
-// Store activity arrays are immutable and appended in order, so the common case is already
-// sorted; a linear pre-check plus a per-array cache avoids re-copying and re-sorting the full
-// list on every summary recomputation (this runs per store flush while a thread streams).
+// store arrays are immutable and appended in order — a linear pre-check plus per-array cache avoids re-sorting on every flush while a thread streams
 function orderedActivities<TActivity extends OrderableActivity>(
   activities: ReadonlyArray<TActivity>,
 ): ReadonlyArray<TActivity> {
@@ -219,7 +217,6 @@ function resolveLatestProposedPlan(input: {
   );
 }
 
-// Tracks the open human-request lifecycles from timeline activities.
 export function derivePendingThreadRequestIds(input: {
   readonly activities: ReadonlyArray<
     Pick<OrchestrationThreadActivity, "createdAt" | "id" | "kind" | "payload" | "sequence">
@@ -231,10 +228,7 @@ export function derivePendingThreadRequestIds(input: {
     >
   >;
 }): PendingThreadRequestIds {
-  // A present settlement projection is authoritative for every interaction
-  // kind, including an empty array and terminal-but-unconfirmed rows such as
-  // `uncertain`. Only snapshots that omit the projection entirely fall back to
-  // activity replay for legacy/imported compatibility.
+  // a present settlement projection is authoritative even when empty or terminal-but-unconfirmed; only its complete absence falls back to activity replay
   const projectedOpenApprovals = new Map<string, string>();
   const projectedOpenUserInputs = new Map<string, string>();
   for (const interaction of input.pendingInteractions ?? []) {
@@ -325,7 +319,7 @@ export function derivePendingThreadRequestIds(input: {
 type ThreadSummaryMessage = Pick<OrchestrationMessage, "role" | "createdAt" | "dispatchOrigin"> &
   Partial<Pick<OrchestrationMessage, "updatedAt">>;
 
-/** User-message updates preserve the send time on turn binding and advance it on resend. */
+/** preserve send time on turn binding; advance it on resend */
 export function resolveHumanMessageAt(message: ThreadSummaryMessage): string | null {
   if (
     message.role !== "user" ||

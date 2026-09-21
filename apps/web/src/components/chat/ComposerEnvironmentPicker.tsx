@@ -1,4 +1,3 @@
-// Purpose: Shared Local/Worktree chip and menu for the full and floating composers.
 import type { ThreadEnvironmentMode } from "@synara/contracts";
 import type { ReactNode } from "react";
 import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";

@@ -1,10 +1,3 @@
-// FILE: ComposerEffortSliderCard.tsx
-// Purpose: Slider-style effort control for the composer model picker's footer (fast toggle,
-//   effort label, reset, and a stepped slider).
-// Layer: Chat composer presentation
-// Depends on: shared trait resolution + effort-change planning, the trait commit hook,
-//   and the shared Slider primitive.
-
 import type { ProviderKind, ProviderModelDescriptor, ThreadId } from "@synara/contracts";
 
 import { ResetIcon } from "~/lib/icons";
@@ -35,10 +28,7 @@ type ComposerEffortSliderCardProps = {
 const CARD_ICON_BUTTON_CLASS_NAME =
   "flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[color:var(--color-border-focus)]/60 disabled:pointer-events-none disabled:opacity-35";
 
-// Effort ladder as a stepped slider. Every level the model exposes is one stop
-// (including prompt-injected ones such as Ultrathink), so the ladder matches the
-// radio menu exactly; changes commit immediately and keep the menu open so the label
-// and thumb update in place.
+// every level the model exposes is one stop including prompt-injected ones (Ultrathink); changes commit immediately, menu stays open
 export function ComposerEffortSliderCard(props: ComposerEffortSliderCardProps) {
   const { provider, threadId, model, modelOptions, prompt, onPromptChange } = props;
   const selection = getComposerTraitSelection(

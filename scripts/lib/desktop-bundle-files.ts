@@ -1,13 +1,7 @@
-// FILE: desktop-bundle-files.ts
-// Purpose: Exclude non-runtime files from desktop artifacts without changing the staged install.
-// Layer: Release/build helper
-
 const DIAGNOSTIC_FILES = [
   "!node_modules/**/*.{js,mjs,cjs,ts,mts,cts}.map",
   "!node_modules/**/*.{d.mts,d.cts,tsbuildinfo}",
-  // These packages execute their compiled JS exports. Keep arbitrary dependency
-  // sources: extension loaders and native helpers can legitimately need them.
-  // Remove only TypeScript, retaining vendored licenses and other source assets.
+  // these packages execute their compiled JS exports — remove only TypeScript, keep vendored licenses and sources
   "!node_modules/effect/src/**/*.ts",
   "!node_modules/@effect/{platform-node,platform-node-shared,sql-sqlite-bun}/src/**/*.ts",
   "!node_modules/openai/src/**/*.ts",
@@ -27,20 +21,16 @@ export function createDesktopBundleFilePatterns(
   const files = ["**/*"];
   if (!options.diagnostics) files.push(...DIAGNOSTIC_FILES);
 
-  // node-pty is rebuilt before packaging. Its platform prebuilds are not
-  // interchangeable; retain both same-platform architectures for universal Mac.
+  // node-pty is rebuilt before packaging and its prebuilds aren't interchangeable — keep both same-platform arches for the universal Mac
   if (platform !== "mac") files.push("!node_modules/node-pty/prebuilds/darwin-*/**");
   if (platform !== "win") files.push("!node_modules/node-pty/prebuilds/win32-*/**");
   files.push("!node_modules/node-pty/lib/*.test.js");
-  // MSVC leaves incremental-link inputs and build logs next to the rebuilt
-  // addon. These are build products, not DLLs, executables, or native addons.
+  // MSVC incremental-link inputs and build logs — build products, not runtime files
   files.push(
     "!node_modules/node-pty/build/**/*.{iobj,ipdb,tlog,vcxproj,filters,recipe,lastbuildstate,exp,lib}",
   );
 
-  // All icon preferences for the target OS and the menu fallback remain intact.
-  // Build resources (signing entitlements / installer icons) are left untouched;
-  // only their otherwise redundant runtime copies are filtered here.
+  // icon preferences and the menu fallback stay intact; only redundant runtime copies are filtered
   const resources = "!apps/desktop/prod-resources/";
   files.push(`${resources}entitlements.mac*.plist`);
   if (platform !== "mac") {
@@ -53,9 +43,7 @@ export function createDesktopBundleFilePatterns(
   if (platform !== "linux") files.push(`${resources}app-icon-linux.png`);
   if (platform !== "win") files.push(`${resources}app-icon-windows.ico`, `${resources}icon.ico`);
 
-  // The SDK selects the glibc executable first on a glibc host. The musl
-  // executable needs a different loader and cannot be its working fallback.
-  // Unknown/non-glibc build hosts retain both variants instead of guessing.
+  // the SDK picks the glibc executable first; musl needs a different loader, and unknown hosts keep both variants
   if (platform === "linux" && options.linuxGlibc) {
     files.push("!node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl/**");
   }

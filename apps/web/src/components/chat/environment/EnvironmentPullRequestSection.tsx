@@ -1,13 +1,3 @@
-// FILE: EnvironmentPullRequestSection.tsx
-// Purpose: "Pull request" section of the Environment panel — one row (state glyph, title,
-//          live check status) that opens the PR action menu: view / code changes, the
-//          checks and review-comment lists, Repair (hands comments, failing checks, or
-//          conflicts to the composer as context cards), Merge, Status (draft / ready /
-//          close / reopen), and Add to chat. Copy link and Open in GitHub ride on the View PR row.
-// Layer: Environment panel section
-// Depends on: git status/PR-snapshot React Query helpers, the pull request action mutation,
-//             and the shared Environment row skin.
-
 import type {
   GitPullRequestCheck,
   GitPullRequestComment,
@@ -244,8 +234,7 @@ function CommentsMenuRow({
               actor={{
                 login: comment.author,
                 name: null,
-                // Review-thread authors are users or bots, never team slugs, so the
-                // login-derived avatar is safe here (same as pullRequestOperations).
+                // review-thread authors are users or bots, never team slugs, so the login-derived avatar is safe here
                 avatarUrl: githubAvatarUrlForLogin(comment.author),
                 url: null,
               }}
@@ -310,8 +299,7 @@ export function EnvironmentPullRequestSection({
   const queryClient = useQueryClient();
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<PullRequestConfirmAction | null>(null);
-  // Share the git block's cache, but revalidate stale status when this always-mounted
-  // panel opens so an earlier missing PR does not linger until the next polling tick.
+  // share the git block's cache but revalidate stale status when this always-mounted panel opens, so an earlier missing PR doesn't linger until the next poll
   const { data: gitStatus } = useQuery(gitStatusQueryOptions(gitCwd, enabled));
   const pr = gitStatus?.pr ?? null;
 
@@ -323,8 +311,7 @@ export function EnvironmentPullRequestSection({
     }),
   );
 
-  // The snapshot can report a merge/close before git status catches up. Once git status
-  // also settles, prefer it over a cached open snapshot whose polling is now disabled.
+  // the snapshot can report merge/close before git status catches up; once git status settles, prefer it over a stale cached snapshot
   const livePr = snapshotQuery.data?.pullRequest ?? null;
   const displayPr = pr?.state === "open" ? (livePr ?? pr) : pr;
 
@@ -334,15 +321,12 @@ export function EnvironmentPullRequestSection({
   const repositoryBelongsToProject = configuredRepositories.some(
     (repository) => repository.nameWithOwner.toLowerCase() === pullRequestRepository?.toLowerCase(),
   );
-  // Merge / Status go through the GitHub-backed PR actions, which are keyed by project +
-  // repository. A PR from a repository the project does not own only gets link actions.
+  // Merge/Status go through GitHub-backed PR actions keyed by project + repository; a PR from a repo the project doesn't own only gets link actions
   const actionInput: PullRequestDetailInput | null =
     displayPr && projectId && pullRequestRepository && repositoryBelongsToProject
       ? { projectId, repository: pullRequestRepository, number: displayPr.number }
       : null;
-  // Merge capabilities (allowed methods, stack state) and the merged/closed timestamps only
-  // live on the detail query. Fetch it lazily while the menu is open so the row itself stays
-  // as cheap as before.
+  // merge capabilities and merged/closed timestamps only live on the detail query — fetch lazily while the menu is open so the row stays cheap
   const detailQuery = useQuery({
     ...pullRequestDetailQueryOptions(actionInput, { pollingEnabled: false }),
     enabled: actionInput !== null && menuOpen,
@@ -399,8 +383,7 @@ export function EnvironmentPullRequestSection({
     onClose();
   };
 
-  // Repair / Add to chat attach a context card to the composer; the panel closes so the
-  // new bubble is visible above the editor right away.
+  // Repair/Add to chat attach a composer context card; the panel closes so the new bubble is visible right away
   const attachContextCard = (scope: PullRequestContextScope) => {
     if (!activeThreadId) {
       return;
@@ -457,13 +440,11 @@ export function EnvironmentPullRequestSection({
   const actionPending = actionMutation.isPending;
   const detail = detailQuery.data ?? null;
   const stackAssessment = detail?.stack ? assessPullRequestStack(detail.stack) : null;
-  // Merge is gated on the detail query: the git snapshot knows nothing about allowed merge
-  // methods, stack state, or review blockers, so offering Merge before detail resolves could
-  // send an action GitHub rejects. Until then the entry stays disabled with a status hint.
+  // git snapshot knows nothing about allowed merge methods/stack/review blockers — offering Merge before detail resolves could send an action GitHub rejects; stays disabled with a hint until then
   const allowedMergeMethods: PullRequestMergeMethod[] = detail
     ? (["merge", "squash", "rebase"] as const).filter((method) => detail.mergeCapabilities[method])
     : [];
-  // Local snapshot facts first (draft, conflicts) so the reason shows before detail loads.
+  // local snapshot facts first (draft, conflicts) so the reason shows before detail loads
   const mergeBlocker = displayPr.isDraft
     ? "Mark the pull request ready for review before merging"
     : displayPr.mergeability === "conflicting"
@@ -497,7 +478,6 @@ export function EnvironmentPullRequestSection({
       : "Ready for review";
   // The git snapshot has no merged/closed timestamp; the lazily fetched detail does.
   const settledAt = settledState === "merged" ? detail?.mergedAt : detail?.closedAt;
-  // formatRelativeTime is the compact list form ("12h"); a sentence needs "12h ago".
   const settledAgo = settledAt ? formatRelativeTime(settledAt) : null;
   const statusTrailing =
     settledState && settledAgo
@@ -669,9 +649,7 @@ export function EnvironmentPullRequestSection({
                       }
                     />
                   ) : (
-                    // shrink-0 children: when the list overflows max-h-64, flex would otherwise
-                    // shrink the rows (their line-clamp overflow-hidden spans have no automatic
-                    // minimum size) and clip the text instead of scrolling.
+                    // shrink-0 children: on overflow, flex would otherwise shrink rows whose line-clamp spans have no minimum size, clipping text instead of scrolling
                     <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto [&>*]:shrink-0">
                       {comments.map((comment) => (
                         <CommentsMenuRow

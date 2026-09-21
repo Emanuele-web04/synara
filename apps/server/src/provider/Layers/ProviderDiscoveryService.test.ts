@@ -1,9 +1,3 @@
-// FILE: ProviderDiscoveryService.test.ts
-// Purpose: Verifies the discovery service merges provider-native skills with the
-//          unified Synara catalog, filters user-disabled skills, and reports
-//          skill discovery as supported for every provider.
-// Layer: Server provider tests
-
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import * as os from "node:os";

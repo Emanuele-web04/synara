@@ -1,5 +1,4 @@
-// Distinguish verified Claude deletion snapshots from older inflated counters.
-// Existing history stays untouched; it cannot safely be repaired from totals.
+// distinguish verified deletion snapshots from older inflated counters; existing history stays untouched — it can't be safely repaired from totals
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { columnExists } from "./schemaHelpers.ts";
@@ -7,8 +6,7 @@ import { columnExists } from "./schemaHelpers.ts";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   if (!(yield* columnExists(sql, "profile_stats_deleted_tokens", "token_accounting_version"))) {
-    // Keep this extensible: readers opt into versions they understand, while a
-    // future writer must not need a table rebuild merely to preserve a snapshot.
+    // readers opt into versions they understand — a future writer must not need a table rebuild merely to preserve a snapshot
     yield* sql`
       ALTER TABLE profile_stats_deleted_tokens ADD COLUMN token_accounting_version INTEGER
     `;
@@ -21,8 +19,7 @@ export default Effect.gen(function* () {
       PRIMARY KEY (thread_id, turn_id)
     ) WITHOUT ROWID
   `;
-  // Capture retained, per-turn main-loop evidence before runtime retention removes
-  // it. Leave compact modelUsage and the immutable event journal untouched.
+  // capture per-turn main-loop evidence before runtime retention removes it; leave compact modelUsage and the immutable journal untouched
   yield* sql`
     INSERT OR IGNORE INTO profile_stats_claude_legacy_usage (thread_id, turn_id, tokens)
     WITH claude_result_source AS (

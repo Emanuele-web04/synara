@@ -1,8 +1,3 @@
-// FILE: SidebarHeaderNavigationControls.tsx
-// Purpose: Single source for the leading chrome cluster (sidebar toggle + route arrows).
-// Layer: Shared web shell chrome
-// Depends on: Sidebar state plus AppNavigationButtons
-
 import { AppNavigationButtons } from "./AppNavigationButtons";
 import { SidebarTrigger, useSidebar } from "./ui/sidebar";
 import { cn } from "~/lib/utils";

@@ -1,10 +1,3 @@
-// FILE: ComposerColumnFrame.tsx
-// Purpose: Shared composer column wrapper and the stacked-activity rail that must
-// live inside it (queued follow-ups, active plan/task activity). Keeps stacked panels
-// aligned with the composer input instead of the full gutter viewport.
-// Layer: Chat composer layout
-// Exports: ComposerColumnFrame, ComposerStackedHeaderFrame
-
 import {
   createContext,
   memo,

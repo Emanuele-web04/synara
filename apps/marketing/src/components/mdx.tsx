@@ -7,11 +7,7 @@ import { Card, Cards } from "@/components/docs/card";
 import { Step, Steps } from "@/components/docs/steps";
 import { DocsGallery, DocsImage, DocsScreenshot, DocsVideo } from "@/components/docs/media";
 
-/*
- * Every docs page gets these without per-file imports. Headings and code
- * blocks come from the fumadocs defaults; Callout, Card(s), and Step(s) are
- * shadcn-based replacements so docs surfaces match the site design system.
- */
+// every docs page gets these without per-file imports — Callout/Card/Steps are shadcn-based replacements so docs match the site design system
 export function getMDXComponents(components?: MDXComponents) {
   return {
     ...defaultMdxComponents,

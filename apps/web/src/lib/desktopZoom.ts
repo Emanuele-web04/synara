@@ -1,18 +1,7 @@
-// FILE: desktopZoom.ts
-// Purpose: Single renderer-side accessor for the Electron shell's page zoom factor.
-// Layer: Web shell utility
-// Depends on: desktopBridge preload API, shared desktop chrome geometry.
-//
-// Why this exists:
-//   Zoom is the conversion factor between the renderer's CSS pixels and the window
-//   DIPs that native surfaces (traffic lights, the native browser WebContentsView)
-//   are positioned in. Every consumer needs the same defensive read — the preload
-//   bridge can be absent (web build) or predate the zoom channel — so the read and
-//   the subscription live here instead of being re-derived per call site.
+// zoom converts renderer CSS px to the DIPs native surfaces (traffic lights, browser view) are positioned in; the bridge can be absent (web build) or predate the zoom channel, so the defensive read lives here
 
 import { normalizeDesktopZoomFactor } from "@synara/shared/desktopChrome";
 
-/** Current shell zoom factor, or 1 when the desktop bridge cannot report one. */
 export function readDesktopZoomFactor(): number {
   const bridge = window.desktopBridge;
   if (!bridge?.getZoomFactor) return 1;

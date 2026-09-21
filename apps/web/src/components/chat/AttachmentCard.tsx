@@ -1,13 +1,3 @@
-// FILE: AttachmentCard.tsx
-// Purpose: Shared visual shell for NON-IMAGE composer/transcript attachments —
-//   files, pasted text, and other document-like references. Centralizes the icon
-//   tile, title/subtitle column, and remove affordance so every non-image
-//   attachment reads consistently; each kind supplies its own icon, labels, and
-//   optional subtitle/action. Image attachments stay separate: they render a
-//   thumbnail (see ComposerImageAttachmentChip), not this shell.
-// Layer: Chat composer/transcript presentation
-// Exports: AttachmentCard
-
 import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
@@ -25,7 +15,6 @@ interface AttachmentCardSizeStyles {
 }
 
 const ATTACHMENT_CARD_SIZE_STYLES: Record<AttachmentCardSize, AttachmentCardSizeStyles> = {
-  // Compact tile for pasted-text cards (composer + transcript echo).
   sm: {
     shell: "max-w-[16rem] gap-2 rounded-lg py-1 pl-1",
     shellWithRemove: "pr-5",
@@ -34,7 +23,6 @@ const ATTACHMENT_CARD_SIZE_STYLES: Record<AttachmentCardSize, AttachmentCardSize
     title: "text-ui leading-snug",
     remove: "sm",
   },
-  // Roomier composer card with a prominent type glyph (file attachments).
   md: {
     shell: "h-14 w-60 max-w-full gap-2.5 rounded-xl py-2 pl-2",
     shellWithRemove: "pr-8",
@@ -48,9 +36,7 @@ const ATTACHMENT_CARD_SIZE_STYLES: Record<AttachmentCardSize, AttachmentCardSize
 interface AttachmentCardOwnProps {
   /** Leading glyph rendered inside the rounded tile; caller sizes it to the tile. */
   icon: ReactNode;
-  /** Primary line — truncated to a single row. */
   title: ReactNode;
-  /** Optional secondary line (type label, byte count, inline action). */
   subtitle?: ReactNode;
   size?: AttachmentCardSize;
   onRemove?: (() => void) | undefined;
@@ -58,8 +44,7 @@ interface AttachmentCardOwnProps {
   removeLabel?: string;
 }
 
-// Spreads remaining span props/ref onto the root so the card works as a Base UI
-// tooltip trigger (which merges hover/aria props + ref onto the rendered element).
+// Spreads remaining span props/ref onto the root so the card works as a Base UI tooltip trigger (which merges hover/aria props + ref onto the rendered element).
 type AttachmentCardProps = AttachmentCardOwnProps &
   Omit<ComponentPropsWithoutRef<"span">, keyof AttachmentCardOwnProps | "title">;
 

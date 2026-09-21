@@ -1,15 +1,4 @@
-// FILE: providerUsage/providers/codex.ts
-// Purpose: Live Codex (ChatGPT/OpenAI) usage fetcher. Reads the OAuth access token from the
-// Codex CLI auth.json (or the macOS keychain) and calls the ChatGPT backend usage endpoint,
-// mapping rate-limit windows + credit balance into the shared snapshot shape.
-//
-// Unlike Claude there is no CLI subcommand to delegate token refresh to, so file-sourced
-// credentials are refreshed here — with the care single-use rotating refresh tokens demand:
-// re-read the live auth.json right before redeeming (the CLI may have rotated it since we
-// loaded), redeem at most once per fetch, and atomically persist the rotated pair (plus
-// last_refresh, preserving unknown fields) back to the same file so the CLI's login survives.
-// Keychain-sourced credentials are never refreshed: our keychain access is read-only, and
-// redeeming a rotating refresh token without writing the rotation back would log the CLI out.
+// no CLI subcommand to delegate refresh to — re-read auth.json before redeeming (the CLI may have rotated it), redeem at most once, atomically persist the rotated pair; keychain credentials are never refreshed (read-only access)
 
 import nodePath from "node:path";
 
@@ -50,23 +39,21 @@ const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const REFRESH_URL = "https://auth.openai.com/oauth/token";
 const OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const KEYCHAIN_SERVICE = "Codex Auth";
-// Refresh once the access token is within this window of its JWT `exp` — the same slack the
-// codex CLI uses, so we rotate on its schedule instead of guessing from wall-clock age.
+// the same slack the codex CLI uses — rotate on its schedule rather than guessing from wall-clock age
 const ACCESS_TOKEN_REFRESH_WINDOW_MS = 5 * 60 * 1000;
-// Fallback for tokens without a readable `exp`: the CLI treats a login as stale after 8 days.
+// fallback when `exp` is unreadable: the CLI treats a login as stale after 8 days
 const LAST_REFRESH_MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000;
 
-// Refresh-token error codes that mean "this stored credential is dead — re-login required".
+// refresh-token errors meaning "dead credential — re-login required"
 const REFRESH_TOKEN_DEAD_CODES = new Set(["refresh_token_expired", "refresh_token_invalidated"]);
-// The token was already redeemed (by the CLI, or another Synara process): the file likely holds
-// a newer credential — re-read it instead of declaring the login dead.
+// refresh_token_reused means someone else won — re-read the file for their rotation instead of declaring the login dead
 const REFRESH_TOKEN_REUSED_CODE = "refresh_token_reused";
 
 type CodexAuthSource = { kind: "file"; path: string } | { kind: "keychain" };
 
 interface CodexOAuthState {
   kind: "oauth";
-  /** Full parsed auth.json record, kept for a field-preserving write-back after rotation. */
+  /** full parsed auth.json kept for field-preserving write-back after rotation */
   record: Record<string, unknown>;
   accessToken: string;
   refreshToken: string | undefined;
@@ -115,7 +102,7 @@ function readCodexAuthRecord(
   return asString(record.OPENAI_API_KEY) ? "api-key-only" : null;
 }
 
-/** Re-read the credential from the exact source it originally came from. */
+/** re-read from the exact source it originally came from */
 async function reloadCodexAuth(
   ctx: ProviderUsageContext,
   source: CodexAuthSource,
@@ -176,8 +163,7 @@ function codexAuthCacheKey(ctx: ProviderUsageContext, auth: CodexAuth | null): s
   return `${ctx.homeDir}:${credentialFingerprint(stableIdentity)}`;
 }
 
-/** Prefer the access token's own JWT `exp`; fall back to `last_refresh` wall-clock age only when
- * the token carries no readable expiry. A fresh login with neither never needs a refresh. */
+/** prefer the token's JWT `exp`; `last_refresh` wall-clock age only when there's no readable expiry */
 function codexAuthNeedsRefresh(state: CodexOAuthState, nowMs: number): boolean {
   const expMs = decodeJwtExpMs(state.accessToken);
   if (expMs !== null) {
@@ -188,8 +174,7 @@ function codexAuthNeedsRefresh(state: CodexOAuthState, nowMs: number): boolean {
   return Number.isFinite(lastRefreshMs) && nowMs - lastRefreshMs > LAST_REFRESH_MAX_AGE_MS;
 }
 
-// Serializes refresh attempts per auth.json path within this process, so concurrent usage
-// fetches can't race each other into redeeming the same single-use refresh token twice.
+// serialize refresh attempts per auth.json path — concurrent fetches can't redeem the same single-use token twice
 const refreshLocks = new Map<string, Promise<unknown>>();
 function withRefreshLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = refreshLocks.get(key) ?? Promise.resolve();
@@ -204,9 +189,7 @@ function withRefreshLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** Apply a token-endpoint rotation to the in-memory state and persist it back to auth.json.
- * Persistence failures are logged loudly but don't fail the fetch: the refreshed token still
- * works for this pass, while the stranded rotation is the thing worth surfacing. */
+/** persist the rotated pair; a write failure is logged but doesn't fail the fetch — the refreshed token still works this pass while the stranded rotation is surfaced */
 async function persistRotatedCodexAuth(
   state: CodexOAuthState,
   refreshed: Extract<OAuthRefreshResult, { ok: true }>,
@@ -250,18 +233,14 @@ type CodexRefreshOutcome =
   | { kind: "needs-auth" }
   | { kind: "unavailable" };
 
-/**
- * Bring a stale/rejected credential up to date. Order matters: adopt an out-of-band rotation
- * from the live file first (redeeming our stale copy would trip `refresh_token_reused`), then
- * redeem the refresh token ourselves at most once (`allowRedeem`), persisting the rotation.
- */
+/** order matters: adopt an out-of-band rotation from the live file first (redeeming our stale copy trips refresh_token_reused), then redeem at most once */
 async function refreshCodexAuth(
   ctx: ProviderUsageContext,
   state: CodexOAuthState,
   options: { allowRedeem: boolean },
 ): Promise<CodexRefreshOutcome> {
   if (state.source.kind === "keychain") {
-    // Read-only keychain access: adopting an out-of-band rotation is fine, self-refresh is not.
+    // read-only keychain: adopting an out-of-band rotation is fine, self-refresh is not
     const live = await reloadCodexAuth(ctx, state.source);
     return live && live.accessToken !== state.accessToken
       ? { kind: "updated", state: live, redeemed: false }
@@ -299,8 +278,7 @@ async function refreshCodexAuth(
       };
     }
     if (refreshed.errorCode === REFRESH_TOKEN_REUSED_CODE) {
-      // Someone else (the CLI, another process) won the redemption race; their rotation should
-      // already be on disk — pick it up instead of declaring the login dead.
+      // someone else won the redemption race — pick up their on-disk rotation instead of declaring the login dead
       const rotated = await reloadCodexAuth(ctx, state.source);
       if (rotated && rotated.accessToken !== live.accessToken) {
         return { kind: "updated", state: rotated, redeemed: false };
@@ -314,7 +292,7 @@ async function refreshCodexAuth(
       });
       return { kind: "needs-auth" };
     }
-    // Transport failure / 5xx / WAF page: nothing wrong with the stored credential per se.
+    // transport failure / 5xx / WAF page — nothing wrong with the stored credential
     log.warn("codex token refresh unavailable; continuing with the stored access token", {
       ...(refreshed.status !== undefined ? { status: refreshed.status } : {}),
     });
@@ -432,8 +410,7 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
     }
 
     let state = auth;
-    // At most one token-endpoint redemption per fetch: if a just-refreshed token still comes
-    // back 401, a second redemption can only burn credentials, not fix anything.
+    // at most one redemption per fetch — if a just-refreshed token still 401s, a second redemption only burns credentials
     let allowRedeem = true;
 
     if (codexAuthNeedsRefresh(state, ctx.nowMs)) {
@@ -450,8 +427,7 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
     try {
       let result = await fetchCodexUsage(state);
       if (isAuthFailureStatus(result.status)) {
-        // The stored expiry can lag reality (revocation, clock skew): refresh/re-read and retry
-        // once with a genuinely different token.
+        // stored expiry can lag reality (revocation, clock skew) — refresh/re-read and retry once
         const outcome = await refreshCodexAuth(ctx, state, { allowRedeem });
         if (outcome.kind === "updated" && outcome.state.accessToken !== state.accessToken) {
           state = outcome.state;
@@ -476,8 +452,7 @@ export const codexUsageFetcher: ProviderUsageFetcher = {
         headers: Object.fromEntries(result.headers),
         nowMs: ctx.nowMs,
       });
-      // Banked resets live behind `codex app-server`, not wham/usage. The probe rides the
-      // same snapshot cache TTL, never throws, and resolves to "not reported" when absent.
+      // banked resets live behind `codex app-server`, not wham/usage — the probe rides the snapshot cache TTL and resolves "not reported" when absent
       const resetCredits = await fetchCodexResetCredits({
         binaryPath: ctx.codexBinaryPath,
         expectedAccountId: state.accountId,

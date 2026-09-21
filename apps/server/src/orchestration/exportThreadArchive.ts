@@ -1,17 +1,4 @@
-// FILE: exportThreadArchive.ts
-// Purpose: Build a ZIP archive that exports a single Synara thread so a user
-//          can download the conversation as a portable, compressed package —
-//          mirroring the `/export` affordance of agent CLIs.
-// Layer: Orchestration utility (plain async module; HTTP composes it through
-//          Stream.fromAsyncIterable). ZIP is produced with node:zlib and a
-//          hand-written central directory. Entries are serialized and deflated
-//          incrementally (per-message chunks through a streaming deflater with
-//          a running CRC), so the server never materializes a full entry
-//          string or uncompressed buffer — peak memory is bounded by the
-//          compressed bytes of one entry.
-// Exports: threadArchiveChunks, buildThreadArchiveBytes, threadArchiveFileName.
-// The export-eligibility guard lives in @synara/shared/threadExport so the
-// web composer and the HTTP route share one predicate.
+// entries deflate incrementally through a streaming deflater with a running CRC — the server never materializes a full entry; peak memory is one entry's compressed bytes
 
 import zlib from "node:zlib";
 
@@ -42,9 +29,7 @@ interface DeflatedEntryData {
   readonly uncompressedSize: number;
 }
 
-// Streams entry chunks through a raw deflater while keeping a running CRC-32,
-// so only the compressed bytes are retained (needed up front: the ZIP local
-// header stores the compressed size and CRC before the payload).
+// streams chunks through a raw deflater with a running CRC-32 — the local header stores compressed size and CRC before the payload
 async function deflateEntryChunks(chunks: Iterable<string>): Promise<DeflatedEntryData> {
   const deflater = zlib.createDeflateRaw();
   const compressedChunks: Buffer[] = [];
@@ -75,50 +60,47 @@ interface ZipEntryRecord {
   readonly centralRecord: (offset: number) => Buffer;
 }
 
-// Zeroed DOS time/date (1980-01-01 00:00) keeps exports deterministic without
-// adding date conversion code to the archive writer. Entries are always
-// deflated: text transcripts compress well, and tiny entries stay valid ZIP
-// even when deflate adds a few bytes.
+// zeroed DOS time keeps exports deterministic; entries always deflated — transcripts compress well and tiny entries stay valid ZIP
 async function buildZipEntry(entry: ThreadArchiveEntry): Promise<ZipEntryRecord> {
   const nameBuffer = Buffer.from(entry.name, "utf8");
   const { compressed, crc, uncompressedSize } = await deflateEntryChunks(entry.chunks);
   const method = 8;
 
   const localChunk = Buffer.concat([
-    u32(0x04034b50), // local file header signature
-    u16(20), // version needed to extract
-    u16(UTF8_FLAG), // general purpose: UTF-8 names
-    u16(method), // compression method (8 deflate)
-    u16(0), // last mod time
-    u16(0), // last mod date
-    u32(crc), // CRC-32
-    u32(compressed.length), // compressed size
-    u32(uncompressedSize), // uncompressed size
-    u16(nameBuffer.length), // file name length
-    u16(0), // extra field length
+    u32(0x04034b50),
+    u16(20),
+    u16(UTF8_FLAG),
+    u16(method),
+    u16(0),
+    u16(0),
+    u32(crc),
+    u32(compressed.length),
+    u32(uncompressedSize),
+    u16(nameBuffer.length),
+    u16(0),
     nameBuffer,
     compressed,
   ]);
 
   const centralRecord = (offset: number): Buffer =>
     Buffer.concat([
-      u32(0x02014b50), // central directory header signature
-      u16(20), // version made by
-      u16(20), // version needed to extract
-      u16(UTF8_FLAG), // general purpose: UTF-8 names
-      u16(method), // compression method
-      u16(0), // last mod time
-      u16(0), // last mod date
-      u32(crc), // CRC-32
-      u32(compressed.length), // compressed size
-      u32(uncompressedSize), // uncompressed size
-      u16(nameBuffer.length), // file name length
-      u16(0), // extra field length
-      u16(0), // file comment length
-      u16(0), // disk number start
-      u16(0), // internal file attributes
-      u32(0), // external file attributes
-      u32(offset), // offset of local header
+      u32(0x02014b50),
+      u16(20),
+      u16(20),
+      u16(UTF8_FLAG),
+      u16(method),
+      u16(0),
+      u16(0),
+      u32(crc),
+      u32(compressed.length),
+      u32(uncompressedSize),
+      u16(nameBuffer.length),
+      u16(0),
+      u16(0),
+      u16(0),
+      u16(0),
+      u32(0),
+      u32(offset),
       nameBuffer,
     ]);
 
@@ -131,7 +113,7 @@ const MESSAGE_ROLE_HEADING: Record<string, string> = {
   system: "System",
 };
 
-// One chunk for the header, then one chunk per message; nothing accumulates.
+// one chunk for the header then one per message — nothing accumulates
 function* transcriptMarkdownChunks(thread: OrchestrationThread): Generator<string> {
   yield `# ${thread.title}\n\n> Exported from Synara.\n`;
   for (const message of thread.messages) {
@@ -146,9 +128,7 @@ function exportMessageProjection(message: OrchestrationMessage): Record<string, 
     role: message.role,
     text: message.text,
     source: message.source,
-    // Attachment/skill/mention references are part of the user's input for a
-    // turn; keep them in the structured export (metadata only — the archive
-    // does not bundle the referenced files).
+    // attachment/skill/mention references are part of the user's input — kept as metadata only; the archive doesn't bundle the files
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
     ...(message.skills?.length ? { skills: message.skills } : {}),
     ...(message.mentions?.length ? { mentions: message.mentions } : {}),
@@ -157,9 +137,7 @@ function exportMessageProjection(message: OrchestrationMessage): Record<string, 
   };
 }
 
-// Emits the thread metadata object once, then appends the messages array one
-// serialized message at a time so the full JSON document never exists as a
-// single string.
+// emits the metadata object once then appends messages one at a time — the full JSON document never exists as a single string
 function* threadJsonChunks(thread: OrchestrationThread): Generator<string> {
   const metadata = JSON.stringify(
     {
@@ -173,7 +151,7 @@ function* threadJsonChunks(thread: OrchestrationThread): Generator<string> {
     null,
     2,
   );
-  // Drop the closing "\n}" so the messages array can be appended incrementally.
+  // drop the closing "\n}" so the messages array appends incrementally
   yield `${metadata.slice(0, -2)},\n  "messages": [`;
 
   let first = true;
@@ -196,8 +174,7 @@ function threadArchiveEntries(thread: OrchestrationThread): ThreadArchiveEntry[]
   ];
 }
 
-// Streams the ZIP as it is produced: one local header+payload chunk per entry,
-// then the central directory and end record.
+// streams the ZIP as produced — one header+payload chunk per entry, then central directory and end record
 export async function* threadArchiveChunks(thread: OrchestrationThread): AsyncGenerator<Buffer> {
   const centralRecords: Buffer[] = [];
   let offset = 0;
@@ -215,18 +192,18 @@ export async function* threadArchiveChunks(thread: OrchestrationThread): AsyncGe
   yield centralDirectoryBody;
 
   yield Buffer.concat([
-    u32(0x06054b50), // end of central directory signature
-    u16(0), // number of this disk
-    u16(0), // disk where central directory starts
-    u16(entryCount), // entries on this disk
-    u16(entryCount), // total entries
-    u32(centralDirectoryBody.length), // size of central directory
-    u32(offset), // offset of central directory
-    u16(0), // comment length
+    u32(0x06054b50),
+    u16(0),
+    u16(0),
+    u16(entryCount),
+    u16(entryCount),
+    u32(centralDirectoryBody.length),
+    u32(offset),
+    u16(0),
   ]);
 }
 
-// Convenience for tests and small callers that want the whole archive at once.
+// for tests and small callers wanting the whole archive at once
 export async function buildThreadArchiveBytes(thread: OrchestrationThread): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of threadArchiveChunks(thread)) {
@@ -246,8 +223,7 @@ function slugifyTitle(title: string): string {
   return slug.length > 0 ? slug.slice(0, 48) : "thread";
 }
 
-// Stable date bucket derived from the ISO timestamp keeps filenames sortable
-// without pulling in a date library for formatting.
+// stable date bucket from the ISO timestamp keeps filenames sortable without a date library
 export function threadArchiveFileName(input: {
   readonly title: string;
   readonly isoTimestamp: string;

@@ -1,7 +1,3 @@
-// FILE: DesktopSettingsPanels.browser.tsx
-// Purpose: Lock the browser/native lifecycle behavior owned by the desktop settings panels.
-// Layer: Browser UI test
-
 import "../../index.css";
 
 import type { DesktopAppSnapState } from "@synara/contracts";

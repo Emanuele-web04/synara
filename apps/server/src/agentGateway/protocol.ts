@@ -1,18 +1,4 @@
-/**
- * Minimal MCP (Model Context Protocol) JSON-RPC handling for the Synara agent
- * gateway.
- *
- * Implements the stateless subset of the MCP streamable-HTTP transport the
- * gateway needs: `initialize`, `ping`, `tools/list`, and `tools/call`, plus
- * notification acknowledgement. Every POST gets a single JSON response (the
- * spec allows servers to answer with `application/json` instead of an SSE
- * stream), so no session or stream state is kept server-side.
- *
- * Pure request/response shaping lives here so it can be unit tested without
- * the HTTP or Effect layers.
- *
- * @module agentGateway/protocol
- */
+/** stateless subset of MCP streamable-HTTP the gateway needs (initialize/ping/tools/list/tools/call); one JSON response per POST, no session state */
 
 export const MCP_DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const MCP_SUPPORTED_PROTOCOL_VERSIONS = new Set(["2025-06-18", "2025-03-26", "2024-11-05"]);
@@ -84,11 +70,7 @@ export type ParsedMcpMessage =
   | { readonly kind: "response" }
   | { readonly kind: "invalid"; readonly id: JsonRpcId };
 
-/**
- * Classify one raw JSON-RPC message. Responses and notifications require no
- * reply body; invalid entries produce an error response bound to whatever id
- * could be recovered.
- */
+/** responses and notifications need no reply body; invalid entries get an error bound to whatever id was recovered */
 export function parseMcpMessage(raw: unknown): ParsedMcpMessage {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { kind: "invalid", id: null };
@@ -101,7 +83,7 @@ export function parseMcpMessage(raw: unknown): ParsedMcpMessage {
     return { kind: "invalid", id };
   }
   if (typeof record.method !== "string" || record.method.length === 0) {
-    // No method: either a client -> server response (has result/error) or garbage.
+    // no method: a client response or garbage
     if ("result" in record || "error" in record) {
       return { kind: "response" };
     }

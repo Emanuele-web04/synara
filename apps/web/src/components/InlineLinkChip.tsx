@@ -1,9 +1,3 @@
-// FILE: InlineLinkChip.tsx
-// Purpose: Shared inline link chip for the composer, sent user messages, and any
-//          read-only prompt echo — same label shortening, favicon icon, and
-//          accent styling everywhere.
-// Layer: Shared UI component
-
 import { type MouseEvent } from "react";
 
 import { describeLinkChip, openExternalLink } from "~/lib/linkChips";

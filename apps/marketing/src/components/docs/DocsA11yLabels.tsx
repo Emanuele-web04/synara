@@ -2,21 +2,7 @@
 
 import { useEffect } from "react";
 
-/**
- * Minimal docs-page accessibility augmentation.
- *
- * Two fumadocs rendering gaps are patched here (no CSS-only fix exists for either):
- *
- * 1. GFM task lists (remark-gfm, e.g. the checklist in /docs/workflows/studio) render as
- *    `<input type="checkbox" disabled>` inside `li.task-list-item` with no accessible name.
- *    Axe flags all of them (region/checkbox naming). We label each one.
- * 2. Fumadocs code blocks wrap `<pre>` in a scrollable `div[role="region"][tabindex="0"]`
- *    (`.fd-scroll-container`) with no accessible name. We label those regions — but only the
- *    ones that actually contain a `<pre>`, so table/other scroll regions are not mislabeled.
- *
- * Labels are numbered per label type ("Code block 1", "Checklist item 1", ...) so pages with
- * several code blocks or task lists keep unique accessible names (axe landmark-unique).
- */
+// patches two fumadocs gaps with no CSS fix: GFM task-list checkboxes render disabled with no accessible name, and scrollable code regions get labels only when they contain a <pre>; labels numbered per type for landmark uniqueness
 export function DocsA11yLabels() {
   useEffect(() => {
     const apply = () => {

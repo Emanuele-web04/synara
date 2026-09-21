@@ -38,11 +38,7 @@ export function resolveDraftEnvModeAfterBranchChange(input: {
   return "local";
 }
 
-/**
- * Studio threads use a concrete working directory as their entire workspace.
- * Branch-selector patches still speak in project/worktree terms, so normalize
- * them at this boundary instead of leaking worktree metadata into the thread.
- */
+// Studio threads use a concrete working directory as their workspace — normalize project/worktree patches at this boundary instead of leaking worktree metadata into the thread
 export function resolveFixedLocalWorkspacePatch(input: {
   currentWorkingDirectory: string | null;
   patch: ThreadWorkspacePatch;
@@ -77,8 +73,7 @@ export function resolveBranchToolbarValue(input: {
   return currentGitBranch ?? activeThreadBranch;
 }
 
-// Local threads should mirror the concrete checkout; stale thread metadata makes
-// the current Git branch appear selectable while clicks only perform a no-op.
+// local threads should mirror the concrete checkout; stale thread metadata makes the current branch appear selectable while clicks no-op
 export function shouldSyncLocalThreadBranch(input: {
   envMode: EnvMode;
   activeWorktreePath: string | null;

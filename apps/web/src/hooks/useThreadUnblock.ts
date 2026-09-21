@@ -1,8 +1,3 @@
-// FILE: useThreadUnblock.ts
-// Purpose: Drives the "Unblock thread" recovery action for provider-delivery quarantines.
-// Layer: Web chat recovery hook
-// Exports: useThreadUnblock
-
 import type { ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 

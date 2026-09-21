@@ -10,18 +10,7 @@ import { WebSocketServer } from "ws";
 
 export const MAX_WEBSOCKET_MESSAGE_BYTES = 2 * 1024 * 1024;
 
-/**
- * Node's HTTP parser owns the socket error listener until an upgrade starts.
- * The Effect upgrade handler then runs the route (including authentication)
- * before `ws.handleUpgrade()` installs its own listener. A peer reset during
- * that gap otherwise becomes an unhandled `error` event and terminates the
- * whole backend process.
- *
- * Keep this boundary for the complete lifetime of every accepted connection.
- * Other protocol-specific listeners still receive the event and perform their
- * own cleanup; destroying an already-failed socket here only guarantees that
- * HTTP requests, rejected upgrades, and pending upgrades all release promptly.
- */
+/** Node's HTTP parser owns the socket error listener until an upgrade starts; a peer reset in that gap otherwise becomes an unhandled `error` event terminating the backend. Keep this boundary for the lifetime of every accepted connection — destroying an already-failed socket just guarantees prompt release */
 function handleClientSocketError(this: Socket): void {
   this.destroy();
 }
@@ -30,62 +19,15 @@ function protectClientSocket(socket: Socket): void {
   socket.on("error", handleClientSocketError);
 }
 
-/**
- * permessage-deflate configuration for the feature WS socket only.
- *
- * The RPC stream is small, highly repetitive JSON (repeated schema keys,
- * UUIDs, event envelopes), which is the best case for DEFLATE with context
- * takeover: the compression window is shared across frames, so each frame is
- * coded against the vocabulary of everything sent before it. Context takeover
- * stays enabled (the negotiated default). A client offering
- * `client_no_context_takeover` still compresses normally; one offering
- * `server_no_context_takeover` loses the shared vocabulary and can end up
- * with frames slightly larger than uncompressed, since framing overhead
- * exceeds the gain on a single small frame.
- *
- * No `threshold` is set: `ws` only honors it when context takeover is
- * disabled, and skipping tiny frames would also skip priming the shared
- * window they benefit from.
- *
- * `maxPayload` admission control is unaffected: `ws` enforces it on the
- * decompressed size — accumulated across continuation frames — so a
- * compressed or fragmented message cannot smuggle past the bound.
- *
- * The pre-auth bootstrap socket deliberately never negotiates compression:
- * each actively compressed connection retains zlib window state (~288 KiB at
- * defaults) plus potentially near-`maxPayload` inflated buffers for
- * incomplete fragmented messages, and the bootstrap path is reachable
- * without credentials. Compression is a post-authentication privilege so
- * unauthenticated connections cannot multiply per-connection memory.
- *
- * Measured on a simulated streaming turn of small repetitive JSON frames:
- * ~80% wire reduction, with CPU dominated by per-invocation zlib overhead
- * rather than compression level (levels 1/3/6 within 2% on both axes), so
- * zlib options stay at their defaults. Numbers in the PR that added this.
- *
- * `ws` already defaults `concurrencyLimit` to 10 and creates its limiter
- * once per process on the first PerMessageDeflate instance, so passing it
- * here would pin the default rather than bound anything new.
- */
+/** permessage-deflate on the feature socket only: the RPC stream is small repetitive JSON — best case for DEFLATE with context takeover (~80% wire reduction measured). The pre-auth bootstrap socket deliberately never negotiates compression — each compressed connection retains ~288KiB zlib state plus inflated buffers, and that path is reachable without credentials */
 const PER_MESSAGE_DEFLATE_OPTIONS = true;
 
-/**
- * The one upgrade route allowed to negotiate compression (post-auth). Shared
- * with the route registration so the dispatcher and the router cannot drift.
- */
+/** the one upgrade route allowed to negotiate compression (post-auth) — shared with route registration so dispatcher and router can't drift */
 const COMPRESSED_UPGRADE_PATH = WS_FEATURE_PATH;
 
-/**
- * Normalizes a raw request target the way the Effect router does before route
- * matching: absolute-form targets, query and fragment, `;params`, duplicate
- * slashes, percent-encoding, case, and trailing slashes all collapse. The
- * router matches case-insensitively on the decoded path, so comparing the raw
- * target here would let `/WS/BOOTSTRAP` or `/ws/%62ootstrap` reach the
- * bootstrap route while classifying as something else.
- */
+/** normalizes the raw target the way the router does — absolute-form, query/fragment, ;params, dup slashes, percent-encoding, case, trailing slashes all collapse; matching the raw target would let /WS/BOOTSTRAP or /ws/%62ootstrap reach bootstrap while classifying as something else */
 function normalizeUpgradePath(requestUrl: string | undefined): string {
   const target = requestUrl ?? "";
-  // Absolute-form request targets (RFC 9112 §3.2.2) are legal on upgrades.
   const afterAuthority = /^[a-z][a-z0-9+.-]*:\/\//i.test(target)
     ? target.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, "") || "/"
     : target;
@@ -94,8 +36,7 @@ function normalizeUpgradePath(requestUrl: string | undefined): string {
   try {
     decoded = decodeURIComponent(pathOnly);
   } catch {
-    // Malformed percent-encoding cannot be a recognized route; leave as-is so
-    // it falls through to the uncompressed default.
+    // malformed percent-encoding can't be a recognized route — leave as-is so it falls through to the uncompressed default
   }
   const withoutParams = decoded
     .split("/")
@@ -105,20 +46,12 @@ function normalizeUpgradePath(requestUrl: string | undefined): string {
   return collapsed.length > 1 ? collapsed.replace(/\/+$/, "") : collapsed;
 }
 
-/**
- * Fail closed: only the exact feature route negotiates compression. Anything
- * else — the pre-auth bootstrap route, unrecognized paths, malformed targets —
- * lands on the uncompressed server, so no unauthenticated connection can hold
- * zlib state regardless of how its path is spelled.
- */
+/** fail closed — only the exact feature route negotiates compression; anything else lands on the uncompressed server so no unauthenticated connection can hold zlib state regardless of spelling */
 export function upgradePathAllowsCompression(requestUrl: string | undefined): boolean {
   return normalizeUpgradePath(requestUrl) === COMPRESSED_UPGRADE_PATH;
 }
 
-/**
- * Owns the Node HTTP/WebSocket transport so Synara, rather than the platform
- * adapter's 100 MiB default, controls admission before a message is decoded.
- */
+/** Synara owns the transport so admission is controlled before decode, not the adapter's 100MiB default */
 export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
   evaluate: () => http.Server,
   options: ListenOptions,
@@ -126,8 +59,7 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
   const scope = yield* Effect.scope;
   const server = evaluate();
 
-  // Install before `listen()`: no accepted connection may exist without a
-  // permanent error boundary, including connections reset during startup.
+  // install before listen() — no accepted connection may exist without a permanent error boundary, incl. resets during startup
   server.on("connection", protectClientSocket);
 
   yield* Scope.addFinalizer(
@@ -171,8 +103,7 @@ export const makeBoundedNodeHttpServer = Effect.fnUntraced(function* (
           server.close(() => resume(Effect.void));
         }),
     ).pipe(Scope.provide(scope));
-  // Two ws servers sharing one HTTP listener: compression is negotiated only
-  // on authenticated feature-socket paths (see PER_MESSAGE_DEFLATE_OPTIONS).
+  // two ws servers sharing one listener — compression negotiated only on authenticated feature-socket paths
   const featureWebSocketServer = yield* makeBoundedWebSocketServer(true);
   const bootstrapWebSocketServer = yield* makeBoundedWebSocketServer(false);
 

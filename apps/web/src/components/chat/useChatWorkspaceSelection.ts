@@ -160,9 +160,8 @@ export function useChatWorkspaceSelection({
   );
 
   const handleResetWorkspaceToHome = useCallback(() => {
-    // The inline reset action prevents pointer-down from stealing editor focus. Avoid refocusing
-    // an already-focused editor: focusAtEnd would move its cursor and schedule a redundant frame.
-    // Picker-menu resets still restore focus because the editor is no longer active in that path.
+    // avoid refocusing an already-focused editor: focusAtEnd would move its cursor and schedule a redundant frame; picker-menu resets still restore focus
+    // the inline reset prevents pointer-down stealing editor focus; avoid refocusing an already-focused editor (would move its cursor)
     const restoreComposerFocus = !composerEditorRef.current?.isFocused();
     if (isLocalDraftThread) {
       if (isStudioContainer) {

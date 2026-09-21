@@ -256,8 +256,7 @@ export function useChatAutomationCreation({
       }
 
       const title = buildPromptThreadTitleFallback(input.titleSeed || GENERIC_CHAT_THREAD_TITLE);
-      // Nested function so the `try` body holds no value blocks — see the comment on
-      // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.
+      // nested function so the `try` body holds no value blocks — React Compiler requires this shape (see deleteEmptyTerminalThread)
       const promoteDraftForAutomation = async (): Promise<ThreadId | null> => {
         const result = await promoteThreadCreate(
           {
@@ -336,8 +335,7 @@ export function useChatAutomationCreation({
         return { form, activityThreadId };
       }
 
-      // Draft review can keep the local draft ID in the form; promote it only when
-      // the automation is actually submitted so cancelling review leaves no empty thread.
+      // promote the local draft ID only when the automation is submitted so cancelling review leaves no empty thread
       const targetThreadId = await ensureAutomationTargetThread({
         titleSeed: form.prompt || form.name,
         threadModelSelection: selectedModelSelection,

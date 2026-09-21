@@ -1,8 +1,3 @@
-// FILE: providerUsage/providers/codex.test.ts
-// Purpose: Covers Codex's token lifecycle — JWT-exp-gated refresh with atomic write-back of the
-// rotated pair (single-use rotating refresh tokens must never be redeemed without persisting),
-// adoption of out-of-band rotations on `refresh_token_reused`, and the dead-token taxonomy.
-
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
@@ -54,7 +49,7 @@ function stubOutboundFetch(
   });
 }
 
-/** An unsigned JWT carrying only `exp`, enough for expiry-window checks. */
+/** unsigned JWT carrying only `exp` — enough for expiry-window checks */
 function makeJwt(expMs: number): string {
   const encode = (value: unknown): string =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -170,7 +165,7 @@ describe("codexUsageFetcher", () => {
     expect(snapshot.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(41);
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
-    // The rotation is on disk: single-use refresh tokens must survive our redemption.
+    // the rotation is on disk — single-use refresh tokens must survive our redemption
     const saved = readAuthFile(authPath);
     const tokens = saved.tokens as Record<string, unknown>;
     expect(tokens.access_token).toBe(freshJwt);
@@ -194,7 +189,7 @@ describe("codexUsageFetcher", () => {
 
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       if (String(url).includes("auth.openai.com/oauth/token")) {
-        // The codex CLI redeemed this token first and left its rotation on disk.
+        // the codex CLI redeemed this token first and left its rotation on disk
         writeFileSync(
           authPath,
           JSON.stringify({
@@ -219,7 +214,6 @@ describe("codexUsageFetcher", () => {
 
     expect(snapshot.status).toBe("ok");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    // The CLI's rotation stays untouched on disk.
     const tokens = readAuthFile(authPath).tokens as Record<string, unknown>;
     expect(tokens.refresh_token).toBe("cli-rotated-refresh-token");
   });
@@ -263,7 +257,7 @@ describe("codexUsageFetcher", () => {
 
     const snapshot = await codexUsageFetcher.fetch(makeCtx(codexHome));
     expect(snapshot.status).toBe("ok");
-    // A failed refresh must not corrupt the stored credential.
+    // a failed refresh must not corrupt the stored credential
     const tokens = readAuthFile(authPath).tokens as Record<string, unknown>;
     expect(tokens.refresh_token).toBe("refresh-token");
   });

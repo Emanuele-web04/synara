@@ -1,8 +1,3 @@
-// FILE: profileStats.test.ts
-// Purpose: Focused coverage for Profile stats SQL aggregation against the migrated SQLite schema.
-// Layer: Server stats tests
-// Exports: Vitest coverage for ProfileStatsQuery.
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -45,8 +40,7 @@ describe("heatmapIntensity", () => {
   });
 
   it("spreads skewed token counts across all levels instead of collapsing to level 1", () => {
-    // One spike day plus many small days: percent-of-max bucketing would put every
-    // day except the spike at level 1.
+    // one spike day plus many small days — percent-of-max bucketing would put every other day at level 1
     const counts = [1_000, 2_000, 3_000, 4_000, 5_000, 6_000, 7_000, 4_000_000];
     const levels = counts.map((count) => heatmapIntensity(count, sorted(counts)));
     expect(levels).toEqual([1, 1, 2, 2, 3, 3, 4, 4]);
@@ -125,8 +119,7 @@ describe("ProfileStatsQuery", () => {
         yield* addActivity("3", "mirrored-child", "mirrored", versioned);
         yield* addActivity("4", "root", "legacy", { modelUsage: versioned.modelUsage });
         yield* addActivity("5", "root", "unrecoverable", { modelUsage: versioned.modelUsage });
-        // An earlier private build emitted a compact shape whose input already
-        // included cache tokens. Its explicit total remains authoritative.
+        // an earlier private build emitted a compact shape whose input already included cache tokens — its explicit total stays authoritative
         yield* addActivity("6", "root", "compact", {
           tokenAccountingVersion: 1,
           mainLoopTokens: 1_000,
@@ -140,16 +133,13 @@ describe("ProfileStatsQuery", () => {
             },
           },
         });
-        // A malformed nonempty breakdown must not suppress the verified
-        // main-loop fallback or make SQLite JSON functions fail.
+        // a malformed nonempty breakdown must not suppress the verified main-loop fallback or make SQLite JSON functions fail
         yield* addActivity("7", "root", "fallback", {
           tokenAccountingVersion: 1,
           mainLoopTokens: 250,
           modelUsage: { "claude-fable-5": "unusable" },
         });
         yield* addActivity("8", "independent-child", "independent", versioned);
-        // Successful main-loop usage survives even though old compact model totals
-        // cannot be classified as per-turn or cumulative without process evidence.
         yield* sql`
         INSERT INTO provider_runtime_events
           (event_id, thread_id, turn_id, event_type, event_json, persisted_at)
@@ -180,7 +170,7 @@ describe("ProfileStatsQuery", () => {
         yield* recoverClaudeUsage;
         yield* recoverClaudeUsage;
         expect(yield* sql`SELECT * FROM provider_runtime_events`).toEqual(journalBefore);
-        // The verified fallback must outlive ordinary runtime-event retention.
+        // the verified fallback must outlive ordinary runtime-event retention
         yield* sql`DELETE FROM provider_runtime_events`;
         const result = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 0 });
         expect(result.lifetimeTotalTokens).toBe(85_228);
@@ -546,8 +536,7 @@ describe("ProfileStatsQuery", () => {
         expect(missingTelemetry.unavailableProviders).toEqual(["grok"]);
         expect(missingTelemetry.lifetimeTotalTokens).toBe(1000);
 
-        // An observed zero is not a positive token total. The coverage notice must
-        // describe the missing positive totals, without claiming telemetry is absent.
+        // an observed zero is not a positive token total — the coverage notice must describe missing positive totals without claiming telemetry is absent
         yield* sql`
           INSERT INTO projection_thread_activities (
             activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
@@ -681,8 +670,7 @@ describe("ProfileStatsQuery", () => {
             )
         `;
 
-        // Codex has more turns (2 vs 1) but Claude processed far more tokens,
-        // so core stats stay turn-ranked while token stats report Claude on top.
+        // Codex has more turns but Claude processed far more tokens — core stats stay turn-ranked while token stats report Claude on top
         yield* sql`
           INSERT INTO projection_thread_activities (
             activity_id,
@@ -728,12 +716,10 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.topProvider).toBe("claudeAgent");
         expect(tokenStats.topProviderPercent).toBeCloseTo(83.3);
         expect(tokenStats.providers).toEqual(["claudeAgent", "codex"]);
-        // Token-based model mix mirrors the token ranking, not the turn counts.
         expect(tokenStats.models).toEqual([
           { provider: "claudeAgent", model: "claude-sonnet-4-6", tokens: 5000, percent: 83.3 },
           { provider: "codex", model: "gpt-5-codex", tokens: 1000, percent: 16.7 },
         ]);
-        // Turn-based provider/model mix is unchanged by the token ranking.
         expect(stats.providerModels[0]).toMatchObject({ provider: "codex", turnCount: 2 });
       }),
     );
@@ -745,10 +731,7 @@ describe("ProfileStatsQuery", () => {
         const sql = yield* SqlClient.SqlClient;
         const statsQuery = yield* ProfileStatsQuery;
 
-        // thread-switch is currently on Opus, but the first turn ran on Fable.
-        // Attributing by the thread's latest selection would hand every token to
-        // Opus. thread-mixed reports BOTH counters: only the cumulative rows may
-        // drive its series, or the dip recovery would double-count.
+        // thread-switch is on Opus now but turn 1 ran on Fable — attributing by the latest selection hands every token to Opus; thread-mixed reports both counters and only cumulative rows may drive its series or the dip recovery double-counts
         yield* sql`
           INSERT INTO projection_threads (
             thread_id,
@@ -854,9 +837,7 @@ describe("ProfileStatsQuery", () => {
             )
         `;
 
-        // Claude completes with per-turn totals; provisional context rows are ignored.
-        // thread-mixed dips to context scale mid-thread and recovers: only the
-        // cumulative rows count (6000 total, not 6000 + the dip recovery).
+        // Claude completes with per-turn totals; provisional context rows are ignored
         yield* sql`
           INSERT INTO projection_thread_activities (
             activity_id,
@@ -1069,9 +1050,7 @@ describe("ProfileStatsQuery", () => {
             )
         `;
 
-        // Codex has cumulative totals, so its usedTokens-only dip is ignored.
-        // A large legacy Claude counter sits between the two Codex turns, but
-        // Claude final usage is counted independently and cannot reset that delta.
+        // Codex has cumulative totals so its usedTokens-only dip is ignored
         yield* sql`
           INSERT INTO projection_thread_activities (
             activity_id,
@@ -1346,8 +1325,7 @@ describe("ProfileStatsQuery", () => {
 
         const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
 
-        // Retention-hidden and manually deleted threads both keep contributing:
-        // profile stats are lifetime totals and deletion is only a soft hide.
+        // retention-hidden and manually deleted threads both keep contributing — stats are lifetime totals and deletion is only a soft hide
         expect(stats.insights.skillsExplored).toBe(5);
         expect(stats.insights.totalSkillsUsed).toBe(8);
         expect(stats.activity.totalPromptsSent).toBe(4);
@@ -1567,11 +1545,8 @@ describe("ProfileStatsQuery", () => {
 
         const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
 
-        // Lifetime totals: deleted threads/projects keep their contribution.
         expect(stats.activity.totalPromptsSent).toBe(7);
         expect(stats.activity.totalThreads).toBe(4);
-        // Alpha and Beta tie on prompts (3) and active days (2); the deleted
-        // Alpha thread's later prompt breaks the tie via lastWorkedAt.
         expect(stats.mostWorkedProject).toEqual({
           projectId: "project-alpha",
           title: "Alpha",

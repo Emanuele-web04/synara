@@ -1,8 +1,3 @@
-// FILE: terminalCloseConfirmation.ts
-// Purpose: Shares terminal-tab close confirmation copy and dialog plumbing across chat and workspace surfaces.
-// Layer: UI logic helper
-// Depends on: Native dialog contract from the app shell.
-
 import type { NativeApi } from "@synara/contracts";
 
 function formatTerminalCloseSubject(terminalTitle: string | null | undefined): string {

@@ -1,11 +1,3 @@
-// FILE: sidebarThreadRowGestures.ts
-// Purpose: Single source for the pointer gestures every sidebar thread row shares —
-//          double-click (plus touch double-tap) rename and right-click context menu —
-//          so the classic list, the pinned list, and the activity feed behave alike.
-// Layer: Sidebar UI helper
-// Exports: createSidebarThreadRowGestures, SidebarRowContextMenuPosition,
-//          SidebarThreadRowGestureProps
-
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 
 import type { ThreadId } from "@synara/contracts";

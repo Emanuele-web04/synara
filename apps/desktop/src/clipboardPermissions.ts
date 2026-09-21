@@ -19,8 +19,7 @@ export function isClipboardWritePermission(
   )
     return false;
   try {
-    // Chromium enforces document focus. Native window focus may already have
-    // returned to the composer when an asynchronous copy requests permission.
+    // Chromium enforces document focus — native window focus may already have returned to the composer when an async copy requests permission
     const page = new URL(requester.getURL());
     const trustedScheme =
       page.protocol === `${SYNARA_DESKTOP_SCHEME}:` ||

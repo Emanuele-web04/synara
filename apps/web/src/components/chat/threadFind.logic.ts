@@ -1,9 +1,3 @@
-// FILE: threadFind.logic.ts
-// Purpose: In-thread find matching and next/prev selection against projected
-//   transcript messages — not the virtualized DOM list.
-// Layer: Chat transcript presentation-adjacent logic (unit-tested)
-// Depends on: timeline entry shape and message ids only.
-
 import { type MessageId } from "@synara/contracts";
 import { repairMarkdownTableDelimiters } from "../../lib/markdownTableRepair";
 import { deriveDisplayedUserMessageState } from "../../lib/terminalContext";

@@ -75,8 +75,7 @@ describe("parseClaudeUsage", () => {
   });
 
   it("maps per-model weekly windows from the scoped limits array, falling back to legacy keys", () => {
-    // Anthropic moved per-model weekly windows into `limits[]` (`weekly_scoped`, named by
-    // `scope.model.display_name`); the legacy `seven_day_<model>` keys now come back null.
+    // Anthropic moved per-model weekly windows into `limits[]` (weekly_scoped); the legacy `seven_day_<model>` keys now return null
     const snapshot = parseClaudeUsage({
       json: {
         seven_day: { utilization: 40, resets_at: "2026-02-01T00:00:00Z" },

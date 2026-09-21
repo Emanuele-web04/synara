@@ -123,8 +123,7 @@ describe("AppSnap shortcut availability", () => {
       available: false,
       reason: "macOS or another app is already using this shortcut.",
     });
-    // Universal in-app chords never reach the registry probe: reserving them
-    // would hijack the action (Copy, Spotlight, …) in every foreground app.
+    // universal in-app chords never reach the registry probe — reserving them would hijack Copy/Spotlight in every foreground app
     expect(manager.checkShortcut({ kind: "key-chord", modifier: "command", key: "Space" })).toEqual(
       {
         available: false,
@@ -183,8 +182,6 @@ describe("AppSnap shortcut availability", () => {
     );
     expect(register).toHaveBeenLastCalledWith("Alt+S", expect.any(Function));
 
-    // The reserved accelerator's callback drives the capture: pressing the
-    // chord writes a trigger line to the helper's stdin.
     const reservationCallback = register.mock.calls.at(-1)?.[1] as (() => void) | undefined;
     reservationCallback?.();
     expect(watchChild.stdin.read()?.toString()).toBe("trigger\n");
@@ -1040,7 +1037,6 @@ describe("AppSnap window picker requests", () => {
       );
       const capture = await capturing;
       expect(capture).toMatchObject({ id: requestId, name: "req-capture.png" });
-      // The durable capture resolves before asynchronous helper-file cleanup.
       await expect.poll(() => FS.existsSync(capturePath)).toBe(false);
       expect(await manager.listPendingCaptures()).toHaveLength(1);
       await manager.acknowledgeCapture(capture.id);

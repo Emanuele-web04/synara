@@ -4,7 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  // Backs the pending stop-check scan, which reads oldest succeeded runs first.
+  // backs the pending stop-check scan — oldest succeeded runs first
   yield* sql`
     CREATE INDEX IF NOT EXISTS idx_automation_runs_completion_eval
     ON automation_runs (finished_at, run_id)

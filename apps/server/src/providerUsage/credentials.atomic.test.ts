@@ -1,6 +1,3 @@
-// FILE: providerUsage/credentials.atomic.test.ts
-// Purpose: Verifies concurrent credential rotations use isolated atomic temp files.
-
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -26,7 +23,7 @@ describe("writeJsonFileAtomic", () => {
     tempDirectories.push(directory);
     const credentialPath = path.join(directory, "auth.json");
 
-    // The former temp name used Date.now, so every write below targeted the same file.
+    // the former temp name used Date.now — every write hit the same file
     vi.spyOn(Date, "now").mockReturnValue(1_789_000_000_000);
     const results = await Promise.allSettled(
       Array.from({ length: 16 }, (_, index) =>

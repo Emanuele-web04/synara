@@ -82,20 +82,13 @@ import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailS
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
-// Pre-transform the compiler-heavy component outside the first case's timeout.
-// The router's auto-split route otherwise requests this module on first mount.
+// pre-transform the compiler-heavy component outside the first case's timeout — the router's auto-split route otherwise requests this module on first mount
 import "./ChatView";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const OTHER_THREAD_ID = "thread-browser-test-other" as ThreadId;
 
-// Each call to the snapshot factory gets a fresh, monotonically increasing sequence.
-// The step (1_000_000) is far larger than any single test can bridge: in-test
-// increments come only from `recordProjectCreateCommand`, `addThreadToSnapshot`, and
-// the per-test snapshot-sync helpers, each +1 per call and bounded by waitFor-driven
-// helper invocations (hundreds at most). So a late in-flight shell snapshot from a
-// previous test is always strictly below the next test's base sequence and is ignored
-// by `isStaleSnapshot`.
+// the step (1_000_000) is far larger than any test can bridge (helpers increment +1, bounded by waitFor-driven calls) — a late in-flight snapshot from a previous test is always below the next test's base sequence and ignored by isStaleSnapshot
 let snapshotSequenceFactory = 0;
 function nextSnapshotSequence(): number {
   snapshotSequenceFactory += 1_000_000;
@@ -975,10 +968,7 @@ function createSnapshotWithSettledCompletedInlinePlan(): OrchestrationReadModel 
   };
 }
 
-// A plan-mode thread whose latest turn has settled and that still has an
-// actionable (unimplemented) proposed plan. This is exactly the state where the
-// live composer shows the plan-follow-up prompt, so it's the setup that used to
-// misroute an auto-dispatched queued *chat* turn into the plan-follow-up path.
+// a settled plan-mode thread with an actionable proposed plan: exactly the state where the live composer shows the plan-follow-up prompt — the setup that used to misroute an auto-dispatched queued chat turn into the plan-follow-up path
 function createSnapshotWithSettledPlanAwaitingFollowUp(): OrchestrationReadModel {
   const snapshot = createSnapshotWithSettledInlinePlan();
   const planMarkdown = [
@@ -1216,9 +1206,7 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
     return fixture.serverConfig;
   }
   if (tag === WS_METHODS.providerListModels) {
-    // Keep the full-app fixture contract-valid and neutral. Returning the
-    // generic `{}` fallback makes real discovery retry malformed responses,
-    // which leaks unrelated retry pressure across this file's many mounts.
+    // keep the fixture contract-valid and neutral — returning the generic {} fallback makes real discovery retry malformed responses, leaking retry pressure across this file's many mounts
     return { models: [], source: "unsupported", cached: false };
   }
   if (tag === WS_METHODS.projectsListDevServers) {
@@ -1457,10 +1445,7 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
         method === WS_METHODS.subscribeProjectDevServerEvents ||
         method === WS_METHODS.subscribeAutomationEvents ||
-        // Left open like the rest: these are infinite subscriptions, and the
-        // default below answers with an Exit, which a stream RPC reads as the
-        // socket dying and answers with a full reconnect. That loops forever
-        // and starves the RPCs these tests are actually asserting on.
+        // left open like the rest: these are infinite subscriptions, and the default below answers with an Exit which a stream RPC reads as the socket dying → full reconnect → loops forever and starves the RPCs under test
         method === DEVICE_WS_METHODS.subscribeEvents
       ) {
         return;
@@ -1769,9 +1754,7 @@ function dispatchConfiguredShortcut(
   return event;
 }
 
-// Re-dispatches until the shortcut handler consumes the event: the resolved
-// keybindings land asynchronously after `serverGetConfig`, so a single dispatch
-// can race the config apply.
+// re-dispatch until the shortcut handler consumes the event — resolved keybindings land asynchronously after serverGetConfig so a single dispatch can race the config apply
 async function dispatchConfiguredShortcutWhenReady(
   target: EventTarget,
   input: { key: string; shiftKey?: boolean; altKey?: boolean },
@@ -1795,10 +1778,7 @@ function dispatchComposerFocusToggleShortcut(): KeyboardEvent {
   return event;
 }
 
-// The composer model/effort shortcuts both drop into the same combined picker,
-// rendered as a Base UI menu popup. Provider and effort detail live in lazily
-// mounted submenus, so the reliable signal that the surface opened is the popup
-// mounting with the active model label (the fixture pins the thread to gpt-5).
+// the model/effort shortcuts drop into the same combined picker (Base UI menu popup); provider/effort live in lazily mounted submenus, so the reliable opened-signal is the popup mounting with the active model label
 async function waitForComposerPickerSurfaceOpen(): Promise<void> {
   await vi.waitFor(() => {
     const popup = document.querySelector('[data-slot="menu-popup"]');
@@ -2114,10 +2094,7 @@ describe("ChatView transcript geometry (full app)", () => {
   });
 
   beforeEach(async () => {
-    // Reset the shared fixture snapshot to a neutral, low-sequence shell before
-    // disposing the old transport. Any in-flight getShellSnapshot that resolves
-    // after this point will then return sequence 0, which the next test's real
-    // snapshot will supersede.
+    // reset the shared fixture snapshot to a neutral low-sequence shell before disposing the old transport — an in-flight getShellSnapshot resolving after this returns sequence 0, which the next test's real snapshot supersedes
     fixture = buildFixture({
       ...fixture.snapshot,
       snapshotSequence: 0,
@@ -2239,8 +2216,7 @@ describe("ChatView transcript geometry (full app)", () => {
     const api = readNativeApi()!;
     const subscribeThread = vi.fn(api.orchestration.subscribeThread);
     const dispatchCommand = vi.fn(async () => {
-      // Only the server fixture learns the winner. The client must fetch and
-      // apply this snapshot through its real subscription/EventRouter path.
+      // only the server fixture learns the winner — the client must fetch and apply this snapshot through its real subscription/EventRouter path
       fixture.snapshot = {
         ...fixture.snapshot,
         snapshotSequence: fixture.snapshot.snapshotSequence + 1,
@@ -2667,8 +2643,7 @@ describe("ChatView transcript geometry (full app)", () => {
   });
 
   it("[geometry:linux] tracks additional rendered wrapping when ChatView width narrows between desktop and mobile viewports", async () => {
-    // Short enough to remain below the 12-line collapse at both widths, while
-    // still wrapping onto materially more lines on mobile.
+    // Short enough to remain below the 12-line collapse at both widths, while still wrapping onto materially more lines on mobile.
     const userText = "x".repeat(320);
     const targetMessageId = "msg-user-target-wrap" as MessageId;
     const snapshot = createSnapshotForTargetUser({
@@ -3006,10 +2981,7 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
-  // Leaving a thread you just sent in and coming back must not replay the
-  // send-time anchor slide: the transcript is remounted with no scroll history,
-  // so replaying it means bootstrapping at the top of the conversation and then
-  // flying down through the whole history in view.
+  // leaving a thread you just sent in and coming back must not replay the send-time anchor slide — the remounted transcript has no scroll history, so replaying bootstraps at the top then flies down through the whole history in view
   it("reopens a thread you sent in at its anchored end without replaying the slide", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
@@ -3043,11 +3015,9 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
-      // Let the send's anchor slide finish before leaving.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 600));
 
-      // Leave and come back: the thread's detail stays cached, so the whole
-      // transcript is present in the very first render of the remounted list.
+      // leave and come back: the detail stays cached so the whole transcript is present in the remounted list's first render
       await mounted.router.navigate({
         to: "/$threadId",
         params: { threadId: OTHER_THREAD_ID },
@@ -3144,8 +3114,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(() => {
         expect(scrollContainer.scrollHeight).toBeGreaterThan(scrollContainer.clientHeight);
       });
-      // Let mount-time tail expansion retries (max 260ms) finish before
-      // isolating the arrow scroll and the user's takeover gesture.
+      // let mount-time tail expansion retries (max 260ms) finish before isolating the arrow scroll and takeover gesture
       await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
       await waitForLayout();
       scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
@@ -3195,9 +3164,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  // How the transcript gets there — one motion, no bouncing — is covered by
-  // "moves a sent message to its anchor once…"; this guards the outcome: a send
-  // from far up the transcript ends pinned at the live edge with focus kept.
+  // guards the outcome not the motion: a send from far up the transcript ends pinned at the live edge with focus kept
   it("re-sticks to the bottom after sending an optimistic user message", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
@@ -3221,9 +3188,7 @@ describe("ChatView transcript geometry (full app)", () => {
         AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
       );
 
-      // Installed so any native smooth scroll resolves immediately; the send
-      // path itself drives the container frame by frame, so this spy is here for
-      // determinism rather than to observe the motion.
+      // the send path drives the container frame by frame — this spy exists for determinism, not to observe motion
       const scrollSpy = installImmediateScrollToSpy(scrollContainer);
       restoreScrollTo = scrollSpy.restore;
 
@@ -3285,7 +3250,6 @@ describe("ChatView transcript geometry (full app)", () => {
         () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
         "Unable to find message scroll container.",
       );
-      // Start where a real conversation sits: parked at the bottom of the transcript.
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
       scrollContainer.dispatchEvent(new Event("scroll"));
       await waitForLayout();
@@ -3315,8 +3279,7 @@ describe("ChatView transcript geometry (full app)", () => {
         }
         return row.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top;
       };
-      // The anchored message keeps the same top gap a chat's first message gets:
-      // the scroll container's own top padding.
+      // the anchored message keeps the same top gap a first message gets: the container's own top padding
       const expectedTopGapPx = Number.parseFloat(getComputedStyle(scrollContainer).paddingTop) || 0;
 
       await vi.waitFor(
@@ -3327,9 +3290,7 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
-      // Real sends ack before the turn goes live, so the transcript sits with no
-      // running turn for a beat. The anchor must survive that gap instead of
-      // collapsing the moment the send stops being "busy".
+      // real sends ack before the turn goes live — the anchor must survive that no-running-turn gap instead of collapsing when send stops being "busy"
       await new Promise<void>((resolve) => {
         window.setTimeout(resolve, 700);
       });
@@ -3337,8 +3298,6 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(offsetAfterAckGapPx, "sent user message row missing after ack gap").not.toBeNull();
       expect(Math.abs(offsetAfterAckGapPx! - expectedTopGapPx)).toBeLessThanOrEqual(24);
 
-      // The server acknowledges the send and the turn starts running: the durable
-      // user message replaces the optimistic row and live turn chrome appears.
       const activeTurnId = TurnId.makeUnsafe("turn-tail-anchor");
       const sentMessageId = findSentRow()?.dataset.messageId;
       expect(sentMessageId, "sent user message id").toBeTruthy();
@@ -3380,8 +3339,7 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 4_000, interval: 16 },
       );
 
-      // The assistant response streams in below the anchored message. While it is
-      // shorter than the viewport the anchored message must not move.
+      // while the streamed response is shorter than the viewport the anchored message must not move
       const streamingId = MessageId.makeUnsafe("msg-assistant-tail-anchor-stream");
       for (const chunkCount of [1, 3, 6]) {
         syncActiveThread((thread) => ({
@@ -3411,8 +3369,7 @@ describe("ChatView transcript geometry (full app)", () => {
         ).toBeLessThanOrEqual(24);
       }
 
-      // The turn completes: the reserve persists so the settled transcript does
-      // not jump back to its true bottom.
+      // The turn completes: the reserve persists so the settled transcript does not jump back to its true bottom.
       const scrollTopBeforeTurnEnd = scrollContainer.scrollTop;
       syncActiveThread((thread) => ({
         ...thread,
@@ -3514,8 +3471,7 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      // Server ack: durable user message + turn requested, but session still ready
-      // (provider session not live yet). Thinking must survive this gap.
+      // ack lands but session still ready (provider not live yet) — Thinking must survive this gap
       const requestedTurnId = TurnId.makeUnsafe("turn-thinking-bridge");
       syncActiveThread((thread) => ({
         ...thread,
@@ -3561,8 +3517,7 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 4_000, interval: 16 },
       );
 
-      // Hold the gap briefly so a flicker/empty frame would be visible if the
-      // bridge cleared too early.
+      // Hold the gap briefly so a flicker/empty frame would be visible if the bridge cleared too early.
       await new Promise<void>((resolve) => {
         window.setTimeout(resolve, 400);
       });
@@ -3602,11 +3557,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  // Regression: the sent message must reach its anchored coordinate in one
-  // motion and then stay there for the rest of the turn. The failure this guards
-  // is the message visibly jumping up and down through send → Thinking →
-  // "Working for" → streaming, which is what a fixed-target scroll produces once
-  // the coordinate moves under it (reserve sizing, rows above being remeasured).
+  // regression: the sent message must reach its anchored coordinate in one motion and stay there — a fixed-target scroll visibly jumps it through send→Thinking→Working→streaming once the coordinate moves under it
   it("moves a sent message to its anchor once and holds it across the turn lifecycle", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let currentSnapshot = createSnapshotForTargetUser({
@@ -3660,8 +3611,7 @@ describe("ChatView transcript geometry (full app)", () => {
       };
       const topGapPx = Number.parseFloat(getComputedStyle(scrollContainer).paddingTop) || 0;
 
-      // Sampled every frame: the regression is a single-frame hop, so polling for
-      // the settled state would not see it.
+      // Sampled every frame: the regression is a single-frame hop, so polling for the settled state would not see it.
       const samples: Array<{ t: number; offset: number | null }> = [];
       const startedAt = performance.now();
       let sampling = true;
@@ -3682,7 +3632,6 @@ describe("ChatView transcript geometry (full app)", () => {
       const activeTurnId = TurnId.makeUnsafe("turn-jitter");
       const streamingId = MessageId.makeUnsafe("msg-assistant-jitter-stream");
 
-      // Server ack: durable user row + running turn (Thinking appears).
       at(140, () => {
         const sentMessageId = findSentRow()?.dataset.messageId;
         if (!sentMessageId) return;
@@ -3720,7 +3669,6 @@ describe("ChatView transcript geometry (full app)", () => {
           updatedAt: isoAt(1_301),
         }));
       });
-      // Turn actually starts: the "Working for" header replaces Thinking.
       at(420, () => {
         syncActiveThread((thread) => ({
           ...thread,
@@ -3730,10 +3678,7 @@ describe("ChatView transcript geometry (full app)", () => {
           updatedAt: isoAt(1_310),
         }));
       });
-      // Rows above the anchor settle to their real height mid-slide (late image
-      // loads, markdown remeasure, estimated virtualized rows mounting). Visible
-      // content preservation is off while an anchor is set, so this is exactly
-      // what shifts the anchored row under the in-flight slide.
+      // rows above the anchor settle to real height mid-slide (late images, markdown remeasure, estimated rows mounting) — visible-content preservation is off while an anchor is set, so this is exactly what shifts the anchored row under the slide
       const earlierMessageId = currentSnapshot.threads
         .find((thread) => thread.id === THREAD_ID)!
         .messages.at(-2)!.id;
@@ -3754,7 +3699,6 @@ describe("ChatView transcript geometry (full app)", () => {
           }));
         });
       }
-      // Assistant text streams in below the anchor, chunk by chunk.
       for (let chunk = 1; chunk <= 24; chunk += 1) {
         at(560 + chunk * 33, () => {
           syncActiveThread((thread) => ({
@@ -3806,19 +3750,13 @@ describe("ChatView transcript geometry (full app)", () => {
         (worst, entry) => Math.max(worst, Math.abs(entry.offset - topGapPx)),
         0,
       );
-      // The approach itself must not bounce: every observed frame moves the
-      // message toward the anchor, never back down and up again. The easing
-      // curve is covered deterministically in transcriptScroll.test.ts;
-      // browser frame sampling cannot prove the intermediate path because a
-      // loaded runner may present no frames between the first move and arrival.
+      // the approach must not bounce: every observed frame moves toward the anchor — browser frame sampling can't prove the intermediate path (a loaded runner may present no frames between first move and arrival); the easing curve is covered deterministically in transcriptScroll.test.ts
       const approach = firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
       let approachReversals = 0;
       let approachDirection = 0;
       for (let index = 1; index < approach.length; index += 1) {
         const delta = approach[index]!.offset - approach[index - 1]!.offset;
-        // Chromium can report a one-pixel layout/compositor rounding shift before
-        // the anchor animation starts. Match the arrival tolerance so that noise
-        // does not count as an extra change of direction.
+        // Chromium can report a one-pixel layout/compositor rounding shift before the anchor animation starts. Match the arrival tolerance so that noise does not count as an extra change of direction.
         if (Math.abs(delta) <= 2) continue;
         const direction = Math.sign(delta);
         if (approachDirection !== 0 && direction !== approachDirection) approachReversals += 1;
@@ -3941,7 +3879,6 @@ describe("ChatView transcript geometry (full app)", () => {
             },
           ],
         }));
-        // The slide emits real scroll events while the provider is starting.
         await new Promise<void>((resolve) => setTimeout(resolve, 700));
       }
       syncThread((thread) => ({
@@ -4028,8 +3965,7 @@ describe("ChatView transcript geometry (full app)", () => {
           container.tabIndex = 0;
           container.focus();
           expect(document.activeElement).toBe(container);
-          // Streaming can advance while the browser input command is in transit.
-          // Compare against the offset at keydown, when the gesture takes ownership.
+          // streaming can advance while the browser input command is in transit — compare against the offset at keydown, when the gesture takes ownership
           let initialTop: number | null = null;
           const captureInitialTop = (event: KeyboardEvent) => {
             if (event.key === keyboardKey) initialTop = container.scrollTop;
@@ -4063,8 +3999,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
         await waitForLayout();
-        // Native wheel and key scrolling may continue after the input command
-        // resolves. Record the reader position only once the viewport is quiet.
+        // native wheel/key scrolling may continue after the input command resolves — record reader position only once the viewport is quiet
         let lastTop = container.scrollTop;
         let stableSince = performance.now();
         await vi.waitFor(
@@ -4119,8 +4054,7 @@ describe("ChatView transcript geometry (full app)", () => {
           }));
           await waitForLayout();
         }
-        // The list may compensate scrollTop as estimated rows settle. The text
-        // the reader is looking at must remain at the same viewport position.
+        // the list may compensate scrollTop as estimated rows settle — the text the reader is looking at must stay at the same viewport position
         expect(readAnchorTop()).toBeCloseTo(detachedTop, 0);
         if (action === "thread switch") {
           await mounted.router.navigate({
@@ -4208,14 +4142,11 @@ describe("ChatView transcript geometry (full app)", () => {
 
       const scrollSpy = installImmediateScrollToSpy(scrollContainer);
       restoreScrollTo = scrollSpy.restore;
-      // Let mount-time tail/image expansion retries (max 260ms) settle before
-      // isolating scrolls caused by the state transitions below.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
       await waitForLayout();
       scrollSpy.calls.length = 0;
 
-      // Buffering/connecting state changes generic turn chrome, but does not add a
-      // transcript message and therefore must not re-stick the transcript.
+      // buffering/connecting changes generic turn chrome but adds no transcript message — must not re-stick the transcript
       syncActiveThread((thread) => ({
         ...thread,
         session: thread.session
@@ -4916,8 +4847,7 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(document.body.textContent).toContain("feature/finished");
       expect(document.body.textContent).toContain("feature/current");
 
-      // Simulate an out-of-band checkout after the cached branch query resolved. The send
-      // path must refresh Git status instead of trusting the stale composer warning.
+      // simulate an out-of-band checkout after the cached branch query resolved — the send path must refresh Git status instead of trusting the stale composer warning
       fixture.gitBranchByCwd["/repo/project"] = "feature/latest";
       useComposerDraftStore.getState().setPrompt(THREAD_ID, "resume settled thread");
       const composerEditor = await waitForComposerEditor();
@@ -5053,9 +4983,7 @@ describe("ChatView transcript geometry (full app)", () => {
           runOnWorktreeCreate: false,
         },
       ]),
-      // The empty landing runs minimal chrome with no scripts control, so drafts
-      // reach scripts through their keybindings; drive the same runProjectScript
-      // path the way a user would.
+      // the empty landing has no scripts control — drafts reach scripts through keybindings; drive the same runProjectScript path a user would
       configureFixture: (nextFixture) => {
         nextFixture.serverConfig = {
           ...nextFixture.serverConfig,
@@ -5150,8 +5078,7 @@ describe("ChatView transcript geometry (full app)", () => {
           runOnWorktreeCreate: false,
         },
       ]),
-      // Same keybinding-driven path as the local-draft script test above: the
-      // empty landing exposes no scripts control.
+      // Same keybinding-driven path as the local-draft script test above: the empty landing exposes no scripts control.
       configureFixture: (nextFixture) => {
         nextFixture.serverConfig = {
           ...nextFixture.serverConfig,
@@ -6012,8 +5939,7 @@ describe("ChatView transcript geometry (full app)", () => {
               .getState()
               .draftsByThreadId[THREAD_ID]?.images.map((image) => image.name),
           ).toEqual(["queued-image.png"]);
-          // The restored image renders as a thumbnail chip whose filename lives in
-          // its accessible label/title, not in text content.
+          // The restored image renders as a thumbnail chip whose filename lives in its accessible label/title, not in text content.
           expect(document.querySelector('[aria-label="Preview queued-image.png"]')).not.toBeNull();
         },
         { timeout: 8_000, interval: 16 },
@@ -6033,8 +5959,7 @@ describe("ChatView transcript geometry (full app)", () => {
       snapshot: createSnapshotForTargetUser({
         targetMessageId: "msg-user-auto-dispatch-target" as MessageId,
         targetText: "auto dispatch target",
-        // Idle session so the auto-dispatch effect (gated on phase !== "running")
-        // drains the queue, mirroring a turn that just finished.
+        // Idle session so the auto-dispatch effect (gated on phase !== "running") drains the queue, mirroring a turn that just finished.
         sessionStatus: "ready",
       }),
     });
@@ -6089,9 +6014,7 @@ describe("ChatView transcript geometry (full app)", () => {
               request.command.message.text.includes(queuedPrompt),
           );
           expect(turnStartRequest).toBeTruthy();
-          // Queue drained...
           expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(0);
-          // ...but the in-progress composer draft is left untouched.
           expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
             draftBeingTyped,
           );
@@ -6115,17 +6038,13 @@ describe("ChatView transcript geometry (full app)", () => {
 
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      // Plan mode, settled turn, actionable proposed plan -> the live composer is
-      // showing the plan follow-up prompt at the moment the queue drains.
+      // plan mode + settled turn + actionable plan → the live composer shows the plan-follow-up prompt when the queue drains
       snapshot: createSnapshotWithSettledPlanAwaitingFollowUp(),
     });
 
     try {
       await waitForComposerEditor();
-      // Make the live composer's interaction mode explicitly "plan" so the
-      // plan-follow-up branch in onSend is live. The queued chat turn below
-      // carries its own "default" mode and an image attachment, both of which the
-      // misroute (onSubmitPlanFollowUp) would discard.
+      // force the live composer's interaction mode to "plan" so the plan-follow-up branch is live — the queued turn carries its own "default" mode and an image, both of which the misroute would discard
       useComposerDraftStore.getState().setInteractionMode(THREAD_ID, "plan");
       useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
         id: "queued-turn-plan-chat",
@@ -6178,16 +6097,13 @@ describe("ChatView transcript geometry (full app)", () => {
             interactionMode?: unknown;
             message?: { attachments?: Array<{ type?: unknown; name?: unknown }> };
           };
-          // Dispatched as a normal chat turn: it keeps the queued turn's own
-          // "default" interaction mode rather than being coerced to "plan" by the
-          // plan-follow-up path.
+          // Dispatched as a normal chat turn: it keeps the queued turn's own "default" interaction mode rather than being coerced to "plan" by the plan-follow-up path.
           expect(command.interactionMode).toBe("default");
           // ...and the queued image survives instead of being dropped to [].
           const attachments = command.message?.attachments ?? [];
           expect(attachments).toHaveLength(1);
           expect(attachments[0]?.type).toBe("image");
           expect(attachments[0]?.name).toBe("queued-plan-image.png");
-          // Queue drained.
           expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(0);
         },
         { timeout: 8_000, interval: 16 },
@@ -6627,13 +6543,11 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      // Wait for the sidebar to render with the project.
       const newThreadButton = page.getByLabelText("Create new thread in Project");
       await expect.element(newThreadButton).toBeInTheDocument();
 
       await newThreadButton.click();
 
-      // The route should change to a new draft thread ID.
       const newThreadPath = await waitForURL(
         mounted.router,
         (path) => UUID_ROUTE_RE.test(path),
@@ -6641,27 +6555,20 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
-      // The composer editor should be present for the new draft thread.
       await waitForComposerEditor();
 
-      // Simulate the snapshot sync arriving from the server after the draft
-      // thread has been promoted to a server thread (thread.create + turn.start
-      // succeeded). The snapshot now includes the new thread, and the sync
-      // should clear the draft without disrupting the route.
+      // simulate snapshot sync arriving after draft promotion (thread.create + turn.start succeeded) — the sync should clear the draft without disrupting the route
       const { syncServerReadModel } = useStore.getState();
       syncServerReadModel(addThreadToSnapshot(fixture.snapshot, newThreadId));
 
-      // Clear the draft now that the server thread exists (mirrors EventRouter behavior).
       useComposerDraftStore.getState().clearDraftThread(newThreadId);
 
-      // The route should still be on the new thread — not redirected away.
       await waitForURL(
         mounted.router,
         (path) => path === newThreadPath,
         "New thread should remain selected after snapshot sync clears the draft.",
       );
 
-      // The empty thread view and composer should still be visible.
       await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();
@@ -6747,8 +6654,7 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      // The sidebar header renders Search as an icon button, so its accessible
-      // name is the only stable handle.
+      // sidebar renders Search as an icon button — its accessible name is the only stable handle
       const searchButton = await waitForElement(
         () => document.querySelector<HTMLButtonElement>('button[aria-label="Search"]'),
         "Unable to find the global Search button.",
@@ -6876,8 +6782,7 @@ describe("ChatView transcript geometry (full app)", () => {
         .element()
         .querySelector<HTMLElement>("[class*='transition-opacity']");
       expect(inlineFolderIcon).not.toBeNull();
-      // Opening the draft autofocuses the composer on a later frame; let that settle so it
-      // cannot steal focus back between focusing the trigger and pressing Tab.
+      // Opening the draft autofocuses the composer on a later frame; let that settle so it cannot steal focus back between focusing the trigger and pressing Tab.
       await vi.waitFor(() => {
         expect(page.getByTestId("composer-editor").element().contains(document.activeElement)).toBe(
           true,
@@ -7015,9 +6920,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      // Keep one non-Studio server thread in the snapshot. This matches the real failure: Studio
-      // has no persisted chats, while the global missing-thread recovery sees known threads and
-      // immediately redirects a transiently-cleared Studio draft to the home index.
+      // keep one non-Studio server thread in the snapshot — matches the real failure: Studio has no persisted chats, while missing-thread recovery sees known threads and immediately redirects a transiently-cleared Studio draft to home
       snapshot: withStudioProject(
         withHomeChatProject(
           createSnapshotForTargetUser({
@@ -7093,9 +6996,7 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      // A superseded navigation resolves the older navigate() promise before the newer route has
-      // committed. Give route effects enough time to expose a late Home redirect, then assert the
-      // stable final state and cleanup of the displaced Studio draft.
+      // A superseded navigation resolves the older navigate() promise before the newer route has committed. Give route effects enough time to expose a late Home redirect, then assert the stable final state and cleanup of the displaced Studio draft.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
       await vi.waitFor(
         () => {
@@ -7362,8 +7263,7 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(composerBlockAfter).not.toBeNull();
       const afterRect = controlsAfter!.getBoundingClientRect();
       const composerBlockAfterRect = composerBlockAfter!.getBoundingClientRect();
-      // Guard against the empty-pane entry animation restarting with a vertical translate
-      // when Home selection turns into a project draft.
+      // Guard against the empty-pane entry animation restarting with a vertical translate when Home selection turns into a project draft.
       expect(
         Math.round(Math.abs(afterRect.height - beforeRect.height)),
         `Composer controls changed height ${beforeRect.height}px -> ${afterRect.height}px`,
@@ -7631,8 +7531,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await page.getByLabelText("Name").fill("Focus");
       await page.getByRole("button", { name: "Create space", exact: true }).click();
 
-      // The nested editor closes, the space.create command is dispatched, and
-      // the fresh space is preselected as the project's destination.
+      // The nested editor closes, the space.create command is dispatched, and the fresh space is preselected as the project's destination.
       await expect
         .element(page.getByRole("heading", { name: "New space" }))
         .not.toBeInTheDocument();
@@ -8783,7 +8682,6 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      // Start a brand-new home chat (draft thread)
       const newChatButton = page.getByLabelText("Open new chat home");
       await expect.element(newChatButton).toBeInTheDocument();
       await newChatButton.click();
@@ -8794,7 +8692,6 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
-      // Type a draft in the new chat
       const prompt = "draft typed in a brand-new home chat";
       useComposerDraftStore.getState().setPrompt(newThreadId, prompt);
       const composerEditor = await waitForComposerEditor();
@@ -8805,7 +8702,6 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      // Switch to another thread to check on it
       await mounted.router.navigate({
         to: "/$threadId",
         params: { threadId: OTHER_THREAD_ID },
@@ -8843,7 +8739,6 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      // The original draft thread must still be registered with its content
       expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.prompt).toBe(prompt);
     } finally {
       await mounted.cleanup();
@@ -8946,7 +8841,7 @@ describe("ChatView transcript geometry (full app)", () => {
           ) as HTMLElement | null;
           expect(row).not.toBeNull();
           expect(row?.className ?? "").toContain("max-w-[var(--app-chat-max-width,46rem)]");
-          expect(getComputedStyle(row!).maxWidth).toBe("1152px"); // 72rem at 16px root
+          expect(getComputedStyle(row!).maxWidth).toBe("1152px");
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -9074,7 +8969,6 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
-      // Type a draft in the new home chat
       const prompt = "draft typed via chat.newChat";
       useComposerDraftStore.getState().setPrompt(newThreadId, prompt);
       await vi.waitFor(
@@ -9086,7 +8980,6 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      // Switch to another thread and come back via the same shortcut
       await mounted.router.navigate({
         to: "/$threadId",
         params: { threadId: OTHER_THREAD_ID },
@@ -9112,7 +9005,6 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
 
-      // The draft must survive the round trip on the same thread
       expect(useComposerDraftStore.getState().draftsByThreadId[newThreadId]?.prompt).toBe(prompt);
       const composerEditorAfter = await waitForComposerEditor();
       await vi.waitFor(
@@ -9791,8 +9683,7 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
         taskListCard!.getBoundingClientRect().top + 1,
       );
-      // Active plan activity shares the centered queued-follow-up rail, intentionally inset to
-      // fourteen fifteenths of the composer width while the input keeps its rounded top corners.
+      // Active plan activity shares the centered queued-follow-up rail, intentionally inset to fourteen fifteenths of the composer width while the input keeps its rounded top corners.
       const taskRect = taskListCard!.getBoundingClientRect();
       const composerRect = composerShell!.getBoundingClientRect();
       expect(Math.abs(taskRect.width - (composerRect.width * 14) / 15)).toBeLessThanOrEqual(2);
@@ -9899,8 +9790,7 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      // The tools already gave way to the assistant's narration block, so even
-      // while the turn is live the run compacts behind its summary row.
+      // The tools already gave way to the assistant's narration block, so even while the turn is live the run compacts behind its summary row.
       await vi.waitFor(
         () => {
           const summaryTrigger = Array.from(
@@ -9927,9 +9817,7 @@ describe("ChatView transcript geometry (full app)", () => {
         window.setTimeout(() => resolve(), 260);
       });
 
-      // Once the grace delay lapses the settled turn folds into "Worked for…",
-      // but the old details stay mounted briefly inside the shared disclosure
-      // close transition so the transcript height eases down instead of snapping.
+      // Once the grace delay lapses the settled turn folds into "Worked for…", but the old details stay mounted briefly inside the shared disclosure close transition so the transcript height eases down instead of snapping.
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Worked for");
@@ -9948,8 +9836,7 @@ describe("ChatView transcript geometry (full app)", () => {
         window.setTimeout(() => resolve(), 320);
       });
 
-      // After the close motion finishes, details are only available by opening
-      // the "Worked for…" disclosure.
+      // After the close motion finishes, details are only available by opening the "Worked for…" disclosure.
       await vi.waitFor(
         () => {
           expect(
@@ -9970,11 +9857,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  // Opening a thread whose turns finished long ago must present them already
-  // folded. Replaying the fold — mounting every tool row and easing it closed —
-  // is a pure cost on open: it rebuilds the whole turn's DOM twice and drags the
-  // transcript height (and the scroll offset with it) up and down before it
-  // settles on exactly the layout the first paint could have had.
+  // opening a thread whose turns finished long ago must present them already folded — replaying the fold rebuilds the whole turn's DOM twice and drags transcript height (and scroll offset) up and down before settling on the layout first paint could have had
   it("opens a finished thread already folded, without replaying the collapse", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -10012,11 +9895,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  // Thread detail does not always land in one write: a thread can paint its
-  // transcript before the record that says its last turn already completed. Until
-  // that record lands the tail turn is treated as live, so every tool row renders
-  // expanded. The fold that follows is hydration catching up, not a turn ending
-  // under the reader's eyes, so it must not be animated.
+  // thread detail doesn't always land in one write: a thread can paint its transcript before the record saying its last turn completed — until then the tail turn reads as live so every tool row renders expanded; the fold that follows is hydration catching up, not a turn ending under the reader's eyes, so it must not be animated
   it("does not replay the collapse when the completed turn record hydrates after the transcript", async () => {
     const settledSnapshot = createSnapshotWithInlineToolOverflow({ active: false });
     const messagesOnlySnapshot: OrchestrationReadModel = {
@@ -10032,8 +9911,7 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      // Baseline: with no turn record the tail turn reads as live, so its work
-      // sits inline instead of folded into the turn's "Worked for…" disclosure.
+      // Baseline: with no turn record the tail turn reads as live, so its work sits inline instead of folded into the turn's "Worked for…" disclosure.
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Wrapped up the inline tool review.");
@@ -10050,8 +9928,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       const startedAt = performance.now();
       let transitionFrames = 0;
-      // Height churn is what the eye reads as "jumping up and down": each frame
-      // whose transcript height differs from the previous one is one visible step.
+      // Height churn is what the eye reads as "jumping up and down": each frame whose transcript height differs from the previous one is one visible step.
       let heightChangeFrames = 0;
       let previousScrollHeight: number | null = null;
       while (performance.now() - startedAt < 800) {

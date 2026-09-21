@@ -1,8 +1,3 @@
-// FILE: useDesktopTopBarGutter.ts
-// Purpose: Decide when desktop top bars must clear the macOS traffic light buttons.
-// Layer: Shared web shell chrome
-// Depends on: sidebar context, electron env detection.
-
 import {
   DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR,
   resolveMacDesktopTopBarTrafficLightGutterCssPx,
@@ -21,18 +16,7 @@ import { isMacNavigatorPlatform } from "~/lib/utils";
  */
 export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS = "desktop-top-bar-traffic-light-gutter";
 
-/**
- * Pure helper: should a top bar at the left edge of the desktop window reserve
- * space for the macOS traffic light buttons?
- *
- * The traffic lights live in the renderer area (titleBarStyle = "hiddenInset"),
- * so any chrome surface that sits flush against the window's left edge needs a
- * gutter, or its leading controls will collide with the close/minimize/zoom
- * buttons. The sidebar always sits on the left and provides that gutter while it
- * is open; when it is collapsed — or on mobile, where the drawer floats over
- * content instead of reserving a column — the next surface to the right has to
- * provide it instead.
- */
+// traffic lights live in the renderer area (hiddenInset) — any left-flush chrome needs the gutter; the sidebar provides it while open, collapsed/mobile the next surface to the right owns it
 export function shouldReserveDesktopTopBarTrafficLightGutter(input: {
   isElectron: boolean;
   isMacDesktop: boolean;
@@ -41,8 +25,7 @@ export function shouldReserveDesktopTopBarTrafficLightGutter(input: {
 }): boolean {
   if (!input.isElectron) return false;
   if (!input.isMacDesktop) return false;
-  // Mobile drawers float above content rather than reserving a column,
-  // so the chat header always owns the left edge in that mode.
+  // Mobile drawers float above content rather than reserving a column, so the chat header always owns the left edge in that mode.
   if (input.isMobile) return true;
   return !input.sidebarOpen;
 }
@@ -54,10 +37,6 @@ function applyTrafficLightGutterCssVar(zoomFactor: number): void {
   );
 }
 
-/**
- * Keeps the macOS traffic-light gutter CSS variable aligned with Electron page zoom.
- * Mount once near the app root (see `__root.tsx`).
- */
 export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
   const isMacDesktop = isMacNavigatorPlatform();
 
@@ -83,13 +62,6 @@ export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
   }, [isMacDesktop]);
 }
 
-/**
- * React hook variant of {@link shouldReserveDesktopTopBarTrafficLightGutter}
- * that returns the gutter className (or `null` when no gutter is needed).
- *
- * Use this for any chrome surface whose top bar can sit flush against the
- * window's left edge: chat header, settings header, workspace header, etc.
- */
 export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
   const { isMobile, open } = useSidebar();
   const isMacDesktop = isMacNavigatorPlatform();
@@ -103,25 +75,7 @@ export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
     : null;
 }
 
-/**
- * Tailwind padding that clears the frameless caption-button cluster.
- *
- * On Windows/Linux the Electron shell can be frameless (`frame: false`, see
- * apps/desktop main) and the renderer owns the minimize/maximize/close buttons.
- * They are rendered ONCE as a viewport-fixed cluster pinned to the window's
- * top-right corner (see {@link DesktopWindowControls} mounted in the root route),
- * mirroring how macOS insets its traffic lights at the top-left.
- *
- * Each caption button is 46px wide (matching {@link CHAT_SURFACE_HEADER_HEIGHT_PX}),
- * so the three-button cluster spans 138px. Any top bar that can sit flush against
- * the window's right edge reserves that width here so its trailing controls never
- * slide underneath the floating buttons.
- *
- * The `!` (important) modifier is required for the same reason as the traffic-light
- * gutter: host headers carry their own `px-*` padding that `twMerge` does not treat
- * as conflicting with `pr-*`, so the override must win the cascade outright. Both the
- * base and `sm:` variants are emitted so it also beats `sm:px-*`.
- */
+// the caption cluster renders once, viewport-fixed top-right (3×46px = 138px) — the `!` is required because twMerge doesn't treat host `px-*` as conflicting with `pr-*`; both base and `sm:` emitted
 export const DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS = "pr-[138px]! sm:pr-[138px]!";
 
 /**
@@ -138,13 +92,6 @@ export function shouldReserveDesktopTopBarWindowControlsGutter(input: {
   return input.isElectron && input.customTitleBarActive;
 }
 
-/**
- * React hook variant of {@link shouldReserveDesktopTopBarWindowControlsGutter}
- * that returns the gutter className (or `null` when no gutter is needed).
- *
- * Use this for any chrome surface whose top bar can sit flush against the window's
- * right edge: chat header, workspace header, plugin nav, the right dock header, etc.
- */
 export function useDesktopTopBarWindowControlsGutterClassName(): string | null {
   const customTitleBarActive = useDesktopCustomTitleBarActive();
   return shouldReserveDesktopTopBarWindowControlsGutter({

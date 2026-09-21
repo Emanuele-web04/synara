@@ -8,9 +8,9 @@ export const ClaudeCacheObservation = Schema.Struct({
   observedAt: IsoDateTime,
   contextTokens: Schema.optional(NonNegativeInt),
   lastResponseAt: Schema.optional(IsoDateTime),
-  // Earliest local observation of the API request that refreshed this prefix.
+  // earliest local observation of the API request that refreshed this prefix
   cacheReferenceAt: Schema.optional(IsoDateTime),
-  // Observed from native usage, never inferred from the user's subscription.
+  // observed from native usage, never inferred from the subscription
   ttlSeconds: Schema.optional(PositiveInt),
   state: Schema.Literals(["likely-warm", "likely-expired", "unknown"]),
   source: Schema.Literals(["session-start", "request-usage", "local-estimate"]),

@@ -1,8 +1,3 @@
-// FILE: voiceTranscription.ts
-// Purpose: Owns the desktop-specific voice transcription flow for Electron builds.
-// Layer: Desktop IPC + ChatGPT upload bridge
-// Depends on: Codex auth discovery, Electron net uploads, and the shared server voice contract.
-
 import { spawnProcess } from "@synara/shared/processRuntime";
 
 import { app, ipcMain } from "electron";
@@ -23,8 +18,6 @@ import {
 import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./ipcChannels";
 
 const MAX_VOICE_DURATION_MS = 120_000;
-
-// --- Input validation ------------------------------------------------------
 
 function normalizeVoiceBase64(value: string): string | null {
   const normalized = value.trim().replace(/\s+/g, "");
@@ -80,8 +73,6 @@ function readNonEmptyString(value: unknown): string | null {
   const normalized = typeof value === "string" ? value.trim() : "";
   return normalized.length > 0 ? normalized : null;
 }
-
-// --- Auth discovery --------------------------------------------------------
 
 async function resolveDesktopVoiceAuth(
   cwd: string,
@@ -209,8 +200,6 @@ async function resolveDesktopVoiceAuth(
   });
 }
 
-// --- Network upload --------------------------------------------------------
-
 export async function requestDesktopVoiceTranscription(input: {
   readonly audioBuffer: Buffer;
   readonly mimeType: string;
@@ -246,8 +235,6 @@ function readVoiceResponseErrorMessage(statusCode: number, body: string): string
 
   return `Transcription failed with status ${statusCode}.`;
 }
-
-// --- IPC entrypoint --------------------------------------------------------
 
 async function transcribeVoiceViaDesktopBridge(
   input: ServerVoiceTranscriptionInput,

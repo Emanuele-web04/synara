@@ -1,9 +1,3 @@
-// FILE: automationInlineDraft.test.ts
-// Purpose: Locks down commit-on-blur draft behavior: commit, revert, rebase, invalid drafts,
-// unmount flush, and the Escape-blur ordering.
-// Layer: Web lib test
-// Depends on: automationInlineDraft hooks via the shared react hook harness.
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("react", async () => (await import("../test/reactHookHarness")).reactHookHarnessMock);
@@ -180,7 +174,7 @@ describe("useCommitDraftBlurHandlers", () => {
     expect(commit).toHaveBeenCalledTimes(1);
     expect(revert).not.toHaveBeenCalled();
 
-    // Escape: element.blur() fires onBlur synchronously before revertAndBlur returns.
+    // element.blur() fires onBlur synchronously before revertAndBlur returns
     handlers.revertAndBlur({ blur: () => handlers.onBlur() });
     expect(revert).toHaveBeenCalledTimes(1);
     expect(commit).toHaveBeenCalledTimes(1);

@@ -1,10 +1,4 @@
-// FILE: spaceNavigation.ts
-// Purpose: Where selecting a Space lands, and which threads a Space is allowed to land on.
-// Layer: Spaces domain helper
-// Why: `isOrdinarySpaceProject` states which *projects* Spaces organize; every Space-scoped
-//      navigation needs the thread-level consequence of that rule. The Space switcher and the
-//      "/" restore landing both make that judgement, and spelling it out separately is exactly
-//      how selecting an empty Space ended up restoring another Space's thread.
+// isOrdinarySpaceProject states which projects Spaces organize; Space-scoped navigation needs the thread-level consequence — spelling it separately is how selecting an empty Space restored another Space's thread
 
 import type { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
 
@@ -12,7 +6,6 @@ import type { ServerWorkspacePaths } from "~/lib/serverWorkspacePaths";
 import { isOrdinarySpaceProject } from "~/lib/spaces";
 import type { Project, SidebarThreadSummary } from "~/types";
 
-/** Strict membership: a project Spaces organize, filed into `spaceId`. */
 export function isProjectInSpace(
   project: Project | null | undefined,
   spaceId: SpaceId | null,
@@ -61,7 +54,6 @@ export function resolveSpaceSelectionTarget(input: {
   rememberedThreadId: ThreadId | null;
   rememberedProjectId: ProjectId | null;
   paths: ServerWorkspacePaths;
-  /** Injected so this stays a domain helper instead of importing sidebar presentation. */
   sortThreads: (threads: readonly SidebarThreadSummary[]) => readonly SidebarThreadSummary[];
 }): SpaceSelectionTarget {
   const { paths, projectById, projects, rememberedProjectId, rememberedThreadId, spaceId } = input;

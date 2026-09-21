@@ -223,12 +223,12 @@ describe("thread annotations round-trip", () => {
         done: false,
       });
 
-      // And via the full snapshot, which is what the client hydrates from on (re)connect.
+      // also via the full snapshot — what the client hydrates from on (re)connect
       const snapshot = await system.run(system.query.getSnapshot());
       const snapshotThread = snapshot.threads.find((candidate) => candidate.id === threadId);
       expect(snapshotThread?.pinnedMessages).toEqual(thread?.pinnedMessages);
 
-      // Shell snapshots feed the sidebar and intentionally avoid the sidepanel payload columns.
+      // shell snapshots feed the sidebar and intentionally avoid the sidepanel payload columns
       const shellSnapshot = await system.run(system.query.getShellSnapshot());
       const shellThread = shellSnapshot.threads.find((candidate) => candidate.id === threadId);
       expect(shellThread).not.toBeUndefined();

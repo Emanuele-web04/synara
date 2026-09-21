@@ -1,10 +1,3 @@
-// FILE: KanbanStatusIcon.tsx
-// Purpose: Linear-style column status glyph — dashed circle (Draft), half-filled
-//          yellow pie (In Progress), filled indigo check (Done). Shared by board
-//          column headers and card status labels.
-// Layer: Kanban UI component
-// Exports: KanbanStatusIcon
-
 import { cn } from "~/lib/utils";
 import type { KanbanColumnKey } from "./kanban.logic";
 

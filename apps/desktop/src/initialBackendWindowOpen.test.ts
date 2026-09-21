@@ -1,6 +1,3 @@
-// FILE: initialBackendWindowOpen.test.ts
-// Purpose: Locks desktop startup behavior so packaged windows appear before backend readiness.
-
 import { describe, expect, it, vi } from "vitest";
 
 import {

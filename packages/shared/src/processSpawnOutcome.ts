@@ -1,19 +1,11 @@
-// FILE: processSpawnOutcome.ts
-// Purpose: Records positive evidence that an owned Node child never spawned.
-// Layer: Shared platform runtime
-
 import type { ChildProcess } from "node:child_process";
 import { errorMonitor, type EventEmitter } from "node:events";
 
 const failedSpawns = new WeakSet<object>();
 
-/**
- * Observe at the spawn boundary, before SDK error handlers can request teardown.
- * errorMonitor preserves Node's error delivery (and unhandled-error behavior).
- * An absent PID alone is deliberately not evidence of a failed spawn.
- */
+/** observe at the spawn boundary before SDK handlers request teardown; errorMonitor preserves Node's error delivery; an absent PID alone is deliberately not evidence */
 export function trackProcessSpawn<T extends ChildProcess>(child: T): T {
-  // ChildProcess narrows once() to string events; EventEmitter supports symbols.
+  // ChildProcess narrows once() to string events; EventEmitter supports symbols
   const emitter: EventEmitter = child;
   const onSpawn = () => emitter.removeListener(errorMonitor, onError);
   const onError = () => {

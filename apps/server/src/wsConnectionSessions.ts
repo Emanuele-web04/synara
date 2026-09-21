@@ -1,12 +1,4 @@
-// Purpose: correlate authenticated WebSocket upgrades with RPC handler execution.
-// Layer: server transport support
-//
-// RpcServer.toHttpEffectWebsocket forks the RPC server on the layer-build scope,
-// so services provided around the per-connection HTTP upgrade effect never reach
-// handler fibers. This registry bridges that gap: the upgrade route registers the
-// connection's authenticated session under an unguessable key, injects the key as
-// a synthetic request header (overriding any client-supplied value), and the RPC
-// admission middleware resolves it back into handler-scoped services.
+// RpcServer.toHttpEffectWebsocket forks the RPC server on the layer-build scope so services provided around the per-connection upgrade never reach handler fibers — this registry bridges that: upgrade registers the session under an unguessable key injected as a synthetic header, and admission middleware resolves it back into handler-scoped services
 import { randomUUID } from "node:crypto";
 
 import { Effect, Layer, Scope, ServiceMap } from "effect";
@@ -28,15 +20,10 @@ export interface WsConnectionSession {
   readonly attachmentPrincipal: ManagedAttachmentPrincipal;
 }
 
-/**
- * Synthetic header carrying the connection-session key. It is set server-side on
- * the upgrade request (never sent to clients), and Headers.set overrides any
- * value a client tried to smuggle in, so entries cannot be forged or replayed.
- */
+/** set server-side on the upgrade request (never sent to clients) — Headers.set overrides any client-supplied value so entries can't be forged or replayed */
 export const WS_CONNECTION_SESSION_HEADER = "x-synara-ws-connection-session";
 
 export interface WsConnectionSessionsShape {
-  /** Registers the session for the lifetime of the connection scope. */
   readonly register: (session: WsConnectionSession) => Effect.Effect<string, never, Scope.Scope>;
   readonly lookup: (key: string | undefined) => WsConnectionSession | undefined;
 }
@@ -65,11 +52,7 @@ export const WsConnectionSessionsLive = Layer.effect(
   makeWsConnectionSessions,
 );
 
-/**
- * Provides the connection session's identity services to an RPC handler
- * effect. With no session (no or unknown key), the effect keeps the
- * conservative defaults: role "client" and the local-loopback principal.
- */
+/** with no session the effect keeps conservative defaults — role "client", loopback principal */
 export function provideWsConnectionSession<A, E, R>(
   effect: Effect.Effect<A, E, R>,
   session: WsConnectionSession | undefined,

@@ -1,8 +1,3 @@
-// FILE: updatePendingCache.ts
-// Purpose: Coordinates safe deletion of electron-updater pending cache artifacts.
-// Layer: Desktop update utility
-// Exports: PendingUpdateCacheClearQueue plus electron-updater cache path helpers
-
 import * as Path from "node:path";
 
 export function resolveElectronUpdaterCacheDirName(

@@ -1,10 +1,3 @@
-// FILE: PullRequestRow.tsx
-// Purpose: One row of the pull requests list — state glyph, truncating title (full title +
-//          number in a tooltip), author avatar + repository + head branch on the second line,
-//          relative time + muted diff stat, and a sibling pin control that never opens detail.
-// Layer: Pull request presentation
-// Exports: PullRequestRow
-
 import type { PullRequestListEntry } from "@synara/contracts";
 import { pullRequestListProjectContexts } from "@synara/shared/githubRepository";
 
@@ -80,10 +73,7 @@ export const PullRequestRow = function PullRequestRow({
   return (
     <div
       className={cn(
-        // The row bleeds past the page padding and pays the same amount back as its own
-        // padding, so the hover surface keeps a halo while the glyph and the title still sit
-        // on the page heading's verticals. The width is explicit because the negative margin
-        // shifts the row without widening it.
+        // the row bleeds past the page padding and pays it back as its own padding so hover keeps a halo while the glyph/title sit on the heading's verticals; width explicit since the negative margin shifts without widening
         "group -mx-3 flex w-[calc(100%+1.5rem)] items-stretch rounded-lg text-left transition-colors",
         selected
           ? "bg-[var(--color-background-elevated-secondary)]"

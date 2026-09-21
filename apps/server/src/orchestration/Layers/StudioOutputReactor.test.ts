@@ -111,8 +111,7 @@ describe("StudioOutputReactor", () => {
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start.pipe(Scope.provide(scope)));
 
-    // This file appears after the command reactor's awaited preparation but before
-    // the provider acknowledges turn.started. A turn.started-time scan would miss it.
+    // appears after the reactor's awaited preparation but before the provider acknowledges turn.started — a started-time scan would miss it
     await runtime.runPromise(reactor.captureBaselineBeforeTurn(threadId));
     await writeFile(path.join(workspaceRoot, "report.md"), "finished report");
 

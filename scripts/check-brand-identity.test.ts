@@ -45,7 +45,7 @@ describe("brand identity guard", () => {
         ),
       ).toHaveLength(1);
 
-      // Missing owned files must still fail rather than silently weakening the guard.
+      // missing owned files must fail, not silently weaken the guard
       rmSync(join(cwd, path));
       expect(() => readTrackedFiles(cwd)).toThrow();
     } finally {

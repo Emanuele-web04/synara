@@ -1,8 +1,3 @@
-// FILE: useTerminalDrawerHeight.ts
-// Purpose: Encapsulates drawer-height state, clamping, and pointer-driven resize behavior.
-// Layer: Terminal interaction hook
-// Depends on: thread terminal sizing defaults and React pointer lifecycle hooks.
-
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from "react";
 
 import { DEFAULT_THREAD_TERMINAL_HEIGHT } from "../../types";
@@ -26,9 +21,7 @@ export function useTerminalDrawerHeight(options: {
   onHeightChange: (height: number) => void;
   resetKey: string;
 }) {
-  // Drag height keyed to the (height, resetKey) it started from: an external
-  // height/reset change derives straight back to the prop value in the same
-  // render, with no state-resetting effect.
+  // drag height keyed to the (height, resetKey) it started from — an external change derives back to the prop value in the same render
   const [dragHeight, setDragHeight] = useState<{
     baseHeight: number;
     baseResetKey: string;
@@ -40,8 +33,7 @@ export function useTerminalDrawerHeight(options: {
     dragHeight.baseResetKey === options.resetKey
       ? dragHeight.height
       : clampTerminalDrawerHeight(options.height);
-  // Reads the current base from a ref so the setter captures nothing reactive
-  // and stays safe inside the empty-deps drag callbacks below.
+  // reads the current base from a ref so the setter captures nothing reactive inside the empty-deps drag callbacks
   const dragBaseRef = useRef({ height: options.height, resetKey: options.resetKey });
   const setDrawerHeight = (height: number) =>
     setDragHeight({
@@ -74,8 +66,7 @@ export function useTerminalDrawerHeight(options: {
     onHeightChangeRef.current(clampedHeight);
   };
 
-  // Ref-only mirror of an external height/reset change (ref writes in effects
-  // are compiler-safe); the rendered height itself is derived above.
+  // ref-only mirror of an external height/reset change (compiler-safe); the rendered height is derived above
   useEffect(() => {
     const clampedHeight = clampTerminalDrawerHeight(options.height);
     dragBaseRef.current = { height: options.height, resetKey: options.resetKey };

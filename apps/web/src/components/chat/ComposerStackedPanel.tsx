@@ -1,8 +1,3 @@
-// FILE: ComposerStackedPanel.tsx
-// Purpose: Shared chrome for panels stacked above the composer input.
-// Layer: Chat composer layout primitive
-// Exports: ComposerStackedPanel and divider token for inner stacked-panel rows.
-
 import { type HTMLAttributes, type ReactNode, type Ref } from "react";
 
 import { cn } from "~/lib/utils";

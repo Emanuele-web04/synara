@@ -77,14 +77,10 @@ import {
 } from "./commandInvariants.ts";
 
 const nowIso = () => new Date().toISOString();
-// Commands from the web client always carry an explicit assistantDeliveryMode;
-// this default only covers legacy/omitted fields. Streaming is the safe fallback:
-// an unrecorded preference should degrade to live output, never to a silent
-// buffer that withholds the whole assistant message until turn completion.
+// this default only covers legacy/omitted fields — streaming is the safe fallback: an unrecorded preference degrades to live output, never a silent buffer
 const DEFAULT_ASSISTANT_DELIVERY_MODE = "streaming" as const;
 const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
-// Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
-// use placeholder roots (e.g. the home dir) that legitimately coexist with real projects.
+// kinds claiming exclusive workspace-root ownership; chat containers excluded — their placeholder roots legitimately coexist with real projects
 const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
 
 function validateSidechatExecutionAvailable(
@@ -258,9 +254,7 @@ function validateProjectPinLimit(input: {
   readonly wasPinned?: boolean;
   readonly staleProjectIds?: ReadonlySet<string>;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  // The kind invariant must hold for the EFFECTIVE pin state, not only when the command sets
-  // isPinned: a kind-only update (e.g. project -> studio) would otherwise carry an existing pin
-  // onto a kind that can never be pinned.
+  // the pin invariant must hold for the EFFECTIVE pin state — a kind-only update would otherwise carry an existing pin onto a kind that can never be pinned
   const nextIsPinned = input.command.isPinned ?? input.wasPinned ?? false;
   if (nextIsPinned && input.nextKind !== "project") {
     return Effect.fail(
@@ -369,8 +363,7 @@ function resolveCreatedThreadWorkspaceMetadata(
       envMode: "local" as const,
       branch: null,
       worktreePath: null,
-      // Backward compatibility: older Studio clients sent "Use a folder" through
-      // worktreePath. Preserve that folder while stripping its worktree semantics.
+      // older Studio clients sent "Use a folder" through worktreePath — preserve the folder while stripping worktree semantics
       workingDirectory:
         command.workingDirectory !== undefined ? command.workingDirectory : command.worktreePath,
       associatedWorktreePath: null,
@@ -400,16 +393,7 @@ function resolveCreatedThreadWorkspaceMetadata(
   };
 }
 
-/**
- * Stamps authoritative goal timestamps for `thread.meta.update`. `goalAchieved`
- * takes precedence over everything: it records a ThreadGoalAchievement (with
- * pause-adjusted elapsed time, anchored to the thread's latest turn) and clears
- * the goal in the same event. A goal change takes precedence over `goalPaused`
- * in the same command: a newly set goal starts the pursuit clock, an edit of an
- * existing goal keeps the running clock and pause state, and clearing resets
- * everything. Pause freezes the clock at `goalPausedAt`; resume rebases
- * `goalStartedAt` so the paused span is excluded from the elapsed time.
- */
+/** goalAchieved records an achievement and clears the goal; a goal change beats goalPaused (new goal starts the clock, edit keeps it); pause freezes at goalPausedAt; resume rebases goalStartedAt so the paused span is excluded */
 function resolveThreadGoalPatch(
   command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
   currentThread: OrchestrationThread,
@@ -549,7 +533,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 }: {
   readonly command: OrchestrationCommand;
   readonly readModel: OrchestrationReadModel;
-  /** Reserved container roots; when provided, space assignment rejects legacy chat containers. */
+  /** reserved container roots — space assignment rejects legacy chat containers */
   readonly workspacePaths?: SpaceAssignmentWorkspacePaths | undefined;
 }): Effect.fn.Return<
   Omit<OrchestrationEvent, "sequence"> | ReadonlyArray<Omit<OrchestrationEvent, "sequence">>,
@@ -597,8 +581,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "space.meta.update": {
       const existingSpace = yield* requireSpace({ readModel, command, spaceId: command.spaceId });
-      // Fields equal to the current value are not changes: a Save with nothing edited (or a
-      // rename that resends the icon) must not append an event or bump updatedAt.
+      // fields equal to the current value aren't changes — a no-op Save must not append an event or bump updatedAt
       const nextName =
         command.name !== undefined && command.name !== existingSpace.name
           ? command.name
@@ -674,9 +657,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     case "space.delete": {
       yield* requireSpace({ readModel, command, spaceId: command.spaceId });
       const occurredAt = nowIso();
-      // The deletion event owns the re-filing invariant. Projectors clear every matching
-      // assignment in one pass, avoiding an unbounded event fanout for large spaces while
-      // still including soft-deleted projects that a recovery flow could resurrect.
+      // the deletion event owns the re-filing invariant — projectors clear assignments in one pass (bounded vs unbounded event fanout) while still including soft-deleted projects a recovery could resurrect
       return {
         ...withEventBase({
           aggregateKind: "space",
@@ -698,8 +679,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         if (seenProjectIds.has(projectId)) continue;
         seenProjectIds.add(projectId);
         const project = yield* requireProject({ readModel, command, projectId });
-        // Already-filed and concurrently-deleted projects are settled, not errors: the
-        // batch stays atomic for real failures without rejecting a raced retry.
+        // already-filed and concurrently-deleted projects are settled, not errors — the batch stays atomic for real failures without rejecting a raced retry
         if (project.deletedAt !== null || project.spaceId === command.spaceId) continue;
         if ((project.kind ?? "project") !== "project") {
           return yield* new OrchestrationCommandInvariantError({
@@ -747,9 +727,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
       const nextProjectKind = command.kind ?? "project";
       if (nextProjectKind === "project") {
-        // The app-managed Studio container owns its root exclusively and is never retired here:
-        // silently deleting it would orphan Studio threads, so adding its folder as a project
-        // is rejected outright.
+        // the Studio container owns its root exclusively and is never retired — deleting it would orphan Studio threads so adding its folder is rejected
         const existingStudioProject = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
@@ -779,8 +757,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         }
 
         for (const staleProject of staleProjects) {
-          // A removed folder can leave an active project shell with no live threads.
-          // Retire that stale shell so re-adding the same folder creates a fresh project.
+          // a removed folder can leave an active project shell with no live threads — retire it so re-adding creates a fresh project
           events.push({
             ...withEventBase({
               aggregateKind: "project",
@@ -797,9 +774,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         }
       }
       if (nextProjectKind === "studio") {
-        // Cross-kind on purpose: a regular project already using this root would otherwise
-        // coexist with the Studio container, breaking workspace-root-to-project uniqueness
-        // that shell snapshot mapping and duplicate recovery rely on.
+        // cross-kind on purpose — a regular project on this root would coexist with the Studio container, breaking root-to-project uniqueness that snapshot mapping and duplicate recovery rely on
         const existingOwningProject = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
@@ -820,8 +795,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         staleProjectIds: new Set(staleProjects.map((project) => project.id)),
       });
 
-      // Filing a new project into the requested space is best-effort: creation must never
-      // fail because the space raced a delete, so an unusable target degrades to Void.
+      // filing into the requested space is best-effort — creation must never fail because the space raced a delete; an unusable target degrades to Void
       const requestedSpace =
         command.spaceId != null ? findSpaceById(readModel, command.spaceId) : undefined;
       const creationSpaceId =
@@ -915,9 +889,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       if (effectiveSpaceId !== null) {
-        // Assignability is an invariant of the resulting row, not only of commands that
-        // explicitly set spaceId. Metadata-only updates must not turn an already-filed
-        // project into the legacy Home/Chats container while retaining its space.
+        // assignability is an invariant of the resulting row — metadata-only updates must not turn a filed project into the legacy Home container while retaining its space
         yield* requireSpaceAssignableProject({
           command,
           projectTitle: command.title ?? existingProject.title,
@@ -950,10 +922,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "Project is already assigned to this space.",
         });
       }
-      // Ownership must hold for the project's *effective* root, not only when the root field is
-      // present on the command: a kind-only update (e.g. chat -> studio) would otherwise slip a
-      // second workspace-owning project onto a root that a project- or studio-kind row already
-      // claims, bypassing the same cross-kind rule project.create enforces.
+      // ownership must hold for the effective root — a kind-only update would slip a second workspace-owning project onto a claimed root, bypassing the rule project.create enforces
       const ownershipMayChange =
         command.workspaceRoot !== undefined ||
         (command.kind !== undefined && command.kind !== (existingProject.kind ?? "project"));
@@ -1042,10 +1011,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      // Provider-native threads mirror subagents the provider already runs;
-      // Synara never starts a session for them, so the Auto-mode capability
-      // check can only reject the projection (and durably poison the runtime
-      // journal replaying it), never prevent an unverified Auto session.
+      // provider-native threads mirror the provider's own subagents — Synara never starts a session for them so the Auto-mode check can only poison the journal replay, never prevent the session
       if (command.creationSource !== "provider_native") {
         yield* validateAutoRuntimeMode(command, command.modelSelection, command.runtimeMode);
       }
@@ -1161,11 +1127,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
 
-      // Imported messages keep their source-thread timestamps so the transcript still
-      // reads chronologically. They are not activity in this thread: the retention
-      // clock floors on the new thread's own createdAt/updatedAt (see
-      // `threadRetention.getThreadLastActivityMs`) so a handoff of an old
-      // conversation is never born past the retention cutoff.
+      // imported messages keep source timestamps so the transcript reads chronologically, but they aren't activity here — the retention clock floors on this thread's own createdAt/updatedAt so a handoff of an old conversation is never born past the cutoff
       const importedMessageEvents: ReadonlyArray<Omit<OrchestrationEvent, "sequence">> =
         command.importedMessages.map((message) => ({
           ...withEventBase({
@@ -1260,11 +1222,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       };
 
-      // Imported messages keep their source-thread timestamps so the transcript still
-      // reads chronologically. They are not activity in this thread: the retention
-      // clock floors on the new thread's own createdAt/updatedAt (see
-      // `threadRetention.getThreadLastActivityMs`) so a fork of an old conversation
-      // is never born past the retention cutoff.
+      // same as above — a fork of an old conversation is never born past the retention cutoff
       const importedMessageEvents: ReadonlyArray<Omit<OrchestrationEvent, "sequence">> =
         command.importedMessages.map((message) => ({
           ...withEventBase({
@@ -1424,9 +1382,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const occurredAt = nowIso();
-      // Subagent threads are only reachable through their parent, so archiving a
-      // thread archives its still-active subagent subtree with it. The commanded
-      // thread goes last: the command receipt records the final event's aggregate.
+      // subagent threads are only reachable through their parent — archiving a thread archives its active subtree; the commanded thread goes last so the receipt records the final aggregate
       const subagentThreadIds = collectSubagentDescendants(readModel.threads, command.threadId)
         .filter((thread) => thread.deletedAt === null && (thread.archivedAt ?? null) === null)
         .map((thread) => thread.id);
@@ -1474,9 +1430,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const occurredAt = nowIso();
-      // Restoring a parent brings back the subagent subtree that was archived with
-      // it. The commanded thread goes last: the command receipt records the final
-      // event's aggregate.
+      // restoring a parent brings back the archived subtree; commanded thread last for the receipt
       const subagentThreadIds = collectSubagentDescendants(readModel.threads, command.threadId)
         .filter((thread) => thread.deletedAt === null && (thread.archivedAt ?? null) !== null)
         .map((thread) => thread.id);
@@ -1504,8 +1458,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
-      // Provider-native threads: see thread.create — the selection mirrors the
-      // provider's own subagent, so the Auto-mode capability check doesn't apply.
+      // provider-native threads — the selection mirrors the provider's subagent so the Auto-mode check doesn't apply
       if (command.modelSelection !== undefined && thread.creationSource !== "provider_native") {
         yield* validateAutoRuntimeMode(command, command.modelSelection, thread.runtimeMode);
       }
@@ -1716,8 +1669,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       yield* validateSidechatExecutionAvailable(command, targetThread);
       if (command.resumePrecondition !== undefined) {
-        // Quit-resume continuations are only valid while the thread is exactly as
-        // it was recorded; checked here so it holds inside the serialized dispatch.
+        // quit-resume continuations are valid only while the thread is exactly as recorded — checked here so it holds inside serialized dispatch
         const violation = threadResumePreconditionViolation(
           targetThread,
           command.resumePrecondition,
@@ -1755,8 +1707,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             detail: "This asynchronous question is unavailable in this Codex thread.",
           });
         }
-        // Serialized command admission makes concurrent answers from multiple
-        // clients a single durable submission, even with different command ids.
+        // serialized admission makes concurrent answers from multiple clients a single durable submission, even with different command ids
         if (questionMessage.asyncUserInput.response) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
@@ -1786,9 +1737,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "The question response exceeds the maximum message length.",
         });
       }
-      // A quit-resume command is planned just before commands are admitted.
-      // Respect settings changed before its serialized dispatch instead of
-      // replaying the planner's stale permission or interaction mode.
+      // a quit-resume command is planned before commands are admitted — respect settings changed before its serialized dispatch rather than replaying stale modes
       const runtimeMode =
         command.resumePrecondition === undefined && !questionResponse
           ? command.runtimeMode
@@ -1830,11 +1779,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         targetThread.session?.providerName ?? targetThread.modelSelection.provider;
       const isThreadRunning =
         targetThread.session?.status === "running" && targetThread.session.activeTurnId !== null;
-      // Subagent threads never queue: their messages steer the running child task
-      // through the parent session, so deferring until the turn settles would
-      // deliver the message only after the subagent already finished.
-      // Steers ride the live turn natively only on providers whose runtime can
-      // inject mid-turn input; everywhere else they queue and interrupt below.
+      // subagent threads never queue — their messages steer the running child task through the parent session; deferring until settle would deliver after the subagent finished; steers ride the live turn natively only where the runtime supports mid-turn input, else they queue and interrupt
       const shouldQueue =
         targetThread.parentThreadId === null &&
         (targetThread.claudeCacheReview != null ||
@@ -1857,11 +1802,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.message.skills !== undefined ? { skills: command.message.skills } : {}),
           ...(command.message.mentions !== undefined ? { mentions: command.message.mentions } : {}),
           dispatchMode,
-          // Explicit "user" (not absent): edit-resends replay through a fresh
-          // server-side turn.start without an origin, and the projection
-          // upsert coalesces absent origins — a human resend of a message
-          // originally dispatched by an automation/agent must overwrite the
-          // stale origin instead of inheriting it.
+          // explicit "user" (not absent) — edit-resends replay through a fresh turn.start without an origin and the projection coalesces absent origins, so a human resend of an automation/agent message must overwrite the stale origin
           dispatchOrigin: command.dispatchOrigin ?? "user",
           startsNewTurn: dispatchMode !== "steer" || !isThreadRunning || shouldQueue,
           turnId: null,
@@ -2700,9 +2641,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `User message '${command.messageId}' is already bound to turn '${message.turnId}'.`,
         });
       }
-      // The command engine requires at least one event per accepted command.
-      // Re-emit the canonical upsert when already bound to this exact turn so
-      // recovery retries with a fresh command id remain safely idempotent.
+      // the engine requires ≥1 event per accepted command — re-emit the canonical upsert when already bound to this turn so recovery retries stay idempotent
       return userMessageUpsertEvent({
         commandId: command.commandId,
         threadId: command.threadId,

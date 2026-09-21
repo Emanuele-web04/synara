@@ -1,8 +1,3 @@
-// FILE: ChatPaneDropOverlay.test.tsx
-// Purpose: Cover pure drop-zone helpers (hit-test + zone-to-direction mapping) used by the overlay.
-// Layer: UI helpers test
-// Targets: getDropZoneFromPointer, dropZoneToDirectionSide.
-
 import { describe, expect, it } from "vitest";
 import { ThreadId } from "@synara/contracts";
 

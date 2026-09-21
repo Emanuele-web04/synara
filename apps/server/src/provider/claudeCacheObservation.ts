@@ -23,8 +23,7 @@ export function claudeCacheContextTokens(usage: {
     raw.cache_creation_input_tokens,
   ].map(tokenCount);
   const output = tokenCount(raw.output_tokens);
-  // The summary's total can be the last prompt alone. Add its output only when
-  // the native usage proves that correspondence, never to a newer estimate.
+  // the summary's total can be the last prompt alone — add its output only when native usage proves that correspondence, never to a newer estimate
   return counts.every((count) => count !== undefined) &&
     output !== undefined &&
     counts.reduce<number>((sum, count) => sum + count!, 0) === total
@@ -36,8 +35,7 @@ export function observedClaudeCacheTtl(usage: Record<string, unknown>): number |
   const creation = usage.cache_creation;
   if (!creation || typeof creation !== "object") return undefined;
   const fields = creation as Record<string, unknown>;
-  // Mixed-duration prefixes expire in parts. Use the shortest observed duration
-  // for the warning instead of promising the entire prefix one hour of warmth.
+  // mixed-duration prefixes expire in parts — warn with the shortest observed duration, not a promised hour
   if ((tokenCount(fields.ephemeral_5m_input_tokens) ?? 0) > 0) return 300;
   if ((tokenCount(fields.ephemeral_1h_input_tokens) ?? 0) > 0) return 3_600;
   return undefined;

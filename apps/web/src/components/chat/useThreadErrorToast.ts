@@ -1,8 +1,3 @@
-// FILE: useThreadErrorToast.ts
-// Purpose: Surfaces thread-level runtime errors as a floating error toast.
-// Layer: Chat status presentation
-// Exports: useThreadErrorToast, buildThreadErrorToastOptions, threadErrorToastId
-
 import type { ThreadId } from "@synara/contracts";
 import { isProviderDeliveryBlockDetail } from "@synara/shared/providerDeliveryBlock";
 import { useEffect, useRef, type RefObject } from "react";
@@ -95,8 +90,7 @@ export function useThreadErrorToast(input: {
     );
   }, [error, threadId, unblocking]);
 
-  // Kept separate from the content effect so an error update refreshes the card in
-  // place instead of tearing it down and replaying the entrance animation.
+  // separate from the content effect so an error update refreshes the card in place instead of replaying the entrance animation
   useEffect(() => {
     if (!threadId) return;
     return () => {

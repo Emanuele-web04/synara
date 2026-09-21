@@ -1,7 +1,3 @@
-// FILE: store.ts
-// Purpose: Public Zustand facade for normalized orchestration state and local UI actions.
-// Exports: Stable store API plus pure transitions re-exported from focused modules.
-
 import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
   type OrchestrationEvent,
@@ -254,8 +250,6 @@ export function setThreadWorkspace(
   });
 }
 
-// ── Zustand store ────────────────────────────────────────────────────
-
 interface AppStore extends AppState {
   syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
   syncServerThreadDetail: (thread: ReadModelThread) => void;
@@ -300,9 +294,7 @@ export const useStore = create<AppStore>((set) => ({
     ),
   evictThreadDetail: (threadId) =>
     set((state) => evictThreadDetailFromClientState(state, threadId)),
-  // Dropping a batch of leases evicts several threads at once. Every store update
-  // re-runs the retention reconcile, so folding them into one write keeps that at
-  // a single pass instead of one per thread.
+  // fold batch lease drops into one write — every update re-runs the retention reconcile
   evictThreadDetails: (threadIds) =>
     set((state) => {
       let nextState: AppState = state;
@@ -341,9 +333,8 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => setThreadWorkspace(state, threadId, patch)),
 }));
 
-// Persist state changes with debouncing to avoid localStorage thrashing.
-// Project snapshots only depend on `state.projects` (immutable — every project mutation
-// produces a new array), so skip them on the streaming hot path where only thread slices move.
+// debounced persistence avoids localStorage thrashing
+// debounce persists to avoid localStorage thrashing; project snapshots depend only on `state.projects` (immutable), so skip them on the streaming hot path
 let lastRememberedProjects: readonly Project[] | undefined;
 useStore.subscribe((state) => {
   if (state.projects !== lastRememberedProjects) {
@@ -353,7 +344,7 @@ useStore.subscribe((state) => {
   debouncedPersistState.maybeExecute(state);
 });
 
-// Flush pending writes synchronously before page unload to prevent data loss.
+// project snapshots depend only on immutable state.projects — skip them on the streaming hot path where only thread slices move
 if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => {
     persistAppStateNow();

@@ -1,16 +1,7 @@
-// FILE: orchestrationEventCoalescing.ts
-// Purpose: Collapse a flush window of orchestration domain events before they reach the
-//          store reducer, so N streamed text deltas for one message cost one reducer pass.
-// Layer: Web client event pipeline (pure)
-// Exports: coalesceOrchestrationUiEvents
-// Why: Coalesce text across interleaved threads without moving a thread's state
-//      transitions ahead of its other events.
-
 import type { OrchestrationEvent } from "@synara/contracts";
 
 type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
 
-/** Concatenate incremental text while retaining the message's original timeline position. */
 function mergeThreadMessageSentEvents(
   previous: ThreadMessageSentEvent,
   event: ThreadMessageSentEvent,
@@ -28,11 +19,7 @@ function mergeThreadMessageSentEvents(
   };
 }
 
-/**
- * Only unrelated threads may intervene between merged deltas. Even a streaming
- * message updates turn state and diff bindings, so every other event in its own
- * thread is an ordering barrier. Project/space events can affect multiple threads.
- */
+// only unrelated threads may intervene between merged deltas — every other event in the same thread is an ordering barrier
 export function coalesceOrchestrationUiEvents(
   events: ReadonlyArray<OrchestrationEvent>,
 ): OrchestrationEvent[] {

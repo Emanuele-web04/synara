@@ -389,8 +389,7 @@ export function preserveProtectedPinValues(
         );
         if (!currentEntry) {
           if (protectedContexts.length === 0) return [entry];
-          // A missing current row is an acknowledged unpin of recovered-only data. Retain an
-          // aggregate row only when it still represents an unprotected project context.
+          // A missing current row is an acknowledged unpin of recovered-only data. Retain an aggregate row only when it still represents an unprotected project context.
           if (protectedContexts.length === contexts.length) return [];
           return [
             protectedContexts.reduce(

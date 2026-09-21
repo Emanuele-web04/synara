@@ -1,6 +1,3 @@
-// FILE: SpaceSwitcher.tsx
-// Purpose: Arc-style horizontal Space tabs with reordering and tab management.
-
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -153,8 +150,7 @@ function SpaceTab(props: {
 }) {
   const toneLabel = props.activityTone ? SPACE_ACTIVITY_LABEL[props.activityTone] : null;
   const detail = toneLabel ?? props.hint ?? null;
-  // Counter, not a boolean: dragenter/dragleave also fire for the tab's child spans, and
-  // a boolean would flicker off while the pointer crosses them.
+  // counter not boolean — dragenter/dragleave also fire for the tab's child spans and a boolean would flicker off crossing them
   const dragDepthRef = useRef(0);
   const [dropActive, setDropActive] = useState(false);
   const { onProjectDrop } = props;
@@ -247,11 +243,7 @@ function SortableSpaceTab(props: {
   onContextMenu: (event: MouseEvent<HTMLButtonElement>) => void;
   onProjectDrop: (projectId: ProjectId) => void;
 }) {
-  // `sortable.attributes` is dropped whole, not filtered: `role`/`tabIndex`/`aria-pressed`
-  // fight the tab role and roving tabindex, and the rest advertise a keyboard drag that
-  // does not exist here — the strip registers a PointerSensor only, so dnd-kit's "press
-  // the space bar to pick up" instructions would send a screen-reader user into the
-  // button's onClick and switch Space. Reordering is pointer-only, so it stays unspoken.
+  // sortable.attributes dropped whole: role/tabIndex/aria-pressed fight the tab role + roving tabindex, and the rest advertise a keyboard drag that doesn't exist — the strip registers a PointerSensor only, so dnd-kit's SR instructions would trigger onClick and switch Space
   const sortable = useSortable({ id: props.space.id });
 
   return (
@@ -271,8 +263,7 @@ function SortableSpaceTab(props: {
         style: {
           transform: CSS.Translate.toString(sortable.transform),
           transition: sortable.transition,
-          // A tab is primarily a click target, so it only claims the drag cursor once a
-          // drag is actually under way.
+          // A tab is primarily a click target, so it only claims the drag cursor once a drag is actually under way.
           ...(sortable.isDragging ? { cursor: "grabbing" } : {}),
         },
         isDragging: sortable.isDragging,
@@ -282,17 +273,7 @@ function SortableSpaceTab(props: {
   );
 }
 
-/**
- * Tracks how far the strip is scrolled past each edge so the fade only appears on the
- * side that actually has hidden tabs. Mirrors the overflow-driven fade in ScrollArea,
- * which cannot be reused here: its viewport is focusable and would inject a tab stop
- * into the middle of the tablist.
- *
- * The distances are written onto the node as custom properties rather than held in
- * state: this runs on every scroll frame, and re-rendering the whole strip (each tab
- * is a tooltip and a dnd-kit sortable) to move a gradient by a pixel is work the
- * compositor already does for free.
- */
+// ScrollArea can't be reused: its viewport is focusable and would inject a tab stop mid-tablist; distances written as custom properties not state — this runs per scroll frame and re-rendering a strip of tooltip+sortable tabs to move a gradient is work the compositor does free
 function useTabStripOverflow(dependencyKey: string) {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
@@ -310,8 +291,7 @@ function useTabStripOverflow(dependencyKey: string) {
 
     update();
     node.addEventListener("scroll", update, { passive: true });
-    // Catches the strip being resized by the sidebar; `dependencyKey` covers tabs
-    // being added or removed, which leaves the scroller's own box unchanged.
+    // Catches the strip being resized by the sidebar; `dependencyKey` covers tabs being added or removed, which leaves the scroller's own box unchanged.
     const observer = new ResizeObserver(update);
     observer.observe(node);
     return () => {
@@ -407,9 +387,7 @@ interface SpaceSwitcherProps {
 }
 
 export function SpaceSwitcher(props: SpaceSwitcherProps) {
-  // Zero spaces means zero chrome: the strip (and the Void tab it would carry) only
-  // exists once there is a second place for a project to be. Creation lives in the
-  // project context menu and the command palette until then.
+  // zero spaces means zero chrome — the strip only exists once there's a second place for a project to be; creation lives in the context menu + palette until then
   if (props.spaces.length === 0) {
     return null;
   }
@@ -436,15 +414,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
   );
   const spaceOrderKey = props.spaces.map((space) => space.id).join();
   const scrollerRef = useTabStripOverflow(spaceOrderKey);
-  /**
-   * `activeSpaceId` can name a Space this strip has no tab for: the selection is restored
-   * from session storage synchronously on reload while `spaces` is still empty, and another
-   * window can delete the Space we are sitting in. Every other Space id in the app resolves
-   * to "unassigned" when it cannot be found, so this one does too — otherwise the header
-   * would name one Space while no tab looked selected, and, because the tab stop rides on
-   * the selected tab, the whole strip would silently drop out of the Tab order. Presenting
-   * Void is also the state the store reconciles itself to a moment later.
-   */
+  // activeSpaceId can name a Space with no tab (session restore before spaces load, another window deleted it) — resolve to "unassigned" like every other Space id, or the header names one Space while no tab looks selected and the whole strip drops out of Tab order
   const activeSpaceId = resolveActiveSpaceId(props.activeSpaceId, props.spaces);
   const activeSpace = activeSpaceId
     ? (props.spaces.find((space) => space.id === activeSpaceId) ?? null)
@@ -473,14 +443,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
     [onSelect],
   );
 
-  /**
-   * Manual activation: the arrows move focus and Enter/Space commits (native on a
-   * `<button>`). Tabs normally select as you arrow onto them, but selecting a Space
-   * here is a route change that tears down and restores an entire working context —
-   * sweeping the strip would fire one navigation per keypress and leave the loser
-   * contexts recorded as "most recent". Users who want to sweep have the dedicated
-   * previous/next-space shortcuts, which are built for exactly that.
-   */
+  // manual activation: arrows move focus, Enter/Space commits — tabs normally select on arrow, but selecting a Space tears down and restores a whole working context, so sweeping would fire a navigation per keypress; sweeping has dedicated prev/next-space shortcuts
   const handleTabStripKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     const tabs = Array.from(
@@ -517,8 +480,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
         )}
       >
         <SpaceNameLabel
-          // Keyed by the active space so switching spaces mid-edit discards the draft
-          // instead of leaving an input bound to a different space's rename handler.
+          // Keyed by the active space so switching spaces mid-edit discards the draft instead of leaving an input bound to a different space's rename handler.
           key={spaceKey(activeSpaceId)}
           displayName={activeSpaceName}
           takenNames={takenNames}
@@ -539,8 +501,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
           aria-orientation="horizontal"
           className="flex min-w-0 flex-1 items-center gap-1"
           onKeyDown={handleTabStripKeyDown}
-          // Every press starts a fresh interaction, so it clears any click suppression a
-          // previous drag armed but never spent (a drag cancelled with Escape, say).
+          // Every press starts a fresh interaction, so it clears any click suppression a previous drag armed but never spent (a drag cancelled with Escape, say).
           onPointerDownCapture={() => {
             dragEndedRef.current = false;
           }}
@@ -659,9 +620,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
                 <span>{contextState.space ? "Edit space…" : "Edit name and icon…"}</span>
               </MenuItem>
               {contextState.space ? (
-                // Neutral, not red: deleting a space only files its projects back into
-                // Void, and the sibling project menu keeps its harder "Delete project"
-                // neutral too. Reddening the milder action would invert the hierarchy.
+                // neutral, not red — deleting a space only files its projects back into Void; reddening the milder action would invert the hierarchy under "Delete project"
                 <MenuItem
                   className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
                   onClick={() => {
@@ -674,8 +633,7 @@ function SpaceSwitcherStrip(props: SpaceSwitcherProps) {
                   <span>Delete space</span>
                 </MenuItem>
               ) : voidIsCustomized ? (
-                // Void cannot be deleted — it is where projects live when they are nowhere —
-                // so the slot below "Edit" is the way back to the shipped name and icon.
+                // Void cannot be deleted — it is where projects live when they are nowhere — so the slot below "Edit" is the way back to the shipped name and icon.
                 <MenuItem
                   className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
                   onClick={() => {

@@ -1,9 +1,3 @@
-// FILE: diff-stat.tsx
-// Purpose: Single source of truth for the "+insertions −deletions" pair rendered
-//          wherever the app surfaces diff size (git dialogs, environment panel,
-//          branch selector, chat header).
-// Layer: UI primitive
-
 import type { ReactNode } from "react";
 import { cn } from "~/lib/utils";
 

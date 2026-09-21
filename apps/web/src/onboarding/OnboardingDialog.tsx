@@ -1,10 +1,4 @@
-// FILE: OnboardingDialog.tsx
-// Purpose: First-run welcome tour: intro → feature tour → agents → appearance → project → done.
-//          Owns step navigation and the per-run results the final summary reads.
-// Layer: Web UI overlay (mounted once from the root route)
-//
-// The popup is a fixed 800×540 frame for every step so the window never resizes as the
-// user moves through the tour; hero steps (welcome, done) center their content in it.
+// fixed 800×540 frame for every step so the window never resizes through the tour
 
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { useEffect, useState } from "react";
@@ -206,8 +200,7 @@ export function OnboardingDialog(props: {
   onOpenChange: (open: boolean) => void;
   onComplete: () => void;
 }) {
-  // Project creation cannot be aborted: closing the tour mid-create would report a skip
-  // while a project still appears afterwards, so dismissal waits for it to settle.
+  // Project creation cannot be aborted: closing the tour mid-create would report a skip while a project still appears afterwards, so dismissal waits for it to settle.
   const [projectBusy, setProjectBusy] = useState(false);
   const handleOpenChange = (open: boolean) => {
     if (!open && projectBusy) return;

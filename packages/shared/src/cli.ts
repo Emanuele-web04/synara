@@ -13,7 +13,7 @@ export interface BooleanFlagInput {
   readonly negative: boolean | undefined;
 }
 
-/** Preserves missing values while still rejecting malformed boolean text. */
+/** preserves missing values while still rejecting malformed boolean text */
 export const optionalBooleanEnvironmentConfig = (
   name: string,
 ): Config.Config<boolean | undefined> => Config.schema(Schema.optional(Config.Boolean), name);
@@ -39,15 +39,7 @@ const requiredBooleanFlag = (
   }) as Flag.Flag<boolean>;
 };
 
-/**
- * A boolean flag that preserves all three configuration states.
- *
- * Effect's standard boolean flag returns `false` when absent, so applying
- * `Flag.optional` cannot distinguish absence from an explicit false. This
- * constructor keeps the normal positive form and adds an explicit negative
- * form. `getBooleanFlagValue` returns `undefined` only when neither spelling
- * was supplied.
- */
+/** Flag.optional can't distinguish absent from explicit false — this adds a negative form; undefined only when neither spelling was supplied */
 export const optionalBooleanFlag = (
   name: string,
   options: OptionalBooleanFlagOptions = {},

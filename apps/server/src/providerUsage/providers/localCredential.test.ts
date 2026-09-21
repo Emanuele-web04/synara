@@ -1,7 +1,3 @@
-// FILE: providerUsage/providers/localCredential.test.ts
-// Purpose: Local-login providers without a personal quota API still surface a
-// connected Settings card, and stay needs-auth when no credential file exists.
-
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";

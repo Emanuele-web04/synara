@@ -38,7 +38,6 @@ describe("syncAnimationsToTimelineOrigin", () => {
     const secondBefore = second.getAnimations()[0];
     expect(firstBefore).toBeDefined();
     expect(secondBefore).toBeDefined();
-    // Mounted ~120ms apart, the two animations do not share a start time.
     expect(firstBefore!.startTime).not.toBe(secondBefore!.startTime);
 
     syncAnimationsToTimelineOrigin(first);

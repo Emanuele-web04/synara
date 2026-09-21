@@ -1,8 +1,3 @@
-// FILE: appSettings.test.ts
-// Purpose: Verifies app settings normalization, model options, and provider dispatch options.
-// Layer: Web settings tests
-// Exports: Vitest suites for appSettings.ts
-
 import { Schema } from "effect";
 import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
@@ -172,7 +167,6 @@ describe("server-backed provider enablement", () => {
       didProviderCommandDiscoverySettingsChange(DEFAULT_SERVER_SETTINGS_VIEW, artifactsOn),
     ).toBe(true);
     expect(didProviderCommandDiscoverySettingsChange(artifactsOn, artifactsOn)).toBe(false);
-    // The first snapshot is covered by didProviderEnablementChange.
     expect(didProviderCommandDiscoverySettingsChange(undefined, artifactsOn)).toBe(false);
   });
 });
@@ -1043,9 +1037,7 @@ describe("AppSettingsSchema", () => {
       }),
     );
 
-    // Single-value settings fall back to the runtime that hosted Kilo sessions;
-    // list entries (hidden/disabled/order) are dropped so Kilo preferences do
-    // not transfer onto the separate OpenCode subscription.
+    // single-value settings fall back to the runtime that hosted Kilo; list entries (hidden/disabled/order) are dropped so Kilo prefs don't transfer to OpenCode
     expect(decoded).toMatchObject({
       textGenerationProvider: "opencode",
       defaultProvider: "opencode",

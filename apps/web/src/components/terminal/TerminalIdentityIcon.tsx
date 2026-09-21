@@ -1,8 +1,3 @@
-// FILE: TerminalIdentityIcon.tsx
-// Purpose: Renders a terminal/provider icon without extra activity chrome.
-// Layer: Terminal presentation primitive
-// Depends on: shared terminal icon keys plus local provider/icon components.
-
 import type { TerminalIconKey } from "@synara/shared/terminalThreads";
 
 import { TerminalSquare } from "~/lib/icons";

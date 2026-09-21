@@ -136,8 +136,7 @@ describe("deriveKanbanColumn", () => {
   });
 
   it("ignores pending approvals/input once the session is dead", () => {
-    // A crashed/closed session can never receive the answer; the request must
-    // not pin the thread to In Progress forever.
+    // a crashed/closed session can never receive the answer; the request must not pin the thread to In Progress forever
     expect(
       deriveKanbanColumn(
         makeSidebarThreadSummary({
@@ -626,8 +625,7 @@ describe("resolveOptimisticDispatchOutcome", () => {
   });
 
   it("keeps watching through the connecting pre-init window", () => {
-    // The early "starting" status must not settle the entry: provider init can
-    // still fail, and the failure toast depends on the entry being alive.
+    // the early "starting" status must not settle the entry: provider init can still fail and the failure toast depends on the entry being alive
     expect(
       resolveOptimisticDispatchOutcome(
         entry(null),

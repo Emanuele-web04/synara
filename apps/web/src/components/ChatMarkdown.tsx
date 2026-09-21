@@ -1,8 +1,3 @@
-// FILE: ChatMarkdown.tsx
-// Purpose: Renders assistant and plan markdown with syntax highlighting and local file links.
-// Layer: Web chat presentation component
-// Exports: ChatMarkdown
-
 import {
   CheckIcon,
   CopyIcon,
@@ -95,8 +90,7 @@ import {
 } from "./ChatMarkdownFind";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
-// Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
-// the href (so opening jumps to the line) but stripped for icon/title resolution.
+// Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on the href (so opening jumps to the line) but stripped for icon/title resolution.
 const MARKDOWN_LINK_POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
 const MARKDOWN_EXTERNAL_LINK_CLASS_NAME =
   "inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline";
@@ -135,9 +129,7 @@ interface ChatMarkdownProps {
   className?: string | undefined;
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
-  /** Case-insensitive substring to wrap while in-thread find is open. */
   findQuery?: string | undefined;
-  /** Active occurrence in this markdown body; other hits stay dimmer. */
   findActiveRange?: ThreadFindRange | null | undefined;
   /**
    * "user" renders a sent prompt: GFM plus hard line breaks (single newlines
@@ -146,9 +138,7 @@ interface ChatMarkdownProps {
    * (skills, mentions, agents, bare links) render as the shared chips.
    */
   variant?: "assistant" | "user";
-  /** Mention metadata for chip icon resolution; only used by the user variant. */
   mentionReferences?: ReadonlyArray<ProviderMentionReference> | undefined;
-  /** Terminal selections rendered as inline chips inside user-message markdown. */
   terminalContexts?: ReadonlyArray<ParsedTerminalContextEntry> | undefined;
   /**
    * Makes GFM task-list checkboxes interactive. Receives the 1-based line of
@@ -164,9 +154,7 @@ interface ChatMarkdownProps {
   knownAbsoluteFilePaths?: ReadonlyArray<string> | undefined;
 }
 
-// Source line of the enclosing task-list item, provided by the `li` override.
-// The checkbox `input` element is synthesized by mdast-util-to-hast without
-// position info, so it cannot read its own source location.
+// Source line of the enclosing task-list item, provided by the `li` override. The checkbox `input` element is synthesized by mdast-util-to-hast without position info, so it cannot read its own source location.
 const TaskItemSourceLineContext = React.createContext<number | null>(null);
 
 function MarkdownTaskCheckbox(props: {
@@ -219,18 +207,11 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   [remarkMath, { singleDollarTextMath: true }],
   remarkGithubAlerts,
 ];
-// User prompts are casual typing, not authored markdown: hard-break single
-// newlines and skip math entirely (the composer chip plugin is appended per
-// render because it closes over the message's mention references).
+// user prompts are casual typing, not authored markdown: hard-break single newlines and skip math entirely (the composer chip plugin is appended per render because it closes over the message's mention refs)
 const USER_MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [remarkGfm, remarkBreaks];
 const USER_MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [];
 const LITERAL_DOLLAR_PLACEHOLDER = "\uE000";
-// `\$` is two source characters that render as a single `$`. Collapsing it to one placeholder used
-// to shorten the protected string, which shifted every downstream source offset (find positions
-// are resolved against the raw text but applied against the parsed mdast positions). A two-character
-// placeholder keeps `protectLiteralMarkdownDollars` length-preserving so those offsets stay aligned;
-// it is restored ahead of the single-char placeholder (the two share no characters, so order is
-// only for clarity).
+// `\$` is two source chars rendering as one `$` — a one-char placeholder would shorten the protected string and shift downstream source offsets (find positions resolve against raw text, applied against mdast positions); the two-char placeholder keeps protectLiteralMarkdownDollars length-preserving
 const ESCAPED_DOLLAR_PLACEHOLDER = "\uE001\uE002";
 
 function restoreLiteralDollarPlaceholders(value: string): string {
@@ -429,8 +410,7 @@ function canOpenInlineMath(value: string, index: number): boolean {
     if (closingIndex === -1 || /\d/.test(value[closingIndex + 1] ?? "")) {
       return false;
     }
-    // A numeric prefix can be a coefficient. Require a complete expression
-    // on this line; do not pair prices across lines or consume `$5-$10`.
+    // a numeric prefix can be a coefficient — require a complete expression on this line; don't pair prices across lines or consume `$5-$10`
     const content = value.slice(index + 1, closingIndex);
     return !/[\r\n]/.test(content) && looksLikeInlineMath(content);
   }
@@ -455,8 +435,7 @@ function findInlineMathClosingDollar(value: string, index: number): number {
     }
     const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
     if (linkEnd !== -1) {
-      // Dollars in Markdown links/images cannot close preceding literal text.
-      // Dollar-free [f](x) remains valid inside a TeX expression.
+      // Dollars in Markdown links/images cannot close preceding literal text. Dollar-free [f](x) remains valid inside a TeX expression.
       if (value.slice(cursor, linkEnd).includes("$")) {
         return -1;
       }
@@ -482,9 +461,7 @@ function protectLiteralDollarsInMarkdownLinks(value: string): string {
       continue;
     }
 
-    // Scan links and math together: splitting at every `[` breaks TeX such as
-    // \left[...\right] before its closing dollars can be found. A math span is
-    // consumed whole below, so brackets inside it never enter link detection.
+    // scan links and math together — splitting at every `[` breaks TeX like \left[...\right] before its closing dollars; a math span is consumed whole so brackets inside it never enter link detection
     const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
     if (linkEnd !== -1) {
       result += value.slice(cursor, linkEnd).replaceAll("$", LITERAL_DOLLAR_PLACEHOLDER);
@@ -641,9 +618,7 @@ function protectLiteralMarkdownDollars(value: string): string {
   return result;
 }
 
-// Returns the raw fence info string (the token after ```), e.g. "ts" or the
-// Cursor reference form "173:186:packages/shared/src/model.ts". Parsing into a
-// highlighter language + file metadata is handled by `parseCodeFenceInfo`.
+// raw fence info string (token after ```), e.g. "ts" or the Cursor form "173:186:packages/shared/src/model.ts" — parsing into language + file metadata lives in `parseCodeFenceInfo`
 function extractRawFenceInfo(className: string | undefined): string {
   const match = className?.match(CODE_FENCE_LANGUAGE_REGEX);
   return match?.[1] ?? "text";
@@ -670,10 +645,7 @@ function extractCodeBlock(
     return null;
   }
 
-  // The single child is the fenced code element. Its rendered `type` is the
-  // custom `code` component (not the string "code") once we override `code`
-  // below, so detect by shape (a valid element carrying the code text) rather
-  // than by tag identity. `pre` only ever wraps a code element in markdown.
+  // the single child is the fenced code element — its rendered `type` is the custom `code` component (not the string "code") once we override `code` below, so detect by shape not tag identity
   const onlyChild = childNodes[0];
   if (!isValidElement<{ className?: string; children?: ReactNode }>(onlyChild)) {
     return null;
@@ -687,21 +659,14 @@ function extractCodeBlock(
 
 const INLINE_CODE_FILE_PATH_MAX_LENGTH = 120;
 
-// Decides whether an inline code span names a file/path that should render as a
-// mention chip (icon + medium label), matching how a file reads in the composer.
-// Conservative on purpose: requires a recognized filename/extension and rejects
-// whitespace and URLs so ordinary prose tokens stay plain inline code.
+// conservative on purpose: requires a recognized filename/extension and rejects whitespace + URLs so ordinary prose tokens stay plain inline code
 function inlineCodeFilePath(raw: string): string | null {
-  // Strip a pair of surrounding quotes/backticks the author may have wrapped the
-  // path in (e.g. `'src/data/social-metrics.ts'`).
   const value = raw.trim().replace(/^['"`]+|['"`]+$/g, "");
   if (value.length === 0 || /\s/.test(value) || value.includes("://")) {
     return null;
   }
   const withoutPosition = value.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
-  // Absolute local files and directories (`/Users/…/annotate-pr`) are chips
-  // even without a known filename extension. Relative names still need a
-  // recognizable file so ordinary tokens stay code.
+  // absolute local files and directories chip even without a known extension; relative names still need a recognizable file so ordinary tokens stay code
   if (resolveMarkdownFileLinkTarget(withoutPosition)) {
     return value;
   }
@@ -742,12 +707,7 @@ function VerifiedWorkspaceFileChip(props: {
   );
 }
 
-// Shared openable file chip: the same mention-chip UI (file icon + medium label)
-// used for both assistant markdown file links and inline code that names a file.
-// A plain click prefers the surface's in-app viewer (right-dock file pane);
-// meta/ctrl-click — or a surface without a viewer — opens the preferred
-// external editor. `targetPath` may carry a `:line` suffix (used to open); the
-// chip icon and title use the position-free path.
+// shared openable file chip for assistant markdown file links and inline code naming a file: plain click prefers the in-app viewer, meta/ctrl-click (or no viewer) opens the external editor; `targetPath` may carry a `:line` suffix (used to open), the chip icon/title use the position-free path
 function OpenableFileChip(props: {
   targetPath: string;
   theme: "light" | "dark";
@@ -786,8 +746,7 @@ function OpenableFileChip(props: {
   );
 }
 
-// Renders the custom element emitted by the composer-chips remark plugin with the
-// shared chip components, so chips in a sent message match the composer exactly.
+// Renders the custom element emitted by the composer-chips remark plugin with the shared chip components, so chips in a sent message match the composer exactly.
 function ComposerChipElement(props: {
   serializedSegment: string | undefined;
   theme: "light" | "dark";
@@ -929,15 +888,8 @@ function getSyntaxHighlightingModulePromise(): Promise<SyntaxHighlightingModule>
   return syntaxHighlightingModulePromise;
 }
 
-// While a message streams, its open code block grows on every reveal commit (~25/s) and
-// each commit re-tokenizes the whole block — quadratic in block length and the single
-// largest renderer cost of a code-heavy turn. Highlight at most this often while
-// streaming; the prefix already on screen stays put and the trailing value always lands,
-// so the block converges to exactly the settled highlight.
-// Each highlight costs roughly linearly in block length, so the cadence also stretches
-// with size: small blocks stay at the base interval, a block at
-// `STREAMING_CODE_HIGHLIGHT_SLOW_CHARS` is highlighted at most once per
-// `STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS`, keeping per-second tokenization work bounded.
+// while streaming, the open code block re-tokenizes on every reveal commit (~25/s) — quadratic in block length, the largest renderer cost of a code-heavy turn; highlight at most this often, the trailing value always lands so it converges to the settled highlight
+// each highlight costs ~linear in block length so the cadence stretches with size — small blocks stay at base interval, a block at the SLOW_CHARS threshold highlights at most once per MAX_INTERVAL
 const STREAMING_CODE_HIGHLIGHT_INTERVAL_MS = 160;
 const STREAMING_CODE_HIGHLIGHT_MAX_INTERVAL_MS = 1_000;
 const STREAMING_CODE_HIGHLIGHT_BASE_CHARS = 8_000;
@@ -1000,8 +952,7 @@ function LoadedShikiCodeBlock({
     return <FindAwareShikiHtml html={cachedHighlightedHtml} sourceOffset={sourceOffset} />;
   }
 
-  // The uncached path lives in its own component: an early return above must
-  // not change this component's hook order once the cache fills.
+  // the uncached path lives in its own component: an early return above must not change this component's hook order once the cache fills
   return (
     <UncachedShikiCodeBlock
       syntaxHighlighting={syntaxHighlighting}
@@ -1091,10 +1042,7 @@ const MARKDOWN_COMPONENTS: Components = {
     const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
     const isExternalHttp = isExternalHttpHref(restoredHref);
     if (isUserVariant && isExternalHttp) {
-      // GFM autolinks a pasted URL before the chips plugin can see it; when the
-      // link text is just the URL itself, render the composer's link chip so a
-      // pasted link looks identical in the composer and in the sent bubble.
-      // Authored `[label](url)` links keep the regular anchor treatment below.
+      // GFM autolinks a pasted URL before the chips plugin sees it — when the link text is just the URL, render the composer link chip so a pasted link looks identical in composer and bubble; authored [label](url) links keep the regular anchor
       const plainText = nodeToPlainText(children);
       if (
         plainText === restoredHref ||
@@ -1172,10 +1120,7 @@ const MARKDOWN_COMPONENTS: Components = {
   code: function MarkdownInlineCode({ node, className, children, ...props }) {
     const { sourceText, knownAbsoluteFilePaths, cwd, resolvedTheme } =
       useContext(MarkdownRenderContext)!;
-    // Fenced blocks carry a `language-*` class and are rendered by `pre`;
-    // only inline code (no class) that names a file becomes an openable
-    // mention chip. Absolute local paths chip immediately. Relative names
-    // chip only when that file actually exists in the chat workspace.
+    // fenced blocks carry a `language-*` class rendered by `pre`; only inline code (no class) naming a file becomes an openable chip — absolute paths chip immediately, relative names only when the file exists in the workspace
     if (!className) {
       const filePath = inlineCodeFilePath(nodeToPlainText(children));
       if (filePath) {
@@ -1248,10 +1193,7 @@ const MARKDOWN_COMPONENTS: Components = {
     }
     return <input {...props} />;
   },
-  // Custom elements emitted by the composer-chips remark plugin (user
-  // variant only; they never appear in assistant markdown). `Components`
-  // only models intrinsic tags, so these entries are typed on their own
-  // and cast into the map.
+  // custom elements from the composer-chips plugin (user variant only — never in assistant markdown); `Components` only models intrinsic tags so these are typed and cast into the map
   ...({
     [COMPOSER_CHIP_TAG_NAME]: function MarkdownComposerChip(props: {
       className?: string | undefined;
@@ -1312,9 +1254,7 @@ function ChatMarkdown({
   mentionReferences,
   terminalContexts,
 }: ChatMarkdownProps) {
-  // Defaults applied with ?? in the body, not in the destructuring: default
-  // values in parameter destructuring make React Compiler 1.0.0 bail on the
-  // whole component (BuildHIR AssignmentPattern), losing its auto-memoization.
+  // defaults applied with ?? in the body, not destructuring — defaults in parameter destructuring make React Compiler 1.0.0 bail on the whole component (BuildHIR AssignmentPattern), losing auto-memoization
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-sm leading-relaxed";
   const variant = variantProp ?? "assistant";
@@ -1333,14 +1273,9 @@ function ChatMarkdown({
     }
     return [...new Set([...(knownAbsoluteFilePathsProp ?? []), ...extractedAbsoluteFilePaths])];
   }, [extractedAbsoluteFilePaths, knownAbsoluteFilePathsProp]);
-  // Reveal streamed text at a steady, adaptive cadence so tokens appear fluidly instead of
-  // in the ~100ms network clumps that land in the store. No-ops (returns `text`) when not
-  // streaming or under reduced motion. Governs cadence only; the deferred value below still
-  // bounds the markdown re-parse cost.
+  // reveal streamed text at a steady adaptive cadence instead of the ~100ms network clumps that land in the store; no-ops when not streaming or under reduced motion — governs cadence only, the deferred value below still bounds re-parse cost
   const smoothedText = useSmoothStreamedText(text, isStreaming);
-  // The dollar rewrite exists to disambiguate math from currency; the user
-  // variant has no math, so its text must stay byte-for-byte what was typed.
-  // Table repair runs first so find offsets use the same normalized text.
+  // the dollar rewrite exists to disambiguate math from currency; the user variant has no math so its text must stay byte-for-byte what was typed — table repair runs first so find offsets use the same normalized text
   const normalizedText = useMemo(
     () =>
       isUserVariant
@@ -1348,10 +1283,7 @@ function ChatMarkdown({
         : protectLiteralMarkdownDollars(repairMarkdownTableDelimiters(smoothedText)),
     [isUserVariant, smoothedText],
   );
-  // While streaming, let React deprioritize and coalesce the markdown re-parse so a
-  // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown
-  // tree on every flush. The deferred value always converges to the latest text, and
-  // completed messages render the exact current text immediately (no visual change).
+  // while streaming, deprioritize+coalesce the markdown re-parse so a fast token stream doesn't re-render the full ReactMarkdown tree per flush; deferred always converges to latest and completed messages render exact text immediately
   const deferredNormalizedText = useDeferredValue(normalizedText);
   const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
   const sourceText = useMemo(

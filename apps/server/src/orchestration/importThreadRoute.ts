@@ -1,8 +1,3 @@
-// FILE: importThreadRoute.ts
-// Purpose: Imports provider-native sessions and binds them to Synara thread projections.
-// Layer: Orchestration command handler
-// Exports: makeImportThreadHandler.
-
 import {
   CommandId,
   type OrchestrationImportThreadInput,
@@ -448,8 +443,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       }
     }).pipe(
       Effect.onError(() =>
-        // Startup precedes history materialization. Roll it back when import
-        // cannot finish so no provider child or persisted binding is orphaned.
+        // startup precedes history materialization — roll it back when import can't finish so no provider child or binding is orphaned
         options.providerService.stopSession({ threadId: thread.id }).pipe(Effect.ignore),
       ),
     );

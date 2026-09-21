@@ -1,9 +1,3 @@
-// FILE: composerAutomation.ts
-// Purpose: Turns composer text into automation decisions and drafts while keeping ChatView thin.
-// Layer: Web composer orchestration helper
-// Exports: composer automation resolver plus draft builder for ChatView.
-// Depends on: automationIntent parsing and automation form helpers.
-
 import { DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS } from "@synara/contracts";
 import type {
   AutomationMode,
@@ -52,13 +46,7 @@ const DEFAULT_GENERATE_INTENT_TIMEOUT_MS = 1_500;
 export type ComposerAutomationRequestDecision =
   | { readonly type: "normal-chat" }
   | {
-      // The message reads as an automation request but is missing required fields
-      // (a task and/or a schedule). ChatView turns this into a conversational
-      // follow-up instead of dropping the message: it asks for what's missing and
-      // folds the user's next reply back in before re-resolving. `automationMessage`
-      // is the cleaned invocation (politeness/creation scaffold stripped) so the
-      // accumulated request never re-parses "could you create an automation for me?"
-      // scaffolding as task content.
+      // missing required fields become a conversational follow-up, not a dropped message; automationMessage is the cleaned invocation so the accumulated request never re-parses scaffolding as task content
       readonly type: "needs-clarification";
       readonly automationMessage: string;
       readonly missingFields: readonly ServerAutomationIntentMissingField[];
@@ -82,10 +70,7 @@ export interface ComposerAutomationDraftDecision {
   readonly needsDraftReview: boolean;
 }
 
-// Possessive "for me" filler carries no task content, but once a follow-up answer
-// is folded onto the accumulated request it would survive into the parsed prompt
-// (e.g. "for me check the build"). Strip it while keeping "please", which can be
-// real task content ("say please").
+// "for me" filler carries no task content but would survive folding ("for me check the build"); strip it while keeping "please" which can be real content
 function stripTrailingAutomationFiller(message: string): string {
   return message
     .replace(/[.!?。！？]+\s*$/u, "")
@@ -95,15 +80,11 @@ function stripTrailingAutomationFiller(message: string): string {
     .trim();
 }
 
-// Builds the follow-up question shown when an automation request is missing required
-// fields. Falls back to asking for a schedule (the dominant missing field) when the
-// generator could not report what was missing.
+// falls back to asking for a schedule (the dominant missing field) when the generator couldn't report what was missing
 export function automationClarificationPrompt(
   missingFields: readonly ServerAutomationIntentMissingField[],
 ): string {
-  // When the generator could not say what was missing (timeout/failure on a bare
-  // request), ask for both task and schedule so setup can still recover instead of
-  // looping on a cadence-only question that a bare "create an automation" can't answer.
+  // when the generator can't say what's missing, ask for task+schedule so setup recovers instead of looping on cadence for a bare "create an automation"
   const fields: readonly ServerAutomationIntentMissingField[] =
     missingFields.length > 0 ? missingFields : ["taskPrompt", "schedule"];
   const needsTask = fields.includes("taskPrompt");
@@ -112,8 +93,7 @@ export function automationClarificationPrompt(
     return 'Sure, what should this automation do, and how often should it run? For example: "every weekday at 9am, summarize my open PRs."';
   }
   if (needsTask) {
-    // Cadence is already known, so asking for it again risks the user repeating it and
-    // leaving a duplicate schedule phrase in the saved task.
+    // cadence already known — asking again risks the user repeating it and leaving a duplicate schedule phrase in the task
     return "What should this automation do? For example: summarize my open PRs, or check the build.";
   }
   if (needsSchedule) {
@@ -121,8 +101,6 @@ export function automationClarificationPrompt(
   }
   return "A couple more details: what should this automation do, and how often should it run?";
 }
-
-// ─── ENTRY POINT ─────────────────────────────────────────────
 
 async function generateIntentWithTimeout(input: {
   readonly generateIntent: GenerateComposerAutomationIntent;
@@ -156,7 +134,6 @@ function isAutoSubmittableBoundedFastLoop(intent: ChatAutomationIntent | null): 
   );
 }
 
-// Resolves whether a composer submission should stay chat or become an automation.
 export async function resolveComposerAutomationRequest(input: {
   readonly message: string;
   readonly cwd: string;
@@ -220,10 +197,7 @@ export async function resolveComposerAutomationRequest(input: {
     defaultMode: automationDefaultMode,
     executionScope: automationExecutionScope,
   });
-  // The generator defaults an unspecified schedule to "manual", which would otherwise
-  // open a manual-automation review dialog for "create an automation to check the build"
-  // instead of asking "how often?". When generation reports the schedule as still
-  // missing, keep the conversational follow-up rather than accepting that default.
+  // the generator defaults an unspecified schedule to "manual" which would open a manual-automation review instead of asking "how often?" — keep the follow-up when generation reports schedule still missing
   const generatedScheduleStillMissing =
     automationResolution !== null &&
     automationResolution.source === "generated" &&
@@ -232,8 +206,7 @@ export async function resolveComposerAutomationRequest(input: {
   if (!automationResolution || generatedScheduleStillMissing) {
     return {
       type: "needs-clarification",
-      // Strip trailing filler, then guarantee a parseable trigger survives so the next
-      // folded reply still resolves as an automation (markers/cadence-only would not).
+      // strip trailing filler, then guarantee a parseable trigger survives so the next folded reply still resolves (markers/cadence-only wouldn't)
       automationMessage: ensureAutomationConversationScaffold(
         stripTrailingAutomationFiller(automationMessage),
       ),
@@ -249,7 +222,6 @@ export async function resolveComposerAutomationRequest(input: {
   };
 }
 
-// Builds the draft form and review state once ChatView has resolved any thread target.
 export function buildComposerAutomationDraft(input: {
   readonly resolution: ResolvedChatAutomationIntent;
   readonly projectId: ProjectId;
@@ -261,8 +233,7 @@ export function buildComposerAutomationDraft(input: {
   const { intent: automationIntent, mode: automationMode } = input.resolution;
   const automationStopWhen = stopWhenFromCompletionPolicy(automationIntent.completionPolicy);
   const baseForm = formFromDefinition(null, input.projectId, input.projectModelSelection);
-  // Chat-created automations should not inherit live Full access; escalating scheduled
-  // runs stays an explicit review step in the automation dialog.
+  // chat-created automations must not inherit live Full access — escalating scheduled runs stays an explicit review step
   const nextForm = applyScheduleToForm(
     {
       ...baseForm,
@@ -279,8 +250,7 @@ export function buildComposerAutomationDraft(input: {
           : "",
       maxIterations:
         automationIntent.maxIterations === null ? "" : String(automationIntent.maxIterations),
-      // Stop clauses are mode-independent: a standalone or dedicated automation retires
-      // itself on the same condition a heartbeat would.
+      // Stop clauses are mode-independent: a standalone or dedicated automation retires itself on the same condition a heartbeat would.
       stopWhen: automationStopWhen,
     },
     automationIntent.schedule,

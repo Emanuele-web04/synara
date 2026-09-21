@@ -25,10 +25,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* threadGitMetadataReactor.start;
     yield* providerRuntimeIngestion.start;
     yield* sidechatExpiryReactor.start;
-    // Install every runtime observer before provider command dispatch can
-    // begin. Reverse-order finalization then drains provider commands first,
-    // side-chat expiry second, runtime ingestion third, Git metadata fourth,
-    // checkpoints fifth, and Studio output last.
+    // install every observer before provider dispatch can begin; reverse-order finalization drains commands first, side-chat expiry, ingestion, git metadata, checkpoints, Studio output last
     yield* providerCommandReactor.start;
   });
 

@@ -340,7 +340,6 @@ describe("composerDraftStore modelSelection", () => {
   it("does not clear other provider options when setting options for a single provider", () => {
     const store = useComposerDraftStore.getState();
 
-    // Set options for both providers
     store.setModelOptions(
       threadId,
       providerModelOptions({
@@ -349,7 +348,6 @@ describe("composerDraftStore modelSelection", () => {
       }),
     );
 
-    // Now set options for only codex — claudeAgent should be untouched
     store.setModelOptions(threadId, providerModelOptions({ codex: { reasoningEffort: "xhigh" } }));
 
     const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
@@ -951,14 +949,12 @@ describe("composerDraftStore sticky composer settings", () => {
     );
 
     const state = useComposerDraftStore.getState();
-    // The thread keeps its own choice and migrates the legacy field name.
     expect(state.draftsByThreadId[threadId]?.modelSelectionByProvider.claudeAgent?.options).toEqual(
       {
         effort: "xhigh",
         autoCompactWindow: "1m",
       },
     );
-    // The sticky snapshot only carries options that are safe to inherit.
     expect(state.stickyModelSelectionByProvider.claudeAgent).toEqual(
       modelSelection("claudeAgent", "claude-opus-4-7", { effort: "xhigh" }),
     );

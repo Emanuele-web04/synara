@@ -1,8 +1,3 @@
-// FILE: opencodeRuntime.test.ts
-// Purpose: Covers OpenCode runtime parsing and local server startup diagnostics.
-// Layer: Provider runtime tests
-// Exports: Vitest suites for opencodeRuntime.ts
-
 import { pathToFileURL } from "node:url";
 
 import { Deferred, Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effect";

@@ -229,8 +229,7 @@ export function serverLocalServersQueryOptions(
   });
 }
 
-// Sidebar project badges need a snapshot, but idle Home should not keep shelling out
-// through lsof/ps; active Synara-owned runs still poll for responsive status.
+// sidebar badges need a snapshot, but idle Home shouldn't keep shelling out through lsof/ps; active Synara-owned runs still poll
 export function sidebarLocalServersQueryOptions(input: {
   hasActiveProjectRun: boolean;
   hasProjects: boolean;
@@ -325,8 +324,6 @@ export async function invalidateProviderUsageQueries(queryClient: QueryClient): 
   ]);
 }
 
-// Local profile + shareable-card core statistics. The client passes its own fixed
-// UTC offset; all metrics are computed from Synara's local DB projections.
 export function serverProfileStatsQueryOptions(input: { enabled?: boolean } = {}) {
   const utcOffsetMinutes = -new Date().getTimezoneOffset();
   return queryOptions({
@@ -344,8 +341,7 @@ export function serverProfileStatsQueryOptions(input: { enabled?: boolean } = {}
   });
 }
 
-// DB-backed token totals and token heatmap, split from core stats so the Profile
-// page can paint first and upgrade token-only surfaces later.
+// split from core stats so the Profile page can paint first and upgrade token-only surfaces later
 export function serverProfileTokenStatsQueryOptions(input: { enabled?: boolean } = {}) {
   const utcOffsetMinutes = -new Date().getTimezoneOffset();
   return queryOptions({
@@ -363,9 +359,7 @@ export function serverProfileTokenStatsQueryOptions(input: { enabled?: boolean }
   });
 }
 
-// Live remaining-usage for every provider. Always fetches the full batch under a single query
-// key so every surface (settings panel, header chips, branch toolbar) shares one cache entry
-// and one request cycle; the server caches per-provider snapshots, so the batch is cheap.
+// one query key for the whole batch so every surface shares one cache entry and one request cycle; the server caches per-provider snapshots so the batch is cheap
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean

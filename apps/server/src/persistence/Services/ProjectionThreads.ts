@@ -1,11 +1,3 @@
-/**
- * ProjectionThreadRepository - Projection repository interface for threads.
- *
- * Owns persistence operations for projected thread records in the
- * orchestration read model.
- *
- * @module ProjectionThreadRepository
- */
 import {
   IsoDateTime,
   ModelSelection,
@@ -76,8 +68,7 @@ export const ProjectionThread = Schema.Struct({
   lastKnownPr: Schema.NullOr(OrchestrationThreadPullRequest),
   latestTurnId: Schema.NullOr(TurnId),
   handoff: Schema.NullOr(ThreadHandoff),
-  // Omission preserves an existing review during legacy whole-row upserts;
-  // null explicitly clears it.
+  // omission preserves an existing review during legacy whole-row upserts; null explicitly clears it
   claudeCacheReview: Schema.optional(Schema.NullOr(PendingClaudeCacheReview)),
   pinnedMessages: Schema.NullOr(ThreadPinnedMessages),
   notes: Schema.NullOr(ThreadNotes),
@@ -123,44 +114,22 @@ export const ListProjectionThreadsByProjectInput = Schema.Struct({
 });
 export type ListProjectionThreadsByProjectInput = typeof ListProjectionThreadsByProjectInput.Type;
 
-/**
- * ProjectionThreadRepositoryShape - Service API for projected thread records.
- */
 export interface ProjectionThreadRepositoryShape {
-  /**
-   * Insert or replace a projected thread row.
-   *
-   * Upserts by `threadId`.
-   */
   readonly upsert: (thread: ProjectionThread) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /**
-   * Read a projected thread row by id.
-   */
   readonly getById: (
     input: GetProjectionThreadInput,
   ) => Effect.Effect<Option.Option<ProjectionThread>, ProjectionRepositoryError>;
 
-  /**
-   * List projected threads for a project.
-   *
-   * Returned in deterministic creation order.
-   */
   readonly listByProjectId: (
     input: ListProjectionThreadsByProjectInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThread>, ProjectionRepositoryError>;
 
-  /**
-   * Soft-delete a projected thread row by id.
-   */
   readonly deleteById: (
     input: DeleteProjectionThreadInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 }
 
-/**
- * ProjectionThreadRepository - Service tag for thread projection persistence.
- */
 export class ProjectionThreadRepository extends ServiceMap.Service<
   ProjectionThreadRepository,
   ProjectionThreadRepositoryShape

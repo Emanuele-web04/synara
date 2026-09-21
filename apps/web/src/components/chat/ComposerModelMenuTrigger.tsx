@@ -1,9 +1,3 @@
-// FILE: ComposerModelMenuTrigger.tsx
-// Purpose: The composer footer's "provider icon · model · effort" menu trigger, shared by
-//   every picker that opens from it so label degradation and the shortcut tooltip stay identical.
-// Layer: Chat composer presentation
-// Depends on: menu/tooltip primitives, provider icons, and composer picker text tokens.
-
 import type { ProviderKind } from "@synara/contracts";
 import { useState } from "react";
 
@@ -20,8 +14,7 @@ import {
 } from "./composerPickerStyles";
 import { getProviderIconClassName } from "./ProviderModelPicker";
 
-// Must render inside a `Menu`. `hideModelLabel` / `hideStatusLabel` are the narrow-composer
-// degradation steps: the text moves to title/sr-only so assistive tech keeps it.
+// Must render inside a `Menu`. `hideModelLabel` / `hideStatusLabel` are the narrow-composer degradation steps: the text moves to title/sr-only so assistive tech keeps it.
 export function ComposerModelMenuTrigger(props: {
   provider: ProviderKind;
   modelLabel: string;
@@ -41,9 +34,7 @@ export function ComposerModelMenuTrigger(props: {
   const freezesLabel = props.isMenuOpen && Boolean(props.openPlaceholderLabel);
   // A compact (icon-only) trigger has no room for the placeholder; it only freezes.
   const showsPlaceholder = freezesLabel && !props.hideModelLabel;
-  // Opening must not move the trigger at all: Base UI opens on mousedown and cancels the
-  // open when the matching mouseup lands outside the trigger, so a resize under the cursor
-  // eats the first click.
+  // Base UI opens on mousedown and cancels on mouseup outside the trigger — a resize under the cursor eats the first click, so opening must not move the trigger
   const liveLabel = {
     modelLabel: props.modelLabel,
     statusLabel: props.statusLabel,

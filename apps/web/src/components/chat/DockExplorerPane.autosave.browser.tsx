@@ -12,8 +12,7 @@ afterEach(async () => {
   restore?.();
 });
 async function mount() {
-  // The lightweight editor accepts native textarea input; persistence is the
-  // same shared session used by Pierre and by the full-screen/diff editors.
+  // The lightweight editor accepts native textarea input; persistence is the same shared session used by Pierre and by the full-screen/diff editors.
   const writeFile = vi.fn().mockResolvedValue({ relativePath: "a.ts", version: "sha256:saved" });
   const readFile = vi
     .fn<NativeApi["projects"]["readFile"]>()

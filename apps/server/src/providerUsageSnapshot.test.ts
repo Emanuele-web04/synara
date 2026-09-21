@@ -1,7 +1,3 @@
-// FILE: providerUsageSnapshot.test.ts
-// Purpose: Verifies provider usage scans stay bounded for large local archives.
-// Layer: Server provider usage tests
-
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -114,8 +110,7 @@ function assistantLine(input: {
 
 describe("readClaudeUsageSamples", () => {
   it("reads samples from the transcript stream without readFile", async () => {
-    // A record carrying no session or message id falls back to its line number, so the
-    // blank line has to keep its place in the count for that key to stay stable.
+    // a record with no session/message id falls back to its line number — the blank line keeps its place so that key stays stable
     const file = await makeSessionFile(
       [
         JSON.stringify({ type: "user", timestamp: "2026-08-14T09:00:00.000Z" }),

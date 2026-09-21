@@ -1,36 +1,17 @@
-/**
- * Zustand store for sidebar thread multi-selection state.
- *
- * Supports Cmd/Ctrl+Click (toggle individual), Shift+Click (range select),
- * and bulk actions on the selected set.
- */
-
 import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 
 export interface ThreadSelectionState {
-  /** Currently selected thread IDs. */
   selectedThreadIds: ReadonlySet<ThreadId>;
-  /** The thread ID that anchors shift-click range selection. */
   anchorThreadId: ThreadId | null;
 }
 
 interface ThreadSelectionStore extends ThreadSelectionState {
-  /** Toggle a single thread in the selection (Cmd/Ctrl+Click). */
   toggleThread: (threadId: ThreadId) => void;
-  /**
-   * Select a range of threads (Shift+Click).
-   * Requires the ordered list of thread IDs within the same project
-   * so the store can compute which threads fall between anchor and target.
-   */
   rangeSelectTo: (threadId: ThreadId, orderedThreadIds: readonly ThreadId[]) => void;
-  /** Clear all selection state. */
   clearSelection: () => void;
-  /** Remove specific thread IDs from the selection (e.g. after deletion). */
   removeFromSelection: (threadIds: readonly ThreadId[]) => void;
-  /** Set the anchor thread without adding it to the selection (e.g. on plain-click navigate). */
   setAnchor: (threadId: ThreadId) => void;
-  /** Check if any threads are selected. */
   hasSelection: () => boolean;
 }
 
@@ -59,7 +40,6 @@ export const useThreadSelectionStore = create<ThreadSelectionStore>((set, get) =
     set((state) => {
       const anchor = state.anchorThreadId;
       if (anchor === null) {
-        // No anchor yet — treat as a single toggle
         const next = new Set(state.selectedThreadIds);
         next.add(threadId);
         return { selectedThreadIds: next, anchorThreadId: threadId };
@@ -68,7 +48,7 @@ export const useThreadSelectionStore = create<ThreadSelectionStore>((set, get) =
       const anchorIndex = orderedThreadIds.indexOf(anchor);
       const targetIndex = orderedThreadIds.indexOf(threadId);
       if (anchorIndex === -1 || targetIndex === -1) {
-        // Anchor or target not in this list (different project?) — fallback to toggle
+        // anchor or target not in this list — fall back to a plain toggle
         const next = new Set(state.selectedThreadIds);
         next.add(threadId);
         return { selectedThreadIds: next, anchorThreadId: threadId };
@@ -83,7 +63,7 @@ export const useThreadSelectionStore = create<ThreadSelectionStore>((set, get) =
           next.add(id);
         }
       }
-      // Keep anchor stable so subsequent shift-clicks extend from the same point
+      // keep the anchor stable so subsequent shift-clicks extend from the same point
       return { selectedThreadIds: next, anchorThreadId: anchor };
     });
   },

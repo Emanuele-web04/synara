@@ -100,8 +100,7 @@ export function useChatProjectScripts({
       }
       requestTerminalFocus();
 
-      // React Compiler cannot lower value blocks directly inside `try`; keep
-      // those expressions in the nested function while retaining error handling.
+      // React Compiler cannot lower value blocks inside `try`; keep them in the nested function
       const runScriptInTargetTerminal = async () => {
         const { metadata } = await runProjectCommandInTerminal({
           api,
@@ -258,8 +257,7 @@ export function useChatProjectScripts({
       const nextScripts = activeProject.scripts.filter((script) => script.id !== scriptId);
 
       const deletedName = activeProject.scripts.find((s) => s.id === scriptId)?.name;
-      // Resolved before the `try`: a value block (`??`) inside a try body makes React
-      // Compiler bail out on the whole component.
+      // resolved before the `try`: a value block inside a try body makes React Compiler bail on the whole component
       const deletedScriptToastTitle = `Deleted action "${deletedName ?? "Unknown"}"`;
 
       try {

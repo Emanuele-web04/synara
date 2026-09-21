@@ -1,8 +1,3 @@
-// FILE: wsTransport.test.ts
-// Purpose: Verifies browser WebSocket construction around the Effect RPC transport.
-// Layer: Web transport tests
-// Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
-
 import { Cause, Effect, Exit, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -113,8 +108,6 @@ class MockWebSocket {
     this.emit("message", { data });
   }
 
-  // Answers Effect RPC frames so unit tests can complete a feature-socket
-  // session: Ping gets a Pong and every request gets a successful void Exit.
   serveVoidRpc() {
     this.onSend = (data) => {
       const frame = JSON.parse(data) as Record<string, unknown>;
@@ -258,9 +251,7 @@ async function waitForSockets(count: number): Promise<void> {
 beforeEach(() => {
   sockets.length = 0;
   vi.stubEnv("VITE_WS_URL", "");
-  // Default to an older server without the HTTP negotiate endpoint so
-  // connection tests exercise the legacy bootstrap fallback unless they
-  // install their own fetch stub.
+  // default to an older server without the negotiate endpoint so connection tests exercise the legacy bootstrap fallback unless they stub fetch
   vi.stubGlobal(
     "fetch",
     vi.fn(() => Promise.reject(new Error("http negotiate unavailable"))),
@@ -506,9 +497,7 @@ describe("WsTransport", () => {
   });
 
   it("does not reconnect the socket for snapshot-fence failures", () => {
-    // Regression: ORCHESTRATION_RESNAPSHOT_REQUIRED used to fall through to a
-    // full transport reconnect, interrupting every unrelated in-flight unary
-    // RPC on a 500ms loop while a stalled projector kept the condition alive.
+    // regression: RESNAPSHOT_REQUIRED used to fall through to a full reconnect, interrupting every in-flight unary RPC on a 500ms loop while a stalled projector kept the condition alive
     expect(
       shouldReconnectAfterStreamFailure(
         Cause.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
@@ -554,8 +543,7 @@ describe("WsTransport", () => {
   });
 
   it("clears the thread resume cursor and retries in place on a resnapshot demand", async () => {
-    // The retried subscription must request a fresh full snapshot: resending
-    // the stale cursor would demand the same overflowing gap replay again.
+    // The retried subscription must request a fresh full snapshot: resending the stale cursor would demand the same overflowing gap replay again.
     vi.useFakeTimers();
     bindWindowTimersToCurrentGlobals();
     resetThreadDetailResumeCursorsForTests();
@@ -619,8 +607,7 @@ describe("WsTransport", () => {
       expect(failures).toHaveLength(1);
       expect(failures[0]?.code).toBe("ORCHESTRATION_SNAPSHOT_STALLED");
 
-      // A snapshot fault clears only when the server heals; a slow in-place
-      // retry converges then without the user resubscribing.
+      // a snapshot fault clears only when the server heals — a slow in-place retry converges without the user resubscribing
       await vi.advanceTimersByTimeAsync(1);
       expect(restart).toHaveBeenCalledTimes(1);
       expect(reconnect).not.toHaveBeenCalled();
@@ -630,8 +617,7 @@ describe("WsTransport", () => {
   });
 
   it("slow-retries a shell stream killed by a projection-state fault instead of leaving it dead", async () => {
-    // The shell stream has no route-level fallback: without a retry the
-    // sidebar silently freezes until an unrelated explicit resubscribe.
+    // The shell stream has no route-level fallback: without a retry the sidebar silently freezes until an unrelated explicit resubscribe.
     vi.useFakeTimers();
     bindWindowTimersToCurrentGlobals();
     try {
@@ -698,10 +684,7 @@ describe("WsTransport", () => {
         Cause.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
       ),
     ).toBe(SNAPSHOT_FAULT_RETRY_MS);
-    // RESNAPSHOT reaches this classifier only after its bounded fast retries
-    // are exhausted (the admission-retry path returns first): an advancing
-    // fence that has not yet closed a large gap must keep slow-retrying
-    // instead of dying while recovery is succeeding.
+    // after bounded fast retries, an advancing-but-unclosed fence must keep slow-retrying instead of dying while recovery is succeeding
     expect(
       getSnapshotFaultRetryDelayMs(
         Cause.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
@@ -711,12 +694,7 @@ describe("WsTransport", () => {
   });
 
   it("keeps slow-retrying an exhausted resnapshot demand instead of leaving the stream dead", async () => {
-    // A projector catching up through a backlog larger than the replay limit
-    // advances the fence on every request without closing the gap: the server
-    // keeps answering RESNAPSHOT_REQUIRED (progress is real, so it never
-    // escalates to STALLED). Once the fast retries are spent, the stream must
-    // fall back to the slow recovery path rather than dying while the server
-    // is actively healing.
+    // a projector working a backlog larger than the replay limit advances the fence without closing the gap — the server keeps answering RESNAPSHOT (progress is real, never escalates to STALLED), so after fast retries the stream falls back to slow recovery
     vi.useFakeTimers();
     bindWindowTimersToCurrentGlobals();
     try {
@@ -766,9 +744,7 @@ describe("WsTransport", () => {
   });
 
   it("rejects an in-flight unary request with a typed retryable error across a reconnect", async () => {
-    // Regression for "sign-in is broken": a transport reconnect used to leak
-    // the raw squashed interrupt (`Error("All fibers interrupted without
-    // error")`) to unary callers, indistinguishable from a server error.
+    // regression: a reconnect leaked the raw squashed interrupt ("All fibers interrupted without error") to unary callers, indistinguishable from a server error
     const { transport, internals } = makeBareTransport();
     const client = { "some.method": () => Effect.never };
     Object.assign(internals, {
@@ -1337,8 +1313,6 @@ describe("WsTransport", () => {
     });
 
     const subscription = transport.request(ORCHESTRATION_WS_METHODS.subscribeShell, {});
-    // Recovery restored the desired stream and delivered its snapshot before
-    // the original request resumed.
     Object.assign(internals, { shellSnapshotDelivered: true });
     resolveClient(client);
     await subscription;
@@ -1543,10 +1517,7 @@ describe("WsTransport", () => {
   });
 
   it("detects a server identity change across a failed reconnect", () => {
-    // The negotiated compatibility is cleared on every failed reconnect, so
-    // the comparison must use the last identity actually reached — otherwise a
-    // restore whose downtime outlasts the first retry keeps stale cursors,
-    // which is the case this guard exists for.
+    // compatibility is cleared on every failed reconnect — compare the last identity actually reached or a restore outlasting the first retry keeps stale cursors
     expect(serverIdentityChanged(null, "instance-a")).toBe(false);
     expect(serverIdentityChanged("instance-a", "instance-a")).toBe(false);
     expect(serverIdentityChanged("instance-a", "instance-b")).toBe(true);
@@ -1597,8 +1568,7 @@ describe("WsTransport", () => {
     await expect(negotiateOverHttp("ws://localhost:3020")).rejects.toSatisfy((error) =>
       isTerminalCompatibilityFailure(error),
     );
-    // A non-426 failure (older server, transient outage) must fall back to the
-    // legacy bootstrap socket instead of failing the connect.
+    // A non-426 failure (older server, transient outage) must fall back to the legacy bootstrap socket instead of failing the connect.
     vi.stubGlobal(
       "fetch",
       vi.fn(() => Promise.resolve(jsonResponse(404, null))),
@@ -1607,9 +1577,7 @@ describe("WsTransport", () => {
   });
 
   it("falls back to bootstrap when the negotiate request never settles", async () => {
-    // A connection that accepts and then stalls (WAN/tunnel black hole) must
-    // not wedge the transport: browsers apply no default fetch timeout, so
-    // without an abort signal the bootstrap fallback would never run.
+    // A connection that accepts and then stalls (WAN/tunnel black hole) must not wedge the transport: browsers apply no default fetch timeout, so without an abort signal the bootstrap fallback would never run.
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -1641,14 +1609,11 @@ describe("WsTransport", () => {
 
     const negotiation = negotiateOverHttp("ws://localhost:3020", controller.signal);
     controller.abort();
-    // Resolves well before the 5s deadline because disposal, not the timeout,
-    // ended the request.
     await expect(negotiation).resolves.toBeNull();
   });
 
   it("does not create a bootstrap socket when disposed during negotiation", async () => {
-    // dispose() captures a null runtime and returns while the HTTP request is
-    // still pending; the transport must not build one afterwards.
+    // dispose() captures a null runtime and returns while the HTTP request is still pending; the transport must not build one afterwards.
     let abortNegotiation: (() => void) | null = null;
     vi.stubGlobal(
       "fetch",
@@ -1663,8 +1628,6 @@ describe("WsTransport", () => {
     );
 
     const transport = new WsTransport();
-    // subscribeShell reaches getClient(), so the request genuinely drives the
-    // connect path rather than relying on the constructor's eager session.
     const connecting = transport
       .request(ORCHESTRATION_WS_METHODS.subscribeShell, {})
       .catch(() => null);
@@ -1724,8 +1687,7 @@ describe("WsTransport", () => {
     internals.probeFeatureConnection = probe;
     await internals.createSession().clientPromise;
 
-    // Reconnect on the same server generation opens exactly one new socket and
-    // performs no renegotiation round trip — only the liveness probe.
+    // reconnect on the same server generation opens one socket and skips renegotiation — only the liveness probe
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(probe).toHaveBeenCalledTimes(1);
     expect(sockets).toHaveLength(2);
@@ -1753,8 +1715,7 @@ describe("WsTransport", () => {
     internals.latestPushByChannel.set("server.welcome", { stale: true });
     internals.sequence = 7;
 
-    // A failed session clears the cache (probe or socket failure), so the next
-    // reconnect renegotiates and lands on the restarted server generation.
+    // a failed session clears the cache so the next reconnect renegotiates onto the restarted generation
     internals.compatibility = null;
     const restarted = { ...NEGOTIATION_RESULT, serverInstanceId: "server-instance-2" };
     fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, restarted)));

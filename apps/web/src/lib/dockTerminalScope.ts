@@ -1,14 +1,7 @@
-// FILE: dockTerminalScope.ts
-// Purpose: Derive a stable, isolated terminal scope id for right-dock terminals.
-// Layer: Terminal scope helpers
-// Exports: dock terminal scope prefix + id factory shared by the dock pane and cleanup.
-
 import type { ThreadId } from "@synara/contracts";
 import { dockTerminalScopeId } from "@synara/shared/terminalThreads";
 
-// Right-dock terminals run as an independent session set from the bottom drawer.
-// They reuse the per-thread terminal store/runtime keyed by this synthetic scope so
-// xterm instances never collide with the host thread's drawer terminals.
+// dock terminals run as an independent session set reusing the per-thread store/runtime keyed by this synthetic scope so xterms never collide with the host thread's drawer terminals
 export { DOCK_TERMINAL_SCOPE_PREFIX } from "@synara/shared/terminalThreads";
 
 export function dockTerminalThreadId(hostThreadId: ThreadId): ThreadId {

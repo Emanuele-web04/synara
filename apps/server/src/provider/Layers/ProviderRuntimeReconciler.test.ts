@@ -162,9 +162,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
       yield* reconciler.reconcileNow;
     }).pipe(Effect.provide(layer), Effect.runPromise);
 
-    // Session repair dispatches first so a partial failure still unsticks the
-    // thread, and `updatedAt` is the dispatch time rather than the terminal
-    // session's original timestamp (which would freeze the staleness clock).
+    // session repair dispatches first so a partial failure still unsticks the thread; updatedAt is dispatch time, not the terminal session's timestamp (which would freeze the staleness clock)
     expect(commands.map((command) => command.type)).toEqual([
       "thread.session.set",
       "thread.activity.append",

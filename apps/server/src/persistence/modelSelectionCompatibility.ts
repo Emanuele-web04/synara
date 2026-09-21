@@ -1,8 +1,3 @@
-// FILE: modelSelectionCompatibility.ts
-// Purpose: Normalizes persisted model-selection JSON from older/newer app builds.
-// Layer: Persistence compatibility helper
-// Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
-
 import { MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
 
 type ModelProviderKind =
@@ -45,7 +40,7 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-// Imported instance ids may be runtime names rather than Synara provider literals.
+// imported instance ids may be runtime names rather than provider literals
 function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   const lowerLabel = label.toLowerCase();
   if (/(^|[^a-z0-9])pi([^a-z0-9]|$)/u.test(lowerLabel)) {
@@ -75,15 +70,14 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("grok") || lowerLabel.includes("xai") || lowerLabel.includes("x.ai")) {
     return "grok";
   }
-  // Windsurf shares Devin credentials, so its labels attribute to the Devin provider.
+  // Windsurf shares Devin credentials — its labels attribute to the Devin provider
   if (lowerLabel.includes("windsurf")) {
     return "devin";
   }
   if (lowerLabel.includes("droid") || lowerLabel.includes("factory")) {
     return "droid";
   }
-  // Word-boundary match only: a bare substring would also catch unrelated
-  // labels like "speech recognition".
+  // word-boundary match only — a bare substring would catch "speech recognition"
   if (/(^|[^a-z0-9])cognition([^a-z0-9]|$)/u.test(lowerLabel)) {
     return "devin";
   }
@@ -120,8 +114,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     }
   }
   const lowerModel = model.toLowerCase();
-  // Shared Claude/Gemini/OpenAI slugs remain ambiguous without an instance label;
-  // only Factory-exclusive built-ins are safe to attribute to Droid.
+  // shared Claude/Gemini/OpenAI slugs are ambiguous without an instance label — only Factory-exclusive built-ins are safe to attribute to Droid
   if (DROID_ONLY_MODEL_SLUGS.has(lowerModel)) {
     return "droid";
   }
@@ -148,8 +141,7 @@ function readLegacyProviderOptions(
   if (!isRecord(options)) {
     return options;
   }
-  // Selections migrated from a renamed provider (e.g. kilo → opencode) keep
-  // their options scoped under the original provider key.
+  // selections migrated from a renamed provider (kilo → opencode) keep options scoped under the original key
   const providerScopedOptions =
     options[provider] ?? (legacyProvider === undefined ? undefined : options[legacyProvider]);
   return providerScopedOptions === undefined ? options : providerScopedOptions;
@@ -244,8 +236,7 @@ export function normalizePersistedModelSelection(input: unknown): unknown {
     return input;
   }
 
-  // Newer Synara writes provider-less selections as { instanceId, model } and
-  // option rows as [{ id, value }]; Synara stores canonical provider/options objects.
+  // newer builds write { instanceId, model } and option rows [{ id, value }]; this store uses canonical provider/options objects
   return normalizeLegacyModelSelection({
     provider: input.provider ?? input.instanceId,
     model,

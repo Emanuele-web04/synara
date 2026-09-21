@@ -224,8 +224,7 @@ describe("production Effect HTTP routes", () => {
         pushBusReady: true,
         projection: { state: "healthy", hasFailure: false },
       });
-      // /health is unauthenticated: failure detail (which can embed raw event
-      // payloads via pretty-printed decode causes) must never cross this route.
+      // /health is unauthenticated — failure detail (can embed raw event payloads via pretty-printed causes) must never cross this route
       expect(body.projection).not.toHaveProperty("lastFailure");
     });
   });
@@ -394,7 +393,6 @@ describe("production Effect HTTP routes", () => {
       expect(identity.headers.get("vary")).toBe("Accept-Encoding");
       await expect(identity.text()).resolves.toBe(source);
 
-      // No sidecar on disk: fall back to identity even when compression is accepted.
       const noSidecar = await fetch(`${origin}/assets/plain-def456.js`, {
         headers: { "accept-encoding": "gzip, br" },
       });
@@ -402,14 +400,12 @@ describe("production Effect HTTP routes", () => {
       expect(noSidecar.headers.get("content-encoding")).toBeNull();
       await expect(noSidecar.text()).resolves.toBe(source);
 
-      // A specific q=0 exclusion outranks the wildcard.
       const excludedBrotli = await fetch(`${origin}/assets/app-abc123.js`, {
         headers: { "accept-encoding": "br;q=0, *" },
       });
       expect(excludedBrotli.headers.get("content-encoding")).toBe("gzip");
       await expect(excludedBrotli.text()).resolves.toBe(source);
 
-      // Sidecars are a negotiation detail, not addressable resources.
       for (const direct of ["/assets/app-abc123.js.br", "/assets/app-abc123.js.gz"]) {
         const response = await fetch(`${origin}${direct}`);
         expect(response.status, direct).toBe(404);
@@ -425,21 +421,17 @@ describe("production Effect HTTP routes", () => {
     const secretPath = path.join(parentDir, "secret.js");
     writeFileSync(secretPath, "outside root");
     writeFileSync(`${secretPath}.gz`, zlib.gzipSync("outside root"));
-    // Lexically inside the root, physically outside it — the guard must
-    // canonicalize before opening rather than trusting the prefix.
     symlinkSync(secretPath, path.join(staticDir, "assets", "leak.js"));
     symlinkSync(`${secretPath}.gz`, path.join(staticDir, "assets", "leak-sidecar.js.gz"));
     writeFileSync(path.join(staticDir, "assets", "leak-sidecar.js"), "inside root");
 
     await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
-      // The escaping source is refused outright — the containment check runs
-      // before any read, so the link target's bytes never reach the response.
       const escaped = await fetch(`${origin}/assets/leak.js`);
       const escapedBody = await escaped.text();
       expect(escaped.status).toBe(500);
       expect(escapedBody).not.toContain("outside root");
 
-      // A sidecar that escapes is skipped; the in-root source is still served.
+      // an escaping sidecar is skipped; the in-root source is still served
       const sidecarEscape = await fetch(`${origin}/assets/leak-sidecar.js`, {
         headers: { "accept-encoding": "gzip" },
       });
@@ -456,14 +448,12 @@ describe("production Effect HTTP routes", () => {
     writeFileSync(path.join(staticDir, "assets", "plain-def456.js"), source);
 
     await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
-      // No sidecars on disk and identity refused: nothing is servable.
       const refused = await fetch(`${origin}/assets/plain-def456.js`, {
         headers: { "accept-encoding": "identity;q=0" },
       });
       expect(refused.status).toBe(406);
       expect(refused.headers.get("vary")).toBe("Accept-Encoding");
 
-      // Same exclusion, but a sidecar the client accepts exists → 200.
       writeFileSync(path.join(staticDir, "assets", "plain-def456.js.gz"), zlib.gzipSync(source));
       const served = await fetch(`${origin}/assets/plain-def456.js`, {
         headers: { "accept-encoding": "gzip, identity;q=0" },
@@ -492,8 +482,7 @@ describe("production Effect HTTP routes", () => {
       expect(revalidated.status).toBe(304);
       await expect(revalidated.text()).resolves.toBe("");
 
-      // Validators must differ per served encoding: the gzip variant's ETag
-      // cannot satisfy an identity conditional and vice versa.
+      // validators must differ per served encoding — the gzip ETag can't satisfy an identity conditional and vice versa
       const gzipResponse = await fetch(`${origin}/assets/app-abc123.js`, {
         headers: { "accept-encoding": "gzip" },
       });
@@ -539,8 +528,7 @@ describe("production Effect HTTP routes", () => {
     writeFileSync(path.join(parentDir, "secret.js.gz"), zlib.gzipSync("outside root"));
     writeFileSync(path.join(parentDir, "secret.js.br"), zlib.brotliCompressSync("outside root"));
 
-    // fetch() normalizes dot segments away client-side; send the raw request
-    // path so the server's own guard is what gets exercised.
+    // fetch() normalizes dot segments client-side — send the raw path so the server's own guard is exercised
     const rawRequest = (origin: string, rawPath: string) =>
       new Promise<{ status: number; body: string }>((resolve, reject) => {
         const { hostname, port } = new URL(origin);
@@ -562,12 +550,8 @@ describe("production Effect HTTP routes", () => {
       });
 
     await withEffectServer(makeConfig({ staticDir }), { kind: "static" }, async (origin) => {
-      // Dot segments are stripped by URL parsing before the path guard runs,
-      // and percent-encoded separators stay literal filename characters — both
-      // must resolve inside the root (shell fallback) or be rejected outright,
-      // never reach the sibling secret or its sidecars.
-      // Sidecar-shaped request paths 404 outright (they are never addressable),
-      // which also removes them as a traversal target.
+      // dot segments are stripped by URL parsing before the guard runs and percent-encoded separators stay literal filename chars — both must resolve inside the root or be rejected, never reach the sibling secret
+      // sidecar-shaped request paths 404 outright (never addressable), which also removes them as traversal targets
       for (const traversal of [
         "/../secret.js",
         "/../secret.js.gz",

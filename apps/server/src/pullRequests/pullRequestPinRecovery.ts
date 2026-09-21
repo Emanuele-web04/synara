@@ -58,8 +58,7 @@ export function recoverPinnedPullRequests(input: {
   recoveryContexts: ReadonlyArray<PullRequestPinRecoveryContext>;
   repositoryKeysByProject: ReadonlyMap<ProjectId, Set<string>>;
   projectById: ReadonlyMap<ProjectId, OrchestrationProject>;
-  // Deliberately boolean, not a type predicate: callers check values already typed
-  // GitHubCliError, and a predicate would narrow the false branch to `never`.
+  // boolean, not a type predicate — callers check values already typed GitHubCliError
   isGlobalError: (error: unknown) => boolean;
   invalidateReviewMatches: (repository: string, viewer: string) => Effect.Effect<void, never>;
   loadReviewMatches: (
@@ -104,8 +103,7 @@ export function recoverPinnedPullRequests(input: {
       })),
     });
 
-    // Budget unique remote lookups rather than project-local rows. Shared repositories fan one
-    // result out to every owning project without consuming the recovery budget repeatedly.
+    // budget unique remote lookups; shared repos fan one result out to every owning project
     const pinsByLookup = new Map<string, typeof allMissingPins>();
     for (const row of allMissingPins) {
       const recovery = recoveryByRepository.get(row.repositoryKey.trim().toLowerCase());
@@ -238,8 +236,7 @@ export function recoverPinnedPullRequests(input: {
       ),
     );
 
-    // Only an exact PR lookup can prove remote deletion. Permission, auth, timeout, and generic
-    // 404 failures preserve the pin for a later retry.
+    // only an exact PR lookup proves remote deletion — permission/auth/timeout/generic-404 preserve the pin
     const definitivelyMissingPins = missingPins.filter((row) => {
       const recovery = recoveryByRepository.get(row.repositoryKey.trim().toLowerCase());
       if (!recovery) return false;

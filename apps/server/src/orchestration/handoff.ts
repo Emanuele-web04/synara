@@ -4,8 +4,7 @@ import { unicodeSafeEndOffset } from "@synara/shared/text";
 const RECENT_MESSAGE_COUNT = 6;
 const EARLIER_MESSAGE_CHAR_LIMIT = 320;
 const RECENT_MESSAGE_CHAR_LIMIT = 2_400;
-// Hard ceiling for any bootstrap transcript: it replays as one uncached user
-// message, so long threads must drop their oldest summaries rather than grow.
+// hard ceiling — it replays as one uncached user message, so long threads drop their oldest summaries rather than grow
 const BOOTSTRAP_TRANSCRIPT_CHAR_BUDGET = 32_000;
 
 function normalizeMessageText(value: string): string {
@@ -141,20 +140,12 @@ function buildImportedMessagesBootstrapText(input: {
       .join("\n\n");
 
   if (earlierMessages.length > 0) {
-    // Keep the newest earlier-message summaries that fit the remaining budget;
-    // older ones are dropped so long threads cannot inflate the bootstrap.
+    // keep the newest summaries that fit — older ones drop so long threads can't inflate the bootstrap
     let remaining =
       maxChars -
       sections.reduce((total, section) => total + section.length + 2, 0) -
       (recentSection.length + 2);
-    // Reserve space for the omission header up front so accepted summary
-    // lines can never push the assembled section past `remaining`. The
-    // header only shrinks as more lines are accepted (omittedCount falls
-    // monotonically from earlierMessages.length toward 0, and shorter/no
-    // counts never produce a longer header), so sizing the reservation off
-    // the largest possible omitted count is a true worst-case bound, not
-    // just a conservative guess. The extra `+ 1` covers the "\n" that joins
-    // the header to the summary lines when at least one line is kept.
+    // reserve the omission header up front so accepted lines can't push past `remaining`; sizing off the largest possible omitted count is a true worst-case bound (the header only shrinks as lines accept); the +1 covers the joining newline
     remaining -= earlierSummaryHeader(earlierMessages.length).length + 1;
     const summaryLines: string[] = [];
     for (let index = earlierMessages.length - 1; index >= 0; index -= 1) {

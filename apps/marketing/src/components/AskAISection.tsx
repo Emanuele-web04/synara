@@ -1,9 +1,3 @@
-// FILE: AskAISection.tsx
-// Purpose: Lets visitors ask external AI assistants whether Synara fits them.
-// Layer: Marketing UI section
-// Exports: AskAISection
-// Depends on: react-icons brand glyphs and homepage design tokens
-
 "use client";
 
 import type { MouseEvent } from "react";
@@ -17,7 +11,6 @@ interface AiLink {
   readonly webHref: string;
   readonly icon: IconType;
   readonly iconClass: string;
-  /** Copy the prompt on click, for assistants that cannot accept it by URL. */
   readonly copyPrompt?: boolean;
 }
 
@@ -42,8 +35,7 @@ const aiLinks: readonly AiLink[] = [
     iconClass: "text-[#D97757]",
   },
   {
-    // Gemini supports no prompt prefill and no app-scheme deep link, so this one
-    // copies the prompt to the clipboard and opens the web app for a paste.
+    // Gemini supports no prompt prefill and no app-scheme deep link — copy the prompt to the clipboard and open the web app for a paste
     label: "Ask Gemini",
     appHref: "https://gemini.google.com/app",
     webHref: "https://gemini.google.com/app",
@@ -97,8 +89,6 @@ function openMobileDeepLink(
   }, 900);
 }
 
-// Gemini cannot receive the prompt through the URL, so it is copied instead and
-// the button reports that for a moment before falling back to its normal label.
 async function copyPromptToClipboard(): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(ASK_AI_PROMPT);

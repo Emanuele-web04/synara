@@ -2,8 +2,7 @@ import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { columnExists } from "./schemaHelpers.ts";
 
-// Preserve existing rows and projector cursors. Streaming bodies move lazily
-// into chunks; completed/imported history requires no backfill.
+// streaming bodies move lazily into chunks; completed/imported history needs no backfill
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   if (!(yield* columnExists(sql, "projection_thread_messages", "text_event_sequence"))) {

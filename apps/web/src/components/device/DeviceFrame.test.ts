@@ -6,16 +6,13 @@ describe("side button controls", () => {
   it("presses every nub the hardware has", () => {
     // Lock lands: it blanks the screen and shows up in SpringBoard's log.
     expect(NUB_ACTIONS.power).toMatchObject({ label: "Lock", button: "lock" });
-    // Volume travels as a HID Consumer-page event rather than an Indigo button
-    // source, which is how Simulator.app's own menu items send it. Verified
-    // against the volume HUD in the framebuffer.
+    // volume travels as a HID Consumer-page event rather than an Indigo button source — how Simulator.app's menu items send it; verified against the framebuffer HUD
     expect(NUB_ACTIONS.volumeUp).toMatchObject({ button: "volume-up" });
     expect(NUB_ACTIONS.volumeDown).toMatchObject({ button: "volume-down" });
   });
 
   it("offers no hint for a nub that works", () => {
-    // A hint exists to answer "why did nothing happen?", so a working control
-    // must not carry one.
+    // a hint exists to answer "why did nothing happen?" — a working control must not carry one
     for (const nub of ["power", "volumeUp", "volumeDown"]) {
       expect(NUB_ACTIONS[nub]?.hint).toBeUndefined();
     }
@@ -33,8 +30,7 @@ describe("deviceKindFor", () => {
   });
 
   it("trusts the family over a name that disagrees with it", () => {
-    // The name heuristic only holds while every Apple tablet says "iPad"; the
-    // profile's family is what makes a rename harmless.
+    // the name heuristic only holds while every Apple tablet says "iPad"; the profile's family is what makes a rename harmless
     expect(
       deviceKindFor({ platform: "ios-simulator", name: "Magic Slate", family: "tablet" }),
     ).toBe("iPad");
@@ -52,8 +48,7 @@ describe("deviceKindFor", () => {
 
 describe("screenGeometry", () => {
   it("takes its aspect from the device's own pixel dimensions", () => {
-    // An iPhone SE is far squarer than an iPhone 17 Pro, and the chassis has to
-    // follow the moment the device is picked rather than after it streams.
+    // an iPhone SE is far squarer than an iPhone 17 Pro — the chassis must follow the moment the device is picked, not after it streams
     const tall = screenGeometry("iPhone", 1206, 2622);
     const short = screenGeometry("iPhone", 750, 1334);
 

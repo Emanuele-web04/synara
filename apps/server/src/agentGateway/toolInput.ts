@@ -127,11 +127,7 @@ export function parseProviderKind(raw: string): ProviderKind {
   );
 }
 
-/**
- * Read an exact `{ provider, model, options? }` target argument. Unknown option
- * keys are preserved so `resolveAgentGatewayTarget` rejects them instead of the
- * decoder silently dropping a typo.
- */
+/** unknown option keys are preserved so the resolver rejects them rather than the decoder dropping a typo */
 export function readModelSelectionArg(
   args: Record<string, unknown>,
   name: string,

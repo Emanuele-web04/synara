@@ -1,16 +1,5 @@
-/**
- * PtyAdapter - Terminal PTY adapter service contract.
- *
- * Defines the process primitives required by terminal session management
- * without binding to a specific PTY implementation.
- *
- * @module PtyAdapter
- */
 import { Effect, Schema, ServiceMap } from "effect";
 
-/**
- * PtyError - Error type for PTY adapter operations.
- */
 export class PtySpawnError extends Schema.TaggedErrorClass<PtySpawnError>()("PtySpawnError", {
   adapter: Schema.String,
   message: Schema.String,
@@ -27,9 +16,9 @@ export interface PtyProcess {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(signal?: string): void;
-  /** Pause reading from the PTY (backpressure). No-op if unsupported. */
+  /** pause reading (backpressure); no-op if unsupported */
   pause(): void;
-  /** Resume reading from the PTY after a pause. No-op if unsupported. */
+  /** resume after a pause; no-op if unsupported */
   resume(): void;
   onData(callback: (data: string) => void): () => void;
   onExit(callback: (event: PtyExitEvent) => void): () => void;
@@ -44,19 +33,10 @@ export interface PtySpawnInput {
   env: NodeJS.ProcessEnv;
 }
 
-/**
- * PtyAdapterShape - Service API for spawning and controlling PTY processes.
- */
 export interface PtyAdapterShape {
-  /**
-   * Spawn a PTY process for a terminal session.
-   */
   spawn(input: PtySpawnInput): Effect.Effect<PtyProcess, PtySpawnError>;
 }
 
-/**
- * PtyAdapter - Service tag for PTY process integration.
- */
 export class PtyAdapter extends ServiceMap.Service<PtyAdapter, PtyAdapterShape>()(
   "synara/terminal/Services/PTY/PtyAdapter",
 ) {}

@@ -288,7 +288,6 @@ it("reuses an unconfirmed request after remount and persisted state hydration", 
   await first.result.current.compact();
   const original = mocks.dispatchCommand.mock.calls[0]![0];
   await first.unmount();
-  // Simulate a page reload: the persisted request is all the new hook inherits.
   const saved = sessionStorage.getItem("synara:claude-compaction-requests")!;
   useClaudeCompactionRequests.setState({ requests: {} });
   sessionStorage.setItem("synara:claude-compaction-requests", saved);

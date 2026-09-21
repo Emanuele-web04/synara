@@ -1,9 +1,3 @@
-// FILE: desktopClipboard.ts
-// Purpose: Tiny renderer-side wrapper for desktop clipboard image writes exposed by
-// Electron preload. Browser-only clipboard fallbacks live with the calling feature.
-// Layer: Web desktop bridge utility
-// Exports: copyPngBlobToDesktopClipboard
-
 export async function copyPngBlobToDesktopClipboard(blob: Blob): Promise<boolean> {
   const writeImagePngDataUrl =
     typeof window === "undefined"

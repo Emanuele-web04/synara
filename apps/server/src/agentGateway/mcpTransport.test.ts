@@ -258,9 +258,7 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
                     },
                     { once: true },
                   );
-                  // Wake the Stop path before tryPromise returns, reproducing
-                  // the re-entrant window where a direct interrupt would miss
-                  // Effect's not-yet-installed AbortController finalizer.
+                  // wake Stop before tryPromise returns — the re-entrant window where a direct interrupt misses the not-yet-installed AbortController finalizer
                   Deferred.doneUnsafe(hostStarted, Effect.void);
                 });
               },
@@ -296,8 +294,7 @@ describe("makeAgentGatewayMcpTransport cancellation", () => {
         yield* Deferred.await(hostAbortObserved);
         assert.deepEqual(yield* Fiber.join(request), { status: 202 });
 
-        // A detached cell can race and issue the request after Stop. The turn
-        // tombstone must reject it before the handler starts.
+        // a detached cell can race and issue the request after Stop — the turn tombstone must reject it
         assert.deepEqual(yield* post(transport, "token-1", { ...body, id: "late-request" }), {
           status: 202,
         });

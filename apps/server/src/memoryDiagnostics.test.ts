@@ -1,7 +1,3 @@
-// FILE: memoryDiagnostics.test.ts
-// Purpose: Verifies server memory diagnostic payloads and warning thresholds.
-// Layer: Server observability tests
-
 import { describe, expect, it } from "vitest";
 
 import {

@@ -1,8 +1,3 @@
-// FILE: skillsSettingsModel.ts
-// Purpose: Groups duplicate skill copies for Settings -> Skills so shared names render once.
-// Layer: Settings UI logic
-// Exports: origin metadata, canonical skill grouping, and section ordering helpers.
-
 import type { ProviderKind, ProviderSkillDescriptor } from "@synara/contracts";
 import { PROVIDER_DISPLAY_NAMES } from "@synara/contracts";
 import { DEFAULT_PROVIDER_ORDER } from "~/providerOrdering";
@@ -127,8 +122,7 @@ function sectionRank(section: string): number {
   return originRank(section);
 }
 
-// Creates one canonical row per normalized skill name. Duplicate provider copies
-// stay visible as sources instead of letting the first origin hide the rest.
+// one canonical row per normalized skill name; duplicate provider copies stay visible as sources instead of the first origin hiding the rest
 export function buildSettingsSkillGroups(
   skills: ReadonlyArray<ProviderSkillDescriptor>,
 ): SettingsSkillGroup[] {

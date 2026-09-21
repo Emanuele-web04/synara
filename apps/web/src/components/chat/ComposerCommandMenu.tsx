@@ -109,8 +109,7 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
     return `/${item.command}`;
   }
 
-  // Right-align the parent path so many same-named entries (e.g. worktrees) stay
-  // distinguishable without crowding the name column.
+  // Right-align the parent path so many same-named entries (e.g. worktrees) stay distinguishable without crowding the name column.
   if (item.type === "path") {
     return item.description.length > 0 ? item.description : null;
   }
@@ -119,8 +118,7 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
 }
 
 function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
-  // The menu is driven from the composer, so focus never reaches the warning icon:
-  // the row itself has to say why the command will not work.
+  // The menu is driven from the composer, so focus never reaches the warning icon: the row itself has to say why the command will not work.
   if (item.type === "provider-native-command" && item.notice) {
     return item.notice.summary;
   }
@@ -423,9 +421,7 @@ export function ComposerCommandMenu(props: {
   );
 }
 
-// Files mirror the recap / diff changed-files treatment (FileEntryIcon at
-// size-3.5 with the same dimmed foreground) so a file reads identically whether
-// it appears in a turn summary or in the composer.
+// Files mirror the recap / diff changed-files treatment (FileEntryIcon at size-3.5 with the same dimmed foreground) so a file reads identically whether it appears in a turn summary or in the composer.
 const COMPOSER_COMMAND_ITEM_FILE_ICON_CLASSNAME =
   "size-3.5 text-[var(--color-text-foreground)] opacity-70 dark:opacity-80";
 
@@ -467,9 +463,7 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
     case "slash-command":
       return commandMenuSlashGlyph(item.command, TerminalIcon);
     case "provider-native-command":
-      // Provider native commands surface skills (e.g. Claude exposes skills as
-      // slash commands), so default to the skill block glyph used for skill
-      // tokens in the composer/timeline — named commands still keep their icon.
+      // Provider native commands surface skills (e.g. Claude exposes skills as slash commands), so default to the skill block glyph used for skill tokens in the composer/timeline — named commands still keep their icon.
       return commandMenuSlashGlyph(item.command, SkillCubeIcon);
     case "model":
       return <BrainIcon className={cls} />;

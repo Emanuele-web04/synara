@@ -1,9 +1,3 @@
-// FILE: WorkspaceSearchPalette.browser.tsx
-// Purpose: Browser regressions for the Cmd+P workspace search palette:
-//          result rows, status semantics (prompt/no-results/error outside the
-//          listbox), selection routing, and the open-time index prewarm.
-// Layer: Focused component integration tests
-
 import "../index.css";
 
 import type { NativeApi } from "@synara/contracts";
@@ -57,9 +51,7 @@ async function renderPalette(mode: WorkspaceSearchPaletteMode) {
   return handlers;
 }
 
-// No manual DOM cleanup: the palette renders through a Base UI portal, and
-// wiping document.body would pull the portal out from under React before
-// vitest-browser-react's automatic unmount runs (removeChild crashes).
+// No manual DOM cleanup: the palette renders through a Base UI portal, and wiping document.body would pull the portal out from under React before vitest-browser-react's automatic unmount runs (removeChild crashes).
 
 it("prewarms the search index on open and shows the prompt outside the listbox", async () => {
   const prewarmSearchIndex = vi.fn().mockResolvedValue({ started: true });
@@ -75,8 +67,7 @@ it("prewarms the search index on open and shows the prompt outside the listbox",
       expect(prewarmSearchIndex).toHaveBeenCalledWith({ cwd: WORKSPACE_ROOT }),
     );
     await expect.element(page.getByText("Type to search for files")).toBeVisible();
-    // The status copy must never live inside role="listbox" — assistive tech
-    // treats listbox children as options.
+    // The status copy must never live inside role="listbox" — assistive tech treats listbox children as options.
     const listbox = document.querySelector('[role="listbox"]');
     expect(listbox?.textContent ?? "").not.toContain("Type to search for files");
     expect(searchEntries).not.toHaveBeenCalled();

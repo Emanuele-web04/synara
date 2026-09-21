@@ -1,13 +1,3 @@
-// FILE: PullRequestCommentComposer.tsx
-// Purpose: Inline "Leave a comment" pill at the bottom of the detail panel's Comments section.
-//          Posts an issue comment through the gh-backed comment RPC as the authenticated GitHub
-//          user (hence the GitHub glyph in the leading slot), then invalidates the detail query
-//          so the new comment appears on the next refetch. Enter submits; Shift+Enter breaks a
-//          line (comments accept markdown). Successful or ambiguous submissions revalidate both
-//          the detail and repository list scopes so comment data and updated ordering converge.
-// Layer: Pull request presentation
-// Exports: PullRequestCommentComposer
-
 import type { PullRequestDetail } from "@synara/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
@@ -22,14 +12,12 @@ export function PullRequestCommentComposer({ detail }: { detail: PullRequestDeta
   const queryClient = useQueryClient();
   const mutation = useMutation(pullRequestCommentMutationOptions(queryClient));
   const [body, setBody] = useState("");
-  // Synchronous re-entrancy lock: mutation.isPending updates on React's schedule, which is
-  // too late to stop a rapid double Enter from posting the comment twice.
+  // synchronous re-entrancy lock: mutation.isPending updates on React's schedule, too late to stop a rapid double Enter posting twice
   const submittingRef = useRef(false);
   const trimmed = body.trim();
   const canSubmit = trimmed.length > 0 && !mutation.isPending;
 
-  // Promise chain instead of async/try-catch-finally: React Compiler does not
-  // yet support try/finally, and it would skip optimizing this whole component.
+  // promise chain instead of async/try-finally: React Compiler doesn't support try/finally
   const submit = () => {
     if (!canSubmit || submittingRef.current) return;
     submittingRef.current = true;
@@ -78,8 +66,7 @@ export function PullRequestCommentComposer({ detail }: { detail: PullRequestDeta
             void submit();
           }
         }}
-        // font-system-ui overrides the global `textarea { font-family: mono }` reset — this is
-        // UI chrome, not code, exactly like the chat composer's editor.
+        // font-system-ui overrides the global `textarea { font-family: mono }` reset — UI chrome, not code
         className={cn(
           PR_BODY_TEXT_CLASS_NAME,
           "font-system-ui min-w-0 flex-1 resize-none bg-transparent py-1.5 outline-none placeholder:text-muted-foreground disabled:opacity-60",

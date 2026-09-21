@@ -1,13 +1,4 @@
-// FILE: announcementSheetSlot.ts
-// Purpose: One shared slot so startup announcement sheets open one at a time.
-// Layer: Web UI store
-//
-// Each announcement decides to open from its own asynchronous probe (desktop bridge,
-// server config), so no fixed order can be relied on. The first sheet that wants to
-// open takes the slot; the others wait and open after it is dismissed. Confirming a
-// sheet starts its follow-on flow (a dialog, a Settings page), so the waiting sheets
-// stay closed for the rest of this launch instead of covering that flow; they are not
-// acknowledged, so they come back on the next one.
+// no fixed order can be relied on (each sheet opens from its own async probe) — first sheet takes the slot, others wait; confirming starts a follow-on flow so waiting sheets stay closed for this launch (not acknowledged → back next launch)
 
 import { useEffect, useId } from "react";
 import { create } from "zustand";

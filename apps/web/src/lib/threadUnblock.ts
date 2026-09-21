@@ -1,11 +1,5 @@
-// FILE: threadUnblock.ts
-// Purpose: Abandons the provider delivery blockers that quarantine a thread.
-// Layer: Web orchestration helper
-// Exports: unblockThreadFromClient, describeThreadUnblockResult, isProviderDeliveryReconciliationConflict, type ThreadUnblockResult
-
 import type { NativeApi, ThreadId } from "@synara/contracts";
 
-/** Code the server returns when a blocker no longer matches the requested state. */
 export const PROVIDER_DELIVERY_RECONCILIATION_CONFLICT_CODE =
   "PROVIDER_DELIVERY_RECONCILIATION_CONFLICT";
 
@@ -17,11 +11,8 @@ type ThreadUnblockApi = Pick<
 >;
 
 export type ThreadUnblockResult =
-  /** At least one blocker was abandoned, so the thread accepts commands again. */
   | { readonly kind: "unblocked"; readonly reconciledCount: number }
-  /** Nothing was blocking the thread anymore. */
   | { readonly kind: "already-clear" }
-  /** Every blocker changed state concurrently (another client or a restart settled it). */
   | { readonly kind: "resolved-elsewhere" };
 
 /**
@@ -37,15 +28,7 @@ export function isProviderDeliveryReconciliationConflict(error: unknown): boolea
   );
 }
 
-/**
- * Settles every delivery that keeps a thread quarantined by abandoning it: the
- * ambiguous command is never replayed (it may have reached the provider), but
- * the server replays the side effects that were skipped after it, so messages
- * sent while the thread was blocked are dispatched again.
- *
- * Blockers are reconciled oldest-first because abandoning one replays the
- * commands that follow it, which can settle the later blockers on its own.
- */
+// the ambiguous command is never replayed (it may have reached the provider) but the server replays skipped side effects so messages sent while blocked dispatch again; blockers reconcile oldest-first since abandoning one replays commands after it
 export async function unblockThreadFromClient(
   api: ThreadUnblockApi,
   threadId: ThreadId,

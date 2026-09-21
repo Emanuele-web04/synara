@@ -1,7 +1,3 @@
-// FILE: ProjectScriptsControl.browser.tsx
-// Purpose: Browser regressions for the chat-header project action control.
-// Layer: Browser UI test
-
 import "../index.css";
 
 import { type ProjectScript, type ResolvedKeybindingsConfig } from "@synara/contracts";

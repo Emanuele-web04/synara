@@ -185,12 +185,7 @@ export function useChatKeyboardShortcuts({
         onInterruptFromStopControl();
         return;
       }
-      // Ctrl+B mirrors the native CLI: background all foreground running
-      // subagents. Literal Ctrl on every platform, but stays out of the
-      // terminal, where Ctrl+B is real shell input (readline cursor-back,
-      // tmux prefix), and out of text-editing surfaces, where Ctrl+B is the
-      // native macOS "move cursor back" binding. Silent no-op (event
-      // untouched) when nothing qualifies.
+      // Ctrl+B backgrounds all foreground subagents like the native CLI — but stays out of the terminal (readline/tmux prefix) and text-editing surfaces (native macOS binding); silent no-op when nothing qualifies
       if (
         event.ctrlKey &&
         !event.metaKey &&
@@ -392,10 +387,7 @@ export function useChatKeyboardShortcuts({
           commitAndPushTriggerRef.current();
           return;
         }
-        // No registered trigger inside a git-enabled thread means the action just
-        // isn't runnable right now (clean tree, behind upstream, action in flight)
-        // — tell the user instead of eating the chord silently. Outside git threads
-        // the chord falls through untouched.
+        // no registered trigger in a git-enabled thread means the action isn't runnable now — tell the user instead of eating the chord; outside git threads it falls through
         if (showGitActions && isGitRepo) {
           event.preventDefault();
           event.stopPropagation();
@@ -418,8 +410,7 @@ export function useChatKeyboardShortcuts({
       if (command === "device.toggle") {
         event.preventDefault();
         event.stopPropagation();
-        // Unlike the browser this works in a plain tab, but only against a macOS
-        // server; the surface leaves the handler unwired when it cannot host one.
+        // works in a plain tab but only against a macOS server; the surface leaves the handler unwired when it can't host one
         onToggleDevicePanel?.();
         return;
       }
@@ -433,8 +424,7 @@ export function useChatKeyboardShortcuts({
         return;
       }
 
-      // The handler already bailed out when no thread is open, so the active thread id
-      // is always the one the user is looking at (the focused pane when split).
+      // the handler already bailed when no thread is open, so the active thread id is always the one the user is looking at
       if (command === "thread.copyId") {
         event.preventDefault();
         event.stopPropagation();

@@ -1,11 +1,3 @@
-// FILE: MessagesTimeline.tailAnchor.browser.tsx
-// Purpose: Browser regression for send-time anchoring — a just-sent user message
-//          aligns just below the viewport top (matching the container's own top
-//          padding), stays pinned while the response streams below it, keeps its
-//          reserve when the turn ends, hands off to follow-the-tail once the
-//          response overflows, and only collapses when the anchor is cleared.
-// Layer: Vitest browser tests
-
 import "../../index.css";
 
 import { MessageId } from "@synara/contracts";
@@ -21,8 +13,7 @@ type TimelineEntries = ReturnType<typeof deriveTimelineEntries>;
 
 const VIEWPORT_HEIGHT_PX = 420;
 const BASE_BOTTOM_INSET_PX = 64;
-// maintainScrollAtEnd re-sticks within its threshold rather than to the exact
-// pixel bottom; anything within this tolerance counts as following the tail.
+// maintainScrollAtEnd re-sticks within its threshold rather than to the exact pixel bottom; anything within this tolerance counts as following the tail.
 const AUTO_FOLLOW_TOLERANCE_PX = 96;
 const FIRST_SENT_MESSAGE_ID = "sent-user-message";
 const SECOND_SENT_MESSAGE_ID = "sent-user-message-2";
@@ -117,8 +108,7 @@ function TailAnchorTimeline({ handleRef }: { handleRef: { current: HarnessHandle
       setIsWorking(true);
       setActiveTurnStartedAt("2026-03-17T19:12:29.000Z");
     },
-    // Turn end keeps the anchor: the reserve must persist so the settled
-    // transcript does not jump back to its true bottom.
+    // Turn end keeps the anchor: the reserve must persist so the settled transcript does not jump back to its true bottom.
     finishTurn: () => {
       setFollowLiveOutput(false);
     },
@@ -224,8 +214,7 @@ describe("MessagesTimeline tail anchor", () => {
         .poll(() => distanceFromBottomPx(handle()), { timeout: 5_000 })
         .toBeLessThanOrEqual(AUTO_FOLLOW_TOLERANCE_PX);
 
-      // The anchored message keeps the same top gap a chat's first message gets:
-      // the scroll container's own top padding.
+      // The anchored message keeps the same top gap a chat's first message gets: the scroll container's own top padding.
       const topGapPx =
         Number.parseFloat(getComputedStyle(getScrollContainer(handle())).paddingTop) || 0;
       const expectAnchoredAtTopGap = (messageId: string) =>
@@ -239,9 +228,7 @@ describe("MessagesTimeline tail anchor", () => {
           )
           .toBe(true);
 
-      // 1) Send: the native end space reserves room and the new message slides
-      // directly to its anchored coordinate. It must never pass that coordinate
-      // and then spring back while the virtualized tail finishes measuring.
+      // 1) Send: the native end space reserves room and the new message slides directly to its anchored coordinate. It must never pass that coordinate and then spring back while the virtualized tail finishes measuring.
       handle().send(FIRST_SENT_MESSAGE_ID);
 
       const initialSlideOffsets: number[] = [];
@@ -259,16 +246,9 @@ describe("MessagesTimeline tail anchor", () => {
       expect(getSpacer().getBoundingClientRect().height).toBe(BASE_BOTTOM_INSET_PX);
       await expectAnchoredAtTopGap(FIRST_SENT_MESSAGE_ID);
 
-      // 2) Short streaming: response grows into the reserve; the message stays
-      // pinned. Sampled every frame, because the regression this guards is a
-      // single-frame hop: LegendList positions a freshly appended row from
-      // `estimatedItemSize`, and sizing the reserve from that frame moves the
-      // scroll max, which jerks the anchored message and springs it back.
+      // sampled every frame — the regression is a single-frame hop: LegendList positions a fresh row from estimatedItemSize, and sizing the reserve from that frame moves scroll max, jerking the anchored message
       const container = getScrollContainer(handle());
-      // The baseline has to be taken once the slide has actually come to rest:
-      // the message eases into its coordinate, so a scroll position sampled
-      // while it is still arriving would charge the last pixels of the slide to
-      // the streaming phase below.
+      // The baseline has to be taken once the slide has actually come to rest: the message eases into its coordinate, so a scroll position sampled while it is still arriving would charge the last pixels of the slide to the streaming phase below.
       await expect
         .poll(
           () => {
@@ -281,6 +261,7 @@ describe("MessagesTimeline tail anchor", () => {
       const scrollTopBeforeStream = container.scrollTop;
       const reserveBeforeStream = reservePx();
 
+      // 2) Short streaming: the response grows into the reserve; the anchored message stays pinned.
       handle().growStream(FIRST_STREAMING_MESSAGE_ID, 2);
       const perFrameOffsets: number[] = [];
       for (let index = 0; index < 24; index += 1) {
@@ -313,15 +294,12 @@ describe("MessagesTimeline tail anchor", () => {
       handle().clearAnchor();
       await expect.poll(() => reservePx(), { timeout: 5_000 }).toBe(0);
 
-      // 5) A new send re-anchors, and an overflowing response hands off to
-      // follow-the-tail with the reserve back at zero.
+      // 5) A new send re-anchors, and an overflowing response hands off to follow-the-tail with the reserve back at zero.
       handle().send(SECOND_SENT_MESSAGE_ID);
       void handle().listRef.current?.scrollToEnd?.({ animated: true });
       await expectAnchoredAtTopGap(SECOND_SENT_MESSAGE_ID);
 
-      // Streamed in chunks, the way a real turn arrives: the transcript has to
-      // stay at the live edge as it grows past the reserve, rather than being
-      // yanked to the bottom in one jump.
+      // Streamed in chunks, the way a real turn arrives: the transcript has to stay at the live edge as it grows past the reserve, rather than being yanked to the bottom in one jump.
       for (let chunk = 0; chunk < 10; chunk += 1) {
         handle().growStream(SECOND_STREAMING_MESSAGE_ID, 4);
         await settleFrames(2);
@@ -371,9 +349,7 @@ describe("MessagesTimeline tail anchor", () => {
           handle().finishTurn();
         }
         await settleFrames(1);
-        // Sample after the frame's other rAF callbacks and mutation observers.
-        // Reading inside rAF can catch a row reposition before its pre-paint
-        // anchor correction, even though that intermediate position never paints.
+        // Sample after the frame's other rAF callbacks and mutation observers. Reading inside rAF can catch a row reposition before its pre-paint anchor correction, even though that intermediate position never paints.
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
         const offset = anchorTopOffsetPx(handle(), FIRST_SENT_MESSAGE_ID);
         if (offset !== null) {
@@ -398,11 +374,7 @@ describe("MessagesTimeline tail anchor", () => {
     }
   });
 
-  // Regression: visible-content preservation must stay disabled for the full
-  // lifetime of a send anchor. Thinking and the "Working for" header are rows
-  // inserted below that anchor; letting the list start a second preservation
-  // cycle for those inserts resets scrollTop after the sent row has reached the
-  // top and visibly juggles it through the pre-turn phases.
+  // regression: visible-content preservation must stay disabled for the full send-anchor lifetime — a second cycle for rows inserted below resets scrollTop after the sent row reached the top
   it("keeps the sent message stable while pre-turn status rows land mid-slide", async () => {
     const handleRef: { current: HarnessHandle | null } = { current: null };
     const screen = await render(<TailAnchorTimeline handleRef={handleRef} />);
@@ -425,9 +397,7 @@ describe("MessagesTimeline tail anchor", () => {
 
       handle().send(FIRST_SENT_MESSAGE_ID);
 
-      // The pre-turn status rows land while the anchored slide is still in
-      // flight, exactly like a real send: Thinking appears on the server ack,
-      // the "Working for" header once the turn starts, then text streams.
+      // The pre-turn status rows land while the anchored slide is still in flight, exactly like a real send: Thinking appears on the server ack, the "Working for" header once the turn starts, then text streams.
       const samples: Array<number | null> = [];
       for (let frame = 0; frame < 90; frame += 1) {
         if (frame === 3) handle().showThinking();

@@ -1,9 +1,3 @@
-// FILE: KanbanOverview.tsx
-// Purpose: Top kanban layer — one column per project (In Progress → Draft → Done cards);
-//          clicking a project drills into its full 3-column board.
-// Layer: UI component (read-only; drag & drop lives in the project board)
-// Exports: KanbanOverview
-
 import type { ProjectId } from "@synara/contracts";
 import { Button } from "~/components/ui/button";
 import { ChevronRightIcon, PlusIcon } from "~/lib/icons";
@@ -110,8 +104,7 @@ export function KanbanOverview({
   prByThreadId: KanbanCardPrLookup;
   nowMs?: number;
 }) {
-  // Projects without any cards are pure noise on the overview; their boards stay
-  // reachable through /kanban/$projectId if linked directly.
+  // projects without cards are pure noise on the overview; their boards stay reachable via /kanban/$projectId
   const visibleProjects = board.projects.filter((projectBoard) => projectBoard.totalCount > 0);
 
   if (visibleProjects.length === 0) {

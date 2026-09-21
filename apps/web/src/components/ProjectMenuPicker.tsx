@@ -1,6 +1,3 @@
-// FILE: ProjectMenuPicker.tsx
-// Purpose: Shared searchable project picker, grouped by the active and other Spaces.
-
 import type { ProjectId, SpaceId } from "@synara/contracts";
 import { Fragment, type ReactElement, type ReactNode, useMemo, useState } from "react";
 
@@ -39,7 +36,6 @@ export function ProjectMenuPicker(props: {
   onProjectIdChange: (projectId: ProjectId) => void;
   /** Rendered through MenuTrigger's `render` slot so each surface owns its trigger chrome. */
   trigger: ReactElement;
-  /** Content merged into the trigger element (label, chevron, …). */
   children?: ReactNode;
   align?: "start" | "center" | "end";
   popupClassName?: string;
@@ -84,8 +80,7 @@ function ProjectMenuPickerList(props: {
   const groupedOptions = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     const projectById = new Map(projects.map((project) => [project.id, project] as const));
-    // A caller may pass its own space assignment (e.g. an optimistic move); otherwise the
-    // project snapshot is the source of truth.
+    // A caller may pass its own space assignment (e.g. an optimistic move); otherwise the project snapshot is the source of truth.
     const resolved: ResolvedProjectOption[] = props.projectOptions
       .map((option) => {
         const resolvedSpaceId =
@@ -120,8 +115,7 @@ function ProjectMenuPickerList(props: {
       searchPlaceholder="Search projects"
       query={query}
       onQueryChange={setQuery}
-      // Lets Arrow/Enter fall through to the menu so the search field and the
-      // list behave as one keyboard surface.
+      // Lets Arrow/Enter fall through to the menu so the search field and the list behave as one keyboard surface.
       stopSearchKeyPropagation
       autoFocusSearch
       widthClassName="w-full"

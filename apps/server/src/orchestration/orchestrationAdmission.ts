@@ -14,16 +14,7 @@ export type OrchestrationCommandAdmissionDecision =
   | { readonly accepted: true }
   | { readonly accepted: false; readonly reason: "overloaded" | "stopped" };
 
-/**
- * Priority lanes, drained strictly highest-first.
- *
- * - `control`: settle or abort work that already exists (stop, interrupt,
- *   completion commands). Never blocked behind anything.
- * - `user`: direct user actions that create new work. Ahead of background
- *   traffic, but behind control so a stop can never queue behind a burst of
- *   turn starts.
- * - `normal`: retention, projections and every other background command.
- */
+/** control: settle/abort existing work — never blocked; user: direct actions creating new work — ahead of background, behind control so a stop never queues behind turn starts; normal: retention/projections/everything else */
 export type OrchestrationCommandLane = "control" | "user" | "normal";
 
 export interface OrchestrationCommandQueues<A> {
@@ -33,21 +24,11 @@ export interface OrchestrationCommandQueues<A> {
   readonly wake: Queue.Queue<void>;
 }
 
-/**
- * Commands that may use the reserved capacity and stay admissible while the
- * engine is quiescing.
- *
- * Membership means "this command settles work that is already in flight", so
- * admitting it can only bring the engine closer to idle. A command that starts
- * new work must never be listed here: during quiesce it would spawn a provider
- * turn the shutdown is about to fence, orphaning it. Lane priority for user
- * actions is expressed by {@link orchestrationCommandLane} instead.
- */
+/** membership means "settles work already in flight" — admitting it only brings the engine closer to idle; a command starting new work must never be listed here (during quiesce it would spawn a turn the shutdown fences); user-action priority is expressed by orchestrationCommandLane */
 export function usesReservedCommandAdmission(type: OrchestrationCommand["type"]): boolean {
   switch (type) {
     case "thread.turn.interrupt":
-    // Task stop/background are user control-plane actions like interrupt:
-    // they must stay admissible when the queue is saturated with data traffic.
+    // task stop/background are user control-plane actions like interrupt — must stay admissible when the queue is saturated with data traffic
     case "thread.task.stop":
     case "thread.task.background":
     case "thread.approval.respond":
@@ -66,8 +47,7 @@ export function usesReservedCommandAdmission(type: OrchestrationCommand["type"])
 }
 
 export function isQuiescingCommandAdmissible(type: OrchestrationCommand["type"]): boolean {
-  // Settlement diagnostics must survive quiesce, but remain in the normal lane
-  // so activity traffic cannot consume the capacity reserved for stopping work.
+  // settlement diagnostics must survive quiesce but stay in the normal lane — activity traffic can't consume capacity reserved for stopping work
   return usesReservedCommandAdmission(type) || type === "thread.activity.append";
 }
 
@@ -78,9 +58,7 @@ export function orchestrationCommandLane(
     return "control";
   }
   switch (type) {
-    // Direct user actions must not sit behind retention and other background
-    // projection traffic. They get their own lane rather than the control lane,
-    // so a burst of turn starts cannot delay a stop.
+    // user actions get their own lane rather than control — a burst of turn starts can't delay a stop
     case "thread.create":
     case "thread.turn.start":
     case "thread.checkpoint.revert":
@@ -123,8 +101,7 @@ export function tryAdmitOrchestrationCommand<A>(input: {
   }
 
   const lane = orchestrationCommandLane(input.commandType);
-  // The reserve is measured against everything already queued, so only control
-  // commands can consume the last `reservedCapacity` slots.
+  // the reserve is measured against everything already queued — only control commands consume the last slots
   const admissionLimit =
     lane === "control" ? policy.capacity : policy.capacity - policy.reservedCapacity;
   const queued =
@@ -141,8 +118,7 @@ export function tryAdmitOrchestrationCommand<A>(input: {
       reason: target.state._tag === "Open" ? "overloaded" : "stopped",
     };
   }
-  // One wake token per accepted envelope lets the worker drain the lanes in
-  // priority order without racing several destructive Queue.take operations.
+  // one wake token per envelope lets the worker drain lanes in priority order without racing several Queue.take operations
   Queue.offerUnsafe(input.queues.wake, undefined);
   return { accepted: true };
 }
@@ -150,9 +126,7 @@ export function tryAdmitOrchestrationCommand<A>(input: {
 export function takeNextOrchestrationCommand<A>(
   queues: OrchestrationCommandQueues<A>,
 ): Effect.Effect<A> {
-  // The token is offered after the envelope, so by the time one is taken its
-  // envelope is already queued: polling the higher lanes can only miss it if a
-  // lower lane holds it.
+  // the token is offered after the envelope — by the time it's taken the envelope is already queued, so polling higher lanes can only miss it if a lower lane holds it
   return Queue.take(queues.wake).pipe(
     Effect.flatMap(() => Queue.poll(queues.control)),
     Effect.flatMap(

@@ -1,9 +1,3 @@
-// FILE: providerModelPrefetch.test.ts
-// Purpose: Verifies new-thread model prefetch resolves providers/cwds, hits the
-//          same React Query keys ChatView uses, warms every visible provider,
-//          and gates Droid to explicit intent.
-// Layer: Web lib tests
-
 import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
 import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
@@ -236,7 +230,6 @@ describe("prefetchModelsForNewThread", () => {
     expect(modelKeys[0]).toEqual(
       providerDiscoveryQueryKeys.models("opencode", null, null, null, "/tmp/project"),
     );
-    // Warm results stay fresh for 30 minutes, so repeated hovers do not re-probe.
     expect(prefetchQuery.mock.calls[0]?.[0].staleTime).toBe(30 * 60_000);
     expect(modelKeys).toHaveLength(8);
     expect(modelKeys).not.toContainEqual(
@@ -358,8 +351,7 @@ describe("prefetchModelsForNewThread", () => {
 
 describe("prefetchModelsForNewThread — new-thread options key parity", () => {
   it("warms the prepared worktree cwd for the PR-handoff shape (worktreePath + fresh + local)", async () => {
-    // PullRequestDetailPanel passes { worktreePath, envMode, fresh: true }; the
-    // prepared worktree must win over the stored draft and envMode "local" clearing.
+    // PullRequestDetailPanel passes { worktreePath, envMode, fresh: true }; the prepared worktree must win over the stored draft and envMode "local" clearing.
     const queryClient = new QueryClient();
     const prefetchQuery = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
 
@@ -425,7 +417,6 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
       providerDiscoveryQueryKeys.models("codex", null, null, null, null),
     );
 
-    // Disabled beats selected (useProviderModelCatalog short-circuit parity).
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),
@@ -446,7 +437,6 @@ describe("prefetchModelsForNewThread — availability parity (#652)", () => {
       providerDiscoveryQueryKeys.models("cursor", null, null, null, null),
     );
 
-    // Selected but unavailable → still warmed (ChatView discovers it on mount).
     prefetchQuery.mockClear();
     prefetchModelsForNewThread(queryClient, {
       settings: makeSettings(),

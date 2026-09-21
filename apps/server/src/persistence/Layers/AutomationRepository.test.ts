@@ -789,7 +789,7 @@ layer("AutomationRepository", (it) => {
       });
       assert.strictEqual(waiting.status, "waiting-for-approval");
       assert.strictEqual(waiting.turnId, TurnId.makeUnsafe("turn-waiting"));
-      // waiting-for-approval is non-terminal: no finished_at is recorded.
+      // waiting-for-approval is non-terminal — no finished_at recorded
       assert.strictEqual(waiting.finishedAt, null);
 
       yield* seedRun("failed");
@@ -812,7 +812,7 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(failed.status, "failed");
       assert.strictEqual(failed.error, "boom");
       assert.strictEqual(failed.finishedAt, "2026-06-16T10:13:00.000Z");
-      // The lease is released so the run is no longer claimed by anyone.
+      // the lease is released so the run is no longer claimed
       assert.strictEqual(failed.claimedBy, null);
       assert.strictEqual(failed.leaseExpiresAt, null);
       const repeatedFailure = yield* repository.markRunFailed({
@@ -923,9 +923,7 @@ layer("AutomationRepository", (it) => {
           now,
         });
 
-      // pending
       yield* makeRun("pending", "2026-06-16T10:00:00.000Z");
-      // running
       yield* makeRun("running", "2026-06-16T10:00:01.000Z");
       yield* repository.markRunStarted({
         id: AutomationRunId.makeUnsafe("run-count-running"),
@@ -935,14 +933,12 @@ layer("AutomationRepository", (it) => {
         turnStartCommandId: CommandId.makeUnsafe("cmd-count-running"),
         startedAt: "2026-06-16T10:00:02.000Z",
       });
-      // waiting-for-approval
       yield* makeRun("waiting", "2026-06-16T10:00:03.000Z");
       yield* repository.markRunWaitingForApproval({
         id: AutomationRunId.makeUnsafe("run-count-waiting"),
         turnId: null,
         updatedAt: "2026-06-16T10:00:04.000Z",
       });
-      // succeeded (NOT active)
       yield* makeRun("done", "2026-06-16T10:00:05.000Z");
       yield* repository.markRunSucceeded({
         id: AutomationRunId.makeUnsafe("run-count-done"),
@@ -1197,7 +1193,6 @@ layer("AutomationRepository", (it) => {
         now: "2026-06-16T10:00:01.000Z",
       });
 
-      // Two distinct rows survive even though they share automation + scheduledFor.
       assert.notStrictEqual(first.id, second.id);
       assert.strictEqual(first.id, AutomationRunId.makeUnsafe("run-manual-1"));
       assert.strictEqual(second.id, AutomationRunId.makeUnsafe("run-manual-2"));
@@ -1217,7 +1212,6 @@ layer("AutomationRepository", (it) => {
         now: "2026-06-16T10:00:00.000Z",
       });
 
-      // Defaults applied at create time.
       assert.strictEqual(created.mode, "standalone");
       assert.strictEqual(created.targetThreadId, null);
       assert.strictEqual(created.maxIterations, null);
@@ -1235,7 +1229,6 @@ layer("AutomationRepository", (it) => {
       assert.deepStrictEqual(created.acknowledgedRisks, []);
       assert.strictEqual(created.iterationCount, 0);
 
-      // And they survive a round trip through the DB row decoder.
       const reloaded = Option.getOrThrow(
         yield* repository.getDefinitionById({
           id: AutomationId.makeUnsafe("automation-defaults"),
@@ -1308,7 +1301,7 @@ layer("AutomationRepository", (it) => {
           id: AutomationId.makeUnsafe("automation-standalone-stop-policy"),
         }),
       );
-      // Stop conditions are mode-independent; only the continuation thread is mode-gated.
+      // stop conditions are mode-independent; only the continuation thread is mode-gated
       assert.deepStrictEqual(created.completionPolicy, policy);
       assert.deepStrictEqual(reloaded.completionPolicy, policy);
       assert.strictEqual(reloaded.targetThreadId, null);
@@ -1328,7 +1321,7 @@ layer("AutomationRepository", (it) => {
         input: {
           ...createInputForProject("project-dedicated-thread"),
           mode: "dedicated",
-          // A caller-supplied thread belongs to heartbeat only.
+          // a caller-supplied thread belongs to heartbeat only
           targetThreadId: ThreadId.makeUnsafe("someone-elses-thread"),
         },
         now: "2026-06-16T10:00:00.000Z",
@@ -1340,7 +1333,7 @@ layer("AutomationRepository", (it) => {
         threadId: firstThreadId,
         updatedAt: "2026-06-16T10:05:00.000Z",
       });
-      // A concurrent first run must not repoint the automation at the loser's thread.
+      // a concurrent first run must not repoint the automation at the loser's thread
       const reattached = yield* repository.attachDefinitionThread({
         id,
         threadId: secondThreadId,
@@ -1641,7 +1634,7 @@ layer("AutomationRepository", (it) => {
         accountedAt: "2026-06-16T10:10:00.000Z",
       });
 
-      // A user archives the run (which also marks it read).
+      // user archives the run (also marks it read); a background completion eval lands afterwards carrying stale triage fields
       const archivedAt = "2026-06-16T10:11:00.000Z";
       yield* repository.archiveRun({
         runId: AutomationRunId.makeUnsafe("run-completion-merge"),
@@ -1649,8 +1642,6 @@ layer("AutomationRepository", (it) => {
         now: archivedAt,
       });
 
-      // A background completion evaluation lands afterwards, carrying stale triage
-      // fields (unarchived / unread) in its result payload.
       const merged = yield* repository.markRunResultPreservingTriage({
         id: AutomationRunId.makeUnsafe("run-completion-merge"),
         result: {
@@ -1667,7 +1658,7 @@ layer("AutomationRepository", (it) => {
         updatedAt: "2026-06-16T10:12:00.000Z",
       });
 
-      // Archive/read state survives; the completion fields are updated.
+      // archive/read state survives; completion fields update
       assert.strictEqual(merged.result?.archivedAt, archivedAt);
       assert.strictEqual(merged.result?.unread, false);
       assert.strictEqual(merged.result?.outcome, "no-findings");
@@ -1706,14 +1697,13 @@ layer("AutomationRepository", (it) => {
         accountedAt: "2026-06-16T10:10:00.000Z",
       });
 
-      // User marks the run read WITHOUT archiving it.
+      // user marks the run read without archiving; a background eval lands with stale triage
       yield* repository.markRunRead({
         runId: AutomationRunId.makeUnsafe("run-read-merge"),
         unread: false,
         now: "2026-06-16T10:11:00.000Z",
       });
 
-      // A background completion eval lands with stale triage fields (unread: true).
       const merged = yield* repository.markRunResultPreservingTriage({
         id: AutomationRunId.makeUnsafe("run-read-merge"),
         result: {
@@ -1730,7 +1720,6 @@ layer("AutomationRepository", (it) => {
         updatedAt: "2026-06-16T10:12:00.000Z",
       });
 
-      // Read state is preserved in isolation; archive stays null; completion fields update.
       assert.strictEqual(merged.result?.unread, false);
       assert.strictEqual(merged.result?.archivedAt, null);
       assert.strictEqual(merged.result?.outcome, "no-findings");
@@ -1988,7 +1977,7 @@ layer("AutomationRepository", (it) => {
 
       const sharedSlot = "2026-06-16T10:05:00.000Z";
 
-      // A manual run lands first, sharing the slot the scheduled occurrence will use.
+      // a manual run lands first, sharing the slot the scheduled occurrence will use
       const manual = yield* repository.createRun({
         id: AutomationRunId.makeUnsafe("run-occurrence-manual"),
         automationId: AutomationId.makeUnsafe("automation-occurrence"),
@@ -2000,8 +1989,7 @@ layer("AutomationRepository", (it) => {
         now: "2026-06-16T10:00:00.000Z",
       });
 
-      // The scheduled occurrence must read back its OWN row, not the manual one, so the
-      // scheduler does not mistake the manual run for a completed scheduled occurrence.
+      // the scheduled occurrence must read back its own row, not the manual one
       const scheduled = yield* repository.createRun({
         id: AutomationRunId.makeUnsafe("run-occurrence-scheduled"),
         automationId: AutomationId.makeUnsafe("automation-occurrence"),
@@ -2048,7 +2036,7 @@ layer("AutomationRepository", (it) => {
         accountedAt: "2026-06-16T10:01:00.000Z",
       });
 
-      // Cancelling an already-succeeded run is a no-op, not a clobber of its outcome.
+      // cancelling an already-succeeded run is a no-op, not a clobber
       const cancelled = yield* repository.cancelRun({
         runId: AutomationRunId.makeUnsafe("run-cancel-done"),
         now: "2026-06-16T10:05:00.000Z",

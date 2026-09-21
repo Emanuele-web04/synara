@@ -1,7 +1,3 @@
-// FILE: sidechatCreation.ts
-// Purpose: Own the sidechat fork/start/snapshot lifecycle independently of composer state.
-// Layer: Chat orchestration
-
 import type {
   ModelSelection,
   NativeApi,
@@ -144,8 +140,7 @@ export function createOrJoinSidechat(input: {
   return flight.completion;
 }
 
-// Null means the successful fork is still synchronizing and must not be pruned.
-// Missing restored panes receive one bounded recheck window before removal.
+// Null means the successful fork is still synchronizing and must not be pruned. Missing restored panes receive one bounded recheck window before removal.
 export function sidechatPaneRetentionRemainingMs(
   threadId: ThreadId,
   nowMs = Date.now(),
@@ -187,7 +182,7 @@ function resolveSidechatRuntimeMode(
   runtimeMode: RuntimeMode,
   modelSelection: ModelSelection,
 ): RuntimeMode {
-  // Changing provider can lose Auto support; never turn that fallback into Full access.
+  // changing provider can lose Auto support — never turn that fallback into Full access
   return autoRuntimeModeSelectionIssue({ runtimeMode, modelSelection })
     ? "approval-required"
     : runtimeMode;
@@ -265,13 +260,11 @@ export async function createSidechatThread(input: {
     createdAt,
   });
 
-  // The fork now exists. Expose it immediately so a slow snapshot refresh cannot
-  // leave a successful creation invisible and tempt the user into creating duplicates.
+  // expose the fork immediately so a slow snapshot refresh can't leave a successful creation invisible and tempt the user into duplicates
   markSidechatSyncing(nextThreadId);
   input.openSidechat(nextThreadId);
 
-  // Start snapshot synchronization before an optional prompt. A slow/queued turn
-  // must never prevent the successful fork from reaching the shell projection.
+  // start snapshot sync before an optional prompt — a slow/queued turn must never keep the successful fork from reaching the shell projection
   const snapshotPromise = (async (): Promise<unknown | null> => {
     try {
       const snapshot = await input.api.orchestration.getShellSnapshot();

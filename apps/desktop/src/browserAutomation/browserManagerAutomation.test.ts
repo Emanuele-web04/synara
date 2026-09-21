@@ -219,8 +219,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       openPopup(source, child);
       if (delayed) release();
       if (nested) openPopup(child, grandchild);
-      // Downloads can begin before the deferred tab publication, or long
-      // after the original host observer has finished.
       if (delayed) await new Promise<void>((resolve) => setImmediate(resolve));
       const target = nested ? grandchild : child;
       const download = { preventDefault: vi.fn() };
@@ -241,8 +239,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       const manualDownload = { preventDefault: vi.fn() };
       willDownloadListener.current!(manualDownload, {}, target);
       expect(manualDownload.preventDefault).not.toHaveBeenCalled();
-      // A popup opened after genuine human input must not inherit a spent
-      // automation epoch either.
       if (!nested) {
         webContentsViewConstructor.mockReturnValueOnce({
           webContents: grandchild,
@@ -851,8 +847,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       guest,
     );
 
-    // Overlay occlusion used to send bounds:null; the adopted <webview> must
-    // stay the visible automation surface so resize/drag does not drop CDP.
     manager.setPanelBounds({ threadId: THREAD_ID, surface: "renderer", bounds: null });
     expect(manager.getVisibleAutomationRuntime({ threadId: THREAD_ID, tabId }).webContents).toBe(
       guest,
@@ -1007,8 +1001,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     });
     expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(0);
 
-    // Mounting BrowserPanel hydrates the state already projected by the agent;
-    // it is not a physical/manual browser action.
     manager.open({ threadId: THREAD_ID });
     expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(0);
 
@@ -1160,8 +1152,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(0);
     releasePointer();
 
-    // A different key and a click outside the coordinate tolerance remain
-    // unambiguously human, even while another expected input is pending.
     const releaseUnmatched = visible.expectAgentInput!({
       kind: "key",
       key: "x",
@@ -1265,7 +1255,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     const delayedAgentEvent = { preventDefault: vi.fn() };
     willDownloadListener.current?.(delayedAgentEvent, {}, webContents);
     expect(delayedAgentEvent.preventDefault).toHaveBeenCalledOnce();
-    // The live host listener has ended, but containment provenance remains.
     expect(observed).toHaveBeenCalledOnce();
 
     webContents.emit(
@@ -1366,8 +1355,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
 
       expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(0);
 
-      // The expected native signal is one-shot. A second otherwise identical
-      // click is genuine human input and must still interrupt automation.
       webContents.emit(
         "before-mouse-event",
         {},
@@ -1472,8 +1459,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
         windowOpenEvents.push(event);
       },
     );
-    // CDP can acknowledge mouseReleased before Electron delivers its
-    // setWindowOpenHandler callback. The correlation lease must bridge that gap.
     releaseGesture();
 
     let windowOpenHandlerReturned = false;
@@ -1495,7 +1480,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     windowOpenHandlerReturned = true;
     expect(manager.getState({ threadId: THREAD_ID }).tabs).toHaveLength(1);
 
-    // Duplicate native callbacks from the same activation are coalesced.
     webContents.windowOpenHandler?.({
       url: "https://opened.example/path",
       frameName: "",
@@ -1865,8 +1849,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
         await manager.getAutomationRuntime({ threadId, tabId }, { restore: false });
       }
 
-      // Active browser calls receive a full tool-deadline grace period. Once it
-      // expires, the least-recently-used hidden page is evicted to enforce the cap.
       expect(nativeWebContents.every((webContents) => !webContents.close.mock.calls.length)).toBe(
         true,
       );
@@ -1881,7 +1863,6 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       const restored = await manager.getAutomationRuntime(tabs[0]!, { restore: false });
       expect(restored.webContents).toBe(nativeWebContents[5]);
       expect(manager.getState({ threadId: tabs[0]!.threadId }).tabs[0]?.status).toBe("live");
-      // Restoring the evicted tab keeps the total at four by evicting the next LRU page.
       expect(nativeWebContents[1]!.close).toHaveBeenCalledOnce();
       manager.dispose();
     } finally {

@@ -1,7 +1,3 @@
-// FILE: EnvironmentProjectInstructionsSection.browser.tsx
-// Purpose: Browser-level regression tests for project instructions autosave behavior.
-// Layer: Vitest browser tests
-
 import "../../../index.css";
 
 import { ProjectId } from "@synara/contracts";

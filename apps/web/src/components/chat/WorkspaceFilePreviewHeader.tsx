@@ -1,18 +1,3 @@
-// FILE: WorkspaceFilePreviewHeader.tsx
-// Purpose: Editor-style header for the shared workspace file preview — a path
-//          breadcrumb (project › …dirs › file) on the left, and an overflow
-//          menu + "Open in editor" split button on the right. Shared by the
-//          right-dock file/explorer panes and the editor center pane so every
-//          surface reads identically. Under width pressure the breadcrumb
-//          collapses whole middle directories behind a single "…" crumb
-//          (never letter-shards like "S… › O…"), keeping the nearest parent
-//          folders and the filename readable; only once every directory is
-//          hidden does the filename itself truncate. The header is a
-//          `header-actions` inline-size query container so the "Open" control
-//          sheds its text label for an icon as the pane narrows.
-// Layer: Chat/editor file-preview UI
-// Exports: WorkspaceFilePreviewHeader
-
 import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@synara/shared/path";
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
 
@@ -69,10 +54,7 @@ interface WorkspaceFilePreviewHeaderProps {
   reloading?: boolean;
 }
 
-// Source (raw file, where selecting text yields a precise line/column chat
-// reference) vs. Preview (rendered markdown, read-only — browse + task lists).
-// Ordered Source-first so the interactive mode reads as the primary surface.
-// Icon-only by design: the title tooltip + sr-only text carry the labels.
+// ordered Source-first so the interactive mode reads as primary; icon-only by design (title tooltip + sr-only carry the labels)
 const MARKDOWN_VIEW_SEGMENTS = [
   {
     rendered: false,
@@ -93,8 +75,7 @@ interface BreadcrumbSegment {
   key: string;
 }
 
-// Reserved room for the unsaved-changes dot after the filename (size-1.5 dot
-// + ml-1.5 gap), plus a small epsilon absorbing fractional-width rounding.
+// Reserved room for the unsaved-changes dot after the filename (size-1.5 dot + ml-1.5 gap), plus a small epsilon absorbing fractional-width rounding.
 const DIRTY_DOT_RESERVE_PX = 12;
 const MEASURE_EPSILON_PX = 1;
 
@@ -141,8 +122,7 @@ function CollapsingPathBreadcrumb(props: {
         ellipsisWidth,
         trailingReserveWidth: (dirty ? DIRTY_DOT_RESERVE_PX : 0) + MEASURE_EPSILON_PX,
       });
-      // Keep the previous state object when nothing changed so resize frames
-      // that land on the same layout skip the re-render entirely.
+      // Keep the previous state object when nothing changed so resize frames that land on the same layout skip the re-render entirely.
       setCollapsedLayout((current) => {
         if (current === nextLayout) return current;
         if (current === null || nextLayout === null) return nextLayout;
@@ -154,8 +134,7 @@ function CollapsingPathBreadcrumb(props: {
     };
 
     compute();
-    // Observing the hidden mirror too re-measures when its natural width
-    // changes without a pane resize (late-loading fonts, new file path).
+    // Observing the hidden mirror too re-measures when its natural width changes without a pane resize (late-loading fonts, new file path).
     const observer = new ResizeObserver(compute);
     observer.observe(nav);
     observer.observe(measure);
@@ -243,14 +222,10 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
 ) {
   const { filePath, workspaceRoot } = props;
 
-  // Out-of-workspace previews (e.g. a session's scratch directory under the
-  // OS temp dir) arrive as absolute paths; everything in-workspace is relative.
+  // Out-of-workspace previews (e.g. a session's scratch directory under the OS temp dir) arrive as absolute paths; everything in-workspace is relative.
   const fileIsOutsideWorkspace = !isWorkspaceRelativePathSafe(filePath);
 
-  // Breadcrumb segments: project folder name, then each path part. Splitting
-  // here (vs. rendering the raw string) lets middle directories collapse
-  // behind a "…" crumb under width pressure while the filename stays pinned.
-  // Absolute paths drop the project prefix — they live outside the workspace.
+  // splitting path parts lets middle directories collapse behind a "…" crumb under width pressure while the filename stays pinned; absolute paths drop the project prefix
   const projectName =
     fileIsOutsideWorkspace || !workspaceRoot ? null : basenameOfPath(workspaceRoot);
   const relativeSegments = filePath
@@ -258,8 +233,7 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
     .split("/")
     .filter((segment) => segment.length > 0);
   const segments = projectName ? [projectName, ...relativeSegments] : relativeSegments;
-  // Key each crumb by its cumulative path so repeated folder names (e.g. two
-  // `src` dirs at different depths) still get stable, unique React keys.
+  // Key each crumb by its cumulative path so repeated folder names (e.g. two `src` dirs at different depths) still get stable, unique React keys.
   const prefixSegments = segments.slice(0, -1).map((name, index) => ({
     name,
     key: segments.slice(0, index + 1).join("/"),

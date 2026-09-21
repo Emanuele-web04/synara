@@ -1,8 +1,3 @@
-// FILE: ChatPaneDropOverlay.tsx
-// Purpose: Renders the 4-quadrant drop-zone overlay used to split a chat surface by dragging a sidebar thread.
-// Layer: UI component (route surfaces wrap it around <ChatView /> or empty-state placeholders)
-// Exports: ChatPaneDropOverlay component, drag MIME constant, drop-zone helpers used by tests
-
 import { useEffect, useRef, type DragEvent as ReactDragEvent, type ReactNode } from "react";
 import { type ThreadId } from "@synara/contracts";
 
@@ -49,10 +44,8 @@ interface ChatPaneDropOverlayProps {
   // ThreadIds whose drops should be ignored (e.g. threads already mounted in this split view).
   excludedThreadIds?: ReadonlySet<ThreadId>;
   onDrop(payload: ThreadDragPayload & { direction: SplitDirection; side: SplitDropSide }): void;
-  // Outer wrapper className. Defaults to a layout-neutral filler that participates in flex containers.
   className?: string;
   children: ReactNode;
-  // Identifier used to reset internal state when the wrapped surface changes (e.g. pane id).
   paneScopeId?: string;
 }
 
@@ -204,8 +197,7 @@ export function ChatPaneDropOverlay(props: ChatPaneDropOverlayProps) {
     return zone;
   };
 
-  // The composer turns a thread drop into an @mention; it owns the event there,
-  // so only drop the split preview left over from the surrounding pane.
+  // The composer turns a thread drop into an @mention; it owns the event there, so only drop the split preview left over from the surrounding pane.
   const deferToMentionDropzone = (event: ReactDragEvent<HTMLDivElement>): boolean => {
     if (!isWithinThreadMentionDropzone(event.target)) return false;
     setPreviewZone(null);

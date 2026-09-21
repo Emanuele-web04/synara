@@ -1,8 +1,3 @@
-// FILE: useThreadErrorToast.test.ts
-// Purpose: Guards the thread error toast payload and its quarantine recovery action.
-// Layer: Chat status presentation tests
-// Depends on: the toast option builder and the provider-delivery block format.
-
 import { ThreadId } from "@synara/contracts";
 import { formatProviderDeliveryBlockDetail } from "@synara/shared/providerDeliveryBlock";
 import { describe, expect, it } from "vitest";

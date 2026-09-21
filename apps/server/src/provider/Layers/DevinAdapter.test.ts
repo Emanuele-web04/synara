@@ -1,8 +1,3 @@
-// FILE: DevinAdapter.test.ts
-// Purpose: Compact adapter/runtime contract tests for Devin session configuration,
-// model discovery, and plan-mode fail-closed behavior.
-// Layer: Provider adapter tests
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ThreadId, TurnId } from "@synara/contracts";
@@ -204,9 +199,7 @@ function makeDevinAdapterTestLayer(
 }
 
 interface WedgeRuntimePlan {
-  /** Prompt behavior per prompt CALL (task, continuation, task, ...), in order. Last entry repeats. */
   readonly prompts: ReadonlyArray<AcpSessionRuntimeShape["prompt"]>;
-  /** When present, the makeAcpRuntime call at this index fails instead. */
   readonly failStartAtIndex?: number;
   readonly beforeCreate?: (index: number) => Effect.Effect<void>;
   readonly cancel?: (index: number) => Effect.Effect<void>;
@@ -269,7 +262,6 @@ const SPAWN_READY_LINE =
 const stripHarnessPrefix = (text: string): string =>
   text.replace(/^<synara_host_context>[\s\S]*?<\/synara_host_context>/, "");
 
-/** Advance past the supervisor tick, the fuse, and the recovery's resume-replay gate. */
 function advanceThroughRecovery(): Effect.Effect<void> {
   return advanceTimers(
     WEDGE_TEST_OPTIONS.stallFuseMs + WEDGE_TEST_OPTIONS.checkIntervalMs * 2 + 2_000,
@@ -856,8 +848,7 @@ describe("Devin adapter lifecycle", () => {
         yield* adapter.stopSession(threadId);
       }).pipe(
         Effect.provide(
-          // Real timers: keep the watchdog's first check (5s cadence at these
-          // budgets) far beyond the assertion window instead of racing it.
+          // real timers keep the watchdog's first check far beyond the assertion window instead of racing it
           makeDevinAdapterTestLayer(runtime, undefined, {
             turnIdleMs: 3_600_000,
             toolIdleMs: 3_600_000,
@@ -1088,8 +1079,7 @@ describe("applyDevinSessionConfiguration", () => {
   });
 
   it("does not touch config options for the model selection", async () => {
-    // Devin models are process-start `--model` flags; the per-turn
-    // set_config_option path must stay gone.
+    // Devin models are process-start `--model` flags — the per-turn set_config_option path must stay gone
     const { runtime, calls } = makeFakeAcpRuntime();
 
     await Effect.runPromise(
@@ -1701,11 +1691,7 @@ describe("Devin CLI model discovery", () => {
 
 describe("resolveDevinToolCallUpdatedTurnId", () => {
   it("keeps a trailing update on its recorded older turn while a newer turn is active", () => {
-    // Regression: a late ToolCallUpdated for turn A arriving while turn B is
-    // active must resolve under turn A (so A's tool row updates in place) and
-    // must never be re-associated with turn B — the handler only applies
-    // current-turn failed-tool detail when the resolved turn is the active
-    // turn, so a non-active resolution cannot set turn B's failure state.
+    // regression: a late ToolCallUpdated for turn A must resolve under A and never set turn B's failure state
     const toolCallTurnIds = new Map<string, TurnId>([["tc-1", asTurnId("turn-A")]]);
 
     expect(
@@ -1721,7 +1707,6 @@ describe("resolveDevinToolCallUpdatedTurnId", () => {
   it("routes same-turn updates to the active turn and suppresses during replay", () => {
     const toolCallTurnIds = new Map<string, TurnId>([["tc-1", asTurnId("turn-A")]]);
 
-    // A not-yet-recorded id belongs to the active turn.
     expect(
       resolveDevinToolCallUpdatedTurnId({
         toolCallId: "tc-2",
@@ -1731,7 +1716,6 @@ describe("resolveDevinToolCallUpdatedTurnId", () => {
       }),
     ).toBe(asTurnId("turn-B"));
 
-    // A recorded id with no active turn (between turns) stays on its turn.
     expect(
       resolveDevinToolCallUpdatedTurnId({
         toolCallId: "tc-1",
@@ -1741,7 +1725,6 @@ describe("resolveDevinToolCallUpdatedTurnId", () => {
       }),
     ).toBe(asTurnId("turn-A"));
 
-    // Resume replay stays suppressed like every other session/update event.
     expect(
       resolveDevinToolCallUpdatedTurnId({
         toolCallId: "tc-1",

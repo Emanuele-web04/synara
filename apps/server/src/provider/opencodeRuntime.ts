@@ -1,8 +1,3 @@
-// FILE: opencodeRuntime.ts
-// Purpose: Starts OpenCode-compatible local servers and adapts their SDK/CLI data.
-// Layer: Provider runtime utility
-// Exports: OpenCodeRuntime, OpenCodeRuntimeLive, model/auth parsers, SDK helpers
-
 import { resolve as resolvePath } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -86,7 +81,6 @@ export const OPENCODE_CLI_SPEC: OpenCodeCompatibleCliSpec = {
 export interface OpenCodeServerProcess {
   readonly url: string;
   readonly exitCode: Effect.Effect<number, never>;
-  /** Password assigned to a managed OpenCode server, when HTTP auth is enabled. */
   readonly serverPassword?: string;
 }
 
@@ -94,7 +88,6 @@ export interface OpenCodeServerConnection {
   readonly url: string;
   readonly exitCode: Effect.Effect<number, never> | null;
   readonly external: boolean;
-  /** Password assigned to a managed OpenCode server, when HTTP auth is enabled. */
   readonly serverPassword?: string;
 }
 
@@ -127,9 +120,7 @@ export function openCodeRuntimeErrorDetail(cause: unknown): string {
     const body = anyCause.error ?? anyCause.data ?? anyCause.body;
     try {
       return `status=${status ?? "?"} body=${JSON.stringify(body ?? cause)}`;
-    } catch {
-      // ignore stringify failure
-    }
+    } catch {}
   }
   return String(cause);
 }
@@ -208,11 +199,7 @@ export interface OpenCodeRuntimeShape {
     readonly hostname?: string;
     readonly timeoutMs?: number;
     readonly experimentalWebSockets?: boolean;
-    /**
-     * Makes a managed server private to one owner and closes it immediately
-     * when that owner's scope ends. Required before installing per-thread MCP
-     * credentials into process-scoped configuration.
-     */
+    // makes a managed server private to one owner and closes it when that scope ends — required before installing per-thread MCP credentials into process-scoped config
     readonly poolIsolationKey?: string;
   }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
   readonly runOpenCodeCommand: (input: {
@@ -747,9 +734,7 @@ export function buildOpenCodePermissionRules(
   interactionMode: ProviderInteractionMode = "default",
 ): PermissionRuleset {
   if (interactionMode === "plan") {
-    // OpenCode evaluates the last matching rule. Start closed, then allow only
-    // read-only planning tools. This also blocks custom/MCP tools and future
-    // mutating tools that a short denylist would accidentally leave enabled.
+    // OpenCode evaluates the last matching rule — start closed, then allow only read-only planning tools (also blocks future mutating tools a denylist would miss)
     return [
       { permission: "*", pattern: "*", action: "deny" },
       { permission: "read", pattern: "*", action: "allow" },
@@ -923,8 +908,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           ));
         const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
         const args = ["serve", "--hostname", hostname, "--port", String(port)];
-        // Protect managed servers that support the environment-based auth contract.
-        // Keep the credential with the process so every SDK client can authenticate.
+        // protect managed servers supporting the env-based auth contract; the credential stays with the process so every SDK client authenticates
         const configuredServerPassword = process.env.OPENCODE_SERVER_PASSWORD;
         const serverPassword =
           configuredServerPassword && configuredServerPassword.length > 0
@@ -1191,9 +1175,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
     }) =>
       pooledServerMutex.withPermit(
         Effect.gen(function* () {
-          // Collapse ordinary aliases, but let the OS resolve parent traversal: resolving `..`
-          // lexically can cross a symlink differently or hide a missing directory. Keep the same
-          // spelling in both the pool key and spawn options, without adding filesystem work here.
+          // let the OS resolve `..` — lexical resolution can cross a symlink differently or hide a missing directory; same spelling in pool key and spawn options
           const hasParentTraversal = input.cwd?.split(/[\\/]/).includes("..");
           const pooledInput =
             input.cwd && !hasParentTraversal ? { ...input, cwd: resolvePath(input.cwd) } : input;
@@ -1355,7 +1337,6 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         client.experimental.console.get(undefined, { signal }),
       ).pipe(
         Effect.map((result) => result.data ?? null),
-        // Console metadata is optional and should not block model discovery.
         Effect.timeoutOption("2 seconds"),
         Effect.map(Option.getOrElse(() => null)),
         Effect.catch(() => Effect.succeed(null)),
@@ -1480,8 +1461,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
                 }),
             }),
           ),
-          // Explicit credential metadata is optional. Discovery should still work when
-          // the auth file does not exist, is unreadable, or belongs to another machine.
+          // Explicit credential metadata is optional. Discovery should still work when the auth file does not exist, is unreadable, or belongs to another machine.
           Effect.catch(() => Effect.succeed([])),
         );
 

@@ -47,8 +47,7 @@ const AppendEventRequestSchema = Schema.Struct({
   metadataJson: UnknownFromJsonString,
 });
 
-// Decode only the SQL envelope here. JSON and domain-schema decoding happen one row at a
-// time below so a corrupt or unsupported event always reports its exact sequence and type.
+// decode only the SQL envelope here — per-row JSON/domain decoding below so a corrupt event reports its exact sequence and type
 const RawPersistedEventRowSchema = Schema.Struct({
   sequence: NonNegativeInt,
   eventId: Schema.String,
@@ -196,8 +195,7 @@ function normalizeLegacyEventRow(row: ParsedPersistedEventRow): ParsedPersistedE
 
 type PersistedEventUpcaster = (row: ParsedPersistedEventRow) => ParsedPersistedEventRow;
 
-// Every unversioned event passes through the same v0 -> v1 boundary. Most event types are a
-// no-op; the model-selection families need the historical shape normalization above.
+// every unversioned event passes through the same v0 -> v1 boundary; only model-selection families need normalization
 const PERSISTED_EVENT_UPCASTERS: Readonly<Record<number, PersistedEventUpcaster>> = {
   [LEGACY_PERSISTED_EVENT_SCHEMA_VERSION]: normalizeLegacyEventRow,
 };
@@ -336,20 +334,7 @@ function inferActorKind(
   return "client";
 }
 
-/**
- * Builds the paged projector-replay query. Exported so tests can pin its query
- * plan with EXPLAIN QUERY PLAN.
- *
- * Every predicate below the sequence range uses SQLite's unary + to stay
- * ineligible for index selection. Without it the planner turns the boundary OR
- * into a MULTI-INDEX OR that scans the whole event_type index and re-sorts
- * through a temp b-tree for every page, which makes projector bootstrap
- * quadratic in event-log size (minutes of startup on multi-GB logs). The +
- * keeps the integer-primary-key range scan: a sparse filter can still walk a
- * long sequence interval to fill one page, but the whole replay stays linear
- * in the covered range (each row visited once), and rows already come back
- * in sequence order with no sort step.
- */
+/** exported so tests pin the query plan with EXPLAIN; predicates use SQLite's unary + to stay index-ineligible — without it the planner turns the boundary OR into a MULTI-INDEX OR that rescans the event_type index per page, making bootstrap quadratic; the + keeps the integer-PK range scan so replay stays linear and pre-sorted */
 export const buildReadEventRowsFromSequenceQuery = (
   sql: SqlClient.SqlClient,
   request: typeof ReadFromSequenceRequestSchema.Type,

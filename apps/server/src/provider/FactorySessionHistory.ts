@@ -1,8 +1,3 @@
-// FILE: FactorySessionHistory.ts
-// Purpose: Reads user-visible messages from Factory Droid's local JSONL session store.
-// Layer: Provider persistence compatibility
-// Exports: readFactorySessionHistory and FactorySessionMessage.
-
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 
@@ -57,14 +52,12 @@ async function findFactorySessionPath(
     const candidate = nodePath.join(sessionsDir, entry.name, `${sessionId}.jsonl`);
     try {
       if ((await fs.stat(candidate)).isFile()) return candidate;
-    } catch {
-      // Continue through the bounded set of workspace session directories.
-    }
+    } catch {}
   }
   return null;
 }
 
-// Filters model-only rows so imports match Droid's user-visible transcript.
+// filters model-only rows so imports match Droid's user-visible transcript
 export async function readFactorySessionHistory(
   homeDir: string,
   sessionId: string,

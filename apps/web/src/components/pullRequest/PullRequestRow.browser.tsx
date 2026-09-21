@@ -1,7 +1,3 @@
-// FILE: PullRequestRow.browser.tsx
-// Purpose: Browser-level regression coverage for the separate row-select and pin controls.
-// Layer: Pull request presentation test
-
 import "../../index.css";
 
 import type { PullRequestListEntry } from "@synara/contracts";

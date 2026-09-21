@@ -1,6 +1,4 @@
-// Shared read-time Claude accounting for Profile Stats and deletion snapshots.
-// Old compact modelUsage may be process-cumulative: only versioned results or
-// retained per-turn main-loop usage are safe. Never infer a version from dates.
+// old compact modelUsage may be process-cumulative: only versioned results or retained per-turn main-loop usage are safe; never infer a version from dates
 import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
 export function claudeTokenActivityCtes(

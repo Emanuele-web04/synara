@@ -33,7 +33,7 @@ layer("087_DropUnusedOrchestrationEventIndexes", (it) => {
       const after = yield* orchestrationEventIndexNames(sql);
       assert.notInclude(after, "idx_orch_events_command_id");
       assert.notInclude(after, "idx_orch_events_correlation_id");
-      // The indexes that production reads actually depend on must survive.
+      // indexes production reads depend on must survive
       assert.include(after, "idx_orch_events_stream_version");
       assert.include(after, "idx_orch_events_stream_sequence");
       assert.include(after, "idx_orchestration_events_profile_turn_events");

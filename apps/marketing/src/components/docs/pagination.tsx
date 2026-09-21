@@ -1,9 +1,3 @@
-// FILE: components/docs/pagination.tsx
-// Purpose: Previous/Next footer for docs pages as compact shadcn outline
-//          buttons (shadcn.com-docs style) — replaces fumadocs' default
-//          footer cards, which read as large empty surfaces.
-// Layer: server component (no client hooks).
-
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";

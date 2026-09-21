@@ -140,8 +140,7 @@ export function useChatProviderStatus({
     activeThread?.session?.provider,
     activeThread?.session?.status,
   ]);
-  // Persist confirmations so a custom binary path that already started a session
-  // stays trusted across restarts, instead of re-showing the availability warning.
+  // persist confirmations so a custom binary path that already started a session stays trusted across restarts
   useEffect(() => {
     saveConfirmedCustomBinaryPaths(confirmedCustomBinaryPathsByProvider);
   }, [confirmedCustomBinaryPathsByProvider]);

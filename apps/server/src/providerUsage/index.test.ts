@@ -1,8 +1,3 @@
-// FILE: providerUsage/index.test.ts
-// Purpose: Covers the orchestration layer's snapshot cache — TTL reuse, single-flight coalescing
-// of concurrent requests, forceRefresh bypass, and the shorter expiry for degraded snapshots —
-// so UI surfaces polling in parallel can't stampede the provider fetchers.
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -175,10 +170,10 @@ describe("collectProviderUsageSnapshots caching", () => {
     }));
 
     await collectProviderUsageSnapshots(makeCtx(NOW_MS));
-    // Within the degraded TTL: still served from cache.
+    // within the degraded TTL: still served from cache
     await collectProviderUsageSnapshots(makeCtx(NOW_MS + 30_000));
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    // Past the degraded TTL (but well within the healthy one): re-fetched.
+    // past the degraded TTL but within the healthy one: re-fetched
     await collectProviderUsageSnapshots(makeCtx(NOW_MS + 90_000));
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });

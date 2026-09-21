@@ -1,8 +1,5 @@
 import { Schema } from "effect";
 
-/**
- * GitCommandError - Git command execution failed.
- */
 export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()("GitCommandError", {
   operation: Schema.String,
   command: Schema.String,
@@ -15,9 +12,6 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
   }
 }
 
-/**
- * GitCheckoutDirtyWorktreeError - Checkout would overwrite local files.
- */
 export class GitCheckoutDirtyWorktreeError extends Schema.TaggedErrorClass<GitCheckoutDirtyWorktreeError>()(
   "GitCheckoutDirtyWorktreeError",
   {
@@ -32,9 +26,6 @@ export class GitCheckoutDirtyWorktreeError extends Schema.TaggedErrorClass<GitCh
   }
 }
 
-/**
- * GitHubCliError - GitHub CLI execution or authentication failed.
- */
 export class GitHubCliError extends Schema.TaggedErrorClass<GitHubCliError>()("GitHubCliError", {
   operation: Schema.String,
   detail: Schema.String,
@@ -46,9 +37,6 @@ export class GitHubCliError extends Schema.TaggedErrorClass<GitHubCliError>()("G
   }
 }
 
-/**
- * TextGenerationError - Commit or PR text generation failed.
- */
 export class TextGenerationError extends Schema.TaggedErrorClass<TextGenerationError>()(
   "TextGenerationError",
   {
@@ -62,9 +50,6 @@ export class TextGenerationError extends Schema.TaggedErrorClass<TextGenerationE
   }
 }
 
-/**
- * GitManagerError - Stacked Git workflow orchestration failed.
- */
 export class GitManagerError extends Schema.TaggedErrorClass<GitManagerError>()("GitManagerError", {
   operation: Schema.String,
   detail: Schema.String,
@@ -75,9 +60,6 @@ export class GitManagerError extends Schema.TaggedErrorClass<GitManagerError>()(
   }
 }
 
-/**
- * GitManagerServiceError - Errors emitted by stacked Git workflow orchestration.
- */
 export type GitManagerServiceError =
   | GitManagerError
   | GitCommandError

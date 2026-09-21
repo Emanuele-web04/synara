@@ -1,7 +1,3 @@
-// FILE: canary.ts
-// Purpose: Maintains and launches an isolated, frozen Synara Canary checkout.
-// Layer: Local developer tooling
-
 import { spawn, spawnSync } from "node:child_process";
 import * as FS from "node:fs";
 import * as OS from "node:os";
@@ -84,18 +80,12 @@ export function resolveCanaryRef(input: ParsedCanaryArgs, trackedRef: string | n
 }
 
 export function canaryCloneArgs(originUrl: string, source: string): ReadonlyArray<string> {
-  // The cleanliness guard runs immediately after cloning. A --no-checkout clone
-  // reports every tracked file as deleted, so it is indistinguishable from a
-  // user-modified managed checkout at that point.
+  // a --no-checkout clone reports every tracked file as deleted, so the cleanliness guard must run after cloning
   return ["clone", "--", originUrl, source];
 }
 
 export function canaryStartArgs(): ReadonlyArray<string> {
-  // Invoke the desktop launcher directly. `bun run --cwd apps/desktop start`
-  // adds a short-lived package-script process in front of the launcher, so the
-  // PID persisted by Canary goes stale while Electron is still running. The
-  // direct launcher remains alive for Electron's lifetime and also preserves
-  // Canary's flavor, home, updater policy, and commit identity.
+  // launch the desktop binary directly: a `bun run` wrapper exits early and leaves a stale PID while Electron runs
   return ["apps/desktop/scripts/start-electron.mjs"];
 }
 

@@ -586,8 +586,7 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 
 describe("resolveSettingsBackTarget", () => {
   it("keeps fresh draft chats available as settings back targets", () => {
-    // Mirrors the sidebar's settings-back wiring: persisted thread summaries plus the
-    // segment's draft thread ids form the restorable set.
+    // Mirrors the sidebar's settings-back wiring: persisted thread summaries plus the segment's draft thread ids form the restorable set.
     const availableThreadIds = new Set(["thread-latest", "thread-draft"]);
 
     expect(
@@ -1017,9 +1016,7 @@ describe("pin helpers", () => {
       makeThread("thread-2"),
     ];
 
-    // Pinning the parent must not hide child-1 entirely (buildProjectThreadTree
-    // hides children with missing parents); the parent stays in the tree,
-    // children render under it.
+    // Pinning the parent must not hide child-1 entirely (buildProjectThreadTree hides children with missing parents); the parent stays in the tree, children render under it.
     expect(getUnpinnedThreadsForSidebar(threads, ["thread-1" as ThreadId])).toEqual(threads);
     // Childless pinned threads are still hidden from project lists.
     expect(getUnpinnedThreadsForSidebar(threads, ["thread-2" as ThreadId])).toEqual([
@@ -1453,9 +1450,7 @@ describe("buildProjectThreadTree", () => {
   });
 
   it("hides subagent subtrees whose parent is not in the list", () => {
-    // Regression: archiving (or deleting) a parent removes it from the sidebar
-    // list; its subagent children must stay hidden instead of surfacing as
-    // top-level rows (#488).
+    // Regression: archiving (or deleting) a parent removes it from the sidebar list; its subagent children must stay hidden instead of surfacing as top-level rows (#488).
     const rows = buildProjectThreadTree({
       threads: [
         makeThread({

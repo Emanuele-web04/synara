@@ -1,8 +1,3 @@
-// FILE: pendingInteraction.ts
-// Purpose: Shared predicates for pending approval / user-input request lifecycle.
-// Layer: Domain helper (consumed by store read-model normalization + session-logic)
-// Exports: isStalePendingRequestFailureDetail
-
 /** Provider "respond failed" details that mean the targeted request is already gone
  *  (stale or unknown), so the matching pending prompt should be cleared rather than
  *  kept open. Centralized so the store hot path and session derivations stay in sync. */

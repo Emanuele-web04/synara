@@ -1,10 +1,3 @@
-// FILE: ComposerModelPicker.tsx
-// Purpose: Single composer picker — provider tabs, searchable model rows, starred
-//   model + trait presets, and per-trait rows (effort, speed, …) in one panel.
-// Layer: Chat composer presentation
-// Depends on: the picker's tabs/row/trait-row pieces, composer trait helpers, starred
-//   model storage, and shared menu primitives.
-
 import {
   type ModelSlug,
   type ProviderAgentDescriptor,
@@ -91,14 +84,12 @@ type ComposerModelPickerProps = {
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
-  // Narrow-composer degradation: drop the model name (provider icon stays)
-  // and/or the effort/status label; both remain available to assistive tech.
+  // Narrow-composer degradation: drop the model name (provider icon stays) and/or the effort/status label; both remain available to assistive tech.
   hideModelLabel?: boolean;
   hideStatusLabel?: boolean;
   contextWindowLabel?: string | null;
   disabled?: boolean;
-  // "menu" (default) lists effort as a footer row; "slider" renders the ladder as a
-  // stepped slider card in the footer instead.
+  // "menu" (default) lists effort as a footer row; "slider" renders the ladder as a stepped slider card in the footer instead.
   effortControl?: ComposerEffortControl;
   onProviderModelChange: (
     provider: ProviderKind,
@@ -179,8 +170,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     }
   }
 
-  // A model picked while the panel stays open (slider mode) still owes the composer its
-  // focus hand-off; it is paid when the panel finally closes.
+  // A model picked while the panel stays open (slider mode) still owes the composer its focus hand-off; it is paid when the panel finally closes.
   const selectionCommittedWhileOpenRef = useRef(false);
   const setMenuOpen = (nextOpen: boolean) => {
     if (open === undefined) {
@@ -199,8 +189,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     return () => cancelAnimationFrame(frame);
   }, [isMenuOpen, tab]);
 
-  // Options a provider's models would run with: the composer's own for the selected
-  // provider, otherwise that provider's draft / sticky selection.
+  // Options a provider's models would run with: the composer's own for the selected provider, otherwise that provider's draft / sticky selection.
   const draftSelectionByProvider = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.modelSelectionByProvider,
   );
@@ -272,8 +261,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         });
   const starredKeySet = new Set(starredModels.map(starredModelKey));
 
-  // Commit a row: `patch` carries the traits to apply on top of the provider's options.
-  // `keepOpen` leaves the panel up so the footer slider can tune the model just picked.
+  // Commit a row: `patch` carries the traits to apply on top of the provider's options. `keepOpen` leaves the panel up so the footer slider can tune the model just picked.
   const commitRow = (
     row: PickerRow,
     model: ModelSlug,
@@ -304,9 +292,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     const model = row.selectableModel;
     if (props.disabled || model === null) return;
     const selection = traitSelectionFor(row.provider, model);
-    // Slider mode: switching to a model with an effort ladder keeps the panel open so the
-    // footer slider can set its effort. Presets already carry their effort, and picking
-    // the current model again is the "done" gesture, so both close.
+    // Slider mode: switching to a model with an effort ladder keeps the panel open so the footer slider can set its effort. Presets already carry their effort, and picking the current model again is the "done" gesture, so both close.
     const keepOpen =
       usesEffortSlider && row.preset === null && !row.selected && selection.effortLevels.length > 0;
     commitRow(
@@ -351,8 +337,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     setTab(openTabs[(index + direction + openTabs.length) % openTabs.length] ?? STARRED_TAB);
   };
 
-  // mod+1…9 picks a visible row. Registered on window capture because thread-jump
-  // owns the same chord globally (the sidebar yields while this picker is open).
+  // mod+1…9 picks a visible row. Registered on window capture because thread-jump owns the same chord globally (the sidebar yields while this picker is open).
   const onShortcutKeyDown = useEffectEvent((event: KeyboardEvent) => {
     const rowIndex = modelPickerShortcutRowIndex(event);
     if (rowIndex === null) return;

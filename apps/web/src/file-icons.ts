@@ -1,22 +1,10 @@
-// FILE: file-icons.ts
-// Purpose: Map file/folder paths to Central icon names (the central-icons-reversed
-//          asset set). Anything we don't have a dedicated glyph for falls back to
-//          the generic `code-brackets` icon.
-// Layer: app-level utility shared by composer, diff panel, timeline, sidebar.
-// Depends on: Central icon assets served from /central-icons-reversed (see central-icons.tsx).
-
-// Generic bracket glyph used whenever a file type has no dedicated Central icon.
 const DEFAULT_FILE_ICON = "code-brackets";
 
-// Lookup keys come from untrusted text (chat content, attachment names), so the
-// tables must be Maps: a plain-object lookup for `constructor` or `__proto__` walks
-// the prototype chain and returns an inherited member instead of an icon name.
+// Lookup keys come from untrusted text (chat content, attachment names), so the tables must be Maps: a plain-object lookup for `constructor` or `__proto__` walks the prototype chain and returns an inherited member instead of an icon name.
 function createIconTable(entries: Record<string, string>): ReadonlyMap<string, string> {
   return new Map(Object.entries(entries));
 }
 
-// Exact basename → Central icon name (case-insensitive lookup). Add entries here
-// when a well-known filename has a dedicated icon we want to surface.
 const FILE_ICON_BY_BASENAME = createIconTable({
   "package.json": "npm",
   "package-lock.json": "npm",
@@ -60,9 +48,7 @@ const FILE_ICON_BY_BASENAME = createIconTable({
   ".env.example": "settings-gear-1",
 });
 
-// Extension → Central icon name. Longest extension wins because
-// `extensionCandidates` yields compound extensions first (e.g. `.d.ts` before
-// `.ts`). NOTE: the Python asset ships misspelled upstream as `phyton.svg`.
+// longest extension wins (`.d.ts` before `.ts`); the Python asset ships misspelled upstream as `phyton.svg`
 const FILE_ICON_BY_EXTENSION = createIconTable({
   ts: "typescript",
   mts: "typescript",
@@ -164,9 +150,6 @@ export function basenameOfPath(pathValue: string): string {
   return pathValue.slice(slashIndex + 1);
 }
 
-// True when the basename matches a known filename or a known file extension.
-// Used both for icon selection and to decide whether an inline token (e.g. an
-// assistant's `path/to/file.ts`) should render as a file mention chip.
 export function pathLooksLikeKnownFile(pathValue: string): boolean {
   const basename = basenameOfPath(pathValue).toLowerCase();
   if (FILE_ICON_BY_BASENAME.has(basename)) {
@@ -200,8 +183,6 @@ function extensionCandidates(fileName: string): string[] {
   return candidates;
 }
 
-// Resolves the Central icon name for a file path, defaulting to the generic
-// bracket glyph when the basename/extension has no dedicated icon.
 export function getFileIconName(pathValue: string): string {
   const basename = basenameOfPath(pathValue).toLowerCase();
   const byName = FILE_ICON_BY_BASENAME.get(basename);
@@ -213,10 +194,7 @@ export function getFileIconName(pathValue: string): string {
   return DEFAULT_FILE_ICON;
 }
 
-// MIME type → Central icon name, used as a fallback for attachments whose
-// filename has no recognizable extension (e.g. a download named only by its
-// Content-Type, like a UUID carrying a `text/calendar` body). Mirrors the
-// families covered by the extension map so the two stay visually consistent.
+// MIME fallback for attachments whose filename has no recognizable extension (e.g. a download named only by Content-Type)
 const FILE_ICON_BY_MIME_TYPE = createIconTable({
   "application/pdf": "file-pdf",
   "application/json": "json",
@@ -244,14 +222,9 @@ const FILE_ICON_BY_MIME_TYPE = createIconTable({
   "text/xml": "code-brackets",
 });
 
-// Attachments default to a neutral document glyph rather than the source-code
-// bracket: an arbitrary upload is far likelier to be a document than code.
+// Attachments default to a neutral document glyph rather than the source-code bracket: an arbitrary upload is far likelier to be a document than code.
 const DEFAULT_ATTACHMENT_ICON = "file-text";
 
-// Resolves the Central icon name for a chat file attachment. Prefers the
-// filename (basename, then extension) like `getFileIconName`, then falls back to
-// the MIME type and finally a generic document glyph — never the bracket glyph,
-// which misreads on non-code uploads.
 export function getAttachmentIconName(attachment: {
   name: string;
   mimeType?: string | null | undefined;

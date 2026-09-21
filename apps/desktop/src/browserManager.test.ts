@@ -188,8 +188,7 @@ describe("DesktopBrowserManager repeated workflow characterization", () => {
       /not ready yet/i,
     );
 
-    // A duplicate terminal signal for the same physical guest must not publish
-    // or clean up the logical tab a second time.
+    // a duplicate terminal signal for the same physical guest must not publish or clean up the logical tab a second time
     firstGuest.emit("render-process-gone");
     expect(publication).toHaveBeenCalledOnce();
     expect(manager.getState({ threadId: THREAD_ID })).toBe(crashedSnapshot);

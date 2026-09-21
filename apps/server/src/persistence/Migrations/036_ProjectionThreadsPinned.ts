@@ -1,7 +1,4 @@
-/**
- * Adds durable pin state to projected threads so server-side retention can
- * protect pinned conversations without depending on browser local storage.
- */
+/** durable pin state so retention protects pinned threads without browser local storage */
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

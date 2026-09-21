@@ -1,8 +1,3 @@
-// FILE: chatReferences.browser.ts
-// Purpose: Browser regressions for DOM-backed selection readers (line spans and
-//          verbatim snippets scoped to a container).
-// Layer: Web UI utility tests
-
 import { afterEach, expect, it } from "vitest";
 
 import { getSelectionSnippetWithin, getSelectionWithin } from "./chatReferences";
@@ -80,7 +75,6 @@ it("getSelectionWithin resolves the line and column span of a source selection",
     throw new Error("window.getSelection() is unavailable");
   }
   const range = document.createRange();
-  // "gamma" on line 2 (columns 6-10).
   range.setStart(text, "alpha\nbeta ".length);
   range.setEnd(text, "alpha\nbeta gamma".length);
   selection.removeAllRanges();

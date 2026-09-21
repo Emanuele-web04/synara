@@ -3,9 +3,7 @@ import { Schema } from "effect";
 import { NonNegativeInt } from "./baseSchemas";
 
 export const WS_PROTOCOL_EPOCH = 1;
-// Revision 2 changes PullRequestCommit.authors to permit name-only authors.
-// Keep revision 1 out of the compatibility range so older clients cannot
-// decode the new nullable login shape and fail while rendering PR details.
+// rev 2 permits name-only authors — rev 1 stays out of range so older clients can't decode the new shape and fail rendering
 export const WS_PROTOCOL_MIN_REVISION = 2;
 export const WS_PROTOCOL_MAX_REVISION = 2;
 export const WS_BOOTSTRAP_METHOD = "bootstrap.negotiate";
@@ -13,9 +11,7 @@ export const WS_BOOTSTRAP_PATH = "/ws/bootstrap";
 export const WS_NEGOTIATE_HTTP_PATH = "/ws/negotiate";
 export const WS_FEATURE_PATH = "/ws";
 
-// These are protocol budgets, not server implementation details. Keeping the
-// browser's desired lease set and server admission on the same values prevents
-// prewarming from creating subscriptions the connection can never admit.
+// protocol budgets shared by both sides — prevents prewarming subscriptions the connection can never admit
 export const WS_STREAM_LIMITS = {
   totalPerClient: 20,
   threadPerClient: 8,
@@ -39,28 +35,21 @@ export const WS_NEGOTIATE_QUERY = {
 export const WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY = "projects.github-provisioning";
 export const WS_PROJECT_FILE_WATCH_CAPABILITY = "projects.file-watch";
 
-// Capabilities the current client refuses to run without. Kept separate from
-// the advertised server list so a newer client can still negotiate with an
-// older server (over the legacy bootstrap socket) during a rollout window.
+// kept separate from the advertised list so a newer client can still negotiate with an older server during rollout
 export const WS_CLIENT_REQUIRED_CAPABILITIES = [
   "orchestration.cursor-safe-streams",
   "orchestration.thread-detail-snapshot",
   "rpc.typed-errors",
-  // git.createDetachedWorktree is a streaming RPC on this client; an older
-  // server would answer it unary and the worktree-setup card would never
-  // advance, so require the capability and fail negotiation with a clear
-  // "update-server" instead.
+  // an older server would answer it unary and the setup card would never advance — fail negotiation with a clear "update-server" instead
   "git.worktree-setup-progress",
 ] as const;
 
 export const WS_SERVER_CAPABILITIES = [
   ...WS_CLIENT_REQUIRED_CAPABILITIES,
-  // Optional feature capability: older servers may omit it without making the
-  // rest of a newer client unusable during a staggered rollout.
+  // older servers may omit it without breaking a newer client during staggered rollout
   WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
   WS_PROJECT_FILE_WATCH_CAPABILITY,
-  // Single-handshake connect: negotiation is available over plain HTTP at
-  // WS_NEGOTIATE_HTTP_PATH, so a connect costs exactly one WebSocket upgrade.
+  // negotiation over plain HTTP — a connect costs exactly one WebSocket upgrade
   "transport.http-negotiate",
 ] as const;
 

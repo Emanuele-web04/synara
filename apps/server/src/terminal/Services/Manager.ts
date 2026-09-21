@@ -1,11 +1,3 @@
-/**
- * TerminalManager - Terminal session orchestration service interface.
- *
- * Owns terminal lifecycle operations, output fanout, and session state
- * transitions for thread-scoped terminals.
- *
- * @module TerminalManager
- */
 import {
   TerminalAckOutputInput,
   TerminalClearInput,
@@ -35,13 +27,13 @@ export interface TerminalSessionState {
   cwd: string;
   status: TerminalSessionStatus;
   pid: number | null;
-  /** Append-optimized scrollback buffer (sanitized visible text, capped on read). */
+  /** append-optimized scrollback buffer (sanitized visible text, capped on read) */
   history: TerminalHistoryBuffer;
   pendingHistoryControlSequence: string;
   exitCode: number | null;
   exitSignal: number | null;
   updatedAt: string;
-  /** Last open/reattach time; used as an archive-cleanup generation fence. */
+  /** archive-cleanup generation fence */
   lastOpenedAt: string;
   cols: number;
   rows: number;
@@ -50,50 +42,30 @@ export interface TerminalSessionState {
   unsubscribeExit: (() => void) | null;
   hasRunningSubprocess: boolean;
   detectedCliKind: TerminalCliKind | null;
-  /** True once this branded session has actually shown a provider child process. */
+  /** true once this branded session has shown a provider child process */
   providerDescendantObserved: boolean;
   managedAgentRunning: boolean;
   managedAgentState: TerminalActivityState | null;
-  /** True once at least one hook event (Start/Stop/PermissionRequest) has been observed. */
+  /** true once a hook event (Start/Stop/PermissionRequest) has been observed */
   managedAgentObserved: boolean;
   runtimeEnv: Record<string, string> | null;
-  /** Buffered shell input used to detect canonical CLI commands at submit time. */
   pendingInputBuffer: string;
-  /** Live terminal-mode mirror used to replay input modes after renderer reattach. */
   modeReplayTracker: TerminalModeReplayTracker | null;
-  /** Buffered output chunks awaiting flush (output batching). */
   pendingOutputChunks: string[];
-  /** Total UTF-8 byte length of buffered output chunks. */
   pendingOutputLength: number;
-  /** Timer handle for the next scheduled output flush. */
   outputFlushTimer: ReturnType<typeof setTimeout> | null;
-  /**
-   * When false, output is still drained and parsed into history but no live
-   * `output` events are emitted. Set for headless sessions (e.g. dev servers)
-   * whose output no renderer consumes, so their PTY traffic never reaches the
-   * WebSocket fanout. Defaults to true for interactive terminals.
-   */
+  /** headless: drain+parse into history but emit no live output events; defaults true for interactive terminals */
   streamOutput: boolean;
-  /** Whether PTY reading has been paused due to backpressure. */
   outputPaused: boolean;
-  /** Local batching requested a PTY pause until the server flushes output. */
   outputBufferPauseRequested: boolean;
-  /** Renderer parsing is behind; keep reads paused until parsed-output ACKs catch up. */
   outputAckPauseRequested: boolean;
-  /** True once a renderer proves it supports parsed-output ACKs for this session. */
   outputAckObserved: boolean;
-  /** Bytes emitted to ACK-capable renderers that xterm has not reported as parsed yet. */
   outputUnackedBytes: number;
-  /**
-   * Watchdog timer that force-resumes ACK-paused reads when a renderer stops
-   * sending ACKs (crash/disconnect), so the terminal can never freeze permanently.
-   */
+  /** force-resume watchdog so a renderer that stops ACKing can't freeze the terminal permanently */
   outputAckResumeTimer: ReturnType<typeof setTimeout> | null;
-  /** Latest wall-clock timestamp when the user wrote to this PTY. */
   lastInputAt: number | null;
-  /** Latest wall-clock timestamp when the PTY emitted output. */
   lastOutputAt: number | null;
-  /** Normalized visible output used to ignore redraw-only PTY noise. */
+  /** normalized visible output used to ignore redraw-only PTY noise */
   lastOutputSignature: string | null;
 }
 
@@ -112,78 +84,38 @@ export interface TerminalCloseOpenedAtOrBeforeInput {
   readonly openedAtOrBefore: string;
 }
 
-/**
- * TerminalManagerShape - Service API for terminal session lifecycle operations.
- */
 export interface TerminalManagerShape {
-  /**
-   * Open or attach to a terminal session.
-   *
-   * Reuses an existing session for the same thread/terminal id and restores
-   * persisted history on first open.
-   */
+  /** reuses the session for the same thread/terminal id and restores persisted history on first open */
   readonly open: (
     input: TerminalOpenInput,
   ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
 
-  /**
-   * Write input bytes to a terminal session.
-   */
   readonly write: (input: TerminalWriteInput) => Effect.Effect<void, TerminalError>;
 
-  /**
-   * Acknowledge terminal output after the renderer's xterm parser consumes it.
-   */
   readonly ackOutput: (input: TerminalAckOutputInput) => Effect.Effect<void, TerminalError>;
 
-  /**
-   * Resize the PTY backing a terminal session.
-   */
   readonly resize: (input: TerminalResizeInput) => Effect.Effect<void, TerminalError>;
 
-  /**
-   * Clear terminal output history.
-   */
   readonly clear: (input: TerminalClearInput) => Effect.Effect<void, TerminalError>;
 
-  /**
-   * Restart a terminal session in place.
-   *
-   * Always resets history before spawning the new process.
-   */
+  /** always resets history before spawning the new process */
   readonly restart: (
     input: TerminalRestartInput,
   ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
 
-  /**
-   * Close an active terminal session.
-   *
-   * When `terminalId` is omitted, closes all sessions for the thread.
-   */
+  /** omitting terminalId closes all sessions for the thread */
   readonly close: (input: TerminalCloseInput) => Effect.Effect<void, TerminalError>;
 
-  /**
-   * Close only sessions whose latest open/reattach predates an archive event.
-   * The comparison and close run under the same per-thread terminal lock.
-   */
+  /** comparison and close run under the same per-thread terminal lock */
   readonly closeSessionsOpenedAtOrBefore: (
     input: TerminalCloseOpenedAtOrBeforeInput,
   ) => Effect.Effect<void, TerminalError>;
 
-  /**
-   * Subscribe to terminal runtime events.
-   */
   readonly subscribe: (listener: (event: TerminalEvent) => void) => Effect.Effect<() => void>;
 
-  /**
-   * Dispose all managed terminal resources.
-   */
   readonly dispose: Effect.Effect<void>;
 }
 
-/**
- * TerminalManager - Service tag for terminal session orchestration.
- */
 export class TerminalManager extends ServiceMap.Service<TerminalManager, TerminalManagerShape>()(
   "synara/terminal/Services/Manager/TerminalManager",
 ) {}

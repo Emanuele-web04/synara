@@ -12,10 +12,7 @@ export function DiffStatLabel(props: { additions: number; deletions: number }) {
   );
 }
 
-// Zero-guarded +/- stats: renders nothing when there are no changes so callers
-// can drop the repeated `hasNonZeroStat(...) ? <span>…` idiom. Inherits the UI
-// font (DiffStatLabel keeps `tabular-nums` for column alignment) so the counts
-// read like chrome, not code. Sizing/layout stays caller-controlled via `className`.
+// zero-guarded +/− stats render nothing when unchanged; keeps tabular-nums for column alignment, sizing stays caller-controlled
 export function DiffStat(props: { additions: number; deletions: number; className?: string }) {
   if (!hasNonZeroStat(props)) {
     return null;

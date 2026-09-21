@@ -1,11 +1,3 @@
-// FILE: PullRequestList.tsx
-// Purpose: The pull requests list body — renders entries as PullRequestRows, either flat or
-//          under the involvement group headers produced by groupPullRequestEntriesByInvolvement
-//          (the "All" tab). Rows use repository + number identity because the global list has
-//          one row per remote PR; selection still retains project context for the detail panel.
-// Layer: Pull request presentation
-// Exports: PullRequestList
-
 import type { ProjectId, PullRequestListEntry } from "@synara/contracts";
 import { pullRequestListEntryKey, type PullRequestListGroup } from "./pullRequestList.logic";
 import { PullRequestRow } from "./PullRequestRow";
@@ -54,8 +46,7 @@ export const PullRequestList = function PullRequestList({
     return (
       <div className="space-y-0.5">
         {grouped.flatMap((group, groupIndex) => [
-          // Keep headers and keyed rows as direct siblings. When a pin moves a row between
-          // groups, React can move the same DOM node instead of remounting it and losing focus.
+          // keep headers and keyed rows as direct siblings — when a pin moves a row between groups React can move the DOM node instead of remounting and losing focus
           <h2
             key={`group:${group.key}`}
             className={cn(

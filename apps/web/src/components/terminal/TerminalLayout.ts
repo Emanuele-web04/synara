@@ -1,8 +1,3 @@
-// FILE: TerminalLayout.ts
-// Purpose: Pure layout resolution for terminal pane tabs, pane trees, and visual identities.
-// Layer: Terminal view-model helpers
-// Depends on: shared terminal identity logic plus terminal pane-tree helpers.
-
 import {
   type ResolvedTerminalVisualIdentity,
   type TerminalCliKind,

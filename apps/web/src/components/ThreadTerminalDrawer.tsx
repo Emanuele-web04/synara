@@ -1,8 +1,3 @@
-// FILE: ThreadTerminalDrawer.tsx
-// Purpose: Hosts the terminal drawer/workspace chrome and each xterm viewport for a thread.
-// Layer: Chat terminal workspace UI
-// Depends on: xterm addons, native terminal APIs, and terminal workspace state from ChatView.
-
 import "@xterm/xterm/css/xterm.css";
 import { SearchAddon } from "@xterm/addon-search";
 import {
@@ -372,8 +367,7 @@ function TerminalViewport({
     if (!api) return;
     const requestId = ++selectionActionRequestIdRef.current;
     selectionActionOpenRef.current = true;
-    // Promise chain instead of async/try-finally: React Compiler does not yet
-    // support try/finally, and it would skip optimizing this whole component.
+    // Promise chain instead of async/try-finally: React Compiler does not yet support try/finally, and it would skip optimizing this whole component.
     void api.contextMenu
       .show(contextMenuItems, nextAction.position)
       .then((clicked) => {

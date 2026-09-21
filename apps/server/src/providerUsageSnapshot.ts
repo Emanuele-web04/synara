@@ -1,6 +1,3 @@
-// FILE: providerUsageSnapshot.ts
-// Purpose: Read provider-specific local usage archives for recent usage snapshots.
-
 import { createReadStream, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import nodePath from "node:path";
@@ -21,8 +18,7 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const LOOKBACK_7D_MS = 7 * ONE_DAY_MS;
 const LOOKBACK_30D_MS = LOOKBACK_DAYS * ONE_DAY_MS;
 const USAGE_CACHE_TTL_MS = 30_000;
-// Keep enough recent archives to make the 30d summary materially different from 7d
-// for heavy local usage without scanning the full historical archive every refresh.
+// keep enough recent archives to make 30d materially different from 7d without scanning the full history every refresh
 const MAX_RECENT_USAGE_FILES = 2_000;
 const PROVIDER_USAGE_FILE_READ_CONCURRENCY = 16;
 const CODEX_SESSION_READ_CHUNK_BYTES = 64 * 1024;
@@ -119,8 +115,7 @@ async function safeStat(path: string): Promise<Stats | null> {
   }
 }
 
-// Bounds archive reads so a cold stats load does useful parallel work without
-// flooding the filesystem with thousands of simultaneous readFile calls.
+// bounds archive reads so a cold stats load does useful parallel work without flooding the fs with thousands of readFile calls
 async function mapWithConcurrency<T, R>(
   items: ReadonlyArray<T>,
   concurrency: number,
@@ -484,9 +479,7 @@ function readClaudeToolResultSample(input: {
   };
 }
 
-// Claude Code stores transcripts under `<CLAUDE_CONFIG_DIR>/projects`, defaulting to
-// `~/.claude/projects`. Honor the override so the Profile reads the SAME transcripts
-// the active Claude provider does (the adapter inherits `process.env`).
+// honor CLAUDE_CONFIG_DIR so the Profile reads the SAME transcripts the active Claude provider does (the adapter inherits process.env)
 function resolveClaudeProjectsRoot(homeDir: string): string {
   const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
   return nodePath.join(configDir || nodePath.join(homeDir, ".claude"), "projects");
@@ -516,14 +509,7 @@ async function listRecentClaudeTranscriptFiles(
   return listRecentFiles(candidates, maxFiles);
 }
 
-/**
- * Claude transcripts are unbounded: a long-running session writes hundreds of megabytes
- * into one file, and a snapshot reads PROVIDER_USAGE_FILE_READ_CONCURRENCY of them at
- * once. Reading one into a string costs its full size in the heap plus a second copy for
- * the line split, so a few large transcripts are enough to exhaust old space and abort the
- * backend. Stream chunks and cap individual records so malformed or tool-heavy lines cannot
- * recreate the same problem inside a line reader.
- */
+/** Claude transcripts are unbounded — a long session writes hundreds of MB into one file and a snapshot reads many at once; a few large transcripts can exhaust old space, so stream chunks and cap individual records */
 export async function readClaudeUsageSamples(
   path: string,
 ): Promise<ReadonlyArray<ClaudeUsageSample>> {
@@ -608,13 +594,11 @@ export async function readClaudeUsageSamples(
       appendLineChunk(chunk.subarray(lineStart));
     }
 
-    // Match readFile/split behavior for a final record that has not been newline-terminated.
     if (lineBytes > 0 && !skippingOversizedLine) {
       collectLine(Buffer.concat(lineChunks, lineBytes), lineIndex);
     }
   } catch {
-    // A transcript that vanishes or fails partway through yields what was read by then,
-    // which is the same outcome as a truncated archive.
+    // a transcript that vanishes or fails partway yields what was read — same outcome as a truncated archive
   } finally {
     stream.destroy();
   }
@@ -789,8 +773,7 @@ export const getProviderUsageSnapshot = Effect.fn(function* (
   });
 });
 
-// Reused by the live-usage batch (providerUsage/index.ts) to enrich live snapshots with the
-// locally-derived 24h/7d/30d token-total lines for providers that keep on-disk archives.
+// reused by the live-usage batch to enrich snapshots with locally-derived 24h/7d/30d token lines for providers keeping on-disk archives
 export async function loadLocalProviderUsageLines(input: {
   provider: ProviderKind;
   homeDir: string;

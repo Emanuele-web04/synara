@@ -1,7 +1,3 @@
-// FILE: ComposerBranchMismatchBanner.test.tsx
-// Purpose: Locks the branch-switch warning to its detached Codex-style notice surface.
-// Layer: Chat composer UI regression test
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 

@@ -87,8 +87,7 @@ export function makeAgentGatewayMcpTransport(input: {
           return jsonRpcResult(request.id, {
             tools: input.tools.map((tool) => ({
               ...tool.definition,
-              // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
-              // returns a fresh object for object input, so this restores the static type.
+              // SAFETY: the sanitizer returns a fresh object for object input — this restores the static type
               inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<
                 string,
                 unknown
@@ -277,10 +276,7 @@ export function makeAgentGatewayMcpTransport(input: {
       const responseSlots: McpResponseSlot[] = [];
       const cancellationRequestIds: Array<string | number> = [];
 
-      // Start every request before awaiting any of them. Apart from avoiding
-      // head-of-line blocking for ordinary batches, this guarantees that a
-      // cancellation notification in the same batch can see its target even
-      // when the notification appears first.
+      // start every request before awaiting any — a cancellation notification in the same batch can then see its target even when it appears first
       for (const parsed of parsedMessages) {
         switch (parsed.kind) {
           case "request": {
@@ -310,9 +306,7 @@ export function makeAgentGatewayMcpTransport(input: {
                 cancellationRequested = true;
                 if (!requestStarted) return Promise.resolve();
                 return new Promise<void>((resolve) => {
-                  // Avoid interrupting re-entrantly while an async Effect is
-                  // still installing its AbortController finalizer. The fiber
-                  // observer is the cleanup barrier returned to Stop.
+                  // don't interrupt re-entrantly while an async Effect is still installing its AbortController finalizer
                   queueMicrotask(() => {
                     if (fiber.pollUnsafe() !== undefined) {
                       resolve();
@@ -325,9 +319,7 @@ export function makeAgentGatewayMcpTransport(input: {
               },
             });
             if (cancellationRequested) {
-              // A terminal-turn tombstone cancelled this request during
-              // registration. The handler is still fenced behind `registered`,
-              // so a direct interruption is safe and no browser work can start.
+              // a terminal-turn tombstone cancelled this during registration — still fenced behind `registered`, so a direct interrupt is safe
               fiber.interruptUnsafe();
             } else {
               requestStarted = true;

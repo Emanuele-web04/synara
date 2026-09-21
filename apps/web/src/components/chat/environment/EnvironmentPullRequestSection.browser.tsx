@@ -1,9 +1,3 @@
-// FILE: EnvironmentPullRequestSection.browser.tsx
-// Purpose: Browser regression tests for the PR row menu in the Environment panel — Repair
-//          attaches composer context cards, the comment list scrolls, and link actions close
-//          the panel.
-// Layer: Vitest browser tests
-
 import "../../../index.css";
 
 import {
@@ -439,9 +433,7 @@ describe("EnvironmentPullRequestSection", () => {
     const avatars = document.querySelectorAll('img[src*="avatars.githubusercontent.com"]');
     expect(avatars.length).toBe(comments.length);
 
-    // Every clamped title/snippet keeps at least one full line: when the list
-    // overflows its max height, rows must scroll rather than flex-shrink into
-    // slivers (their overflow-hidden spans have no automatic minimum size).
+    // clamped rows must keep at least one full line: when the list overflows max height, rows scroll rather than flex-shrink into slivers
     const clamped = Array.from(document.querySelectorAll("span.line-clamp-2")).filter((span) =>
       span.textContent?.includes("Finding"),
     );

@@ -1,8 +1,3 @@
-// FILE: providerDiscovery.test.ts
-// Purpose: Verifies provider discovery search normalization and ranking behavior.
-// Layer: Web lib tests
-// Exports: Vitest cases for composer/plugin discovery helpers.
-
 import type { ProviderSkillDescriptor } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { buildSkillSearchFields, rankProviderDiscoveryItems } from "./providerDiscovery";

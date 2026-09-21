@@ -1,8 +1,3 @@
-// FILE: theme.seed.generated.ts
-// Purpose: Stores normalized theme seeds with Synara's zero-contrast default.
-// Layer: Web appearance generated catalog
-// Exports: THEME_SEED_CATALOG for code-theme seed lookup.
-
 import type { ChromeTheme, ThemeVariant } from "./theme.logic";
 
 export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, ChromeTheme>>> = {

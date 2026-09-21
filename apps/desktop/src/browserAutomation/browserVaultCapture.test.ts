@@ -96,7 +96,6 @@ describe("native credential capture lifecycle", () => {
     f.update({ settings: { offerSave: true, autosave: false, agentUse: true } });
     await vi.waitFor(() => expect(mocks.install).toHaveBeenCalled());
     const context = mocks.install.mock.calls[0]![0] as CaptureContextShim;
-    // on("page") fires for late-registered tabs; off("page") stops the fan-out.
     const seen: string[] = [];
     const listener = (page: { id: string }) => void seen.push(page.id);
     context.on("page", listener);
@@ -121,7 +120,6 @@ describe("native credential capture lifecycle", () => {
       },
     } as unknown as BrowserAutomationVisibleRuntime);
     expect(seen).toHaveLength(1);
-    // Closed tabs are reported shut and refuse new CDP sessions.
     const [page] = context.pages();
     expect(page!.isClosed()).toBe(false);
     unregister();

@@ -1,13 +1,4 @@
-// FILE: lib/ctaButton.ts
-// Purpose: The site's pill call-to-action styling in one place — the filled
-//          primary pill and the bordered secondary pill used by the hero,
-//          sponsor, privacy, and changelog CTAs.
-// Layer: shared style helper (server/client importable).
-// Note: A class helper rather than a wrapper component on purpose. These CTAs
-//       are variously a <Link>, an <a target="_blank">, and a <button>, so the
-//       call site keeps ownership of the element, href, rel, and aria bits
-//       instead of everything routing through a prop passthrough layer.
-//       Mirrors the cva convention already used by components/ui/button.tsx.
+// a class helper not a wrapper component on purpose — CTAs are variously Link/a/button, so the call site keeps ownership of element, href, rel, and aria
 
 import { cva, type VariantProps } from "class-variance-authority";
 
@@ -24,11 +15,8 @@ const ctaButton = cva(
           "border border-[var(--divide)] text-[var(--text-primary)] transition-colors hover:bg-[var(--mock-row)]",
       },
       width: {
-        /** Natural content width — the default for inline CTAs. */
         auto: "",
-        /** Pinned to content width inside a stretching flex/grid parent. */
         fit: "w-fit",
-        /** Full-width stacked on mobile, natural width from sm up. */
         responsive: "w-full justify-center sm:w-auto",
       },
     },

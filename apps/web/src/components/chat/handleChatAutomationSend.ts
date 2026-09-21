@@ -90,9 +90,7 @@ export async function handleChatAutomationSend({
   providerOptionsForDispatchForSend,
 }: ChatAutomationSendInput): Promise<boolean> {
   const conversation = pendingAutomationConversation;
-  // While gathering missing details, fold the reply into the cleaned request so it
-  // re-resolves as a whole rather than parsing the bare answer (and never re-parses
-  // "could you create an automation" scaffolding as the task).
+  // fold the reply into the cleaned request so it re-resolves as a whole rather than parsing the bare answer as the task
   const messageForAutomation = conversation
     ? `${conversation.accumulatedMessage}\n${trimmedPromptForSend}`
     : trimmedPromptForSend;
@@ -101,8 +99,7 @@ export async function handleChatAutomationSend({
     cwd: threadWorkspaceCwd ?? activeProject.cwd,
     generateIntent: (request) => api.server.generateAutomationIntent(request),
   });
-  // Drop a stale resolve: bail if the user switched threads, or cancelled/changed the
-  // setup, while generateAutomationIntent was awaiting.
+  // drop a stale resolve: bail if the user switched threads or cancelled/changed setup while the intent was awaiting
   if (
     activeThreadIdRef.current !== threadId ||
     pendingAutomationConversationRef.current !== conversation ||
@@ -112,9 +109,7 @@ export async function handleChatAutomationSend({
   }
   if (automationRequest.type !== "normal-chat") {
     if (automationRequest.type === "needs-clarification") {
-      // Conversational setup only runs for prompt-only sends while no turn is live:
-      // clearing the composer would drop attachments/mentions Cancel can't restore,
-      // and ephemeral setup bubbles must not anchor a running turn's work rows.
+      // conversational setup only runs for prompt-only sends while no turn is live — clearing the composer would drop attachments/mentions Cancel can't restore, and ephemeral bubbles must not anchor a running turn's work rows
       if (!hasPromptOnlySendableContent || hasLiveTurn) {
         toastManager.add({
           type: "warning",
@@ -125,14 +120,10 @@ export async function handleChatAutomationSend({
         });
         return true;
       }
-      // Render the exchange in-thread: echo the user's words as a bubble and ask for
-      // what's missing as an assistant bubble. Nothing reaches a provider; the cleaned
-      // automationMessage accumulates for the next re-resolve and for Cancel's restore.
+      // render the exchange in-thread as user + assistant bubbles; nothing reaches a provider, and the cleaned request accumulates for re-resolve and Cancel's restore
       const question = automationClarificationPrompt(automationRequest.missingFields);
       const priorBubbles = conversation?.bubbles ?? [];
-      // Drop the submitted request from the composer (it is captured in
-      // accumulatedMessage, so re-folding it would duplicate the scaffold) while
-      // preserving anything typed *after* it during the async resolve.
+      // drop the submitted request from the composer (captured in accumulatedMessage) while preserving anything typed after it during the async resolve
       const liveDraft = promptRef.current.trimStart();
       const leftover = liveDraft.startsWith(trimmedPromptForSend)
         ? liveDraft.slice(trimmedPromptForSend.length).trimStart()
@@ -167,14 +158,11 @@ export async function handleChatAutomationSend({
       targetThreadId: automationTargetThreadId,
       hasEphemeralContext: !hasPromptOnlySendableContent,
     });
-    // A multi-turn setup always confirms before creating, so the user reviews the
-    // parsed task/schedule (and any scaffolding the parser kept) rather than it
-    // silently auto-creating a recurring job.
+    // multi-turn setup always confirms before creating so the user reviews the parsed task/schedule rather than silently auto-creating a recurring job
     if (automationDraft.needsDraftReview || conversation !== null) {
       if (conversation !== null) {
-        // Keep the full multi-turn request in the composer so dismissing the review
-        // dialog doesn't lose it (the single-turn path likewise leaves its text).
-        // Restore only the text; any attachments/mentions on the final reply stay.
+        // keep the full multi-turn request in the composer so dismissing the review dialog doesn't lose it
+        // Keep the full multi-turn request in the composer so dismissing the review dialog doesn't lose it (the single-turn path likewise leaves its text). Restore only the text; any attachments/mentions on the final reply stay.
         const liveDraft = promptRef.current.trimStart();
         const leftover = liveDraft.startsWith(trimmedPromptForSend)
           ? liveDraft.slice(trimmedPromptForSend.length).trimStart()
@@ -208,8 +196,7 @@ export async function handleChatAutomationSend({
     return true;
   }
   if (conversation) {
-    // The combined text no longer reads as an automation; abandon setup and let
-    // this message send as a normal chat turn instead of looping on the question.
+    // the combined text no longer reads as an automation — abandon setup and send as a normal turn instead of looping
     pendingAutomationConversationRef.current = null;
     setPendingAutomationConversation(null);
   }

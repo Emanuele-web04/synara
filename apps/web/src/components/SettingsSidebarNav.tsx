@@ -1,10 +1,3 @@
-// FILE: SettingsSidebarNav.tsx
-// Purpose: Settings section sidebar navigation with central icons and reference-style pill rows.
-//          Doubles as a settings search surface: typing swaps the section list for ranked
-//          row matches (same behavior as the editor file search), each jumping to its section.
-// Layer: UI component
-// Exports: SettingsSidebarNav
-
 import { type KeyboardEvent as ReactKeyboardEvent, useState } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
@@ -51,8 +44,7 @@ function SettingsSearchResultRow(props: {
 }) {
   const { entry, onSelect } = props;
   const icon = SETTINGS_SECTION_ICON_BY_ID.get(entry.section) ?? "settings-gear-4";
-  // Mirrors the project header + nested thread layout: the section reuses the nav row
-  // (muted icon + label) and the matched setting sits below as an indented thread-style row.
+  // Mirrors the project header + nested thread layout: the section reuses the nav row (muted icon + label) and the matched setting sits below as an indented thread-style row.
   return (
     <li>
       <button

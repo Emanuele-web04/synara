@@ -512,17 +512,16 @@ describe("TerminalManager", () => {
     if (!process) return;
 
     process.emitData("dev server listening\n");
-    // History is still drained and persisted even though nothing is broadcast.
+    // history still drains and persists even though nothing is broadcast
     await waitFor(() => fs.existsSync(historyLogPath(logsDir)));
     await waitFor(() =>
       fs.readFileSync(historyLogPath(logsDir), "utf8").includes("dev server listening"),
     );
 
-    // No live output event ever reaches the WebSocket fanout for a headless session.
+    // no live output event reaches the WebSocket fanout for a headless session
     expect(events.some((event) => event.type === "output")).toBe(false);
 
-    // Re-opening with streamOutput:true flips the session back to live mode (e.g. a
-    // log viewer attaching later); omitting the flag would preserve headless mode.
+    // re-opening with streamOutput:true flips the session back to live mode
     await manager.open(openInput({ streamOutput: true }));
     process.emitData("after attach\n");
     await waitFor(() => events.some((event) => event.type === "output"));
@@ -537,14 +536,12 @@ describe("TerminalManager", () => {
     expect(process).toBeDefined();
     if (!process) return;
 
-    // Renderer proves ACK support, then a burst pauses reads without draining.
+    // burst pauses reads without draining
     await manager.ackOutput({ threadId: "thread-1", terminalId: "default", bytes: 1 });
     process.emitData("x".repeat(120_000));
     await waitFor(() => process.paused);
 
-    // Renderer disconnects while paused and reattaches (open on a running session).
-    // Without resetting the previous client's ACK accounting the PTY would stay
-    // paused forever, since the fresh renderer never ACKs output it never received.
+    // without resetting the previous client's ACK accounting the PTY stays paused forever — a fresh renderer never ACKs output it never received
     await manager.open(openInput());
 
     expect(process.paused).toBe(false);
@@ -939,9 +936,7 @@ describe("TerminalManager", () => {
       __terminalHistorySanitizeTesting;
     const chunkLength = 4096;
 
-    // An OSC with no BEL/ST terminator (truncated program, crashed TUI, `cat` on a
-    // binary) used to make every later byte accumulate in the carry-over buffer
-    // forever: nothing reached scrollback and each flush rescanned the whole buffer.
+    // an OSC with no terminator used to wedge every later byte in the carryover buffer forever — nothing reached scrollback
     let pending = `\u001b]0;${"a".repeat(chunkLength)}`;
     let emitted = "";
     let flushes = 0;
@@ -957,7 +952,7 @@ describe("TerminalManager", () => {
 
     expect(flushes).toBeGreaterThan(0);
     expect(emitted.length).toBeGreaterThan(maxPendingControlSequenceLength);
-    // Parser state is reset, so ordinary output flows into history again.
+    // parser state reset — ordinary output flows into history again
     const recovered = sanitizeTerminalHistoryChunk(pending, "recovered\n");
     expect(recovered.visibleText.endsWith("recovered\n")).toBe(true);
     expect(recovered.pendingControlSequence).toBe("");
@@ -973,7 +968,7 @@ describe("TerminalManager", () => {
     process.emitData(
       `\u001b]0;${"x".repeat(__terminalHistorySanitizeTesting.maxPendingControlSequenceLength + 1)}`,
     );
-    // Let the runaway sequence flush on its own batch before the next output.
+    // let the runaway sequence flush on its own batch
     await new Promise((resolve) => setTimeout(resolve, 60));
     process.emitData("visible after overflow\n");
 
@@ -993,7 +988,7 @@ describe("TerminalManager", () => {
     if (!process) return;
 
     process.emitData("archived output\n");
-    // Archiving closes terminals but keeps their transcripts on disk.
+    // archiving closes terminals but keeps their transcripts on disk
     await manager.close({ threadId: "thread-1" });
 
     const persistedHistoryByKey = (

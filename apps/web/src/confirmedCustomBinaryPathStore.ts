@@ -1,10 +1,3 @@
-// FILE: confirmedCustomBinaryPathStore.ts
-// Purpose: Persist which custom provider binary paths a successful session has
-//   already confirmed, so the "uses a custom local binary path" warning does not
-//   reappear on every app restart for a path that is already known to work.
-// Layer: Web UI state utilities
-// Exports: load/save helpers for the confirmed-path record.
-
 import type { ProviderKind } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { isPlainObject } from "./persistedRecord";
@@ -41,8 +34,7 @@ export function loadConfirmedCustomBinaryPaths(): Partial<Record<ProviderKind, s
   if (!isPlainObject(parsed)) {
     return {};
   }
-  // Validating keys against the known provider set also blocks prototype
-  // pollution (e.g. "__proto__") from untrusted persisted input.
+  // Validating keys against the known provider set also blocks prototype pollution (e.g. "__proto__") from untrusted persisted input.
   const result: Partial<Record<ProviderKind, string>> = {};
   for (const [key, value] of Object.entries(parsed)) {
     if (!isProviderKind(key) || typeof value !== "string") {
@@ -62,7 +54,5 @@ export function saveConfirmedCustomBinaryPaths(paths: Partial<Record<ProviderKin
   }
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(paths));
-  } catch {
-    // Best-effort persistence; ignore quota/availability errors.
-  }
+  } catch {}
 }

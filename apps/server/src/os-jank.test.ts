@@ -1,6 +1,3 @@
-// FILE: os-jank.test.ts
-// Purpose: Verifies PATH hydration keeps inherited entries and macOS fallbacks.
-
 import { describe, expect, it, vi } from "vitest";
 
 import { fixPath } from "./os-jank";
@@ -23,9 +20,7 @@ describe("fixPath", () => {
     expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin:/Users/test/.local/bin");
   });
 
-  // `launchctl getenv PATH` is a launchd-session value something published once and can be
-  // arbitrarily stale, so it stays a fallback: while a login shell answers it is not even
-  // consulted, and its (cheap, cached) answer wins.
+  // `launchctl getenv PATH` is a launchd-session value published once and arbitrarily stale — stays a fallback; while a login shell answers it isn't consulted
   it("does not consult launchctl on macOS when a login shell answers", () => {
     const env: NodeJS.ProcessEnv = {
       SHELL: "/bin/zsh",
@@ -52,7 +47,6 @@ describe("fixPath", () => {
         throw new Error("unknown flag");
       })
       .mockImplementationOnce(() => undefined);
-    // Whatever launchd has is better than nothing once every login shell has failed.
     const readLaunchctlPath = vi.fn(() => "/usr/bin:/bin:/usr/sbin:/sbin");
     const logWarning = vi.fn();
 
@@ -67,7 +61,7 @@ describe("fixPath", () => {
 
     expect(readPath).toHaveBeenNthCalledWith(1, "/opt/homebrew/bin/nu");
     expect(readPath).toHaveBeenNthCalledWith(2, "/bin/zsh");
-    // Asked exactly once, and only after every candidate shell had its turn.
+    // asked exactly once, and only after every candidate shell had its turn
     expect(readLaunchctlPath).toHaveBeenCalledTimes(1);
     expect(logWarning).toHaveBeenCalledWith(
       "Failed to read PATH from login shell /opt/homebrew/bin/nu.",
@@ -97,7 +91,7 @@ describe("fixPath", () => {
     expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
   });
 
-  // A populated PATH is not evidence of hydration: every process inherits one.
+  // a populated PATH is not evidence of hydration — every process inherits one
   it("still probes when PATH is populated but the hydration marker is absent", () => {
     const env: NodeJS.ProcessEnv = {
       SHELL: "/bin/zsh",

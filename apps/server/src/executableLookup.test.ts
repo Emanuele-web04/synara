@@ -1,8 +1,3 @@
-// FILE: executableLookup.test.ts
-// Purpose: Pin the PATH/PATHEXT rules now shared by editor discovery, terminal wrappers,
-//          provider maintenance and the Codex version gate. The win32 cases run on any host
-//          because the platform is injected and only affects PATH/PATHEXT semantics.
-
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -125,8 +120,6 @@ describe("executableCandidates", () => {
   });
 
   it("splits a qualified command on whichever separator it uses, not the host's", () => {
-    // `node:path`'s dirname would report "." for this on a POSIX host, silently mislabelling the
-    // directory the caller is told the binary came from.
     const candidates = [
       ...executableCandidates("C:\\bin\\codex.EXE", {
         platform: "win32",

@@ -1,7 +1,3 @@
-// FILE: release-artifact-provenance.ts
-// Purpose: Hashes collected release assets and proves platform signing before upload.
-// Layer: Release/build helper
-
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {

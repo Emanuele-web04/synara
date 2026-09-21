@@ -1,22 +1,4 @@
-/**
- * StudioOutputReactorLive - Per-turn Studio output capture layer.
- *
- * Git checkpoints attribute produced files precisely, but the Studio root is
- * typically not a Git repository, and file-change tool activities miss files
- * created by shell subprocesses (scripts, converters, downloads). This reactor
- * closes that gap: it snapshots the Studio workspace tree before provider turn
- * execution, rescans when the turn settles, and persists the diff as a thread activity
- * (`studio.outputs.captured`) that the Studio outputs listing reads back.
- *
- * Codex-generated images live under the Codex home, outside the Studio root, so
- * this scan never sees them; ProviderRuntimeIngestion owns copying those into
- * the workspace (with their own direct attribution) as image items complete.
- *
- * Concurrent Studio chats share one root, so overlapping turns may both claim
- * a file; attribution is deliberately generous rather than lossy.
- *
- * @module StudioOutputReactorLive
- */
+/** Git checkpoints don't run in the typically non-Git Studio root and file-change activities miss shell-created files — this snapshots the workspace before the turn, rescans at settle, and persists the diff as studio.outputs.captured; Codex images live outside the root so ingestion owns those; concurrent Studio chats share one root so attribution is deliberately generous */
 import {
   CommandId,
   EventId,
@@ -44,16 +26,14 @@ import {
   type StudioOutputReactorShape,
 } from "../Services/StudioOutputReactor.ts";
 
-// Baselines whose terminal event never arrives must not accumulate forever; one
-// entry per active turn stays far below this.
+// baselines whose terminal event never arrives must not accumulate — one entry per active turn stays far below this
 const MAX_TRACKED_TURN_BASELINES = 128;
 const STUDIO_OUTPUT_REACTOR_CAPACITY = 128;
 
 const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
-// Keyed by thread + turn so concurrent turns on one thread (e.g. subagent runs)
-// never clobber each other's baseline.
+// keyed by thread+turn so concurrent turns on one thread never clobber each other's baseline
 const baselineKey = (threadId: ThreadId, turnId: string) => `${threadId}\0${turnId}`;
 
 interface StudioTurnBaseline {
@@ -77,16 +57,11 @@ const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
-  // ProviderCommandReactor writes this map before invoking sendTurn/startReview.
-  // The subsequent runtime turn.started event promotes the prepared entry into
-  // baselineByTurn without rescanning after provider execution has begun.
+  // written before sendTurn — the turn.started event promotes the entry into baselineByTurn without rescanning after execution began
   const pendingBaselineByThread = new Map<ThreadId, StudioTurnBaseline>();
   const baselineByTurn = new Map<string, ActiveStudioTurnBaseline>();
 
-  // Resolves the Studio workspace root to scan for a thread, or null when this
-  // reactor should stay out of the way: non-Studio projects, unresolvable cwds,
-  // and Git roots (checkpoint capture already attributes those precisely).
-  // Shell reads keep this cheap: it runs on every turn boundary of every thread.
+  // null when this reactor should stay out of the way — non-Studio projects, unresolvable cwds, Git roots (checkpoints already attribute those)
   const resolveStudioScanRoot = Effect.fnUntraced(function* (threadId: ThreadId) {
     const threadOption = yield* projectionSnapshotQuery
       .getThreadShellById(threadId)
@@ -128,8 +103,7 @@ const make = Effect.gen(function* () {
   };
 
   const captureBaselineBeforeTurnUnsafe = Effect.fnUntraced(function* (threadId: ThreadId) {
-    // A retry replaces an earlier preparation for this thread. Remove it before
-    // scanning so a failed fresh capture cannot leave a stale baseline behind.
+    // a retry replaces an earlier preparation — remove it first so a failed capture can't leave a stale baseline
     pendingBaselineByThread.delete(threadId);
     const workspaceRoot = yield* resolveStudioScanRoot(threadId);
     if (!workspaceRoot) {
@@ -176,9 +150,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // Provider-native/subagent turns can bypass ProviderCommandReactor. Preserve
-    // best-effort capture for those paths, while ordinary user turns always use
-    // the awaited pre-dispatch baseline above.
+    // provider-native/subagent turns can bypass ProviderCommandReactor — preserve best-effort capture while user turns use the awaited pre-dispatch baseline
     const workspaceRoot = yield* resolveStudioScanRoot(event.threadId);
     if (!workspaceRoot) {
       return;
@@ -204,9 +176,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    // The payload mirrors the provider file-change activity shape (itemType + data
-    // holding `path` entries) so the Studio outputs listing extracts paths through
-    // the same collector that already handles provider payloads.
+    // mirrors the provider file-change activity shape so the outputs listing extracts paths through the same collector
     yield* orchestrationEngine.dispatch({
       type: "thread.activity.append",
       commandId: serverCommandId("studio-outputs-captured"),
@@ -224,9 +194,7 @@ const make = Effect.gen(function* () {
     });
   });
 
-  // Runs on turn.completed AND turn.aborted: files produced before an interruption
-  // are still real outputs the panel should list. A pending entry covers providers
-  // that terminate without first emitting turn.started.
+  // runs on completed AND aborted — files produced before an interruption are still real outputs; a pending entry covers providers terminating without turn.started
   const captureTurnOutputs = Effect.fnUntraced(function* (
     event: Extract<ProviderRuntimeEvent, { type: "turn.completed" | "turn.aborted" }>,
   ) {
@@ -248,9 +216,7 @@ const make = Effect.gen(function* () {
     });
   });
 
-  // A provider process can exit or error without a matching turn.aborted. Drain
-  // every baseline for that thread so real files produced before the failure are
-  // still attributed and stale in-memory entries do not accumulate.
+  // a provider can exit without a matching turn.aborted — drain every baseline for the thread so real files stay attributed and stale entries don't accumulate
   const captureTerminatedSessionOutputs = Effect.fnUntraced(function* (
     event: Extract<ProviderRuntimeEvent, { type: "session.exited" | "runtime.error" }>,
   ) {

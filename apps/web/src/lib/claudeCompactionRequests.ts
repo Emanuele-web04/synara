@@ -4,9 +4,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 type CompactionCommand = Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>;
 
-// Keep the original command until its acceptance is observed. Reusing its
-// receipt makes a manual retry safe even after a lost RPC and route remount.
-// Session storage also preserves that identity across a page reload.
+// keep the original command until acceptance is observed — reusing its receipt makes a manual retry safe after a lost RPC + remount; session storage preserves it across reload
 export const useClaudeCompactionRequests = create<{
   requests: Partial<Record<ThreadId, CompactionCommand>>;
   remember: (command: CompactionCommand) => void;

@@ -1,12 +1,3 @@
-// FILE: pullRequestList.logic.ts
-// Purpose: Pure grouping helper for the pull request list's "All" tab — buckets entries by the
-//          viewer's involvement (review requested, authored, others) so the list can
-//          render muted section headers the way the reference design does, without duplicating
-//          this classification in the route component itself.
-// Layer: Web domain helpers (no React)
-// Exports: PullRequestListGroupKey, PullRequestListGroup, grouping, pinned ordering,
-//          involvement/search filters, identity, and badge helpers
-
 import type {
   PullRequestInvolvement,
   PullRequestListEntry,
@@ -62,10 +53,7 @@ export function pullRequestPinToggleInputs(
     }));
 }
 
-// The list is fetched once per state as the "all" involvement superset; the Reviewing and
-// Authored tabs are views over it, so switching tabs never waits on the network. Reviewing
-// relies on the server-computed viewerReviewRequested flag (which includes team-routed review
-// requests); Authored matches the author login case-insensitively, like the grouping above.
+// the list is fetched once per state as the "all" superset; Reviewing/Authored are views over it so tab switches never wait on the network
 export function filterPullRequestEntriesByInvolvement(
   entries: readonly PullRequestListEntry[],
   viewerLogin: string | null | undefined,
@@ -105,8 +93,7 @@ export function orderPullRequestEntriesPinnedFirst(
   ];
 }
 
-// We only claim relationships represented by list data. In particular, no "previously reviewed"
-// bucket is inferred from authorship because the API result has no review-history signal.
+// only claim relationships represented by list data — no "previously reviewed" bucket since the API has no review-history signal
 export function groupPullRequestEntriesByInvolvement(
   entries: readonly PullRequestListEntry[],
   viewerLogin: string | null | undefined,

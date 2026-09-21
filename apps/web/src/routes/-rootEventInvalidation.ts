@@ -1,8 +1,3 @@
-// FILE: -rootEventInvalidation.ts
-// Purpose: Classifies streamed orchestration events that invalidate shared query caches.
-// Layer: Root route utility
-// Exports: Event invalidation predicates for provider, project, Git, and Studio output caches.
-
 import {
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationEvent,
@@ -63,17 +58,12 @@ function isPotentiallyFileMutatingToolCompletion(event: OrchestrationEvent): boo
   ) {
     return false;
   }
-  // Known read-only tools should not trigger expensive file/diff reads. Every
-  // other completed tool can write through a shell, MCP, subagent, script, or
-  // provider-specific payload, including older payloads with no itemType.
+  // Known read-only tools should not trigger expensive file/diff reads. Every other completed tool can write through a shell, MCP, subagent, script, or provider-specific payload, including older payloads with no itemType.
   const itemType = activityItemType(event);
   return itemType !== "web_search" && itemType !== "image_view";
 }
 
-// Activities stream while a turn is still running; file-change tool calls are the
-// earliest signal that workspace files were touched. Invalidating the project
-// file queries on them lets the editor file tree and open file preview refresh
-// mid-turn instead of waiting for the turn diff to complete.
+// file-change tool calls are the earliest mid-turn signal that workspace files were touched; invalidating on them refreshes the file tree/preview mid-turn
 export function getProjectFileInvalidationThreadIdForEvent(
   event: OrchestrationEvent,
 ): ThreadId | null {
@@ -97,7 +87,6 @@ export function getProjectFileInvalidationThreadIdForEvent(
   return null;
 }
 
-/** Invalidates one Studio output list after attribution or filesystem state changes. */
 export function getStudioOutputInvalidationThreadIdForEvent(
   event: OrchestrationEvent,
 ): ThreadId | null {

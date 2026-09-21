@@ -14,9 +14,9 @@ interface RunCall {
 
 interface BackendSetup {
   readonly processEnv?: NodeJS.ProcessEnv;
-  /** What `xcode-select -p` reports; defaults to stable Xcode. */
+  /** what `xcode-select -p` reports; defaults to stable Xcode */
   readonly selected?: string;
-  /** `/Applications` listing for discovery; defaults to none. */
+  /** `/Applications` listing for discovery; defaults to none */
   readonly applications?: readonly string[];
 }
 
@@ -56,14 +56,13 @@ function makeBackend(setup: BackendSetup) {
 
 describe("Xcode beta toolchain", () => {
   it("targets the beta named by DEVELOPER_DIR rather than the machine-wide selection", async () => {
-    // Pointing one process at a beta is how a beta is tried at all; changing
-    // the machine-wide selection would move every other build onto it too.
+    // pointing one process at a beta is how a beta is tried — changing the machine selection would move every other build too
     const { backend, calls } = makeBackend({ processEnv: { DEVELOPER_DIR: BETA_DIR } });
     await backend.listDevices({});
 
     const simctl = calls.find((call) => call.command === "xcrun");
     expect(simctl?.env?.DEVELOPER_DIR).toBe(BETA_DIR);
-    // The override answers on its own; asking the machine would return stable.
+    // the override answers on its own — asking the machine would return stable
     expect(calls.some((call) => call.command === "xcode-select")).toBe(false);
   });
 
@@ -86,9 +85,7 @@ describe("Xcode beta toolchain", () => {
 
 describe("Xcode discovery", () => {
   it("finds a beta-only Xcode when xcode-select points at CommandLineTools", async () => {
-    // The macOS default after installing git: CommandLineTools selected, a full
-    // Xcode installed but never `xcode-select -s`'d. Discovery should use it
-    // without requiring the user to set anything.
+    // the macOS default after installing git: CLT selected, a full Xcode installed but never `xcode-select -s`'d — discovery should use it without user setup
     const { backend, calls } = makeBackend({
       selected: CLT_DIR,
       applications: ["Safari.app", "Xcode-beta.app"],
@@ -111,8 +108,7 @@ describe("Xcode discovery", () => {
   });
 
   it("keeps the CommandLineTools selection when no Xcode bundle exists", async () => {
-    // Nothing to discover: the availability checklist still needs the selected
-    // path to say "install Xcode", not a null that reads as no toolchain.
+    // the checklist still needs the selected path to say "install Xcode", not a null reading as no toolchain
     const { backend, calls } = makeBackend({ selected: CLT_DIR, applications: ["Safari.app"] });
     await backend.listDevices({});
 

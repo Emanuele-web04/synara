@@ -1,7 +1,3 @@
-// FILE: ChatView.selectors.ts
-// Purpose: Keep ChatView's thread-scoped selectors off the component hot path and out of the render file.
-// Exports: lineage/work-log selector factories used by ChatView.
-
 import {
   type MessageId,
   ThreadId,
@@ -319,8 +315,7 @@ export function createThreadLineageSelector(threadId: ThreadIdType | null) {
       currentThreadId = thread.parentThreadId ?? null;
     }
 
-    // Breadcrumb labels only need shells plus parent activity identity hints;
-    // avoid subscribing this header path to message/session/diff slices.
+    // Breadcrumb labels only need shells plus parent activity identity hints; avoid subscribing this header path to message/session/diff slices.
     const selectedIdsChanged = !shallowEqualThreadIds(previousSelectedThreadIds, selectedThreadIds);
     const nextSliceRefs = new Map<ThreadIdType, ThreadLineageSliceRefs>();
     let sliceRefsChanged = selectedIdsChanged;

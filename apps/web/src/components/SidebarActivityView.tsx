@@ -1,9 +1,3 @@
-// FILE: SidebarActivityView.tsx
-// Purpose: Task-feed sidebar surface — every thread is a 2-line task row
-//          (provider + title / project + branch) grouped by status, with settle.
-// Layer: Sidebar UI component
-// Exports: SidebarActivityView
-
 import {
   useEffect,
   useMemo,
@@ -147,13 +141,9 @@ function ActivityThreadRow({
     threadId: thread.id,
   });
   const actionToneClassName = "text-muted-foreground/42";
-  // One trailing slot, top-right, shared by every status: the accent dot for an
-  // unread completion and the running spinner (or state dot) for everything
-  // else — same rule and same glyphs the classic thread/project rows use.
+  // One trailing slot, top-right, shared by every status: the accent dot for an unread completion and the running spinner (or state dot) for everything else — same rule and same glyphs the classic thread/project rows use.
   const trailingStatus = resolveThreadStatusTrailingIndicator({ status, isActive });
-  // Rename/context-menu gestures live on the row wrapper (not the title button) so
-  // they also fire over the trailing status and hover-action cluster, which are
-  // absolutely positioned siblings of the button.
+  // Rename/context-menu gestures live on the row wrapper (not the title button) so they also fire over the trailing status and hover-action cluster, which are absolutely positioned siblings of the button.
   const rowGestures = createSidebarThreadRowGestures({
     threadId: thread.id,
     onRename,
@@ -177,8 +167,7 @@ function ActivityThreadRow({
         <button
           type="button"
           onClick={onOpen}
-          // Same native drag as the classic thread rows: drop on a chat pane to
-          // split, or on a composer to @mention the chat.
+          // Same native drag as the classic thread rows: drop on a chat pane to split, or on a composer to @mention the chat.
           draggable
           onDragStart={(event) => beginThreadDrag(event, thread.id)}
           onDragEnd={endThreadDrag}
@@ -251,9 +240,7 @@ function ActivityThreadRow({
         ) : null}
         <span
           className="absolute top-1 right-1 inline-flex items-center gap-1 opacity-0 transition-opacity group-hover/activity-row:opacity-100 group-focus-within/activity-row:opacity-100"
-          // Double-clicking an action button toggles it twice; it must not also open
-          // the row's rename dialog. Pointer-up is the touch/pen double-tap signal,
-          // so keep action taps out of that detector too.
+          // Double-clicking an action button toggles it twice; it must not also open the row's rename dialog. Pointer-up is the touch/pen double-tap signal, so keep action taps out of that detector too.
           onDoubleClick={stopRowActivation}
           onPointerUp={(event) => event.stopPropagation()}
         >
@@ -603,8 +590,7 @@ export function SidebarActivityView({
   );
 
   const isRealProject = (projectId: ProjectId) => projectById.get(projectId)?.kind === "project";
-  // Scope options and the unread sweep intentionally ignore the active scope:
-  // the menu must keep offering every project, and "Mark all as read" means all.
+  // Scope options and the unread sweep intentionally ignore the active scope: the menu must keep offering every project, and "Mark all as read" means all.
   const scopeOptions = collectActivityScopeOptions(threads, isRealProject);
   const unreadThreads = collectUnreadActivityThreads(threads);
 
@@ -719,10 +705,7 @@ export function SidebarActivityView({
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
       pr={
-        // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
-        // checkout moved on); falling back to raw lastKnownPr would resurrect that stale
-        // badge. Rows not yet covered (revealed by paging a paint before the parent's map
-        // catches up) get the same resolution without live status instead.
+        // explicit null means the persisted PR was ruled out (checkout moved on) — falling back to raw lastKnownPr would resurrect a stale badge; uncovered rows get the same resolution without live status
         prByThreadId.has(thread.id)
           ? (prByThreadId.get(thread.id) ?? null)
           : resolveThreadPullRequestFallback({
@@ -749,9 +732,7 @@ export function SidebarActivityView({
   const renderActiveRow = (thread: SidebarThreadSummary) =>
     renderRow(thread, isThreadSettledForActivity(thread, settledOverrideByThreadId));
 
-  // The placeholder speaks for the whole surface, so it may only appear when no
-  // section has rows — a feed with nothing active but a populated Pinned or Done
-  // section is not empty.
+  // The placeholder speaks for the whole surface, so it may only appear when no section has rows — a feed with nothing active but a populated Pinned or Done section is not empty.
   const isEmpty =
     model.active.length === 0 && model.settled.length === 0 && scopedPinnedThreads.length === 0;
   const emptyLabel =

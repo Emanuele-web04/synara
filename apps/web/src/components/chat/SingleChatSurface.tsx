@@ -161,9 +161,7 @@ function shouldAcceptDockWidth({
   const previousSidebarWidth = wrapper.style.getPropertyValue("--sidebar-width");
   return canComposerHandlePanelWidth({
     nextWidth,
-    // The dock coexists only with the single-pane chat, but dock sidechat
-    // panes mount their own composer forms — scope the probe so it always
-    // measures the main composer instead of "first form in the document".
+    // The dock coexists only with the single-pane chat, but dock sidechat panes mount their own composer forms — scope the probe so it always measures the main composer instead of "first form in the document".
     paneScopeId: SINGLE_CHAT_PANE_SCOPE_ID,
     applyWidth: (width) => {
       wrapper.style.setProperty("--sidebar-width", `${width}px`);
@@ -183,8 +181,7 @@ function RightDockPanePlaceholder(props: { kind: RightDockPaneKind }) {
   return <PanelStateMessage>{label} panel is coming soon.</PanelStateMessage>;
 }
 
-// Embedded dock chats (side chats) manage their own panels through the dock, so the
-// nested ChatView always renders with a closed, inert panel state.
+// Embedded dock chats (side chats) manage their own panels through the dock, so the nested ChatView always renders with a closed, inert panel state.
 const DOCK_EMBEDDED_PANEL_STATE: SplitViewPanePanelState = {
   panel: null,
   diffTurnId: null,
@@ -219,13 +216,9 @@ export function SingleChatSurface(props: {
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[props.threadId] ?? null,
   );
-  // A registered-but-unpromoted draft is the freeze case: landing a brand-new
-  // chat commits the whole ChatView subtree synchronously. Defer that mount
-  // behind the chat mount loader so the paint is never blocked. Opening an
-  // existing thread keeps today's immediate mount (no draft -> no loader).
+  // a registered-but-unpromoted draft commits the whole ChatView subtree synchronously — defer that mount behind the loader so paint is never blocked; existing threads keep the immediate mount
   const isBrandNewDraftThread = draftThread !== null;
-  // File preview must follow the same runtime cwd as chat markdown, diffs, and git:
-  // worktree-backed threads resolve links against their materialized worktree.
+  // File preview must follow the same runtime cwd as chat markdown, diffs, and git: worktree-backed threads resolve links against their materialized worktree.
   const workspaceRoot = resolveFilePreviewWorkspaceRoot({
     projectCwd: activeProject?.cwd ?? null,
     threadEnvMode: threadWorkspaceMetadata.envMode ?? draftThread?.envMode ?? null,
@@ -267,8 +260,7 @@ export function SingleChatSurface(props: {
     baseRev: DiffEditBaseRev;
     returnMode: "file" | "diff";
   } | null>(null);
-  // This route component is reused across thread navigations; reload the
-  // persisted editor view state when the thread changes.
+  // This route component is reused across thread navigations; reload the persisted editor view state when the thread changes.
   const editorViewStateThreadIdRef = useRef(props.threadId);
   useEffect(() => {
     if (editorViewStateThreadIdRef.current === props.threadId) {
@@ -276,9 +268,7 @@ export function SingleChatSurface(props: {
     }
     editorViewStateThreadIdRef.current = props.threadId;
     const persisted = readEditorViewState(props.threadId);
-    // Re-seed editor view state from storage asynchronously so the reset is not a
-    // synchronous setState in the effect body; both setters are user-mutable
-    // elsewhere, so deriving here would mean stamping the thread key in every one.
+    // Re-seed editor view state from storage asynchronously so the reset is not a synchronous setState in the effect body; both setters are user-mutable elsewhere, so deriving here would mean stamping the thread key in every one.
     const timer = window.setTimeout(() => {
       setEditorExpandedDirectories(new Set(persisted?.expandedDirectories ?? []));
       setEditorCenterMode(props.search.editorFilePath ? "file" : (persisted?.centerMode ?? "diff"));
@@ -332,8 +322,7 @@ export function SingleChatSurface(props: {
     activePane,
   });
 
-  // Bridge the dock's active browser/diff pane back into the panelState shape the
-  // chat shell still consumes (diff badge, toggle pressed state, transcript gating).
+  // Bridge the dock's active browser/diff pane back into the panelState shape the chat shell still consumes (diff badge, toggle pressed state, transcript gating).
   const chatPanelState: SplitViewPanePanelState = {
     panel:
       activePane && (activePane.kind === "browser" || activePane.kind === "diff")
@@ -373,8 +362,7 @@ export function SingleChatSurface(props: {
     });
   };
 
-  // Stable identities: these feed memoized result rows in the search palette,
-  // so recreating them per render would defeat the rows' React.memo bailout.
+  // Stable identities: these feed memoized result rows in the search palette, so recreating them per render would defeat the rows' React.memo bailout.
   const handleOpenWorkspaceSearchFile = useCallback(
     (relativePath: string) => {
       requestImmediateDockHydration("file");
@@ -392,12 +380,9 @@ export function SingleChatSurface(props: {
     [requestImmediateDockHydration, openPane, props.threadId],
   );
 
-  // Ctrl/Cmd+P opens the file-name search palette; Ctrl/Cmd+Shift+F opens the
-  // snippet (content) search. Registered with capture so it wins over page-level
-  // defaults (print, browser find) while the chat surface is mounted.
+  // Ctrl/Cmd+P opens the file-name search palette; Ctrl/Cmd+Shift+F opens the snippet (content) search. Registered with capture so it wins over page-level defaults (print, browser find) while the chat surface is mounted.
   useEffect(() => {
-    // Editor view returns before rendering the palette, so leave its shortcuts
-    // available to the editor instead of swallowing them invisibly.
+    // Editor view returns before rendering the palette, so leave its shortcuts available to the editor instead of swallowing them invisibly.
     if (editorViewActive) return;
 
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -429,9 +414,7 @@ export function SingleChatSurface(props: {
     });
   };
 
-  // Chat-owned actions that replace the editor (file links, diff toggles,
-  // turn diffs) run through the editor's own dirty/saving guard, since they
-  // change state on the same route and the router blocker cannot see them.
+  // Chat-owned actions that replace the editor (file links, diff toggles, turn diffs) run through the editor's own dirty/saving guard, since they change state on the same route and the router blocker cannot see them.
   const editorLeaveGuardRef = useRef<EditorLeaveGuard | null>(null);
   const guardEditorLeave = (run: () => void) => {
     const guard = editorLeaveGuardRef.current;
@@ -578,9 +561,7 @@ export function SingleChatSurface(props: {
     addChatFileComment(props.threadId, comment);
   };
 
-  // Hover warm-up shared by both surfaces' file openers: file contents land in
-  // the React Query cache and the matching Shiki highlighter loads, so the
-  // preview paints instantly on click.
+  // Hover warm-up shared by both surfaces' file openers: file contents land in the React Query cache and the matching Shiki highlighter loads, so the preview paints instantly on click.
   const prefetchOpenerFile = (path: string) => {
     if (!workspaceRoot || resolveWorkspaceDirectoryOpenTarget(path, workspaceRoot) !== null) {
       return;
@@ -590,10 +571,7 @@ export function SingleChatSurface(props: {
       prefetchWorkspaceFile(queryClient, workspaceRoot, relativePath);
     }
   };
-  // Chat surface: file references open in the right-dock file pane, while the
-  // workspace root and explicit directory references open in Explorer.
-  // Other references retain the existing dock file preview and external-editor
-  // fallback behavior.
+  // Chat surface: file references open in the right-dock file pane, while the workspace root and explicit directory references open in Explorer. Other references retain the existing dock file preview and external-editor fallback behavior.
   const dockFileOpener: WorkspaceFileOpener = {
     openFile: (path) => {
       const directoryPath = resolveWorkspaceDirectoryOpenTarget(path, workspaceRoot);
@@ -603,9 +581,7 @@ export function SingleChatSurface(props: {
         requestExplorerReveal(props.threadId, directoryPath);
         return true;
       }
-      // In-workspace references map to relative paths for the file-read RPC;
-      // binary previews in a session's scratch workspace (outside the chat
-      // workspace) open by absolute path through the local-image route.
+      // In-workspace references map to relative paths for the file-read RPC; binary previews in a session's scratch workspace (outside the chat workspace) open by absolute path through the local-image route.
       const targetPath = resolveDockFileOpenTarget(path, workspaceRoot);
       if (!targetPath) {
         return false;
@@ -616,8 +592,7 @@ export function SingleChatSurface(props: {
     },
     prefetchFile: prefetchOpenerFile,
   };
-  // Editor surface: the center file pane is already the file viewer, so file
-  // references select into it instead of opening a dock pane.
+  // Editor surface: the center file pane is already the file viewer, so file references select into it instead of opening a dock pane.
   const editorFileOpener: WorkspaceFileOpener = {
     openFile: (path) => {
       if (!workspaceRoot) {
@@ -745,10 +720,7 @@ export function SingleChatSurface(props: {
 
   const excludedThreadIds = new Set<ThreadId>([props.threadId]);
 
-  // Sidechat tab labels only need thread titles, so subscribe to the coarse
-  // sidebar-summary selector (turn-level changes) instead of the full thread
-  // selector, which re-emits on every streaming token of any thread and would
-  // otherwise re-render the entire chat surface + right dock + active pane.
+  // coarse sidebar-summary selector (turn-level) instead of the full thread selector, which re-emits per streaming token and would re-render the whole chat surface + dock + pane
   const threadSummaries = useStore(useMemo(() => createSidebarThreadSummariesSelector(), []));
   const sidechatPaneRetentionVersion = useSyncExternalStore(
     subscribeSidechatPaneRetention,
@@ -863,8 +835,7 @@ export function SingleChatSurface(props: {
   const handleAddDockPane = (kind: RightDockPaneKind) => {
     requestImmediateDockHydration(kind);
     if (kind === "sidechat") {
-      // Sidechat spawns a thread; reuse the composer's /side flow (correct model
-      // selection) published via the registry instead of opening an empty pane.
+      // Sidechat spawns a thread; reuse the composer's /side flow (correct model selection) published via the registry instead of opening an empty pane.
       void waitForSidechatCreator(props.threadId)
         .then((createSidechat) => {
           if (!createSidechat) {
@@ -964,11 +935,7 @@ export function SingleChatSurface(props: {
         if (context.runtimeMode === "preview") {
           return <PanelStateMessage>Terminal is sleeping. Restoring shortly.</PanelStateMessage>;
         }
-        // Kept mounted across tab switches; visibility toggles the xterm runtime
-        // instead of detaching/reattaching it (avoids the open-lag + fit flicker).
-        // Also sleep it while the dock is collapsed: a closed dock keeps the pane
-        // mounted (offcanvas is CSS-only), so without this the off-screen terminal
-        // would keep WebGL + resize observers alive for nothing.
+        // visibility toggles the xterm runtime instead of detaching (avoids open-lag + fit flicker); sleep while dock collapsed too — offcanvas is CSS-only so a closed dock keeps WebGL + resize observers alive for nothing
         return (
           <Suspense fallback={<PanelStateMessage>Loading terminal...</PanelStateMessage>}>
             <DockTerminalPane
@@ -1050,9 +1017,7 @@ export function SingleChatSurface(props: {
     setActivePane(props.threadId, paneId);
   };
 
-  // The editor file path arrives via the URL, so an attacker-crafted link can
-  // carry traversal segments ("../../etc"). Treat unsafe values as no selection
-  // so neither the ancestor prefetch nor the preview ever queries them.
+  // The editor file path arrives via the URL, so an attacker-crafted link can carry traversal segments ("../../etc"). Treat unsafe values as no selection so neither the ancestor prefetch nor the preview ever queries them.
   const rawEditorFilePath = props.search.editorFilePath ?? null;
   const selectedEditorFilePath =
     rawEditorFilePath !== null && isWorkspaceRelativePathSafe(rawEditorFilePath)
@@ -1068,9 +1033,7 @@ export function SingleChatSurface(props: {
       return;
     }
 
-    // Prefetch every ancestor listing in parallel: the explorer renders one
-    // directory level at a time, so without this each depth waits for the
-    // previous level's response (a per-level request waterfall).
+    // Prefetch every ancestor listing in parallel: the explorer renders one directory level at a time, so without this each depth waits for the previous level's response (a per-level request waterfall).
     if (workspaceRoot) {
       for (const parentPath of parentPaths) {
         void queryClient.prefetchQuery(
@@ -1083,8 +1046,7 @@ export function SingleChatSurface(props: {
       }
     }
 
-    // Auto-expand the ancestors a tick later so this is not a synchronous setState
-    // in the effect body; the functional update still merges with any user toggles.
+    // Auto-expand the ancestors a tick later so this is not a synchronous setState in the effect body; the functional update still merges with any user toggles.
     const expandTimer = window.setTimeout(() => {
       setEditorExpandedDirectories((previous) => {
         let changed = false;
@@ -1153,8 +1115,7 @@ export function SingleChatSurface(props: {
                   onUpdatePanelState={handleUpdateEditorDiffPanelState}
                   liveRefreshEnabled={editorCenterMode === "diff"}
                   onEditFile={handleEditDiffFileInEditorView}
-                  // Keep diff data warm while browsing files so switching to the
-                  // diff tab renders instantly instead of cold-fetching.
+                  // Keep diff data warm while browsing files so switching to the diff tab renders instantly instead of cold-fetching.
                   queriesEnabled
                   hideHeader
                   onRenderableFilesChange={handleEditorDiffFilesChange}

@@ -1,6 +1,3 @@
-// FILE: EnvironmentUsageSection.browser.tsx
-// Purpose: Browser coverage for the active-provider usage row and multi-window summaries.
-
 import "../../../index.css";
 
 import { DEFAULT_SERVER_SETTINGS_VIEW, type ServerProviderUsageSnapshot } from "@synara/contracts";
@@ -74,8 +71,7 @@ describe("EnvironmentUsageSection", () => {
 
   it("hides the section while the provider has nothing displayable yet", async () => {
     const queryClient = createQueryClient();
-    // Batch resolved but the provider's live fetch was dropped (e.g. errored server-side) and no
-    // local/thread fallback produced rows: nothing renders until some source yields data.
+    // batch resolved but the provider's live fetch was dropped with no fallback rows: nothing renders until some source yields data
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot("codex", [{ window: "Weekly", usedPercent: 18, windowDurationMins: 10_080 }]),
     ]);

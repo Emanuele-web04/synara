@@ -200,8 +200,7 @@ export function useChatTurnFollowUps({
     tailAnchorScrollInFlightRef.current = true;
     setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
 
-    // Nested function so the `try` body holds no value blocks — see the comment on
-    // `deleteEmptyTerminalThread` above for why React Compiler requires this shape.
+    // nested function so the `try` body holds no value blocks — React Compiler requires this shape
     const dispatchPlanFollowUpTurn = async () => {
       await persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
@@ -211,8 +210,7 @@ export function useChatTurnFollowUps({
         interactionMode: nextInteractionMode,
       });
 
-      // Keep the mode toggle and plan-follow-up banner in sync immediately
-      // while the same-thread implementation turn is starting.
+      // keep the mode toggle and plan-follow-up banner in sync while the same-thread implementation turn starts
       setComposerDraftInteractionMode(threadIdForSend, nextInteractionMode);
 
       const providerOptionsForPlanDispatch =
@@ -253,11 +251,7 @@ export function useChatTurnFollowUps({
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt: messageCreatedAt,
       });
-      // Steers on providers without native mid-turn steering interrupt the live
-      // turn before re-dispatching; hold queued auto-dispatch through that gap
-      // so it can't race the steer. The live session provider decides the
-      // interrupt path server-side, so the gate keys off it rather than the
-      // requested model selection.
+      // non-natively-steerable providers interrupt the live turn before re-dispatching; hold queued auto-dispatch through that gap — gate keys off the live session provider
       const livePlanProviderForSteerGate =
         activeThread?.session?.provider ?? modelSelectionForPlanDispatch.provider;
       if (
@@ -272,9 +266,7 @@ export function useChatTurnFollowUps({
         setQueuedSteerGate(nextSteerGate);
         armQueuedComposerSteerGate(threadId, nextSteerGate);
       }
-      // Optimistically open the plan sidebar when implementing (not refining).
-      // "default" mode here means the agent is executing the plan, which produces
-      // step-tracking activities that the sidebar will display.
+      // "default" mode means the agent is executing the plan, producing step-tracking activities the sidebar displays
       if (nextInteractionMode === "default") {
         planSidebarDismissedForTurnRef.current = null;
         setPlanSidebarOpen(true);
@@ -295,8 +287,7 @@ export function useChatTurnFollowUps({
         err instanceof Error ? err.message : "Failed to send plan follow-up.",
       );
       sendInFlightRef.current = false;
-      // The turn RPC failed, so no server turn exists for the watchdog to
-      // recover — drop the marker armed when the dispatch began.
+      // the turn RPC failed, so no server turn exists for the watchdog — drop the marker
       clearPendingTurnDispatch(threadIdForSend);
       resetLocalDispatch();
       return false;
@@ -399,10 +390,7 @@ export function useChatTurnFollowUps({
       assistantDeliveryMode,
     ],
   );
-  // Resuming a workflow is a normal composer turn instructing the agent to
-  // re-invoke the Workflow tool against the persisted script; completed agent()
-  // calls replay from cache, so a paused run picks up where it stopped. Sent as
-  // a pre-built chat turn so it takes the exact send path a queued turn does.
+  // resuming a workflow sends a pre-built turn telling the agent to re-invoke the Workflow tool; completed agent() calls replay from cache so a paused run picks up where it stopped
 
   const onResumeWorkflowRun = useCallback(async () => {
     if (!workflowRunState?.scriptPath || !workflowRunState.runId) return;
@@ -539,8 +527,7 @@ export function useChatTurnFollowUps({
         });
       })
       .then(() => {
-        // The turn RPC resolved for a thread this view never made active, so
-        // arm the watchdog marker with that exact thread id before navigation.
+        // the turn RPC resolved for a thread this view never made active — arm the watchdog marker with that exact thread id before navigation
         markPendingTurnDispatch(nextThreadId);
         return api.orchestration.getShellSnapshot();
       })

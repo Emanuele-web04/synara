@@ -1,9 +1,3 @@
-// FILE: providerUsage/providers/grok.ts
-// Purpose: Live Grok usage fetcher. SuperGrok CLI logins (`~/.grok/auth.json`) call the
-// Grok CLI-proxy billing REST API. Short-lived OIDC tokens are refreshed and written back
-// the same way Codex does. An xAI API key still proves a connected account when no
-// SuperGrok session is present.
-
 import nodePath from "node:path";
 
 import type { ServerProviderUsageLine, ServerProviderUsageLimit } from "@synara/contracts";

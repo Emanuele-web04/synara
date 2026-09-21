@@ -51,8 +51,7 @@ describe("TerminalOpenInput", () => {
   });
 
   it("accepts ultrawide column counts", () => {
-    // Regression: a fit on a wide viewport at a small font legitimately exceeds
-    // the old 400-column cap (e.g. 436), which must not fail the terminal open.
+    // a fit on a wide viewport at a small font legitimately exceeds the old 400-col cap — must not fail the terminal open
     expect(
       decodes(TerminalOpenInput, {
         threadId: "thread-1",

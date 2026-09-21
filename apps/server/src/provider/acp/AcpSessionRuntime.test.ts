@@ -276,8 +276,6 @@ describe("runAcpFreshSessionSetup", () => {
 });
 
 describe("assistantItemId", () => {
-  // Format contract only — distinct runtimeInstanceId wiring is covered by
-  // AcpJsonRpcConnection.test.ts ("assigns distinct fallback assistant item ids...").
   it("produces distinct ids across runtime instances with the same session id and segment index", () => {
     const sessionId = "session-1";
     const a = assistantItemId(sessionId, "aaaa1111", 0);
@@ -682,28 +680,15 @@ describe("AcpSessionRuntime initialize validation", () => {
 });
 
 describe("AcpSessionRuntime startup timeouts", () => {
-  // Per-step budget; the aggregate handshake budget stays far above it so the
-  // step timeout is what fires first.
   const STEP_TIMEOUT_MS = 1_000;
   const TOTAL_TIMEOUT_MS = 60_000;
-  // Generous vitest timeout: the flow is real-async and contains no sleeps,
-  // but a regression that stalls the handshake should fail visibly, not hang.
   const TEST_TIMEOUT_MS = 15_000;
 
-  /**
-   * Returns an ACP request handler that records that the request arrived and
-   * then holds the response open in-process. Only the runtime's step budget
-   * (advanced on the test clock) can resolve it.
-   */
   const holdResponseOpen = (received: Deferred.Deferred<void>) => () => {
     Deferred.doneUnsafe(received, Effect.succeed(undefined));
     return new Promise<never>(() => {});
   };
 
-  /**
-   * Bridges an in-memory OfficialAcp.agent() to the runtime through a fake
-   * ChildProcessSpawner, then runs start until the step budget fires.
-   */
   const runStartTimeout = (input: {
     readonly agentApp: OfficialAcp.AgentApp;
     readonly received: Deferred.Deferred<void>;

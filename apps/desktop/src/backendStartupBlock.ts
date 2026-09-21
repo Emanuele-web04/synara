@@ -1,6 +1,3 @@
-// FILE: backendStartupBlock.ts
-// Purpose: Classifies expected backend startup blocks that need user action, not crash retries.
-
 import { StringDecoder } from "node:string_decoder";
 
 import {

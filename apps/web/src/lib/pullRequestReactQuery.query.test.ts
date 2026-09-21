@@ -20,8 +20,7 @@ afterEach(() => {
 
 describe("pull request list query options", () => {
   it("never reuses another filter's rows as placeholders", () => {
-    // Cross-key placeholders rendered actionable rows under the wrong state/involvement
-    // heading; both list options must go to the network (or warm cache) instead.
+    // Cross-key placeholders rendered actionable rows under the wrong state/involvement heading; both list options must go to the network (or warm cache) instead.
     expect(
       pullRequestsListQueryOptions({ state: "closed", projectId: null }).placeholderData,
     ).toBeUndefined();

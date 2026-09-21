@@ -1,10 +1,3 @@
-// FILE: useThreadPullRequests.ts
-// Purpose: Shared PR-badge source for thread rows (sidebar tree, activity view, kanban
-//          cards). Polls live git status per checkout plus the stored PR reference per
-//          thread, then resolves which PR each thread row should surface.
-// Layer: UI state hook (resolution rules live in Sidebar.logic.ts)
-// Exports: useThreadPullRequests, resolveThreadPullRequestFallback, toThreadPullRequest
-
 import type {
   GitStatusResult,
   OrchestrationThreadPullRequest,
@@ -27,12 +20,10 @@ export type ThreadPullRequestSource = Pick<
 >;
 
 const THREAD_PR_STALE_TIME_MS = 30_000;
-// Every visible row costs one GitHub API call per tick, so badges poll at the relaxed git-status
-// cadence. Local pushes, merges, and turn activity still refresh them through git invalidation.
+// every visible row costs one GitHub call per tick — badges poll at the relaxed git-status cadence; pushes/merges/turn activity still refresh via git invalidation
 const THREAD_PR_REFETCH_INTERVAL_MS = 300_000;
 
-// Also accepts persisted `lastKnownPr` entries, whose draft/mergeability/diff fields are
-// optional because older rows predate them.
+// Also accepts persisted `lastKnownPr` entries, whose draft/mergeability/diff fields are optional because older rows predate them.
 export function toThreadPullRequest(
   pr:
     | NonNullable<ThreadPullRequest>
@@ -65,12 +56,7 @@ export function toThreadPullRequest(
   };
 }
 
-/**
- * Resolution for a thread row without live git-status coverage: rows revealed before the
- * shared hook picks them up (activity paging reveals a row a paint earlier) or rendered
- * where no checkout is resolvable. Runs the same persisted-PR validation as the live
- * path, so a stale "open" badge the resolver already ruled out cannot reappear here.
- */
+// fallback for rows without live git-status coverage — runs the same persisted-PR validation so a ruled-out stale badge can't reappear
 export function resolveThreadPullRequestFallback(input: {
   readonly branch: string | null;
   readonly hasDedicatedWorktree: boolean;
@@ -86,12 +72,7 @@ export function resolveThreadPullRequestFallback(input: {
   });
 }
 
-/**
- * Resolves the PR badge for each given thread. Callers pass only the rows they render:
- * every distinct thread-owned worktree gets a polled git-status query and every stored PR
- * reference a polled lookup. Shared local checkouts intentionally use only the durable thread PR:
- * their live branch may belong to another concurrent thread.
- */
+// shared local checkouts intentionally use only the durable thread PR — their live branch may belong to another concurrent thread
 export function useThreadPullRequests(input: {
   readonly threads: readonly ThreadPullRequestSource[];
   readonly projectCwdById: ReadonlyMap<ProjectId, string>;
@@ -156,8 +137,7 @@ export function useThreadPullRequests(input: {
     for (let index = 0; index < threadGitStatusCwds.length; index += 1) {
       const cwd = threadGitStatusCwds[index];
       if (!cwd) continue;
-      // Keep the last successful snapshot during a failed background refetch. React Query
-      // retains that data, and it is still a better branch authority than stale thread metadata.
+      // Keep the last successful snapshot during a failed background refetch. React Query retains that data, and it is still a better branch authority than stale thread metadata.
       const status = threadGitStatusQueries[index]?.data;
       if (status) {
         statusByCwd.set(cwd, status);

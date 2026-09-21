@@ -35,8 +35,7 @@ export const makeAutomationSchedulerLive = (options?: AutomationSchedulerLiveOpt
         options?.intervalMs ?? DEFAULT_AUTOMATION_SCHEDULER_INTERVAL_MS,
       );
 
-      // Each pass first reconciles in-flight runs against their thread state (a backstop for
-      // any completion the event reactor missed), then starts newly-due runs.
+      // each pass reconciles in-flight runs against thread state (backstop for missed completions), then starts newly-due runs
       const runPassSafely = automationService.reconcileActiveRuns().pipe(
         Effect.flatMap(() => automationService.runDueOnce()),
         Effect.catchCause((cause) =>
@@ -74,7 +73,7 @@ export const makeAutomationSchedulerLive = (options?: AutomationSchedulerLiveOpt
             while (true) {
               yield* runPassSafely;
               const delayMs = yield* nextDelayMs();
-              // Definition changes can create a nearer one-shot run while we are sleeping.
+              // definition changes can create a nearer one-shot run while sleeping
               yield* Effect.sleep(Duration.millis(delayMs)).pipe(
                 Effect.raceFirst(Queue.take(wakeups)),
                 Effect.asVoid,

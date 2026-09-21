@@ -1,8 +1,3 @@
-// FILE: DiffPanel.logic.ts
-// Purpose: Resolve the thread context the diff panel should use across server-backed and local draft chats.
-// Exports: resolveDiffPanelThread, diff view source helpers
-// Depends on: ChatView.logic draft-thread normalization.
-
 import { type ModelSelection, type ThreadId, type TurnId } from "@synara/contracts";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 

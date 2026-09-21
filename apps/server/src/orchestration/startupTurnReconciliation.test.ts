@@ -284,9 +284,7 @@ describe("planRestartTurnReconciliation", () => {
       }),
     ];
 
-    // The turn is already settled, but the retained `activeTurnId` keeps every
-    // "is this thread busy?" check true - so the pointer is cleared without
-    // rewriting the terminal status or dropping the error banner.
+    // the turn is settled but the retained activeTurnId keeps every "is this thread busy?" check true — clear the pointer without rewriting the terminal status or dropping the banner
     expect(planRestartTurnReconciliation({ threads, now: NOW })).toEqual([
       {
         type: "thread.session.set",
@@ -383,7 +381,7 @@ describe("planRestartTurnReconciliation", () => {
     expect(commands[1]).toMatchObject({
       commandId: `restart-reconcile:errored-with-requests:user-input:input-after-error:${NOW}`,
     });
-    // Only the stale turn pointer is settled: the error status and its banner survive.
+    // only the stale turn pointer is settled — the error status and banner survive
     expect(commands[2]).toEqual({
       type: "thread.session.set",
       commandId: `restart-reconcile-active-turn:errored-with-requests:${NOW}`,

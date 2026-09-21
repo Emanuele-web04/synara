@@ -1,8 +1,3 @@
-// FILE: SettingsSidebarNav.test.tsx
-// Purpose: Guards the settings sidebar search surface and its ranking index.
-// Layer: Component rendering tests
-// Depends on: SettingsSidebarNav, the settings search index, and React server rendering.
-
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 

@@ -72,7 +72,7 @@ upgradeLayer("077_ExternalMcpCompensatingCapacity upgrade", (it) => {
         )
       `;
 
-      // Recreate the pre-77 operation branch to model an already-migrated dev database.
+      // recreate the pre-77 operation branch to model an already-migrated dev database
       yield* sql`DROP VIEW external_mcp_active_capacity_claims`;
       yield* sql`
         CREATE VIEW external_mcp_active_capacity_claims AS

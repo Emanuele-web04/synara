@@ -128,10 +128,7 @@ export function buildExternalMcpExamplePrompt(projectTitle: string | null): stri
   ].join(" ");
 }
 
-// The one block a user pastes into any coding agent (Codex, Claude Code, or
-// another MCP-capable app). The agent pairs the machine, registers Synara in
-// its own MCP configuration, and verifies the connection — no per-client
-// artifacts to juggle. `setupCommand` is null once pairing already happened.
+// the one block pasted into any MCP-capable agent: it pairs the machine, registers Synara, and verifies — `setupCommand` is null once pairing happened
 export function buildExternalMcpSetupPrompt(input: {
   readonly setupCommand: string | null;
   readonly stdio: ExternalMcpStdioConfiguration;

@@ -1,19 +1,10 @@
-// FILE: route.ts
-// Purpose: Exposes the live installer total to the client as a CDN-cached JSON response.
-// Layer: App Router route handler
-// Depends on: getInstallerCount server utility
-
 import { NextResponse } from "next/server";
 
 import { getInstallerCount } from "@/lib/installerCount";
 
-// COST FIX (Vercel audit): the homepage mounts InstallerCount twice (hero + closing CTA),
-// each polling this route every 30s. With force-dynamic + no-store every poll ran a
-// function invocation + GitHub API call. Caching the route for 60s makes the polls
-// free CDN cache hits; the GitHub fetch now runs at most once per 60s per PoP.
+// the homepage mounts InstallerCount twice, each polling every 30s — uncached, every poll hit a function + GitHub call; a 60s cache makes polls free CDN hits
 export const revalidate = 60;
 
-// Returns the current installer total so the homepage can refresh it while open.
 export async function GET() {
   const count = await getInstallerCount();
 

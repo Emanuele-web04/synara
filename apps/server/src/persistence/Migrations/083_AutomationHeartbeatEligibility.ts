@@ -1,6 +1,3 @@
-// FILE: 083_AutomationHeartbeatEligibility.ts
-// Purpose: Adds heartbeat cooldown configuration and durable deferred-run retries.
-
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

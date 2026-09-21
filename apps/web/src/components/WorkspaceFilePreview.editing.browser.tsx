@@ -1,7 +1,3 @@
-// FILE: WorkspaceFilePreview.editing.browser.tsx
-// Purpose: Browser regressions for guarded Explorer editing and save-state UX.
-// Layer: Focused component integration tests
-
 import "../index.css";
 
 import type {
@@ -243,8 +239,7 @@ it("refreshes mounted unstaged changes after a save and after watched file event
       scope: "unstaged",
     });
 
-    // An external write to the open file must refresh the pane as well, not
-    // merely mark it stale until the window regains focus.
+    // An external write to the open file must refresh the pane as well, not merely mark it stale until the window regains focus.
     subscription.listener?.({ type: "changed", relativePath: FILE_PATH, mtimeMs: Date.now() });
     await vi.waitFor(() => expect(unstagedCalls()).toBe(3));
   } finally {
@@ -858,8 +853,7 @@ it("keeps the large-file fallback gutter rows aligned at the bottom of horizonta
     await expect.element(editor).toBeVisible();
     const area = editor.element() as HTMLTextAreaElement;
     expect(area.scrollWidth).toBeGreaterThan(area.clientWidth);
-    // Headless Chromium hides scrollbars. Extra bottom padding exercises the
-    // same unequal scroll ranges there; visible scrollbars need no emulation.
+    // Headless Chromium hides scrollbars. Extra bottom padding exercises the same unequal scroll ranges there; visible scrollbars need no emulation.
     if (area.offsetHeight === area.clientHeight) {
       area.style.paddingBottom = `${Number.parseFloat(getComputedStyle(area).paddingBottom) + 10}px`;
     }
@@ -870,8 +864,7 @@ it("keeps the large-file fallback gutter rows aligned at the bottom of horizonta
       const lastNumber = document.querySelector(".editor-file-editor__gutter-line:last-child");
       if (!lastNumber) throw new Error("editor line-number gutter not found");
       const metrics = getComputedStyle(area);
-      // CSS exposes unrounded line-height; measure native layout to avoid
-      // accumulating subpixel rounding across thousands of rows.
+      // CSS exposes unrounded line-height; measure native layout to avoid accumulating subpixel rounding across thousands of rows.
       const measure = document.createElement("div");
       Object.assign(measure.style, {
         position: "absolute",

@@ -1,7 +1,3 @@
-// FILE: shortcutsSheet.test.ts
-// Purpose: Verify the shortcuts sheet builder reflects current context and dynamic script bindings.
-// Layer: UI helper tests
-
 import { STATIC_KEYBINDING_COMMANDS } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 

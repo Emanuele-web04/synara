@@ -62,15 +62,8 @@ describe("resolveAllowedLocalPreviewFile", () => {
   });
 
   it("allows images written to the SYNARA_HOME codex-home-overlay generated_images root", async () => {
-    // Codex app-server is launched with CODEX_HOME pointing at a Synara overlay
-    // directory (see resolveSynaraCodexHomeOverlayPath). Generated images therefore
-    // live under <SYNARA_HOME>/codex-home-overlay/generated_images/<thread>/<call>.png,
-    // which sits outside both the user's `~/.codex` source home and any workspace
-    // root. The allowlist must still serve them.
-    //
-    // We anchor the fake homes inside the worktree (process.cwd() resolves to
-    // apps/server/ when vitest runs) so neither path falls under os.tmpdir(); that
-    // way only the overlay candidate can satisfy the allowlist.
+    // app-server runs with CODEX_HOME pointing at the Synara overlay, so images live outside both ~/.codex and any workspace root — the allowlist must still serve them
+    // anchor fake homes inside the worktree so neither path falls under os.tmpdir() — only the overlay candidate can satisfy the allowlist
     const fakeRoot = path.join(process.cwd(), `.test-codex-overlay-${process.pid}-${Date.now()}`);
     const sourceHome = path.join(fakeRoot, "source", ".codex");
     const synaraHome = path.join(fakeRoot, "synara", "runtime");
@@ -122,9 +115,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
   });
 
   it("allows PDFs inside a per-thread scratch workspace without a cwd", async () => {
-    // Sessions that start before a project workspace exists run in
-    // <tmpdir>/synara-codex-workspaces/<threadId>; files agents create there
-    // are workspace-equivalent, so documents must be servable from that root.
+    // sessions starting before a project workspace exists run in <tmpdir>/synara-codex-workspaces/<threadId> — files agents create there are workspace-equivalent
     const scratchRoot = path.join(os.tmpdir(), "synara-codex-workspaces");
     const threadDir = path.join(scratchRoot, `test-thread-${process.pid}-${Date.now()}`);
     const pdfPath = path.join(threadDir, "viewer-test.pdf");
@@ -140,8 +131,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
       assert.equal(result?.fileName, "viewer-test.pdf");
       assert.equal(result?.sizeBytes, 8);
     } finally {
-      // Remove only the per-thread dir — the shared scratch root may belong
-      // to a live server.
+      // remove only the per-thread dir — the shared scratch root may belong to a live server
       rmSync(threadDir, { recursive: true, force: true });
     }
   });
@@ -165,8 +155,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
   });
 
   it("rejects PDFs outside the workspace even under the temp-dir image roots", async () => {
-    // Temp/generated-image roots exist for agent-produced images in chat
-    // markdown; documents must only ever be served from the workspace.
+    // temp/generated-image roots exist for agent-produced images in chat markdown — documents must only be served from the workspace
     const tempDir = makeTempDir("synara-pdf-outside-");
     const pdfPath = path.join(tempDir, "leak.pdf");
     writeFileSync(pdfPath, Buffer.from("%PDF-1.4"));

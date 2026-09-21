@@ -1,14 +1,4 @@
-// FILE: voidSpaceStore.ts
-// Purpose: Persists what the user calls the group of projects that are in no Space.
-// Layer: Web UI state
-// Why: "Void" is Synara's word for "not filed yet", and it is the one Space label a user
-//      cannot rename through the orchestration commands — there is no row behind it. Most
-//      installs leave every project there, so the sidebar's loudest label is also its least
-//      meaningful one (and untranslatable). This keeps a per-install name and icon for it.
-//
-//      Local storage rather than a server setting: this is presentation only, it must resolve
-//      synchronously on first paint (the sidebar header renders the name before any query
-//      settles), and no server-side decision reads it. Windows stay in sync through `storage`.
+// Void is the one Space label a user cannot rename through orchestration commands — presentation only, resolved synchronously from local storage before any query settles; windows sync via `storage`
 
 import { SPACE_NAME_MAX_LENGTH } from "@synara/contracts";
 import { create } from "zustand";
@@ -21,11 +11,7 @@ import {
 
 const STORAGE_KEY = "synara:void-space:v1";
 
-/**
- * Accepts anything (a hand-edited entry, a value written by a future version) and answers
- * with a presentation that is safe to render: a non-empty name within the same length limit
- * a stored Space name obeys, and an icon the renderer actually has an asset for.
- */
+// accept anything and answer with a safe presentation — a non-empty name within the Space length limit and an icon the renderer actually has
 export function normalizeVoidSpace(value: unknown): VoidSpacePresentation {
   const record =
     typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
@@ -51,8 +37,7 @@ function readPersisted(): VoidSpacePresentation {
 function persist(voidSpace: VoidSpacePresentation): void {
   if (typeof window === "undefined") return;
   try {
-    // The default is stored as an absent key, so an install that never renamed Void keeps
-    // following the product default if it ever changes.
+    // The default is stored as an absent key, so an install that never renamed Void keeps following the product default if it ever changes.
     if (voidSpace.name === DEFAULT_VOID_SPACE.name && voidSpace.icon === DEFAULT_VOID_SPACE.icon) {
       window.localStorage.removeItem(STORAGE_KEY);
       return;
@@ -92,15 +77,13 @@ export const useVoidSpaceStore = create<VoidSpaceState>((set, get) => ({
 }));
 
 if (typeof window !== "undefined") {
-  // Renaming in one window has to reach the others: every window renders this label in its
-  // sidebar, and `storage` only fires in the windows that did not write.
+  // Renaming in one window has to reach the others: every window renders this label in its sidebar, and `storage` only fires in the windows that did not write.
   window.addEventListener("storage", (event) => {
     if (event.key !== null && event.key !== STORAGE_KEY) return;
     useVoidSpaceStore.setState({ voidSpace: readPersisted() });
   });
 }
 
-/** Subscribing read for components; the object identity is stable between edits. */
 export function useVoidSpace(): VoidSpacePresentation {
   return useVoidSpaceStore((state) => state.voidSpace);
 }

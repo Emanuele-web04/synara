@@ -1,9 +1,4 @@
 import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
-/**
- * GrokAdapterLive - Grok Build CLI (`grok agent ... stdio`) via ACP.
- *
- * @module GrokAdapterLive
- */
 import {
   ApprovalRequestId,
   type GrokModelOptions,
@@ -148,48 +143,26 @@ export const takeGrokSynaraHarnessPolicyTextPart = (
   });
 const GROK_RESUME_VERSION = 1 as const;
 const GROK_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
-// Forking a dead source session must first reopen it, so leave enough time for
-// the shared ACP load-replay gate and the fork exchange.
+// forking a dead source reopens it first — leave room for the load-replay gate plus the fork exchange
 const GROK_ACP_FORK_TIMEOUT_MS = 30_000;
 const GROK_ACP_TRANSPORT_DEBUG_MARKER = "grok-acp-meta-stripper-v2";
 const GROK_ACP_LOG_PAYLOAD_LIMIT = 4_000;
 const GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
 const SYNARA_GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
 const LEGACY_GROK_ACP_DEBUG_ENV = "DP_GROK_ACP_DEBUG";
-// Backstop for an alive-but-silent grok child: if a turn produces no ACP
-// activity for this long, force-fail it instead of showing "Working" forever.
-// Generous by design so legitimate long, quiet tool runs are not killed;
-// override with SYNARA_GROK_TURN_IDLE_TIMEOUT_MS when a workload needs longer.
+// backstop for an alive-but-silent grok child; generous so long quiet runs aren't killed — override via SYNARA_GROK_TURN_IDLE_TIMEOUT_MS
 const GROK_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   envVar: "SYNARA_GROK_TURN_IDLE_TIMEOUT_MS",
   defaultMs: 600_000,
 });
 const GROK_TURN_WATCHDOG_INTERVAL_MS = 15_000;
-// Hard cap on a manual /compact prompt. compactingThread rejects every send
-// while set, so a Grok child that goes alive-but-silent mid-compaction would
-// otherwise wedge the thread indefinitely. Reuses the turn idle timeout value
-// as a generous ceiling (compactions stream activity well under it).
+// hard cap on manual /compact: compactingThread rejects sends while set, so a silent child mid-compaction would wedge the thread — reuses the idle timeout (compactions stream well under it)
 const GROK_COMPACT_TIMEOUT_MS = GROK_TURN_IDLE_TIMEOUT_MS;
-// After a timed-out /compact the cancel is only best-effort: the child may
-// still stream stale compaction updates for a moment. Hold new turns (and
-// drop compaction-shaped tool updates) for this long so those events cannot
-// be attributed to the next active turn.
 const GROK_COMPACT_ABANDON_QUIET_MS = 5_000;
-// Bounded wait for the forked post-timeout cancel to be written before the
-// next prompt is dispatched. stdio delivers in order, so once the cancel is
-// on the wire it cannot cancel a prompt written after it; a fully wedged
-// child never confirms, hence the cap.
 const GROK_COMPACT_CANCEL_WAIT_MS = 10_000;
-// The compaction outcome (failed tool detail) is recorded by the notification
-// consumer, which can lag the /compact response; wait for inbound activity to
-// go quiet (bounded) before deciding success.
 const GROK_COMPACT_OUTCOME_QUIET_MS = 200;
 const GROK_COMPACT_OUTCOME_MAX_WAIT_MS = 2_000;
-// A prompt response can resolve while session/update events received during
-// the turn still sit in the ACP event queue. The turn stays active (bounded)
-// until that backlog drains so late tool updates keep their turn attribution
-// instead of falling into the between-turn heuristics. Zero-cost when the
-// consumer is keeping up (the queue is already empty).
+// a prompt response can resolve while queued session/update events sit unhandled — keep the turn active (bounded) until the backlog drains so late updates keep attribution
 const GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
 const GROK_TURN_SETTLE_DRAIN_POLL_MS = 25;
 const GROK_EXIT_PLAN_RESPONSE_GRACE_MS = 25;
@@ -255,9 +228,7 @@ export function buildGrokTurnPromptText(input: {
 export function buildGrokPromptMeta(interactionMode: ProviderInteractionMode): {
   readonly mode: "plan" | "agent";
 } {
-  // Grok ACP reconciles its native Plan tracker from session/prompt `_meta.mode`.
-  // Unlike x.ai/toggle_plan_mode this is idempotent, so reconnects cannot invert
-  // the provider state when Synara sends the desired mode again.
+  // Grok reconciles its Plan tracker from session/prompt _meta.mode — unlike x.ai/toggle_plan_mode it's idempotent, so reconnects can't invert on resend
   return { mode: interactionMode === "plan" ? "plan" : "agent" };
 }
 
@@ -360,47 +331,17 @@ interface GrokSessionContext {
   activePlanResponseText: string;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
-  // Epoch-ms of the last inbound ACP activity for the active turn; drives the
-  // idle-progress watchdog that force-fails a silently hung turn.
   lastTurnActivityAt: number | undefined;
-  // Provider tool-call ids seen during the most recent turn, mapped to that
-  // turn. A backlogged consumer can process a queued ToolCallUpdated after the
-  // prompt response cleared activeTurnId; this keeps the event attributed to
-  // its originating turn instead of the between-turn auto-compaction
-  // heuristic. Cleared when the next turn dispatches.
+  // tool-call→turn map for backlogged events after activeTurnId cleared — keeps attribution instead of falling into between-turn auto-compaction heuristics
   readonly turnToolCallIds: Map<string, TurnId>;
-  // Count of ACP session/update events fully handled by the notification
-  // consumer. Compared against acp.sessionUpdatesEnqueuedCount to detect when
-  // events received before a prompt response have all been processed —
-  // in-flight handlers and stream chunk buffering included.
   sessionUpdatesProcessed: number;
-  // Pending until startSession has completed its post-registration setup.
-  // The session is registered first, so sendTurn/compactThread can route to it
-  // mid-startup; they await this gate until the remaining startup work has
-  // settled. Resolved by stopSessionInternal too, so a failed startup never
-  // strands waiters.
   sessionConfigReady: Deferred.Deferred<void> | undefined;
-  // True while sendTurn is between its compaction check and settling the turn;
-  // compactThread reads it so a compaction prompt cannot slip into the gap
-  // before ctx.activeTurnId is assigned.
   turnStarting: boolean;
-  // Set by interruptTurn while a turn is still starting (no prompt fiber to
-  // interrupt yet); startGrokTurn re-checks it before dispatching so a
-  // cancelled turn is never prompted.
   pendingTurnInterrupted: boolean;
   compactingThread: boolean;
-  // Failed compaction tool-call detail recorded while compactingThread is set;
-  // runGrokCompaction reads it so a failed compaction whose /compact prompt
-  // still resolves successfully is not persisted as compacted (mirrors how
-  // normal turns use activeTurnFailedToolDetail).
+  // failed-compaction tool detail recorded while compactingThread — a failed tool call whose /compact still resolves must not persist as compacted
   compactionFailedToolDetail: string | undefined;
-  // Epoch-ms until which an abandoned (timed-out) /compact may still stream
-  // stale updates; new turns wait it out and compaction-shaped tool updates
-  // are dropped so they cannot pollute the next turn.
   compactionQuietUntil: number | undefined;
-  // Forked best-effort cancel from a timed-out /compact. The next prompt
-  // waits (bounded) for it so the cancel is on the wire first — stdio
-  // ordering then guarantees it cannot cancel the new turn.
   compactionCancelFiber: Fiber.Fiber<void> | undefined;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
@@ -563,8 +504,7 @@ export function selectGrokDiscoveredModelGroups(input: {
   readonly cliModels: ReadonlyArray<{ slug: string; name: string }>;
   readonly apiModels: ReadonlyArray<{ slug: string; name: string }>;
 }): ReadonlyArray<ReadonlyArray<{ slug: string; name: string }>> {
-  // `grok models` is the picker source of truth. The xAI language-model API still
-  // advertises retired grok-build slugs that the current CLI no longer serves.
+  // `grok models` is the picker source of truth — the xAI API still advertises retired grok-build slugs the CLI no longer serves
   if (input.cliModels.length > 0) {
     return [input.cliModels];
   }
@@ -710,8 +650,6 @@ export function makeGrokAdapter(
     const fileSystem = yield* FileSystem.FileSystem;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* Effect.service(ServerConfig);
-    // Optional so adapter tests can run without the gateway layer; when
-    // present, every session gets the synara_* MCP tools.
     const agentGatewayCredentials = Option.getOrUndefined(
       yield* Effect.serviceOption(AgentGatewayCredentials),
     );
@@ -919,24 +857,12 @@ export function makeGrokAdapter(
         pollMs: GROK_TURN_SETTLE_DRAIN_POLL_MS,
       });
 
-    // Waits until the notification consumer has been quiet briefly so state it
-    // records from queued events (e.g. compactionFailedToolDetail) is visible
-    // before the compaction outcome is decided. Bounded — a chatty session
-    // cannot hold the /compact RPC open past the cap.
     const settleGrokCompactionOutcome = (ctx: GrokSessionContext) =>
       Effect.gen(function* () {
-        // First drain events that were already enqueued when the /compact
-        // response resolved — a backlogged consumer may not have applied a
-        // failed compaction tool update yet, and the quiet window below only
-        // covers in-transit stragglers, not the existing backlog.
         yield* waitForGrokQueuedTurnEventsDrained(ctx);
         const startedAt = Date.now();
         while (true) {
           const now = Date.now();
-          // Seed the quiet measurement from startedAt: a backlogged consumer
-          // may not have bumped lastTurnActivityAt yet, so always wait at
-          // least one full quiet interval after the prompt response before
-          // deciding the outcome.
           const lastActivityAt = Math.max(ctx.lastTurnActivityAt ?? 0, startedAt);
           if (
             now - lastActivityAt >= GROK_COMPACT_OUTCOME_QUIET_MS ||
@@ -948,11 +874,6 @@ export function makeGrokAdapter(
         }
       });
 
-    // After a timed-out /compact, hold new prompts until the forked cancel is
-    // on the wire (bounded — a fully wedged child never confirms) and the
-    // stale update stream has had its quiet window. stdio ordering then
-    // guarantees the cancel cannot cancel the new prompt, and stragglers
-    // cannot be attributed to the new turn.
     const waitForAbandonedGrokCompaction = (ctx: GrokSessionContext) =>
       Effect.gen(function* () {
         const cancelFiber = ctx.compactionCancelFiber;
@@ -962,9 +883,6 @@ export function makeGrokAdapter(
             Effect.timeoutOption(GROK_COMPACT_CANCEL_WAIT_MS),
           );
           ctx.compactionCancelFiber = undefined;
-          // The cancel wait can outlive the quiet window armed at the original
-          // compaction timeout; restart it from now so stragglers arriving
-          // just after the cancel drains are still held off (and dropped).
           if (ctx.compactionQuietUntil !== undefined) {
             ctx.compactionQuietUntil = Math.max(
               ctx.compactionQuietUntil,
@@ -1075,9 +993,7 @@ export function makeGrokAdapter(
             runtimeMode: input.runtimeMode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "Synara", version: "0.0.0" },
-            // Grok registers client hooks from session setup metadata, not
-            // initialize.clientCapabilities. Re-send this on load/resume so a
-            // reconnected session keeps the Plan-mode write gate.
+            // Grok registers client hooks from session setup metadata, not initialize.clientCapabilities — re-send on load/resume so a reconnected session keeps the Plan-mode write gate
             sessionMeta: GROK_SESSION_META,
             ...(agentGatewayCredentials
               ? {
@@ -1143,8 +1059,7 @@ export function makeGrokAdapter(
                 Effect.gen(function* () {
                   yield* logNative(input.threadId, method, params);
                   if (ctx?.activeInteractionMode === "default") {
-                    // A new Default turn is the user's approval to leave the
-                    // provider-native Plan gate and continue with implementation.
+                    // A new Default turn is the user's approval to leave the provider-native Plan gate and continue with implementation.
                     return makeGrokExitPlanModeApprovedResponse();
                   }
                   const planMarkdown = extractGrokExitPlanMarkdown(params);
@@ -1177,9 +1092,7 @@ export function makeGrokAdapter(
                       ctx.lastPlanFingerprint !== planMarkdown
                     ) {
                       ctx.lastPlanFingerprint = planMarkdown;
-                      // The extension response must reach Grok before Synara cancels the
-                      // prompt fiber. Cancelling inline can tear down Grok's pending reverse
-                      // request and recreate its misleading "client disconnected" failure.
+                      // the extension response must reach Grok before Synara cancels the prompt fiber — inline cancel tears down the pending reverse request and recreates the misleading "client disconnected" failure
                       yield* Effect.gen(function* () {
                         yield* Effect.sleep(GROK_EXIT_PLAN_RESPONSE_GRACE_MS);
                         yield* completeGrokPlanTurn(ctx, turnId, activePromptFiber);
@@ -1396,9 +1309,7 @@ export function makeGrokAdapter(
                     return;
                   case "ToolCallUpdated":
                     {
-                      // Stale tool updates from an abandoned (timed-out) /compact
-                      // can arrive until the child processes the cancel; drop
-                      // them instead of attributing them anywhere.
+                      // stale tool updates from an abandoned /compact can arrive until the child processes the cancel — drop them rather than attribute anywhere
                       if (
                         ctx.compactionQuietUntil !== undefined &&
                         Date.now() < ctx.compactionQuietUntil &&
@@ -1406,35 +1317,22 @@ export function makeGrokAdapter(
                       ) {
                         return;
                       }
-                      // A queued update for a tool call the just-settled turn
-                      // already rendered belongs to that turn, even if its
-                      // title mentions "compact"/"summarize" — a backlogged
-                      // consumer must not reclassify it as auto-compaction.
+                      // a queued update for a call the settled turn rendered belongs to that turn even if its title mentions "compact" — never reclassify as auto-compaction
                       const lateTurnId =
                         ctx.activeTurnId === undefined && !ctx.compactingThread
                           ? ctx.turnToolCallIds.get(event.toolCall.toolCallId)
                           : undefined;
-                      // The title heuristic only applies between turns (grok-initiated
-                      // auto-compaction); a live turn's tool call may legitimately
-                      // mention "compact"/"summarize" and must render normally, and
-                      // replay is already suppressed by the shared ACP runtime.
+                      // the title heuristic applies only between turns (grok-initiated auto-compaction); a live turn's tool call may legitimately mention "compact"
                       const treatAsCompaction =
                         ctx.compactingThread ||
                         (ctx.activeTurnId === undefined &&
                           lateTurnId === undefined &&
                           isGrokContextCompactionToolCall(event.toolCall));
                       if (treatAsCompaction) {
-                        // During a manual /compact, compactThread emits the single
-                        // terminal row itself (and knows about cancellation), so
-                        // tool-call updates stay progress-only to avoid duplicate
-                        // "Context compacted" rows. Grok-initiated auto-compaction
-                        // has no other completion source and keeps its terminal row.
+                        // manual /compact emits the terminal row itself, so tool updates stay progress-only to avoid duplicate "Context compacted" rows; auto-compaction keeps its terminal row
                         const isTerminal =
                           event.toolCall.status === "completed" ||
                           event.toolCall.status === "failed";
-                        // Manual compaction downgrades terminal tool events to
-                        // progress rows, so remember a failure here for
-                        // runGrokCompaction to honor after the prompt resolves.
                         if (ctx.compactingThread && event.toolCall.status === "failed") {
                           ctx.compactionFailedToolDetail =
                             readAcpFailedToolDetail(event.toolCall) ??
@@ -1459,9 +1357,6 @@ export function makeGrokAdapter(
                         return;
                       }
                       if (lateTurnId !== undefined) {
-                        // Emit with the originating turn id so the existing tool
-                        // row resolves in place instead of being dropped as an
-                        // orphan (or worse, misfiled as thread compaction).
                         yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                         yield* offerRuntimeEvent(
                           input.lifecycleGeneration,
@@ -1556,9 +1451,6 @@ export function makeGrokAdapter(
                     return;
                 }
               }).pipe(
-                // Bump the processed count only after the handler fully ran, so
-                // waitForGrokQueuedTurnEventsDrained cannot observe an event as
-                // consumed while its state updates are still being applied.
                 Effect.ensuring(
                   Effect.sync(() => {
                     ctx.sessionUpdatesProcessed += 1;
@@ -1566,9 +1458,6 @@ export function makeGrokAdapter(
                 ),
               ),
             ),
-            // The drain's lifetime is the session's, not the caller's: forking it as
-            // a child of the fiber that called startSession kills it as soon as that
-            // fiber returns, silently dropping every session/update.
           ).pipe(Effect.forkIn(sessionScope));
 
           ctx.notificationFiber = notificationFiber;
@@ -1582,9 +1471,6 @@ export function makeGrokAdapter(
 
       return Effect.gen(function* () {
         const { ctx, session, started, grokModelSelection, sessionConfigReady } = yield* setup;
-        // The replay wait deliberately runs without the per-thread lock. The
-        // registered context lets stop/restart close the scope and release the
-        // gate immediately instead of waiting for its hard cap.
         yield* ctx.acp.awaitLoadReplayReady.pipe(
           Effect.mapError((cause) =>
             ctx.stopped
@@ -1611,8 +1497,6 @@ export function makeGrokAdapter(
               mapError: ({ cause, method }) =>
                 mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
             });
-            // Startup configuration has settled; turns gated on this deferred
-            // can now prompt. Grok model options are process-start settings.
             yield* Deferred.succeed(sessionConfigReady, undefined);
             ctx.sessionConfigReady = undefined;
 
@@ -1650,10 +1534,6 @@ export function makeGrokAdapter(
       );
     };
 
-    // Idle-progress watchdog escape hatch: force-fail a turn whose grok child
-    // is alive but has gone completely silent. Mirrors the prompt-fiber
-    // onFailure branch and stays idempotent via clearAcpActiveTurn, so it is a
-    // no-op if the turn settled normally first (whichever fires first wins).
     const failGrokTurnAsTimedOut = (ctx: GrokSessionContext, turnId: TurnId, idleMs: number) =>
       Effect.gen(function* () {
         const promptFiber = ctx.activePromptFiber;
@@ -1692,11 +1572,6 @@ export function makeGrokAdapter(
             ...completedCost,
           },
         });
-        // Best-effort: tell the child to abandon the turn, then unwind the
-        // pending prompt fiber (its onInterrupt no-ops, the turn is cleared).
-        // The cancel is forked, not awaited — this path only runs because the
-        // child went silent, and a hung session/cancel must not block the
-        // prompt-fiber interrupt or leak the watchdog fiber.
         yield* Effect.ignore(ctx.acp.cancel).pipe(Effect.forkIn(ctx.scope));
         if (promptFiber) {
           yield* Fiber.interrupt(promptFiber);
@@ -1706,13 +1581,6 @@ export function makeGrokAdapter(
     const sendTurn: GrokAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
-        // compactThread holds the thread lock but sendTurn intentionally does not
-        // (turns are long-running); reject instead of racing a second prompt whose
-        // events the compaction suppression would silently drop. Setting
-        // turnStarting in the same synchronous block as this check closes the
-        // reverse gap: startGrokTurn awaits config/attachment work before it
-        // assigns ctx.activeTurnId, and compactThread checks turnStarting so a
-        // compaction prompt cannot slip into that window.
         if (ctx.compactingThread) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -1720,9 +1588,6 @@ export function makeGrokAdapter(
             issue: "Cannot start a turn while Grok context compaction is in progress.",
           });
         }
-        // A second sendTurn entering while another turn is still starting would
-        // clear that turn's pendingTurnInterrupted flag (letting a cancelled
-        // turn dispatch anyway) and race two ACP prompts; reject it instead.
         if (ctx.turnStarting) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -1746,15 +1611,11 @@ export function makeGrokAdapter(
       input: Parameters<GrokAdapterShape["sendTurn"]>[0],
     ) =>
       Effect.gen(function* () {
-        // Startup registers the session before post-registration setup settles;
-        // a turn routed in during that window must wait for setup to finish.
         if (ctx.sessionConfigReady !== undefined) {
           yield* Deferred.await(ctx.sessionConfigReady);
         }
         yield* waitForAbandonedGrokCompaction(ctx);
-        // Do not publish a working turn while session/load replay is still
-        // being suppressed. A concurrent stop releases the shared gate and is
-        // reported as the session disappearing before any turn lifecycle opens.
+        // don't publish a working turn while load replay is still suppressed — a concurrent stop releases the gate as "session disappeared" before any turn lifecycle opens
         yield* ctx.acp.awaitLoadReplayReady.pipe(
           Effect.mapError((cause) =>
             ctx.stopped
@@ -1765,9 +1626,6 @@ export function makeGrokAdapter(
               : mapAcpToAdapterError(PROVIDER, input.threadId, "session/load", cause),
           ),
         );
-        // The setup gate above is resolved by stopSessionInternal too; a turn
-        // unblocked by a failed or stopped startup must fail here instead of
-        // emitting lifecycle events for a dead session.
         if (ctx.stopped) {
           return yield* new ProviderAdapterSessionNotFoundError({
             provider: PROVIDER,
@@ -1832,26 +1690,17 @@ export function makeGrokAdapter(
           promptParts.unshift(harnessPolicy);
         }
 
-        // A stop can land while the pre-prompt work or attachment reads above were
-        // in flight; opening the turn now would publish turn.started (and a
-        // phantom cancelled completion) for a session that already exited.
         if (ctx.stopped) {
           return yield* new ProviderAdapterSessionNotFoundError({
             provider: PROVIDER,
             threadId: input.threadId,
           });
         }
-        // Interrupts that landed during model selection or attachment reads are
-        // honored by the prompt fiber's dispatch guard below, so the turn completes
-        // through the normal cancelled path instead of surfacing as a provider
-        // turn-start failure.
         ctx.activeTurnId = turnId;
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
         ctx.activePlanResponseText = "";
         ctx.activeTurnFailedToolDetail = undefined;
-        // Late-event attribution only matters between turns; once a new turn
-        // dispatches, stragglers from older turns are stale enough to drop.
         ctx.turnToolCallIds.clear();
         ctx.activeInteractionMode = interactionMode;
         ctx.lastPlanFingerprint = undefined;
@@ -1874,12 +1723,6 @@ export function makeGrokAdapter(
         });
 
         const runPrompt = Effect.suspend(() =>
-          // interruptTurn during model selection or attachment reads, or between
-          // turn.started publishing and this fiber being registered, sets
-          // pendingTurnInterrupted; honor it (and a concurrent stop) here so a
-          // cancelled turn is never prompted.
-          // Self-interrupting routes through the onInterrupt branch below, which
-          // completes the turn as cancelled rather than as a provider failure.
           ctx.pendingTurnInterrupted || ctx.stopped
             ? Effect.interrupt
             : ctx.acp.prompt({
@@ -1927,8 +1770,6 @@ export function makeGrokAdapter(
               }),
             onSuccess: (result) =>
               Effect.gen(function* () {
-                // Drain BEFORE snapshotting turn state: queued events may still
-                // set activeTurnFailedToolDetail or assistant-content flags.
                 yield* waitForGrokQueuedTurnEventsDrained(ctx);
                 if (ctx.activeTurnId !== turnId) {
                   return;
@@ -1981,12 +1822,7 @@ export function makeGrokAdapter(
                   stopReason: result.stopReason,
                   ...(failedToolDetail !== undefined ? { failedToolDetail } : {}),
                 });
-                // ACP PromptResponse.usage is cumulative session spend, not the
-                // live context-window occupancy. Preserve it on turn.completed
-                // below, but do not synthesize a context-window update from it:
-                // doing so makes the meter grow across turns and stay full after
-                // compaction. A real usage_update notification remains the only
-                // trustworthy source for Grok's context meter.
+                // PromptResponse.usage is cumulative session spend, not context occupancy — never synthesize a context-window update from it; usage_update is the only trustworthy meter source
                 yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
                   type: "turn.completed",
                   ...(yield* makeEventStamp()),
@@ -2038,9 +1874,6 @@ export function makeGrokAdapter(
         );
         ctx.activePromptFiber = yield* runPrompt;
 
-        // Backstop the forked prompt: if the child goes silent, fail the turn
-        // instead of leaving it "Working" forever. Self-terminates when the
-        // turn settles; pauses while a human approval is pending.
         yield* forkAcpAdapterTurnIdleWatchdog({
           context: ctx,
           turnId,
@@ -2068,9 +1901,6 @@ export function makeGrokAdapter(
           return;
         }
         const activeTurnId = turnId ?? ctx.activeTurnId;
-        // A turn that is still starting has no prompt fiber to interrupt yet;
-        // flag it so startGrokTurn aborts before prompting instead of running
-        // the cancelled turn anyway.
         if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
           ctx.pendingTurnInterrupted = true;
         }
@@ -2186,22 +2016,12 @@ export function makeGrokAdapter(
 
     const compactThread: NonNullable<GrokAdapterShape["compactThread"]> = (threadId) =>
       Effect.gen(function* () {
-        // Startup registers the session before its configuration settles, so
-        // compaction must wait before taking the thread lock.
         const preLockCtx = yield* requireSession(threadId);
         if (preLockCtx.sessionConfigReady !== undefined) {
           yield* Deferred.await(preLockCtx.sessionConfigReady);
         }
-        // Claim the compaction slot under the thread lock, but run the
-        // (potentially long) /compact prompt outside it: stopSession/restart
-        // take the same lock, and a hung compaction must never block
-        // stopSessionInternal from cancelling or killing the child.
         const ctx = yield* withThreadLock(threadId, claimGrokCompactionSlot(threadId, preLockCtx));
         return yield* runGrokCompaction(ctx).pipe(
-          // compactingThread stays set until this clears it: sendTurn only
-          // rejects while the flag is true, so clearing before the
-          // completion/thread-state events publish would let a new turn start
-          // and then be trailed by stale compaction bookkeeping.
           Effect.ensuring(
             Effect.sync(() => {
               ctx.compactingThread = false;
@@ -2213,9 +2033,6 @@ export function makeGrokAdapter(
     const claimGrokCompactionSlot = (threadId: ThreadId, preLockCtx: GrokSessionContext) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
-        // The pre-lock setup wait resolves early when the session is stopped;
-        // if a restart won the lock first, this thread id now maps to a fresh
-        // session that the original compaction request never targeted.
         if (ctx !== preLockCtx) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -2224,8 +2041,6 @@ export function makeGrokAdapter(
               "The Grok session was restarted while waiting to compact; retry once it settles.",
           });
         }
-        // The prompt runs outside the thread lock, so a concurrent /compact can
-        // reach this point while one is already in flight; reject it here.
         if (ctx.compactingThread) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -2233,9 +2048,6 @@ export function makeGrokAdapter(
             issue: "A Grok context compaction is already in progress.",
           });
         }
-        // turnStarting covers a sendTurn that is past its compaction check but
-        // has not assigned ctx.activeTurnId yet; the check and the flag write
-        // below stay in one synchronous block so the two paths cannot interleave.
         if (ctx.activeTurnId !== undefined || ctx.turnStarting) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -2250,8 +2062,6 @@ export function makeGrokAdapter(
 
     const runGrokCompaction = (ctx: GrokSessionContext) =>
       Effect.gen(function* () {
-        // A previous timed-out /compact may still be cancelling; same ordering
-        // requirement as new turns.
         yield* waitForAbandonedGrokCompaction(ctx);
         yield* emitGrokContextCompactionRuntimeEvent(ctx, {
           lifecycle: "item.updated",
@@ -2272,10 +2082,7 @@ export function makeGrokAdapter(
           if (Cause.hasInterruptsOnly(compactResult.cause)) {
             return yield* Effect.failCause(compactResult.cause);
           }
-          // Closing a load-resumed runtime releases the central replay gate.
-          // That release reaches the prompt as a request error rather than an
-          // interrupt, but teardown must retain the same interruption-only UI
-          // semantics and avoid publishing a stale compaction failure.
+          // closing a load-resumed runtime releases the replay gate as a request error rather than interrupt — teardown keeps interruption-only UI semantics and no stale compaction failure
           if (ctx.stopped) {
             return yield* Effect.interrupt;
           }
@@ -2298,12 +2105,6 @@ export function makeGrokAdapter(
 
         const promptResponse = Option.getOrUndefined(compactResult.value);
         if (promptResponse === undefined) {
-          // Timed out: tell the child to abandon the prompt (best effort) and
-          // surface the failure instead of leaving compactingThread wedged.
-          // The cancel may take a moment to drain; suppress stragglers so the
-          // next turn cannot inherit stale compaction updates. The cancel is
-          // forked, not awaited: the child just proved it can go silent, and a
-          // hung session/cancel would keep compactingThread set forever.
           ctx.compactionQuietUntil = Date.now() + GROK_COMPACT_ABANDON_QUIET_MS;
           ctx.compactionCancelFiber = yield* Effect.ignore(ctx.acp.cancel).pipe(
             Effect.forkIn(ctx.scope),
@@ -2328,15 +2129,8 @@ export function makeGrokAdapter(
           );
         }
 
-        // The failed-tool detail below is recorded by the notification
-        // consumer, which can lag the prompt response (the update may still
-        // sit in the event queue); wait for inbound activity to go quiet
-        // before deciding the outcome.
         yield* settleGrokCompactionOutcome(ctx);
 
-        // ACP can answer a /compact prompt successfully with stopReason
-        // "cancelled" (user interrupt via session/cancel); that is not a
-        // completed compaction and must not be persisted as one.
         if (promptResponse.stopReason === "cancelled") {
           const detail = "Grok context compaction was cancelled before it completed.";
           yield* emitGrokContextCompactionRuntimeEvent(ctx, {
@@ -2354,9 +2148,6 @@ export function makeGrokAdapter(
           );
         }
 
-        // A compaction tool call can fail while the /compact prompt itself
-        // still resolves successfully; honor the recorded failure instead of
-        // persisting the compaction as completed.
         const failedToolDetail = ctx.compactionFailedToolDetail;
         if (failedToolDetail !== undefined) {
           yield* emitGrokContextCompactionRuntimeEvent(ctx, {
@@ -2374,9 +2165,6 @@ export function makeGrokAdapter(
           );
         }
 
-        // Success: thread.state.changed is the single terminal signal —
-        // ingestion projects it into the "Context compacted manually" row, so
-        // emitting an item.completed row here too would duplicate it.
         yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
           type: "thread.state.changed",
           ...(yield* makeEventStamp()),
@@ -2510,8 +2298,6 @@ export function makeGrokAdapter(
           });
 
         const activeSource = sessions.get(input.sourceThreadId);
-        // Forking mid-turn would branch from incomplete in-flight state, so
-        // let the retained-transcript fallback handle busy sources.
         if (activeSource?.activeTurnId !== undefined) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -2560,10 +2346,6 @@ export function makeGrokAdapter(
               return yield* forkRuntime(runtime);
             }).pipe(Effect.scoped);
 
-        // Return only the cursor: ProviderService registers the binding under
-        // a committed lifecycle lease and the target's first turn resumes it
-        // there. Starting the runtime here would capture an undefined
-        // lifecycle generation, orphaning the fork's approval requests.
         return {
           threadId: input.threadId,
           resumeCursor: {

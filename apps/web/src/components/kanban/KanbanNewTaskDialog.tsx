@@ -1,13 +1,3 @@
-// FILE: KanbanNewTaskDialog.tsx
-// Purpose: Linear-style "New task" dialog — a compact composer that drafts a task
-//          (prompt + provider/model/effort + permissions + mode + environment + voice)
-//          and drops it into the board's Draft column. Model state is driven through
-//          a scratch composer-draft-store thread so the split model + effort/options
-//          pickers work exactly like a fresh chat composer; the project's regular
-//          composer draft is untouched.
-// Layer: Kanban UI component
-// Exports: KanbanNewTaskDialog
-
 import type {
   ProjectId,
   ProviderInteractionMode,
@@ -163,9 +153,7 @@ export function KanbanNewTaskDialog({
   const [interactionMode, setInteractionMode] =
     useState<ProviderInteractionMode>(DEFAULT_INTERACTION_MODE);
   const [envMode, setEnvMode] = useState<DraftThreadEnvMode>("local");
-  // Off by default: a new task is sent straight to In Progress (like starting a
-  // fresh chat). The Draft column's "+" opens the dialog with the toggle on, so
-  // the task parks in Draft — matching where the user clicked.
+  // off by default (new task → In Progress); the Draft column's "+" opens it with the toggle on, matching where the user clicked
   const [sendAsDraft, setSendAsDraft] = useState(initialSendAsDraft);
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
@@ -181,8 +169,7 @@ export function KanbanNewTaskDialog({
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
 
-  // Voice transcription always rides on the Codex ChatGPT session, regardless of
-  // which provider the task targets — gate the mic on the Codex status.
+  // voice transcription always rides the Codex ChatGPT session regardless of the task's provider — gate the mic on Codex status
   const voiceProviderStatus = useMemo(
     () => findProviderStatus(providerStatuses, "codex"),
     [providerStatuses],
@@ -205,8 +192,7 @@ export function KanbanNewTaskDialog({
     selectedRuntimeAgents,
   } = useProviderModelCatalog({
     selectedProvider,
-    // Keep discovery warm whenever either picker can open so cursor/codex effort
-    // and fast-mode controls are populated, not just the model list.
+    // keep discovery warm whenever either picker can open so effort and fast-mode controls are populated, not just the model list
     discoveryEnabled: isModelPickerOpen || isTraitsPickerOpen,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider,
@@ -326,8 +312,7 @@ export function KanbanNewTaskDialog({
     onCreate: handleCreateRequest,
   });
 
-  // Providers without a static default (e.g. Pi) resolve their model once
-  // discovery delivers the catalog.
+  // providers without a static default (e.g. Pi) resolve their model once discovery delivers the catalog
   useEffect(() => {
     if (selectedModel !== null) {
       return;
@@ -385,8 +370,7 @@ export function KanbanNewTaskDialog({
 
   const isVoiceActive = voice.isVoiceRecording || voice.isVoiceTranscribing;
 
-  // Cmd/Ctrl+Enter submits from anywhere in the dialog, not just the textarea —
-  // the focus is often on a picker (model/effort/project) when the user commits.
+  // Cmd/Ctrl+Enter submits from anywhere in the dialog — focus is often on a picker when the user commits
   const handleSubmitShortcut = useCallback(
     (event: React.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {

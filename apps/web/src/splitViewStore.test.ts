@@ -1,7 +1,3 @@
-// FILE: splitViewStore.test.ts
-// Purpose: Verify tree-aware split view state operations: drop creation, perpendicular subdivision,
-// pane focus/ratio mutations, deleted-thread collapse semantics, and v1 -> v2 persisted-state migration.
-
 import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -508,7 +504,6 @@ describe("splitViewStore", () => {
     const firstSplit = nextState.splitViewsById[firstSplitId];
     expect(firstSplit).toBeDefined();
     if (firstSplit) {
-      // First split kept THREAD_B and dropped the THREAD_A leaf, so the tree collapses to a single leaf.
       expect(resolveSplitViewThreadIds(firstSplit)).toEqual([THREAD_B]);
       expect(resolveSplitViewFocusedThreadId(firstSplit)).toBe(THREAD_B);
       expect(firstSplit.sourceThreadId).toBe(THREAD_B);

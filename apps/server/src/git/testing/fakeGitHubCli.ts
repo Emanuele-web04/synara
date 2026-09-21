@@ -1,9 +1,4 @@
-// FILE: fakeGitHubCli.ts
-// Purpose: Shared test fake for the GitHubCli service — scripted `gh` responses (PR lists,
-//          views, checkout, repo lookups) plus a call log for command assertions.
-// Layer: Server test utility (imported by *.test.ts only; never by production code)
-// Note: list responses decode through the live layer's decodePullRequestListJson so raw
-//       gh-shaped fixtures ("OPEN", "CONFLICTING", …) normalize exactly like production.
+// list responses decode through the live layer's decoder so fixtures normalize exactly like production
 
 import { spawnSync } from "node:child_process";
 

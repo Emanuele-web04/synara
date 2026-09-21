@@ -1,7 +1,3 @@
-// FILE: providerBinaryResolution.ts
-// Purpose: Resolves provider CLI binaries from PATH and vendor-owned Windows install folders.
-// Layer: Server provider runtime
-
 import { existsSync } from "node:fs";
 import { win32 } from "node:path";
 

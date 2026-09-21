@@ -29,7 +29,7 @@ describe("104_ProjectionThreadsClaudeCacheReview", () => {
       `;
       assert.deepStrictEqual(row, { title: "Existing thread", review: null });
 
-      // Reapplying the additive migration must not erase a pending decision.
+      // reapplying the additive migration must not erase a pending decision
       const review = '{"reviewId":"preserved-review"}';
       yield* sql`
         UPDATE projection_threads SET claude_cache_review_json = ${review}

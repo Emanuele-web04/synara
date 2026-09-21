@@ -1,8 +1,3 @@
-// FILE: pendingUserInput.ts
-// Purpose: Normalize draft answers and progress for pending user input prompts.
-// Layer: Web chat state utility
-// Exports: Draft answer helpers and progress derivation used by ChatView/composer panels.
-
 import type { ProviderUserInputAnswers, UserInputQuestion } from "@synara/contracts";
 
 export interface PendingUserInputDraftAnswer {
@@ -33,7 +28,6 @@ function normalizeDraftAnswer(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-// Normalize option selections so UI and submit logic can share one canonical list.
 function normalizeSelectedOptionLabels(value: string[] | undefined): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -79,7 +73,6 @@ export function setPendingUserInputCustomAnswer(
   };
 }
 
-// Toggle selections in-place so multi-select prompts can keep the same draft state shape.
 export function togglePendingUserInputOptionSelection(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,

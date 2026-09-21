@@ -1,11 +1,3 @@
-/**
- * ProjectionTurnRepository - Projection repository interface for unified turn state.
- *
- * Owns persistence operations for pending starts, running/completed turn lifecycle,
- * and checkpoint metadata in a single projection table.
- *
- * @module ProjectionTurnRepository
- */
 import {
   CheckpointRef,
   IsoDateTime,
@@ -114,69 +106,52 @@ export const ClearCheckpointTurnConflictInput = Schema.Struct({
 export type ClearCheckpointTurnConflictInput = typeof ClearCheckpointTurnConflictInput.Type;
 
 export interface ProjectionTurnRepositoryShape {
-  /**
-   * Inserts or updates the canonical row for a concrete `{threadId, turnId}` turn lifecycle state.
-   */
+  /** upserts the canonical row for a concrete {threadId, turnId} lifecycle state */
   readonly upsertByTurnId: (
     row: ProjectionTurnById,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /**
-   * Replaces any existing pending-start placeholder rows for a thread with exactly one latest pending-start row.
-   */
+  /** replaces pending-start placeholder rows with exactly one latest */
   readonly replacePendingTurnStart: (
     row: ProjectionPendingTurnStart,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /**
-   * Returns the newest pending-start placeholder for a thread; this is expected to be at most one row after replacement writes.
-   */
+  /** newest pending-start placeholder; at most one row after replacement writes */
   readonly getPendingTurnStartByThreadId: (
     input: GetProjectionPendingTurnStartInput,
   ) => Effect.Effect<Option.Option<ProjectionPendingTurnStart>, ProjectionRepositoryError>;
 
-  /**
-   * Deletes only pending-start placeholder rows (`turnId = null`) for a thread and leaves concrete turn rows untouched.
-   */
+  /** deletes only pending-start placeholders (turnId = null); concrete turn rows untouched */
   readonly deletePendingTurnStartByThreadId: (
     input: GetProjectionPendingTurnStartInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /**
-   * Lists all projection rows for a thread, including pending placeholders, with checkpoint rows ordered before non-checkpoint rows.
-   */
+  /** all rows for a thread including placeholders, checkpoint rows first */
   readonly listByThreadId: (
     input: ListProjectionTurnsByThreadInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionTurn>, ProjectionRepositoryError>;
 
-  /**
-   * Looks up a concrete turn row by `{threadId, turnId}` and never returns pending placeholder rows.
-   */
+  /** concrete turn by {threadId, turnId}; never returns placeholders */
   readonly getByTurnId: (
     input: GetProjectionTurnByTurnIdInput,
   ) => Effect.Effect<Option.Option<ProjectionTurnById>, ProjectionRepositoryError>;
 
-  /** Batch lookup used by long-poll status readers to avoid one query per turn. */
+  /** batch lookup for long-poll readers — avoids one query per turn */
   readonly getManyByTurnId: (
     input: ReadonlyArray<GetProjectionTurnByTurnIdInput>,
   ) => Effect.Effect<ReadonlyArray<ProjectionTurnById>, ProjectionRepositoryError>;
 
-  /** One lightweight query for pinned turn states plus current thread existence. */
+  /** one query for pinned turn states plus thread existence */
   readonly getManyWaitSnapshot: (input: {
     readonly threadIds: ReadonlyArray<GetProjectionTurnByTurnIdInput["threadId"]>;
     readonly turns: ReadonlyArray<GetProjectionTurnByTurnIdInput>;
   }) => Effect.Effect<ProjectionTurnWaitSnapshot, ProjectionRepositoryError>;
 
-  /**
-   * Clears checkpoint fields on conflicting rows that reuse the same checkpoint turn count in a thread, excluding the provided turn.
-   */
+  /** clears checkpoint fields on rows reusing the same checkpoint turn count, excluding the provided turn */
   readonly clearCheckpointTurnConflict: (
     input: ClearCheckpointTurnConflictInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
-  /**
-   * Hard-deletes all projection rows for a thread, including pending-start placeholders and checkpoint metadata rows.
-   */
   readonly deleteByThreadId: (
     input: DeleteProjectionTurnsByThreadInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

@@ -76,7 +76,6 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "git.commitAndPush",
 ] as const;
 
-// Shared list of numbered thread-jump commands used by the web shortcut UI.
 export const THREAD_JUMP_KEYBINDING_COMMANDS = [
   "thread.jump.1",
   "thread.jump.2",
@@ -90,8 +89,7 @@ export const THREAD_JUMP_KEYBINDING_COMMANDS = [
 ] as const;
 export type ThreadJumpKeybindingCommand = (typeof THREAD_JUMP_KEYBINDING_COMMANDS)[number];
 
-// Shared list of numbered space-jump commands used by the web shortcut UI. Index 0 is
-// the first tab in the space strip (Void), matching the visual order of the switcher.
+// index 0 is the first tab in the space strip (Void), matching the switcher's visual order
 export const SPACE_JUMP_KEYBINDING_COMMANDS = [
   "space.jump.1",
   "space.jump.2",

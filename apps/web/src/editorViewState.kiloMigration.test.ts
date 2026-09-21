@@ -1,6 +1,3 @@
-// FILE: editorViewState.kiloMigration.test.ts
-// Purpose: Verifies persisted editor tabs survive the Kilo-to-OpenCode migration.
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { readEditorRailChatTabs } from "./editorViewState";

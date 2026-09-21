@@ -1,6 +1,3 @@
-// FILE: SpaceIcon.tsx
-// Purpose: Renders built-in and custom Space icons through Synara's Central asset renderer.
-
 import { SPACE_ICON_NAMES, type SpaceIconName } from "@synara/contracts";
 
 import { CentralIcon } from "~/lib/central-icons";

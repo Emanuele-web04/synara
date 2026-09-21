@@ -1,8 +1,3 @@
-// FILE: providerModelOptions.test.ts
-// Purpose: Verifies provider-aware model-name formatting for picker and composer labels.
-// Layer: Web unit tests
-// Depends on: providerModelOptions shared formatting helpers.
-
 import { describe, expect, it } from "vitest";
 import { getAppModelOptions } from "./appSettings";
 

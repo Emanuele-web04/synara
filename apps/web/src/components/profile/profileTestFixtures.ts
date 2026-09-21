@@ -1,4 +1,3 @@
-// Shared profile regression fixtures.
 import type { ProfileStats, ProfileTokenStats } from "@synara/contracts";
 
 export const promptHeatmapCell = {

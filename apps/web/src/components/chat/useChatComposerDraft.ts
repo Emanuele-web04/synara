@@ -190,10 +190,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
     expectedPromptHistoryPromptRef.current = null;
     promptHistoryAppliedPromptRef.current = null;
   }, [threadId]);
-  // While a history browse is active the persisted draft prompt holds a
-  // recalled entry and the user's real draft snapshot sits in promptHistorySavedDraft.
-  // A non-null saved draft with no live navigation state means the browse was
-  // interrupted (thread switch, reload, unmount) — put the real draft back.
+  // during a history browse the persisted prompt holds a recalled entry and the real draft sits in promptHistorySavedDraft — non-null saved draft + no navigation state = interrupted browse, restore it
   useEffect(() => {
     if (promptHistoryNavigationRef.current !== null || composerPromptHistorySavedDraft === null) {
       return;
@@ -227,7 +224,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
     if (promptHistoryNavigationRef.current === null) {
       return;
     }
-    // Attachment edits mean the recalled prompt is now the user's draft; do not restore the old one.
+    // attachment edits mean the recalled prompt is now the user's draft — don't restore the old one
     promptHistoryNavigationRef.current = null;
     applyingPromptHistoryNavigationRef.current = false;
     expectedPromptHistoryPromptRef.current = null;
@@ -373,8 +370,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
       threadId,
     ],
   );
-  // "Show in text field": drop the full pasted text back into the editor (appended
-  // to the current prompt) and discard the card so it can be edited as normal text.
+  // "Show in text field": drop the full pasted text into the editor (appended) and discard the card
   const showComposerPastedTextInField = useCallback(
     (pastedTextId: string) => {
       const pasted = composerPastedTexts.find((entry) => entry.id === pastedTextId);
@@ -441,10 +437,7 @@ export function useChatComposerDraft({ threadId }: ChatComposerDraftInput) {
       promptHistoryNavigationRef.current !== null &&
       prompt !== promptHistoryAppliedPromptRef.current
     ) {
-      // Another writer (queued-turn restore, automation restore, insertion)
-      // replaced the prompt while a history browse was active. The new prompt
-      // is authoritative: end the browse and drop the saved pre-browse draft
-      // so it cannot clobber this prompt later.
+      // another writer replaced the prompt during a history browse — the new prompt is authoritative: end the browse and drop the saved draft so it can't clobber it later
       promptHistoryNavigationRef.current = null;
       expectedPromptHistoryPromptRef.current = null;
       setComposerDraftPromptHistorySavedDraft(threadId, null);

@@ -1,8 +1,3 @@
-// FILE: automationForm.ts
-// Purpose: Owns automation form state, schedule conversion, and API payload helpers.
-// Layer: Web lib (pure form/domain helpers)
-// Exports: form builders, schedule formatters, warning adapters, and payload mappers.
-
 import {
   AUTOMATION_NAME_MAX_LENGTH,
   AUTOMATION_PROMPT_MAX_LENGTH,
@@ -53,9 +48,6 @@ export const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const LEGACY_WALL_CLOCK_TIMEZONE = "UTC";
 
-// --- Schedule form shape ----------------------------------------------------
-
-/** UI-level cadence options shown in the schedule picker (each maps onto an AutomationSchedule). */
 export type ScheduleKind =
   | "manual"
   | "once"
@@ -123,9 +115,6 @@ function scheduleTimezone(schedule: AutomationSchedule, fallbackTimezone: string
   );
 }
 
-// --- Schedule conversion and labels ----------------------------------------
-
-/** Pick the schedule option that represents a stored schedule (interval 1h reads as "Hourly"). */
 export function scheduleKindFromSchedule(schedule: AutomationSchedule): ScheduleKind {
   switch (schedule.type) {
     case "daily":
@@ -145,7 +134,6 @@ export function scheduleKindFromSchedule(schedule: AutomationSchedule): Schedule
   }
 }
 
-/** Build a schedule for the chosen kind, reusing time/day/interval from `current` where it applies. */
 export function scheduleFromKind(
   kind: ScheduleKind,
   current: AutomationSchedule,
@@ -277,7 +265,6 @@ export function formatSchedule(schedule: AutomationSchedule): string {
   }
 }
 
-/** "09:00" -> "9:00": drops the leading zero on the hour for friendlier cadence labels. */
 export function formatClockTime(timeOfDay: string): string {
   const [hours, minutes] = timeOfDay.split(":");
   const hour = Number.parseInt(hours ?? "", 10);
@@ -312,18 +299,12 @@ function formatIntervalCadenceLong(seconds: number): string {
   return seconds === 1 ? "Every second" : `Every ${seconds} seconds`;
 }
 
-/** Like {@link formatCadence} but with interval units spelled out ("Every 5 minutes"). */
 export function formatCadenceLong(schedule: AutomationSchedule): string {
   return schedule.type === "interval"
     ? formatIntervalCadenceLong(schedule.everySeconds)
     : formatCadence(schedule);
 }
 
-/**
- * Countdown phrase for an upcoming run: "now", "in 5 minutes", "in 9 hours", "in 3 days".
- * A past-due `nextRunAt` (scheduler catching up) also reads "now". Null when unscheduled
- * or unparseable so callers can drop the segment entirely.
- */
 export function formatNextRun(nextRunAt: string | null, now: number = Date.now()): string | null {
   if (!nextRunAt) return null;
   const time = new Date(nextRunAt).getTime();
@@ -342,15 +323,9 @@ export function weekdayLabel(value: number): string {
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][value] ?? "Sun";
 }
 
-// --- Thread automation lookups ---------------------------------------------
-// Automations that continue a thread are the only kind bound to one; both the
-// Environment panel and the sidebar surface them keyed by that thread, whether the
-// user chose it (heartbeat) or the automation created it for itself (dedicated).
-
 const byAutomationName = (left: AutomationDefinition, right: AutomationDefinition): number =>
   left.name.localeCompare(right.name);
 
-/** Automations continuing a single thread, sorted by name. */
 export function automationsForThread(
   definitions: readonly AutomationDefinition[],
   threadId: ThreadId,
@@ -360,7 +335,6 @@ export function automationsForThread(
     .toSorted(byAutomationName);
 }
 
-/** All thread-bound automations grouped by the thread they continue (each list sorted by name). */
 export function groupAutomationsByContinuedThread(
   definitions: readonly AutomationDefinition[],
 ): Map<ThreadId, AutomationDefinition[]> {
@@ -383,9 +357,7 @@ export function groupAutomationsByContinuedThread(
   return byThreadId;
 }
 
-// --- Interval presets --------------------------------------------------------
-// Single preset list for every interval picker (creation dialog and detail page)
-// so cadence options and labels never diverge between surfaces.
+// one preset list for every interval picker so cadence options/labels never diverge between surfaces
 
 export const AUTOMATION_INTERVAL_PRESET_SECONDS: readonly number[] = [
   900, 1800, 3600, 7200, 21600, 43200, 86400,
@@ -398,11 +370,6 @@ export function formatIntervalPresetLabel(seconds: number): string {
   return `Every ${seconds} sec`;
 }
 
-/**
- * Options for an interval cadence picker. A stored non-preset interval is prepended so the
- * current value always renders as itself. The dialog omits the hourly preset because
- * "Hourly" is its own ScheduleKind there; the detail page includes it.
- */
 export function automationIntervalPresetOptions({
   currentSeconds,
   includeHourly,
@@ -425,8 +392,6 @@ export function automationIntervalPresetOptions({
     ...presets,
   ];
 }
-
-// --- Form state and API payloads -------------------------------------------
 
 export function intervalFormPartsFromSeconds(everySeconds: number): {
   readonly amount: string;
@@ -640,8 +605,7 @@ export function createInputFromForm(
     ...(providerOptions ? { providerOptions } : {}),
     mode: form.mode,
     notificationPolicy: form.notificationPolicy,
-    // Only heartbeat carries a thread the user picked; a dedicated automation is given
-    // its own thread by the server after its first run.
+    // only heartbeat carries a user-picked thread; a dedicated automation is given its own thread by the server after its first run
     targetThreadId: automationRequiresTargetThread(form.mode)
       ? (form.targetThreadId as ThreadId)
       : null,
@@ -674,9 +638,6 @@ export function acknowledgedRiskIdsForFormWarnings(
   return acknowledgedRiskIdsForDraft(warnings, acknowledgedWarningIds);
 }
 
-// --- Validation ---------------------------------------------------------------
-
-/** Error for an automation name draft, or null when saveable. */
 export function automationNameError(name: string): string | null {
   const trimmed = name.trim();
   if (!trimmed) return "Add a name";
@@ -686,12 +647,9 @@ export function automationNameError(name: string): string | null {
   return null;
 }
 
-// One token per cron field: digits, `*`, lists, ranges, steps. Deliberately structural —
-// range semantics (minute 0-59, month 1-12, …) stay with the server's parser, so this can't
-// drift from it; it only stops obviously incomplete input from becoming a doomed request.
+// deliberately structural — range semantics stay with the server's parser so this can't drift; it only stops obviously incomplete input from becoming a doomed request
 const CRON_FIELD_PATTERN = /^[\d*,/-]+$/;
 
-/** Error for a cron expression draft, or null when it is worth sending to the server. */
 export function automationCronExpressionError(expression: string): string | null {
   const fields = expression.trim().split(/\s+/).filter(Boolean);
   if (fields.length !== 5 || !fields.every((field) => CRON_FIELD_PATTERN.test(field))) {
@@ -700,7 +658,6 @@ export function automationCronExpressionError(expression: string): string | null
   return null;
 }
 
-/** Error for a schedule timezone draft, or null when it names a real IANA timezone. */
 export function automationTimezoneError(timezone: string): string | null {
   const trimmed = timezone.trim();
   if (!trimmed) return "Add a timezone";
@@ -712,7 +669,6 @@ export function automationTimezoneError(timezone: string): string | null {
   return null;
 }
 
-/** Error for an automation prompt draft, or null when saveable. */
 export function automationPromptError(prompt: string): string | null {
   const trimmed = prompt.trim();
   if (!trimmed) return "Add a prompt";
@@ -722,11 +678,7 @@ export function automationPromptError(prompt: string): string | null {
   return null;
 }
 
-/**
- * Why the form can't be submitted right now, as user-facing copy — or null when
- * submittable. Rendered beside the dialog's Save button so a disabled Save is never
- * a silent dead end.
- */
+// rendered beside Save so a disabled Save is never a silent dead end
 export function automationFormSubmitBlockReason(
   form: AutomationFormState,
   warnings: readonly AutomationDraftWarning[],

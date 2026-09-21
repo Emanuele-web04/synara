@@ -1,8 +1,3 @@
-// FILE: desktopCustomTitleBar.ts
-// Purpose: Persist the Windows/Linux custom title bar preference for Electron boot.
-// Layer: Desktop main process
-// Depends on: filesystem; preference must be readable before BrowserWindow creation.
-
 import * as FS from "node:fs";
 import * as Path from "node:path";
 

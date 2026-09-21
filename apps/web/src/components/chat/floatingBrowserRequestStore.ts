@@ -1,9 +1,4 @@
-// FILE: floatingBrowserRequestStore.ts
-// Purpose: Remember which threads have an undocked floating browser across route changes.
-// Layer: Chat surface UI state
-// A background agent can open a page while another chat is focused. The request
-// must survive that visit — and survive a temporarily visible dock browser — so
-// the card returns when the owning thread is shown without a docked live guest.
+// a background agent can open a page while another chat is focused; the request survives that visit and a temporarily visible dock browser
 
 import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";

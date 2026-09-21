@@ -1,7 +1,3 @@
-// FILE: DiffPanel.tsx
-// Purpose: Coordinates diff-panel data sources, toolbar state, and patch body rendering.
-// Layer: Diff panel container
-
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { ThreadId, type ResolvedKeybindingsConfig, type TurnId } from "@synara/contracts";
@@ -473,10 +469,7 @@ export default function DiffPanel({
   const setRepoDiffCompareRef = useRepoDiffScopeStore((store) => store.setCompareRef);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
   const [fileTreeOpen, setFileTreeOpen] = useState(false);
-  // Lazy-mount the review file tree on first open so a closed diff panel never
-  // pays to filter/build/render the side tree (the common case). Keep it mounted
-  // afterward so the open/close animation plays and the filter + expand state
-  // persist across toggles.
+  // lazy-mount the review file tree on first open so a closed diff panel never pays to filter/build/render it; keep mounted afterward so open/close animates and filter+expand state persist
   const [fileTreeMounted, setFileTreeMounted] = useState(false);
   const toggleFileTree = useCallback(() => {
     setFileTreeOpen((previous) => !previous);
@@ -487,9 +480,7 @@ export default function DiffPanel({
   }, []);
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const diffSelectAllArmedRef = useRef(false);
-  // Cmd/Ctrl+A keydown targets document.activeElement; clicks on non-focusable diff
-  // chrome leave focus outside the viewport. Remember the last pointer hit so a
-  // subsequent select-all still counts as "inside the diff".
+  // Cmd/Ctrl+A targets document.activeElement; clicks on non-focusable diff chrome leave focus outside the viewport — remember the last pointer hit so a later select-all still counts as inside the diff
   const lastPointerInDiffViewportRef = useRef(false);
   const previousDiffOpenRef = useRef(false);
   const routeThreadId = useParams({
@@ -719,9 +710,7 @@ export default function DiffPanel({
   const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
-  // The scope picker shows a file count per scope. Counts come from the stats endpoint rather
-  // than four full patches: only the selected scope's patch is ever rendered, so fetching the
-  // other three in full moved megabytes per refresh on a large working tree for four integers.
+  // counts come from the stats endpoint rather than four full patches — only the selected scope's patch is rendered, so fetching the other three moved megabytes per refresh for four integers
   const unstagedDiffStatsQuery = useQuery(
     gitWorkingTreeDiffStatsQueryOptions({
       cwd: activeCwd ?? null,
@@ -813,10 +802,7 @@ export default function DiffPanel({
   }, [activeCheckpointDiffQuery, diffViewKind, repoDiffQuery]);
   const activeReviewHasNoChanges = diffViewKind === "repo" ? hasNoRepoChanges : hasNoNetChanges;
   const { copyToClipboard: copyDiffToClipboard, isCopied: isDiffCopied } = useCopyToClipboard();
-  // The parsed patch is structural and theme-agnostic — theming is applied
-  // separately via the themed row key and buildDiffPanelUnsafeCSS (cached per
-  // theme). Keeping `resolvedTheme` out of the parse cache scope and these deps
-  // avoids re-parsing the whole patch on every light/dark toggle.
+  // the parsed patch is theme-agnostic — theming applies via the themed row key + buildDiffPanelUnsafeCSS (cached per theme); keeping resolvedTheme out of the parse cache avoids re-parsing the whole patch per light/dark toggle
   const renderablePatch = useMemo(() => getRenderablePatch(activeReviewPatch), [activeReviewPatch]);
   const diffCopyText = useMemo(
     () => resolveDiffCopyText(activeReviewPatch, activeReviewTruncated),
@@ -853,8 +839,7 @@ export default function DiffPanel({
     onRenderableFilesChange?.(renderableFiles, activeReviewIsLoading);
   }, [activeReviewIsLoading, onRenderableFilesChange, renderableFiles]);
 
-  // Virtualized shadow-DOM diffs only mount ~150 rows. Arm on Cmd/Ctrl+A inside
-  // the viewport, then hijack the document `copy` event to write the full raw patch.
+  // virtualized shadow-DOM diffs only mount ~150 rows — arm on Cmd/Ctrl+A inside the viewport, then hijack the document copy event to write the full raw patch
   useEffect(() => {
     const isEventWithinDiffViewport = (event: Event) => {
       const viewport = patchViewportRef.current;
@@ -962,9 +947,7 @@ export default function DiffPanel({
     () => areAllRenderableFilesCollapsed(renderableFiles, collapsedFiles),
     [collapsedFiles, renderableFiles],
   );
-  // Timeout-0 keeps these two sync writes asynchronous (no wasted pre-paint
-  // render), which also keeps this component eligible for React Compiler; the
-  // panel opens behind a 300ms slide, so one tick is invisible.
+  // timeout-0 keeps the sync writes asynchronous (no wasted pre-paint render) and keeps the component compiler-eligible; the panel opens behind a 300ms slide so one tick is invisible
   useEffect(() => {
     const wasOpen = previousDiffOpenRef.current;
     previousDiffOpenRef.current = diffOpen;
@@ -1068,7 +1051,6 @@ export default function DiffPanel({
     [diffViewKind, onEditFile, repoDiffCompareRef, repoDiffScope],
   );
 
-  // Per-file header actions that talk to the active thread's composer draft.
   const diffFileChatActions = useMemo(
     () =>
       activeThreadId
@@ -1092,9 +1074,7 @@ export default function DiffPanel({
   const closeLineBlame = useCallback(() => {
     setBlameTarget(null);
   }, []);
-  // Blame reads the working tree (or HEAD for deletions), so it is only offered
-  // where the diff's line numbers describe those trees: turn diffs are
-  // checkpoint snapshots, and index-backed scopes number lines by the index.
+  // blame reads the working tree (or HEAD for deletions), so it's only offered where the diff's line numbers describe those trees: turn diffs are checkpoint snapshots, index-backed scopes number by the index
   const blameEnabled =
     diffViewKind === "repo" && repoDiffScope !== "staged" && repoDiffScope !== "unstaged";
   useEffect(() => {
@@ -1115,9 +1095,7 @@ export default function DiffPanel({
     [activeThreadId],
   );
 
-  // Highlight diff code -> floating "Add to chat" -> mention + quoted snippet.
-  // The diff body renders inside the @pierre/diffs shadow root, so selection
-  // ancestors are resolved through shadow boundaries.
+  // the diff body renders inside the @pierre/diffs shadow root, so selection ancestors resolve through shadow boundaries
   const readDiffSelection = useCallback((container: HTMLElement) => {
     const selection = window.getSelection();
     if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
@@ -1129,8 +1107,7 @@ export default function DiffPanel({
       return null;
     }
     const filePath = anchorRow.getAttribute("data-diff-file-path") ?? "";
-    // Read the text from the selection rather than its range: ranges are
-    // retargeted at the shadow host, so `range.toString()` would be empty.
+    // read text from the selection not its range — ranges are retargeted at the shadow host so range.toString() would be empty
     const text = normalizeSelectionSnippet(selection.toString());
     if (filePath.length === 0 || text === null) {
       return null;
@@ -1356,8 +1333,7 @@ export default function DiffPanel({
     () =>
       hideHeader ? null : showDiffToolbar ? (
         <DiffPanelToolbar
-          // Remount per thread so per-thread view state (e.g. the expanded
-          // turn-list page size) does not leak across thread navigations.
+          // Remount per thread so per-thread view state (e.g. the expanded turn-list page size) does not leak across thread navigations.
           key={activeThreadId ?? "no-thread"}
           activeCwd={activeCwd}
           activeThreadId={activeThreadId}
