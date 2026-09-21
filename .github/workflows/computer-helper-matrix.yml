@@ -6,10 +6,8 @@
 # symbol reaches them as a desktop that cannot be driven rather than a failed
 # build.
 #
-# This job is the tripwire, and it is the twin of device-helper-matrix.yml. Like
-# that one it is deliberately NOT attached to pull_request: macOS runners are
-# expensive and this catches upstream drift, which happens on Apple's schedule
-# rather than ours.
+# Run for helper changes as well as on a schedule, so pull requests verify the
+# Swift build before merging. Scheduled runs also catch SDK and OS drift.
 #
 # The blocking assertion is the `--probe` report: every `skylight` capability
 # must be present and boolean. A symbol that moved reports `false` there, which
@@ -17,6 +15,19 @@
 name: Computer Helper Matrix
 
 on:
+  pull_request:
+    paths:
+      - "apps/server/native/computer-use-macos/**"
+      - "apps/server/src/computer/mac*.ts"
+      - "apps/server/src/computer/MacComputerBackend*.ts"
+      - "apps/desktop/scripts/build-computer-helper.mjs"
+      - "packages/shared/src/computerHelper*"
+      - "scripts/assert-computer-helper-probe*"
+      - "scripts/mac-after-sign.test.ts"
+      - "scripts/lib/mac-after-sign.cjs"
+      - "scripts/lib/desktop-platform-build-config.ts"
+      - "scripts/build-desktop-artifact-mac-config.test.ts"
+      - ".github/workflows/computer-helper-matrix.yml"
   schedule:
     # Mondays 05:30 UTC, half an hour after the device helper so the two do not
     # contend for the macOS runner pool.
@@ -84,12 +95,34 @@ jobs:
           sw_vers
           xcrun swiftc -version
 
+      - name: Test helper packaging and signing
+        run: bun run --cwd scripts test mac-after-sign.test.ts build-desktop-artifact-mac-config.test.ts assert-computer-helper-probe.test.ts
+
       # The blocking check. A compile failure here is a Swift or SDK change; a
       # probe failure is a moved symbol. Both are what this workflow exists for.
       - name: Compile the helper
         env:
           SYNARA_COMPUTER_HELPER_OUT: ${{ runner.temp }}/computer-helper
         run: bash apps/server/native/computer-use-macos/build.sh "$SYNARA_COMPUTER_HELPER_OUT"
+
+      - name: Test native geometry and cancellation without desktop input
+        run: |
+          set -euo pipefail
+          helper_test_dir=$(mktemp -d "${RUNNER_TEMP}/synara-computer-tests.XXXXXX")
+          trap 'rm -rf "$helper_test_dir"' EXIT
+          swiftc apps/server/native/computer-use-macos/Sources/CaptureCanvas.swift \
+            apps/server/native/computer-use-macos/Tests/CaptureCanvasTests.swift \
+            -o "$helper_test_dir/capture-canvas-tests" -framework AppKit
+          "$helper_test_dir/capture-canvas-tests"
+          swiftc apps/server/native/computer-use-macos/Sources/InputDeliveryHistory.swift \
+            apps/server/native/computer-use-macos/Tests/InputDeliveryHistoryTests.swift \
+            -o "$helper_test_dir/input-delivery-history-tests"
+          "$helper_test_dir/input-delivery-history-tests"
+          swiftc apps/server/native/computer-use-macos/Sources/JSONRPC.swift \
+            apps/server/native/computer-use-macos/Sources/Cancellation.swift \
+            apps/server/native/computer-use-macos/Tests/InputCancellationTests.swift \
+            -o "$helper_test_dir/cancellation-tests"
+          "$helper_test_dir/cancellation-tests"
 
       - name: Probe capabilities and assert the SkyLight report
         env:
