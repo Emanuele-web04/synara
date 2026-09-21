@@ -819,6 +819,9 @@ export function projectProviderRuntimeActivities(
               ? { workflowAgentPlans: event.payload.workflowAgentPlans }
               : {}),
             ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.isBackgrounded !== undefined
+              ? { isBackgrounded: event.payload.isBackgrounded }
+              : {}),
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
               : {}),

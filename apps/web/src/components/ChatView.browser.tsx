@@ -9773,7 +9773,10 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.body.textContent).toContain("1 out of 3 tasks completed");
           expect(document.body.textContent).toContain("Inspecting ChatView boundaries");
           expect(document.body.textContent).toContain("Patch the shared checklist receiver");
-          expect(document.body.textContent).toContain("1 background agent");
+          expect(document.body.textContent).toContain("1 background agent running");
+          expect(
+            document.querySelector('[data-testid="composer-background-tasks-panel"]'),
+          ).not.toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -9825,7 +9828,10 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.body.textContent).toContain("Finished the investigation.");
           expect(document.body.textContent).not.toContain("1 out of 3 tasks completed");
           expect(document.querySelector('[data-testid="active-task-list-card"]')).toBeNull();
-          expect(document.body.textContent).not.toContain("1 background agent");
+          expect(document.body.textContent).not.toContain("1 background agent running");
+          expect(
+            document.querySelector('[data-testid="composer-background-tasks-panel"]'),
+          ).toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
