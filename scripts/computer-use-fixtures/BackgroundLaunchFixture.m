@@ -46,7 +46,7 @@ int main(int argc, const char *argv[]) {
         if (argc == 4) {
             if (strcmp(argv[1], "--terminate-bundle") == 0) {
                 NSString *identifier = @(argv[2]);
-                if (![identifier hasPrefix:@"com.synara.fixture.background-launch."]) return 2;
+                if (![identifier hasPrefix:@"app.synara.fixture.background-launch."]) return 2;
                 for (NSRunningApplication *owned in
                     [NSRunningApplication runningApplicationsWithBundleIdentifier:identifier]) {
                     if ([owned.bundleURL.path isEqualToString:@(argv[3])]) [owned terminate];
@@ -55,7 +55,7 @@ int main(int argc, const char *argv[]) {
             }
             NSRunningApplication *app = [NSRunningApplication
                 runningApplicationWithProcessIdentifier:atoi(argv[2])];
-            if (!app || ![app.bundleIdentifier hasPrefix:@"com.synara.fixture.background-launch."]
+            if (!app || ![app.bundleIdentifier hasPrefix:@"app.synara.fixture.background-launch."]
                 || ![app.bundleURL.path isEqualToString:@(argv[3])]) return 2;
             NSString *command = @(argv[1]);
             if ([command isEqualToString:@"--hide"]) return [app hide] ? 0 : 3;

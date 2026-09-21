@@ -24,7 +24,7 @@ const directory = await mkdtemp(join(build, "cua-launch-proof-"));
 const appPath = join(directory, "Target.app");
 const executable = join(directory, "fixture");
 const focusProbe = join(directory, "focus-probe");
-const bundleId = `com.synara.fixture.background-launch.${randomUUID()}`;
+const bundleId = `app.synara.fixture.background-launch.${randomUUID()}`;
 const socketPath = join(directory, "driver.sock");
 const register =
   "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
