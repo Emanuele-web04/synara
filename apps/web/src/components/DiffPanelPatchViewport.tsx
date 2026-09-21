@@ -37,7 +37,7 @@ export const DiffPanelPatchViewport = memo(
   }) {
     const viewportClassName = "flex h-full min-h-0 w-full flex-1 flex-col";
     const refreshStatus = props.refreshStatus ? (
-      <p role="status" className="shrink-0 px-3 py-2 text-[11px] text-muted-foreground/75">
+      <p role="status" className="shrink-0 px-3 py-2 text-ui-xs text-muted-foreground/75">
         {props.refreshStatus}
       </p>
     ) : null;

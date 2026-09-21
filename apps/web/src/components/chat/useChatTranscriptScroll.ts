@@ -572,14 +572,24 @@ export function useChatTranscriptScroll({
       const target = legendListRef.current;
       if (!target) return;
       for (let attempt = 0; attempt < 4; attempt += 1) {
-        if (cancelled || isUserScrollDetachedRef.current || legendListRef.current !== target)
+        if (
+          cancelled ||
+          tailAnchorScrollInFlightRef.current ||
+          isUserScrollDetachedRef.current ||
+          legendListRef.current !== target
+        )
           return;
         programmaticScrollUntilRef.current = performance.now() + 200;
         await target.scrollToEnd({ animated: false });
         await new Promise<void>((resolve) => {
           window.requestAnimationFrame(() => resolve());
         });
-        if (cancelled || isUserScrollDetachedRef.current || legendListRef.current !== target)
+        if (
+          cancelled ||
+          tailAnchorScrollInFlightRef.current ||
+          isUserScrollDetachedRef.current ||
+          legendListRef.current !== target
+        )
           return;
         const node = target.getScrollableNode();
         if (node instanceof HTMLElement && isScrollContainerNearBottom(node, 1)) return;
