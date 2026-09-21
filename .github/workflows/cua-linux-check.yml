@@ -48,9 +48,23 @@ jobs:
       - name: Install Linux build and disposable X11 dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev xvfb xauth xdotool dbus-x11
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev xvfb xauth xdotool dbus-x11 acl
+
+      - name: Install a trusted system Chrome fixture
+        run: |
+          # Hosted images deliberately make /opt browser payloads world-writable.
+          # The driver must reject those. Reinstall the official payload and
+          # restore root-managed installation permissions on this disposable VM.
+          curl --fail --location --retry 3 https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb --output "$RUNNER_TEMP/cua-smoke-chrome.deb"
+          sudo apt-get install -y --reinstall "$RUNNER_TEMP/cua-smoke-chrome.deb"
+          sudo setfacl -b /opt /opt/google
+          sudo setfacl -Rb /opt/google/chrome
+          sudo chown -R root:root /opt/google/chrome
+          sudo chmod go-w /opt /opt/google
+          sudo chmod -R go-w /opt/google/chrome
           command -v google-chrome
           ls -ld / /opt /opt/google /opt/google/chrome /opt/google/chrome/google-chrome
+          google-chrome --version
 
       - name: Prepare pinned Linux driver source
         shell: bash
