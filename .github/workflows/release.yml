@@ -25,6 +25,10 @@ on:
         type: choice
         default: artifact
         options: [artifact, native, icon, js]
+      cua_benchmark_baseline:
+        description: "Optional full baseline commit for paired cold Cua builds (native, one Mac only)"
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -61,6 +65,7 @@ jobs:
       build_icon: ${{ steps.scope.outputs.build_icon }}
       build_js: ${{ steps.scope.outputs.build_js }}
       build_native: ${{ steps.scope.outputs.build_native }}
+      benchmark_native: ${{ steps.scope.outputs.benchmark_native }}
       package_artifacts: ${{ steps.scope.outputs.package_artifacts }}
       build_server: ${{ steps.scope.outputs.build_server }}
     steps:
@@ -91,6 +96,7 @@ jobs:
           BUILD_PLATFORM: ${{ inputs.platform || 'all' }}
           BUILD_STAGE: ${{ inputs.stage || 'artifact' }}
           PUBLISH_RELEASE: ${{ steps.release_mode.outputs.publish_release }}
+          CUA_BENCHMARK_BASELINE: ${{ inputs.cua_benchmark_baseline }}
         run: node scripts/resolve-release-build-scope.ts
 
       - id: release_meta
@@ -258,7 +264,7 @@ jobs:
     needs: [preflight, build_mac_icon, build_portable]
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.build_native == 'true' && (needs.build_mac_icon.result == 'success' || needs.build_mac_icon.result == 'skipped') && (needs.build_portable.result == 'success' || needs.build_portable.result == 'skipped') }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ needs.preflight.outputs.benchmark_native == 'true' && 25 || 60 }}
     permissions:
       contents: read
     strategy:
@@ -315,6 +321,16 @@ jobs:
       - name: Provision verified Cua
         if: matrix.platform == 'mac' || matrix.platform == 'linux'
         uses: ./.github/actions/provision-cua
+        with:
+          benchmark-baseline: ${{ inputs.cua_benchmark_baseline || '' }}
+
+      - name: Upload Cua benchmark evidence
+        if: ${{ always() && needs.preflight.outputs.benchmark_native == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cua-benchmark-${{ matrix.arch }}
+          path: ${{ runner.temp }}/cua-benchmark/evidence
+          if-no-files-found: error
 
       - name: Restore portable outputs
         if: needs.preflight.outputs.package_artifacts == 'true'

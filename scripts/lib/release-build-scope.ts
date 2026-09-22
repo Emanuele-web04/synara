@@ -33,7 +33,12 @@ const platforms = [
   },
 ] as const;
 
-export function resolveReleaseBuildScope(platform = "all", stage = "artifact", publish = false) {
+export function resolveReleaseBuildScope(
+  platform = "all",
+  stage = "artifact",
+  publish = false,
+  cuaBenchmarkBaseline = "",
+) {
   if (!["artifact", "native", "icon", "js"].includes(stage))
     throw new Error(`Unknown build stage: ${stage}`);
   const selected = platforms.filter((entry) => platform === "all" || platform === entry.id);
@@ -44,6 +49,14 @@ export function resolveReleaseBuildScope(platform = "all", stage = "artifact", p
     throw new Error("Icon validation requires a macOS platform or all.");
   if (stage === "native" && platform === "win-x64")
     throw new Error("Windows does not compile the patched Cua driver.");
+  if (
+    cuaBenchmarkBaseline &&
+    (publish ||
+      stage !== "native" ||
+      !["mac-arm64", "mac-x64"].includes(platform) ||
+      !/^[a-f0-9]{40}$/.test(cuaBenchmarkBaseline))
+  )
+    throw new Error("Cua benchmark requires one native macOS platform and a full baseline commit.");
   return {
     matrix: {
       include: stage === "native" ? selected.filter((entry) => entry.platform !== "win") : selected,
@@ -53,6 +66,7 @@ export function resolveReleaseBuildScope(platform = "all", stage = "artifact", p
       (stage === "artifact" && selected.some((entry) => entry.platform === "mac")),
     build_js: stage === "js" || stage === "artifact",
     build_native: stage === "native" || stage === "artifact",
+    benchmark_native: cuaBenchmarkBaseline !== "",
     package_artifacts: stage === "artifact",
     build_server: stage === "artifact" && platform === "all",
   };

@@ -5,6 +5,7 @@ const scope = resolveReleaseBuildScope(
   process.env.BUILD_PLATFORM || "all",
   process.env.BUILD_STAGE || "artifact",
   process.env.PUBLISH_RELEASE === "true",
+  process.env.CUA_BENCHMARK_BASELINE || "",
 );
 if (!process.env.GITHUB_OUTPUT) throw new Error("GITHUB_OUTPUT is required.");
 for (const [key, value] of Object.entries(scope))

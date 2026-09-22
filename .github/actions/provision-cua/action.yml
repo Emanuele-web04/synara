@@ -1,6 +1,9 @@
 name: Provision verified Cua
 description: Restore an exact trusted native build or build the pinned source on a cache miss
 inputs:
+  benchmark-baseline:
+    description: Full baseline commit for isolated cold A/B builds; bypasses all artifact caches
+    default: ""
   save-cache:
     description: Only the trusted default-branch producer may save
     default: "false"
@@ -39,13 +42,14 @@ runs:
 
     - name: Restore exact Cua artifact
       id: cache
+      if: inputs.benchmark-baseline == ''
       uses: actions/cache/restore@v4
       with:
         path: ${{ runner.temp }}/cua-artifact
         key: ${{ steps.key.outputs.key }}
 
     - name: Build on a valid cache miss
-      if: steps.cache.outputs.cache-hit != 'true'
+      if: inputs.benchmark-baseline == '' && steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         CACHE_KEY: ${{ steps.key.outputs.key }}
@@ -58,6 +62,7 @@ runs:
         printf '%s\n' "$CACHE_KEY" > "$RUNNER_TEMP/cua-artifact/build-key.txt"
 
     - name: Validate and stage cached Cua
+      if: inputs.benchmark-baseline == ''
       shell: bash
       env:
         CACHE_KEY: ${{ steps.key.outputs.key }}
@@ -71,8 +76,15 @@ runs:
         echo "Cua exact cache hit: $CACHE_HIT; key: $CACHE_KEY" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Save trusted default-branch Cua artifact
-      if: inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      if: inputs.benchmark-baseline == '' && inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       uses: actions/cache/save@v4
       with:
         path: ${{ runner.temp }}/cua-artifact
         key: ${{ steps.key.outputs.key }}
+
+    - name: Compare cold Cua builds and driver behavior
+      if: inputs.benchmark-baseline != ''
+      shell: bash
+      env:
+        BASELINE_COMMIT: ${{ inputs.benchmark-baseline }}
+      run: node scripts/benchmark-cua-build.ts "$BASELINE_COMMIT" "$RUNNER_TEMP/cua-benchmark"

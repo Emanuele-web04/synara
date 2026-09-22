@@ -117,6 +117,14 @@ gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=fal
 gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f stage=js
 ```
 
+For a paired cold Cua build comparison, add `-f cua_benchmark_baseline=FULL_COMMIT`
+to a single-Mac `stage=native` invocation. The baseline must use the same Cua
+source/version/native revision/compiler. This experiment bypasses artifact caches,
+builds baseline then candidate on the same runner with separate empty Cargo/target
+directories, and uploads Cargo timing reports, native linkage and isolated daemon
+probe results. It checks that only the baseline emits the unused SDK dynamic
+library. No app packaging or publication runs; the native job is capped at 25 minutes.
+
 `native` verifies the pinned Cua artifact/source path only; `icon` compiles the
 macOS catalog only; `js` builds and records portable outputs only. These stages
 do not qualify an installer or provider runtime. Publication rejects any scope

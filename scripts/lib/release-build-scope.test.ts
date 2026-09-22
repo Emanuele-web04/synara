@@ -38,4 +38,18 @@ describe("release validation scope", () => {
     expect(() => resolveReleaseBuildScope("all", "package")).toThrow("Unknown build stage");
     expect(() => resolveReleaseBuildScope("win-x64", "native")).toThrow("Windows");
   });
+  it("restricts paired Cua benchmarks to one build-only native Mac", () => {
+    const baseline = "a".repeat(40);
+    expect(resolveReleaseBuildScope("mac-x64", "native", false, baseline)).toMatchObject({
+      benchmark_native: true,
+      package_artifacts: false,
+      build_js: false,
+      build_icon: false,
+    });
+    for (const platform of ["all", "linux-x64", "win-x64"])
+      expect(() => resolveReleaseBuildScope(platform, "native", false, baseline)).toThrow();
+    expect(() => resolveReleaseBuildScope("mac-x64", "artifact", false, baseline)).toThrow();
+    expect(() => resolveReleaseBuildScope("all", "artifact", true, baseline)).toThrow();
+    expect(() => resolveReleaseBuildScope("mac-x64", "native", false, "main")).toThrow();
+  });
 });
