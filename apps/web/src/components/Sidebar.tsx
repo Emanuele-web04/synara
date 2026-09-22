@@ -316,7 +316,6 @@ import {
   createSidebarThreadHoverAnchorId,
   findWorkspaceRootMatch,
   getPinnedThreadsForSidebar,
-  getUnpinnedThreadsForSidebar,
   orderPinnedProjectsForSidebar,
   pullRequestRepositoryConfigFingerprint,
   getNextVisibleSidebarThreadId,
@@ -1620,6 +1619,7 @@ export default function Sidebar() {
     projectId: ProjectId;
     mode: "onboarding" | "edit";
   } | null>(null);
+  const pendingCoordinatorActivationCancelRef = useRef<(() => void) | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
   // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
@@ -2515,18 +2515,9 @@ export default function Sidebar() {
     ],
   );
 
-  // Keep the user off optional tabs once hidden in Settings: viewing one
-  // (e.g. via a bookmark/deep link) jumps back to the always-visible Threads tab.
-  // Settings is its own route and is never redirected.
-  useEffect(() => {
-    if (isOnSettings) {
-      return;
-    }
-    if (isOnGroups && !groupsSectionVisible) {
-      handleSidebarViewChange("threads");
-      return;
-    }
-  }, [handleSidebarViewChange, isOnSettings, isOnGroups, groupsSectionVisible]);
+  // The /groups route owns the hidden-section redirect: a second owner here would
+  // double-fire when showGroupsSection flips off on /groups and could mint a stray
+  // home draft through handleSidebarViewChange("threads").
 
   useEffect(() => {
     // Persisted paths make homeDir truthy
@@ -3976,36 +3967,6 @@ export default function Sidebar() {
     () => visibleChatThreadRows.map((row) => row.thread.id),
     [visibleChatThreadRows],
   );
-  // Group threads, flattened the same way the home Chats list is. Skipped entirely while the
-  // Groups surface is not showing so thread updates on Projects don't pay for an unused sort.
-  // Pinned threads are hidden here the same way `deriveSidebarProjectData` hides them from
-  // per-project lists, so a pinned group chat only ever renders once, inside the Pinned block.
-  const groupChatThreadRows = useMemo(() => {
-    if (!isOnGroups) {
-      return [];
-    }
-    return buildProjectThreadTree({
-      threads: sortThreadsForSidebar(
-        getUnpinnedThreadsForSidebar(
-          groupProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
-          pinnedThreadIds,
-        ),
-        appSettings.sidebarThreadSortOrder,
-      ),
-      forceVisibleThreadId: activeSidebarThreadId ?? undefined,
-    });
-  }, [
-    activeSidebarThreadId,
-    appSettings.sidebarThreadSortOrder,
-    isOnGroups,
-    pinnedThreadIds,
-    sortedSidebarThreadsByProjectId,
-    groupProjects,
-  ]);
-  const groupChatThreadIds = useMemo(
-    () => groupChatThreadRows.map((row) => row.thread.id),
-    [groupChatThreadRows],
-  );
   const visibleChatPreviewEntries = useMemo(
     () =>
       visibleChatThreadRows.map((row) => ({
@@ -4155,8 +4116,7 @@ export default function Sidebar() {
   >(() => {
     // Off-Groups this map is unused (surfaceProjectSidebarDataById picks the
     // standard one), so skip the derivation instead of recomputing it on every
-    // Projects-side store change. Mirrors the isOnGroups gate on
-    // groupChatThreadRows.
+    // Projects-side store change.
     if (!isOnGroups) {
       return EMPTY_PROJECT_SIDEBAR_DATA;
     }
@@ -4274,6 +4234,20 @@ export default function Sidebar() {
     return () => window.clearTimeout(settle);
   }, [isOnSettings, routeSearch.splitViewId, routeThreadId]);
 
+  // A pending coordinator activation only makes sense while the user is still where the
+  // dialog left them — once they navigate, or the sidebar unmounts, drop it.
+  useEffect(() => {
+    pendingCoordinatorActivationCancelRef.current?.();
+    pendingCoordinatorActivationCancelRef.current = null;
+  }, [routeThreadId]);
+  useEffect(
+    () => () => {
+      pendingCoordinatorActivationCancelRef.current?.();
+      pendingCoordinatorActivationCancelRef.current = null;
+    },
+    [],
+  );
+
   const handleThreadClick = useCallback(
     (event: MouseEvent, threadId: ThreadId, orderedProjectThreadIds: readonly ThreadId[]) => {
       const isMac = isMacNavigatorPlatform();
@@ -4325,17 +4299,8 @@ export default function Sidebar() {
       }
     }
 
-    // Group rows are not produced by surfaceProjects in the classic list (that path is
-    // threads-only), so group chat rows join the visible ids directly — otherwise jump
-    // shortcuts and detail prewarming would cover nothing but pinned rows on Groups.
-    // groupChatThreadIds is already empty off-Groups and in render order (pinned rows
-    // excluded, they were added above).
-    for (const threadId of groupChatThreadIds) {
-      addVisibleThreadId(threadId);
-    }
-
     return [...visibleThreadIdSet];
-  }, [pinnedThreads, groupChatThreadIds, surfaceProjectSidebarDataById, surfaceProjects]);
+  }, [pinnedThreads, surfaceProjectSidebarDataById, surfaceProjects]);
   const visibleSidebarThreadIds =
     activityViewEnabled && !isOnGroups ? activityVisibleThreadIds : classicVisibleSidebarThreadIds;
   const visibleSidebarThreadIdSet = useMemo(
@@ -4343,15 +4308,9 @@ export default function Sidebar() {
       new Set(
         activityViewEnabled && !isOnGroups
           ? visibleSidebarThreadIds
-          : [...visibleSidebarThreadIds, ...visibleChatThreadIds, ...groupChatThreadIds],
+          : [...visibleSidebarThreadIds, ...visibleChatThreadIds],
       ),
-    [
-      activityViewEnabled,
-      isOnGroups,
-      groupChatThreadIds,
-      visibleChatThreadIds,
-      visibleSidebarThreadIds,
-    ],
+    [activityViewEnabled, isOnGroups, visibleChatThreadIds, visibleSidebarThreadIds],
   );
   const visibleSidebarThreads = useMemo(
     // Tree source so an active subagent row also gets PR badges and git targets.
@@ -7022,7 +6981,8 @@ export default function Sidebar() {
             if (projectAgentDialogState?.mode !== "onboarding") return;
             const coordinatorThreadId = overview.config?.coordinatorThreadId;
             if (coordinatorThreadId) {
-              activateThreadWhenHydrated({
+              pendingCoordinatorActivationCancelRef.current?.();
+              pendingCoordinatorActivationCancelRef.current = activateThreadWhenHydrated({
                 hasThread: () =>
                   useStore.getState().sidebarThreadSummaryById[coordinatorThreadId] !== undefined,
                 subscribe: (listener) => useStore.subscribe(listener),

@@ -189,5 +189,7 @@ export async function createGroupProject(input: {
     },
     findMatch: (snapshot) => findGroupContainerCandidateById(snapshot.projects, projectId),
   });
-  return match?.id ?? projectId;
+  // A snapshot miss means the create may not have landed — report failure rather than
+  // handing the caller an id it cannot open.
+  return match?.id ?? null;
 }

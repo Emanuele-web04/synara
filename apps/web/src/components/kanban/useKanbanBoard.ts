@@ -56,6 +56,8 @@ export function useKanbanBoard(): KanbanBoard {
   const chatContainers = allProjects.filter((project) =>
     isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
   );
+  // Group containers are coordinator surfaces, not work boards — a group would render
+  // as an empty board next to its real repo projects, so they stay off Kanban.
   const otherProjects = allProjects.filter(
     (project) =>
       !isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }) &&

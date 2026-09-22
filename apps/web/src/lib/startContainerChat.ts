@@ -4,11 +4,17 @@
 // Layer: Web orchestration helper
 // Exports: Container-chat startup plus segment-aware fresh-chat dispatch.
 
-import type { ProjectId, ThreadId } from "@synara/contracts";
+import type { ModelSelection, ProjectId, ProviderStartOptions, ThreadId } from "@synara/contracts";
 import type { Project } from "../types";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { isGroupContainerProject } from "./groupProjects";
 import type { ServerWorkspacePaths } from "./serverWorkspacePaths";
 import type { NewThreadOptions } from "./threadBootstrap";
+
+export type ContainerThreadDefaults = {
+  readonly modelSelection?: ModelSelection | undefined;
+  readonly providerOptions?: ProviderStartOptions | undefined;
+};
 
 export type StartContainerChatResult =
   | { ok: true; threadId: ThreadId | null }
@@ -48,9 +54,14 @@ export async function startContainerChat(input: {
   ) => Promise<ThreadId | null>;
   readonly fresh?: boolean | undefined;
   readonly forceLocalWorkspace?: boolean | undefined;
-  // Container-scoped defaults staged onto the fresh thread's draft after it exists
-  // (e.g. a group's coordinator workerRouting model selection / provider options).
-  readonly applyThreadDefaults?: ((threadId: ThreadId) => Promise<void> | void) | undefined;
+  // Container-scoped defaults for the fresh thread's draft (e.g. a group's
+  // coordinator workerRouting model selection / provider options). Resolved
+  // BEFORE the thread is minted so the apply step is synchronous — no
+  // post-navigation fetch window where a fast send picks the wrong model.
+  readonly resolveThreadDefaults?: (() => Promise<ContainerThreadDefaults | null>) | undefined;
+  readonly applyThreadDefaults?:
+    | ((threadId: ThreadId, defaults: ContainerThreadDefaults) => void)
+    | undefined;
   readonly errorLabel: string;
 }): Promise<StartContainerChatResult> {
   try {
@@ -58,6 +69,7 @@ export async function startContainerChat(input: {
     if (!projectId) {
       return { ok: false, error: input.errorLabel };
     }
+    const threadDefaults = input.resolveThreadDefaults ? await input.resolveThreadDefaults() : null;
     const threadOptions: NewThreadOptions | undefined =
       input.fresh === true || input.forceLocalWorkspace === true
         ? {
@@ -67,9 +79,14 @@ export async function startContainerChat(input: {
             worktreePath: null,
           }
         : undefined;
+    const draftsBeforeCreate = useComposerDraftStore.getState().draftsByThreadId;
     const threadId = await input.handleNewThread(projectId, threadOptions);
-    if (threadId) {
-      await input.applyThreadDefaults?.(threadId);
+    if (threadId && threadDefaults && input.applyThreadDefaults) {
+      // A thread id that already had a draft is a reused draft, not a fresh
+      // one — the user's existing selections win over container defaults.
+      if (draftsBeforeCreate[threadId] === undefined) {
+        input.applyThreadDefaults(threadId, threadDefaults);
+      }
     }
     return { ok: true, threadId };
   } catch (error) {

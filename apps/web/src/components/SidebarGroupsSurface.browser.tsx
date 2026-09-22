@@ -39,7 +39,10 @@ import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSum
 import { isGroupContainerProject } from "../lib/groupProjects";
 import type { Project, SidebarThreadSummary } from "../types";
 import { SidebarProvider } from "./ui/sidebar";
-import { SidebarGroupsSurface } from "./SidebarGroupsSurface";
+import {
+  resetStudioAdoptionDispatchedIdsForTests,
+  SidebarGroupsSurface,
+} from "./SidebarGroupsSurface";
 import type { SidebarDerivedProjectData } from "./Sidebar.logic";
 
 const GROUPS_ROOT = "/Users/tester/Groups";
@@ -210,6 +213,7 @@ let mountedRoot: { unmount(): void | Promise<void> } | null = null;
 
 describe("SidebarGroupsSurface", () => {
   beforeEach(() => {
+    resetStudioAdoptionDispatchedIdsForTests();
     harness.dispatchCommand.mockClear();
     harness.listSummaries.mockReset();
     harness.listSummaries.mockResolvedValue({ summaries: [] });
@@ -229,7 +233,7 @@ describe("SidebarGroupsSurface", () => {
     await waitForText("Loading Groups...");
 
     await mount({ projects: [], threadsHydrated: true });
-    await waitForText("No group chats yet");
+    await waitForText("No groups yet");
   });
 
   it("expands a group row to reveal its coordinator row first, then chats", async () => {
@@ -344,6 +348,11 @@ describe("SidebarGroupsSurface", () => {
         }),
       );
     });
+
+    // The once-per-session guard is module-level: remounting the surface must not
+    // dispatch the rename a second time.
+    await mount({ projects: [legacyStudio], threadsHydrated: true });
+
     const calls = harness.dispatchCommand.mock.calls as ReadonlyArray<[unknown]>;
     const renameCalls = calls.filter(
       (call) => (call[0] as { type?: string } | undefined)?.type === "project.meta.update",

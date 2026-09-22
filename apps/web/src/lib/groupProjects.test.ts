@@ -6,7 +6,11 @@ import { type ProjectId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { Project } from "../types";
-import { collectGroupProjectIds, isGroupContainerProject } from "./groupProjects";
+import {
+  collectGroupProjectIds,
+  findLegacyStudioContainerForAdoption,
+  isGroupContainerProject,
+} from "./groupProjects";
 
 function makeProject(overrides: Partial<Project> = {}): Project {
   return {
@@ -93,5 +97,62 @@ describe("collectGroupProjectIds", () => {
     expect(collectGroupProjectIds([group, studio, ordinary], PATHS)).toEqual(
       new Set([group.id, studio.id]),
     );
+  });
+});
+
+describe("findLegacyStudioContainerForAdoption", () => {
+  const legacyStudio = () =>
+    makeProject({
+      id: "project-studio" as ProjectId,
+      kind: "studio",
+      name: "Studio",
+      cwd: "/Users/tester/Documents/Synara/Studio",
+    });
+
+  it("adopts the Studio container by title", () => {
+    expect(findLegacyStudioContainerForAdoption([legacyStudio()], PATHS)?.id).toBe(
+      "project-studio",
+    );
+  });
+
+  it("does not adopt a studio row the user renamed away from 'Studio'", () => {
+    // `localName` folds into `project.name`, so a user-retitled container no longer
+    // carries the adoption title — that is the only user-edited signal Project has.
+    expect(
+      findLegacyStudioContainerForAdoption(
+        [
+          makeProject({
+            id: "project-renamed" as ProjectId,
+            kind: "studio",
+            name: "Team pods",
+            localName: "Team pods",
+            cwd: "/Users/tester/Documents/Synara/Studio",
+          }),
+        ],
+        PATHS,
+      ),
+    ).toBeNull();
+  });
+
+  it("does not adopt a container already titled 'Groups'", () => {
+    expect(
+      findLegacyStudioContainerForAdoption(
+        [
+          makeProject({
+            id: "project-groups" as ProjectId,
+            kind: "studio",
+            name: "Groups",
+            cwd: "/Users/tester/Documents/Synara/Studio",
+          }),
+        ],
+        PATHS,
+      ),
+    ).toBeNull();
+    expect(
+      findLegacyStudioContainerForAdoption(
+        [makeProject({ id: "project-groups" as ProjectId, kind: "group", name: "Groups" })],
+        PATHS,
+      ),
+    ).toBeNull();
   });
 });

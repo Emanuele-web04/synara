@@ -1,6 +1,8 @@
 import { ProjectId, ThreadId } from "@synara/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useComposerDraftStore, type ComposerThreadDraftState } from "../composerDraftStore";
+import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import {
   startContainerChat,
   startFreshChatForActiveSurface,
@@ -101,6 +103,10 @@ describe("startFreshChatForActiveSurface", () => {
 });
 
 describe("startContainerChat", () => {
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
   it("returns the created thread so callers can attach context deterministically", async () => {
     const projectId = ProjectId.makeUnsafe("project-1");
     const threadId = ThreadId.makeUnsafe("thread-1");
@@ -142,22 +148,66 @@ describe("startContainerChat", () => {
     });
   });
 
-  it("applies container thread defaults (e.g. a group's worker routing) to the new chat", async () => {
+  it("resolves container thread defaults before minting the thread, then applies them", async () => {
     const projectId = ProjectId.makeUnsafe("group-project");
     const threadId = ThreadId.makeUnsafe("group-thread");
-    const handleNewThread = vi.fn(async () => threadId);
-    const applyThreadDefaults = vi.fn(async () => {});
+    const order: string[] = [];
+    const resolveThreadDefaults = vi.fn(async () => {
+      order.push("resolve");
+      return { modelSelection: { provider: "codex" as const, model: "gpt-5" } };
+    });
+    const handleNewThread = vi.fn(async () => {
+      order.push("create");
+      return threadId;
+    });
+    const applyThreadDefaults = vi.fn(() => {
+      order.push("apply");
+    });
 
     await expect(
       startContainerChat({
         ensureProjectId: async () => projectId,
         handleNewThread,
         forceLocalWorkspace: true,
+        resolveThreadDefaults,
         applyThreadDefaults,
         errorLabel: "failed",
       }),
     ).resolves.toEqual({ ok: true, threadId });
 
-    expect(applyThreadDefaults).toHaveBeenCalledWith(threadId);
+    expect(order).toEqual(["resolve", "create", "apply"]);
+    expect(applyThreadDefaults).toHaveBeenCalledWith(threadId, {
+      modelSelection: { provider: "codex", model: "gpt-5" },
+    });
+  });
+
+  it("never overwrites a draft that already existed before the thread was minted", async () => {
+    const projectId = ProjectId.makeUnsafe("group-project");
+    const threadId = ThreadId.makeUnsafe("reused-thread");
+    useComposerDraftStore.setState((state) => ({
+      draftsByThreadId: {
+        ...state.draftsByThreadId,
+        [threadId]: {
+          prompt: "user typed this",
+        } as unknown as ComposerThreadDraftState,
+      },
+    }));
+    const handleNewThread = vi.fn(async () => threadId);
+    const applyThreadDefaults = vi.fn();
+
+    await expect(
+      startContainerChat({
+        ensureProjectId: async () => projectId,
+        handleNewThread,
+        forceLocalWorkspace: true,
+        resolveThreadDefaults: async () => ({
+          modelSelection: { provider: "codex" as const, model: "gpt-5" },
+        }),
+        applyThreadDefaults,
+        errorLabel: "failed",
+      }),
+    ).resolves.toEqual({ ok: true, threadId });
+
+    expect(applyThreadDefaults).not.toHaveBeenCalled();
   });
 });

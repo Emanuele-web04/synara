@@ -8,7 +8,10 @@
 
 import type { ProjectId } from "@synara/contracts";
 
-import { applyGroupWorkerRoutingDefaults } from "../lib/groupWorkerRouting";
+import {
+  applyGroupWorkerRoutingDefaults,
+  resolveGroupWorkerRoutingDefaults,
+} from "../lib/groupWorkerRouting";
 import { startContainerChat, type StartContainerChatResult } from "../lib/startContainerChat";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "./useHandleNewThread";
@@ -40,8 +43,9 @@ export function useHandleNewGroupChat() {
       // A group owns one durable local workspace per chat. Reopening its stored draft
       // must never inherit an old project/worktree environment.
       forceLocalWorkspace: true,
-      applyThreadDefaults: (threadId) =>
-        applyGroupWorkerRoutingDefaults({ groupProjectId, threadId }),
+      resolveThreadDefaults: () => resolveGroupWorkerRoutingDefaults({ groupProjectId }),
+      applyThreadDefaults: (threadId, defaults) =>
+        applyGroupWorkerRoutingDefaults({ threadId, defaults }),
       errorLabel: "Unable to prepare a new group chat.",
     });
 

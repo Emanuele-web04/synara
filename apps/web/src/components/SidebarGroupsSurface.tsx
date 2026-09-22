@@ -43,6 +43,7 @@ import {
 } from "./ui/sidebar";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { RenameDialog } from "./RenameDialog";
+import { toastManager } from "./ui/toast";
 import type { Project } from "../types";
 import {
   SIDEBAR_HEADER_ROW_CLASS_NAME,
@@ -54,6 +55,10 @@ import type { SidebarThreadSortOrder } from "../appSettings";
 // Rename fires once per project per session; the effect re-runs on every snapshot
 // while the server has not yet echoed the new title.
 const studioAdoptionDispatchedIds = new Set<string>();
+
+export function resetStudioAdoptionDispatchedIdsForTests(): void {
+  studioAdoptionDispatchedIds.clear();
+}
 
 export function SidebarGroupsSurface({
   groupProjects,
@@ -104,7 +109,12 @@ export function SidebarGroupsSurface({
 
   // Adopt the pre-Groups Studio container in place: retitle it "Groups" once so its
   // existing chats stay under it. Idempotent — the row stops matching once renamed.
+  // Gated on threadsHydrated: that only flips once the shell snapshot has arrived over
+  // a live transport, so the dispatch below cannot fire against a connecting API.
   useEffect(() => {
+    if (!threadsHydrated) {
+      return;
+    }
     const legacy = findLegacyStudioContainerForAdoption(groupProjects, {
       homeDir,
       chatWorkspaceRoot,
@@ -129,17 +139,29 @@ export function SidebarGroupsSurface({
       .catch(() => {
         // Leave the id marked: a transient failure should not spam the command.
       });
-  }, [chatWorkspaceRoot, groupProjects, groupsWorkspaceRoot, homeDir, studioWorkspaceRoot]);
+  }, [
+    chatWorkspaceRoot,
+    groupProjects,
+    groupsWorkspaceRoot,
+    homeDir,
+    studioWorkspaceRoot,
+    threadsHydrated,
+  ]);
 
   const createGroup = async (title: string) => {
     const trimmed = title.trim();
     if (trimmed.length === 0) {
       return;
     }
-    const projectId = await createGroupProject({ title: trimmed });
-    if (projectId) {
-      onOpenGroupSettings(projectId, "onboarding");
+    const projectId = await createGroupProject({ title: trimmed }).catch(() => null);
+    if (!projectId) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to create group",
+      });
+      return;
     }
+    onOpenGroupSettings(projectId, "onboarding");
   };
 
   const emptyState = resolveGroupsListEmptyState({
@@ -155,6 +177,7 @@ export function SidebarGroupsSurface({
             icon={NewThreadIcon}
             iconClassName="size-3.5"
             label="New group"
+            disabled={!groupsWorkspaceRoot}
             onClick={() => {
               setNewGroupDialogOpen(true);
             }}
@@ -345,7 +368,7 @@ export function SidebarGroupsSurface({
             })
           ) : (
             <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
-              {emptyState === "loading" ? "Loading Groups..." : "No group chats yet"}
+              {emptyState === "loading" ? "Loading Groups..." : "No groups yet"}
             </div>
           )}
         </SidebarMenu>
