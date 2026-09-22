@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+
+import { describe, expect, it, vi } from "vitest";
 
 import {
   captureProcessTree,
   createProcessTreeKiller,
   inspectProcessTree,
+  parseProcessChildrenMap,
+  signalOwnedChildProcess,
   type ProcessChildrenMap,
 } from "./processTreeController";
 
@@ -123,7 +128,7 @@ describe("Windows process-tree controller", () => {
     let commandLookups = 0;
     const killer = createProcessTreeKiller({
       captureChildrenMap: () => new Map(),
-      readCurrentCommands: () => {
+      readCurrentProcesses: () => {
         commandLookups += 1;
         return null;
       },
@@ -161,7 +166,7 @@ describe("Windows process-tree controller", () => {
     let commandLookups = 0;
     const killer = createProcessTreeKiller({
       captureChildrenMap: () => new Map(),
-      readCurrentCommands: () => {
+      readCurrentProcesses: () => {
         commandLookups += 1;
         return null;
       },
@@ -277,3 +282,169 @@ describe("unsafe process-tree root guard", () => {
     expect(snapshots).toBe(0);
   });
 });
+
+
+
+describe("signal target and captured identity safeguards", () => {
+  it.each([0, 1, -1, -42, 1.5, NaN, Infinity, 2 ** 32 + 1])(
+    "does not inspect or signal unsafe root %s",
+    async (rootPid) => {
+      const captureChildrenMap = vi.fn(() => new Map());
+      const signalPid = vi.fn(() => null);
+      const signalTree = vi.fn();
+      const captureWindowsChildren = vi.fn(async () => new Map());
+      const killer = createProcessTreeKiller({ captureChildrenMap, signalPid, signalTree });
+      expect(killer.capture(rootPid).captureComplete).toBe(false);
+      await captureProcessTree(rootPid, { platform: "win32", captureWindowsChildren });
+      killer.signal({
+        rootPid,
+        signal: "SIGTERM",
+        tree: { descendants: [{ pid: 20, command: "child" }] },
+        onError: vi.fn(),
+      });
+      expect(captureChildrenMap).not.toHaveBeenCalled();
+      expect(captureWindowsChildren).not.toHaveBeenCalled();
+      expect(signalPid).not.toHaveBeenCalled();
+      expect(signalTree).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects unsafe descendant targets even with preverified identities", () => {
+    const signalPid = vi.fn(() => null);
+    createProcessTreeKiller({ signalPid }).signal({
+      rootPid: 100,
+      signal: "SIGKILL",
+      includeRootTree: false,
+      verifiedDescendants: true,
+      tree: {
+        descendants: [0, 1, -1, 1.5, NaN, Infinity, 2 ** 32 + 1].map((pid) => ({
+          pid,
+          command: "invalid",
+        })),
+      },
+      onError: vi.fn(),
+    });
+    expect(signalPid).not.toHaveBeenCalled();
+  });
+
+  it("rejects same-command recycled descendants using one batched identity lookup", () => {
+    const original = { pid: 101, command: "worker", startedAt: "Fri Sep 18 10:00:00 2026" };
+    const unchanged = { pid: 102, command: "worker", startedAt: "Fri Sep 18 10:00:01 2026" };
+    const readCurrentProcesses = vi.fn(
+      () =>
+        new Map([
+          [101, { ...original, startedAt: "Fri Sep 18 11:00:00 2026" }],
+          [102, { ...unchanged }],
+        ]),
+    );
+    const signalPid = vi.fn(() => null);
+    const killer = createProcessTreeKiller({ readCurrentProcesses, signalPid });
+    const tree = { descendants: [original, unchanged] };
+    killer.signal({
+      rootPid: 100,
+      signal: "SIGKILL",
+      tree,
+      includeRootTree: false,
+      onError: vi.fn(),
+    });
+    expect(readCurrentProcesses).toHaveBeenCalledExactlyOnceWith([101, 102]);
+    expect(signalPid).toHaveBeenCalledExactlyOnceWith(102, "SIGKILL");
+    expect(killer.inspect?.(tree)).toEqual({ verified: true, survivors: [unchanged] });
+  });
+
+  it("does not downgrade a captured start time when the new snapshot lacks it", () => {
+    const signalPid = vi.fn(() => null);
+    createProcessTreeKiller({
+      signalPid,
+      readCurrentProcesses: () => new Map([[101, { pid: 101, command: "worker" }]]),
+    }).signal({
+      rootPid: 100,
+      signal: "SIGKILL",
+      tree: { descendants: [{ pid: 101, command: "worker", startedAt: "old" }] },
+      includeRootTree: false,
+      onError: vi.fn(),
+    });
+    expect(signalPid).not.toHaveBeenCalled();
+  });
+});
+
+describe("owned child signals", () => {
+  it.each([undefined, 0, 1, -1, NaN, Infinity, 1.5, 2 ** 32 + 1])(
+    "rejects unsafe child PID %s",
+    (pid) => {
+      const kill = vi.fn();
+      signalOwnedChildProcess({ pid, kill }, "SIGTERM", "darwin");
+      signalOwnedChildProcess({ pid, kill }, "SIGTERM", "win32");
+      expect(kill).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses the owned POSIX handle without depending on external process probes", () => {
+    const kill = vi.fn();
+    signalOwnedChildProcess({ pid: 12345, kill }, "SIGKILL", "darwin");
+    expect(kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  });
+
+  it("parses start times without changing the terminal activity snapshot format", () => {
+    expect(
+      parseProcessChildrenMap("101 100 Fri Sep 18 10:00:00 2026 /bin/sh worker", true),
+    ).toEqual(
+      new Map([
+        [100, [{ pid: 101, startedAt: "Fri Sep 18 10:00:00 2026", command: "/bin/sh worker" }]],
+      ]),
+    );
+    expect(parseProcessChildrenMap("101 100 /bin/sh worker")).toEqual(
+      new Map([[100, [{ pid: 101, command: "/bin/sh worker" }]]]),
+    );
+  });
+});
+
+it("rejects a different command even when second-resolution start times match", () => {
+  const captured = { pid: 101, command: "owned worker", startedAt: "Fri Sep 18 10:00:00 2026" };
+  const signalPid = vi.fn(() => null);
+  const killer = createProcessTreeKiller({
+    signalPid,
+    readCurrentProcesses: () => new Map([[101, { ...captured, command: "unrelated worker" }]]),
+  });
+  const tree = { descendants: [captured] };
+  killer.signal({
+    rootPid: 100,
+    signal: "SIGKILL",
+    tree,
+    includeRootTree: false,
+    onError: vi.fn(),
+  });
+  expect(signalPid).not.toHaveBeenCalled();
+  expect(killer.inspect?.(tree)).toEqual({ verified: true, survivors: [] });
+});
+
+it.skipIf(process.platform !== "darwin")(
+  "captures and verifies native start times independently of the parent locale",
+  async () => {
+    const previousLocale = process.env.LC_ALL;
+    const child = spawn("/bin/sleep", ["1"], { stdio: "ignore" });
+    const exited = once(child, "exit");
+    try {
+      await once(child, "spawn");
+      process.env.LC_ALL = "ja_JP.UTF-8";
+      const killer = createProcessTreeKiller();
+      const captured = killer.capture(process.pid).descendants.find((row) => row.pid === child.pid);
+      expect(captured).toBeDefined();
+      expect(captured?.command).toBe("/bin/sleep 1");
+      expect(captured?.startedAt).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) [A-Z][a-z]{2} /);
+      if (!captured) throw new Error("Owned test child was not captured");
+      // Both probes must use the same stable locale, even if the parent changes it.
+      process.env.LC_ALL = "fr_FR.UTF-8";
+      expect(killer.inspect?.({ descendants: [captured] })).toEqual({
+        verified: true,
+        survivors: [captured],
+      });
+      expect(process.env.LC_ALL).toBe("fr_FR.UTF-8");
+    } finally {
+      if (previousLocale === undefined) delete process.env.LC_ALL;
+      else process.env.LC_ALL = previousLocale;
+      await exited;
+    }
+  },
+);
+

@@ -67,6 +67,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
   const [allowProjectRead, setAllowProjectRead] = useState(false);
   const [allowLocal, setAllowLocal] = useState(false);
   const [allowFullAccess, setAllowFullAccess] = useState(false);
+  const [allowComputerControl, setAllowComputerControl] = useState(false);
   const [setup, setSetup] = useState<ExternalMcpCreateIntegrationResult | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -95,8 +96,9 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
     if (allowProjectRead) next.push("tasks:read-project");
     if (allowLocal) next.push("runtime:local");
     if (allowFullAccess) next.push("runtime:full-access");
+    if (allowComputerControl) next.push("computer:control");
     return next;
-  }, [allowFullAccess, allowLocal, allowProjectRead]);
+  }, [allowComputerControl, allowFullAccess, allowLocal, allowProjectRead]);
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -275,7 +277,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     <label
                       key={project.id}
                       className={cn(
-                        "flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs transition-colors",
+                        "flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2 text-ui leading-snug transition-colors",
                         checked ? "border-foreground/30 bg-muted/70" : "border-border/70",
                       )}
                     >
@@ -296,7 +298,9 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                   );
                 })}
                 {projects.length === 0 ? (
-                  <span className="text-xs text-muted-foreground">No projects are available.</span>
+                  <span className="text-ui leading-snug text-muted-foreground">
+                    No projects are available.
+                  </span>
                 ) : null}
               </div>
             </DisclosureRegion>
@@ -322,8 +326,8 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-xs font-medium">Read other project tasks</div>
-                  <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  <div className="text-ui leading-snug font-medium">Read other project tasks</div>
+                  <div className="mt-0.5 text-ui-sm leading-relaxed text-muted-foreground">
                     Without this permission, the agent can read only tasks it creates.
                   </div>
                 </div>
@@ -331,8 +335,10 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-xs font-medium">Use the shared local checkout</div>
-                  <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  <div className="text-ui leading-snug font-medium">
+                    Use the shared local checkout
+                  </div>
+                  <div className="mt-0.5 text-ui-sm leading-relaxed text-muted-foreground">
                     High impact. Tasks may modify the checkout you are actively using instead of an
                     isolated worktree.
                   </div>
@@ -341,13 +347,25 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <div className="text-xs font-medium">Run without approval prompts</div>
-                  <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  <div className="text-ui leading-snug font-medium">
+                    Run without approval prompts
+                  </div>
+                  <div className="mt-0.5 text-ui-sm leading-relaxed text-muted-foreground">
                     High impact. The external agent may start full-access execution without asking
                     you to approve tool actions.
                   </div>
                 </div>
                 <Switch checked={allowFullAccess} onCheckedChange={setAllowFullAccess} />
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs font-medium">Computer control</div>
+                  <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                    High impact. Tasks may drive this Mac&apos;s screen — observe, click, type,
+                    menus, clipboard. Every computer action still asks for your approval.
+                  </div>
+                </div>
+                <Switch checked={allowComputerControl} onCheckedChange={setAllowComputerControl} />
               </div>
             </DisclosureRegion>
           </SettingsRow>
@@ -450,7 +468,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
               </Button>
             }
           >
-            <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-muted/30 p-3 text-[11px] leading-relaxed">
+            <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-muted/30 p-3 text-ui-sm leading-relaxed">
               {setupPrompt}
             </pre>
           </SettingsRow>
@@ -476,7 +494,9 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
               {!paired ? (
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-3">
-                    <span className="text-xs font-medium">Pairing command (run in Terminal)</span>
+                    <span className="text-ui leading-snug font-medium">
+                      Pairing command (run in Terminal)
+                    </span>
                     <Button
                       size="xs"
                       variant="outline"
@@ -486,14 +506,14 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                       Copy
                     </Button>
                   </div>
-                  <pre className="overflow-x-auto rounded-lg border border-border/70 bg-muted/30 p-3 text-[11px] leading-relaxed">
+                  <pre className="overflow-x-auto rounded-lg border border-border/70 bg-muted/30 p-3 text-ui-sm leading-relaxed">
                     {setup.setupCommand}
                   </pre>
                 </div>
               ) : null}
               <div>
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium">MCP configuration (JSON)</span>
+                  <span className="text-ui leading-snug font-medium">MCP configuration (JSON)</span>
                   <Button
                     size="xs"
                     variant="outline"
@@ -503,7 +523,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     Copy
                   </Button>
                 </div>
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-muted/30 p-3 text-[11px] leading-relaxed">
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-muted/30 p-3 text-ui-sm leading-relaxed">
                   {manualConfiguration.value}
                 </pre>
               </div>
@@ -529,7 +549,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
             }
           >
             {paired ? (
-              <div className="mt-3 rounded-lg border border-border/70 bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
+              <div className="mt-3 rounded-lg border border-border/70 bg-muted/30 p-3 text-ui leading-relaxed text-muted-foreground">
                 {examplePrompt}
               </div>
             ) : null}

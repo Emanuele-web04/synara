@@ -153,11 +153,41 @@ jobs:
       - name: Test
         run: bun run test
 
+  build_mac_icon:
+    name: Compile macOS icon
+    needs: preflight
+    runs-on: macos-26
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+
+      - name: Compile Icon Composer catalog
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          mkdir -p "$RUNNER_TEMP/mac-icon"
+          xcrun actool assets/prod/Synara.icon --compile "$RUNNER_TEMP/mac-icon" --platform macosx --minimum-deployment-target 26.0 --app-icon Synara --include-all-app-icons --output-partial-info-plist "$RUNNER_TEMP/icon-partial.plist" --output-format human-readable-text
+          test -s "$RUNNER_TEMP/mac-icon/Assets.car"
+
+      - name: Upload icon catalog
+        uses: actions/upload-artifact@v7
+        with:
+          name: mac-icon-catalog
+          path: ${{ runner.temp }}/mac-icon/Assets.car
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.label }}
-    needs: preflight
+    needs: [preflight, build_mac_icon]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -165,7 +195,7 @@ jobs:
       matrix:
         include:
           - label: macOS arm64
-            runner: macos-14
+            runner: macos-15
             platform: mac
             target: dmg
             arch: arm64
@@ -205,6 +235,49 @@ jobs:
         # Preflight validates the entire workspace. Native artifacts retain all
         # runtime/build dependencies but do not install the unrelated marketing site.
         run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+
+      - name: Download macOS icon catalog
+        if: matrix.platform == 'mac'
+        uses: actions/download-artifact@v8
+        with:
+          name: mac-icon-catalog
+          path: ${{ runner.temp }}/mac-icon
+
+      - name: Select macOS native toolchain
+        if: matrix.platform == 'mac'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The pinned apple-metal bridge requires the macOS 15 SDK.
+          # Icon Composer runs separately on macOS 26 to avoid AssetRuntime
+          # framework crashes on the older native-build host.
+          native_developer_dir=/Applications/Xcode_16.4.app/Contents/Developer
+          test -d "$native_developer_dir"
+          test -s "$RUNNER_TEMP/mac-icon/Assets.car"
+          echo "DEVELOPER_DIR=$native_developer_dir" >> "$GITHUB_ENV"
+          echo "SYNARA_MAC_ICON_CATALOG=$RUNNER_TEMP/mac-icon/Assets.car" >> "$GITHUB_ENV"
+          DEVELOPER_DIR="$native_developer_dir" xcodebuild -version
+
+      - name: Install the pinned Cua Driver compiler
+        # The mac and Linux artifacts compile the patched Cua Driver from source,
+        # and provisioning refuses any rustc other than the pinned release.
+        if: matrix.platform == 'mac' || matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rust_version=$(jq -r .rustVersion packages/shared/src/cuaDriverRelease.json)
+          rustup toolchain install "$rust_version" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$rust_version" >> "$GITHUB_ENV"
+          # Provisioning otherwise compiles into a directory it deletes, so the
+          # macOS x64 packaging retries would each recompile the driver.
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cua-driver-target" >> "$GITHUB_ENV"
+
+      - name: Install Linux native build dependencies
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev
 
       - id: build_artifact
         name: Build desktop artifact

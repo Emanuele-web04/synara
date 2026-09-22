@@ -22,7 +22,7 @@ import {
 } from "./composerPickerStyles";
 
 export const COMPOSER_MENU_PANEL_GROUP_LABEL_CLASS_NAME =
-  "px-2 pt-1 pb-0.5 text-[11px] font-normal text-muted-foreground/60";
+  "px-2 pt-1 pb-0.5 text-ui-sm font-normal text-muted-foreground/60";
 
 /** Glyph size shared by every panel row icon, whatever the menu. */
 export const COMPOSER_MENU_PANEL_GLYPH_CLASS_NAME = "size-3.5";
@@ -166,13 +166,13 @@ const ComposerMenuPanelItem = memo(function ComposerMenuPanelItem({
       )}
       <div className="min-w-0 flex flex-1 items-center gap-3">
         <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
-          <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">{row.title}</span>
+          <span className="shrink-0 text-ui-sm font-medium text-foreground/80">{row.title}</span>
           {row.secondary ? (
-            <span className="truncate text-[11px] text-muted-foreground/55">{row.secondary}</span>
+            <span className="truncate text-ui-sm text-muted-foreground/55">{row.secondary}</span>
           ) : null}
         </div>
         {row.trailing === undefined || row.trailing === null ? null : (
-          <span className="shrink-0 flex items-center pl-2 text-right text-[10.5px] text-muted-foreground/42">
+          <span className="shrink-0 flex items-center pl-2 text-right text-ui-xs text-muted-foreground/42">
             {row.trailing}
           </span>
         )}

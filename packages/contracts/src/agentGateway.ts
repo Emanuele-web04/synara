@@ -66,6 +66,7 @@ export type SynaraContextResult = typeof SynaraContextResult.Type;
 
 export const SynaraCreateThreadSpec = Schema.Struct({
   prompt: Schema.String.check(Schema.isNonEmpty()),
+  notifyCreatorOnComplete: Schema.optional(Schema.Boolean),
   title: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   target: ModelSelection,
   projectId: Schema.optional(ProjectId),
@@ -76,6 +77,9 @@ export const SynaraCreateThreadSpec = Schema.Struct({
   baseBranch: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   branchName: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   runtimeMode: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
+  // External integrations need the "computer:control" scope; provider sessions
+  // cannot delegate computer control to created threads.
+  enableComputerControl: Schema.optional(Schema.Boolean),
 });
 export type SynaraCreateThreadSpec = typeof SynaraCreateThreadSpec.Type;
 

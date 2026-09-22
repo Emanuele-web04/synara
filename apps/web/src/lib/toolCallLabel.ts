@@ -6,6 +6,11 @@
 
 import type { ToolLifecycleItemType } from "@synara/contracts";
 import { BROWSER_TOOL_TITLES } from "@synara/shared/browserAutomationPresentation";
+import {
+  COMPUTER_TOOL_TITLES,
+  computerToolName,
+  type ComputerToolName,
+} from "./computerToolPresentation";
 import { basenameOfPath } from "../file-icons";
 import { extractToolArgumentField } from "./toolArgumentSummary";
 
@@ -104,7 +109,13 @@ export interface ReadableToolTitleInput {
   readonly title?: string | null;
   readonly fallbackLabel: string;
   readonly itemType?: ToolLifecycleItemType | undefined;
-  readonly requestKind?: "command" | "file-read" | "file-change" | "permissions" | undefined;
+  readonly requestKind?:
+    | "command"
+    | "file-read"
+    | "file-change"
+    | "permissions"
+    | "tool"
+    | undefined;
   readonly command?: string | null;
   readonly payload?: Record<string, unknown> | null;
   readonly isRunning?: boolean;
@@ -143,6 +154,130 @@ const SYNARA_BROWSER_TOOL_PRESENTATIONS = Object.fromEntries(
     return [`synara_${toolName}`, { running: title, completed: title, failed: title }];
   }),
 ) as Record<SynaraBrowserToolName, SynaraMcpToolPresentation>;
+
+/**
+ * The desktop tools, spoken. Every browser tool had a curated presentation and
+ * every computer tool had none, so the most consequential rows in the
+ * transcript — an agent moving a pointer on the user's own machine — fell
+ * through to the invented "Synara is handling computer click" fallback.
+ *
+ * The wording deliberately keeps the machine in the sentence ("this computer's
+ * desktop") rather than saying "the desktop", because on the backends that
+ * matter it is the user's own.
+ */
+const SYNARA_COMPUTER_TOOL_PRESENTATIONS = {
+  synara_computer_screenshot: presentComputerTool("taking a screenshot", "took a screenshot"),
+  synara_computer_get_state: presentComputerTool("reading the screen", "read the screen"),
+  synara_computer_get_screen_size: presentComputerTool(
+    "measuring the screen",
+    "measured the screen",
+  ),
+  synara_computer_list_windows: presentComputerTool("listing windows", "listed the windows"),
+  synara_computer_list_apps: presentComputerTool("listing apps", "listed the apps"),
+  synara_computer_verify_state: presentComputerTool(
+    "checking desktop state",
+    "checked desktop state",
+  ),
+  synara_computer_zoom: presentComputerTool("zooming into a window", "zoomed into a window"),
+  synara_computer_get_accessibility_tree: presentComputerTool(
+    "listing apps and windows",
+    "listed apps and windows",
+  ),
+  synara_computer_get_cursor_position: presentComputerTool(
+    "reading the cursor position",
+    "read the cursor position",
+  ),
+  synara_computer_help: presentComputerTool(
+    "reading the Computer playbook",
+    "read the Computer playbook",
+  ),
+  synara_computer_click: presentComputerTool("clicking the desktop", "clicked the desktop"),
+  synara_computer_move_cursor: presentComputerTool("moving the cursor", "moved the cursor"),
+  synara_computer_drag: presentComputerTool("dragging on the desktop", "dragged on the desktop"),
+  synara_computer_scroll: presentComputerTool("scrolling the desktop", "scrolled the desktop"),
+  synara_computer_type_text: presentComputerTool("typing on the desktop", "typed on the desktop"),
+  synara_computer_press_key: presentComputerTool("pressing a key", "pressed a key"),
+  synara_computer_set_value: presentComputerTool("setting a field", "set a field"),
+  synara_computer_select_text: presentComputerTool("selecting text", "selected text"),
+  synara_computer_perform_action: presentComputerTool(
+    "activating a control",
+    "activated a control",
+  ),
+  synara_computer_launch_app: presentComputerTool("opening an app", "opened an app"),
+  synara_computer_activate_window: presentComputerTool("activating a window", "activated a window"),
+  synara_computer_set_window_frame: presentComputerTool(
+    "moving or resizing a window",
+    "moved or resized a window",
+  ),
+  synara_computer_invoke_menu: presentComputerTool("invoking a menu item", "invoked a menu item"),
+  synara_computer_kill_app: presentComputerTool("force-quitting an app", "force-quit an app"),
+  synara_computer_set_window_minimized: presentComputerTool(
+    "changing a window's visibility",
+    "changed a window's visibility",
+  ),
+  synara_computer_set_app_visibility: presentComputerTool(
+    "changing an app's visibility",
+    "changed an app's visibility",
+  ),
+  synara_computer_wait: presentComputerTool("waiting for the desktop", "waited for the desktop"),
+  synara_computer_read_clipboard: presentComputerTool(
+    "reading the clipboard",
+    "read the clipboard",
+  ),
+  synara_computer_write_clipboard: presentComputerTool(
+    "writing to the clipboard",
+    "wrote to the clipboard",
+  ),
+  synara_computer_paste: presentComputerTool("pasting text", "pasted text"),
+  synara_computer_run: presentComputerTool("running a desktop sequence", "ran a desktop sequence"),
+  synara_computer_inspect: presentComputerTool("inspecting the computer", "inspected the computer"),
+  synara_computer_spaces: presentComputerTool(
+    "inspecting desktop Spaces",
+    "inspected desktop Spaces",
+  ),
+  synara_computer_browser_state: presentComputerTool(
+    "reading the browser page",
+    "read the browser page",
+  ),
+  synara_computer_browser_prepare: presentComputerTool("preparing a browser", "prepared a browser"),
+  synara_computer_browser_navigate: presentComputerTool(
+    "opening a browser page",
+    "opened a browser page",
+  ),
+  synara_computer_browser_click: presentComputerTool(
+    "clicking in the browser",
+    "clicked in the browser",
+  ),
+  synara_computer_browser_type: presentComputerTool(
+    "typing in a browser field",
+    "typed in a browser field",
+  ),
+  synara_computer_browser_dialog: presentComputerTool(
+    "handling a browser dialog",
+    "handled a browser dialog",
+  ),
+  synara_computer_browser_upload: presentComputerTool(
+    "attaching files in the browser",
+    "attached files in the browser",
+  ),
+  synara_computer_browser_download: presentComputerTool("downloading a file", "downloaded a file"),
+  synara_computer_browser_pointer: presentComputerTool(
+    "using the pointer in the browser",
+    "used the pointer in the browser",
+  ),
+  synara_computer_browser_press: presentComputerTool(
+    "pressing Enter in the browser",
+    "pressed Enter in the browser",
+  ),
+} as const satisfies Record<`synara_${ComputerToolName}`, SynaraMcpToolPresentation>;
+
+function presentComputerTool(present: string, past: string): SynaraMcpToolPresentation {
+  return {
+    running: `Synara is ${present}`,
+    completed: `Synara ${past}`,
+    failed: `Synara couldn't finish ${present}`,
+  };
+}
 
 const SYNARA_MCP_TOOL_PRESENTATIONS = {
   synara_context: {
@@ -286,6 +421,7 @@ const SYNARA_MCP_TOOL_PRESENTATIONS = {
     failed: "Synara couldn't stop an automation",
   },
   ...SYNARA_BROWSER_TOOL_PRESENTATIONS,
+  ...SYNARA_COMPUTER_TOOL_PRESENTATIONS,
 } as const satisfies Record<string, SynaraMcpToolPresentation>;
 
 function normalizeSynaraMcpIdentifier(value: string): string {
@@ -485,12 +621,10 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
   const requestKindLabel = humanizeRequestKind(input.requestKind, input.itemType);
 
   if (normalizedTitle.length > 0 && !isGenericToolTitle(normalizedTitle)) {
-    return normalizedTitle;
-  }
-
-  // Use verbal requestKind label before falling back to raw descriptors
-  if (requestKindLabel) {
-    return requestKindLabel;
+    return (input.itemType === "mcp_tool_call" || input.itemType === "dynamic_tool_call") &&
+      /[_-]/.test(normalizedTitle)
+      ? (normalizeToolDescriptor(normalizedTitle) ?? normalizedTitle)
+      : normalizedTitle;
   }
 
   if (commandLike && commandLabel) {
@@ -500,6 +634,12 @@ export function deriveReadableToolTitle(input: ReadableToolTitleInput): string |
   const descriptor = normalizeToolDescriptor(extractToolDescriptorFromPayload(input.payload));
   if (descriptor && !isGenericToolTitle(descriptor)) {
     return descriptor;
+  }
+
+  // A generic request kind describes the transport, while the payload can name
+  // the actual tool. Only use it after the provider metadata has been checked.
+  if (requestKindLabel) {
+    return requestKindLabel;
   }
 
   if (normalizedFallback.length > 0 && !isGenericToolTitle(normalizedFallback)) {
@@ -528,6 +668,7 @@ function humanizeRequestKind(
 ): string | null {
   if (requestKind === "file-read") return "Read";
   if (requestKind === "file-change" || itemType === "file_change") return "Edited";
+  if (requestKind === "tool") return "Tool";
   // Don't handle command types here — let humanizeCommandToolLabel produce more specific labels
   if (itemType === "web_search") return "Searched the web";
   if (itemType === "image_generation") return "Generated image";
@@ -564,6 +705,10 @@ function normalizeToolDescriptor(value: string | null): string | null {
   if (!value) {
     return null;
   }
+  const computerTool = computerToolName(value);
+  if (computerTool) {
+    return COMPUTER_TOOL_TITLES[computerTool];
+  }
   const mcpIdentifier = humanizeMcpToolIdentifier(value);
   if (mcpIdentifier) {
     return mcpIdentifier;
@@ -590,7 +735,8 @@ function normalizeToolDescriptor(value: string | null): string | null {
   if (lowerCollapsed === "search" || lowerCollapsed === "find" || lowerCollapsed === "searched") {
     return "Search";
   }
-  return collapsed.length > 64 ? `${collapsed.slice(0, 61).trimEnd()}...` : collapsed;
+  const readable = /[_-]/.test(value) ? humanizeMcpToken(collapsed) : collapsed;
+  return readable.length > 64 ? `${readable.slice(0, 61).trimEnd()}...` : readable;
 }
 
 function humanizeMcpToken(value: string | undefined): string {
@@ -661,7 +807,17 @@ function extractMcpServerToolDescriptor(value: unknown, depth: number): string |
   if (typeof record.server === "string" && typeof record.tool === "string") {
     return humanizeMcpServerTool(record.server, record.tool);
   }
-  for (const nestedKey of ["item", "data", "event", "payload", "result", "input", "call"]) {
+  for (const nestedKey of [
+    "item",
+    "data",
+    "event",
+    "payload",
+    "result",
+    "input",
+    "call",
+    "invocation",
+    "source",
+  ]) {
     const nested = extractMcpServerToolDescriptor(record[nestedKey], depth + 1);
     if (nested) {
       return nested;

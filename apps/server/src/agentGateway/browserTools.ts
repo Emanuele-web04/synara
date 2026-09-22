@@ -25,6 +25,10 @@ import type { McpToolCallResult } from "./protocol.ts";
 import type { ToolContext, ToolEntry } from "./toolRuntime.ts";
 import { saveBrowserProof } from "./browserProof.ts";
 import { SYNARA_E2E_REVIEW_GUIDANCE } from "./e2eReviewGuidance.ts";
+import { ToolGuidanceCadence } from "./toolGuidanceCadence.ts";
+
+const BROWSER_TOOL_REFRESH_GUIDANCE =
+  "Browser routing reminder: use browser_* for Synara's integrated browser and Computer Use for native apps or OS surfaces. Prefer WebMCP, WebAgents, site requests, and structured DOM reads before screenshots. For long or virtualized histories, scan in bounded batches, deduplicate stable item identities, preserve text/link/media order, return progress and a resumable checkpoint, and state when the true boundary cannot be proven.";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -199,6 +203,7 @@ function successResult(
   name: BrowserToolName,
   value: unknown,
   context: ToolContext,
+  guidance?: string,
 ): McpToolCallResult {
   const hostEnvelope = asRecord(value);
   const structuredValue = hostEnvelope?.structuredContent ?? value;
@@ -221,6 +226,10 @@ function successResult(
   if (image?.mimeType === "image/png" && typeof image.data === "string" && image.data.length > 0) {
     content.push({ type: "image", data: image.data, mimeType: "image/png" });
   }
+  if (guidance !== undefined) {
+    const text = content[0];
+    if (text?.type === "text") content[0] = { ...text, text: `${guidance}\n${text.text}` };
+  }
   return { content, structuredContent };
 }
 
@@ -241,6 +250,7 @@ export function makeAgentGatewayBrowserTools(
   host: BrowserAutomationHostShape,
   options: AgentGatewayBrowserToolsOptions = {},
 ): ReadonlyArray<ToolEntry> {
+  const guidanceCadence = new ToolGuidanceCadence(10, 256);
   const browserTools = BROWSER_TOOL_CATALOGUE.map((catalogueEntry) => {
     const name = catalogueEntry.name as BrowserToolName;
     const definition = BROWSER_TOOL_DEFINITIONS_BY_NAME[name];
@@ -261,8 +271,25 @@ export function makeAgentGatewayBrowserTools(
         },
       },
       handler: (rawArguments, context) => {
+        const guidance = guidanceCadence.shouldRefresh(context.callerThreadId)
+          ? BROWSER_TOOL_REFRESH_GUIDANCE
+          : undefined;
         if (!host.available && name === "browser_status")
-          return Effect.succeed(unavailableStatus(context));
+          return Effect.succeed(
+            guidance === undefined
+              ? unavailableStatus(context)
+              : successResult(
+                  "browser_status",
+                  {
+                    available: false,
+                    physicalScope: "visible-shared-electron-webview",
+                    assignedTabId: null,
+                    authorization: "not-required",
+                  },
+                  context,
+                  guidance,
+                ),
+          );
         return Effect.gen(function* () {
           const decodedArguments = yield* validateInput(
             definition,
@@ -323,10 +350,11 @@ export function makeAgentGatewayBrowserTools(
                 name,
                 { ...envelope, structuredContent: { ...metadata, ...artifact } },
                 context,
+                guidance,
               );
             }
           }
-          return successResult(name, decodedOutput, context);
+          return successResult(name, decodedOutput, context, guidance);
         }).pipe(Effect.catch((error) => Effect.succeed(encodeBrowserMcpToolError(error))));
       },
     } satisfies ToolEntry;

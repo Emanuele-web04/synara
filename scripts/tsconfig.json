@@ -15,9 +15,14 @@
   // device-helper-smoke.ts spawns the helper through the server's sandbox
   // wrapper so the smoke run exercises the same confinement the app applies.
   // Duplicating that logic here is what would let the two drift.
+  // computer-use-fixtures is the canary/fixture runner family: it crosses into
+  // apps/desktop and apps/server sources on purpose and is bundled by bun, so
+  // it stays outside the composite project list the way apps/desktop keeps
+  // src/cuaFixtures out of its own.
   "include": [
     "**/*.ts",
     "../apps/server/src/device/helperSandbox.ts",
     "../apps/desktop/src/desktopAppIcon.ts"
-  ]
+  ],
+  "exclude": ["computer-use-fixtures"]
 }

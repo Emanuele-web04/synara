@@ -396,13 +396,13 @@ function PullRequestsRouteView() {
               <SidebarHeaderNavigationControls />
               {/* The title rides the surface header like the automations detail route, so the
                   scroll area opens straight onto the filters and the list. */}
-              <h1 className="truncate font-heading text-sm font-medium">Pull requests</h1>
+              <h1 className="truncate font-heading text-ui-lg font-medium">Pull requests</h1>
               {scopedProjectName ? (
                 <>
                   <span aria-hidden className="text-muted-foreground/50">
                     ·
                   </span>
-                  <span className="truncate text-xs text-muted-foreground">
+                  <span className="truncate text-ui leading-snug text-muted-foreground">
                     {scopedProjectName}
                   </span>
                 </>

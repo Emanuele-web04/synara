@@ -69,7 +69,7 @@ describe("providerStartOptionsFromServerSettings", () => {
       }),
     ).not.toThrow();
     expect(providerOptions.codex).toEqual({});
-    expect(providerOptions.claudeAgent).toEqual({});
+    expect(providerOptions.claudeAgent).toEqual({ enableArtifacts: false });
     expect(providerOptions.cursor).toEqual({});
     expect(providerOptions.antigravity).toEqual({});
     expect(providerOptions.grok).toEqual({});

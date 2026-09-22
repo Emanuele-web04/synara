@@ -14,7 +14,6 @@ import {
   type ServerProviderStatus,
   type ThreadId,
 } from "@synara/contracts";
-import { resolveSelectableModel } from "@synara/shared/model";
 import {
   useDeferredValue,
   useEffect,
@@ -96,6 +95,7 @@ type ComposerModelPickerProps = {
   // and/or the effort/status label; both remain available to assistive tech.
   hideModelLabel?: boolean;
   hideStatusLabel?: boolean;
+  contextWindowLabel?: string | null;
   disabled?: boolean;
   // "menu" (default) lists effort as a footer row; "slider" renders the ladder as a
   // stepped slider card in the footer instead.
@@ -163,7 +163,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     lockedProvider === null
       ? starredModels
       : starredModels.filter((entry) => entry.provider === lockedProvider);
-  const hiddenStarredCount = starredModels.length - usableStarredModels.length;
 
   const [tab, setTab] = useState<ComposerModelPickerTab>(activeProvider);
   const [query, setQuery] = useState("");
@@ -313,14 +312,9 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
       );
       return;
     }
-    const resolvedModel = resolveSelectableModel(
-      row.provider,
-      row.model,
-      props.modelOptionsByProvider[row.provider],
-    );
-    // A starred model may be missing until its provider's catalog is discovered.
-    const model = (resolvedModel ?? (row.preset ? row.model : null)) as ModelSlug | null;
-    if (!model) return;
+    const model = row.selectableModel;
+    if (model === null) return;
+
     const selection = traitSelectionFor(row.provider, model);
     // Slider mode: switching to a model with an effort ladder keeps the panel open so the
     // footer slider can set its effort. Presets already carry their effort, and picking
@@ -339,13 +333,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 
   // Pick a model and its effort in one gesture from the row's side block.
   const selectRowWithEffort = (row: PickerRow, value: string) => {
-    if (props.disabled) return;
-    const model = resolveSelectableModel(
-      row.provider,
-      row.model,
-      props.modelOptionsByProvider[row.provider],
-    );
-    if (!model) return;
+    const model = row.selectableModel;
+    if (props.disabled || model === null) return;
     const plan = planComposerEffortChange({
       provider: row.provider,
       selection: traitSelectionFor(row.provider, model),
@@ -405,11 +394,13 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         provider={activeProvider}
         modelLabel={modelLabel}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
+        contextWindowLabel={activeProvider === "claudeAgent" ? props.contextWindowLabel : null}
         showsFastBadge={showsComposerFastModeBadge(currentTraitSelection)}
         hideModelLabel={props.hideModelLabel}
         hideStatusLabel={props.hideStatusLabel}
         disabled={props.disabled}
         isMenuOpen={isMenuOpen}
+        openPlaceholderLabel={usesEffortSlider ? "Select effort" : null}
         shortcutLabel={props.shortcutLabel}
       />
       <ComposerPickerMenuPopup
@@ -477,7 +468,9 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             )}
           >
             {discoveryError ? (
-              <div className="px-2 py-1.5 text-xs text-destructive">{discoveryError}</div>
+              <div className="px-2 py-1.5 text-ui leading-snug text-destructive">
+                {discoveryError}
+              </div>
             ) : null}
             {isTabLoading ? (
               <div className="space-y-2 px-2 py-2" aria-label="Loading models">
@@ -495,7 +488,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                     key={row.key}
                     row={row}
                     shortcutHint={
-                      index < MODEL_PICKER_SHORTCUT_ROW_LIMIT
+                      row.selectableModel !== null && index < MODEL_PICKER_SHORTCUT_ROW_LIMIT
                         ? `${shortcutModifierLabel}${index + 1}`
                         : null
                     }
@@ -511,7 +504,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                 ))}
               </div>
             ) : (
-              <div className="px-2 py-3 text-muted-foreground text-xs leading-relaxed">
+              <div className="px-2 py-3 text-muted-foreground text-ui leading-relaxed">
                 {normalizedQuery.length > 0
                   ? "No matches"
                   : tab === STARRED_TAB
@@ -519,12 +512,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                     : "No models found"}
               </div>
             )}
-            {tab === STARRED_TAB && hiddenStarredCount > 0 ? (
-              <div className="px-2 pt-1.5 pb-1 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70">
-                {hiddenStarredCount} starred from other providers — this thread stays on its
-                provider.
-              </div>
-            ) : null}
           </div>
           <ComposerModelPickerTraitRows
             provider={props.provider}
@@ -535,7 +522,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             modelOptions={props.modelOptions}
             prompt={props.prompt}
             onPromptChange={props.onPromptChange}
-            modelLabel={modelLabel}
             effortControl={effortControl}
           />
         </div>

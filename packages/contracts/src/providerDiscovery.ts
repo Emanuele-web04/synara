@@ -109,13 +109,21 @@ export const ProviderListCommandsInput = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
   experimentalWebSockets: Schema.optional(Schema.Boolean),
+  enableArtifacts: Schema.optional(Schema.Boolean),
   agentDir: Schema.optional(TrimmedNonEmptyString),
   forceReload: Schema.optional(Schema.Boolean),
 });
 export type ProviderListCommandsInput = typeof ProviderListCommandsInput.Type;
 
+// Whether the provider can publish hosted artifacts in this session: `disabled`
+// means the host setting is off, `unavailable` means the provider refused it
+// (plan, login, version or organization policy).
+export const ProviderArtifactsState = Schema.Literals(["available", "disabled", "unavailable"]);
+export type ProviderArtifactsState = typeof ProviderArtifactsState.Type;
+
 export const ProviderListCommandsResult = Schema.Struct({
   commands: Schema.Array(ProviderNativeCommandDescriptor),
+  artifacts: Schema.optional(ProviderArtifactsState),
   source: Schema.optional(TrimmedNonEmptyString),
   cached: Schema.optional(Schema.Boolean),
 });

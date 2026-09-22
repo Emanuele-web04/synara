@@ -19,12 +19,18 @@ import {
   createDesktopPlatformBuildConfig,
   MAC_APPSNAP_HELPER_STAGE_PATH,
   MAC_DEVICE_HELPER_RESOURCE_PATH,
+  MAC_ICON_ASSET_NAME,
+  MAC_ICON_COMPOSER_DEPLOYMENT_TARGET,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
-import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
+import {
+  SYNARA_PACKAGED_DESKTOP_FLAVORS,
+  type SynaraPackagedDesktopFlavor,
+} from "@synara/shared/desktopIdentity";
+import { createDesktopArtifactIdentity } from "./lib/desktop-artifact-identity.ts";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
-import { finalizeSignedMacDmg } from "./lib/mac-dmg-finalize.ts";
+import { finalizeSignedMacDmg, rebuildUnsignedMacDmg } from "./lib/mac-dmg-finalize.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
 import {
   RELEASE_LOCKFILE_PATH,
@@ -35,12 +41,25 @@ import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Config, Data, Effect, FileSystem, Layer, Logger, Option, Path, Schema } from "effect";
+import {
+  Config,
+  Data,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Logger,
+  Option,
+  Path,
+  Schema,
+  Stream,
+} from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
+const BuildFlavor = Schema.Literals(SYNARA_PACKAGED_DESKTOP_FLAVORS);
 const requireFromScriptsWorkspace = createRequire(new URL("./package.json", import.meta.url));
 
 const RepoRoot = Effect.service(Path.Path).pipe(
@@ -50,6 +69,11 @@ const ProductionMacIconSource = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconPng),
+);
+const ProductionMacIconComposerSource = Effect.zipWith(
+  RepoRoot,
+  Effect.service(Path.Path),
+  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconComposer),
 );
 const ProductionMacLegacyIconSource = Effect.zipWith(
   RepoRoot,
@@ -102,6 +126,7 @@ const PLATFORM_CONFIG: Record<typeof BuildPlatform.Type, PlatformConfig> = {
 
 interface BuildCliInput {
   readonly platform: Option.Option<typeof BuildPlatform.Type>;
+  readonly flavor: Option.Option<SynaraPackagedDesktopFlavor>;
   readonly target: Option.Option<string>;
   readonly arch: Option.Option<typeof BuildArch.Type>;
   readonly buildVersion: Option.Option<string>;
@@ -201,6 +226,7 @@ function resolvePythonForNodeGyp(): string | undefined {
 
 interface ResolvedBuildOptions {
   readonly platform: typeof BuildPlatform.Type;
+  readonly flavor: SynaraPackagedDesktopFlavor;
   readonly target: string;
   readonly arch: typeof BuildArch.Type;
   readonly version: string | undefined;
@@ -218,6 +244,8 @@ interface ResolvedBuildOptions {
 
 interface StagePackageJson {
   readonly name: string;
+  readonly productName: string;
+  readonly synaraDesktopFlavor: SynaraPackagedDesktopFlavor;
   readonly version: string;
   readonly buildVersion: string;
   readonly synaraCommitHash: string;
@@ -306,6 +334,13 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   }
 
   const target = mergeOptions(input.target, env.target, PLATFORM_CONFIG[platform].defaultTarget);
+  // Flavor is deliberately a build flag, never inherited from a source
+  // launcher's SYNARA_DESKTOP_FLAVOR environment variable.
+  const flavor = Option.getOrElse(input.flavor, () => "production" as const);
+  const artifactIdentity = yield* Effect.try({
+    try: () => createDesktopArtifactIdentity({ platform, flavor }),
+    catch: (cause) => new BuildScriptError({ message: String(cause), cause }),
+  });
   const arch = mergeOptions(input.arch, env.arch, getDefaultArch(platform));
   const version = mergeOptions(input.buildVersion, env.version, undefined);
   const sourceCommit = mergeOptions(input.sourceCommit, env.sourceCommit, undefined);
@@ -317,8 +352,8 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const envVerbose = yield* resolveBooleanEnv("SYNARA_DESKTOP_VERBOSE", env.verbose);
   const envMockUpdates = yield* resolveBooleanEnv("SYNARA_DESKTOP_MOCK_UPDATES", env.mockUpdates);
   const releaseDir = resolveBooleanFlag(input.mockUpdates, envMockUpdates)
-    ? "release-mock"
-    : "release";
+    ? `${artifactIdentity.releaseDirectoryName}-mock`
+    : artifactIdentity.releaseDirectoryName;
   const outputDir = path.resolve(
     repoRoot,
     mergeOptions(input.outputDir, env.outputDir, releaseDir),
@@ -337,6 +372,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   return {
     platform,
+    flavor,
     target,
     arch,
     version,
@@ -355,18 +391,30 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
 const commandOutputOptions = (verbose: boolean) =>
   ({
-    stdout: verbose ? "inherit" : "ignore",
+    stdout: verbose ? "inherit" : "pipe",
     stderr: "inherit",
   }) as const;
 
 const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Command) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const child = yield* commandSpawner.spawn(command);
+  const collectStdout = child.stdout.pipe(
+    Stream.decodeText(),
+    Stream.runCollect,
+    Effect.map((chunks) => chunks.join("")),
+    Effect.orElseSucceed(() => ""),
+  );
+  const collectStdoutFiber = yield* collectStdout.pipe(Effect.forkChild);
   const exitCode = yield* child.exitCode;
+  const stdout = yield* Effect.race(
+    Fiber.join(collectStdoutFiber),
+    Effect.sleep("500 millis").pipe(Effect.as("")),
+  );
 
   if (exitCode !== 0) {
+    const outputTail = stdout.trimEnd().split("\n").slice(-30).join("\n");
     return yield* new BuildScriptError({
-      message: `Command exited with non-zero exit code (${exitCode})`,
+      message: `Command exited with non-zero exit code (${exitCode}).${outputTail ? `\n${outputTail}` : ""}`,
     });
   }
 });
@@ -423,6 +471,12 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
         message: `Production legacy macOS icon source is missing at ${legacyIconSource}`,
       });
     }
+    const iconComposerSource = yield* ProductionMacIconComposerSource;
+    if (!(yield* fs.exists(iconComposerSource))) {
+      return yield* new BuildScriptError({
+        message: `Production macOS Icon Composer source is missing at ${iconComposerSource}`,
+      });
+    }
 
     const tmpRoot = yield* fs.makeTempDirectoryScoped({
       prefix: "synara-icon-build-",
@@ -446,6 +500,29 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     );
 
     yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
+
+    // macOS 26 renders the Liquid Glass material only from a layered Icon
+    // Composer asset, so compile one into the asset catalog that ships beside
+    // the ICNS. Older releases ignore Assets.car and keep the solid mark.
+    const assetCatalogPath = path.join(stageResourcesDir, "Assets.car");
+    const precompiledCatalog = process.env.SYNARA_MAC_ICON_CATALOG?.trim();
+    if (precompiledCatalog) {
+      // Release CI compiles this architecture-independent resource from the
+      // same checkout on macOS 26; native code retains the macOS 15 SDK.
+      yield* fs.copyFile(precompiledCatalog, assetCatalogPath);
+    } else {
+      yield* runCommand(
+        ChildProcess.make({
+          ...commandOutputOptions(verbose),
+        })`xcrun actool ${iconComposerSource} --compile ${stageResourcesDir} --platform macosx --minimum-deployment-target ${MAC_ICON_COMPOSER_DEPLOYMENT_TARGET} --app-icon ${MAC_ICON_ASSET_NAME} --include-all-app-icons --output-partial-info-plist ${path.join(tmpRoot, "icon-partial.plist")} --output-format human-readable-text`,
+      );
+    }
+
+    if (!(yield* fs.exists(assetCatalogPath))) {
+      return yield* new BuildScriptError({
+        message: `actool completed but the icon asset catalog was not found at ${assetCatalogPath}`,
+      });
+    }
   });
 }
 
@@ -720,22 +797,24 @@ const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
-  productName: string,
+  artifactIdentity: ReturnType<typeof createDesktopArtifactIdentity>,
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: string | undefined,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: SYNARA_PRODUCTION_BUNDLE_ID,
-    productName,
-    artifactName: "Synara-${version}-${arch}.${ext}",
+    ...artifactIdentity.buildConfig,
     directories: {
       buildResources: "apps/desktop/resources",
     },
     forceCodeSigning: signed,
   };
   const publishConfig = resolveGitHubPublishConfig();
-  if (publishConfig) {
+  if (artifactIdentity.identity.usesScriptedUpdates) {
+    // Experimental bundles must never contain a Stable updater feed, even
+    // when built from a shell used by the release workflow.
+    buildConfig.publish = null;
+  } else if (publishConfig) {
     buildConfig.publish = [publishConfig];
   } else if (mockUpdates) {
     buildConfig.publish = [
@@ -764,10 +843,21 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     platform,
     target,
     signed,
+    adHocSign: artifactIdentity.identity.usesScriptedUpdates && !signed,
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
 
   Object.assign(buildConfig, createDesktopPlatformBuildConfig(platformBuildConfigInput));
+  if (platform === "linux" && artifactIdentity.identity.flavor !== "production") {
+    const linux = buildConfig.linux as Record<string, unknown>;
+    buildConfig.linux = {
+      ...linux,
+      executableName: artifactIdentity.identity.userDataDirectoryName,
+      desktop: {
+        entry: { StartupWMClass: artifactIdentity.identity.userDataDirectoryName },
+      },
+    };
+  }
 
   return {
     buildConfig,
@@ -860,6 +950,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const repoRoot = yield* RepoRoot;
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
+  const artifactIdentity = createDesktopArtifactIdentity({
+    platform: options.platform,
+    flavor: options.flavor,
+  });
 
   const platformConfig = PLATFORM_CONFIG[options.platform];
   if (!platformConfig) {
@@ -986,7 +1080,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
-    prefix: `synara-desktop-${options.platform}-stage-`,
+    prefix: `synara-desktop-${options.flavor}-${options.platform}-stage-`,
   });
 
   const stageAppDir = path.join(stageRoot, "app");
@@ -1036,6 +1130,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
+  if (options.platform === "mac" || options.platform === "linux") {
+    const provisionCua = path.join(repoRoot, "apps/desktop/scripts/provision-cua-driver.mjs");
+    const cuaDestination = path.join(stageResourcesDir, "cua-driver");
+    const cuaPlatform = options.platform === "mac" ? "darwin" : "linux";
+    yield* Effect.log("[desktop-artifact] Verifying and staging pinned Cua Driver...");
+    yield* runCommand(
+      ChildProcess.make({
+        cwd: repoRoot,
+        ...commandOutputOptions(options.verbose),
+      })`node ${provisionCua} --destination ${cuaDestination} --platform ${cuaPlatform} --arch ${options.arch}`,
+    );
+  }
   if (options.platform === "mac") {
     yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
   }
@@ -1048,14 +1154,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const resolvedBuildConfig = yield* createBuildConfig(
     options.platform,
     options.target,
-    desktopPackageJson.productName ?? "Synara",
+    artifactIdentity,
     options.signed,
     options.mockUpdates,
     options.mockUpdateServerPort,
   );
 
   const stagePackageJson: StagePackageJson = {
-    name: "synara-desktop",
+    ...artifactIdentity.packageMetadata,
     version: appVersion,
     buildVersion: appVersion,
     synaraCommitHash: commitHash,
@@ -1116,7 +1222,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   yield* Effect.log(
-    `[desktop-artifact] Building ${options.platform}/${options.target} (arch=${options.arch}, version=${appVersion})...`,
+    `[desktop-artifact] Building ${options.flavor} ${options.platform}/${options.target} (arch=${options.arch}, version=${appVersion})...`,
   );
   const electronBuilderCliPath = requireFromScriptsWorkspace.resolve("electron-builder/cli.js");
   yield* runCommand(
@@ -1135,7 +1241,24 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   if (options.platform === "mac") {
-    yield* assertPackagedMacDeviceHelper(stageDistDir, desktopPackageJson.productName ?? "Synara");
+    yield* assertPackagedMacDeviceHelper(stageDistDir, artifactIdentity.identity.displayName);
+  }
+
+  if (options.platform === "mac" && options.target === "dmg" && !options.signed) {
+    yield* Effect.log("[desktop-artifact] Rebuilding unsigned macOS DMG from the final app...");
+    yield* Effect.try({
+      try: () =>
+        rebuildUnsignedMacDmg({
+          stageDistDir,
+          productName: artifactIdentity.identity.displayName,
+          verbose: options.verbose,
+        }),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "Unsigned macOS DMG finalization failed.",
+          cause,
+        }),
+    });
   }
 
   if (options.platform === "mac" && options.target === "dmg" && options.signed) {
@@ -1168,6 +1291,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           stageDistDir,
           signed: options.signed,
           verbose: options.verbose,
+          requireUpdateManifest: !artifactIdentity.identity.usesScriptedUpdates,
+          ...(artifactIdentity.identity.usesScriptedUpdates
+            ? { expectedBundleIdentifier: artifactIdentity.identity.bundleId }
+            : {}),
         }),
       catch: (cause) =>
         new BuildScriptError({
@@ -1212,6 +1339,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 });
 
 const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
+  flavor: Flag.choice("flavor", BuildFlavor.literals).pipe(
+    Flag.withDescription("Packaged identity: production (default), canary, or cua."),
+    Flag.optional,
+  ),
   platform: Flag.choice("platform", BuildPlatform.literals).pipe(
     Flag.withDescription("Build platform (env: SYNARA_DESKTOP_PLATFORM)."),
     Flag.optional,

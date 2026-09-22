@@ -307,6 +307,9 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [103, "ClaudeTokenAccounting"],
         [104, "ProjectionThreadsClaudeCacheReview"],
         [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -364,6 +367,9 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 103, name: "ClaudeTokenAccounting" },
           { migration_id: 104, name: "ProjectionThreadsClaudeCacheReview" },
           { migration_id: 105, name: "AsyncUserInput" },
+          { migration_id: 106, name: "ProjectImportOrigins" },
+          { migration_id: 107, name: "ProjectionThreadsHumanMessage" },
+          { migration_id: 108, name: "GatewayCompletions" },
         ],
       );
       const preserved = yield* sql<{ readonly count: number }>`
@@ -462,6 +468,9 @@ agentGatewayRetentionLegacyLayer(
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
           [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -562,6 +571,9 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [103, "ClaudeTokenAccounting"],
         [104, "ProjectionThreadsClaudeCacheReview"],
         [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -603,6 +615,9 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
           [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
         ],
       );
 
@@ -698,6 +713,9 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [103, "ClaudeTokenAccounting"],
         [104, "ProjectionThreadsClaudeCacheReview"],
         [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -735,6 +753,9 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
           [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

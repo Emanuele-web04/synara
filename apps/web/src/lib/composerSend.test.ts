@@ -17,7 +17,39 @@ import {
   hydratePendingBlobComposerAttachments,
   readFileAsDataUrl,
   prepareComposerImageAttachmentsFromFiles,
+  formatOutgoingComposerPrompt,
 } from "./composerSend";
+
+describe("Computer command with provider prompt formatting", () => {
+  it("keeps the Synara command first when Claude uses a prompt-injected effort", () => {
+    expect(
+      formatOutgoingComposerPrompt({
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+        effort: "ultrathink",
+        text: "/computer-use open Calculator",
+      }),
+    ).toBe("/computer-use Ultrathink:\nopen Calculator");
+  });
+  it("keeps ordinary prompts and providers on their existing formatting path", () => {
+    expect(
+      formatOutgoingComposerPrompt({
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+        effort: "ultrathink",
+        text: "Explain this change",
+      }),
+    ).toBe("Ultrathink:\nExplain this change");
+    expect(
+      formatOutgoingComposerPrompt({
+        provider: "codex",
+        model: "gpt-5.6-sol",
+        effort: "high",
+        text: "/computer-use open Calculator",
+      }),
+    ).toBe("/computer-use open Calculator");
+  });
+});
 
 describe("composerSend attachment builders", () => {
   const originalCreateObjectUrl = URL.createObjectURL;

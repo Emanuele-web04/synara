@@ -30,7 +30,9 @@ it.layer(NodeSqliteClient.layerMemory())("asynchronous question migration", (it)
           '2026-09-11T00:00:00.000Z', '2026-09-11T00:00:00.000Z', ${review}
         )
       `;
-      assert.deepStrictEqual(yield* runMigrations(), [[105, "AsyncUserInput"]]);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 105 }), [
+        [105, "AsyncUserInput"],
+      ]);
       assert.deepStrictEqual(
         yield* sql`
         SELECT claude_cache_review_json FROM projection_threads WHERE thread_id = 'thread-claude'

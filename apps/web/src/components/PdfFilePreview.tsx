@@ -125,13 +125,11 @@ export function PdfFilePreview(props: {
       <div className={outerClassName}>
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
           <TriangleAlertIcon className="size-5 text-destructive/80" aria-hidden="true" />
-          <p className="text-[12px] text-muted-foreground">
-            {doc.error ?? "Could not open this PDF."}
-          </p>
+          <p className="text-ui text-muted-foreground">{doc.error ?? "Could not open this PDF."}</p>
           {props.onReload ? (
             <button
               type="button"
-              className="rounded-md px-2 py-1 text-xs hover:bg-foreground/8"
+              className="rounded-md px-2 py-1 text-ui leading-snug hover:bg-foreground/8"
               onClick={props.onReload}
             >
               Reload file from disk

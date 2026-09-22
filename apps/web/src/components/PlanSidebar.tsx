@@ -69,12 +69,12 @@ const PlanSidebar = function PlanSidebar({
         <div className="flex items-center gap-2">
           <Badge
             variant="secondary"
-            className="rounded-md bg-[color-mix(in_srgb,var(--color-accent-blue)_10%,transparent)] px-1.5 py-0 text-[10px] font-semibold text-[var(--color-accent-blue)]"
+            className="rounded-md bg-[color-mix(in_srgb,var(--color-accent-blue)_10%,transparent)] px-1.5 py-0 text-ui-xs font-semibold text-[var(--color-accent-blue)]"
           >
             Plan
           </Badge>
           {activeTaskList ? (
-            <span className="text-[11px] text-muted-foreground/60">
+            <span className="text-ui-sm text-muted-foreground/60">
               {formatTimestamp(activeTaskList.createdAt, timestampFormat)}
             </span>
           ) : null}
@@ -105,7 +105,7 @@ const PlanSidebar = function PlanSidebar({
         <div className="p-3 space-y-4">
           {/* Explanation */}
           {activeTaskList?.explanation ? (
-            <p className="text-[13px] leading-relaxed text-muted-foreground/80">
+            <p className="text-ui-lg leading-relaxed text-muted-foreground/80">
               {activeTaskList.explanation}
             </p>
           ) : null}
@@ -113,7 +113,7 @@ const PlanSidebar = function PlanSidebar({
           {/* Tasks */}
           {activeTaskList && activeTaskList.tasks.length > 0 ? (
             <div className="space-y-1">
-              <p className="mb-2 text-[10px] font-semibold text-muted-foreground/40">Steps</p>
+              <p className="mb-2 text-ui-xs font-semibold text-muted-foreground/40">Steps</p>
               {activeTaskList.tasks.map((task) => (
                 <div
                   key={`${task.status}:${task.task}`}
@@ -128,7 +128,7 @@ const PlanSidebar = function PlanSidebar({
                   <div className="mt-0.5">{stepStatusIcon(task.status)}</div>
                   <p
                     className={cn(
-                      "text-[13px] leading-snug",
+                      "text-ui-lg leading-snug",
                       task.status === "completed"
                         ? "text-muted-foreground/50 line-through decoration-muted-foreground/20"
                         : task.status === "inProgress"
@@ -156,7 +156,7 @@ const PlanSidebar = function PlanSidebar({
                 ) : (
                   <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
                 )}
-                <span className="text-[10px] font-semibold text-muted-foreground/40 group-hover:text-muted-foreground/60">
+                <span className="text-ui-xs font-semibold text-muted-foreground/40 group-hover:text-muted-foreground/60">
                   {planTitle ?? "Full Plan"}
                 </span>
               </button>
@@ -175,8 +175,8 @@ const PlanSidebar = function PlanSidebar({
           {/* Empty state */}
           {!activeTaskList && !planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
-              <p className="mt-1 text-[11px] text-muted-foreground/30">
+              <p className="text-ui-lg text-muted-foreground/40">No active plan yet.</p>
+              <p className="mt-1 text-ui-sm text-muted-foreground/30">
                 Plans will appear here when generated.
               </p>
             </div>

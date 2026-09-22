@@ -789,8 +789,8 @@ export function normalizeClaudeModelOptions(
 export function resolveApiModelId(modelSelection: ModelSelection): string {
   if (
     modelSelection.provider === "claudeAgent" &&
-    (modelSelection.options?.autoCompactWindow ?? modelSelection.options?.contextWindow) === "1m" &&
-    hasAutoCompactWindowOption(getModelCapabilities("claudeAgent", modelSelection.model), "1m") &&
+    normalizeClaudeModelOptions(modelSelection.model, modelSelection.options)?.autoCompactWindow ===
+      "1m" &&
     getClaudeContextWindowSuffix(modelSelection.model) === null
   ) {
     return `${modelSelection.model}[1m]`;
@@ -814,31 +814,23 @@ export function getEffectiveClaudeCodeEffort(
 
 interface ClaudeSpawnProfile {
   readonly maxEffort: boolean;
+  readonly autoCompactWindow: string | undefined;
 }
 
-// Mirrors the spawn-time option derivation in the Claude adapter's startSession:
-// only `max` effort is fixed at subprocess spawn (the query `effort` option;
-// the flag-settings `effortLevel` key caps at xhigh). Every other effort level
-// plus fastMode/ultracode are Settings keys applied live via the SDK's
-// flag-settings control, and model/context window switch via `setModel`.
+// Claude's live flag settings do not refresh the runtime auto-compaction window.
+// Keep this profile aligned with the adapter's normalized spawn settings.
 function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
   const caps = getModelCapabilities("claudeAgent", selection.model);
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
   const effort = requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
   return {
     maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
+    autoCompactWindow: normalizeClaudeModelOptions(selection.model, selection.options)
+      ?.autoCompactWindow,
   } satisfies ClaudeSpawnProfile;
 }
 
-/**
- * Whether switching from `previous` to `next` requires restarting the Claude
- * subprocess. Restarting resumes via `--resume`; an unchanged conversation
- * prefix can still use the provider cache until its TTL expires. Restart only for options
- * fixed at spawn — currently only `max` effort, which has no live Settings
- * equivalent. Model changes use `setModel`; other effort levels, fast mode,
- * ultracode, the auto-compact budget, and the thinking toggle all use the
- * SDK's live flag-settings control.
- */
+/** Restart only for spawn-fixed settings; resume preserves identity, not guaranteed cache hits. */
 export function claudeSelectionRequiresRestart(
   previous: ModelSelection | undefined,
   next: ModelSelection,
@@ -859,7 +851,9 @@ export function claudeSelectionRequiresRestart(
   // selected model's capabilities change.
   const prev = claudeSpawnProfile(previous);
   const desired = claudeSpawnProfile(next);
-  return prev.maxEffort !== desired.maxEffort;
+  return (
+    prev.maxEffort !== desired.maxEffort || prev.autoCompactWindow !== desired.autoCompactWindow
+  );
 }
 
 export function normalizeCursorModelOptions(

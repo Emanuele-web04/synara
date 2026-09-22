@@ -154,6 +154,53 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("forwards bounded Computer history and owner diagnostic requests through their RPCs", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    requestMock.mockResolvedValue({
+      entries: [],
+      nextCursor: null,
+      truncated: false,
+      status: "missing",
+    });
+    await api.computer.getAuditHistory({ limit: 30, before: "cursor" });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith("computer.getAuditHistory", {
+      limit: 30,
+      before: "cursor",
+    });
+    requestMock.mockClear();
+    await api.server.readThreadDiagnostics({
+      source: "runtime",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      includeDetails: true,
+    });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith("server.readThreadDiagnostics", {
+      source: "runtime",
+      threadId: "thread-1",
+      includeDetails: true,
+    });
+  });
+  it("checks paused readiness without dropping immediate control revocation", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    requestMock.mockResolvedValue({ inputPause: { windowId: "1357", message: "Input paused" } });
+    await expect(
+      api.computer.getState({ windowId: "1357", includeScreenshot: false }),
+    ).resolves.toMatchObject({ inputPause: { windowId: "1357" } });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith("computer.getState", {
+      windowId: "1357",
+      includeScreenshot: false,
+    });
+    requestMock.mockClear();
+    requestMock.mockResolvedValue({ enabled: false, generation: 1 });
+    await expect(
+      api.computer.setControlEnabled({ threadId: ThreadId.makeUnsafe("thread-1"), enabled: false }),
+    ).resolves.toEqual({ enabled: false, generation: 1 });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith("computer.setControlEnabled", {
+      threadId: "thread-1",
+      enabled: false,
+    });
+  });
   it("delivers and caches valid server.welcome payloads", async () => {
     const { createWsNativeApi, onServerWelcome } = await import("./wsNativeApi");
 
@@ -317,7 +364,13 @@ describe("wsNativeApi", () => {
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
         providers: {
           codex: { enabled: true, binaryPath: "codex", homePath: "", customModels: [] },
-          claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
+          claudeAgent: {
+            enabled: true,
+            binaryPath: "claude",
+            launchArgs: "",
+            enableArtifacts: false,
+            customModels: [],
+          },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           devin: { enabled: true, binaryPath: "devin", customModels: [] },
           antigravity: { enabled: true, binaryPath: "agy", customModels: [] },

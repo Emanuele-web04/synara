@@ -1,6 +1,7 @@
 // FILE: MessagesTimeline.toolGroupCollapse.browser.tsx
 // Purpose: Browser regressions for collapsing settled tool-call runs into
-//          summary rows ("Ran 4 commands") once a newer narration block starts.
+//          summary rows ("Ran 4 commands") once a newer narration block starts,
+//          and for folding the live run to one line wearing its newest call.
 // Layer: Vitest browser tests
 
 import "../../index.css";
@@ -117,12 +118,75 @@ function isVisibleOutsideClosedDisclosure(text: string): boolean {
   return match !== undefined && match.closest("[aria-hidden='true']") === null;
 }
 
+// The live run is one disclosure line wearing its newest call; the earlier
+// calls stay unmounted until that line is opened.
+async function expectLiveRunFoldedToNewestCall(): Promise<HTMLButtonElement> {
+  const [earlierCommand, newestCommand] = LIVE_COMMANDS as [string, string];
+  await expect.poll(() => findSummaryTrigger(newestCommand) !== null).toBe(true);
+  const liveTrigger = findSummaryTrigger(newestCommand)!;
+  expect(liveTrigger.getAttribute("aria-expanded")).toBe("false");
+  expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
+  expect(document.body.textContent ?? "").not.toContain(earlierCommand);
+  return liveTrigger;
+}
+
 describe("MessagesTimeline tool group collapse", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
-  it("keeps calls made after steering visible in the live tool group", async () => {
+  it("keeps the latest status above tool calls and reveals the other entries on expansion", async () => {
+    const host = createTimelineHost();
+    const statusEntry = (id: string, preview: string): TimelineEntry => ({
+      id,
+      kind: "work",
+      createdAt: "2026-03-17T19:12:28.000Z",
+      entry: {
+        id,
+        createdAt: "2026-03-17T19:12:28.000Z",
+        label: "Reasoning summary",
+        tone: "tool",
+        preview,
+      },
+    });
+    const entries = [
+      assistantEntry("narration", "Checking the integrations.", true),
+      commandEntry("first-command", LIVE_COMMANDS[0]!),
+      statusEntry("first-status", "Inspecting integrations"),
+    ];
+    const screen = await render(<ToolGroupCollapseTimeline timelineEntries={entries} />, {
+      container: host,
+    });
+
+    try {
+      await expect.poll(() => findSummaryTrigger("Inspecting integrations") !== null).toBe(true);
+      entries.push(commandEntry("last-command", LIVE_COMMANDS[1]!));
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} />);
+      expect(findSummaryTrigger("Inspecting integrations")?.getAttribute("aria-expanded")).toBe(
+        "false",
+      );
+      for (const command of LIVE_COMMANDS) {
+        expect(document.body.textContent).not.toContain(command);
+      }
+
+      entries.push(statusEntry("last-status", "Verifying the adapter"));
+      await screen.rerender(<ToolGroupCollapseTimeline timelineEntries={[...entries]} />);
+      await expect.poll(() => findSummaryTrigger("Verifying the adapter") !== null).toBe(true);
+      expect(document.body.textContent).not.toContain("Inspecting integrations");
+      expect(document.querySelectorAll('[data-tool-group-live="true"]')).toHaveLength(1);
+
+      findSummaryTrigger("Verifying the adapter")!.click();
+      for (const text of [...LIVE_COMMANDS, "Inspecting integrations"]) {
+        await expect.poll(() => isVisibleOutsideClosedDisclosure(text)).toBe(true);
+      }
+      expect(document.body.textContent?.match(/Verifying the adapter/g)).toHaveLength(1);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("keeps calls made after steering reachable from the live tool line", async () => {
     const host = createTimelineHost();
     const turnId = TurnId.makeUnsafe("steered-turn");
     const timelineEntries = deriveTimelineEntries(
@@ -177,17 +241,19 @@ describe("MessagesTimeline tool group collapse", () => {
     });
 
     try {
-      for (const command of LIVE_COMMANDS) {
-        await expect.poll(() => isVisibleOutsideClosedDisclosure(command)).toBe(true);
-      }
-      expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
+      const liveTrigger = await expectLiveRunFoldedToNewestCall();
+
+      liveTrigger.click();
+
+      await expect.poll(() => liveTrigger.getAttribute("aria-expanded")).toBe("true");
+      await expect.poll(() => isVisibleOutsideClosedDisclosure(LIVE_COMMANDS[0]!)).toBe(true);
     } finally {
       await screen.unmount();
       host.remove();
     }
   });
 
-  it("collapses the settled run behind a summary and keeps the live run expanded", async () => {
+  it("collapses the settled run behind a summary and folds the live run to one line", async () => {
     const host = createTimelineHost();
     const screen = await render(
       <ToolGroupCollapseTimeline
@@ -212,11 +278,7 @@ describe("MessagesTimeline tool group collapse", () => {
         expect(document.body.textContent ?? "").not.toContain(command);
       }
 
-      // The live (newest) run renders individual rows with no summary trigger.
-      expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
-      for (const command of LIVE_COMMANDS) {
-        expect(isVisibleOutsideClosedDisclosure(command)).toBe(true);
-      }
+      await expectLiveRunFoldedToNewestCall();
 
       trigger.click();
 
@@ -262,12 +324,8 @@ describe("MessagesTimeline tool group collapse", () => {
         expect(document.body.textContent ?? "").not.toContain(command);
       }
 
-      // The run after the thinking boundary is the live tail: expanded rows,
-      // no summary trigger.
-      expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
-      for (const command of LIVE_COMMANDS) {
-        expect(isVisibleOutsideClosedDisclosure(command)).toBe(true);
-      }
+      // The run after the thinking boundary is the live tail.
+      await expectLiveRunFoldedToNewestCall();
     } finally {
       await screen.unmount();
       host.remove();

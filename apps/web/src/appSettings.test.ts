@@ -18,6 +18,7 @@ import {
   DEFAULT_TERMINAL_FONT_SIZE_PX,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
+  didProviderCommandDiscoverySettingsChange,
   didProviderEnablementChange,
   getAppModelOptions,
   getCustomBinaryPathForProvider,
@@ -41,6 +42,36 @@ import {
   resolveFollowUpDispatchMode,
   resolveTerminalFontFamilyStack,
 } from "./appSettings";
+
+describe("computer control defaults", () => {
+  it("leaves computer control off until a preference is explicitly saved", () => {
+    expect(AppSettingsSchema.makeUnsafe({}).computerControlEnabled).toBe(false);
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ autoOpenComputerPane: false });
+    expect(normalizeStoredAppSettings(decoded).computerControlEnabled).toBe(false);
+  });
+
+  it("preserves a saved computer control preference", () => {
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
+      computerControlEnabled: true,
+    });
+    expect(normalizeStoredAppSettings(decoded).computerControlEnabled).toBe(true);
+  });
+
+  it("migrates the legacy per-chat computer control default", () => {
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
+      allowComputerControlInNewChats: true,
+    });
+    const normalized = normalizeStoredAppSettings(decoded);
+    expect(normalized.computerControlEnabled).toBe(true);
+    expect(normalized).not.toHaveProperty("allowComputerControlInNewChats");
+  });
+
+  it("defaults the in-chat preview to the compact footprint", () => {
+    expect(AppSettingsSchema.makeUnsafe({}).computerPreviewSize).toBe("compact");
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ computerPreviewSize: "large" });
+    expect(normalizeStoredAppSettings(decoded).computerPreviewSize).toBe("large");
+  });
+});
 
 describe("server-backed provider enablement", () => {
   it("reads disabled providers from the server settings view", () => {
@@ -153,6 +184,26 @@ describe("server-backed provider enablement", () => {
       didProviderEnablementChange(DEFAULT_SERVER_SETTINGS_VIEW, DEFAULT_SERVER_SETTINGS_VIEW),
     ).toBe(false);
     expect(didProviderEnablementChange(DEFAULT_SERVER_SETTINGS_VIEW, disabledOpenCode)).toBe(true);
+  });
+
+  it("invalidates command discovery when another client toggles Claude Artifacts", () => {
+    const artifactsOn = {
+      ...DEFAULT_SERVER_SETTINGS_VIEW,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS_VIEW.providers,
+        claudeAgent: {
+          ...DEFAULT_SERVER_SETTINGS_VIEW.providers.claudeAgent,
+          enableArtifacts: true,
+        },
+      },
+    };
+
+    expect(
+      didProviderCommandDiscoverySettingsChange(DEFAULT_SERVER_SETTINGS_VIEW, artifactsOn),
+    ).toBe(true);
+    expect(didProviderCommandDiscoverySettingsChange(artifactsOn, artifactsOn)).toBe(false);
+    // The first snapshot is covered by didProviderEnablementChange.
+    expect(didProviderCommandDiscoverySettingsChange(undefined, artifactsOn)).toBe(false);
   });
 });
 
@@ -538,7 +589,7 @@ describe("timestamp format defaults", () => {
 
 describe("chat font size defaults", () => {
   it("defaults chat font size to 12px", () => {
-    expect(DEFAULT_CHAT_FONT_SIZE_PX).toBe(12);
+    expect(DEFAULT_CHAT_FONT_SIZE_PX).toBe(13);
   });
 
   it("clamps chat font size updates into the supported range", () => {

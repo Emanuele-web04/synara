@@ -388,8 +388,13 @@ export function useProviderModelCatalog(input: {
       "devin",
       "omp",
     ] as const) {
-      const dynamicModels = dynamicSources[provider]?.models;
-      if (dynamicModels && dynamicModels.length > 0) {
+      const discovery = dynamicSources[provider];
+      const dynamicModels = discovery?.models;
+      const hasCodexCatalog =
+        provider === "codex" &&
+        discovery?.source === "codex-app-server" &&
+        discovery.error === undefined;
+      if (dynamicModels && (dynamicModels.length > 0 || hasCodexCatalog)) {
         result[provider] = mergeDynamicModelOptions({
           provider,
           staticOptions: staticOptions[provider],

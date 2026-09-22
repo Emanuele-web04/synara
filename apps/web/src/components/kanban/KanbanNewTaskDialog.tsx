@@ -469,7 +469,7 @@ export function KanbanNewTaskDialog({
               onProjectIdChange={setSelectedProjectId}
             />
             <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/50" aria-hidden />
-            <DialogTitle className="font-system-ui truncate font-medium text-[length:var(--app-font-size-ui,12px)] leading-none">
+            <DialogTitle className="font-system-ui truncate font-medium text-ui leading-none">
               New task
             </DialogTitle>
           </div>
@@ -532,7 +532,7 @@ export function KanbanNewTaskDialog({
             />
             {isPreparingImages ? (
               <div
-                className="flex items-center gap-1.5 py-1 text-xs text-muted-foreground"
+                className="flex items-center gap-1.5 py-1 text-ui leading-snug text-muted-foreground"
                 role="status"
               >
                 <LoaderCircleIcon className="size-3.5 animate-spin" />
@@ -550,7 +550,7 @@ export function KanbanNewTaskDialog({
               className={cn(
                 COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
                 COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
-                "px-0 py-0 text-sm",
+                "px-0 py-0",
               )}
               onRemoveTerminalContext={removeComposerTerminalContext}
               onChange={onPromptChange}
@@ -664,7 +664,7 @@ export function KanbanNewTaskDialog({
               ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-3">
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+              <label className="flex cursor-pointer items-center gap-2 text-ui leading-snug text-muted-foreground">
                 <Switch
                   checked={sendAsDraft}
                   onCheckedChange={(checked) => setSendAsDraft(checked === true)}

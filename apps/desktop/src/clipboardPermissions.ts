@@ -1,6 +1,7 @@
 import type { WebContents } from "electron";
 import {
   SYNARA_CANARY_DESKTOP_SCHEME,
+  SYNARA_CUA_DESKTOP_SCHEME,
   SYNARA_DESKTOP_SCHEME,
 } from "@synara/shared/desktopIdentity";
 
@@ -24,7 +25,8 @@ export function isClipboardWritePermission(
     const page = new URL(requester.getURL());
     const trustedScheme =
       page.protocol === `${SYNARA_DESKTOP_SCHEME}:` ||
-      page.protocol === `${SYNARA_CANARY_DESKTOP_SCHEME}:`;
+      page.protocol === `${SYNARA_CANARY_DESKTOP_SCHEME}:` ||
+      page.protocol === `${SYNARA_CUA_DESKTOP_SCHEME}:`;
     if (
       page.protocol !== "https:" &&
       !trustedScheme &&

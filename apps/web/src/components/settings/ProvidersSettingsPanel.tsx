@@ -90,7 +90,7 @@ type ProviderInstallTextKey =
   | "ompAgentDir";
 type ProviderInstallPasswordKey = "openCodeServerPassword";
 type ProviderInstallPasswordConfiguredKey = "openCodeServerPasswordConfigured";
-type ProviderInstallBooleanKey = "openCodeExperimentalWebSockets";
+type ProviderInstallBooleanKey = "claudeEnableArtifacts" | "openCodeExperimentalWebSockets";
 
 type ProviderInstallTextField = {
   readonly kind: "text";
@@ -174,6 +174,18 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         description: (
           <>
             Leave blank to use <code>claude</code> from your PATH.
+          </>
+        ),
+      },
+      {
+        kind: "boolean",
+        settingsKey: "claudeEnableArtifacts",
+        label: "Artifacts, /design and /slides",
+        description: (
+          <>
+            Claude Code keeps Artifacts off in embedded sessions. Turn this on so{" "}
+            <code>/design</code> and <code>/slides</code> publish to claude.ai. Needs a claude.ai
+            login on a Pro, Max, Team or Enterprise plan, and applies to new sessions.
           </>
         ),
       },
@@ -516,8 +528,10 @@ function SortableProviderVisibilityRow(props: {
         </button>
         <ProviderIcon provider={props.option.provider} className="size-4 shrink-0" />
         <span className="min-w-0">
-          <span className="block truncate text-sm text-foreground">{props.option.title}</span>
-          <span className="block text-[11px] text-muted-foreground">
+          <span className="block truncate text-ui-lg leading-snug text-foreground">
+            {props.option.title}
+          </span>
+          <span className="block text-ui-sm text-muted-foreground">
             {providerSetupStatusLabel({
               status: props.providerStatus,
               reconciled: props.statusReconciled,
@@ -546,7 +560,7 @@ function ProviderDocsLinks({ docs }: { docs: ProviderInstallSettings["docs"] }) 
   return (
     <div className={cn(SETTINGS_OUTLINED_SURFACE_CLASS_NAME, "px-3 py-2.5")}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <span className="text-xs font-medium text-foreground">CLI docs</span>
+        <span className="text-ui leading-snug font-medium text-foreground">CLI docs</span>
         <div className="flex flex-wrap gap-2">
           {docs.map((doc) => (
             <Button
@@ -636,8 +650,10 @@ function ProviderInstallFieldControl(props: {
         className="flex items-start justify-between gap-3 rounded-md border border-border/70 bg-background/60 px-3 py-2"
       >
         <span className="min-w-0">
-          <span className="block text-xs font-medium text-foreground">{props.field.label}</span>
-          <span className="mt-1 block text-xs text-muted-foreground">
+          <span className="block text-ui leading-snug font-medium text-foreground">
+            {props.field.label}
+          </span>
+          <span className="mt-1 block text-ui leading-snug text-muted-foreground">
             {props.field.description}
           </span>
         </span>
@@ -657,7 +673,9 @@ function ProviderInstallFieldControl(props: {
   const isPassword = props.field.kind === "password";
   return (
     <label htmlFor={id} className="block">
-      <span className="block text-xs font-medium text-foreground">{props.field.label}</span>
+      <span className="block text-ui leading-snug font-medium text-foreground">
+        {props.field.label}
+      </span>
       <DebouncedSettingTextInput
         id={id}
         size="sm"
@@ -676,7 +694,9 @@ function ProviderInstallFieldControl(props: {
         autoComplete={isPassword ? "new-password" : undefined}
         spellCheck={false}
       />
-      <span className="mt-1 block text-xs text-muted-foreground">{props.field.description}</span>
+      <span className="mt-1 block text-ui leading-snug text-muted-foreground">
+        {props.field.description}
+      </span>
     </label>
   );
 }
@@ -739,14 +759,14 @@ function ProviderToolRow(props: {
             type="button"
             className="flex min-w-0 flex-1 items-center gap-2 text-left"
           >
-            <span className="min-w-0 flex-1 text-sm font-medium text-foreground">{title}</span>
+            <span className="min-w-0 flex-1 text-ui-lg font-medium text-foreground">{title}</span>
             {isDirty ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground">Custom</span>
+              <span className="shrink-0 text-ui-sm text-muted-foreground">Custom</span>
             ) : null}
             {providerUpdateLabel ? (
               <span
                 className={cn(
-                  "shrink-0 text-[11px]",
+                  "shrink-0 text-ui-sm",
                   updateAdvisory?.status === "behind_latest"
                     ? "text-foreground"
                     : "text-muted-foreground",
@@ -775,7 +795,7 @@ function ProviderToolRow(props: {
             <div className="space-y-3">
               <ProviderDocsLinks docs={props.config.docs} />
               {showProviderUpdateStatus && updateAdvisory?.status === "behind_latest" ? (
-                <div className="text-xs text-muted-foreground">
+                <div className="text-ui leading-snug text-muted-foreground">
                   {updateAdvisory.canUpdate && updateAdvisory.updateCommand ? (
                     <>
                       <span>Command: </span>
@@ -788,7 +808,7 @@ function ProviderToolRow(props: {
               ) : null}
               {showSelfManagedUpdate && props.providerStatus ? (
                 <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 text-xs text-muted-foreground">
+                  <div className="min-w-0 text-ui leading-snug text-muted-foreground">
                     {title} manages its own releases, so Synara cannot tell whether a newer version
                     exists. Run the update to be sure.
                   </div>
@@ -1239,7 +1259,7 @@ export function ProvidersSettingsPanel({
                             onUpdate={(provider) => void runProviderUpdate(provider)}
                           />
                         ) : (
-                          <span className="text-[11px] text-muted-foreground">Manual update</span>
+                          <span className="text-ui-sm text-muted-foreground">Manual update</span>
                         )
                       }
                     />

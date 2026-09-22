@@ -168,3 +168,13 @@ After a confirmed startup failure, correct the reported provider problem and ret
 - [Codex authentication](https://developers.openai.com/codex/auth)
 
 Continue with [Your first task](/docs/getting-started/first-task) or [Provider handoffs](/docs/workflows/handoffs).
+
+## Questions, favorites and banked resets in 0.9.0
+
+Supported Codex sessions can ask non-blocking questions: answer the card while the task continues. Blocking multiple-choice questions can be cancelled. Question behavior depends on the request type; a non-blocking card is not a reason to ignore a required approval.
+
+The model picker uses current Codex discovery and supports starred model-and-effort presets. Unsupported settings are normalized to the provider's available options. Resuming a session avoids requesting duplicate history.
+
+Usage panels show banked reset credits when the account exposes them. **Use reset** asks for confirmation and spends one existing credit only after rechecking the account and limits. A five-hour or weekly limit must have **10% or less remaining**. If a result is unconfirmed, **Retry reset** checks the same attempt rather than starting a new redemption.
+
+[Import local Codex projects](/docs/features/project-import) to bring existing conversations into Synara. [Computer Use beta](/docs/features/computer-use) is available on macOS.

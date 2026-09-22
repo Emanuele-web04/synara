@@ -61,7 +61,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
     providers: {
       codex: { ...provider, binaryPath: "codex", homePath: "" },
-      claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },
+      claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "", enableArtifacts: false },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       devin: { ...provider, binaryPath: "devin" },
       antigravity: { ...provider, binaryPath: "agy" },

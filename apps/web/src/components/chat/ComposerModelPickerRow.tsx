@@ -74,6 +74,18 @@ export function ComposerModelPickerRow(props: {
       : [];
   const RowProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[row.provider];
   const rowClassName = cn("pe-1", row.selected && PICKER_PANEL_ROW_SELECTED_CLASS_NAME);
+  const starButton = (
+    <ModelStarButton
+      starred={starred}
+      iconClassName="size-3.5"
+      label={
+        starred
+          ? `Remove ${row.name} from starred`
+          : `Star ${row.name} with its current effort and speed`
+      }
+      onToggle={() => props.onToggleStar(starEntry)}
+    />
+  );
 
   const rowContent = (
     <>
@@ -90,22 +102,24 @@ export function ComposerModelPickerRow(props: {
         {row.detail}
       </span>
       {props.shortcutHint ? (
-        <Kbd className="h-4 min-w-4 shrink-0 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground">
+        <Kbd className="h-4 min-w-4 shrink-0 px-1 text-ui-2xs text-muted-foreground">
           {props.shortcutHint}
         </Kbd>
       ) : null}
-      <ModelStarButton
-        starred={starred}
-        iconClassName="size-3.5"
-        label={
-          starred
-            ? `Remove ${row.name} from starred`
-            : `Star ${row.name} with its current effort and speed`
-        }
-        onToggle={() => props.onToggleStar(starEntry)}
-      />
+      {row.selectableModel !== null ? starButton : null}
     </>
   );
+
+  if (row.selectableModel === null) {
+    return (
+      <div className="relative">
+        <MenuItem disabled className="pe-8" closeOnClick={false}>
+          {rowContent}
+        </MenuItem>
+        <div className="absolute inset-y-0 end-1 flex items-center">{starButton}</div>
+      </div>
+    );
+  }
 
   if (onSelectEffort === null || effortLevels.length === 0) {
     return (

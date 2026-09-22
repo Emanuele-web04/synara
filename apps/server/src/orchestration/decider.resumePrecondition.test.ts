@@ -10,10 +10,12 @@ import {
   type OrchestrationReadModel,
   type OrchestrationSession,
 } from "@synara/contracts";
+import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { decideOrchestrationCommand } from "./decider.ts";
+import { planQuitResumeTurns } from "./quitResume.ts";
 
 const NOW = "2026-07-19T00:00:00.000Z";
 const RECORDED_AT = "2026-07-18T23:00:00.000Z";
@@ -119,6 +121,38 @@ const expectRejected = async (
 };
 
 describe("decider thread.turn.start resumePrecondition", () => {
+  it("does not count an automatic startup continuation as a human send", async () => {
+    const readModel = makeReadModel({ latestTurn: makeLatestTurn("interrupted") });
+    const plan = planQuitResumeTurns({
+      record: {
+        version: 1,
+        recordId: "recency",
+        recordedAt: RECORDED_AT,
+        continuationPrompt: "Continue where you left off.",
+        threads: [{ threadId: THREAD_ID, turnId: RECORDED_TURN_ID }],
+      },
+      threads: readModel.threads,
+      projects: [{ id: readModel.threads[0]!.projectId, deletedAt: null }],
+      now: NOW,
+    });
+    expect(plan.commands).toHaveLength(1);
+    const decided = await Effect.runPromise(
+      decideOrchestrationCommand({ command: plan.commands[0]!, readModel }),
+    );
+    const events = Array.isArray(decided) ? decided : [decided];
+    const message = events.find((event) => event.type === "thread.message-sent");
+    expect(message?.type).toBe("thread.message-sent");
+    if (message?.type !== "thread.message-sent") return;
+    expect(
+      deriveThreadSummaryMetadata({
+        messages: [{ role: "user", createdAt: BEFORE_RECORD }, message.payload],
+        activities: [],
+        proposedPlans: [],
+        latestTurn: null,
+      }).latestHumanMessageAt,
+    ).toBe(BEFORE_RECORD);
+  });
+
   it("accepts the continuation while the recorded turn ended by interruption", async () => {
     await expectAccepted(makeReadModel({ latestTurn: makeLatestTurn("interrupted") }));
   });

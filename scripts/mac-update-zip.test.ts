@@ -98,6 +98,22 @@ describe("mac-update-zip", () => {
     );
   });
 
+  it("allows a missing manifest only for an explicitly scripted-update artifact", () => {
+    const artifacts = ["Synara-Cua-0.8.4-arm64.zip"];
+    assert.deepStrictEqual(resolveMacUpdateManifestFileNames(artifacts, { required: false }), []);
+    assert.throws(() => resolveMacUpdateManifestFileNames(artifacts, { required: true }));
+    assert.throws(() => resolveMacUpdateManifestFileNames(artifacts));
+  });
+
+  it("still returns present manifests for validation when a feed is optional", () => {
+    assert.deepStrictEqual(
+      resolveMacUpdateManifestFileNames(["Synara-Cua-0.8.4-arm64.zip", "latest-mac.yml"], {
+        required: false,
+      }),
+      ["latest-mac.yml"],
+    );
+  });
+
   it("updates the macOS zip file entry and matching top-level sha", () => {
     const manifest = `version: 0.1.4
 files:

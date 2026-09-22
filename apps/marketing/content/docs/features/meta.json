@@ -3,6 +3,8 @@
   "defaultOpen": true,
   "pages": [
     "overview",
+    "computer-use",
+    "project-import",
     "composer",
     "thread-goals",
     "organize",

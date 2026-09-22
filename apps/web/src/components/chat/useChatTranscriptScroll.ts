@@ -549,6 +549,59 @@ export function useChatTranscriptScroll({
     return () => window.clearTimeout(settle);
   }, [activeThreadId, setTranscriptScrollDetached]);
 
+  const previousThreadIdRef = useRef(activeThreadId);
+  const pendingStreamingThreadRef = useRef<ThreadId | null>(null);
+  useEffect(() => {
+    if (previousThreadIdRef.current !== activeThreadId) {
+      previousThreadIdRef.current = activeThreadId;
+      pendingStreamingThreadRef.current = activeThreadId;
+    }
+    if (
+      activeThreadId === null ||
+      !hasStreamingAssistantText ||
+      pendingStreamingThreadRef.current !== activeThreadId
+    )
+      return;
+    pendingStreamingThreadRef.current = null;
+
+    // The replacement list can expand after its first end-scroll as virtual rows
+    // acquire their measured heights. Keep the live response at the end while
+    // that initial layout settles, but yield immediately to a reader gesture.
+    let cancelled = false;
+    const settleAtEnd = async () => {
+      const target = legendListRef.current;
+      if (!target) return;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        if (
+          cancelled ||
+          tailAnchorScrollInFlightRef.current ||
+          isUserScrollDetachedRef.current ||
+          legendListRef.current !== target
+        )
+          return;
+        programmaticScrollUntilRef.current = performance.now() + 200;
+        await target.scrollToEnd({ animated: false });
+        await new Promise<void>((resolve) => {
+          window.requestAnimationFrame(() => resolve());
+        });
+        if (
+          cancelled ||
+          tailAnchorScrollInFlightRef.current ||
+          isUserScrollDetachedRef.current ||
+          legendListRef.current !== target
+        )
+          return;
+        const node = target.getScrollableNode();
+        if (node instanceof HTMLElement && isScrollContainerNearBottom(node, 1)) return;
+      }
+    };
+    const frameId = window.requestAnimationFrame(() => void settleAtEnd());
+    return () => {
+      cancelled = true;
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [activeThreadId, hasStreamingAssistantText, legendListRef]);
+
   return {
     showScrollToBottom,
     isUserScrollDetached,

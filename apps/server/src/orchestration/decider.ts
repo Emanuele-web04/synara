@@ -34,7 +34,10 @@ import {
 } from "@synara/shared/conversationEdit";
 import { Effect } from "effect";
 
+import { computerActivationMetadata } from "../computer/computerActivation.ts";
+
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { withProjectRelocationEvents } from "./projectRelocation.ts";
 import { buildForkThreadTitle } from "./forkThreadTitle.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
@@ -768,7 +771,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           const remainingThreads = listThreadsByProjectId(readModel, existingProject.id).filter(
             (thread) => thread.deletedAt === null,
           );
-          if (remainingThreads.length > 0) {
+          if (remainingThreads.length > 0 || command.preserveExistingProject) {
             return yield* new OrchestrationCommandInvariantError({
               commandType: command.type,
               detail: `Project '${existingProject.id}' already uses workspace root '${existingProject.workspaceRoot}'.`,
@@ -974,7 +977,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         wasPinned: existingProject.isPinned === true,
       });
       const occurredAt = nowIso();
-      return {
+      const event = {
         ...withEventBase({
           aggregateKind: "project",
           aggregateId: command.projectId,
@@ -995,7 +998,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(changedSpaceId !== undefined ? { spaceId: changedSpaceId } : {}),
           updatedAt: occurredAt,
         },
-      };
+      } satisfies Omit<Extract<OrchestrationEvent, { type: "project.meta-updated" }>, "sequence">;
+      return yield* withProjectRelocationEvents({
+        event,
+        previousProject: existingProject,
+        readModel,
+      });
     }
 
     case "project.delete": {
@@ -1873,6 +1881,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? { providerOptions: command.providerOptions }
           : {}),
         ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
+        ...computerActivationMetadata({ ...command, userMessageText: command.message.text }),
         assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
         dispatchMode,
         dispatchOrigin: command.dispatchOrigin ?? "user",
@@ -2109,6 +2118,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { providerOptions: command.providerOptions }
             : {}),
           ...(command.reviewTarget !== undefined ? { reviewTarget: command.reviewTarget } : {}),
+          ...computerActivationMetadata(command),
           assistantDeliveryMode: command.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE,
           dispatchMode: command.dispatchMode ?? "queue",
           dispatchOrigin: command.dispatchOrigin ?? "user",
@@ -2436,6 +2446,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.providerOptions !== undefined
             ? { providerOptions: command.providerOptions }
             : {}),
+          ...computerActivationMetadata({ ...command, userMessageText: command.text }),
           ...(command.assistantDeliveryMode !== undefined
             ? { assistantDeliveryMode: command.assistantDeliveryMode }
             : {}),
@@ -2850,7 +2861,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.activity.append": {
-      yield* requireThread({
+      yield* (command.requireUnarchived ? requireThreadNotArchived : requireThread)({
         readModel,
         command,
         threadId: command.threadId,

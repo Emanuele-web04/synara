@@ -143,8 +143,27 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     workflow,
-    "  build:\n    name: Build ${{ matrix.label }}\n    needs: preflight\n    runs-on: ${{ matrix.runner }}\n    timeout-minutes: 30\n    permissions:\n      contents: read",
+    "  build:\n    name: Build ${{ matrix.label }}\n    needs: [preflight, build_mac_icon]\n    runs-on: ${{ matrix.runner }}\n    timeout-minutes: 60\n    permissions:\n      contents: read",
     "Expected artifact builds to receive read-only repository access.",
+  );
+  assertContains(
+    workflow,
+    "- label: macOS arm64\n            runner: macos-15",
+    "Expected the arm64 native release runner to retain the macOS 15 SDK.",
+  );
+  for (const toolchain of [
+    "native_developer_dir=/Applications/Xcode_16.4.app/Contents/Developer",
+    "DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer",
+    "runs-on: macos-26",
+    "name: mac-icon-catalog",
+    'echo "SYNARA_MAC_ICON_CATALOG=$RUNNER_TEMP/mac-icon/Assets.car" >> "$GITHUB_ENV"',
+  ]) {
+    assertContains(workflow, toolchain, "Expected separate native and icon release toolchains.");
+  }
+  assertContains(
+    workflow,
+    "pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev",
+    "Expected the Linux release to install the native driver's build dependencies.",
   );
   assertContains(
     workflow,

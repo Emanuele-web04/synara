@@ -37,6 +37,11 @@ compaction turn identity. The review appears in full, detail, and shell snapshot
 | Compact, then send         | Run a separate native `/compact` operation; deliver the held message only after verified success. |
 | Cancel this send           | Clear the pending send while retaining the conversation message.                                  |
 
+Once a choice is accepted, the review panel hides and progress moves to the transcript: the Claude
+adapter publishes a "Compacting context" row when native compaction starts (explicit `/compact` or a
+native `compacting` status), resolves it at the compact boundary, and marks it failed if the turn ends
+without one. The panel returns only for a failed or uncertain review.
+
 Waiting for a choice releases the delivery lock. Other tasks continue normally; queue promotion in
 the affected task waits. A response identifies the review and message, and stale or duplicate
 responses cannot authorize a different send. Relevant session, model, or context changes require

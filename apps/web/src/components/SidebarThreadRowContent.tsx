@@ -233,7 +233,7 @@ export function SidebarThreadRowContent({
       >
         <span
           className={cn(
-            "min-w-0 flex-1 truncate-fade text-[length:var(--app-font-size-ui,12px)]",
+            "min-w-0 flex-1 truncate-fade text-ui",
             isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
             variant === "standard" && isSubagentThread
               ? "leading-[18px] text-foreground/80"
@@ -253,7 +253,7 @@ export function SidebarThreadRowContent({
         {!isSubagentThread && pendingStatusColorClass ? (
           <span
             aria-label="Pending approval"
-            className={cn("shrink-0 text-[10px] font-medium", pendingStatusColorClass)}
+            className={cn("shrink-0 text-ui-xs font-medium", pendingStatusColorClass)}
           >
             Pending
           </span>

@@ -54,7 +54,9 @@ function mockHandle(
   options?: { readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode> },
 ) {
   return ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(0x7fff_fffe),
+
+    pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
+
     exitCode: options?.exitCode ?? Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
     isRunning: Effect.succeed(false),
     kill: () => Effect.void,
@@ -2292,9 +2294,15 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
     });
 
-    it.effect("returns ready with auth guidance when no Devin API key is set", () =>
-      Effect.gen(function* () {
-        const status = yield* checkDevinProviderStatus;
+    it.effect("returns ready with auth guidance when no Devin API key is set", () => {
+      const previousWindsurfKey = process.env.WINDSURF_API_KEY;
+      const previousDevinKey = process.env.DEVIN_API_KEY;
+      delete process.env.WINDSURF_API_KEY;
+      delete process.env.DEVIN_API_KEY;
+      return Effect.gen(function* () {
+        // Stub the credential read so a real `devin auth login` on the host
+        // cannot leak an "authenticated" result into this test.
+        const status = yield* makeCheckDevinProviderStatus(undefined, async () => undefined);
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
         assert.strictEqual(status.authStatus, "unknown");
@@ -2307,8 +2315,22 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-      ),
-    );
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousWindsurfKey === undefined) {
+              delete process.env.WINDSURF_API_KEY;
+            } else {
+              process.env.WINDSURF_API_KEY = previousWindsurfKey;
+            }
+            if (previousDevinKey === undefined) {
+              delete process.env.DEVIN_API_KEY;
+            } else {
+              process.env.DEVIN_API_KEY = previousDevinKey;
+            }
+          }),
+        ),
+      );
+    });
 
     it.effect("recognizes credentials saved by devin auth login", () => {
       let credentialsRead = false;

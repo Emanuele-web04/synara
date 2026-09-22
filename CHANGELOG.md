@@ -1,5 +1,6 @@
 # Changelog
 
+
 ## Unreleased
 
 ### Added
@@ -9,6 +10,143 @@
 ### Fixed
 
 - Fixed OMP threads being mislabeled as Codex when the session-provider normalizer fell through to the Codex default instead of preserving the OMP provider.
+
+
+## [0.9.0] — 2026-09-21
+
+**Computer Use arrives in beta, available on macOS only at the moment. Linux is coming soon.** Ask Synara to operate Mac apps and browsers with `/computer-use`, follow the targeted window in a preview, and stop the task from chat. The rest of this release brings project import, richer provider controls, clearer review workflows and many reliability fixes.
+
+### Added
+
+#### Computer Use beta
+
+- Native Mac app inspection and actions, including window targeting, text entry, clicks, scrolling, keyboard shortcuts, menus and text selection, through the bundled Cua driver. App compatibility varies during beta. (#1090, #1227, #1286)
+- `/computer-use <task>` activates Computer for one request. Settings → Computer control is a separate opt-in for ordinary turns; an AppSnap attachment does not enable control.
+- Shared setup guide for Accessibility, Input Monitoring and Screen Recording, with fresh permission checks, exact-app identity checks and stale-grant recovery guidance. Permission setup leaves the task unsent until the user sends it.
+- Background-first native work and isolated headless browser profiles. Bringing an app visibly forward requires explicit user intent; using the same browser executable does not import personal cookies or profile data.
+- Task-owned, draggable preview of the addressed window or browser tab, compact/expanded sizing, bounded still fallback and last-frame retention through short gaps. Closing the preview hides it; chat Stop ends the task. Preview frames are local UI feedback, separate from model screenshots.
+- Human-readable Computer action chips/cards, scoped task approvals, protected security surfaces, bounded action audit records, fresh-observation checks and physical Escape interruption when Input Monitoring is granted. Escape interrupts current input without disabling future tasks.
+- Batches of up to 25 known native steps and on-demand help keep routine workflows compact. Native task targeting permits independent app/window work where the backend can prove isolation; input transactions remain serialized.
+- External MCP integrations can request Computer-enabled tasks with the explicit `computer:control` scope; task approval still applies.
+- Computer integration across the provider adapters, with explicit readiness checks and task-scoped connections. This is not a claim of live certification of every provider/model/app combination. Linux groundwork and experiments are not advertised as released Linux Computer support.
+
+#### Projects, models and provider features
+
+- Discover and import local Codex and Claude Code projects and conversations: source picker, search, automatic initial selection, archived-session option, per-project destination, progress, stop and retry. Landing-page and first-run entry points make imports discoverable. (#1259, #1271)
+- Import frozen provider-session copies while preserving original histories, completed legacy turns and source identity. Relocate missing/moved project folders without losing task context or rewriting the source session. (#1266; 948b3d136)
+- Tabbed model picker with starred model-and-effort presets; refreshed Codex model discovery and normalized provider-supported options. (#1252, #1256)
+- Claude prompt-cache observations in the UI and local transcript diagnostics: reads, creation, uncached input and persisted evidence, without inventing missing usage or guaranteeing future cache hits. (#1240, #1241)
+- Durable review before expensive Claude cache resumptions: continue with full context, compact then send, or cancel. Native compaction completes before releasing the held message; progress and failures remain visible. (#1242, #1243, #1244)
+- Optional Claude Artifacts, `/design` and `/slides`, with account/version readiness explanations. Enable in Claude provider settings and start a new session. (#1271)
+- Non-blocking Codex question cards, plus cancellation for blocking multiple-choice questions. (#1213, #1285)
+- Banked Codex reset display and confirm-gated redemption, with fresh account/usage checks and idempotent retries for uncertain outcomes. (#1246)
+- Chat drag-and-drop for composer mentions and pane splits. (#1255)
+- Passive completion delivery for eligible Agent Gateway delegated runs, tied to the originating request and durable settled output. (#1276)
+- GitHub-style Markdown alerts in chat. (#1273)
+
+### Changed
+
+- Claude context-budget changes safely respect the active session and report the actual runtime budget. (#1260)
+- Activity lists follow the latest human message, rather than being reordered by background assistant work. (#1261)
+- PR controls expose status-specific actions and pending toasts; PR links appear in chat hover cards. Cached GitHub lookups and reduced badge polling cut repeated requests. (#1257, #1262; 35fe7e31d, b99c9e4c4)
+- Tool activity collapses into one live accordion line, keeping the latest human-readable status visible and removing redundant settled PR status rows. (#1274; b58f27381, d715a9164)
+- Markdown files default to Preview in the editor. Command palette and recent-view switcher match the file-picker presentation. (#1218, #1248)
+- Shared UI font tokens extend user-selected typography across more surfaces; effort controls stay stable during adjustments, import glyph transparency is retained, and browser sizing/composer spacing are refined. (948875954, 3f11b1124, d684f2de4, 33333439c)
+- Liquid Glass Mac app icons, updated alternate icons, persistent icon selection and a redesigned Dmgly installer. Default removes custom-icon metadata; pristine release signature verification remains distinct from a customized installed app. (#1247; 6db82819b, e7cd15281)
+- Provider settings show setup health and clarify theme activation. Shortcut labels are human-readable, and the keyboard-reference defaults are corrected. (#1249, #1253, #1254)
+- Production packaging prunes unused icons/assets and excludes unnecessary source material while retaining required resources and vendored licenses. No universal download-size percentage is claimed. (#1234)
+- Hidden presentations avoid unnecessary ticks; streaming reveal avoids stalls; editor updates do less repeated work. Development skips React Compiler in the normal reload path. (#1258, #1208, #1225)
+- CI setup/test lanes are streamlined and an Electron energy-proxy benchmark is available. The earlier #1197 optimization was reverted; benchmark infrastructure is not a battery-life claim. (#1202, #1263)
+- Native-driver source/provenance and Rust toolchain are pinned in release builds; Canary bootstraps an isolated Rust toolchain and preserves the rustup installer filename. (0567d829c, 92ac55986, 8e873b0d7)
+- Repository licensing is explicitly MIT. (9a0d71fe7)
+
+### Fixed
+
+- Editor rows redraw after repeated line insertion, subsequent typing, undo and redo. (#1208)
+- Codex resumes without returning duplicate history; mixed MCP transports are configured correctly. (#1066, #1203)
+- Stuck provider startup can be stopped and recovered; side chats retain runtime permission choices when created and sent. (#1230, #1205)
+- OpenCode uses current server/model metadata; managed Computer sessions require their scoped tool connection to be ready. (#1228; fbb3a5881)
+- BetterWright 2.7.3 browser lease migration and lifecycle behavior are completed. (#1233)
+- Invalid process signals and captured process identities are guarded during cleanup. Source checks do not by themselves prove packaged Windows teardown. (#1270)
+- Profiles include providers with real turns but no token telemetry, preserving unknown usage rather than inventing zero. (#1215)
+- Unlinked commit authors remain visible in PR details; PR dedup separators are represented safely. (#1214, #1188)
+- Linux desktop zoom shortcuts are handled in the main process. (#1229)
+- AppSnap/toast development warnings and temporary-chat hover accent precedence are corrected. (#1226, #1190)
+- Computer text is inserted atomically, falls back to the focused field when appropriate, and targets same-process windows more reliably. Background Enter can use the observed field reference. (#1286; 503b97108)
+- Computer preview expansion actually enlarges the card; stale native observations, ambiguous focus, driver failures and interrupted input receive bounded recovery instead of silent action replay. (f26bed6ea, 71b29aeae, fbb3a5881)
+- Computer permission refresh, driver provisioning, cancellation, ownership and task isolation are hardened. Session startup and teardown preserve failure visibility; no broad live-provider certification is inferred from unit tests. (#1090 and follow-up commits)
+
+### Verification
+
+- Node 24.13.1 and Bun 1.4.2: formatting, lint, typecheck, release smoke, production build, brand identity, Windows runtime-boundary and migration-lineage checks passed. Lint retains existing warnings; it reported no errors.
+- Final uncached full suite after frozen-lockfile installation: **1,125 files and 14,686 tests passed; 12 files / 30 tests skipped**. Skipped live-provider and benchmark tests are not claimed as validated.
+- The first full run failed `apps/desktop/src/computerShield.test.ts` → `ComputerShield > engages on first use and confirms before resolving`. Its isolated rerun passed. The fixture imposed 400 ms on real child startup; successful/refusal cases now use the existing 5-second production limit, while the deliberate wedged-helper case keeps its short timeout. All 10 shield tests and the final full suite passed; production behavior was not relaxed.
+- A subsequent full run exposed eight `apps/server/src/platform/effectProcessSignals.test.ts` cases named `never turns invalid child PID %s into a group signal` (undefined, 0, 1, -1, 1.5, NaN, Infinity and 4294967297). The local dependency installation lacked the already-committed Effect patch. `bun install --frozen-lockfile` refreshed that one package; all 10 process-signal tests and the final full suite passed. No runtime source patch was added for this installation issue.
+- Initial release smoke was blocked by sandbox temp-directory access (`EPERM`); it passed with the required access. The initial build was stopped to use pinned Node. These preliminary attempts are not counted as passing checks.
+- Both documentation trees passed their 57-test documentation contract/integrity suites. The paired website passed lint and production build. Release copy is identical across the in-app entry and both marketing changelogs; no external documentation links were added or changed.
+- The first native release attempt failed macOS icon staging: the macOS 14 runner's older `actool` returned success without creating `Assets.car`. A second attempt exposed an Apple AssetRuntime framework crash when Xcode 26.3 compiled icons on macOS 15. Release CI now compiles the shared icon catalog on macOS 26 with Xcode 26.3 and keeps native code on macOS 15 with Xcode 16.4. The catalog remains required; no icon fallback or signing gate was weakened.
+- The first Linux artifact attempt failed because `x11.pc` was unavailable while compiling the bundled driver. Release setup now installs the same native development-library prerequisites as the dedicated Linux Cua check. Linux Computer Use remains outside the 0.9.0 support announcement.
+- Packaging follow-ups passed formatting, lint, typecheck, release smoke and all 231 release-script tests. A real local Icon Composer compile with Xcode 27 produced `Assets.car`; the separate Xcode 26.3/macOS 26 CI job remains the artifact qualification gate.
+- Native packaging, macOS signing/notarization, unsigned Windows startup/provenance checks and public asset publication are enforced by the tag workflow. Local source checks do not certify current packaged Computer behavior across every provider, application, display or Space. Computer remains a macOS beta; Linux Computer support is coming soon.
+
+### Merge and direct-commit audit
+
+Audited all 450 commits in the complete `v0.8.4..f3cffcb66` ancestry, including merged branch commits and direct pushes. **51 merged pull requests** have merge commits in this range. #1197 is included in that historical count but was reverted. Intermediate Computer recording/replay and durable always-allow grants were removed before this release and are not shipped features.
+
+- [#1066](https://github.com/Emanuele-web04/synara/pull/1066) — fix(codex): avoid returning history on resume
+- [#1090](https://github.com/Emanuele-web04/synara/pull/1090) — Add scoped Computer Use with background browser control and native macOS support
+- [#1188](https://github.com/Emanuele-web04/synara/pull/1188) — fix(web): spell pull-request dedup separators as \^@ escapes
+- [#1190](https://github.com/Emanuele-web04/synara/pull/1190) — Keep temporary chat accent visible while hovered
+- [#1197](https://github.com/Emanuele-web04/synara/pull/1197) — Optimize cross-platform CI setup and cut the measured critical path (reverted)
+- [#1202](https://github.com/Emanuele-web04/synara/pull/1202) — Reduce CI setup work and shorten test lanes
+- [#1203](https://github.com/Emanuele-web04/synara/pull/1203) — Repair mixed Codex MCP transport configuration
+- [#1205](https://github.com/Emanuele-web04/synara/pull/1205) — Preserve runtime permissions for sidechats
+- [#1208](https://github.com/Emanuele-web04/synara/pull/1208) — Fix Pierre editor row rendering after line insertion
+- [#1213](https://github.com/Emanuele-web04/synara/pull/1213) — feat(codex): support non-blocking user question cards
+- [#1214](https://github.com/Emanuele-web04/synara/pull/1214) — fix(github): preserve unlinked commit authors in PR details (repair for #1067)
+- [#1215](https://github.com/Emanuele-web04/synara/pull/1215) — fix(profile): surface providers with turns but no token telemetry (repair for #1075)
+- [#1218](https://github.com/Emanuele-web04/synara/pull/1218) — feat(web): default editor markdown to Preview
+- [#1225](https://github.com/Emanuele-web04/synara/pull/1225) — fix(web): remove React Compiler delay from development loading and reloads
+- [#1226](https://github.com/Emanuele-web04/synara/pull/1226) — fix(web): clean up AppSnap and toast development warnings
+- [#1227](https://github.com/Emanuele-web04/synara/pull/1227) — Ambient in-chat computer preview plus foreground focus restore
+- [#1228](https://github.com/Emanuele-web04/synara/pull/1228) — fix(opencode): support current server and model metadata
+- [#1229](https://github.com/Emanuele-web04/synara/pull/1229) — fix(desktop): handle Linux zoom shortcuts in the main process
+- [#1230](https://github.com/Emanuele-web04/synara/pull/1230) — fix(session): recover stop for stuck provider starts
+- [#1233](https://github.com/Emanuele-web04/synara/pull/1233) — fix(browser): complete BetterWright 2.7.3 lease migration and regression coverage
+- [#1234](https://github.com/Emanuele-web04/synara/pull/1234) — perf: reduce shipped desktop size without runtime or visual changes
+- [#1239](https://github.com/Emanuele-web04/synara/pull/1239) — test(web): allow cold imports to finish
+- [#1240](https://github.com/Emanuele-web04/synara/pull/1240) — feat(diagnostics): report Claude cache usage from local transcripts
+- [#1241](https://github.com/Emanuele-web04/synara/pull/1241) — Preserve and display native Claude prompt-cache observations
+- [#1242](https://github.com/Emanuele-web04/synara/pull/1242) — Persist pending Claude cache-resume reviews
+- [#1243](https://github.com/Emanuele-web04/synara/pull/1243) — Confirm expensive Claude cache resumptions before dispatch
+- [#1244](https://github.com/Emanuele-web04/synara/pull/1244) — Compact Claude context natively before releasing held messages
+- [#1246](https://github.com/Emanuele-web04/synara/pull/1246) — feat: show and consume Codex banked resets
+- [#1247](https://github.com/Emanuele-web04/synara/pull/1247) — [codex] Apply Dmgly design to macOS installer
+- [#1248](https://github.com/Emanuele-web04/synara/pull/1248) — Restyle the command palette and recent-view switcher to match ⌘P
+- [#1249](https://github.com/Emanuele-web04/synara/pull/1249) — fix(settings): show provider setup health and clarify theme activation
+- [#1252](https://github.com/Emanuele-web04/synara/pull/1252) — feat(composer): tabbed model picker with starred model + effort presets
+- [#1253](https://github.com/Emanuele-web04/synara/pull/1253) — docs(shortcuts): list missing defaults and correct workspace tab combo
+- [#1254](https://github.com/Emanuele-web04/synara/pull/1254) — fix(web): show friendly labels for terminal and usage keybindings
+- [#1255](https://github.com/Emanuele-web04/synara/pull/1255) — Support chat drag-and-drop mentions and pane splits
+- [#1256](https://github.com/Emanuele-web04/synara/pull/1256) — Refresh Codex model discovery and preserve starred preset behavior
+- [#1257](https://github.com/Emanuele-web04/synara/pull/1257) — Enrich pull request controls with status actions
+- [#1258](https://github.com/Emanuele-web04/synara/pull/1258) — perf(web): eliminate stalled reveal frames and hidden presentation ticks
+- [#1259](https://github.com/Emanuele-web04/synara/pull/1259) — Add Codex and Claude project import flow
+- [#1260](https://github.com/Emanuele-web04/synara/pull/1260) — fix(claude): safely apply context budget changes and show runtime budget
+- [#1261](https://github.com/Emanuele-web04/synara/pull/1261) — Order activity by the latest human message
+- [#1262](https://github.com/Emanuele-web04/synara/pull/1262) — Show pull request links in chat hover cards
+- [#1263](https://github.com/Emanuele-web04/synara/pull/1263) — bench: cloud Electron energy proxy
+- [#1266](https://github.com/Emanuele-web04/synara/pull/1266) — fix: relocate imported projects without losing thread context
+- [#1270](https://github.com/Emanuele-web04/synara/pull/1270) — fix(process): guard invalid signals and captured process identities
+- [#1271](https://github.com/Emanuele-web04/synara/pull/1271) — Add Claude Artifacts support and project import onboarding
+- [#1273](https://github.com/Emanuele-web04/synara/pull/1273) — Render GitHub-style alerts in chat markdown
+- [#1274](https://github.com/Emanuele-web04/synara/pull/1274) — Fold the live tool run into one accordion line
+- [#1276](https://github.com/Emanuele-web04/synara/pull/1276) — feat: passively return delegated gateway task results
+- [#1285](https://github.com/Emanuele-web04/synara/pull/1285) — fix: allow cancelling blocking questions with choices
+- [#1286](https://github.com/Emanuele-web04/synara/pull/1286) — Improve computer typing and same-process window targeting
+
+[Complete commit comparison](https://github.com/Emanuele-web04/synara/compare/v0.8.4...v0.9.0) includes direct pushes, follow-up repairs, native-driver iterations and test/documentation changes.
+
 
 ## 0.8.4 - 2026-09-14
 

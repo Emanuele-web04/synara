@@ -195,7 +195,7 @@ export function SelectionNewChatComposer({
                 />
               </div>
               {error ? (
-                <p role="alert" className="px-3 pb-2 text-xs text-destructive">
+                <p role="alert" className="px-3 pb-2 text-ui leading-snug text-destructive">
                   {error}
                 </p>
               ) : null}

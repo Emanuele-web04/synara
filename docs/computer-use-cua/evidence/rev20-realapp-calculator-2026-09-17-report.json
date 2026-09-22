@@ -1,0 +1,183 @@
+{
+  "run": "rev20-realapp-calculator-2026-09-17",
+  "date": "2026-09-17",
+  "nativeBuild": {
+    "version": "0.28.2",
+    "nativeRevision": 20,
+    "patchSha256": "a53aca2e440161a2776a255fa8a9c856ddb4dada69927fd5bab08fc6b936623b",
+    "binarySha256": "601382877c7af04543a32959ddff31743425a8d4fdfc4d1d5529d5c1f03589c4"
+  },
+  "host": "external trusted CuaDriverHost (shell-ancestry TCC), bundle com.synara.cua-canary, endpoint synara-cua-cyREYK/host.sock",
+  "target": {
+    "app": "Calculator",
+    "pid": 30509,
+    "window_id": 775,
+    "title": "Calculator",
+    "launch": "open -g -n -a Calculator",
+    "note": "a second pre-existing Calculator instance (pid 20803, not launched by this run) remained running and untouched throughout"
+  },
+  "cases": [
+    {
+      "case": "observation: get_window_state + screenshot",
+      "result": {
+        "returned_element_count": 127,
+        "elements_complete": false,
+        "screenshot_frame_valid": true,
+        "screenshot_frame_freshness": "captured_current_space",
+        "window_is_on_screen": true,
+        "background_input_routes": ["accessibility", "window_pointer", "pid_keyboard"]
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "check_input_ready",
+      "result": { "ready": true },
+      "verdict": "pass"
+    },
+    {
+      "case": "semantic input: AXPress digit buttons via element_token (7, 8)",
+      "result": {
+        "effect": "unverifiable",
+        "route": "accessibility",
+        "delivery_mode": "background"
+      },
+      "independent_evidence": "display readback '78' via tree_markdown AXStaticText",
+      "verdict": "pass"
+    },
+    {
+      "case": "synthetic keyboard: press_key '5' to background non-frontmost window",
+      "result": {
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery_mode": "background"
+      },
+      "independent_evidence": "display readback '785'",
+      "verdict": "pass"
+    },
+    {
+      "case": "semantic input: Add, 5, Equals",
+      "result": { "effect": "unverifiable", "route": "accessibility" },
+      "independent_evidence": "display readback '785+5'; Edit->Copy put computed result '790' on the clipboard",
+      "verdict": "pass"
+    },
+    {
+      "case": "coordinate click on '9' without expected_window_bounds",
+      "result": {
+        "effect": "refused",
+        "code": "stale_geometry",
+        "message": "Logical coordinates require exact finite window bounds and in-window points"
+      },
+      "verdict": "pass",
+      "note": "window_points space requires expected_window_bounds (driver string: 'Internal logical window points require expected_window_bounds and exact pid/window_id') - deliberate freshness guard, not a defect"
+    },
+    {
+      "case": "coordinate click on '9' with expected_window_bounds {x:350,y:559,w:230,h:408}",
+      "result": {
+        "effect": "unverifiable",
+        "route": "synthetic_events",
+        "delivery_mode": "background"
+      },
+      "independent_evidence": "display readback '7,777,799' (appended 9 to '777,779')",
+      "verdict": "pass"
+    },
+    {
+      "case": "verify_state element exists+enabled (Equals button)",
+      "result": { "status": "satisfied", "stable": true, "samples": 2, "elapsed_ms": 225 },
+      "verdict": "pass"
+    },
+    {
+      "case": "verify_state element exists (nonexistent button)",
+      "result": {
+        "status": "unknown",
+        "unknown_reason": "observation_unavailable",
+        "matches": 0,
+        "samples": 31,
+        "elapsed_ms": 5068
+      },
+      "verdict": "pass",
+      "note": "honest tri-state: missing element reports unknown, not unsatisfied; took ~5s of stability sampling"
+    },
+    {
+      "case": "invoke_menu Edit->Copy + clipboard_read readback",
+      "result": {
+        "invoke_menu": {
+          "effect": "unverifiable",
+          "route": "accessibility",
+          "delivery_mode": "foreground"
+        },
+        "clipboard": { "text": "790", "types_include": "com.apple.Calculator.expression" }
+      },
+      "independent_evidence": "clipboard contained the computed result, proving the menu dispatch landed",
+      "verdict": "pass"
+    },
+    {
+      "case": "cancellation: stop during force_synthetic type_text (2000 digit keystrokes)",
+      "result": {
+        "stop_ms": 437,
+        "in_flight_reply": "native_input_cancelled: driver input generation is retired",
+        "display_after": "77,777 (5 digits landed of 2000 requested; a completed run would pin the ~16-digit display cap)",
+        "interrupted_before_completion": true,
+        "driver_pid": "58806 -> 63901 (generation retired; fresh generation on next call)",
+        "post_stop_calls_ok": true
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: set_value on AXButton (non-settable)",
+      "result": {
+        "effect": "refused",
+        "code": "ax_action_refused",
+        "message": "AXValue is not writable and no numeric stepping route is available"
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: press_key 'insert'",
+      "result": {
+        "isError": true,
+        "code": "delivery_failed",
+        "message": "Unknown key name: insert"
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: invoke_menu ['View','No Such Item']",
+      "result": {
+        "status": "refused",
+        "refusal": { "code": "menu_path_unavailable", "message": "path segment 1 was not found" }
+      },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: set_value with forged element_token",
+      "result": { "status": "refused", "refusal": { "code": "stale_element_token" } },
+      "verdict": "pass"
+    },
+    {
+      "case": "refusal: kill_app on process not launched by this runtime",
+      "result": {
+        "status": "refused",
+        "refusal": { "code": "foreign_process_termination_denied" }
+      },
+      "verdict": "pass"
+    }
+  ],
+  "axIndexCheck": {
+    "system_events_nested_enumeration": "'every UI element' reaches scroll area and digit buttons nested under group 1 of splitter group 1 of group 1 of window 1",
+    "system_events_direct_index": "scroll area 1 of window 1 => error -1719 invalid index; button \"7\" of window 1 => not addressable",
+    "display_element_gap": "the Calculator readout AXStaticText carries no frame, so it is absent from `elements` and only appears in `tree_markdown`; System Events addressing likewise cannot reach it by index",
+    "same_family_as_textedit_finding": true
+  },
+  "focusInvariant": {
+    "frontmost_before": "TextEdit",
+    "frontmost_after": "TextEdit",
+    "theft_free": true
+  },
+  "processes": {
+    "calculator_pid": 30509,
+    "preexisting_calculator_pid_untouched": 20803,
+    "driver_generations_seen": [58806, 63901],
+    "other_drivers_untouched": [8012, 27831]
+  },
+  "summary": "Calculator.app certified at rev 20: observation, element-token and coordinate targeting, semantic AX presses, background synthetic keys and a verified menu->clipboard chain, tri-state verify_state, five clean refusal classes, mid-flight synthetic-input cancellation with app-visible partial input, and zero focus theft. Anomalies: Calculator display is not in the bounded elements list (tree_markdown only), and System Events index addressing fails on nested children - the same AX-index fragility family as the TextEdit finding."
+}

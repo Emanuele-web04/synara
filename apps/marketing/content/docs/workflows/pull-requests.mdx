@@ -35,6 +35,8 @@ A partial refresh failure in one repository should not erase usable results from
 
 A task's PR badge opens its pull request in the right dock. PR status stays visible after a merge or close and refreshes after GitHub operations. Verify the current remote head and checks when an action depends on freshness.
 
+Hover over a chat in the sidebar to see its linked PR number, title, and status alongside the folder, branch, worktree, and model. Click the PR link in the hover card to open it in your browser.
+
 **Add to chat** and repair actions attach a PR context card to the composer. A card can cover the reference, review comments, failing checks, conflicts, or the combined repair context. Remove the card to omit that context. After sending, click the transcript card to inspect the exact prompt it supplied.
 
 For working-tree review, see [Workspace editor & diffs](/docs/features/workspace-editor), including compare-with-ref, line blame, and partial-diff warnings.
@@ -263,3 +265,9 @@ Inspect every review thread and the actual diff. A textual response does not res
   A merge, close, reopen, or comment affects other collaborators and automation. Verify the
   repository, pull request, account, and current head before confirming it.
 </Callout>
+
+## Status actions and feedback in 0.9.0
+
+PR controls expose actions appropriate to the current status and show pending feedback while an action runs. Hover cards on chat PR links provide context without losing the conversation. Commit authors remain visible even when GitHub does not link them to an account.
+
+Lookups are cached and badge polling is reduced. Recheck the current remote head, checks and mergeability before an irreversible action; a cached badge is not an exact-head release gate.

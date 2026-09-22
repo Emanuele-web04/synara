@@ -936,6 +936,16 @@ describe("normalizeClaudeModelOptions", () => {
 });
 
 describe("resolveApiModelId", () => {
+  it("uses the normalized legacy 1M override for model identity too", () => {
+    expect(
+      resolveApiModelId({
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+        options: { autoCompactWindow: "", contextWindow: "1m" },
+      }),
+    ).toBe("claude-opus-4-6[1m]");
+  });
+
   it("selects extended context for explicit 1M budgets", () => {
     expect(
       resolveApiModelId({
@@ -1050,13 +1060,40 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(true);
   });
 
-  it("does not restart for an auto-compact-budget-only change", () => {
+  it("restarts for an auto-compact-budget-only change", () => {
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "xhigh", autoCompactWindow: "200k" }),
         selection("claude-opus-4-8", { effort: "xhigh", autoCompactWindow: "1m" }),
       ),
+    ).toBe(true);
+  });
+
+  it("treats a blank modern override like its valid legacy fallback", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-fable-5-1", { autoCompactWindow: "200k" }),
+        selection("claude-fable-5-1", { autoCompactWindow: "", contextWindow: "200k" }),
+      ),
     ).toBe(false);
+  });
+
+  it("compares normalized context overrides for every transition", () => {
+    for (const previous of [undefined, "auto", "200k", "1m", "invalid"]) {
+      for (const next of [undefined, "auto", "200k", "1m", "invalid"]) {
+        const previousOverride = previous === "200k" || previous === "1m" ? previous : undefined;
+        const nextOverride = next === "200k" || next === "1m" ? next : undefined;
+        expect(
+          claudeSelectionRequiresRestart(
+            selection(
+              "claude-fable-5-1",
+              previous === undefined ? {} : { contextWindow: previous },
+            ),
+            selection("claude-fable-5-1", next === undefined ? {} : { autoCompactWindow: next }),
+          ),
+        ).toBe(previousOverride !== nextOverride);
+      }
+    }
   });
 
   it("restarts when max effort toggles on", () => {

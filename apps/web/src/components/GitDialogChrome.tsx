@@ -64,13 +64,13 @@ export function GitDialogHeading({
 }) {
   return (
     <DialogHeader className="gap-0.5">
-      <DialogTitle className="flex items-center justify-between gap-2 font-normal font-sans text-muted-foreground text-xs">
+      <DialogTitle className="flex items-center justify-between gap-2 font-normal font-sans text-muted-foreground text-ui leading-snug">
         <span className="truncate">{eyebrow}</span>
         {eyebrowTrailing}
       </DialogTitle>
       <DialogDescription
         className={cn(
-          "truncate font-medium text-sm",
+          "truncate font-medium text-ui-lg leading-snug",
           subjectMuted ? "text-muted-foreground italic" : "text-[var(--color-text-foreground)]",
         )}
       >
@@ -87,7 +87,7 @@ export function GitDialogBody({ children }: { children: ReactNode }) {
 
 /** Borderless authoring field (PR title/description, commit message). */
 export const GIT_DIALOG_FIELD_CLASS =
-  "w-full bg-transparent py-1 font-system-ui text-sm outline-none placeholder:text-muted-foreground/70";
+  "w-full bg-transparent py-1 font-system-ui text-ui leading-snug outline-none placeholder:text-muted-foreground/70";
 
 /** Hairline-separated action strip pinned to the bottom of a git dialog. */
 export function GitDialogActionList({ children }: { children: ReactNode }) {
@@ -118,7 +118,7 @@ export function GitDialogActionRow({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none transition-colors",
+        "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-ui leading-snug outline-none transition-colors",
         "hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:bg-[var(--color-background-button-secondary-hover)]",
         highlighted && "bg-[var(--color-background-button-secondary-hover)]",
         disabled && "pointer-events-none opacity-50",

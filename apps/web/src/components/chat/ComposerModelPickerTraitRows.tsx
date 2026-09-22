@@ -79,7 +79,6 @@ export function ComposerModelPickerTraitRows(props: {
   modelOptions: ProviderOptions | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  modelLabel: string;
   // "slider" swaps the Effort and Speed rows for the stepped slider card, which owns
   // both. Models without an effort ladder always keep the rows.
   effortControl: ComposerEffortControl;
@@ -207,7 +206,6 @@ export function ComposerModelPickerTraitRows(props: {
           provider={provider}
           threadId={threadId}
           model={model}
-          modelLabel={props.modelLabel}
           runtimeModel={props.runtimeModel}
           modelOptions={modelOptions}
           prompt={prompt}

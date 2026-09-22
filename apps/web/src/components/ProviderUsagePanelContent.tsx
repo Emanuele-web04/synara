@@ -45,12 +45,12 @@ export function ProviderUsagePanelContent(props: {
   return (
     <div className={cn("space-y-2", props.className)}>
       {props.showTitle !== false ? (
-        <div className="text-[length:var(--app-font-size-chat-meta,10px)] font-medium text-muted-foreground">
+        <div className="text-chat-meta font-medium text-muted-foreground">
           {providerUsageLabel(props.provider)}
         </div>
       ) : null}
       {props.notice ? (
-        <p className="flex items-start gap-1.5 text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-amber-600 dark:text-amber-300/90">
+        <p className="flex items-start gap-1.5 text-chat-meta leading-relaxed text-amber-600 dark:text-amber-300/90">
           <TriangleAlertIcon className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
           <span>{props.notice}</span>
         </p>
@@ -69,11 +69,11 @@ export function ProviderUsagePanelContent(props: {
           surface="popover"
         />
       ) : visibleRows.length === 0 && props.isLoading ? (
-        <p className="text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-muted-foreground">
+        <p className="text-chat-meta leading-relaxed text-muted-foreground">
           Scanning local usage data for the selected provider.
         </p>
       ) : visibleRows.length === 0 ? (
-        <p className="text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-muted-foreground">
+        <p className="text-chat-meta leading-relaxed text-muted-foreground">
           {props.emptyMessage ??
             (props.provider
               ? "No local usage data was found yet for the selected provider."
@@ -85,7 +85,7 @@ export function ProviderUsagePanelContent(props: {
           href={learnMoreHref}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1 pt-0.5 text-[length:var(--app-font-size-chat-meta,10px)] text-muted-foreground transition-colors hover:text-foreground"
+          className="flex items-center gap-1 pt-0.5 text-chat-meta text-muted-foreground transition-colors hover:text-foreground"
         >
           Learn more
           <ExternalLinkIcon className="size-3" />

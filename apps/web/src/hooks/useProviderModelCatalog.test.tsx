@@ -4,6 +4,7 @@
 
 import {
   DEFAULT_SERVER_SETTINGS,
+  MODEL_OPTIONS_BY_PROVIDER,
   type ProviderKind,
   type ProviderModelDescriptor,
 } from "@synara/contracts";
@@ -140,6 +141,67 @@ beforeEach(() => {
 });
 
 describe("useProviderModelCatalog", () => {
+  it.each([{ models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }] }, { models: [] }])(
+    "uses the Codex catalog without restoring retired built-ins: %j",
+    ({ models }) => {
+      mocks.useAppSettings.mockReturnValue({
+        settings: { ...SETTINGS, customCodexModels: ["private-model"] },
+        serverSettings: DEFAULT_SERVER_SETTINGS,
+      });
+      modelQueries.set("codex", {
+        ...EMPTY_QUERY,
+        data: { models, source: "codex-app-server", cached: false },
+      });
+
+      const [catalog] = readCatalogRenders({
+        selectedProvider: "codex",
+        discoveryEnabled: true,
+        modelHintByProvider: { codex: "gpt-5.4" },
+      });
+
+      expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual([
+        ...models.map((model) => model.slug),
+        "private-model",
+      ]);
+    },
+  );
+
+  it.each([
+    { ...EMPTY_QUERY, error: new Error("Codex unavailable") },
+    {
+      ...EMPTY_QUERY,
+      isLoading: true,
+      isPlaceholderData: true,
+      data: { models: [], source: "empty", cached: false },
+    },
+  ])("keeps the Codex fallback until discovery succeeds: %j", (query) => {
+    modelQueries.set("codex", query);
+
+    const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
+
+    expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual(
+      MODEL_OPTIONS_BY_PROVIDER.codex.map((model) => model.slug),
+    );
+  });
+
+  it("keeps the last Codex catalog when a background refresh fails", () => {
+    modelQueries.set("codex", {
+      ...EMPTY_QUERY,
+      data: {
+        models: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+        source: "codex-app-server",
+        cached: true,
+      },
+      error: new Error("Codex unavailable"),
+    });
+
+    const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
+
+    expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual([
+      "gpt-5.6-sol",
+    ]);
+  });
+
   it("keeps the foreground effect dependency stable across unrelated renders", () => {
     readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: true });
     const [first, second] = mocks.useEffect.mock.calls;

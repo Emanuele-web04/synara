@@ -3,7 +3,8 @@
 // Layer: Chat composer state helpers
 // Depends on: composer trait resolution and the starred model storage shape.
 
-import type { ProviderKind } from "@synara/contracts";
+import type { ModelSlug, ProviderKind } from "@synara/contracts";
+import { resolveSelectableModel } from "@synara/shared/model";
 
 import { type StarredModel, starredModelKey } from "~/lib/starredModels";
 import {
@@ -123,6 +124,7 @@ export type ComposerModelPickerRow = {
   key: string;
   provider: ProviderKind;
   model: string;
+  selectableModel: ModelSlug | null;
   name: string;
   /** Muted text after the name: the trait summary of a starred preset. */
   detail: string | null;
@@ -156,6 +158,7 @@ export function buildProviderTabRows(input: {
       key: `${provider}:${option.slug}`,
       provider,
       model: option.slug,
+      selectableModel: option.slug,
       name: option.name,
       detail: null,
       selected: option.slug === input.selectedModel,
@@ -180,9 +183,11 @@ export function buildStarredTabRows(input: {
   ) => ComposerTraitSelection["effortLevels"];
 }): ComposerModelPickerRow[] {
   return input.starredModels.flatMap((entry) => {
+    const options = input.modelOptionsByProvider[entry.provider];
+    const selectableModel = resolveSelectableModel(entry.provider, entry.model, options);
     const name =
-      input.modelOptionsByProvider[entry.provider].find((option) => option.slug === entry.model)
-        ?.name ?? formatProviderModelOptionName({ provider: entry.provider, slug: entry.model });
+      options.find((option) => option.slug === selectableModel)?.name ??
+      formatProviderModelOptionName({ provider: entry.provider, slug: entry.model });
     if (
       input.query.length > 0 &&
       !`${name} ${entry.model} ${entry.provider}`.toLowerCase().includes(input.query)
@@ -198,11 +203,13 @@ export function buildStarredTabRows(input: {
         key: starredModelKey(entry),
         provider: entry.provider,
         model: entry.model,
+        selectableModel,
         name,
-        detail: traitsLabel.length > 0 ? traitsLabel : null,
+        detail: selectableModel === null ? "Unavailable" : traitsLabel || null,
         selected:
+          selectableModel !== null &&
           entry.provider === input.current.provider &&
-          entry.model === input.current.model &&
+          selectableModel === input.current.model &&
           starredTraitsMatch(entry, input.current),
         groupLabel: null,
         preset: entry,

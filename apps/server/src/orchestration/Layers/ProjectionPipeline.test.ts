@@ -34,6 +34,7 @@ import {
   OrchestrationProjectionPipelineLive,
 } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   OrchestrationProjectionPipeline,
@@ -5770,6 +5771,166 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("synara-projection-pipeline-def
             yield* cursorOf(ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries),
             third.sequence,
           );
+        }),
+    );
+  },
+);
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("synara-human-recency-test-")))(
+  "human message recency",
+  (it) => {
+    it.effect(
+      "projects human sends separately and restores their timestamp after rollback and replay",
+      () =>
+        Effect.gen(function* () {
+          const pipeline = yield* OrchestrationProjectionPipeline;
+          const eventStore = yield* OrchestrationEventStore;
+          const sql = yield* SqlClient.SqlClient;
+          const append = makeScenarioAppender(
+            makeAppendAndProject(eventStore, pipeline),
+            "human-recency",
+          );
+          const threadId = ThreadId.makeUnsafe("human-recency");
+          const projectId = ProjectId.makeUnsafe("human-recency-project");
+          const at = (minute: number) => `2026-09-17T10:${String(minute).padStart(2, "0")}:00.000Z`;
+          yield* append({
+            type: "project.created",
+            aggregateKind: "project",
+            aggregateId: projectId,
+            occurredAt: at(0),
+            payload: {
+              projectId,
+              title: "Recency",
+              workspaceRoot: "/tmp/human-recency",
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: at(0),
+              updatedAt: at(0),
+            },
+          });
+          yield* append({
+            type: "thread.created",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: at(0),
+            payload: {
+              threadId,
+              projectId,
+              title: "Recency",
+              modelSelection: { provider: "codex", model: "gpt-5" },
+              runtimeMode: "full-access",
+              branch: null,
+              worktreePath: null,
+              createdAt: at(0),
+              updatedAt: at(0),
+            },
+          });
+          for (const [index, dispatchOrigin] of (
+            [undefined, "agent", "automation", "user"] as const
+          ).entries()) {
+            yield* append({
+              type: "thread.message-sent",
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt: at(index + 1),
+              payload: {
+                threadId,
+                messageId: MessageId.makeUnsafe(`human-recency-${index}`),
+                role: "user",
+                ...(dispatchOrigin ? { dispatchOrigin } : {}),
+                text: "Follow-up",
+                turnId: null,
+                streaming: false,
+                createdAt: at(index + 1),
+                updatedAt: at(index + 1),
+              },
+            });
+            const [row] =
+              yield* sql`SELECT latest_user_message_at, latest_human_message_at FROM projection_threads WHERE thread_id = ${threadId}`;
+            assert.deepStrictEqual(row, {
+              latest_user_message_at: at(index + 1),
+              latest_human_message_at: index === 3 ? at(4) : at(1),
+            });
+          }
+          const resendAt = at(6);
+          for (const [index, createdAt] of [resendAt, at(4)].entries()) {
+            yield* append({
+              type: "thread.message-sent",
+              aggregateKind: "thread",
+              aggregateId: threadId,
+              occurredAt: at(6 + index),
+              payload: {
+                threadId,
+                messageId: MessageId.makeUnsafe("human-recency-3"),
+                role: "user",
+                dispatchOrigin: "user",
+                text: "Edited and resent",
+                turnId: null,
+                streaming: false,
+                createdAt,
+                updatedAt: resendAt,
+              },
+            });
+          }
+          yield* append({
+            type: "thread.message-sent",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: at(8),
+            payload: {
+              threadId,
+              messageId: MessageId.makeUnsafe("human-recency-next"),
+              role: "user",
+              dispatchOrigin: "user",
+              text: "Later prompt",
+              turnId: null,
+              streaming: false,
+              createdAt: at(8),
+              updatedAt: at(8),
+            },
+          });
+          yield* append({
+            type: "thread.conversation-rolled-back",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: at(9),
+            payload: {
+              threadId,
+              messageId: MessageId.makeUnsafe("human-recency-next"),
+              numTurns: 1,
+            },
+          });
+          const assertResendSummary = Effect.gen(function* () {
+            const [row] =
+              yield* sql`SELECT latest_human_message_at FROM projection_threads WHERE thread_id = ${threadId}`;
+            assert.strictEqual(row?.latest_human_message_at, resendAt);
+            const [message] =
+              yield* sql`SELECT created_at, updated_at FROM projection_thread_messages WHERE thread_id = ${threadId} AND message_id = 'human-recency-3'`;
+            assert.deepStrictEqual(message, { created_at: at(4), updated_at: resendAt });
+          });
+          yield* assertResendSummary;
+          yield* sql`DELETE FROM projection_state`;
+          yield* pipeline.bootstrap;
+          yield* assertResendSummary;
+          yield* append({
+            type: "thread.conversation-rolled-back",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: at(10),
+            payload: { threadId, messageId: MessageId.makeUnsafe("human-recency-3"), numTurns: 1 },
+          });
+          const readSummary = Effect.gen(function* () {
+            const query = yield* ProjectionSnapshotQuery;
+            const shell = Option.getOrThrow(yield* query.getThreadShellById(threadId));
+            const detail = Option.getOrThrow(yield* query.getThreadDetailById(threadId));
+            assert.strictEqual(shell.latestHumanMessageAt, at(1));
+            assert.strictEqual(detail.latestHumanMessageAt, at(1));
+            assert.strictEqual(shell.latestUserMessageAt, at(3));
+          }).pipe(Effect.provide(OrchestrationProjectionSnapshotQueryLive));
+          yield* readSummary;
+          yield* sql`DELETE FROM projection_state`;
+          yield* pipeline.bootstrap;
+          yield* readSummary;
         }),
     );
   },

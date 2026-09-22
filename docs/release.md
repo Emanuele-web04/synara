@@ -51,6 +51,8 @@ This document covers build-only native validation and publishing desktop release
   - Clean-release publication fails closed if either the default Latest manifests or the dedicated `synara` aliases are missing.
 - Production desktop builds omit web/server/desktop source maps by default to keep update payloads small. Set `SYNARA_WEB_SOURCEMAP=1`, `SYNARA_SERVER_SOURCEMAP=1`, or `SYNARA_DESKTOP_SOURCEMAP=1` only for a diagnostic release that needs them.
 - macOS metadata note:
+  - Installed macOS apps persist alternate icon choices using `NSWorkspace` custom-icon metadata, and reapply the saved choice on launch after an update. Default removes the override so the bundled icon follows system appearance. This requires a writable app bundle; development Electron bundles are not customized.
+  - Custom icons leave signed `Contents` unchanged, but add Finder metadata that `codesign --verify --strict` rejects on a customized installation. Validate pristine distribution artifacts with the strict checks below. A local notarized app copy retained normal signature verification and Gatekeeper acceptance after customization; signed release/update testing must still cover this path.
   - The build initially emits `latest-mac.yml` for both Intel and Apple Silicon.
   - The workflow merges the per-arch macOS metadata, then keeps the merged manifest as `latest-mac.yml` and copies it to `synara-mac.yml` for stable releases.
   - The desktop build script repacks the macOS update `.zip` with `ditto`, verifies Electron framework symlinks, extracts the zip, validates the extracted app signature, patches the matching `latest-mac*.yml` hash/size, and removes the stale `.zip.blockmap`.
@@ -100,6 +102,27 @@ Use this before publication to validate the real native macOS, Linux, and Window
 5. Download the workflow artifacts and sanity-check installation on each OS.
 
 To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
+
+### macOS release toolchains
+
+Both native macOS release runners use macOS 15. Native helpers and the pinned
+Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. A separate macOS 26
+job compiles the architecture-independent Icon Composer catalog with Xcode 26.3
+from the same release checkout and passes it through a required workflow artifact.
+`SYNARA_MAC_ICON_CATALOG` points packaging at that catalog; a missing file fails
+the build. This avoids Apple's AssetRuntime framework crash on macOS 15 without
+changing the native SDK. Local builds without that variable compile icons with
+the selected Xcode on the local host.
+
+An older `actool` can exit successfully without creating `Assets.car`; that is a
+packaging failure, not permission to silently omit the Liquid Glass icon.
+
+### Linux native build dependencies
+
+The release job installs the Cua driver's OpenSSL, X11, XCB, xkbcommon and
+Wayland development libraries before provisioning. This matches the build
+prerequisites in `cua-linux-check.yml`; it does not qualify Linux Computer Use
+as a supported 0.9.0 feature.
 
 ### Local DMG appearance validation
 

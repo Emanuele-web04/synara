@@ -1,4 +1,10 @@
 import { Schema } from "effect";
+import type {
+  ImportProjectInput,
+  ImportProjectResult,
+  ListProjectImportsInput,
+  ListProjectImportsResult,
+} from "./projectImport";
 
 import type {
   AuthBearerBootstrapResult,
@@ -175,10 +181,32 @@ import type {
   DeviceTypeTextInput,
   ThreadDeviceState,
 } from "./device";
+import type {
+  ComputerActionResult,
+  ComputerControlEnabledResult,
+  ComputerEvent,
+  ComputerGetStateInput,
+  ComputerGetStatusInput,
+  ComputerInputClickInput,
+  ComputerInputKeyInput,
+  ComputerInputScrollInput,
+  ComputerListWindowsInput,
+  ComputerListWindowsResult,
+  ComputerProvisionInput,
+  ComputerProvisionResult,
+  ComputerSetControlEnabledInput,
+  ComputerState,
+  ComputerStatusResult,
+  ComputerThreadInput,
+  ThreadComputerState,
+} from "./computer";
+import type { ComputerGetAuditHistoryInput, ComputerGetAuditHistoryResult } from "./computerAudit";
 import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
+  ServerReadThreadDiagnosticsInput,
+  ServerReadThreadDiagnosticsResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -462,15 +490,34 @@ export interface DesktopAppSnapShortcutUpdateResult {
   availability: DesktopAppSnapShortcutAvailability;
 }
 
+export type DesktopAppSnapSettingsPane = "accessibility" | "input-monitoring" | "screen-recording";
+
+/** A macOS privacy grant the AppSnap helper can check or request. */
+export type DesktopAppSnapPermissionKind = "accessibility" | "inputMonitoring" | "screenRecording";
+
+export type DesktopAppSnapPermissionGuideState = "closed" | "granted";
+
 export interface DesktopAppSnapState {
   platform: DesktopAppSnapPlatform;
   supported: boolean;
   enabled: boolean;
   status: DesktopAppSnapStatus;
   shortcut: DesktopAppSnapShortcut | null;
+  /**
+   * Only present once a caller asked about Accessibility; the helper reports
+   * just the grants it was queried for, so an absent field means "not asked".
+   */
+  accessibilityPermission?: DesktopAppSnapPermission;
   inputMonitoringPermission: DesktopAppSnapPermission;
   screenRecordingPermission: DesktopAppSnapPermission;
   message: string | null;
+  /** Explicit setup failure; unrelated AppSnap capture errors do not set this. */
+  permissionSetupErrorCode?:
+    | "permission_setup_bundle_unavailable"
+    | "permission_setup_registration_unresolved"
+    | "permission_setup_identity_mismatch";
+  /** Name macOS shows for this build in System Settings permission lists. */
+  appDisplayName: string;
 }
 
 export interface DesktopAppSnapCapture {
@@ -602,6 +649,29 @@ export type DesktopSafariAccessInfo =
   | { supported: false }
   | { supported: true; appName: string; appPath: string | null };
 
+/**
+ * One frame of the desktop app's native computer preview tap: a complete JPEG
+ * of the driven window. `seq` is monotonic per host process; the first frame
+ * marks stream start and frames simply stop when the tap ends or dies. Sent
+ * over the desktop bridge only, never through the computer WebSocket path.
+ */
+export interface DesktopComputerPreviewFrame {
+  readonly windowId: number;
+  readonly seq: number;
+  readonly jpeg: Uint8Array;
+}
+
+/**
+ * Agent cursor colors mirrored from the renderer to the desktop main process.
+ * Each channel is a `#rrggbb` string; an omitted channel keeps the driver's
+ * stock treatment for it, and `null` is the stock monochrome cursor.
+ */
+export interface DesktopAgentCursorStyle {
+  readonly fill?: string;
+  readonly rim?: string;
+  readonly shadow?: string;
+}
+
 export interface DesktopBridge {
   safariAccess?: {
     getInfo: () => Promise<DesktopSafariAccessInfo>;
@@ -652,6 +722,24 @@ export interface DesktopBridge {
     setPreference: (enabled: boolean) => Promise<DesktopCustomTitleBarState>;
     relaunch: () => Promise<void>;
   };
+  /**
+   * Live desktop frames from the native computer frame tap, desktop app only.
+   * Plain browser clients never see this member; their preview keeps drawing
+   * the WebSocket stills stream.
+   */
+  computerPreview?: {
+    onFrame: (listener: (frame: DesktopComputerPreviewFrame) => void) => () => void;
+  };
+  /**
+   * Desktop-owned computer preferences. `setCursorStyle` mirrors the agent
+   * cursor colors to the main process, which persists them for the next Cua
+   * driver session and live-pushes them when a session is already open.
+   * `null` restores the stock cursor. Plain browser clients never see this
+   * member; their settings stay local and the driver is not running there.
+   */
+  computer?: {
+    setCursorStyle: (style: DesktopAgentCursorStyle | null) => Promise<void>;
+  };
   onMenuAction: (listener: (action: string) => void) => () => void;
   onQuitConfirmationRequest: (
     listener: (request: DesktopQuitConfirmationRequest) => void,
@@ -670,17 +758,39 @@ export interface DesktopBridge {
     show: (input: DesktopNotificationInput) => Promise<boolean>;
   };
   appSnap: {
-    getState: () => Promise<DesktopAppSnapState>;
+    captureCurrentApp: (requestId: string) => Promise<DesktopAppSnapCapture>;
+    cancelCapture: (requestId: string) => Promise<void>;
+    getState: (
+      permissions?: readonly DesktopAppSnapPermissionKind[],
+    ) => Promise<DesktopAppSnapState>;
     setEnabled: (enabled: boolean) => Promise<DesktopAppSnapState>;
     checkShortcut: (
       shortcut: DesktopAppSnapShortcut,
     ) => Promise<DesktopAppSnapShortcutAvailability>;
     setShortcut: (shortcut: DesktopAppSnapShortcut) => Promise<DesktopAppSnapShortcutUpdateResult>;
-    requestPermissions: () => Promise<DesktopAppSnapState>;
+    requestPermissions: (
+      permissions?: readonly DesktopAppSnapPermissionKind[],
+    ) => Promise<DesktopAppSnapState>;
+    /**
+     * Reads current grants without prompting, then walks the floating permission
+     * coach through each pane still missing a grant — opening its System
+     * Settings page and raising that pane's prompt as each step begins, so macOS
+     * never shows several permission dialogs at once.
+     */
+    startPermissionSetup: (
+      permissions: readonly DesktopAppSnapPermissionKind[],
+    ) => Promise<DesktopAppSnapState>;
     listPendingCaptures: () => Promise<DesktopAppSnapCapture[]>;
     acknowledgeCapture: (captureId: string) => Promise<void>;
     listWindows: () => Promise<DesktopAppSnapWindowEntry[]>;
     captureWindow: (input: { windowId: number }) => Promise<DesktopAppSnapCapture>;
+    openPermissionSettings: (pane: DesktopAppSnapSettingsPane) => Promise<boolean>;
+    restartApp: () => Promise<void>;
+    showPermissionGuide: (pane: DesktopAppSnapSettingsPane) => Promise<void>;
+    hidePermissionGuide: () => Promise<void>;
+    onPermissionGuideState: (
+      listener: (state: DesktopAppSnapPermissionGuideState) => void,
+    ) => () => void;
     onCaptured: (listener: (capture: DesktopAppSnapCapture) => void) => () => void;
     onError: (listener: (error: DesktopAppSnapErrorEvent) => void) => () => void;
     onState: (listener: (state: DesktopAppSnapState) => void) => () => void;
@@ -882,6 +992,9 @@ export interface NativeApi {
       input: ServerConsumeCodexResetCreditInput,
     ) => Promise<ServerConsumeCodexResetCreditResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
+    readThreadDiagnostics: (
+      input: ServerReadThreadDiagnosticsInput,
+    ) => Promise<ServerReadThreadDiagnosticsResult>;
     generateThreadRecap: (
       input: ServerGenerateThreadRecapInput,
     ) => Promise<ServerGenerateThreadRecapResult>;
@@ -923,6 +1036,8 @@ export interface NativeApi {
     importThread: (
       input: OrchestrationImportThreadInput,
     ) => Promise<OrchestrationImportThreadResult>;
+    listProjectImports: (input: ListProjectImportsInput) => Promise<ListProjectImportsResult>;
+    importProject: (input: ImportProjectInput) => Promise<ImportProjectResult>;
     regenerateThreadTitle: (
       input: OrchestrationRegenerateThreadTitleInput,
     ) => Promise<OrchestrationRegenerateThreadTitleResult>;
@@ -995,5 +1110,23 @@ export interface NativeApi {
     describeUi: (input: DeviceDescribeUiInput) => Promise<DeviceDescribeUiResult>;
     scrollToElement: (input: DeviceScrollToElementInput) => Promise<DeviceScrollToElementResult>;
     onEvent: (callback: (event: DeviceEvent) => void) => () => void;
+  };
+  computer: {
+    /** Thread-independent backend status for surfaces outside any conversation. */
+    getStatus: (input: ComputerGetStatusInput) => Promise<ComputerStatusResult>;
+    getAuditHistory: (
+      input: ComputerGetAuditHistoryInput,
+    ) => Promise<ComputerGetAuditHistoryResult>;
+    provision: (input: ComputerProvisionInput) => Promise<ComputerProvisionResult>;
+    setControlEnabled: (
+      input: ComputerSetControlEnabledInput,
+    ) => Promise<ComputerControlEnabledResult>;
+    getThreadState: (input: ComputerThreadInput) => Promise<ThreadComputerState>;
+    getState: (input: ComputerGetStateInput) => Promise<ComputerState>;
+    /** User input from the computer dock pane; needs no agent turn in flight. */
+    inputClick: (input: ComputerInputClickInput) => Promise<ComputerActionResult>;
+    inputScroll: (input: ComputerInputScrollInput) => Promise<ComputerActionResult>;
+    inputKey: (input: ComputerInputKeyInput) => Promise<ComputerActionResult>;
+    onEvent: (callback: (event: ComputerEvent) => void) => () => void;
   };
 }

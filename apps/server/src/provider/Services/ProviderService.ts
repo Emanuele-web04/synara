@@ -18,6 +18,8 @@ import type {
   ProviderForkThreadResult,
   ProviderInterruptTurnInput,
   ProviderKind,
+  ModelSelection,
+  RuntimeMode,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderRuntimeEvent,
@@ -26,6 +28,7 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderStartOptions,
   ProviderSteerSubagentInput,
   ProviderStopSessionInput,
   ProviderStopTaskInput,
@@ -134,6 +137,18 @@ export interface ProviderServiceShape {
   readonly forkThread?: (
     input: ProviderForkThreadInput,
   ) => Effect.Effect<ProviderForkThreadResult | null, ProviderServiceError>;
+
+  /** Copy an external native conversation without ever resuming the original. */
+  readonly importExternalThread?: (input: {
+    readonly threadId: ThreadId;
+    readonly provider: "codex" | "claudeAgent";
+    readonly externalThreadId: string;
+    readonly sourceCwd: string;
+    readonly cwd?: string;
+    readonly modelSelection: ModelSelection;
+    readonly providerOptions?: ProviderStartOptions;
+    readonly runtimeMode: RuntimeMode;
+  }) => Effect.Effect<ProviderForkThreadResult, ProviderServiceError>;
 
   /**
    * Interrupt a running provider turn.

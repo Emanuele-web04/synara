@@ -462,9 +462,13 @@ export const createComposerDraftStoreState =
       if (!draftThread?.promotedTo) {
         return;
       }
-      get().clearDraftThread(threadId);
+      // Promotion removes the scratch content, but the same server thread
+      // keeps its explicit Computer choice for subsequent turns.
+      get().clearDraftThread(threadId, {
+        preserveComputerControl: draftThread.promotedTo === threadId,
+      });
     },
-    clearDraftThread: (threadId) => {
+    clearDraftThread: (threadId, options) => {
       if (threadId.length === 0) {
         return;
       }
@@ -489,8 +493,22 @@ export const createComposerDraftStoreState =
           state.draftThreadsByThreadId;
         const { [threadId]: _removedComposerDraft, ...restDraftsByThreadId } =
           state.draftsByThreadId;
+        const computerControl = options?.preserveComputerControl
+          ? _removedComposerDraft?.enableComputerControl
+          : undefined;
         return {
-          draftsByThreadId: restDraftsByThreadId,
+          draftsByThreadId:
+            computerControl === undefined
+              ? restDraftsByThreadId
+              : {
+                  ...restDraftsByThreadId,
+                  [threadId]: {
+                    ...createEmptyThreadDraft(),
+                    enableComputerControl: computerControl,
+                    computerControlMode: _removedComposerDraft?.computerControlMode,
+                    computerControlGeneration: _removedComposerDraft?.computerControlGeneration,
+                  },
+                },
           draftThreadsByThreadId: restDraftThreadsByThreadId,
           projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
         };
@@ -1051,6 +1069,63 @@ export const createComposerDraftStoreState =
         const nextDraft: ComposerThreadDraftState = {
           ...base,
           interactionMode: nextInteractionMode,
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
+    setComputerControlMode: (threadId, mode, options) => {
+      if (threadId.length === 0) return;
+      // Preserve frozen one-request intent when restoring a queue item or
+      // preparing an explicit invocation; only Settings opt-in uses chat mode.
+      set((state) => ({
+        draftsByThreadId: {
+          ...state.draftsByThreadId,
+          [threadId]: {
+            ...(state.draftsByThreadId[threadId] ?? createEmptyThreadDraft()),
+            computerControlMode: mode,
+            ...(options?.generation !== undefined
+              ? { computerControlGeneration: options.generation }
+              : {}),
+            enableComputerControl: mode !== "off",
+            ...(mode === "off" && options?.revokeQueued
+              ? {
+                  queuedTurns: (state.draftsByThreadId[threadId]?.queuedTurns ?? []).map(
+                    (turn) => ({
+                      ...turn,
+                      computerControlMode: "off" as const,
+                      enableComputerControl: false,
+                    }),
+                  ),
+                }
+              : {}),
+          },
+        },
+      }));
+    },
+    setEnableComputerControl: (threadId, enabled) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        // Always record the choice, even an explicit false: the flag is tri-state
+        // and an untouched draft follows the new-chat default instead.
+        const base = state.draftsByThreadId[threadId] ?? createEmptyThreadDraft();
+        if (
+          base.enableComputerControl === enabled &&
+          base.computerControlMode === (enabled ? "chat" : "off")
+        ) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...base,
+          enableComputerControl: enabled,
+          computerControlMode: enabled ? "chat" : "off",
         };
         const nextDraftsByThreadId = { ...state.draftsByThreadId };
         if (shouldRemoveDraft(nextDraft)) {
