@@ -393,30 +393,10 @@ export function SingleChatSurface(props: {
     [requestImmediateDockHydration, openPane, props.threadId],
   );
 
-  // Ctrl/Cmd+P opens the file-name search palette; Ctrl/Cmd+Shift+F opens the
-  // snippet (content) search. Registered with capture so it wins over page-level
-  // defaults (print, browser find) while the chat surface is mounted.
-  useEffect(() => {
-    // Editor view returns before rendering the palette, so leave its shortcuts
-    // available to the editor instead of swallowing them invisibly.
-    if (editorViewActive) return;
-
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.repeat || event.altKey) return;
-      const isPrimaryModifier = event.ctrlKey || event.metaKey;
-      if (!isPrimaryModifier) return;
-      const key = event.key.toLowerCase();
-      if (key !== "p" && key !== "f") return;
-      if (key === "f" && !event.shiftKey) return;
-      if (key === "p" && event.shiftKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      setSearchPaletteMode(key === "p" ? "files" : "snippets");
-      setSearchPaletteOpen(true);
-    };
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [editorViewActive]);
+  const handleOpenWorkspaceSearch = useCallback((mode: WorkspaceSearchPaletteMode) => {
+    setSearchPaletteMode(mode);
+    setSearchPaletteOpen(true);
+  }, []);
 
   const handleOpenEditorView = () => {
     void navigate({
@@ -1212,6 +1192,7 @@ export function SingleChatSurface(props: {
               onToggleBrowser={handleToggleBrowser}
               onOpenBrowserUrl={handleOpenBrowserUrl}
               onOpenTurnDiff={handleOpenTurnDiff}
+              onOpenWorkspaceSearch={handleOpenWorkspaceSearch}
               {...(hasDeviceSupport ? { onToggleDevice: handleToggleDevice } : {})}
               onSplitSurface={handleSplitSurface}
               viewModeAction={{

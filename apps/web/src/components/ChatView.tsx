@@ -127,6 +127,7 @@ import {
   useThreadComputerAvailability,
   useThreadComputerControlGeneration,
 } from "../computerStateStore";
+import type { WorkspaceSearchPaletteMode } from "./WorkspaceSearchPalette";
 import { formatShortcutLabel, shortcutLabelForCommand } from "../keybindings";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
 import { appendComposerPromptText } from "../lib/chatReferences";
@@ -499,6 +500,7 @@ interface ChatViewProps {
   onToggleDevicePanel?: () => void;
   onOpenBrowserUrl?: (url: string) => void;
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
+  onOpenWorkspaceSearch?: ((mode: WorkspaceSearchPaletteMode) => void) | undefined;
   onSplitSurface?: () => void;
   onMaximizeSurface?: () => void;
   viewModeAction?: {
@@ -534,6 +536,7 @@ export default function ChatView({
   onToggleDevicePanel,
   onOpenBrowserUrl,
   onOpenTurnDiffPanel,
+  onOpenWorkspaceSearch,
   onSplitSurface,
   onMaximizeSurface,
   viewModeAction: viewModeActionProp,
@@ -3570,6 +3573,7 @@ export default function ChatView({
     closeActiveWorkspaceView,
     setTerminalWorkspaceTab,
     onToggleDiff,
+    onOpenWorkspaceSearch,
     commitAndPushTriggerRef,
     showGitActions,
     isGitRepo,

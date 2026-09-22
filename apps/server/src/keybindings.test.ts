@@ -116,6 +116,27 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("defaults search.files and search.snippets outside terminal focus", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "search.files"),
+        {
+          key: "mod+p",
+          command: "search.files",
+          when: "!terminalFocus",
+        },
+      );
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "search.snippets"),
+        {
+          key: "mod+shift+f",
+          command: "search.snippets",
+          when: "!terminalFocus",
+        },
+      );
+    }),
+  );
+
   it.effect("persists both platform variants of the commit-and-push binding", () =>
     Effect.sync(() => {
       assert.deepEqual(
