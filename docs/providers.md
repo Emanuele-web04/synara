@@ -197,6 +197,19 @@ keeps the message on hold. If delivery is uncertain, Synara does not automatical
 See [cache recovery behavior and verification](claude-cache-recovery.md) for the implementation
 boundaries and remaining live validation.
 
+### OpenCode
+
+Synara uses OpenCode's legacy endpoint family, including `/session` and MCP
+for the Synara tools attached to managed sessions. Startup checks `GET /provider`
+and rejects a server that reports that route as unavailable; this does not identify
+the CLI's version. The SDK is pinned exactly (`1.18.31`) — bump it deliberately,
+never by range.
+
+The `opencode` executable resolves from `PATH` first, then the standard install
+locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,
+Volta, asdf, mise, proto, Deno, nvm/fnm). Set an explicit binary path in
+provider settings only when the install lives somewhere else entirely.
+
 ### Claude Artifacts, `/design` and `/slides`
 
 Claude Code keeps [Artifacts](https://code.claude.com/docs/en/artifacts) off by default for Agent

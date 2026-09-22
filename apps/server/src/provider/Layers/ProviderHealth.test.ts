@@ -1,3 +1,6 @@
+import * as OS from "node:os";
+import { join } from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
@@ -1997,6 +2000,22 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         Effect.provide(
           mockSpawnerLayer((args, command) => {
             assert.strictEqual(command, "/custom/bin/opencode");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("expands a tilde opencode binary path for the version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckOpenCodeProviderStatus("~/bin/opencode");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, join(OS.homedir(), "bin/opencode"));
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);

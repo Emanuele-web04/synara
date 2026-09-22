@@ -3,9 +3,13 @@
 // Layer: Provider runtime tests
 // Exports: Vitest suites for opencodeRuntime.ts
 
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Deferred, Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effect";
+import { systemError } from "effect/PlatformError";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 import { type ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
@@ -15,7 +19,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   buildOpenCodePermissionRules,
-  buildOpenCodeServerProcessEnv,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   makeOpenCodeRuntimeLive,
@@ -25,6 +28,10 @@ import {
   supportsVerboseModelsCommandFailure,
   toOpenCodeFileParts,
 } from "./opencodeRuntime.ts";
+import {
+  buildOpenCodeServerProcessEnv,
+  openCodeBinarySearchDirectories,
+} from "./providerBinaryResolution.ts";
 
 const encoder = new TextEncoder();
 
@@ -142,6 +149,7 @@ function openCodeRuntimePoolTestLayer(state: {
         reserveLoopbackPort: () => Effect.succeed(59_000),
         findAvailablePort: () => Effect.succeed(59_000),
       },
+      fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
       teardownProcessTree: async ({ rootPid }) => {
         const url = processUrls.get(rootPid);
         if (url) state.killUrls.push(url);
@@ -240,7 +248,7 @@ describe("buildOpenCodeServerProcessEnv", () => {
     });
 
     expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
-    expect(env.PATH).toBe("/usr/bin");
+    expect(env.PATH?.split(delimiter)[0]).toBe("/usr/bin");
   });
 
   it("preserves an explicitly configured config-content environment value", () => {
@@ -266,6 +274,38 @@ describe("buildOpenCodeServerProcessEnv", () => {
     expect(env.SYNARA_AUTH_TOKEN).toBeUndefined();
     expect(env.SYNARA_BROWSER_USE_PIPE_PATH).toBeUndefined();
   });
+
+  it("appends install directories containing the CLI to PATH", () => {
+    const home = mkdtempSync(join(tmpdir(), "synara-opencode-env-"));
+    try {
+      mkdirSync(join(home, ".opencode", "bin"), { recursive: true });
+      const binary = join(home, ".opencode", "bin", "opencode");
+      writeFileSync(binary, "#!/bin/sh\n");
+      chmodSync(binary, 0o755);
+      const env = buildOpenCodeServerProcessEnv({
+        baseEnv: {
+          PATH: "/usr/bin",
+          HOME: home,
+        },
+      });
+      expect(env.PATH?.split(":")).toContain(join(home, ".opencode", "bin"));
+      expect(env.PATH?.startsWith("/usr/bin")).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("lists the installer and program dirs under Windows", () => {
+    const dirs = openCodeBinarySearchDirectories({
+      platform: "win32",
+      env: {
+        USERPROFILE: "C:\\Users\\test",
+        LOCALAPPDATA: "C:\\Users\\test\\AppData\\Local",
+      },
+    });
+    expect(dirs).toContain("C:\\Users\\test\\.opencode\\bin");
+    expect(dirs).toContain("C:\\Users\\test\\AppData\\Local\\Programs\\opencode");
+  });
 });
 
 describe("OpenCodeRuntime startup diagnostics", () => {
@@ -287,6 +327,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
         ).pipe(
           Effect.provide(
             makeOpenCodeRuntimeLive({
+              fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
               teardownProcessTree: async () => ({
                 escalated: false,
                 signalErrors: [],
@@ -386,6 +427,7 @@ describe("OpenCodeRuntime startup diagnostics", () => {
       ).pipe(
         Effect.provide(
           makeOpenCodeRuntimeLive({
+            fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
             teardownProcessTree: async () => ({
               escalated: false,
               signalErrors: [],
@@ -403,6 +445,169 @@ describe("OpenCodeRuntime startup diagnostics", () => {
     );
 
     expect(server.url).toBe("http://127.0.0.1:58123");
+  });
+
+  it("fails startup when the server does not serve the legacy surface", async () => {
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime
+            .startOpenCodeServerProcess({
+              binaryPath: "opencode",
+              hostname: "127.0.0.1",
+              port: 58_123,
+            })
+            .pipe(Effect.flip);
+        }),
+      ).pipe(
+        Effect.provide(
+          makeOpenCodeRuntimeLive({
+            fetchImpl: () => Promise.resolve(new Response("{}", { status: 404 })),
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
+          }).pipe(
+            Layer.provide(
+              mockOpenCodeServerSpawnerLayer({
+                stdout: "server listening on http://127.0.0.1:58123\n",
+                stderr: "",
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(OpenCodeRuntimeError.is(error)).toBe(true);
+    expect(error.detail).toContain("does not serve the legacy surface");
+    expect(error.detail).toContain("GET /provider → HTTP 404");
+    expect(error.detail).not.toContain("2.x");
+  });
+
+  it("retries the surface probe through a transient failure before succeeding", async () => {
+    let probeCalls = 0;
+    const server = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime.startOpenCodeServerProcess({
+            binaryPath: "opencode",
+            hostname: "127.0.0.1",
+            port: 58_123,
+          });
+        }),
+      ).pipe(
+        Effect.provide(
+          makeOpenCodeRuntimeLive({
+            fetchImpl: () => {
+              probeCalls += 1;
+              return Promise.resolve(new Response("{}", { status: probeCalls === 1 ? 500 : 200 }));
+            },
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
+          }).pipe(
+            Layer.provide(
+              mockOpenCodeServerSpawnerLayer({
+                stdout: "server listening on http://127.0.0.1:58123\n",
+                stderr: "",
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(server.url).toBe("http://127.0.0.1:58123");
+    expect(probeCalls).toBe(2);
+  });
+
+  it("reports a distinct probe error for non-surface statuses like 401", async () => {
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime
+            .startOpenCodeServerProcess({
+              binaryPath: "opencode",
+              hostname: "127.0.0.1",
+              port: 58_123,
+            })
+            .pipe(Effect.flip);
+        }),
+      ).pipe(
+        Effect.provide(
+          makeOpenCodeRuntimeLive({
+            fetchImpl: () => Promise.resolve(new Response("{}", { status: 401 })),
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
+          }).pipe(
+            Layer.provide(
+              mockOpenCodeServerSpawnerLayer({
+                stdout: "server listening on http://127.0.0.1:58123\n",
+                stderr: "",
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(OpenCodeRuntimeError.is(error)).toBe(true);
+    expect(error.detail).toContain("did not pass the legacy surface probe");
+    expect(error.detail).toContain("HTTP 401");
+    expect(error.detail).toContain("rejected the credentials");
+    expect(error.detail).not.toContain("2.x");
+  });
+
+  it("adds the install hint to spawn permission failures", async () => {
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          return yield* runtime
+            .startOpenCodeServerProcess({
+              binaryPath: "opencode",
+              hostname: "127.0.0.1",
+              port: 58_123,
+            })
+            .pipe(Effect.flip);
+        }),
+      ).pipe(
+        Effect.provide(
+          makeOpenCodeRuntimeLive({
+            teardownProcessTree: async () => ({
+              escalated: false,
+              signalErrors: [],
+            }),
+          }).pipe(
+            Layer.provide(
+              Layer.succeed(
+                ChildProcessSpawner.ChildProcessSpawner,
+                ChildProcessSpawner.make(() =>
+                  Effect.fail(
+                    systemError({
+                      _tag: "PermissionDenied",
+                      module: "ChildProcess",
+                      method: "spawn",
+                      description: "spawn opencode: EACCES",
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(OpenCodeRuntimeError.is(error)).toBe(true);
+    expect(error.detail).toContain("install it (https://opencode.ai)");
   });
 
   it("recognizes the OpenCode 2.x verbose-models flag error", () => {
@@ -474,6 +679,7 @@ describe("OpenCodeRuntime local server pool", () => {
         reserveLoopbackPort: () => Effect.succeed(59_000),
         findAvailablePort: () => Effect.succeed(59_000),
       },
+      fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
       teardownProcessTree: async ({ rootPid }) => {
         teardownCalls += 1;
         expect(rootPid).toBe(0x7fff_fffe);

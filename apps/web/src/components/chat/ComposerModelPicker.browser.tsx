@@ -369,8 +369,16 @@ describe("ComposerModelPicker", () => {
       await expect.element(slider).toBeVisible();
       expect(trigger.element().getBoundingClientRect().width).toBeCloseTo(closedWidth, 1);
 
-      slider.element().focus();
-      await userEvent.keyboard("{ArrowRight}{ArrowRight}");
+      // The panel still settles its own focus right after open and can steal it
+      // back mid-typing, so step the thumb directly; each step must commit before
+      // the next, since back-to-back keydowns would read the stale value.
+      slider
+        .element()
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+      slider
+        .element()
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
       await expect.element(slider).toHaveAttribute("aria-valuetext", "Extra High");
       expect(trigger.element().getBoundingClientRect().width).toBeCloseTo(closedWidth, 1);
     } finally {
