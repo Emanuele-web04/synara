@@ -114,7 +114,8 @@ function GroupsIndexRouteView() {
   };
 
   // A hidden Groups tab must never start the restore/create flow: a direct /groups link would
-  // otherwise race the sidebar's hidden-section redirect and could mint a hidden group draft.
+  // otherwise mint a hidden group draft. This route owns the redirect — the sidebar does not
+  // also bounce hidden-section views, which could mint a stray home draft.
   const navigate = useNavigate();
   const groupsSectionVisible = appSettings.showGroupsSection;
   useEffect(() => {

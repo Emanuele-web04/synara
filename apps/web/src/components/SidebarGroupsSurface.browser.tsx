@@ -213,10 +213,10 @@ let mountedRoot: { unmount(): void | Promise<void> } | null = null;
 
 describe("SidebarGroupsSurface", () => {
   beforeEach(() => {
-    resetStudioAdoptionDispatchedIdsForTests();
     harness.dispatchCommand.mockClear();
     harness.listSummaries.mockReset();
     harness.listSummaries.mockResolvedValue({ summaries: [] });
+    resetStudioAdoptionDispatchedIdsForTests();
     useStore.setState({ projects: [], threadsHydrated: true });
     useProjectAgentSummariesStore.setState({ summariesByProjectId: new Map(), loaded: true });
     usePinnedProjectAgentsStore.setState({ pinnedProjectAgentIds: [] });
@@ -330,7 +330,7 @@ describe("SidebarGroupsSurface", () => {
     });
   });
 
-  it("adopts the legacy Studio container by retitling it Groups once", async () => {
+  it("adopts the legacy Studio container by retitling it Groups once across remounts", async () => {
     const legacyStudio = makeGroupProject({
       id: STUDIO_ID,
       kind: "studio",
@@ -349,8 +349,8 @@ describe("SidebarGroupsSurface", () => {
       );
     });
 
-    // The once-per-session guard is module-level: remounting the surface must not
-    // dispatch the rename a second time.
+    // The adoption marks the id for the session, so unmounting and remounting the
+    // surface must not re-dispatch the rename.
     await mount({ projects: [legacyStudio], threadsHydrated: true });
 
     const calls = harness.dispatchCommand.mock.calls as ReadonlyArray<[unknown]>;

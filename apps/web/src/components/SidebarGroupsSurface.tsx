@@ -56,6 +56,8 @@ import type { SidebarThreadSortOrder } from "../appSettings";
 // while the server has not yet echoed the new title.
 const studioAdoptionDispatchedIds = new Set<string>();
 
+// Browser tests remount the surface inside one test and must start from a clean
+// slate — the module-level set otherwise leaks "already dispatched" across mounts.
 export function resetStudioAdoptionDispatchedIdsForTests(): void {
   studioAdoptionDispatchedIds.clear();
 }
@@ -109,8 +111,9 @@ export function SidebarGroupsSurface({
 
   // Adopt the pre-Groups Studio container in place: retitle it "Groups" once so its
   // existing chats stay under it. Idempotent — the row stops matching once renamed.
-  // Gated on threadsHydrated: that only flips once the shell snapshot has arrived over
-  // a live transport, so the dispatch below cannot fire against a connecting API.
+  // threadsHydrated doubles as the connected-api signal: the hydrated snapshot only
+  // lands after the API negotiated, so gating on it retries adoption once the
+  // transport is live instead of silently returning on a null api.
   useEffect(() => {
     if (!threadsHydrated) {
       return;
@@ -153,13 +156,25 @@ export function SidebarGroupsSurface({
     if (trimmed.length === 0) {
       return;
     }
-    const projectId = await createGroupProject({ title: trimmed }).catch(() => null);
+    let projectId: ProjectId | null = null;
+    try {
+      projectId = await createGroupProject({ title: trimmed });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to create group",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      });
+      // Re-throw so the dialog stays open for a retry instead of closing silently.
+      throw error;
+    }
     if (!projectId) {
       toastManager.add({
         type: "error",
         title: "Unable to create group",
+        description: "The Groups workspace is not ready yet — try again in a moment.",
       });
-      return;
+      throw new Error("Group creation is not ready yet.");
     }
     onOpenGroupSettings(projectId, "onboarding");
   };
@@ -177,6 +192,8 @@ export function SidebarGroupsSurface({
             icon={NewThreadIcon}
             iconClassName="size-3.5"
             label="New group"
+            // The /groups route gates on the same root: without it
+            // createGroupProject can only fail, so hold the action off.
             disabled={!groupsWorkspaceRoot}
             onClick={() => {
               setNewGroupDialogOpen(true);

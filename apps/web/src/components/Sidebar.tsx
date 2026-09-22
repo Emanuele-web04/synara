@@ -1619,7 +1619,28 @@ export default function Sidebar() {
     projectId: ProjectId;
     mode: "onboarding" | "edit";
   } | null>(null);
-  const pendingCoordinatorActivationCancelRef = useRef<(() => void) | null>(null);
+  // A coordinator activation scheduled from onboarding outlives the dialog: its
+  // poll/timeout must not yank the user to that thread after they have moved on,
+  // so keep its cancel handle and drop it on unmount and on the first navigation
+  // after it was scheduled.
+  const pendingCoordinatorActivationRef = useRef<{
+    readonly cancel: () => void;
+    readonly pathname: string;
+  } | null>(null);
+  useEffect(() => {
+    const pending = pendingCoordinatorActivationRef.current;
+    if (pending && pending.pathname !== pathname) {
+      pending.cancel();
+      pendingCoordinatorActivationRef.current = null;
+    }
+  }, [pathname]);
+  useEffect(
+    () => () => {
+      pendingCoordinatorActivationRef.current?.cancel();
+      pendingCoordinatorActivationRef.current = null;
+    },
+    [],
+  );
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
   // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
@@ -2514,10 +2535,6 @@ export default function Sidebar() {
       resolveBackToThreadsTarget,
     ],
   );
-
-  // The /groups route owns the hidden-section redirect: a second owner here would
-  // double-fire when showGroupsSection flips off on /groups and could mint a stray
-  // home draft through handleSidebarViewChange("threads").
 
   useEffect(() => {
     // Persisted paths make homeDir truthy
@@ -4233,20 +4250,6 @@ export default function Sidebar() {
     }, 0);
     return () => window.clearTimeout(settle);
   }, [isOnSettings, routeSearch.splitViewId, routeThreadId]);
-
-  // A pending coordinator activation only makes sense while the user is still where the
-  // dialog left them — once they navigate, or the sidebar unmounts, drop it.
-  useEffect(() => {
-    pendingCoordinatorActivationCancelRef.current?.();
-    pendingCoordinatorActivationCancelRef.current = null;
-  }, [routeThreadId]);
-  useEffect(
-    () => () => {
-      pendingCoordinatorActivationCancelRef.current?.();
-      pendingCoordinatorActivationCancelRef.current = null;
-    },
-    [],
-  );
 
   const handleThreadClick = useCallback(
     (event: MouseEvent, threadId: ThreadId, orderedProjectThreadIds: readonly ThreadId[]) => {
@@ -6981,27 +6984,30 @@ export default function Sidebar() {
             if (projectAgentDialogState?.mode !== "onboarding") return;
             const coordinatorThreadId = overview.config?.coordinatorThreadId;
             if (coordinatorThreadId) {
-              pendingCoordinatorActivationCancelRef.current?.();
-              pendingCoordinatorActivationCancelRef.current = activateThreadWhenHydrated({
-                hasThread: () =>
-                  useStore.getState().sidebarThreadSummaryById[coordinatorThreadId] !== undefined,
-                subscribe: (listener) => useStore.subscribe(listener),
-                // The sidebar intent path resolves against the summary map captured at
-                // render time; a thread created by this dialog hydrates later, so wait
-                // for its row and then open it directly.
-                activate: () => {
-                  prewarmThreadDetailForIntent(coordinatorThreadId);
-                  setOptimisticActiveThreadId(coordinatorThreadId);
-                  setSelectionAnchor(coordinatorThreadId);
-                  openChatThreadPage(coordinatorThreadId);
-                  rememberLastThreadRouteNow({ threadId: coordinatorThreadId });
-                  void navigate({
-                    to: "/$threadId",
-                    params: { threadId: coordinatorThreadId },
-                    search: (previous) => ({ ...previous, splitViewId: undefined }),
-                  });
-                },
-              });
+              pendingCoordinatorActivationRef.current?.cancel();
+              pendingCoordinatorActivationRef.current = {
+                pathname,
+                cancel: activateThreadWhenHydrated({
+                  hasThread: () =>
+                    useStore.getState().sidebarThreadSummaryById[coordinatorThreadId] !== undefined,
+                  subscribe: (listener) => useStore.subscribe(listener),
+                  // The sidebar intent path resolves against the summary map captured at
+                  // render time; a thread created by this dialog hydrates later, so wait
+                  // for its row and then open it directly.
+                  activate: () => {
+                    prewarmThreadDetailForIntent(coordinatorThreadId);
+                    setOptimisticActiveThreadId(coordinatorThreadId);
+                    setSelectionAnchor(coordinatorThreadId);
+                    openChatThreadPage(coordinatorThreadId);
+                    rememberLastThreadRouteNow({ threadId: coordinatorThreadId });
+                    void navigate({
+                      to: "/$threadId",
+                      params: { threadId: coordinatorThreadId },
+                      search: (previous) => ({ ...previous, splitViewId: undefined }),
+                    });
+                  },
+                }),
+              };
             }
           }}
         />
