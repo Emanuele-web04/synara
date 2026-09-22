@@ -711,11 +711,7 @@ describe("Cua macOS host retirement", () => {
       },
       { signal: controller.signal },
     ).catch((error: unknown) => error);
-    for (let attempt = 0; attempt < 200; attempt++) {
-      if ((await f.events().catch(() => [])).some((event) => event.event === "observe")) break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    expect((await f.events()).some((event) => event.event === "observe")).toBe(true);
+    await waitForEvent(f, "observe");
     controller.abort();
     expect(await observation).toBeInstanceOf(Error);
     await new Promise((resolve) => setTimeout(resolve, 100));
