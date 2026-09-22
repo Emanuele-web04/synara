@@ -410,12 +410,12 @@ export function providerModelsQueryOptions(input: {
   enabled?: boolean;
   priority?: ProviderModelDiscoveryPriority | undefined;
 }) {
-  // OMP's catalog is global (`omp models --json` is not project-scoped — the
-  // server caches it by binary path only), so cwd is intentionally excluded
-  // from its query key and request. This keeps a single cache entry shared
-  // across threads/projects and lets an app-startup warm land on the exact key
-  // the composer reads.
-  const cwd = input.provider === "omp" ? null : (input.cwd ?? null);
+  // The OMP catalog is global (`omp models --json` is not project-scoped), but
+  // `modelRoles` merge a project layer (`<cwd>/.omp/config.yml`), so cwd stays
+  // in the query key for roles to reflect the active project. The server still
+  // shares one catalog cache across cwds, so a per-cwd entry only pays for the
+  // role config reads.
+  const cwd = input.cwd ?? null;
   const queryKey = providerDiscoveryQueryKeys.models(
     input.provider,
     input.binaryPath ?? null,

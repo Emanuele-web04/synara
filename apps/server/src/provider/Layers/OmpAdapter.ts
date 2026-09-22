@@ -14,7 +14,6 @@ import {
   type ProviderInteractionMode,
   type ProviderListCommandsResult,
   type ProviderListModelsResult,
-  type OmpRoleDescriptor,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -113,7 +112,8 @@ import {
   applyOmpAcpInteractionMode,
   applyOmpAcpModelSelection,
   makeOmpAcpRuntime,
-  parseOmpAgentConfigModelRoles,
+  ompModelRolesMapFromConfig,
+  parseOmpModelRoles,
   parseOmpCliModelList,
   resolveOmpCliBinaryPath,
   type OmpAcpRuntimeSettings,
@@ -835,6 +835,7 @@ export function makeOmpAdapter(
             agentGatewayCredentials,
             input.threadId,
             PROVIDER,
+            input,
           );
           yield* Effect.addFinalizer(() =>
             sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
@@ -2109,82 +2110,120 @@ export function makeOmpAdapter(
           // override when unset so omp uses its own default/ambient env.
           const agentDir = input.agentDir?.trim() || ompSettings.agentDir?.trim() || undefined;
           const cacheKey = [binaryPath, agentDir ?? ""].join("\u0000");
+          // The catalog is global (keyed by binary path + agent dir), but role
+          // values live in layered config files — resolve roles per request so
+          // project-scoped `modelRoles` participate when a cwd is provided.
           const cached = modelDiscoveryCache.get(cacheKey);
-          if (cached && cached.expiresAt > Date.now()) {
+          const catalogFromCache = cached !== undefined && cached.expiresAt > Date.now();
+          if (catalogFromCache) {
             log.info("model/list cache hit", {
               cacheKey,
               modelCount: cached.result.models.length,
             });
-            return { ...cached.result, cached: true };
           }
-          const result = yield* runOmpCliModelList(binaryPath, agentDir).pipe(
-            Effect.timeoutOption(OMP_MODEL_DISCOVERY_TIMEOUT_MS),
-            Effect.flatMap(
-              Option.match({
-                onNone: () =>
-                  Effect.fail(
-                    new ProviderAdapterRequestError({
-                      provider: PROVIDER,
-                      method: "model/list",
-                      detail: "Timed out while discovering Omp models via CLI.",
+          const catalog: ProviderListModelsResult =
+            cached !== undefined && catalogFromCache
+              ? cached.result
+              : yield* runOmpCliModelList(binaryPath, agentDir).pipe(
+                  Effect.timeoutOption(OMP_MODEL_DISCOVERY_TIMEOUT_MS),
+                  Effect.flatMap(
+                    Option.match({
+                      onNone: () =>
+                        Effect.fail(
+                          new ProviderAdapterRequestError({
+                            provider: PROVIDER,
+                            method: "model/list",
+                            detail: "Timed out while discovering Omp models via CLI.",
+                          }),
+                        ),
+                      onSome: (discovered) => Effect.succeed(discovered),
                     }),
                   ),
-                onSome: (discovered) => Effect.succeed(discovered),
-              }),
-            ),
-            Effect.mapError((cause) =>
-              cause instanceof ProviderAdapterRequestError
-                ? cause
-                : new ProviderAdapterRequestError({
-                    provider: PROVIDER,
-                    method: "model/list",
-                    detail:
-                      cause instanceof Error && cause.message
-                        ? cause.message
-                        : "OMP model discovery failed unexpectedly.",
+                  Effect.mapError((cause) =>
+                    cause instanceof ProviderAdapterRequestError
+                      ? cause
+                      : new ProviderAdapterRequestError({
+                          provider: PROVIDER,
+                          method: "model/list",
+                          detail:
+                            cause instanceof Error && cause.message
+                              ? cause.message
+                              : "OMP model discovery failed unexpectedly.",
+                        }),
+                  ),
+                  Effect.tapError((cause) =>
+                    Effect.sync(() => {
+                      if (cause instanceof ProviderAdapterRequestError) {
+                        log.warn("model/list failed", {
+                          method: cause.method,
+                          detail: cause.detail,
+                        });
+                      } else {
+                        log.warn("model/list failed", { detail: String(cause) });
+                      }
+                    }),
+                  ),
+                );
+          if (!catalogFromCache) {
+            log.info("model/list success", {
+              modelCount: catalog.models.length,
+              source: catalog.source,
+            });
+            setOmpDiscoveryCacheEntry(modelDiscoveryCache, cacheKey, {
+              expiresAt: Date.now() + OMP_MODEL_DISCOVERY_CACHE_MS,
+              result: catalog,
+            });
+          }
+          // OMP roles are file-backed `modelRoles`, not part of the CLI catalog.
+          // OMP merges the global layer (`<agentDir>/config.yml`, or
+          // `~/.omp/agent` when no override is configured) with the project
+          // layer (`<cwd>/.omp/config.yml`), project winning per role name;
+          // `config.yaml` is a valid alternate filename in both spots.
+          // Mirror OMP's getAgentDir() precedence: the configured override
+          // (spawned as PI_CODING_AGENT_DIR), then the ambient env the child
+          // inherits anyway, then <PI_CONFIG_DIR|".omp">/agent under home.
+          const rolesAgentDir =
+            agentDir ||
+            process.env.PI_CODING_AGENT_DIR?.trim() ||
+            nodePath.join(nodeOs.homedir(), process.env.PI_CONFIG_DIR?.trim() || ".omp", "agent");
+          const readOmpRolesMap = (dir: string): Effect.Effect<Record<string, unknown>> =>
+            Effect.gen(function* () {
+              // `config.yml` then `config.yaml` — OMP's MAIN_CONFIG_FILENAMES
+              // order; the first file that loads wins even when it parses to
+              // empty settings, and a read/parse failure stops the fallback.
+              for (const filename of ["config.yml", "config.yaml"]) {
+                const configPath = nodePath.join(dir, filename);
+                if (!(yield* fileSystem.exists(configPath).pipe(Effect.orElseSucceed(() => false))))
+                  continue;
+                const text = yield* fileSystem.readFileString(configPath).pipe(
+                  Effect.catch((error) => {
+                    log.warn("model/list roles read failed", {
+                      agentDir: dir,
+                      detail: error instanceof Error ? error.message : String(error),
+                    });
+                    return Effect.succeed(null);
                   }),
-            ),
-            Effect.tapError((cause) =>
-              Effect.sync(() => {
-                if (cause instanceof ProviderAdapterRequestError) {
-                  log.warn("model/list failed", {
-                    method: cause.method,
-                    detail: cause.detail,
-                  });
-                } else {
-                  log.warn("model/list failed", { detail: String(cause) });
-                }
-              }),
-            ),
-          );
-          log.info("model/list success", {
-            modelCount: result.models.length,
-            source: result.source,
-          });
-          // OMP roles are file-backed (`<agentDir>/config.yml` modelRoles), not
-          // part of the CLI catalog — read them from the resolved agent dir,
-          // which defaults to `~/.omp/agent` when no override is configured.
-          const rolesAgentDir = agentDir ?? nodePath.join(nodeOs.homedir(), ".omp", "agent");
-          const roles = yield* fileSystem
-            .readFileString(nodePath.join(rolesAgentDir, "config.yml"))
-            .pipe(
-              Effect.map((text) => parseOmpAgentConfigModelRoles(text)),
-              Effect.catch((error) =>
-                Effect.sync((): ReadonlyArray<OmpRoleDescriptor> => {
-                  log.warn("model/list roles read failed", {
-                    agentDir: rolesAgentDir,
+                );
+                if (text === null) return {};
+                try {
+                  return ompModelRolesMapFromConfig(text);
+                } catch (error) {
+                  log.warn("model/list roles parse failed", {
+                    agentDir: dir,
                     detail: error instanceof Error ? error.message : String(error),
                   });
-                  return [];
-                }),
-              ),
-            );
-          const resultWithRoles: ProviderListModelsResult = { ...result, roles };
-          setOmpDiscoveryCacheEntry(modelDiscoveryCache, cacheKey, {
-            expiresAt: Date.now() + OMP_MODEL_DISCOVERY_CACHE_MS,
-            result: resultWithRoles,
-          });
-          return resultWithRoles;
+                  return {};
+                }
+              }
+              return {};
+            });
+          const globalRoles = yield* readOmpRolesMap(rolesAgentDir);
+          const rolesCwd = input.cwd?.trim();
+          const projectRoles = rolesCwd
+            ? yield* readOmpRolesMap(nodePath.join(rolesCwd, ".omp"))
+            : {};
+          const roles = parseOmpModelRoles({ ...globalRoles, ...projectRoles }, catalog.models);
+          return { ...catalog, roles, ...(catalogFromCache ? { cached: true as const } : {}) };
         }),
       );
 

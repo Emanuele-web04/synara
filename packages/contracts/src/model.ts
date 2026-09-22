@@ -27,8 +27,12 @@ export const PI_THINKING_LEVEL_OPTIONS = [
   "max",
 ] as const;
 export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
+// `auto` is an OMP thinking sentinel (not an effort level): it maps to the
+// `thinking` config option's Auto choice, which no model catalog emits as an
+// effort but role selectors (`model:auto`) may pin.
 export const OMP_THINKING_LEVEL_OPTIONS = [
   "off",
+  "auto",
   "minimal",
   "low",
   "medium",

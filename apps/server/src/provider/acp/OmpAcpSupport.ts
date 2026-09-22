@@ -13,6 +13,7 @@ import {
   type ProviderInteractionMode,
   type ProviderModelDescriptor,
   type OmpRoleDescriptor,
+  type OmpThinkingLevel,
   OMP_THINKING_LEVEL_OPTIONS,
 } from "@synara/contracts";
 import { Effect, Layer, Option, Schema, Scope, ServiceMap } from "effect";
@@ -240,6 +241,7 @@ export function applyOmpAcpInteractionMode<E>(input: {
  */
 const OMP_THINKING_LABELS: Readonly<Record<string, string>> = {
   off: "Off",
+  auto: "Auto",
   minimal: "Minimal",
   low: "Low",
   medium: "Medium",
@@ -274,34 +276,260 @@ type OmpConfigYamlValue = ReturnType<typeof YAML.parse>;
 const OmpConfigRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const toOmpConfigRecordOption = Schema.decodeUnknownOption(OmpConfigRecordSchema);
 
+/** OMP accepts a role value as a string or an all-strings array (a comma-joined
+ * fallback chain); anything else is skipped, matching `modelRoleValueFromUnknown`. */
+function ompRolePatternsFromUnknown(rawValue: unknown): ReadonlyArray<string> {
+  const entries =
+    typeof rawValue === "string"
+      ? [rawValue]
+      : Array.isArray(rawValue)
+        ? rawValue.every((entry): entry is string => typeof entry === "string")
+          ? rawValue
+          : []
+        : [];
+  return entries
+    .flatMap((entry) => entry.split(","))
+    .map((pattern) => pattern.trim())
+    .filter((pattern) => pattern.length > 0);
+}
+
 /**
- * Parses OMP `modelRoles` entries (from `~/.omp/agent/config.yml`) into role
- * descriptors. Each value is `<provider/id>[:<thinking-level>]`; a trailing
- * segment is split off as the thinking level only when it matches a known OMP
- * thinking level. Entries whose value is not a non-empty trimmed string are
- * skipped. Insertion order is preserved so the picker lists roles in config order.
+ * Split a trailing `:<level>` selector off a pattern, like OMP's
+ * `splitThinkingSuffix` — every known thinking level plus the guarded `:auto`
+ * sentinel and `:max` tier split here; the colon must sit strictly after
+ * `minColonIndex` (role-alias callers pass the alias prefix length).
+ */
+function splitOmpThinkingSuffix(
+  pattern: string,
+  minColonIndex = 0,
+): { base: string; level?: OmpThinkingLevel } {
+  const lastColon = pattern.lastIndexOf(":");
+  if (lastColon <= minColonIndex) return { base: pattern };
+  const suffix = pattern.slice(lastColon + 1);
+  const level = OMP_THINKING_LEVEL_OPTIONS.find((candidate) => candidate === suffix);
+  return level === undefined ? { base: pattern } : { base: pattern.slice(0, lastColon), level };
+}
+
+function ompCatalogParts(model: ProviderModelDescriptor): { provider: string; id: string } {
+  const slash = model.slug.indexOf("/");
+  return slash === -1
+    ? { provider: "", id: model.slug }
+    : { provider: model.slug.slice(0, slash), id: model.slug.slice(slash + 1) };
+}
+
+/**
+ * OMP `matchModel`'s exact phases: a `provider/id` selector, then a bare id —
+ * both case-insensitive. A `provider/…` pattern stays locked to that provider
+ * when it exists in the catalog (`isProviderLockedCrossMatch`), so a bare id
+ * matching only another provider's model does not resolve.
+ */
+function matchOmpCatalogExact(
+  pattern: string,
+  catalog: ReadonlyArray<ProviderModelDescriptor>,
+): ProviderModelDescriptor | undefined {
+  const lower = pattern.toLowerCase();
+  const ref = catalog.find((model) => model.slug.toLowerCase() === lower);
+  if (ref) return ref;
+  const slash = pattern.indexOf("/");
+  const lockedProvider =
+    slash > 0 &&
+    catalog.some(
+      (model) =>
+        ompCatalogParts(model).provider.toLowerCase() === pattern.slice(0, slash).toLowerCase(),
+    )
+      ? pattern.slice(0, slash).toLowerCase()
+      : undefined;
+  return catalog.find(
+    (model) =>
+      ompCatalogParts(model).id.toLowerCase() === lower &&
+      (lockedProvider === undefined ||
+        ompCatalogParts(model).provider.toLowerCase() === lockedProvider),
+  );
+}
+
+/**
+ * OMP `matchModel`'s non-exact phases, approximated for picker display:
+ * `provider/partial` substring-matches ids within that provider (a miss there
+ * exhausts the pattern — the provider lock does not fall through), and anything
+ * else substring-matches id or name. Catalog order decides ties where OMP
+ * scores fuzzy hits and consults usage ranks.
+ */
+function matchOmpCatalogModel(
+  pattern: string,
+  catalog: ReadonlyArray<ProviderModelDescriptor>,
+  exactOnly: boolean,
+): ProviderModelDescriptor | undefined {
+  const exact = matchOmpCatalogExact(pattern, catalog);
+  if (exact) return exact;
+  if (exactOnly) return undefined;
+  const slash = pattern.indexOf("/");
+  if (slash > 0) {
+    const provider = pattern.slice(0, slash).toLowerCase();
+    const providerModels = catalog.filter(
+      (model) => ompCatalogParts(model).provider.toLowerCase() === provider,
+    );
+    if (providerModels.length > 0) {
+      const idPattern = pattern.slice(slash + 1).toLowerCase();
+      return providerModels.find((model) =>
+        ompCatalogParts(model).id.toLowerCase().includes(idPattern),
+      );
+    }
+    // The prefix is not a catalog provider — the slash stays part of the id.
+  }
+  const lower = pattern.toLowerCase();
+  return catalog.find(
+    (model) =>
+      ompCatalogParts(model).id.toLowerCase().includes(lower) ||
+      model.name.toLowerCase().includes(lower),
+  );
+}
+
+interface OmpRolePatternResult {
+  readonly model: string;
+  readonly thinkingLevel?: OmpThinkingLevel | undefined;
+  /** Set when resolution went through OMP's invalid-`:suffix` fallback path. */
+  readonly warning?: string | undefined;
+}
+
+/**
+ * Resolve one role pattern against the discovered catalog, mirroring OMP's
+ * `parseModelPatternWithContext`: whole-pattern exact first (literal ids keep a
+ * `:level`), then the guarded thinking-suffix split — whose recursion strips
+ * the level when the inner match carries a warning — then the non-exact
+ * catalog match, and finally the invalid-`:suffix` fallback that resolves the
+ * prefix and reports a warning like OMP does.
+ */
+function matchOmpRolePattern(
+  pattern: string,
+  catalog: ReadonlyArray<ProviderModelDescriptor>,
+): OmpRolePatternResult | undefined {
+  const exact = matchOmpCatalogModel(pattern, catalog, true);
+  if (exact) return { model: exact.slug };
+
+  const { base, level } = splitOmpThinkingSuffix(pattern);
+  if (level !== undefined) {
+    // A literal catalog id can itself end in `:<level>` (`router:low`) — a
+    // fuzzy hit on the full pattern whose id does wins over the split.
+    const literal = matchOmpCatalogModel(pattern, catalog, false);
+    if (literal !== undefined && ompCatalogParts(literal).id.toLowerCase().endsWith(`:${level}`)) {
+      return { model: literal.slug };
+    }
+    const inner = matchOmpRolePattern(base, catalog);
+    if (inner === undefined) return undefined;
+    return {
+      model: inner.model,
+      ...(inner.warning === undefined ? { thinkingLevel: level } : {}),
+      ...(inner.warning !== undefined ? { warning: inner.warning } : {}),
+    };
+  }
+
+  const fuzzy = matchOmpCatalogModel(pattern, catalog, false);
+  if (fuzzy) return { model: fuzzy.slug };
+
+  // Invalid `:suffix` — drop it and resolve the prefix; OMP resolves the model
+  // and warns that the configured level is ignored.
+  const lastColon = pattern.lastIndexOf(":");
+  if (lastColon > 0) {
+    const inner = matchOmpRolePattern(pattern.slice(0, lastColon), catalog);
+    if (inner !== undefined) {
+      return { model: inner.model, warning: `invalid thinking level in "${pattern}"` };
+    }
+  }
+  return undefined;
+}
+
+/** OMP's built-in role ids — an alias resolves against these or any configured `modelRoles` key. */
+const OMP_BUILTIN_ROLE_IDS: ReadonlySet<string> = new Set([
+  "advisor",
+  "commit",
+  "default",
+  "dictation",
+  "image",
+  "judge",
+  "memory",
+  "plan",
+  "slow",
+  "smol",
+  "speech",
+  "task",
+  "tiny",
+  "vision",
+  "web",
+]);
+
+/**
+ * OMP `resolveConfiguredRolePattern`: `@role`, `pi/role`, and `*` (the default
+ * role) expand to that role's configured chain — recursively, and dropping
+ * cycles. The alias's own `:level` suffix rides onto every expanded pattern.
+ * A pattern that is not a role alias stays literal, and one whose alias is
+ * unresolvable (unconfigured role — OMP would consult its built-in priority
+ * defaults, which live in the agent, not the catalog) contributes nothing.
+ */
+function expandOmpRolePattern(
+  pattern: string,
+  modelRoles: Record<string, unknown>,
+  visited: ReadonlySet<string>,
+): ReadonlyArray<string> | undefined {
+  const prefixLength = pattern.startsWith("@")
+    ? 1
+    : pattern.startsWith("pi/")
+      ? 3
+      : pattern === "*"
+        ? 0
+        : -1;
+  if (prefixLength === -1) return [pattern];
+  const { base, level } = splitOmpThinkingSuffix(pattern, prefixLength);
+  const candidate = base === "*" ? "default" : base.slice(prefixLength);
+  if (!OMP_BUILTIN_ROLE_IDS.has(candidate) && !Object.hasOwn(modelRoles, candidate)) {
+    return [pattern];
+  }
+  if (visited.has(candidate)) return undefined;
+  const nextVisited = new Set(visited).add(candidate);
+  const configured = Object.hasOwn(modelRoles, candidate)
+    ? ompRolePatternsFromUnknown(modelRoles[candidate])
+    : [];
+  const expanded = configured.flatMap(
+    (nested) => expandOmpRolePattern(nested, modelRoles, nextVisited) ?? [],
+  );
+  return level !== undefined ? expanded.map((nested) => `${nested}:${level}`) : expanded;
+}
+
+/**
+ * Parses OMP `modelRoles` entries (from `<agentDir>/config.yml` or
+ * `<cwd>/.omp/config.yml`) into role descriptors. Each value is a fallback
+ * chain — a comma-separated string or an all-strings array, with `@role` /
+ * `pi/role` / `*` aliases expanded against the same map — whose first entry
+ * resolving against `catalog` wins, carrying its `:level` thinking suffix when
+ * present. Unresolvable chains surface their first entry so committing them
+ * fails against the provider the way OMP's unresolved-role warning does.
+ * Insertion order is preserved so the picker lists roles in config order.
  */
 export function parseOmpModelRoles(
   modelRoles: OmpConfigYamlValue,
+  catalog: ReadonlyArray<ProviderModelDescriptor> = [],
 ): ReadonlyArray<OmpRoleDescriptor> {
   const record = Option.getOrUndefined(toOmpConfigRecordOption(modelRoles));
   if (record === undefined) return [];
   const roles: OmpRoleDescriptor[] = [];
   for (const [name, rawValue] of Object.entries(record)) {
-    if (!Schema.is(Schema.String)(rawValue)) continue;
-    const value = rawValue.trim();
-    if (!value) continue;
-    const lastColon = value.lastIndexOf(":");
-    if (lastColon > 0) {
-      const maybeLevel = value.slice(lastColon + 1);
-      const model = value.slice(0, lastColon);
-      const level = OMP_THINKING_LEVEL_OPTIONS.find((candidate) => candidate === maybeLevel);
-      if (level !== undefined && model) {
-        roles.push({ name, model, thinkingLevel: level });
-        continue;
-      }
+    const patterns = ompRolePatternsFromUnknown(rawValue);
+    if (patterns.length === 0) continue;
+    const expanded = patterns.flatMap(
+      (pattern) => expandOmpRolePattern(pattern, record, new Set()) ?? [],
+    );
+    const resolved = expanded
+      .map((pattern) => matchOmpRolePattern(pattern, catalog))
+      .find((match) => match !== undefined);
+    if (resolved) {
+      roles.push({
+        name,
+        model: resolved.model,
+        ...(resolved.thinkingLevel !== undefined ? { thinkingLevel: resolved.thinkingLevel } : {}),
+      });
+      continue;
     }
-    roles.push({ name, model: value });
+    const { base, level } = splitOmpThinkingSuffix(patterns[0]!);
+    roles.push({ name, model: base, ...(level !== undefined ? { thinkingLevel: level } : {}) });
   }
   return roles;
 }
@@ -312,15 +540,16 @@ const OmpAgentConfigSchema = Schema.Struct({
 const toOmpAgentConfigOption = Schema.decodeUnknownOption(OmpAgentConfigSchema);
 
 /**
- * Reads the `modelRoles` map out of `~/.omp/agent/config.yml` text. An
- * unparseable YAML document throws to the caller; a document whose
- * `modelRoles` subtree is absent or malformed yields no roles.
+ * Reads the raw `modelRoles` map out of a `config.yml`/`config.yaml` text for
+ * layer merging — callers combine global and project maps (project wins per
+ * role name, matching OMP's layer order) before resolving with
+ * {@link parseOmpModelRoles}. An unparseable YAML document throws to the
+ * caller; a document whose `modelRoles` subtree is absent or malformed yields
+ * an empty map.
  */
-export function parseOmpAgentConfigModelRoles(
-  configYaml: string,
-): ReadonlyArray<OmpRoleDescriptor> {
+export function ompModelRolesMapFromConfig(configYaml: string): Record<string, unknown> {
   const config = Option.getOrUndefined(toOmpAgentConfigOption(YAML.parse(configYaml)));
-  return parseOmpModelRoles(config?.modelRoles);
+  return Option.getOrUndefined(toOmpConfigRecordOption(config?.modelRoles)) ?? {};
 }
 
 export function parseOmpCliModelList(stdout: string): ReadonlyArray<ProviderModelDescriptor> {

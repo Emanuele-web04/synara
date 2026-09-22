@@ -463,9 +463,10 @@ function ProviderModelDiscoveryWarmer() {
   // takes ~3s to fetch (`omp models --json` cold-start), so it is the lone
   // provider that doesn't render instantly when the model picker opens. Warm it
   // at app startup — ahead of the picker opening — so the catalog is ready by
-  // the time the user browses to OMP. React Query dedupes by query key, and
-  // OMP's key is cwd-agnostic, so this prefetch lands on the exact cache entry
-  // the composer reads on mount.
+  // the time the user browses to OMP. The server caches that catalog globally
+  // (keyed by binary path + agent dir), so any warm primes it for every later
+  // query; `modelRoles` merge a per-cwd project layer, so the picker's own
+  // cwd-scoped query key then only pays for the config reads on top.
   const { settings } = useAppSettings();
   const queryClient = useQueryClient();
   const ompHidden = settings.hiddenProviders.includes("omp");
