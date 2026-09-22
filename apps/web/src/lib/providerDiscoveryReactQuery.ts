@@ -467,11 +467,14 @@ export function providerModelsQueryOptions(input: {
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
+    // OMP keeps the standard 30s staleness: the CLI catalog is server-cached 5min,
+    // but file-backed modelRoles are re-resolved per request, so config edits must
+    // reach the server on the ordinary focus/mount refetch cadence.
     retry: providerModelDiscoveryRetry(input.provider),
     staleTime:
       input.provider === "devin"
         ? (query) => (query.state.data?.error ? 0 : 30_000)
-        : input.provider === "droid" || input.provider === "omp"
+        : input.provider === "droid"
           ? 5 * 60_000
           : 30_000,
     // Devin deliberately returns a usable static catalog when CLI discovery
@@ -486,11 +489,13 @@ export function providerModelsQueryOptions(input: {
       : {}),
     // Droid discovery starts a disposable ACP session, so it must not refetch
     // on focus. OMP discovery is a cheap `omp models` subprocess (server-cached
-    // 5min; modelRoles are re-read per request), so it refetches on focus and
-    // on an interval while observed — otherwise config/role edits only appear
-    // after a remount.
+    // 5min; modelRoles are re-read per request), so it refetches on focus and,
+    // where the renderer's timers allow, on an interval while observed —
+    // otherwise config/role edits only appear after an app restart.
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
-    ...(input.provider === "omp" ? { refetchOnWindowFocus: true, refetchInterval: 60_000 } : {}),
+    ...(input.provider === "omp"
+      ? { refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: true }
+      : {}),
     // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
     // providerModelPrefetch.ts (not imported: that module imports from here).
     gcTime: 30 * 60_000,
