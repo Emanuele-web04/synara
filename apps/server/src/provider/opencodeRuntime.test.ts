@@ -5,7 +5,7 @@
 
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { Deferred, Duration, Effect, Exit, Fiber, Layer, Scope, Sink, Stream } from "effect";
@@ -248,7 +248,7 @@ describe("buildOpenCodeServerProcessEnv", () => {
     });
 
     expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
-    expect(env.PATH).toBe("/usr/bin");
+    expect(env.PATH?.split(delimiter)[0]).toBe("/usr/bin");
   });
 
   it("preserves an explicitly configured config-content environment value", () => {
@@ -482,7 +482,8 @@ describe("OpenCodeRuntime startup diagnostics", () => {
 
     expect(OpenCodeRuntimeError.is(error)).toBe(true);
     expect(error.detail).toContain("does not serve the legacy surface");
-    expect(error.detail).toContain("2.x");
+    expect(error.detail).toContain("GET /provider → HTTP 404");
+    expect(error.detail).not.toContain("2.x");
   });
 
   it("retries the surface probe through a transient failure before succeeding", async () => {

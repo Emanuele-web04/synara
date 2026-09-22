@@ -168,10 +168,6 @@ function windowsPackageManagerBinaryDirectories(env: NodeJS.ProcessEnv): Readonl
   return directories;
 }
 
-// Enumerating version-manager roots hits the filesystem on every call; the
-// directory list only changes with the environment, so memoize on the inputs.
-const binarySearchDirectoriesCache = new Map<string, ReadonlyArray<string>>();
-
 /**
  * Directories the `opencode` CLI can be installed into: the installer's own
  * `~/.opencode/bin`-style location first, then every package-manager global
@@ -183,18 +179,8 @@ export function openCodeBinarySearchDirectories(
 ): ReadonlyArray<string> {
   const resolved = resolveOptions(options);
   const env = resolved.env;
-  const key = [
-    resolved.platform,
-    env.HOME,
-    env.USERPROFILE,
-    env.LOCALAPPDATA,
-    env.APPDATA,
-    env.PNPM_HOME,
-    env.npm_config_prefix,
-    env.ChocolateyInstall,
-  ].join("\0");
-  const cached = binarySearchDirectoriesCache.get(key);
-  if (cached !== undefined) return cached;
+  // Version-manager directories can appear after installation without an
+  // environment change. Refresh them so health checks and launches see new CLIs.
   const installerDirs: string[] = [];
   if (resolved.platform === "win32") {
     const userProfile = env.USERPROFILE?.trim();
@@ -209,7 +195,6 @@ export function openCodeBinarySearchDirectories(
     if (home) installerDirs.push(join(home, ".opencode", "bin"));
     installerDirs.push(...posixPackageManagerBinaryDirectories(env));
   }
-  binarySearchDirectoriesCache.set(key, installerDirs);
   return installerDirs;
 }
 

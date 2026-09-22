@@ -1086,10 +1086,9 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           });
         }
 
-        // A 2.x CLI serves only the `/api/*` engine — Synara drives the legacy
-        // endpoint family, so probe `provider.list`. Only a definitive absence
-        // (404/405) means 2.x; refused connections and other statuses can be a
-        // startup race, so retry before failing with a distinct error.
+        // Synara needs the legacy endpoint family, so probe `provider.list`.
+        // A missing route (404/405) establishes incompatibility, not the CLI
+        // version. Retry other statuses and connection failures separately.
         const probeUrl = `${readyOption.value.replace(/\/$/, "")}/provider`;
         const fetchImpl = options?.fetchImpl ?? fetch;
         let probeStatus: number | null = null;
@@ -1114,7 +1113,7 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           if (response !== null && (response.status === 404 || response.status === 405)) {
             return yield* new OpenCodeRuntimeError({
               operation: "startOpenCodeServerProcess",
-              detail: `${cliSpec.displayName} server does not serve the legacy surface Synara requires (GET /provider → HTTP ${response.status}); a 2.x CLI only serves /api/*. Install the 1.18.x line (https://opencode.ai) or set an explicit binary path in provider settings.`,
+              detail: `${cliSpec.displayName} server does not serve the legacy surface Synara requires (GET /provider → HTTP ${response.status}). Install a compatible CLI release (https://opencode.ai) or set an explicit binary path in provider settings.`,
             });
           }
           probeStatus = response === null ? null : response.status;

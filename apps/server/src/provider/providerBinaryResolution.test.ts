@@ -1,7 +1,12 @@
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
   appendDirectoriesToPathEnv,
+  buildOpenCodeServerProcessEnv,
   directoriesContainingCommand,
   openCodeBinarySearchDirectories,
 } from "./providerBinaryResolution.ts";
@@ -9,6 +14,30 @@ import {
 const missingPath = () => false;
 
 describe("openCodeBinarySearchDirectories", () => {
+  it.skipIf(process.platform === "win32").each([
+    [".nvm", "versions", "node", "v24.13.1", "bin"],
+    ["Library", "Application Support", "fnm", "node-versions", "v24.13.1", "installation", "bin"],
+    [".local", "share", "fnm", "node-versions", "v24.13.1", "installation", "bin"],
+  ])("discovers a new version-manager install after an earlier lookup (%j)", (...segments) => {
+    const home = mkdtempSync(join(tmpdir(), "synara-opencode-refresh-"));
+    const env = { HOME: home, PATH: "/usr/bin:/bin" };
+    const binDirectory = join(home, ...segments);
+    try {
+      expect(openCodeBinarySearchDirectories({ env })).not.toContain(binDirectory);
+      mkdirSync(binDirectory, { recursive: true });
+      const binaryPath = join(binDirectory, "opencode");
+      writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n");
+      chmodSync(binaryPath, 0o755);
+
+      expect(openCodeBinarySearchDirectories({ env })).toContain(binDirectory);
+      expect(buildOpenCodeServerProcessEnv({ baseEnv: env }).PATH?.split(":")).toContain(
+        binDirectory,
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("includes installer, bun, local, and version-manager bin dirs under HOME on posix", () => {
     const dirs = openCodeBinarySearchDirectories({
       platform: "darwin",

@@ -199,10 +199,11 @@ boundaries and remaining live validation.
 
 ### OpenCode
 
-Synara drives the `opencode-ai` 1.18.x line through the legacy endpoint family
-(the newer `/api/*` engine has no MCP support, and every managed session
-carries the Synara MCP tools), so a 2.x-only CLI is rejected at startup. The
-SDK is pinned exactly (`1.18.31`) — bump it deliberately, never by range.
+Synara uses OpenCode's legacy endpoint family, including `/session` and MCP
+for the Synara tools attached to managed sessions. Startup checks `GET /provider`
+and rejects a server that reports that route as unavailable; this does not identify
+the CLI's version. The SDK is pinned exactly (`1.18.31`) — bump it deliberately,
+never by range.
 
 The `opencode` executable resolves from `PATH` first, then the standard install
 locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,
