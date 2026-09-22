@@ -89,24 +89,34 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   const requestKey = pendingRequestInstanceKey(requestId, approval.lifecycleGeneration);
   const submissionKey = JSON.stringify([requestKey, approval.responseAttemptKey ?? null]);
   const submittedRequestKeyRef = useRef<string | null>(null);
-  const computerTask = approval.approvalScope === "computer-task";
+  const taskScope = approval.approvalScope;
+  const taskFamily = taskScope === "device-task" ? "Device" : "Computer";
+  const computerTask = taskScope === "computer-task" || taskScope === "device-task";
   const baseActions = computerTask
     ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession").map((action) =>
         action.decision === "accept"
           ? {
               ...action,
-              label: "Allow Computer for this task",
+              label: `Allow ${taskFamily} for this task`,
               description:
-                "Continue routine desktop actions until this response ends. Stop cancels access. Clipboard reads still ask separately.",
+                taskScope === "device-task"
+                  ? "Continue routine device actions until this response ends. Stop cancels access."
+                  : "Continue routine desktop actions until this response ends. Stop cancels access. Clipboard reads still ask separately.",
             }
           : action.decision === "decline"
             ? {
                 ...action,
-                description: "Stop desktop for this turn, agent continues without tools",
+                description:
+                  taskScope === "device-task"
+                    ? "Stop device control for this turn, agent continues without tools"
+                    : "Stop desktop for this turn, agent continues without tools",
               }
             : {
                 ...action,
-                description: "Stop revokes new input; keys/buttons already sent may still land.",
+                description:
+                  taskScope === "device-task"
+                    ? "Stop revokes new input; actions already sent may still land."
+                    : "Stop revokes new input; keys/buttons already sent may still land.",
               },
       )
     : approval.sessionApprovalAvailable === false
@@ -159,8 +169,8 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
-          {computerTask ? "Allow Computer for this task?" : KIND_PROMPT[approval.requestKind]}
-          {!computerTask && (approval.toolName ?? parsed.tool) ? (
+          {computerTask ? `Allow ${taskFamily} for this task?` : KIND_PROMPT[approval.requestKind]}
+          {taskScope !== "computer-task" && (approval.toolName ?? parsed.tool) ? (
             <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
               {approval.toolName ?? parsed.tool}
             </span>

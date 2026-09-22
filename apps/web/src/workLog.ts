@@ -2173,16 +2173,20 @@ function deriveComputerToolDescription(input: {
   toolName: string | null;
   title: string | null;
 }) {
-  if (input.payload?.approvalScope === "computer-task") {
+  if (
+    input.payload?.approvalScope === "computer-task" ||
+    input.payload?.approvalScope === "device-task"
+  ) {
+    const family = input.payload.approvalScope === "device-task" ? "Device" : "Computer";
     return {
       summary:
         input.activity.kind === "approval.requested"
-          ? "Computer task approval requested"
+          ? `${family} task approval requested`
           : input.payload.decision === "accept"
-            ? "Computer task approved"
+            ? `${family} task approved`
             : input.payload.decision === "decline"
-              ? "Computer task declined"
-              : "Computer task approval cancelled",
+              ? `${family} task declined`
+              : `${family} task approval cancelled`,
     };
   }
   if (!computerToolName(input.toolName)) {

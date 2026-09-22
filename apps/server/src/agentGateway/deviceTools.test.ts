@@ -34,11 +34,24 @@ function makeContext(provider: ProviderKind = "claudeAgent"): ToolContext {
   };
 }
 
-async function setup() {
+async function setup(options?: {
+  readonly authorizeAction?:
+    | ((
+        name: string,
+        args: Record<string, unknown>,
+        context: ToolContext,
+        signal: AbortSignal,
+      ) => Promise<boolean>)
+    | undefined;
+}) {
   const backend = new FakeDeviceBackend();
   const manager = new DeviceManager({ backend });
   await manager.boot(DEVICE);
-  const tools = makeAgentGatewayDeviceTools({ manager });
+  const authorizeAction =
+    options && "authorizeAction" in options ? options.authorizeAction : async () => true;
+  const tools = authorizeAction
+    ? makeAgentGatewayDeviceTools({ manager, authorizeAction })
+    : makeAgentGatewayDeviceTools({ manager });
   const byName = new Map(tools.map((tool) => [tool.definition.name, tool]));
   const call = async (
     name: string,
@@ -335,22 +348,24 @@ describe("agent gateway device tool handlers", () => {
   });
 });
 
-describe("agent gateway device tools without an approval gate", () => {
-  it.each([...PROVIDERS_WITHOUT_APPROVAL_GATE])(
-    "refuses input and open_url for %s before the action runs",
-    async (provider) => {
-      const { backend, call } = await setup();
+describe("agent gateway device tools approval surface", () => {
+  const MUTATING_CALLS = [
+    ["device_tap", { udid: DEVICE, x: 1, y: 1 }],
+    ["device_swipe", { udid: DEVICE, fromX: 0, fromY: 0, toX: 10, toY: 10 }],
+    ["device_type", { udid: DEVICE, text: "hello" }],
+    ["device_press_button", { udid: DEVICE, button: "home" }],
+    ["device_open_url", { udid: DEVICE, url: "https://example.com" }],
+    ["device_install", { udid: DEVICE, appPath: "/tmp/Demo.app" }],
+    ["device_launch", { udid: DEVICE, bundleId: "com.example.Demo" }],
+    ["device_boot", { udid: "FAKE-0002" }],
+  ] as const;
 
-      for (const [name, args] of [
-        ["device_tap", { udid: DEVICE, x: 1, y: 1 }],
-        ["device_swipe", { udid: DEVICE, fromX: 0, fromY: 0, toX: 10, toY: 10 }],
-        ["device_type", { udid: DEVICE, text: "hello" }],
-        ["device_press_button", { udid: DEVICE, button: "home" }],
-        ["device_open_url", { udid: DEVICE, url: "https://example.com" }],
-        ["device_install", { udid: DEVICE, appPath: "/tmp/Demo.app" }],
-        ["device_launch", { udid: DEVICE, bundleId: "com.example.Demo" }],
-        ["device_boot", { udid: "FAKE-0002" }],
-      ] as const) {
+  it.each(["codex", "omp", ...PROVIDERS_WITHOUT_APPROVAL_GATE] as const)(
+    "refuses input and open_url for %s when no authorize surface exists",
+    async (provider) => {
+      const { backend, call } = await setup({ authorizeAction: undefined });
+
+      for (const [name, args] of MUTATING_CALLS) {
         const result = await call(name, args, provider);
         expect(result.isError, `${name} should be refused`).toBe(true);
         const text = result.content.find((entry) => entry.type === "text");
@@ -363,24 +378,51 @@ describe("agent gateway device tools without an approval gate", () => {
     },
   );
 
-  it("still allows the read tools for Antigravity", async () => {
-    const { call } = await setup();
+  it("asks authorizeAction before running a mutating tool, for every provider kind", async () => {
+    const asked: string[] = [];
+    const { call } = await setup({
+      authorizeAction: async (name) => {
+        asked.push(name);
+        return true;
+      },
+    });
 
-    const list = await call("device_list", {}, "antigravity");
-    const describe = await call("device_describe_ui", { udid: DEVICE }, "antigravity");
-    const screenshot = await call("device_screenshot", { udid: DEVICE }, "antigravity");
+    for (const provider of ["codex", "omp", "antigravity"] as const) {
+      const result = await call("device_tap", { udid: DEVICE, x: 5, y: 5 }, provider);
+      expect(result.isError).toBeUndefined();
+    }
 
-    expect(list.isError).toBeUndefined();
-    expect(describe.isError).toBeUndefined();
-    expect(screenshot.isError).toBeUndefined();
+    expect(asked).toEqual(["device_tap", "device_tap", "device_tap"]);
   });
 
-  it("allows every tool for providers that do gate approvals", async () => {
-    const { call } = await setup();
+  it("does not ask authorizeAction for the read-only tools", async () => {
+    let asked = 0;
+    const { call } = await setup({
+      authorizeAction: async () => {
+        asked += 1;
+        return true;
+      },
+    });
 
-    const result = await call("device_tap", { udid: DEVICE, x: 5, y: 5 }, "codex");
+    for (const name of ["device_list", "device_describe_ui", "device_screenshot"] as const) {
+      const result = await call(name, { udid: DEVICE }, "omp");
+      expect(result.isError).toBeUndefined();
+    }
 
-    expect(result.isError).toBeUndefined();
+    expect(asked).toBe(0);
+  });
+
+  it("denies the action without touching the device when authorizeAction refuses", async () => {
+    const { backend, call } = await setup({ authorizeAction: async () => false });
+
+    const result = await call("device_tap", { udid: DEVICE, x: 5, y: 5 }, "omp");
+
+    expect(result.isError).toBe(true);
+    const text = result.content.find((entry) => entry.type === "text");
+    expect(text && text.type === "text" ? text.text : "").toContain("denied or cancelled");
+    expect(backend.calls.filter((entry) => entry.kind !== "attachStream")).toEqual([
+      { kind: "boot", udid: DEVICE },
+    ]);
   });
 });
 
