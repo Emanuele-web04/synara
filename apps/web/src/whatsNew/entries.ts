@@ -38,7 +38,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         title: "GPT-6 Sol & Luna",
         description: "Choose GPT-6 Sol or Luna in Codex with model-specific reasoning options.",
         details:
-          "Sol offers Low through Ultra effort; Luna offers Low through Max. GPT-6 Astra remains the default. Your installed Codex runtime and account determine which models are available.",
+          "Sol offers Low through Ultra effort; Luna offers Low through Max. GPT-6 Astra remains the default for chat, and GPT-6 Luna is the default for Git writing. Your installed Codex runtime and account determine which models are available.",
       },
       {
         id: "environment-tasks",

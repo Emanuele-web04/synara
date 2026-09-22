@@ -9,9 +9,13 @@ import { timeBuildStage } from "./lib/build-timing.ts";
 const [directory, sourceCommit] = process.argv.slice(2);
 if (!directory || !sourceCommit)
   throw new Error("Usage: import-portable-build.ts ARTIFACT_DIRECTORY SOURCE_COMMIT");
-const archive = resolve(directory, "outputs.tar");
+const archive = "outputs.tar";
 const runTar = (args: string[]) => {
-  const result = spawnSync("tar", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const result = spawnSync("tar", args, {
+    cwd: directory,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
   if (result.status !== 0)
     throw new Error(`Portable archive failed: ${result.stderr || result.error?.message}`);
   return result.stdout.trimEnd().split(/\r?\n/);

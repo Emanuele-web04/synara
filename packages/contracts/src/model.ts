@@ -1170,7 +1170,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
 
 // Backward compatibility for existing Codex-only call sites.
 export const DEFAULT_MODEL = DEFAULT_MODEL_BY_PROVIDER.codex;
-export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.6-luna" as const;
+export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-6-luna" as const;
 export const DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT = "high" as const;
 
 /**

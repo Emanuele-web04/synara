@@ -48,8 +48,8 @@ import {
 } from "./model";
 
 describe("Git text generation defaults", () => {
-  it("uses GPT-5.6 Luna with high reasoning", () => {
-    expect(DEFAULT_GIT_TEXT_GENERATION_MODEL).toBe("gpt-5.6-luna");
+  it("uses GPT-6 Luna with high reasoning", () => {
+    expect(DEFAULT_GIT_TEXT_GENERATION_MODEL).toBe("gpt-6-luna");
     expect(DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT).toBe("high");
   });
 });
