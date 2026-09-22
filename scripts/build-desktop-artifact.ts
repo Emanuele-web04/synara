@@ -14,6 +14,8 @@ import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
+import { startBuildStage } from "./lib/build-timing.ts";
+import { verifyPortableBuild } from "./lib/portable-build.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import {
   createDesktopPlatformBuildConfig,
@@ -45,6 +47,7 @@ import {
   Config,
   Data,
   Effect,
+  Exit,
   Fiber,
   FileSystem,
   Layer,
@@ -418,6 +421,13 @@ const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Comm
     });
   }
 });
+
+function timedBuildStage<A, E, R>(stage: string, work: Effect.Effect<A, E, R>) {
+  return Effect.suspend(() => {
+    const finish = startBuildStage(stage);
+    return work.pipe(Effect.onExit((exit) => Effect.sync(() => finish(Exit.isSuccess(exit)))));
+  });
+}
 
 function generateMacIconSet(
   sourcePng: string,
@@ -1083,6 +1093,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     prefix: `synara-desktop-${options.flavor}-${options.platform}-stage-`,
   });
 
+  yield* Effect.log(`[desktop-artifact] Packaging stage: ${stageRoot}`);
   const stageAppDir = path.join(stageRoot, "app");
   const stageResourcesDir = path.join(stageAppDir, "apps/desktop/resources");
   const distDirs = {
@@ -1092,15 +1103,30 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   };
   const bundledClientEntry = path.join(distDirs.serverDist, "client/index.html");
 
+  if (options.skipBuild && process.env.SYNARA_PORTABLE_BUILD_MANIFEST) {
+    yield* Effect.try({
+      try: () =>
+        verifyPortableBuild(
+          repoRoot,
+          commitHash,
+          JSON.parse(readFileSync(process.env.SYNARA_PORTABLE_BUILD_MANIFEST!, "utf8")),
+        ),
+      catch: (cause) =>
+        new BuildScriptError({ message: "Shared release build verification failed.", cause }),
+    });
+  }
   if (!options.skipBuild) {
     yield* Effect.log("[desktop-artifact] Building desktop/server/web artifacts...");
-    yield* runCommand(
-      ChildProcess.make({
-        cwd: repoRoot,
-        ...commandOutputOptions(options.verbose),
-        // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
-        shell: process.platform === "win32",
-      })`bun run build:desktop`,
+    yield* timedBuildStage(
+      "javascript-build",
+      runCommand(
+        ChildProcess.make({
+          cwd: repoRoot,
+          ...commandOutputOptions(options.verbose),
+          // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
+          shell: process.platform === "win32",
+        })`bun run build:desktop`,
+      ),
     );
   }
 
@@ -1128,22 +1154,31 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
 
-  yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
+  yield* timedBuildStage(
+    "platform-icons",
+    assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose),
+  );
 
   if (options.platform === "mac" || options.platform === "linux") {
     const provisionCua = path.join(repoRoot, "apps/desktop/scripts/provision-cua-driver.mjs");
     const cuaDestination = path.join(stageResourcesDir, "cua-driver");
     const cuaPlatform = options.platform === "mac" ? "darwin" : "linux";
     yield* Effect.log("[desktop-artifact] Verifying and staging pinned Cua Driver...");
-    yield* runCommand(
-      ChildProcess.make({
-        cwd: repoRoot,
-        ...commandOutputOptions(options.verbose),
-      })`node ${provisionCua} --destination ${cuaDestination} --platform ${cuaPlatform} --arch ${options.arch}`,
+    yield* timedBuildStage(
+      "cua-provision",
+      runCommand(
+        ChildProcess.make({
+          cwd: repoRoot,
+          ...commandOutputOptions(options.verbose),
+        })`node ${provisionCua} --destination ${cuaDestination} --platform ${cuaPlatform} --arch ${options.arch}`,
+      ),
     );
   }
   if (options.platform === "mac") {
-    yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
+    yield* timedBuildStage(
+      "appsnap-helper",
+      stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose),
+    );
   }
 
   yield* stageDesktopRuntimeResources(
@@ -1185,7 +1220,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     },
   };
 
-  yield* installFrozenStageDependencies(repoRoot, stageAppDir, options.platform, options.verbose);
+  yield* timedBuildStage(
+    "production-dependencies",
+    installFrozenStageDependencies(repoRoot, stageAppDir, options.platform, options.verbose),
+  );
 
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
   yield* fs.writeFileString(path.join(stageAppDir, "package.json"), `${stagePackageJsonString}\n`);
@@ -1225,12 +1263,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     `[desktop-artifact] Building ${options.flavor} ${options.platform}/${options.target} (arch=${options.arch}, version=${appVersion})...`,
   );
   const electronBuilderCliPath = requireFromScriptsWorkspace.resolve("electron-builder/cli.js");
-  yield* runCommand(
-    ChildProcess.make({
-      cwd: stageAppDir,
-      env: buildEnv,
-      ...commandOutputOptions(options.verbose),
-    })`${process.execPath} ${electronBuilderCliPath} ${platformConfig.cliFlag} --${options.arch} --publish never`,
+  yield* timedBuildStage(
+    "electron-packaging",
+    runCommand(
+      ChildProcess.make({
+        cwd: stageAppDir,
+        env: buildEnv,
+        ...commandOutputOptions(options.verbose),
+      })`${process.execPath} ${electronBuilderCliPath} ${platformConfig.cliFlag} --${options.arch} --publish never`,
+    ),
   );
 
   const stageDistDir = path.join(stageAppDir, "dist");
@@ -1263,7 +1304,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   if (options.platform === "mac" && options.target === "dmg" && options.signed) {
     yield* Effect.log("[desktop-artifact] Notarizing and validating signed macOS DMG...");
-    const finalizedDmg = yield* Effect.try({
+    const finalizedDmg = yield* Effect.tryPromise({
       try: () =>
         finalizeSignedMacDmg({
           stageDistDir,
@@ -1285,23 +1326,26 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   if (options.platform === "mac") {
     yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
-    const finalizedZip = yield* Effect.tryPromise({
-      try: () =>
-        finalizeMacUpdateZip({
-          stageDistDir,
-          signed: options.signed,
-          verbose: options.verbose,
-          requireUpdateManifest: !artifactIdentity.identity.usesScriptedUpdates,
-          ...(artifactIdentity.identity.usesScriptedUpdates
-            ? { expectedBundleIdentifier: artifactIdentity.identity.bundleId }
-            : {}),
-        }),
-      catch: (cause) =>
-        new BuildScriptError({
-          message: "macOS update zip finalization failed.",
-          cause,
-        }),
-    });
+    const finalizedZip = yield* timedBuildStage(
+      "update-zip",
+      Effect.tryPromise({
+        try: () =>
+          finalizeMacUpdateZip({
+            stageDistDir,
+            signed: options.signed,
+            verbose: options.verbose,
+            requireUpdateManifest: !artifactIdentity.identity.usesScriptedUpdates,
+            ...(artifactIdentity.identity.usesScriptedUpdates
+              ? { expectedBundleIdentifier: artifactIdentity.identity.bundleId }
+              : {}),
+          }),
+        catch: (cause) =>
+          new BuildScriptError({
+            message: "macOS update zip finalization failed.",
+            cause,
+          }),
+      }),
+    );
     if (finalizedZip.removedZipBlockmapPath) {
       yield* Effect.log(
         `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,

@@ -682,3 +682,11 @@ suite preserves revision 38 behavior. A staged macOS arm64 build is source/build
 proof only: live Notes behavior, fewer tool calls, hotkey/paste delivery, other
 apps, Intel/Windows/Linux runtime behavior, and signed release distribution are
 not qualified by these checks.
+
+## Synara SDK build target
+
+The native patch builds `cua-driver-sdk` as an `rlib` only. The driver still uses
+the SDK internally; Synara does not ship or load its separate `cdylib` on macOS
+or patched Linux. Removing that output avoids its code generation/link step
+without removing SDK functionality or changing native protocol revision 39.
+The patch checksum and trusted build-cache key cover this build-only change.
