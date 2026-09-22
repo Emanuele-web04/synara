@@ -116,6 +116,11 @@ const DEVICE_HARDWARE_BUTTONS: readonly DeviceHardwareButton[] = [
   "volume-down",
 ];
 
+// Screenshots ride MCP tool-result and provider session frames as base64;
+// 4 MB of PNG stays well under the shared 16 MB JSON-RPC frame cap after
+// encoding, for every provider transport.
+const DEVICE_SCREENSHOT_MAX_INLINE_BYTES = 4 * 1024 * 1024;
+
 const UDID_PROPERTY = {
   type: "string",
   description: "Device udid from device_list.",
@@ -595,7 +600,9 @@ export function makeAgentGatewayDeviceTools(
           return yield* Effect.tryPromise({
             try: async () => {
               const result = await manager.withAgentActivity(context.callerThreadId, () =>
-                manager.screenshot(readUdid(args)),
+                manager.screenshot(readUdid(args), {
+                  maxInlineBytes: DEVICE_SCREENSHOT_MAX_INLINE_BYTES,
+                }),
               );
               await surfaceDevice(context, readUdid(args), "agent-tool");
               // Image content beside the JSON so the model sees the screen

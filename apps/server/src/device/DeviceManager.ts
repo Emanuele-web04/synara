@@ -682,7 +682,7 @@ export class DeviceManager {
 
   async screenshot(
     udid: string,
-    options: { readonly save?: boolean } = {},
+    options: { readonly save?: boolean; readonly maxInlineBytes?: number } = {},
   ): Promise<DeviceScreenshotResult> {
     return await this.backend.screenshot(udid, options);
   }

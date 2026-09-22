@@ -519,7 +519,7 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   async screenshot(
     udid: string,
-    options: { readonly save?: boolean } = {},
+    options: { readonly save?: boolean; readonly maxInlineBytes?: number } = {},
   ): Promise<DeviceScreenshotResult> {
     // Captured to a temp file either way, because `simctl io screenshot` only
     // writes to a path. When the caller wants it kept, it is moved next to the
@@ -533,9 +533,16 @@ export class IosSimulatorBackend implements DeviceBackend {
       if (info.size > MAX_SCREENSHOT_BYTES) {
         throw new DeviceBackendError("Screenshot exceeded the maximum supported size");
       }
-      const bytes = await readFile(file);
+      const fullBytes = await readFile(file);
+      const savedPath =
+        options.save === true ? await this.saveScreenshotFile(udid, fullBytes) : null;
+      // Inline consumers (agent tool results) ride JSON-RPC frames with byte
+      // caps, so oversized shots are resampled rather than rejected.
+      const bytes =
+        options.maxInlineBytes === undefined || fullBytes.byteLength <= options.maxInlineBytes
+          ? fullBytes
+          : await this.resampleScreenshotPng(file, directory, options.maxInlineBytes);
       const dimensions = readPngDimensions(bytes);
-      const savedPath = options.save === true ? await this.saveScreenshotFile(udid, bytes) : null;
       return {
         ...(savedPath ? { path: savedPath } : {}),
         udid,
@@ -550,6 +557,38 @@ export class IosSimulatorBackend implements DeviceBackend {
     } finally {
       await rm(directory, { recursive: true, force: true }).catch(() => undefined);
     }
+  }
+
+  /**
+   * Downscale a captured PNG with `sips` until it fits `maxBytes`. Stepping the
+   * longest edge down keeps screenshots legible for models while staying well
+   * under inline transport caps; a still-oversized result fails loudly instead
+   * of silently breaking the agent's session transport.
+   */
+  private async resampleScreenshotPng(
+    sourceFile: string,
+    directory: string,
+    maxBytes: number,
+  ): Promise<Buffer> {
+    let smallest: Buffer | null = null;
+    for (const maxDimension of [1170, 840, 600]) {
+      const target = path.join(directory, `screenshot-${String(maxDimension)}.png`);
+      const result = await runProcess("/usr/bin/sips", [
+        "-Z",
+        String(maxDimension),
+        sourceFile,
+        "--out",
+        target,
+      ]);
+      if (result.code !== 0) continue;
+      const bytes = await readFile(target);
+      if (bytes.byteLength <= maxBytes) return bytes;
+      if (!smallest || bytes.byteLength < smallest.byteLength) smallest = bytes;
+    }
+    if (!smallest || smallest.byteLength > maxBytes) {
+      throw new DeviceBackendError("Screenshot exceeded the maximum supported size");
+    }
+    return smallest;
   }
 
   /**
