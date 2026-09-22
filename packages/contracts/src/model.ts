@@ -513,7 +513,7 @@ const CLAUDE_NO_FAST_XHIGH_CAPABILITIES: ModelCapabilities = {
 // ultrathink prompt mode), effort runs low..max, and there is no fast-mode lane.
 const CLAUDE_FABLE_CAPABILITIES: ModelCapabilities = CLAUDE_NO_FAST_XHIGH_CAPABILITIES;
 
-// Opus 5 keeps the Claude 5 ladder (thinking is adaptive, so no ultrathink prompt
+// Opus 5 and 5.5 keep the Claude 5 ladder (thinking is adaptive, so no ultrathink prompt
 // mode) but stays on the Opus fast-mode lane that Fable and Sonnet lack.
 const CLAUDE_OPUS_5_CAPABILITIES: ModelCapabilities = {
   ...CLAUDE_NO_FAST_XHIGH_CAPABILITIES,
@@ -629,6 +629,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       slug: "claude-fable-5",
       name: "Claude Fable 5",
       capabilities: CLAUDE_FABLE_CAPABILITIES,
+    },
+    {
+      slug: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      capabilities: CLAUDE_OPUS_5_CAPABILITIES,
     },
     {
       slug: "claude-opus-5",
@@ -1185,7 +1190,10 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "claude-fable-5-1": "claude-fable-5-1",
     "fable-5": "claude-fable-5",
     "claude-fable-5": "claude-fable-5",
-    opus: "claude-opus-5",
+    opus: "claude-opus-5-5",
+    "opus-5.5": "claude-opus-5-5",
+    "claude-opus-5.5": "claude-opus-5-5",
+    "claude-opus-5-5": "claude-opus-5-5",
     "opus-5": "claude-opus-5",
     "claude-opus-5": "claude-opus-5",
     "opus-4.8": "claude-opus-4-8",
