@@ -42,7 +42,9 @@ export function countInstallerDownloads(releases: GitHubRelease[]): number {
   }, 0);
 }
 
-const INSTALLER_COUNT_CACHE_TTL_SECONDS = 60;
+// Once a day is plenty for a marketing counter; the stored snapshot is refreshed
+// on the same cadence. One GitHub call per day per instance instead of per visit.
+const INSTALLER_COUNT_CACHE_TTL_SECONDS = 24 * 60 * 60;
 
 // Live GitHub total. Throws when the API is unavailable or reports zero so the
 // caching wrapper below never memoizes a failure.
@@ -78,13 +80,11 @@ async function fetchLiveInstallerCount(): Promise<number> {
   return count;
 }
 
-// Cached for the same 60s the API route already promises via `s-maxage=60`
-// (same approach as the testimonial tweets in tweets.ts), so homepage SSR and
-// cache-miss polls stop paying a full GitHub Releases round-trip each and
-// GitHub API usage stays at roughly one call per minute per instance. Only a
-// successful live count is cached: `unstable_cache` does not memoize a
-// rejected call, so an outage retries on the next request instead of pinning
-// the fallback for 60s.
+// Cached for a day (same approach as the testimonial tweets in tweets.ts), so
+// homepage SSR stops paying a full GitHub Releases round-trip per visit and
+// GitHub API usage drops to one call per day per instance. Only a successful
+// live count is cached: `unstable_cache` does not memoize a rejected call, so
+// an outage retries on the next request instead of pinning the fallback.
 const fetchCachedInstallerCount = unstable_cache(
   fetchLiveInstallerCount,
   ["synara-installer-count"],
