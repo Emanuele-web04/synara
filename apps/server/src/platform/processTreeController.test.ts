@@ -221,14 +221,23 @@ describe("unsafe process-tree root guard", () => {
     expect(killer.capture(process.pid)).toEqual({ descendants: [], captureComplete: false });
   });
 
-  it("proves absence when the root pid is missing from a complete snapshot", () => {
-    const killer = createProcessTreeKiller({ captureChildrenMap: sessionSnapshot });
-    expect(killer.capture(0x7fff_fffe)).toEqual({ descendants: [], captureComplete: true });
+  // Positive capture outcomes go through captureProcessTree's injected win32
+  // path: `capture()` refuses to run on Windows hosts (the sync API cannot
+  // query CIM), so asserting `captureComplete: true` there is platform-bound.
+  it("proves absence when the root pid is missing from a complete snapshot", async () => {
+    const tree = await captureProcessTree(0x7fff_fffe, {
+      platform: "win32",
+      captureWindowsChildren: async () => sessionSnapshot(),
+    });
+    expect(tree).toEqual({ descendants: [], captureComplete: true });
   });
 
-  it("still collects descendants for a real root in the same snapshot", () => {
-    const killer = createProcessTreeKiller({ captureChildrenMap: sessionSnapshot });
-    expect(killer.capture(4242)).toEqual({
+  it("still collects descendants for a real root in the same snapshot", async () => {
+    const tree = await captureProcessTree(4242, {
+      platform: "win32",
+      captureWindowsChildren: async () => sessionSnapshot(),
+    });
+    expect(tree).toEqual({
       descendants: [{ pid: 4243, command: "provider-grandchild" }],
       captureComplete: true,
     });
