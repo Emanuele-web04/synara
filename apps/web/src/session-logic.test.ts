@@ -8,6 +8,9 @@ import {
   deriveActiveWorkStartedAt,
   findLatestProposedPlan,
   findSidebarProposedPlan,
+  formatClockDuration,
+  formatClockElapsed,
+  formatElapsed,
   hasActionableProposedPlan,
   hasLiveLatestTurn,
   hasLiveTurnTailWork,
@@ -15,6 +18,33 @@ import {
   PROVIDER_OPTIONS,
 } from "./session-logic";
 import { makeActivity } from "./storeTestFixtures";
+
+describe("elapsed duration formatting", () => {
+  // Settled work rounds seconds; live clocks only show time already elapsed.
+  it.each([
+    [250, "250ms", "0s"],
+    [1_500, "1.5s", "1s"],
+    [10_500, "11s", "10s"],
+    [60_000, "1m", "1m"],
+    [61_900, "1m 2s", "1m 1s"],
+    [119_600, "2m", "1m 59s"],
+    [3_599_499, "59m 59s", "59m 59s"],
+    [3_599_500, "1h", "59m 59s"],
+    [3_600_000, "1h", "1h"],
+    [4_969_000, "1h 22m", "1h 22m"],
+    [86_399_499, "23h 59m", "23h 59m"],
+    [86_399_500, "1d", "23h 59m"],
+    [86_400_000, "1d", "1d"],
+    [183_845_000, "2d 3h", "2d 3h"],
+  ])("formats %i ms as %s for settled work and %s for live clocks", (durationMs, settled, live) => {
+    const startIso = "2026-01-01T00:00:00.000Z";
+    const endIso = new Date(Date.parse(startIso) + durationMs).toISOString();
+
+    expect(formatElapsed(startIso, endIso)).toBe(settled);
+    expect(formatClockDuration(durationMs)).toBe(live);
+    expect(formatClockElapsed(startIso, endIso)).toBe(live);
+  });
+});
 
 describe("deriveActiveTaskListState", () => {
   it("returns the latest plan update for the active turn", () => {
