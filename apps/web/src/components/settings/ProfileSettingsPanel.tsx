@@ -350,7 +350,6 @@ function formatMostWorkedProjectLabel(project: ProfileStats["mostWorkedProject"]
   return `${project.title} · ${formatNumber(project.promptCount)} ${promptLabel}`;
 }
 
-
 function ModelUsageRow({
   provider,
   model,

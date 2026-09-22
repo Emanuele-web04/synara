@@ -33,6 +33,7 @@ const EMPTY_MODEL_OPTIONS: Record<ProviderKind, ReadonlyArray<ProviderModelOptio
   antigravity: [],
   grok: [],
   droid: [],
+  omp: [],
   opencode: [],
   pi: [],
 };

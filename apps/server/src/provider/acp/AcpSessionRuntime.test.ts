@@ -58,7 +58,6 @@ it.each(["overflow", "scope close"])(
           });
           agentConnection = agentApp.connect(OfficialAcp.ndJsonStream(output, input));
           return ChildProcessSpawner.makeHandle({
-
             pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
 
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
@@ -593,7 +592,6 @@ describe("AcpSessionRuntime initialize validation", () => {
         Effect.sync(() => {
           agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
           return ChildProcessSpawner.makeHandle({
-
             pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
 
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
@@ -734,7 +732,6 @@ describe("AcpSessionRuntime startup timeouts", () => {
         Effect.sync(() => {
           input.agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
           return ChildProcessSpawner.makeHandle({
-
             pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
 
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
@@ -802,7 +799,6 @@ describe("AcpSessionRuntime startup timeouts", () => {
       });
 
       expect(tornDownPids).toEqual([0x7ff_f_fffe]);
-
     },
     TEST_TIMEOUT_MS,
   );
@@ -829,7 +825,6 @@ describe("AcpSessionRuntime startup timeouts", () => {
       });
 
       expect(tornDownPids).toEqual([0x7ff_f_fffe]);
-
     },
     TEST_TIMEOUT_MS,
   );
@@ -857,7 +852,6 @@ describe("AcpSessionRuntime startup timeouts", () => {
       });
 
       expect(tornDownPids).toEqual([0x7ff_f_fffe]);
-
     },
     TEST_TIMEOUT_MS,
   );

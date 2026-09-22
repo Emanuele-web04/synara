@@ -54,7 +54,6 @@ function mockHandle(
   options?: { readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode> },
 ) {
   return ChildProcessSpawner.makeHandle({
-
     pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
 
     exitCode: options?.exitCode ?? Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),

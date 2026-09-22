@@ -9,6 +9,7 @@ import {
   inspectProcessTree,
   parseProcessChildrenMap,
   signalOwnedChildProcess,
+  type CapturedProcess,
   type ProcessChildrenMap,
 } from "./processTreeController";
 
@@ -283,8 +284,6 @@ describe("unsafe process-tree root guard", () => {
   });
 });
 
-
-
 describe("signal target and captured identity safeguards", () => {
   it.each([0, 1, -1, -42, 1.5, NaN, Infinity, 2 ** 32 + 1])(
     "does not inspect or signal unsafe root %s",
@@ -422,15 +421,27 @@ it.skipIf(process.platform !== "darwin")(
   "captures and verifies native start times independently of the parent locale",
   async () => {
     const previousLocale = process.env.LC_ALL;
-    const child = spawn("/bin/sleep", ["1"], { stdio: "ignore" });
+    // Self-roots fail closed by design, so root at a spawned shell instead of
+    // the test process; its sleep grandchild is the captured identity, and it
+    // must still be alive when `inspect` re-verifies it below.
+    const child = spawn("/bin/sh", ["-c", "sleep 3 & wait"], { stdio: "ignore" });
     const exited = once(child, "exit");
     try {
       await once(child, "spawn");
       process.env.LC_ALL = "ja_JP.UTF-8";
       const killer = createProcessTreeKiller();
-      const captured = killer.capture(process.pid).descendants.find((row) => row.pid === child.pid);
+      const deadline = Date.now() + 5_000;
+      let captured: CapturedProcess | undefined;
+      while (Date.now() < deadline) {
+        captured = killer
+          .capture(child.pid as number)
+          .descendants.find((row) => row.command === "sleep 3");
+        if (captured) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
       expect(captured).toBeDefined();
-      expect(captured?.command).toBe("/bin/sleep 1");
+      // Spawned via `sh -c`, so argv[0] is `sleep` rather than a full path.
+      expect(captured?.command).toBe("sleep 3");
       expect(captured?.startedAt).toMatch(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) [A-Z][a-z]{2} /);
       if (!captured) throw new Error("Owned test child was not captured");
       // Both probes must use the same stable locale, even if the parent changes it.
@@ -447,4 +458,3 @@ it.skipIf(process.platform !== "darwin")(
     }
   },
 );
-

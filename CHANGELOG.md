@@ -1,6 +1,5 @@
 # Changelog
 
-
 ## Unreleased
 
 ### Added
@@ -10,7 +9,6 @@
 ### Fixed
 
 - Fixed OMP threads being mislabeled as Codex when the session-provider normalizer fell through to the Codex default instead of preserving the OMP provider.
-
 
 ## [0.9.0] — 2026-09-21
 
@@ -146,7 +144,6 @@ Audited all 450 commits in the complete `v0.8.4..f3cffcb66` ancestry, including 
 - [#1286](https://github.com/Emanuele-web04/synara/pull/1286) — Improve computer typing and same-process window targeting
 
 [Complete commit comparison](https://github.com/Emanuele-web04/synara/compare/v0.8.4...v0.9.0) includes direct pushes, follow-up repairs, native-driver iterations and test/documentation changes.
-
 
 ## 0.8.4 - 2026-09-14
 
