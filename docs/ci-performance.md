@@ -77,3 +77,13 @@ These test timings are local macOS results. Hosted run [34608752703](https://git
 After publication, compare at least three successful first-attempt code-change runs against the baseline. Measure creation-to-gate-completion, individual job duration, cache hits, and runner queue delay separately. Confirm both server shards, all four browser jobs, and the aggregate check succeed. Do not treat a rerun's timestamp or a warm local run as proof of the hosted improvement.
 
 The sharding and project configuration use [Vitest's supported sharding](https://vitest.dev/guide/improving-performance) and [test projects](https://vitest.dev/guide/projects).
+
+## Follow-up: no build before tests
+
+The contracts build that replaced the broad prerequisite in step 4 was later
+found unnecessary: every test package imports `@synara/contracts` from source
+through its ESM `import` export, and the whole workspace suite passed locally
+with no contracts build output (14,732 tests, Node 24.13.1). The Turbo test task
+no longer depends on any build, so each unit lane starts at its test files and
+the unit lane stopped persisting Turbo outputs. Release preflight timings are in
+[release-build-optimization.md](release-build-optimization.md).

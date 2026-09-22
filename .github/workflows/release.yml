@@ -193,8 +193,11 @@ jobs:
         with:
           bun-version-file: package.json
 
+      # Five workspace packages patch the one shared TypeScript install in their
+      # prepare scripts; concurrent patching of that file is a race, so lifecycle
+      # scripts run one at a time here.
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --concurrent-scripts=1
 
       - name: Verify Synara identity
         run: bun run brand:check
@@ -245,7 +248,7 @@ jobs:
           bun-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --concurrent-scripts=1
 
       - name: Test server shard ${{ matrix.shard }}
         run: bunx turbo run test --filter=@synara/cli -- --shard=${{ matrix.shard }}

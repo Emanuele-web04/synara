@@ -126,6 +126,93 @@ The retained 25-minute benchmark cap would not accommodate two builds at the
 observed baseline speed; a future paired measurement needs an explicit time
 budget decision. **No additional minute saved is claimed.**
 
+## Preflight quality gates
+
+The two Intel runs above showed the preflight itself getting slower (9m42s →
+11m51s) with an unchanged test set. Both preflight logs were re-read step by step.
+Turbo ran the six test packages concurrently in one four-CPU Ubuntu job, and the
+critical path was the server package: 500 files run serially with
+`--maxWorkers=1 --no-file-parallelism`, taking 483.97s and then 594.79s while the
+web, desktop, shared, scripts and contracts suites finished within 3m30s. A
+25-second contracts build (tsdown with declaration output) also preceded the server
+suite because its Turbo test task depended on `@synara/contracts#build`.
+
+Per-file server timings from the optimized run: `ProviderCommandReactor.test.ts`
+98.20s (346 tests; 75.48s in the baseline), `AntigravityAdapter.test.ts` 27.21s,
+`ProviderRuntimeIngestion.test.ts` 25.34s, `CuaComputerBackend.test.ts` 23.55s.
+The 687 per-harness migration runs took 89.4s in total (mean 130ms; 65.0s and
+95ms in the baseline), and unchanged files later in the serial order were also
+20–40% slower, so the regression is consistent with runner variability rather
+than the added tests. Locally the Antigravity, Cua, `computerTools`
+(one 10-second `computer_wait` bound) and `authEffectRoute` files take the same
+wall time as in CI because they wait on real timers; together about 65s of the
+serial path. They were left unchanged: shortening them means rewriting
+time-bound assertions, which is a separate, per-test change. The server suite
+stays serial: 93 server test files use fixed `tmpdir()` paths and 9 bind fixed
+ports, so in-process file parallelism was not attempted.
+
+Changes, validated locally before the one CI measurement:
+
+- `preflight` now resolves policy, scope and source provenance only (no install).
+- A `quality` job runs the frozen install, brand check, lint, typecheck and every
+  test package except the server; a `server_tests` matrix runs the server package
+  in Vitest's native `--shard=1/3`, `2/3`, `3/3` lanes, the same geometry ci.yml
+  already uses. Shards are assigned by a hash of each file path, so every file
+  runs exactly once; nothing is skipped and no assertion changed.
+- Portable, icon and native jobs now require `quality` and every server shard,
+  and the smoke test asserts those prerequisites.
+- The Turbo test task no longer depends on any build. All packages import
+  `@synara/contracts` from source through its ESM `import` export. With the
+  contracts build output deleted, the entire workspace suite passed locally under
+  Node 24.13.1 (`bunx turbo run test --only --continue`: 500 server files /
+  6,987 tests, 399 web files / 5,195 tests, 14,732 tests in total, 4m59s on
+  18 CPUs). The same run under the machine's default Node 26 failed 28 web store
+  tests on a read-only `localStorage` global, unrelated to the change.
+- `stage=preflight` runs only these gates, so they can be measured without
+  native builds, packaging or publication.
+
+Measurement: [run 35725031035](https://github.com/Emanuele-web04/synara/actions/runs/35725031035)
+at `acd7ddd1e832bec5afad6eae0e8ceca016b07521`, `stage=preflight`,
+`publish_release=false`, dispatched from the branch on 2026-09-22. No retry
+was run and no other run was triggered. **The run failed**: the `Server tests
+(2/3)` job stopped after 27s in `bun install --frozen-lockfile`, before any test,
+when the web package's `effect-language-service patch` prepare script crashed with
+`TypeError: Cannot read properties of undefined (reading 'ES2022')` right after
+logging that the shared TypeScript file was "already patched". Five workspace
+packages run that prepare script against one `node_modules/.bun/typescript@5.9.3`
+file and Bun runs lifecycle scripts concurrently, so this is a pre-existing race
+that four parallel installs per run expose more often than one. The release
+installs now pass `--concurrent-scripts=1`; that mitigation has not yet been
+exercised in Actions. The other four jobs succeeded.
+
+| Phase                              |            Baseline 35659929299 |           Optimized 35711485748 |                                                                               Sharded 35725031035 |
+| ---------------------------------- | ------------------------------: | ------------------------------: | ------------------------------------------------------------------------------------------------: |
+| Trigger to preflight start (queue) |                           7m25s |                              5s |                                                                                                3s |
+| Preflight job                      |                           9m42s |                          11m51s |                                                                                 12s (policy only) |
+| Dependency installation            |                             27s |                             30s |                                                             28s gates; 59s / 16s / 36s shards 1–3 |
+| Lint                               |                              1s |                              1s |                                                                                                1s |
+| Typecheck                          |                             33s |                             42s |                                                                                               42s |
+| Contracts build before tests       |                            ~19s |                             25s |                                                                                              none |
+| Non-server tests (web suite)       |      inside test step (141.08s) |      inside test step (182.49s) |                                                                          2m48s step (160.94s web) |
+| Server tests                       | 483.97s, 500 files, 6,982 tests | 594.79s, 500 files, 6,982 tests |          1/3: 166.23s, 167 files, 2,598 tests; 3/3: 229.22s, 165 files, 2,840 tests; 2/3: not run |
+| Test step (longest)                |                           8m25s |                          10m22s |                                                                                 3m52s (shard 3/3) |
+| Gates start to last gate complete  |                           9m42s |                          11m51s |                                                 4m51s observed, but incomplete (shard 2/3 failed) |
+| Ubuntu job time consumed           |                           9m42s |                          11m51s | 13m29s (12s + 4m11s + 4m02s + 4m37s + 27s failed); about 16–17m estimated with shard 2/3 complete |
+
+Observed: the longest gate job fell from 11m51s to 4m37s, and every completed
+job stayed under five minutes; the two completed shards ran 332 of the 500
+server files and 5,438 of the 6,982 server tests with 0 failures. Estimated:
+shard 2/3 holds the remaining 168 files (1,544 tests). Its predicted serial
+time from the optimized run's per-file timings is about 100s of tests plus
+import overhead, and the identical hash shard in ci.yml took 2m23s including a
+cached install on 2026-09-21 (run 35659926878), so a complete run would most
+likely still finish with shard 3/3 at about 4m40s–5m. That remains unverified.
+Runner variability is visible inside this run: the same install command took
+16s to 59s across four jobs. Summed Ubuntu time rises by roughly 4–5 minutes
+per release because each shard repeats checkout, toolchain setup and the
+frozen install; macOS and Windows consumption is unchanged, and the native jobs
+still start only after every gate passes.
+
 ## Local measurements
 
 2026-09-22, macOS 27 arm64, 18 available CPUs, 48 GiB RAM, Node 24.13.1, Bun 1.4.2.
