@@ -2,16 +2,15 @@
 // Purpose: Resolve thread:// composer references into bounded transcript prompt context.
 // Layer: Provider prompt compatibility
 
-import {
-  ThreadId,
-  type OrchestrationThread,
-  type ProviderMentionReference,
-} from "@synara/contracts";
+import { ThreadId, type ProviderMentionReference } from "@synara/contracts";
 import { isThreadMentionPath, threadIdFromThreadMentionPath } from "@synara/shared/threadMentions";
 import { Effect, Option } from "effect";
 
 import { paginateThreadMessages } from "../agentGateway/threadSummary.ts";
-import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import type {
+  OrchestrationThreadMentionContext,
+  ProjectionSnapshotQueryShape,
+} from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 
 export const THREAD_MENTION_MESSAGE_LIMIT = 20;
 export const THREAD_MENTION_MAX_MESSAGE_CHARS = 1_500;
@@ -62,7 +61,7 @@ function fitContextBlockToMaxChars(block: string, maxChars: number): string {
 
 export function formatThreadMentionContextBlock(input: {
   readonly reference: ProviderMentionReference;
-  readonly thread: OrchestrationThread | null;
+  readonly thread: OrchestrationThreadMentionContext | null;
   readonly maxChars?: number;
 }): string {
   const threadId = threadIdFromMentionReference(input.reference) ?? input.reference.path;
@@ -111,7 +110,7 @@ export interface ResolvedThreadMentionPromptProjection {
 
 export function resolveThreadMentionPromptProjection(input: {
   readonly mentions: ReadonlyArray<ProviderMentionReference> | undefined;
-  readonly snapshotQuery: Pick<ProjectionSnapshotQueryShape, "getThreadDetailById">;
+  readonly snapshotQuery: Pick<ProjectionSnapshotQueryShape, "getThreadMentionContextById">;
   readonly maxTotalContextChars?: number;
 }): Effect.Effect<ResolvedThreadMentionPromptProjection> {
   const threadMentions = (input.mentions ?? []).filter(isThreadMentionReference);
@@ -147,15 +146,19 @@ export function resolveThreadMentionPromptProjection(input: {
   return Effect.forEach(contextMentions, (reference) => {
     const threadId = threadIdFromMentionReference(reference);
     const thread = threadId
-      ? input.snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(threadId)).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("failed to resolve mentioned thread context", {
-              threadId,
-              error,
-            }).pipe(Effect.as(Option.none<OrchestrationThread>())),
-          ),
-          Effect.map(Option.getOrNull),
-        )
+      ? input.snapshotQuery
+          .getThreadMentionContextById(ThreadId.makeUnsafe(threadId), {
+            messageLimit: THREAD_MENTION_MESSAGE_LIMIT,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("failed to resolve mentioned thread context", {
+                threadId,
+                error,
+              }).pipe(Effect.as(Option.none<OrchestrationThreadMentionContext>())),
+            ),
+            Effect.map(Option.getOrNull),
+          )
       : Effect.succeed(null);
     return thread.pipe(
       Effect.map((resolvedThread) =>

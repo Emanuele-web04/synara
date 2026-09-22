@@ -10,6 +10,7 @@ import {
 } from "../Services/ThreadDiagnosticsQuery.ts";
 
 const OPERATIONAL_DIAGNOSTIC_CAP = 10_000;
+const OPERATIONAL_DIAGNOSTIC_RETENTION_PRUNE_INTERVAL = 50;
 
 interface ActivityRow extends Omit<DiagnosticThreadActivity, "payload"> {
   readonly payloadJson: string;
@@ -90,6 +91,12 @@ const makeThreadDiagnosticsQuery = Effect.gen(function* () {
     );
   };
 
+  // Retention is enforced every Nth insert rather than on each one: the two
+  // DELETEs cost a scan per write, while a bounded lag of a few rows past the
+  // cap or the 30-day window is invisible to readers. The first insert of a
+  // process still prunes, so a restart never inherits an unbounded backlog.
+  let insertsSinceRetentionPrune = OPERATIONAL_DIAGNOSTIC_RETENTION_PRUNE_INTERVAL;
+
   const recordOperationalDiagnostic: ThreadDiagnosticsQueryShape["recordOperationalDiagnostic"] = (
     input,
   ) =>
@@ -104,6 +111,11 @@ const makeThreadDiagnosticsQuery = Effect.gen(function* () {
                 ${input.code ?? null}, ${JSON.stringify(input.detail)}, ${input.occurredAt}
               )
             `;
+          insertsSinceRetentionPrune += 1;
+          if (insertsSinceRetentionPrune < OPERATIONAL_DIAGNOSTIC_RETENTION_PRUNE_INTERVAL) {
+            return;
+          }
+          insertsSinceRetentionPrune = 0;
           yield* sql`
               DELETE FROM operational_diagnostics
               WHERE occurred_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days')

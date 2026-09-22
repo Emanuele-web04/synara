@@ -963,7 +963,9 @@ export function AutomationDialog({
   readonly open: boolean;
   readonly form: AutomationFormState;
   readonly projects: ReturnType<typeof useStore.getState>["projects"];
-  readonly threads: readonly Thread[];
+  readonly threads: ReadonlyArray<
+    Pick<Thread, "id" | "projectId" | "title" | "sidechatSourceThreadId">
+  >;
   readonly warnings?: readonly AutomationDraftWarning[];
   readonly acknowledgedWarningIds?: ReadonlySet<AutomationDraftWarningId>;
   readonly onOpenChange: (open: boolean) => void;

@@ -46,7 +46,7 @@ describe("thread mention prompt context", () => {
       resolveThreadMentionPromptProjection({
         mentions: [reference, fileMention],
         snapshotQuery: {
-          getThreadDetailById: () => Effect.succeed(Option.some(mentionedThread)),
+          getThreadMentionContextById: () => Effect.succeed(Option.some(mentionedThread)),
         },
       }),
     );
@@ -75,7 +75,7 @@ describe("thread mention prompt context", () => {
       resolveThreadMentionPromptProjection({
         mentions: [reference],
         snapshotQuery: {
-          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadMentionContextById: () => Effect.succeed(Option.none()),
         },
       }),
     );
@@ -103,33 +103,33 @@ describe("thread mention prompt context", () => {
       name: `Thread ${index}`,
       path: `thread://thread-${index}`,
     }));
-    const getThreadDetailById = vi.fn(() => Effect.succeed(Option.some(longThread)));
+    const getThreadMentionContextById = vi.fn(() => Effect.succeed(Option.some(longThread)));
     const result = await Effect.runPromise(
       resolveThreadMentionPromptProjection({
         mentions: manyReferences,
         snapshotQuery: {
-          getThreadDetailById,
+          getThreadMentionContextById,
         },
       }),
     );
     expect(result.contextBlocks.join("\n\n").length).toBeLessThanOrEqual(
       THREAD_MENTION_MAX_TOTAL_CONTEXT_CHARS,
     );
-    expect(getThreadDetailById.mock.calls.length).toBeLessThan(manyReferences.length);
+    expect(getThreadMentionContextById.mock.calls.length).toBeLessThan(manyReferences.length);
   });
 
   it("skips context resolution when the provider input has no remaining budget", async () => {
-    const getThreadDetailById = vi.fn(() => Effect.succeed(Option.some(thread([]))));
+    const getThreadMentionContextById = vi.fn(() => Effect.succeed(Option.some(thread([]))));
     const result = await Effect.runPromise(
       resolveThreadMentionPromptProjection({
         mentions: [reference],
-        snapshotQuery: { getThreadDetailById },
+        snapshotQuery: { getThreadMentionContextById },
         maxTotalContextChars: 0,
       }),
     );
 
     expect(result).toEqual({ contextBlocks: [], providerMentions: undefined });
-    expect(getThreadDetailById).not.toHaveBeenCalled();
+    expect(getThreadMentionContextById).not.toHaveBeenCalled();
   });
 
   it("clamps oversized titles so the block header stays bounded", () => {

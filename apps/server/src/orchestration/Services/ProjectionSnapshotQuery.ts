@@ -29,6 +29,13 @@ import type { Effect, Option } from "effect";
 
 import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 
+export interface OrchestrationThreadMentionContext {
+  readonly id: ThreadId;
+  readonly title: OrchestrationThread["title"];
+  readonly modelSelection: OrchestrationThread["modelSelection"];
+  readonly messages: OrchestrationThread["messages"];
+}
+
 export interface ProjectionSnapshotCounts {
   readonly projectCount: number;
   readonly threadCount: number;
@@ -217,6 +224,14 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
+   * Read several active thread shells in one round of queries. Ids without an
+   * active thread are simply absent from the result.
+   */
+  readonly getThreadShellsByIds: (
+    threadIds: ReadonlyArray<ThreadId>,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationThreadShell>, ProjectionRepositoryError>;
+
+  /**
    * True when the thread id is already bound to an aggregate, including
    * soft-deleted threads that the active-only reads above hide.
    *
@@ -229,11 +244,14 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<boolean, ProjectionRepositoryError>;
 
   /**
-   * Recover the parent thread for legacy synthetic subagent IDs.
+   * Recover the parent thread shell for legacy synthetic subagent IDs.
+   *
+   * Shell-only on purpose: the provider-session resolver that consumes this
+   * runs on every provider intent event and reads just id/session/model.
    */
   readonly findSyntheticSubagentParentThread: (
     threadId: ThreadId,
-  ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
+  ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread detail snapshot by id.
@@ -241,6 +259,17 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadDetailById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
+
+  /**
+   * The bounded slice a `thread://` mention needs: the thread row plus its
+   * newest `messageLimit` messages. Skips plans, activities, pending
+   * interactions, checkpoints, and the full-transcript decode that
+   * `getThreadDetailById` pays, none of which a mention context block reads.
+   */
+  readonly getThreadMentionContextById: (
+    threadId: ThreadId,
+    options: { readonly messageLimit: number },
+  ) => Effect.Effect<Option.Option<OrchestrationThreadMentionContext>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread detail snapshot by id with the full message history.

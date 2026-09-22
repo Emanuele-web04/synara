@@ -269,16 +269,10 @@ function truncateJsonValue(
     return String(value);
   }
 
-  const entries = Object.entries(value)
-    .filter(
-      ([, entry]) =>
-        entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol",
-    )
-    .toSorted((left, right) => {
-      const byRank = activityPayloadKeyRank(left[0]) - activityPayloadKeyRank(right[0]);
-      return byRank !== 0 ? byRank : left[0].localeCompare(right[0]);
-    });
-  const retainedEntries = entries.slice(0, options.objectKeys);
+  const entries = Object.entries(value).filter(
+    ([, entry]) => entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol",
+  );
+  const retainedEntries = selectLeadingActivityPayloadEntries(entries, options.objectKeys);
   const result: Record<string, unknown> = {};
   for (const [key, entry] of retainedEntries) {
     result[key] = truncateJsonValue(entry, { ...options, depth: options.depth - 1 });
@@ -1408,4 +1402,55 @@ export function providerActivityUpdateFingerprint(activity: OrchestrationThreadA
     payload: activity.payload,
     turnId: activity.turnId,
   });
+}
+
+function compareActivityPayloadEntries(
+  left: readonly [string, unknown],
+  right: readonly [string, unknown],
+): number {
+  const byRank = activityPayloadKeyRank(left[0]) - activityPayloadKeyRank(right[0]);
+  return byRank !== 0 ? byRank : left[0].localeCompare(right[0]);
+}
+
+/**
+ * The first `limit` entries in rank/name order, without sorting the whole
+ * object first. Payloads are untrusted and can be arbitrarily wide, so a full
+ * sort just to keep a handful of keys made truncation itself the expensive
+ * step. Keys are unique, so the comparator never ties and the selection is
+ * exactly `toSorted(...).slice(0, limit)`.
+ */
+function selectLeadingActivityPayloadEntries(
+  entries: ReadonlyArray<[string, unknown]>,
+  limit: number,
+): Array<[string, unknown]> {
+  if (limit <= 0) {
+    return [];
+  }
+  if (entries.length <= limit) {
+    return entries.toSorted(compareActivityPayloadEntries);
+  }
+  const leading: Array<[string, unknown]> = [];
+  for (const entry of entries) {
+    if (
+      leading.length === limit &&
+      compareActivityPayloadEntries(entry, leading[leading.length - 1]!) >= 0
+    ) {
+      continue;
+    }
+    let low = 0;
+    let high = leading.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (compareActivityPayloadEntries(leading[middle]!, entry) <= 0) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    leading.splice(low, 0, entry);
+    if (leading.length > limit) {
+      leading.pop();
+    }
+  }
+  return leading;
 }

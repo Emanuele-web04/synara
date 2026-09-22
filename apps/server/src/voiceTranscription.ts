@@ -90,7 +90,10 @@ function decodeVoiceAudio(input: ServerVoiceTranscriptionInput): Buffer {
   }
 
   const audioBuffer = Buffer.from(normalizedBase64, "base64");
-  if (!audioBuffer.length || audioBuffer.toString("base64") !== normalizedBase64) {
+  // `isLikelyBase64` already pins the alphabet and padding shape, so comparing
+  // the decoded length against what the base64 length implies catches a
+  // truncated or mis-padded payload without re-encoding ~13 MB just to compare.
+  if (!audioBuffer.length || audioBuffer.length !== expectedBase64DecodedLength(normalizedBase64)) {
     throw new Error("The recorded audio could not be decoded.");
   }
   if (audioBuffer.length > SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES) {
@@ -148,7 +151,12 @@ function normalizeBase64(value: string): string | null {
 }
 
 function isLikelyBase64(value: string): boolean {
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+  return value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
+function expectedBase64DecodedLength(value: string): number {
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return (value.length / 4) * 3 - padding;
 }
 
 function isLikelyWavBuffer(buffer: Buffer): boolean {

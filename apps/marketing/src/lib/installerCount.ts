@@ -53,9 +53,13 @@ export async function getInstallerCount(): Promise<number | null> {
       headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
     }
 
+    // Cached in Next's data cache for the same 60s the route already promises
+    // via `s-maxage=60` (and `revalidate = 60`, which `cache: "no-store"` had
+    // been defeating), so homepage SSR and cache-miss polls stop paying a full
+    // GitHub Releases round-trip each and GitHub API usage stays bounded.
     const response = await fetch(RELEASES_API_URL, {
       headers,
-      cache: "no-store",
+      next: { revalidate: 60 },
     });
 
     if (!response.ok) return getStoredInstallerCount();

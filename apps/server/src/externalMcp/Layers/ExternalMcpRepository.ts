@@ -63,26 +63,34 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
       ORDER BY project_id ASC
     `;
 
+  const toIntegrationRecord = (
+    row: IntegrationRow,
+    projectIds: ReadonlyArray<string>,
+  ): ExternalMcpIntegrationRecord => ({
+    integrationId: row.integrationId,
+    name: row.name,
+    clientKind: row.clientKind,
+    audience: row.audience,
+    credentialHash: row.credentialHash,
+    capabilities: parseCapabilities(row.capabilitiesJson),
+    projectScope: row.projectScope,
+    projectIds: [...projectIds],
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+    lastUsedAt: row.lastUsedAt,
+    pairedAt: row.pairedAt,
+    revokedAt: row.revokedAt,
+    rateLimitPerMinute: row.rateLimitPerMinute,
+    concurrencyLimit: row.concurrencyLimit,
+  });
+
   const hydrateIntegration = (row: IntegrationRow) =>
     readProjectIds(row.integrationId).pipe(
-      Effect.map(
-        (projects): ExternalMcpIntegrationRecord => ({
-          integrationId: row.integrationId,
-          name: row.name,
-          clientKind: row.clientKind,
-          audience: row.audience,
-          credentialHash: row.credentialHash,
-          capabilities: parseCapabilities(row.capabilitiesJson),
-          projectScope: row.projectScope,
-          projectIds: projects.map((project) => project.projectId),
-          createdAt: row.createdAt,
-          expiresAt: row.expiresAt,
-          lastUsedAt: row.lastUsedAt,
-          pairedAt: row.pairedAt,
-          revokedAt: row.revokedAt,
-          rateLimitPerMinute: row.rateLimitPerMinute,
-          concurrencyLimit: row.concurrencyLimit,
-        }),
+      Effect.map((projects) =>
+        toIntegrationRecord(
+          row,
+          projects.map((project) => project.projectId),
+        ),
       ),
     );
 
@@ -154,7 +162,33 @@ export const makeExternalMcpRepository = Effect.gen(function* () {
       FROM external_mcp_integrations
       ORDER BY created_at DESC, integration_id DESC
     `.pipe(
-      Effect.flatMap((rows) => Effect.forEach(rows, hydrateIntegration)),
+      // One grouped read of the project scope table instead of a query per
+      // integration; the per-row `hydrateIntegration` path stays for point reads.
+      Effect.flatMap((rows) =>
+        rows.length === 0
+          ? Effect.succeed([] as ExternalMcpIntegrationRecord[])
+          : sql<{ readonly integrationId: string; readonly projectId: string }>`
+              SELECT integration_id AS "integrationId", project_id AS "projectId"
+              FROM external_mcp_integration_projects
+              WHERE integration_id IN ${sql.in(rows.map((row) => row.integrationId))}
+              ORDER BY integration_id ASC, project_id ASC
+            `.pipe(
+              Effect.map((projectRows) => {
+                const projectIdsByIntegrationId = new Map<string, string[]>();
+                for (const projectRow of projectRows) {
+                  const projectIds = projectIdsByIntegrationId.get(projectRow.integrationId);
+                  if (projectIds) {
+                    projectIds.push(projectRow.projectId);
+                  } else {
+                    projectIdsByIntegrationId.set(projectRow.integrationId, [projectRow.projectId]);
+                  }
+                }
+                return rows.map((row) =>
+                  toIntegrationRecord(row, projectIdsByIntegrationId.get(row.integrationId) ?? []),
+                );
+              }),
+            ),
+      ),
       Effect.mapError(repositoryError("listIntegrations")),
     );
 
