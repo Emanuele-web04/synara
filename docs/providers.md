@@ -77,6 +77,11 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
+Claude Code may discover a model under an alias while reporting its concrete model ID separately.
+For a release newer than Synara's catalog, the picker shows the concrete ID. Agent Gateway accepts
+that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact
+advertised alias.
+
 For Codex, successful model discovery determines the built-in choices, including when the returned
 catalog is empty. Models absent from that catalog are not added back from Synara's static list.
 Custom models remain available. Until discovery succeeds, Synara uses a static fallback; a failed

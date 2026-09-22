@@ -11,7 +11,7 @@ import {
   type ProviderModelDescriptor,
   type ServerProviderAuthStatus,
 } from "@synara/contracts";
-import { getClaudeContextWindowSuffix } from "@synara/shared/model";
+import { getClaudeContextWindowSuffix, stripClaudeContextWindowSuffix } from "@synara/shared/model";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -668,7 +668,29 @@ export function resolveAgentGatewayTarget(input: {
         ),
       );
     }
-    const descriptor = catalog.models.find((model) => model.slug === input.target.model);
+    const exactDescriptor = catalog.models.find((model) => model.slug === input.target.model);
+    // The Claude picker can show a concrete resolved id for a newly discovered
+    // alias. Discovery still advertises the alias as its slug, so validate that
+    // id against a single non-default descriptor carrying it. Prefer an exact
+    // resolved id before ignoring its context qualifier.
+    const resolvedClaudeDescriptors =
+      !exactDescriptor && input.target.provider === "claudeAgent"
+        ? catalog.models.filter((model) => model.slug !== "default" && model.resolvedModel)
+        : [];
+    const exactResolved = resolvedClaudeDescriptors.filter(
+      (model) => model.resolvedModel === input.target.model,
+    );
+    const unqualifiedResolved =
+      getClaudeContextWindowSuffix(input.target.model) === null
+        ? resolvedClaudeDescriptors.filter(
+            (model) =>
+              model.resolvedModel &&
+              stripClaudeContextWindowSuffix(model.resolvedModel) === input.target.model,
+          )
+        : [];
+    const resolvedMatches = exactResolved.length > 0 ? exactResolved : unqualifiedResolved;
+    const descriptor =
+      exactDescriptor ?? (resolvedMatches.length === 1 ? resolvedMatches[0] : undefined);
     // Capability claims come from discovery, never the agent's target input. Keep
     // unknown distinct from false so Auto-mode validation can still fail closed.
     const target: ModelSelection =
@@ -737,7 +759,8 @@ export function resolveAgentGatewayTarget(input: {
       input.target.provider === "claudeAgent" &&
       (input.target.options?.autoCompactWindow !== undefined ||
         input.target.options?.contextWindow !== undefined) &&
-      descriptor?.resolvedModel
+      descriptor?.resolvedModel &&
+      stripClaudeContextWindowSuffix(descriptor.resolvedModel) !== input.target.model
     ) {
       const suffix =
         getClaudeContextWindowSuffix(input.target.model) === "1m" &&

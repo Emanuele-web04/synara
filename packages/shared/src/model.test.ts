@@ -20,6 +20,7 @@ import {
   getDefaultAutoCompactWindow,
   getDefaultContextWindow,
   getDefaultModel,
+  EMPTY_MODEL_CAPABILITIES,
   getModelCapabilities,
   getModelOptions,
   humanizeModelSlug,
@@ -28,6 +29,7 @@ import {
   isClaudeUltrathinkPrompt,
   normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
+  resolveNewestKnownClaudeFamilyModel,
   normalizeCursorModelOptions,
   normalizeGrokModelOptions,
   normalizeModelDisplayName,
@@ -1284,6 +1286,34 @@ describe("normalizeAntigravityModelOptions", () => {
 });
 
 describe("getModelCapabilities Claude capability flags", () => {
+  it("keeps every catalog Claude model on its own catalog capabilities", () => {
+    for (const model of MODEL_OPTIONS_BY_PROVIDER.claudeAgent) {
+      expect(getModelCapabilities("claudeAgent", model.slug)).toBe(model.capabilities);
+      expect(getModelCapabilities("claudeAgent", `${model.slug}[1m]`)).toBe(model.capabilities);
+      expect(resolveNewestKnownClaudeFamilyModel(model.slug)).toBeNull();
+    }
+  });
+
+  it("gives uncatalogued newer Claude releases their family's newest capabilities", () => {
+    const caps = (slug: string) => getModelCapabilities("claudeAgent", slug);
+    expect(caps("claude-opus-6")).toBe(caps("claude-opus-5-5"));
+    expect(caps("claude-opus-6[1m]")).toBe(caps("claude-opus-5-5"));
+    expect(caps("claude-opus-5-6")).toBe(caps("claude-opus-5-5"));
+    expect(caps("claude-fable-6")).toBe(caps("claude-fable-5-1"));
+    expect(caps("claude-sonnet-5-1")).toBe(caps("claude-sonnet-5"));
+    expect(caps("claude-haiku-5")).toBe(caps("claude-haiku-4-5"));
+    expect(resolveNewestKnownClaudeFamilyModel("claude-opus-6[1m]")).toBe("claude-opus-5-5");
+  });
+
+  it("keeps older or unrecognized uncatalogued Claude ids on empty capabilities", () => {
+    const caps = (slug: string) => getModelCapabilities("claudeAgent", slug);
+    expect(caps("claude-opus-5-1")).toBe(EMPTY_MODEL_CAPABILITIES);
+    expect(caps("claude-opus-4-1")).toBe(EMPTY_MODEL_CAPABILITIES);
+    expect(caps("claude-3-opus")).toBe(EMPTY_MODEL_CAPABILITIES);
+    expect(caps("us.anthropic.claude-opus-6-v1")).toBe(EMPTY_MODEL_CAPABILITIES);
+    expect(caps("enterprise-model")).toBe(EMPTY_MODEL_CAPABILITIES);
+  });
+
   it("enables adaptive reasoning for supported Claude models", () => {
     const has = (m: string | undefined) =>
       getModelCapabilities("claudeAgent", m).reasoningEffortLevels.length > 0;

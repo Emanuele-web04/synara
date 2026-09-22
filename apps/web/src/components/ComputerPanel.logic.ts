@@ -66,6 +66,19 @@ export function stepComputerFrameGate(
   };
 }
 
+/**
+ * A backend that has never connected and never failed is not broken — it is
+ * idle. The server does not connect at boot, so after every launch health
+ * reads non-connected with a clean record until something uses the desktop.
+ */
+export function computerBackendIsIdle(health: ComputerHealth | undefined): boolean {
+  return (
+    health?.status === "unavailable" &&
+    health.consecutiveFailures === 0 &&
+    health.lastFailure === undefined
+  );
+}
+
 export type ComputerAvailabilityView =
   | { readonly kind: "checking"; readonly title: string; readonly description: string }
   | { readonly kind: "ready"; readonly title: string; readonly description: string }
@@ -75,9 +88,16 @@ export type ComputerAvailabilityView =
       readonly description: string;
     };
 
+/**
+ * `grantsConfirmed` is fresh evidence from the OS itself (the desktop app's
+ * native grant check) that every permission is granted. The server cannot
+ * know that before its backend starts, which happens only when something uses
+ * the desktop, so without it an idle backend stays "not checked".
+ */
 export function resolveComputerAvailabilityView(
   availability: ComputerAvailability | undefined,
   health?: ComputerHealth,
+  grantsConfirmed = false,
 ): ComputerAvailabilityView {
   // A pending retry is not a dead desktop, and the viewport must not say it is:
   // the frames stop either way, but one of the two states ends by itself.
@@ -96,6 +116,13 @@ export function resolveComputerAvailabilityView(
     };
   }
   if (availability.kind === "available") {
+    if (grantsConfirmed && computerBackendIsIdle(health)) {
+      return {
+        kind: "ready",
+        title: "All permissions granted",
+        description: "Synara connects to the desktop the next time an agent uses it.",
+      };
+    }
     if (health && health.status !== "connected") {
       return {
         kind: "checking",
@@ -113,8 +140,8 @@ export function resolveComputerAvailabilityView(
     }
     return {
       kind: "ready",
-      title: "Computer control available",
-      description: "The agent can use the desktop through its computer tools.",
+      title: "Connected to the desktop",
+      description: "Synara can see and control the desktop through its computer tools.",
     };
   }
   if (availability.kind === "unsupported-platform") {
@@ -165,14 +192,20 @@ export type ComputerSetupProbe = Pick<
   "availability" | "health" | "capabilities" | "provisionable"
 >;
 
-export function computerStatusNeedsSetup(status: ComputerSetupProbe | undefined): boolean {
+export function computerStatusNeedsSetup(
+  status: ComputerSetupProbe | undefined,
+  grantsConfirmed = false,
+): boolean {
   if (!status) return false;
   if (status.availability.kind === "unsupported-platform") return false;
+  // An idle backend's placeholder health proves nothing either way; only the
+  // OS's own answer that every grant is in place lets it skip Set up.
+  const idle = grantsConfirmed && computerBackendIsIdle(status.health);
   return (
-    (status.provisionable === true && status.health.status !== "connected") ||
+    (status.provisionable === true && status.health.status !== "connected" && !idle) ||
     status.availability.kind === "backend-unavailable" ||
     status.availability.kind === "permission-required" ||
-    status.health.captureAvailable === false ||
+    (status.health.captureAvailable === false && !idle) ||
     !status.capabilities.input ||
     !status.capabilities.capture
   );
@@ -233,14 +266,11 @@ export function resolveComputerHealthBadge(
   health: ComputerHealth | undefined,
 ): ComputerHealthBadge | null {
   if (!health || health.status === "connected") return null;
+  // Opening the pane is itself what engages the backend, and a real failure
+  // arrives with a lastFailure to show. Badging the idle state would flash
+  // "Desktop unavailable" at every pane open on a perfectly healthy desktop.
+  if (computerBackendIsIdle(health)) return null;
   const reconnecting = health.status === "reconnecting";
-  // A backend that has never connected AND never failed is not broken — it is
-  // lazy. The server no longer connects at boot, so the first snapshot a pane
-  // sees carries non-connected health with a clean record; opening the pane is
-  // itself what engages the backend, and a real failure arrives with a
-  // lastFailure to show. Badging the lazy state would flash "Desktop
-  // unavailable" at every pane open on a perfectly healthy desktop.
-  if (!reconnecting && health.consecutiveFailures === 0 && !health.lastFailure) return null;
   return {
     label: reconnecting ? "Reconnecting to desktop" : "Desktop unavailable",
     title: computerHealthDetail(health),

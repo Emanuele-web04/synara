@@ -141,7 +141,7 @@ const COMPUTER_TOOL_REFRESH_GUIDANCE =
  * matters, and the description alone does not stop a relaunch loop.
  */
 const INPUT_PAUSE_REQUERY_HINT =
-  "Observe a usable window of the affected app after physical input stops; never replay an uncertain action.";
+  "To resume, call computer_get_state with the paused window_id, or with include_screenshot: true when no window is named; never replay an uncertain action.";
 
 const LAUNCH_NULL_WINDOW_GUIDANCE =
   "No usable window was established. The launch may already have started the app; never launch again automatically. Inspect computer_list_windows once using the returned app identity. If no usable target exists, report the limitation instead of looping. An isolated browser via computer_browser_prepare is an alternative only when compatible with the requested task; do not silently replace a requested personal browser or incognito window.";

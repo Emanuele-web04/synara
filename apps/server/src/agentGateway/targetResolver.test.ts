@@ -114,6 +114,82 @@ describe("agent gateway target resolver", () => {
       }),
   );
 
+  it.effect("accepts a Claude picker id resolved from one discovered non-default alias", () =>
+    Effect.gen(function* () {
+      const claudeDiscovery = {
+        listModels: () =>
+          Effect.succeed({
+            models: [
+              {
+                slug: "default",
+                name: "Default",
+                resolvedModel: "claude-opus-6[1m]",
+              },
+              {
+                slug: "opus[1m]",
+                name: "Opus",
+                resolvedModel: "claude-opus-6[1m]",
+                supportsAutoMode: true,
+                optionDescriptors: [
+                  {
+                    id: "autoCompactWindow",
+                    label: "Context",
+                    type: "select" as const,
+                    options: [{ id: "200k", label: "200k" }],
+                  },
+                ],
+              },
+            ],
+          }),
+      } as unknown as ProviderDiscoveryServiceShape;
+
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({
+          target: { provider: "claudeAgent", model: "claude-opus-6" },
+          discovery: claudeDiscovery,
+        }),
+        { provider: "claudeAgent", model: "claude-opus-6", supportsAutoMode: true },
+      );
+      assert.deepEqual(
+        yield* resolveAgentGatewayTarget({
+          target: {
+            provider: "claudeAgent",
+            model: "claude-opus-6",
+            options: { autoCompactWindow: "200k" },
+          },
+          discovery: claudeDiscovery,
+        }),
+        {
+          provider: "claudeAgent",
+          model: "claude-opus-6",
+          options: { autoCompactWindow: "200k" },
+          supportsAutoMode: true,
+        },
+      );
+    }),
+  );
+
+  it.effect("rejects an ambiguous Claude resolved id", () =>
+    Effect.gen(function* () {
+      const result = yield* resolveAgentGatewayTarget({
+        target: { provider: "claudeAgent", model: "claude-opus-6" },
+        discovery: {
+          listModels: () =>
+            Effect.succeed({
+              models: [
+                { slug: "opus", name: "Opus", resolvedModel: "claude-opus-6[1m]" },
+                { slug: "team-opus", name: "Team Opus", resolvedModel: "claude-opus-6[1m]" },
+              ],
+            }),
+        } as unknown as ProviderDiscoveryServiceShape,
+      }).pipe(
+        Effect.map(() => ({ code: "unexpected-success" })),
+        Effect.catch((error) => Effect.succeed(error)),
+      );
+      assert.equal(result.code, "model_unavailable");
+    }),
+  );
+
   it.effect("builds examples from the exact model restrictions and preserves option types", () =>
     Effect.gen(function* () {
       const codexCatalog = {
