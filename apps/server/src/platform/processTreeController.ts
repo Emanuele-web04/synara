@@ -228,10 +228,11 @@ export function createProcessTreeKiller(
         childrenByParentPid = deps.captureChildrenMap();
       }
       if (!childrenByParentPid) return { descendants: [], captureComplete: false };
-      // A root missing from a complete snapshot is provably not running. Its
-      // numeric pid may already be reused by an unrelated process, so refusing
-      // to collect here also closes the stale-pid kill path.
-      if (!processesByPid(childrenByParentPid).has(rootPid)) {
+      // A root absent from the snapshot — neither a child of another process
+      // nor a parent key — is provably not running, and refusing to collect
+      // also closes the stale-pid kill path. Sparse maps may legitimately list
+      // a live root only as a parent key, so parentage alone counts as presence.
+      if (!childrenByParentPid.has(rootPid) && !processesByPid(childrenByParentPid).has(rootPid)) {
         return { descendants: [], captureComplete: true };
       }
       return {

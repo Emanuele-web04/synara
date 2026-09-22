@@ -9,6 +9,7 @@ import {
   type ProjectId,
   SpaceId,
 } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -159,7 +160,7 @@ describe("createOrRecoverProjectFromPath", () => {
         type: "project.create",
         defaultModelSelection: {
           provider: "codex",
-          model: "gpt-5.5",
+          model: getDefaultModel("codex"),
         },
       }),
     );

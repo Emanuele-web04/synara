@@ -372,7 +372,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           aria-live="polite"
           aria-label="Couldn’t load OMP models. Check that omp is installed and authenticated."
           tabIndex={-1}
-          className="flex items-start gap-1.5 px-2 py-2 text-sm text-amber-600 dark:text-amber-300/90"
+          className="text-ui-sm flex items-start gap-1.5 px-2 py-2 text-amber-600 dark:text-amber-300/90"
         >
           <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
           <span>Couldn’t load OMP models — check that omp is installed and authenticated</span>
