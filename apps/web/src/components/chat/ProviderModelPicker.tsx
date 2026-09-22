@@ -349,16 +349,21 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       <div className="px-2 py-1.5 text-ui leading-snug text-destructive">{discoveryError}</div>
     ) : null;
 
+    const activeModelSlug =
+      activeProvider === provider
+        ? (resolveSelectableModel(provider, props.model, providerOptions) ?? props.model)
+        : props.model;
+
     const content =
       groupedOptions.length > 0 ? (
         <MenuRadioGroup
-          value={activeProvider === provider ? props.model : ""}
+          value={activeProvider === provider ? activeModelSlug : ""}
           onValueChange={(value) => handleModelChange(provider, value)}
         >
           <ProviderModelOptionGroupList
             groupedOptions={groupedOptions}
             provider={provider}
-            activeModel={props.model}
+            activeModel={activeModelSlug}
             isSearching={normalizedModelSearchQuery.length > 0}
             favoriteProvider={favoriteProvider}
             favoriteModelSlugSet={favoriteModelSlugSet}

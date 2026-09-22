@@ -205,17 +205,42 @@ export function mergeDynamicModelOptions(input: {
     });
   }
 
+  // Scoped providers (omp/pi/opencode) surface catalog slugs as
+  // `<upstream-provider>/<model>`. A bare custom slug naming the same model id
+  // duplicates the discovered row; drop it only when exactly one discovered
+  // option carries that id so an ambiguous name never silently wins.
+  const scopedProvider =
+    input.provider === "omp" || input.provider === "pi" || input.provider === "opencode";
+  const dynamicIdPartCounts = scopedProvider
+    ? normalizedDynamicOptions.reduce((counts, option) => {
+        const idPart = option.slug.slice(option.slug.lastIndexOf("/") + 1);
+        counts.set(idPart, (counts.get(idPart) ?? 0) + 1);
+        return counts;
+      }, new Map<string, number>())
+    : undefined;
+
   // Droid validates model values against its live ACP select options, so an
   // arbitrary custom slug is guaranteed to fail at session configuration.
   const customOnlyModels =
     input.provider === "droid"
       ? []
-      : input.staticOptions.filter(
-          (model) =>
-            "isCustom" in model &&
-            model.isCustom &&
-            !dynamicNormalizedSlugs.has(normalizeDynamicModelSlug(input.provider, model.slug)),
-        );
+      : input.staticOptions.filter((model) => {
+          if (!("isCustom" in model) || !model.isCustom) {
+            return false;
+          }
+          const normalizedCustomSlug = normalizeDynamicModelSlug(input.provider, model.slug);
+          if (dynamicNormalizedSlugs.has(normalizedCustomSlug)) {
+            return false;
+          }
+          if (
+            dynamicIdPartCounts !== undefined &&
+            !normalizedCustomSlug.includes("/") &&
+            dynamicIdPartCounts.get(normalizedCustomSlug) === 1
+          ) {
+            return false;
+          }
+          return true;
+        });
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );

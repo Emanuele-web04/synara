@@ -74,6 +74,11 @@ const PROVIDER_MODEL_DISCOVERY_PRIORITY_RANK: Record<ProviderModelDiscoveryPrior
   foreground: 2,
 };
 
+// The queue slot is single and discovery runs over IPC into CLI subprocesses
+// that can hang indefinitely. Without a bound, one stuck provider discovery
+// starves every other provider's catalog loads.
+const PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS = 90_000;
+
 function queryKeysMatch(left: readonly unknown[], right: readonly unknown[]): boolean {
   return (
     left.length === right.length && left.every((value, index) => Object.is(value, right[index]))
@@ -119,13 +124,28 @@ function drainProviderModelDiscoveryQueue(): void {
   }
 
   providerModelDiscoveryRunning = true;
+  let taskSettled = false;
+  const finishTask = (settle: () => void) => {
+    if (taskSettled) return;
+    taskSettled = true;
+    clearTimeout(timeoutId);
+    task.signal.removeEventListener("abort", onTaskAbort);
+    providerModelDiscoveryRunning = false;
+    settle();
+    drainProviderModelDiscoveryQueue();
+  };
+  const onTaskAbort = () => finishTask(() => task.reject(abortReason(task.signal)));
+  const timeoutId = setTimeout(
+    () => finishTask(() => task.reject(new Error("Provider model discovery timed out."))),
+    PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS,
+  );
+  task.signal.addEventListener("abort", onTaskAbort, { once: true });
   void Promise.resolve()
     .then(task.discover)
-    .then(task.resolve, task.reject)
-    .finally(() => {
-      providerModelDiscoveryRunning = false;
-      drainProviderModelDiscoveryQueue();
-    });
+    .then(
+      (value) => finishTask(() => task.resolve(value)),
+      (reason) => finishTask(() => task.reject(reason)),
+    );
 }
 
 export function prioritizeProviderModelDiscovery(
@@ -464,9 +484,13 @@ export function providerModelsQueryOptions(input: {
             query.state.data?.error || query.state.error ? 30_000 : false,
         }
       : {}),
-    ...(input.provider === "droid" || input.provider === "omp"
-      ? { refetchOnWindowFocus: false }
-      : {}),
+    // Droid discovery starts a disposable ACP session, so it must not refetch
+    // on focus. OMP discovery is a cheap `omp models` subprocess (server-cached
+    // 5min; modelRoles are re-read per request), so it refetches on focus and
+    // on an interval while observed — otherwise config/role edits only appear
+    // after a remount.
+    ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
+    ...(input.provider === "omp" ? { refetchOnWindowFocus: true, refetchInterval: 60_000 } : {}),
     // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
     // providerModelPrefetch.ts (not imported: that module imports from here).
     gcTime: 30 * 60_000,

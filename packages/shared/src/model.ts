@@ -708,7 +708,25 @@ export function resolveSelectableModel(
   }
 
   const resolved = options.find((option) => option.slug === normalized);
-  return resolved ? resolved.slug : null;
+  if (resolved) {
+    return resolved.slug;
+  }
+
+  // Scoped providers (omp/pi/opencode) surface catalog slugs as
+  // `<upstream-provider>/<model>`, while saved selections and custom entries
+  // can hold the bare model id. Resolve a bare slug to a uniquely matching
+  // scoped option; ambiguity across upstream providers resolves to nothing.
+  if (
+    (provider === "omp" || provider === "pi" || provider === "opencode") &&
+    !normalized.includes("/")
+  ) {
+    const scoped = options.filter((option) => option.slug.endsWith(`/${normalized}`));
+    if (scoped.length === 1) {
+      return scoped[0]!.slug;
+    }
+  }
+
+  return null;
 }
 
 export function resolveModelSlug(

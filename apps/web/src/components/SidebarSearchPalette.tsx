@@ -131,7 +131,7 @@ const IMPORT_PROJECTS_SOURCES: readonly {
 
 export type ImportProviderKind = Extract<
   ProviderKind,
-  "codex" | "claudeAgent" | "cursor" | "opencode"
+  "codex" | "claudeAgent" | "cursor" | "opencode" | "omp"
 >;
 
 function actionHandler(

@@ -297,6 +297,32 @@ describe("resolveSelectableModel", () => {
       ]),
     ).toBeNull();
   });
+
+  it.each(["omp", "pi", "opencode"] as const)(
+    "resolves a bare %s model id to its unique scoped catalog slug",
+    (provider) => {
+      expect(
+        resolveSelectableModel(provider, "muse-spark-1.3-contributor", [
+          { slug: "opencode-go/muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
+          { slug: "opencode-go/deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+        ]),
+      ).toBe("opencode-go/muse-spark-1.3-contributor");
+    },
+  );
+
+  it("does not resolve a bare model id when multiple scoped rows share it", () => {
+    expect(
+      resolveSelectableModel("omp", "shared-model", [
+        { slug: "provider-a/shared-model", name: "Shared Model (A)" },
+        { slug: "provider-b/shared-model", name: "Shared Model (B)" },
+      ]),
+    ).toBeNull();
+    expect(
+      resolveSelectableModel("codex", "muse-spark-1.3-contributor", [
+        { slug: "opencode-go/muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
+      ]),
+    ).toBeNull();
+  });
 });
 
 describe("getModelCapabilities reasoningEffortLevels", () => {

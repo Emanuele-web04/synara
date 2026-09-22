@@ -60,6 +60,7 @@ import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
+import { readOmpSessionHistory } from "../OmpSessionHistory.ts";
 import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
 import { appendProviderReferencesPromptBlock } from "../promptReferenceProjection.ts";
 import {
@@ -1933,6 +1934,56 @@ export function makeOmpAdapter(
         return { threadId, turns: snapshotProviderTurns(ctx.turns) };
       });
 
+    const readExternalThread: NonNullable<OmpAdapterShape["readExternalThread"]> = (input) =>
+      Effect.tryPromise({
+        // Resolve the agent dir with the same precedence OMP uses for its
+        // session store: provider override, ambient env, then ~/.omp/agent.
+        try: async () => {
+          const agentDir =
+            input.providerOptions?.omp?.agentDir?.trim() ||
+            ompSettings.agentDir?.trim() ||
+            process.env.PI_CODING_AGENT_DIR?.trim() ||
+            nodePath.join(nodeOs.homedir(), process.env.PI_CONFIG_DIR?.trim() || ".omp", "agent");
+          return await readOmpSessionHistory(agentDir, input.externalThreadId);
+        },
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "thread/read",
+            detail: cause instanceof Error ? cause.message : "Failed to read the Oh My Pi session.",
+            cause,
+          }),
+      }).pipe(
+        Effect.flatMap((history) =>
+          history
+            ? Effect.succeed({
+                threadId: ThreadId.makeUnsafe(history.sessionId),
+                ...(history.cwd ? { cwd: history.cwd } : {}),
+                ...(history.lastModel
+                  ? {
+                      lastUsedModel: {
+                        model: history.lastModel,
+                        ...(history.lastThinkingLevel
+                          ? { thinkingLevel: history.lastThinkingLevel }
+                          : {}),
+                      },
+                    }
+                  : {}),
+                turns: history.messages.map((message, index) => ({
+                  id: TurnId.makeUnsafe(`omp:${message.id}:${index}`),
+                  items: [{ type: "ompMessage", ...message }],
+                })),
+              })
+            : Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "thread/read",
+                  detail: `Oh My Pi session '${input.externalThreadId}' was not found locally.`,
+                }),
+              ),
+        ),
+      );
+
     const rollbackThread: OmpAdapterShape["rollbackThread"] = (threadId, numTurns) =>
       Effect.gen(function* () {
         yield* requireSession(threadId);
@@ -2095,7 +2146,9 @@ export function makeOmpAdapter(
         // Omp's TUI has /compact, but ACP currently exposes no compaction RPC
         // and treats that text as an ordinary model prompt.
         supportsThreadCompaction: false,
-        supportsThreadImport: false,
+        // OMP persists every session under <agentDir>/sessions, so an external
+        // session id can be read from the JSONL store and resumed over ACP.
+        supportsThreadImport: true,
       } satisfies ProviderComposerCapabilities);
 
     const listModels: NonNullable<OmpAdapterShape["listModels"]> = (input) =>
@@ -2324,6 +2377,7 @@ export function makeOmpAdapter(
       sendTurn,
       interruptTurn,
       readThread,
+      readExternalThread,
       rollbackThread,
       forkThread,
       respondToRequest,
