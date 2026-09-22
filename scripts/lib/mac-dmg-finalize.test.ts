@@ -43,7 +43,6 @@ describe("macOS DMG finalization", () => {
       credentials.appleApiKeyId,
       "--issuer",
       credentials.appleApiIssuer,
-      "--wait",
     ]);
   });
 

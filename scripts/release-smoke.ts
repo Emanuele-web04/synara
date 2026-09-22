@@ -141,14 +141,23 @@ function verifyReleaseWorkflowSafety(): void {
     "  preflight:\n    name: Preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
     "Expected preflight to receive read-only repository access.",
   );
-  assertContains(
-    workflow,
-    "  build:\n    name: Build ${{ matrix.label }}\n    needs: [preflight, build_mac_icon]\n    runs-on: ${{ matrix.runner }}\n    timeout-minutes: 60\n    permissions:\n      contents: read",
-    "Expected artifact builds to receive read-only repository access.",
+  const buildJob = workflow.slice(
+    workflow.indexOf("  build:\n"),
+    workflow.indexOf("  publish_cli:\n"),
   );
   assertContains(
-    workflow,
-    "- label: macOS arm64\n            runner: macos-15",
+    buildJob,
+    "needs: [preflight, build_mac_icon, build_portable]",
+    "Native builds require exact-source prerequisites.",
+  );
+  assertContains(
+    buildJob,
+    "permissions:\n      contents: read",
+    "Artifact builds must remain read-only.",
+  );
+  assertContains(
+    readFileSync(resolve(repoRoot, "scripts/lib/release-build-scope.ts"), "utf8"),
+    'runner: "macos-15",',
     "Expected the arm64 native release runner to retain the macOS 15 SDK.",
   );
   for (const toolchain of [
@@ -161,7 +170,7 @@ function verifyReleaseWorkflowSafety(): void {
     assertContains(workflow, toolchain, "Expected separate native and icon release toolchains.");
   }
   assertContains(
-    workflow,
+    readFileSync(resolve(repoRoot, ".github/actions/provision-cua/action.yml"), "utf8"),
     "pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev",
     "Expected the Linux release to install the native driver's build dependencies.",
   );
@@ -172,7 +181,7 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     workflow,
-    "  build_server_tarball:\n    name: Build server tarball\n    if: ${{ needs.preflight.outputs.publish_release == 'true' }}\n    needs: [preflight, build]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: read",
+    "  build_server_tarball:\n    name: Build server tarball\n    if: needs.preflight.outputs.build_server == 'true'\n    needs: [preflight, build_portable]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: read",
     "Expected server tarball builds to receive read-only repository access.",
   );
   assertContains(

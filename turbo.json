@@ -1,6 +1,7 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": [
+    "AZURE_TRUSTED_SIGNING_SUBJECT_DN",
     "PORT",
     "VITE_WS_URL",
     "VITE_DEV_SERVER_URL",

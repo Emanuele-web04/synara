@@ -8,7 +8,10 @@ This document covers build-only native validation and publishing desktop release
   - Manual dispatch defaults to build-only validation and uploads workflow artifacts without publishing anything.
   - A pushed tag matching `v*.*.*` publishes after successful builds.
   - Manual publication requires the explicit `publish_release=true` input.
-- Runs quality gates first: lint, typecheck, test.
+- Runs quality gates first: lint, typecheck, test. Narrow `native`, `icon`, and
+  `js` validation stages cannot publish and omit these full-suite gates.
+- Builds portable JavaScript once, verifies its source/lockfile/settings and
+  output checksums on each consumer, and stages native dependencies per platform.
 - Builds four artifacts in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG
@@ -92,7 +95,7 @@ Checklist:
 
 ## 1) Build-only native CI validation
 
-Use this before publication to validate the real native macOS, Linux, and Windows build matrix. Build-only mode does not create a tag, GitHub Release, npm package, updater manifest, or version-bump commit.
+Use this before publication to validate the real native macOS, Linux, and Windows build matrix. Build-only mode produces workflow artifacts and local updater metadata without creating a tag, GitHub Release, npm publication, or version-bump commit, or changing public updater feeds.
 
 1. Push the release-candidate branch so GitHub Actions can check it out.
 2. Start the workflow in build-only mode:
@@ -102,6 +105,77 @@ Use this before publication to validate the real native macOS, Linux, and Window
 5. Download the workflow artifacts and sanity-check installation on each OS.
 
 To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
+
+For one-platform qualification, add `-f platform=mac-arm64`, `mac-x64`,
+`linux-x64`, or `win-x64`. `-f stage=artifact` (the default) still runs quality
+gates, packaging, provenance checks, and isolated startup smoke for that platform.
+For a narrower diagnosis:
+
+```bash
+gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f platform=linux-x64 -f stage=native
+gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f platform=mac-arm64 -f stage=icon
+gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f stage=js
+```
+
+`native` verifies the pinned Cua artifact/source path only; `icon` compiles the
+macOS catalog only; `js` builds and records portable outputs only. These stages
+do not qualify an installer or provider runtime. Publication rejects any scope
+other than `platform=all, stage=artifact` and still requires every desktop gate.
+Server tarball preparation runs alongside desktop jobs; publication waits for both.
+
+### Release build caches and measurements
+
+See [build optimization evidence](release-build-optimization.md) for the measured
+baseline, local measurements, remaining CI validation, and timing interpretation.
+
+`.github/workflows/cua-release-cache.yml` builds a credential-free Cua cache on
+relevant changes to `main`, with a default-branch guard. To warm an evicted cache
+or validate a runner-image update, dispatch it on the default branch:
+
+```bash
+gh workflow run cua-release-cache.yml --ref main
+```
+
+Release tags restore only exact keys. GitHub scopes caches by ref: a cache made
+on one release tag cannot seed the next tag, whereas the default-branch cache is
+visible to release jobs. PR workflows do not populate this cache. Keys cover the
+pinned release manifest, all patches, provisioning/validation/cache logic, actual
+Rust/compiler/OS/architecture/Xcode/SDK identity, Linux development packages, and
+build flags. Arbitrary compiler overrides/wrappers are rejected. Signing keys,
+certificates, signed release bundles and user state are never cached.
+
+Each restore checks the build key, existing executable provenance/checksum and
+Mach-O/ELF identity, plus all Linux sidecar checksums. Non-exact matches are
+discarded before a source build. A corrupt exact hit fails instead of silently
+substituting a different binary. Delete that cache entry in GitHub Actions and
+rerun the producer, or intentionally bump the `cua-v1` key schema when invalidating
+the whole cache. Never edit provenance to make a hit pass. Packaging re-signs a
+separate staged copy, preserving cached bytes.
+
+Portable outputs are same-run artifacts, never cross-release caches. Import
+rejects archive links and unexpected paths before extraction into an isolated
+directory, verifies the complete file inventory, source, lockfile and build
+settings, then copies only the two allowed output roots. Frozen production
+installs, dependency patches and native ABI checks still run on each platform.
+
+The Intel Mac job no longer retries the whole artifact command. Diagnose the
+failed stage and rerun only its platform. With `--keep-stage` (used by CI), the
+logged stage directory retains Apple submission IDs and exact payload hashes
+for same-run recovery; it is not uploaded or persisted across runners. A failed
+wait does not cancel Apple's processing. With the same credentials in the
+environment, resume finalization without re-signing the app:
+
+```bash
+node scripts/notarize-mac-app.ts /PATH/TO/STAGE/app/dist/mac-arm64/Synara.app
+node scripts/finalize-mac-dmg.ts /PATH/TO/STAGE/app/dist
+```
+
+The first command is for an interrupted app notarization stage; DMG finalization
+requires an already-created signed DMG. Changed payloads reject saved state;
+remove only the matching stale `.app-notary-*` or `.notary-state` entry before
+submitting changed bytes. Recovery checks Apple's status and retains signature,
+stapling, Gatekeeper and final update-ZIP validation. Startup smoke and release
+provenance checks must still pass before publication.
 
 ### macOS release toolchains
 

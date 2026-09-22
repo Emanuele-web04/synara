@@ -3,7 +3,7 @@
 // Layer: Release/build helper
 // Exports: signed DMG finalization plus pure command construction for tests.
 
-import { spawnSync } from "node:child_process";
+import { notarizeMacPayload, recordStapledPayload, runMacCommand } from "./mac-notarization.ts";
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -63,8 +63,6 @@ export function buildUnsignedMacDmgCommands(
   ];
 }
 
-const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
-
 function requireCredential(value: string | undefined, name: string): string {
   const normalized = value?.trim();
   if (!normalized) {
@@ -106,7 +104,6 @@ export function buildMacDmgFinalizationCommands(
         appleApiKeyId,
         "--issuer",
         appleApiIssuer,
-        "--wait",
       ],
     },
     {
@@ -136,23 +133,8 @@ export function buildMacDmgFinalizationCommands(
   ];
 }
 
-function runCommand(command: MacDmgCommand, verbose: boolean): void {
-  const result = spawnSync(command.command, [...command.args], {
-    encoding: "utf8",
-    maxBuffer: COMMAND_OUTPUT_MAX_BUFFER_BYTES,
-  });
-  if (verbose && result.stdout) {
-    process.stdout.write(result.stdout);
-  }
-  if (verbose && result.stderr) {
-    process.stderr.write(result.stderr);
-  }
-  if (result.status !== 0) {
-    const detail = (result.stderr || result.stdout || "").trim();
-    throw new Error(
-      `${command.command} failed with exit code ${result.status ?? "unknown"}${detail ? `: ${detail}` : ""}`,
-    );
-  }
+function runCommand(command: MacDmgCommand, _verbose: boolean): void {
+  runMacCommand(command.command, command.args, `dmg-${command.command}-${command.args[0]}`);
 }
 
 function findFirstMacAppBundle(root: string): string | null {
@@ -209,7 +191,9 @@ export function rebuildUnsignedMacDmg(
   return { dmgPath, dmgFileName };
 }
 
-export function finalizeSignedMacDmg(options: FinalizeSignedMacDmgOptions): FinalizedSignedMacDmg {
+export async function finalizeSignedMacDmg(
+  options: FinalizeSignedMacDmgOptions,
+): Promise<FinalizedSignedMacDmg> {
   if (process.platform !== "darwin") {
     throw new Error("Signed macOS DMG finalization must run on macOS.");
   }
@@ -220,8 +204,20 @@ export function finalizeSignedMacDmg(options: FinalizeSignedMacDmgOptions): Fina
     throw new Error(`macOS DMG artifact was not found at ${dmgPath}.`);
   }
 
+  let submission;
   for (const command of buildMacDmgFinalizationCommands(dmgPath, options)) {
-    runCommand(command, options.verbose === true);
+    if (command.command === "xcrun" && command.args[0] === "notarytool") {
+      submission = await notarizeMacPayload(
+        dmgPath,
+        options,
+        join(options.stageDistDir, ".notary-state"),
+        "dmg",
+      );
+    } else {
+      runCommand(command, options.verbose === true);
+      if (command.args[0] === "stapler" && command.args[1] === "staple" && submission)
+        await recordStapledPayload(dmgPath, submission);
+    }
   }
 
   return { dmgPath, dmgFileName };
