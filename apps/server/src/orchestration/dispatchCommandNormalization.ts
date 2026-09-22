@@ -67,8 +67,8 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
   //     (see buildChatWorkspaceFolderPath in chatFirstSend.ts); the shared chatWorkspaceRoot
   //     itself is never used directly as a project's root, so exact equality must be excluded
   //     to avoid ever scaffolding "work"/"outputs" straight into the shared parent directory.
-  //   - studio: the Studio container project's workspace root IS exactly studioWorkspaceRoot
-  //     (see ensureStudioProject in studioProjects.ts), so exact equality must trigger prepare.
+  //   - studio: the legacy Studio container's workspace root IS exactly
+  //     studioWorkspaceRoot, so exact equality must trigger prepare.
   //   - group: each group lives in its own subfolder under groupsWorkspaceRoot, never at the
   //     Groups parent itself, so exact equality must be excluded like chat.
   const maybePrepareWorkspaceRoot = (input: {

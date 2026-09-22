@@ -57,7 +57,7 @@ import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
-import { shouldShowStudioFolderRow } from "./EnvironmentPanel.logic";
+import { shouldShowGroupFolderRow } from "./EnvironmentPanel.logic";
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
   EnvironmentCollapsibleSection,
@@ -100,12 +100,12 @@ export interface EnvironmentPanelProps {
   /** Active provider for the usage row (same chip the header shows). */
   activeProvider: ProviderKind;
   /**
-   * Whether the active thread is a Studio chat. Studio chats show the Output section:
+   * Whether the active thread is a group chat. Group chats show the Output section:
    * the Outbox files THIS chat produced, so its output stays attached to the chat.
    */
-  isStudioChat: boolean;
-  /** Ordinary cwd selected for this Studio chat; this is not a Git worktree. */
-  studioFolderPath?: string | null;
+  isGroupChat: boolean;
+  /** Ordinary cwd selected for this group chat; this is not a Git worktree. */
+  groupFolderPath?: string | null;
   /** Whether the active runtime exposes git actions (hides "Commit and Push" otherwise). */
   showGitActions: boolean;
   /** Current diff-panel open state, so the "Changes" row reflects/toggles it. */
@@ -208,8 +208,8 @@ export function EnvironmentPanel({
   availableEditors,
   activeThreadId,
   activeProvider,
-  isStudioChat,
-  studioFolderPath: studioFolderPathProp,
+  isGroupChat,
+  groupFolderPath: groupFolderPathProp,
   showGitActions,
   diffOpen,
   threadAutomations,
@@ -240,7 +240,7 @@ export function EnvironmentPanel({
 }: EnvironmentPanelProps) {
   const githubRepository = githubRepositoryProp ?? null;
   const githubRepositories = githubRepositoriesProp ?? [];
-  const studioFolderPath = studioFolderPathProp ?? null;
+  const groupFolderPath = groupFolderPathProp ?? null;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
   const recap = recapProp ?? null;
   const onOpenEditorView = onOpenEditorViewProp ?? null;
@@ -254,9 +254,9 @@ export function EnvironmentPanel({
   const changesDisabled = diffDisabledReason !== null && !diffOpen;
   const showRecap = Boolean(recap?.text) || recap?.status === "pending";
   const markdownCwd = openInTarget ?? gitCwd ?? undefined;
-  const showStudioFolderRow = shouldShowStudioFolderRow({
-    isStudioChat,
-    studioFolderPath,
+  const showGroupFolderRow = shouldShowGroupFolderRow({
+    isGroupChat,
+    groupFolderPath,
     nativeShellAvailable: isElectron,
   });
 
@@ -297,12 +297,12 @@ export function EnvironmentPanel({
         </IconButton>
       </div>
 
-      {showStudioFolderRow && studioFolderPath ? (
+      {showGroupFolderRow && groupFolderPath ? (
         <EnvironmentRow
           icon={<FolderClosed className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label={
-            <span className="truncate" title={studioFolderPath}>
-              {basenameOfPath(studioFolderPath) || studioFolderPath}
+            <span className="truncate" title={groupFolderPath}>
+              {basenameOfPath(groupFolderPath) || groupFolderPath}
             </span>
           }
           trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
@@ -317,7 +317,7 @@ export function EnvironmentPanel({
               return;
             }
             void api.shell
-              .showInFolder(studioFolderPath)
+              .showInFolder(groupFolderPath)
               .then(onClose)
               .catch((error) => {
                 toastManager.add({
@@ -428,7 +428,7 @@ export function EnvironmentPanel({
         />
       ) : null}
 
-      {isStudioChat && activeThreadId ? (
+      {isGroupChat && activeThreadId ? (
         <EnvironmentStudioOutputsSection threadId={activeThreadId} enabled={open} />
       ) : null}
 

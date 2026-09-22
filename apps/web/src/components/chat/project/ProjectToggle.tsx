@@ -24,7 +24,7 @@ export function ProjectToggle({ project }: { project: ProjectToggleState }) {
             className={TOGGLE_CLASS_NAME}
             pressed={project.open}
             onPressedChange={project.onOpenChange}
-            aria-label="Toggle project panel"
+            aria-label="Toggle group panel"
             variant="default"
             size="xs"
           >
@@ -32,7 +32,7 @@ export function ProjectToggle({ project }: { project: ProjectToggleState }) {
           </Toggle>
         }
       />
-      <TooltipPopup side="bottom">Project</TooltipPopup>
+      <TooltipPopup side="bottom">Group</TooltipPopup>
     </Tooltip>
   );
 }

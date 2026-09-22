@@ -25,6 +25,7 @@ import {
   getProjectSortTimestamp,
   hasUnseenCompletion,
   partitionSidebarThreadsByProjectIds,
+  normalizeSidebarView,
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
@@ -95,9 +96,9 @@ describe("project agent sidebar hiding", () => {
 
 describe("isProjectsSidebarSurface", () => {
   it("enables Space shortcuts only where the Space switcher is visible", () => {
-    expect(isProjectsSidebarSurface({ isOnSettings: false, isOnStudio: false })).toBe(true);
-    expect(isProjectsSidebarSurface({ isOnSettings: false, isOnStudio: true })).toBe(false);
-    expect(isProjectsSidebarSurface({ isOnSettings: true, isOnStudio: false })).toBe(false);
+    expect(isProjectsSidebarSurface({ isOnSettings: false, isOnGroups: false })).toBe(true);
+    expect(isProjectsSidebarSurface({ isOnSettings: false, isOnGroups: true })).toBe(false);
+    expect(isProjectsSidebarSurface({ isOnSettings: true, isOnGroups: false })).toBe(false);
   });
 });
 
@@ -1752,24 +1753,42 @@ function makeSidebarThreadSummary(
   };
 }
 
+describe("normalizeSidebarView", () => {
+  it("maps a persisted Studio selection to the Groups view", () => {
+    expect(normalizeSidebarView("studio")).toBe("groups");
+    expect(normalizeSidebarView("groups")).toBe("groups");
+    expect(normalizeSidebarView("threads")).toBe("threads");
+    expect(normalizeSidebarView(null)).toBe("threads");
+    expect(normalizeSidebarView(undefined)).toBe("threads");
+    expect(normalizeSidebarView("bogus")).toBe("threads");
+  });
+});
+
 describe("partitionSidebarThreadsByProjectIds", () => {
-  it("splits Studio threads from the regular Threads surface by project id", () => {
+  it("splits group threads (including legacy Studio rows) from the Threads surface", () => {
     const projectThread = makeSidebarThreadSummary({
       id: ThreadId.makeUnsafe("thread-project"),
       projectId: ProjectId.makeUnsafe("project-app"),
     });
-    const studioThread = makeSidebarThreadSummary({
+    const groupThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-group"),
+      projectId: ProjectId.makeUnsafe("project-group"),
+    });
+    const legacyStudioThread = makeSidebarThreadSummary({
       id: ThreadId.makeUnsafe("thread-studio"),
       projectId: ProjectId.makeUnsafe("project-studio"),
     });
 
     const partitioned = partitionSidebarThreadsByProjectIds(
-      [projectThread, studioThread],
-      new Set([ProjectId.makeUnsafe("project-studio")]),
+      [projectThread, groupThread, legacyStudioThread],
+      new Set([ProjectId.makeUnsafe("project-group"), ProjectId.makeUnsafe("project-studio")]),
     );
 
-    expect(partitioned.nonStudioThreads.map((thread) => thread.id)).toEqual(["thread-project"]);
-    expect(partitioned.studioThreads.map((thread) => thread.id)).toEqual(["thread-studio"]);
+    expect(partitioned.nonGroupThreads.map((thread) => thread.id)).toEqual(["thread-project"]);
+    expect(partitioned.groupThreads.map((thread) => thread.id)).toEqual([
+      "thread-group",
+      "thread-studio",
+    ]);
   });
 });
 

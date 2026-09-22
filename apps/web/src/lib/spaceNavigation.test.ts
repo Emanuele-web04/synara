@@ -95,7 +95,7 @@ describe("selecting an empty Space", () => {
       availableSplitViewIds: new Set(),
       threadIds: [voidThread.id],
       sidebarThreadSummaryById: { [voidThread.id]: { projectId: voidThread.projectId } },
-      studioProjectIds: new Set(),
+      groupProjectIds: new Set(),
       draftProjectIdByThreadId: new Map(),
       rememberedSplitViewThreadIds: undefined,
       landingSpace: {
@@ -115,7 +115,7 @@ describe("selecting an empty Space", () => {
         availableSplitViewIds: new Set(),
         threadIds: [homeThread.id],
         sidebarThreadSummaryById: { [homeThread.id]: { projectId: homeThread.projectId } },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         rememberedSplitViewThreadIds: undefined,
         landingSpace: { spaceId: workSpaceId, projectById, workspacePaths: paths },
@@ -133,7 +133,7 @@ describe("selecting an empty Space", () => {
         availableSplitViewIds: new Set(["split-cross-space"]),
         threadIds: [voidThread.id],
         sidebarThreadSummaryById: { [voidThread.id]: { projectId: voidThread.projectId } },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         // Unscoped startup preserves the remembered split without applying a Space policy.
         rememberedSplitViewThreadIds: undefined,
@@ -156,7 +156,7 @@ describe("selecting an empty Space", () => {
             sidechatSourceThreadId: voidThread.id,
           },
         },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         rememberedSplitViewThreadIds: undefined,
         landingSpace: null,
@@ -178,7 +178,7 @@ describe("selecting an empty Space", () => {
           [workThread.id]: { projectId: workThread.projectId },
           [voidThread.id]: { projectId: voidThread.projectId },
         },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         rememberedSplitViewThreadIds: [workThread.id, voidThread.id],
         landingSpace: {
@@ -202,7 +202,7 @@ describe("selecting an empty Space", () => {
         sidebarThreadSummaryById: {
           [workThread.id]: { projectId: workThread.projectId },
         },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         rememberedSplitViewThreadIds: undefined,
         landingSpace: {
@@ -228,7 +228,7 @@ describe("selecting an empty Space", () => {
           [firstThread.id]: { projectId: firstThread.projectId },
           [secondThread.id]: { projectId: secondThread.projectId },
         },
-        studioProjectIds: new Set(),
+        groupProjectIds: new Set(),
         draftProjectIdByThreadId: new Map(),
         rememberedSplitViewThreadIds: [firstThread.id, secondThread.id],
         landingSpace: {

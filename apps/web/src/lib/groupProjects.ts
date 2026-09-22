@@ -4,9 +4,10 @@
 // Layer: Web orchestration helper
 // Exports: Group container lookup and creation helpers.
 
-import { type ProjectId } from "@synara/contracts";
+import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 
+import type { DraftThreadState } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
@@ -79,6 +80,48 @@ export function collectGroupProjectIds<T extends Pick<Project, "id" | "cwd" | "k
   );
 }
 
+// The pre-Groups Studio container is adopted as a group in place: retitling it
+// "Groups" keeps its chats under the new surface without moving workspaces.
+// Idempotent by title — once renamed it no longer matches. A user-set local alias
+// (localName) is honored: a renamed row is the user's title, not the default
+// "Studio", so it is left alone.
+export function findLegacyStudioContainerForAdoption<
+  T extends Pick<Project, "id" | "cwd" | "kind" | "name" | "localName">,
+>(projects: readonly T[], paths: ServerWorkspacePaths): T | null {
+  return (
+    projects.find(
+      (project) =>
+        project.kind === "studio" &&
+        project.name === "Studio" &&
+        project.localName === null &&
+        isGroupContainerProject(project, paths),
+    ) ?? null
+  );
+}
+
+export function findGroupDraftThreadId(input: {
+  readonly groupProjectIds: ReadonlySet<ProjectId>;
+  readonly projectDraftThreadIdByProjectId: Readonly<Record<string, ThreadId>>;
+  readonly draftThreadsByThreadId: Readonly<Record<string, DraftThreadState>>;
+}): ThreadId | null {
+  for (const projectId of input.groupProjectIds) {
+    const draftThreadId = input.projectDraftThreadIdByProjectId[projectId];
+    if (!draftThreadId) {
+      continue;
+    }
+    const draftThread = input.draftThreadsByThreadId[draftThreadId];
+    if (
+      draftThread &&
+      draftThread.projectId === projectId &&
+      draftThread.entryPoint === "chat" &&
+      draftThread.promotedTo === undefined
+    ) {
+      return draftThreadId;
+    }
+  }
+  return null;
+}
+
 function findGroupContainerCandidateById<
   T extends { readonly id?: ProjectId | undefined; readonly kind?: Project["kind"] | undefined },
 >(projects: readonly T[], projectId: ProjectId): T | null {
@@ -149,5 +192,7 @@ export async function createGroupProject(input: {
     },
     findMatch: (snapshot) => findGroupContainerCandidateById(snapshot.projects, projectId),
   });
-  return match?.id ?? projectId;
+  // A sync miss must not hand back the possibly-nonexistent id: callers open the
+  // onboarding dialog for it and the lookup would silently no-op.
+  return match?.id ?? null;
 }

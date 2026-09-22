@@ -6,7 +6,11 @@ import { type ProjectId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { Project } from "../types";
-import { collectGroupProjectIds, isGroupContainerProject } from "./groupProjects";
+import {
+  collectGroupProjectIds,
+  findLegacyStudioContainerForAdoption,
+  isGroupContainerProject,
+} from "./groupProjects";
 
 function makeProject(overrides: Partial<Project> = {}): Project {
   return {
@@ -74,6 +78,41 @@ describe("isGroupContainerProject", () => {
         { homeDir: "/Users/tester" },
       ),
     ).toBe(true);
+  });
+});
+
+describe("findLegacyStudioContainerForAdoption", () => {
+  const makeLegacyStudio = (overrides: Partial<Project> = {}): Project =>
+    makeProject({
+      id: "project-studio" as ProjectId,
+      kind: "studio",
+      name: "Studio",
+      remoteName: "Studio",
+      localName: null,
+      cwd: "/Users/tester/Documents/Synara/Studio",
+      ...overrides,
+    });
+
+  it("adopts the default-titled legacy Studio container", () => {
+    const studio = makeLegacyStudio();
+    expect(findLegacyStudioContainerForAdoption([makeProject(), studio], PATHS)?.id).toBe(
+      studio.id,
+    );
+  });
+
+  it("does not adopt a studio row with a non-Studio title", () => {
+    const renamed = makeLegacyStudio({ name: "Ops studio", remoteName: "Ops studio" });
+    expect(findLegacyStudioContainerForAdoption([renamed], PATHS)).toBeNull();
+  });
+
+  it("does not adopt a row already titled Groups", () => {
+    const alreadyGroups = makeLegacyStudio({ name: "Groups", remoteName: "Groups" });
+    expect(findLegacyStudioContainerForAdoption([alreadyGroups], PATHS)).toBeNull();
+  });
+
+  it("does not adopt a studio row the user renamed locally", () => {
+    const userTitled = makeLegacyStudio({ localName: "Studio" });
+    expect(findLegacyStudioContainerForAdoption([userTitled], PATHS)).toBeNull();
   });
 });
 

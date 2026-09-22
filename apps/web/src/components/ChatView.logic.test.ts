@@ -104,7 +104,7 @@ describe("thread artifact workspace root", () => {
   it("uses a materialized worktree for file previews", () => {
     expect(
       resolveThreadArtifactWorkspaceRoot({
-        isStudioContainer: false,
+        isGroupContainer: false,
         projectCwd: "/repo/project",
         threadWorkspaceCwd: "/repo/worktrees/feature",
       }),
@@ -114,7 +114,7 @@ describe("thread artifact workspace root", () => {
   it("keeps the project fallback while a normal thread worktree is pending", () => {
     expect(
       resolveThreadArtifactWorkspaceRoot({
-        isStudioContainer: false,
+        isGroupContainer: false,
         projectCwd: "/repo/project",
         threadWorkspaceCwd: null,
       }),
@@ -124,7 +124,7 @@ describe("thread artifact workspace root", () => {
   it("does not escape a Studio thread's selected working directory", () => {
     expect(
       resolveThreadArtifactWorkspaceRoot({
-        isStudioContainer: true,
+        isGroupContainer: true,
         projectCwd: "/studio/root",
         threadWorkspaceCwd: null,
       }),
@@ -1135,19 +1135,19 @@ describe("git repository UI state", () => {
   it("waits for positive repository detection in Studio", () => {
     expect(
       resolveGitRepoUiState({
-        isStudioContainer: true,
+        isGroupContainer: true,
         queriedIsRepo: undefined,
       }),
     ).toBe(false);
     expect(
       resolveGitRepoUiState({
-        isStudioContainer: true,
+        isGroupContainer: true,
         queriedIsRepo: true,
       }),
     ).toBe(true);
     expect(
       resolveGitRepoUiState({
-        isStudioContainer: true,
+        isGroupContainer: true,
         queriedIsRepo: false,
       }),
     ).toBe(false);
@@ -1156,7 +1156,7 @@ describe("git repository UI state", () => {
   it("keeps normal project Git UI stable while discovery is pending", () => {
     expect(
       resolveGitRepoUiState({
-        isStudioContainer: false,
+        isGroupContainer: false,
         queriedIsRepo: undefined,
       }),
     ).toBe(true);
