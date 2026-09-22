@@ -22,7 +22,13 @@ type GitHubRelease = {
   assets?: GitHubReleaseAsset[];
 };
 
+// The count the deterministic browser fixture (VISUAL_TEST=1) renders. The
+// visual baselines were captured with this value, and it must not follow the
+// daily-refreshed snapshot JSON or every refresh would invalidate them.
+const VISUAL_TEST_INSTALLER_COUNT = 11_990;
+
 export function getStoredInstallerCount(): number | null {
+  if (process.env.VISUAL_TEST === "1") return VISUAL_TEST_INSTALLER_COUNT;
   return storedInstallerDownloads.count > 0 ? storedInstallerDownloads.count : null;
 }
 
