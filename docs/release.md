@@ -126,7 +126,8 @@ Server tarball preparation runs alongside desktop jobs; publication waits for bo
 ### Release build caches and measurements
 
 See [build optimization evidence](release-build-optimization.md) for the measured
-baseline, local measurements, remaining CI validation, and timing interpretation.
+baseline, signed Intel CI comparison, local measurements, remaining validation,
+and timing interpretation.
 
 `.github/workflows/cua-release-cache.yml` builds a credential-free Cua cache on
 relevant changes to `main`, with a default-branch guard. To warm an evicted cache

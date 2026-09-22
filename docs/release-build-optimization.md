@@ -1,31 +1,91 @@
 # Release build optimization evidence
 
 Baseline: [v0.9.0 run 35659929299](https://github.com/Emanuele-web04/synara/actions/runs/35659929299),
-source `f04341a67bc4941d1b2e91e0b23bbe782dfbc727`. One successful run, not an average.
-The original timestamped logs and job API response were rechecked for this change.
+source `f04341a67bc4941d1b2e91e0b23bbe782dfbc727`.
+Validation: [build-only run 35711485748](https://github.com/Emanuele-web04/synara/actions/runs/35711485748),
+source `be6aa59f3beeb03ffb942c2b43bd18c8e01be70e`, 2026-09-22. Both succeeded.
+Each column is one observation, not an average or a controlled performance guarantee.
+Original logs, new timestamped stage records and both job API responses were checked.
 
-| Critical-path phase        |            Baseline | Optimized cold CI                            | Optimized warm CI |
-| -------------------------- | ------------------: | -------------------------------------------- | ----------------- |
-| Initial workflow queue     |               7m25s | Not measured                                 | Not measured      |
-| Preflight                  | 9m42s (tests 8m25s) | Not measured                                 | Not measured      |
-| Icon job                   |                 25s | Not measured                                 | Not measured      |
-| Intel desktop job          |              36m11s | Not measured                                 | Not measured      |
-| Serialized server tarball  |               2m17s | Runs alongside desktops; duration unmeasured | Unmeasured        |
-| Publication                |                 47s | Not run                                      | Not run           |
-| Inter-job gaps             |                 19s | Not measured                                 | Not measured      |
-| Execution span             |          **49m41s** | **Not measured**                             | **Not measured**  |
-| Trigger through completion |          **57m06s** | **Not measured**                             | **Not measured**  |
+The validation ran `platform=mac-x64`, `stage=artifact`, `publish_release=false`,
+with a cold Cua cache and no retries. It retained the complete preflight and signed
+Intel packaging gates. Compare the path ending at the Intel job, rather than the
+old full release's 57m06s, which also includes server packaging and publication.
 
-Parallel desktop job durations must not be added. The earlier failed/cancelled
-runs overlapped; their durations are not additive either.
+| Comparable phase / path                  |               Baseline | Optimized cold CI |         Observed change |
+| ---------------------------------------- | ---------------------: | ----------------: | ----------------------: |
+| Initial workflow queue                   |                  7m25s |                5s |                  -7m20s |
+| Preflight                                |                  9m42s |            11m51s |                  +2m09s |
+| Icon job                                 |                    25s |               29s |                     +4s |
+| Shared JavaScript job                    | Inside each native job |             2m12s | New shared prerequisite |
+| Intel desktop job                        |                 36m11s |            17m59s |        -18m12s (-50.3%) |
+| Preflight start through Intel completion |             **46m32s** |        **32m09s** |    **-14m23s (-30.9%)** |
+| Trigger through Intel completion         |                 53m57s |            32m14s |        -21m43s (-40.3%) |
 
-| Repeated work                          | Original macOS arm64 | Original macOS x64 | Original Linux x64 | New measurement                                                 |
-| -------------------------------------- | -------------------: | -----------------: | -----------------: | --------------------------------------------------------------- |
-| JS build through staging transition    |                2m16s |              3m58s |        about 1m53s | Shared once; CI transfer unmeasured                             |
-| Cua source setup through staged driver |            6m25.245s |          9m44.589s |          6m04.434s | Trusted exact-key reuse implemented; warm CI hit unmeasured     |
-| Cargo compilation within that interval |                6m17s |              9m35s |              5m58s | Cold and warm CI unmeasured                                     |
-| App signing through app acceptance     |                8m49s |              8m33s |                N/A | Separated into preparation/signing, upload, wait and validation |
-| DMG notarization/final validation      |                6m46s |              4m02s |                N/A | Live progress and resumable exact-payload submission            |
+The execution comparison includes the new shared job, transfer, slower preflight,
+inter-job gaps and final artifact checks. The queue reduction is unrelated to the
+code change. The complete multi-platform release and warm-cache path were not run.
+Parallel job durations must not be added to estimate elapsed time; the earlier
+failed/cancelled runs also overlapped.
+
+Both Intel jobs used `macos-15-intel`, image `20260824.0482.1`, macOS 15.7.9,
+Xcode 16.4, Rust 1.97.1, Node 24.19.0 and Bun 1.4.2. The new capacity record
+reports four available CPUs and 14 GiB RAM. Historical CPU/RAM and utilization
+were not logged, so equal image versions do not establish equal runner load.
+The shared JavaScript job used Ubuntu image `20260907.300.1`, four CPUs,
+15.61 GiB RAM and Node 24.20.0.
+
+| Intel phase                                           |             Baseline |                    Optimized cold CI | Interpretation                                             |
+| ----------------------------------------------------- | -------------------: | -----------------------------------: | ---------------------------------------------------------- |
+| Workspace dependency installation                     |                1m12s |                                  26s | Frozen installation retained                               |
+| JS build through staging transition                   |                3m58s | Shared job 2m12s + native restore 7s | Shared job includes setup, 1m49s build and upload          |
+| Cua source build                                      |                9m45s |                            6m39.514s | Both cold; not a cache speedup                             |
+| Cargo within source build                             |                9m35s |                            6m32.464s | Compiler unchanged; variation not attributed to caching    |
+| Entire new Cua action                                 | No equivalent action |                                6m56s | Includes toolchain setup, cache lookup and verified import |
+| AppSnap helper                                        |            About 20s |                              18.250s | Native helper retained                                     |
+| Staged dependency installation                        |               36.64s |                              26.507s | Platform-specific dependencies retained                    |
+| App signing start through notarization and validation |            8m33.227s |                            3m43.715s | Historical signing/upload/wait cannot be separated         |
+| DMG notarization and final validation                 |             4m01.86s |                            1m44.812s | Apple service time varies                                  |
+| Update ZIP repack and validation                      |             1m04.41s |                              33.570s | Stapled app and updater metadata verified                  |
+| Artifact provenance                                   |                  24s |                                  12s | Passed                                                     |
+| Isolated packaged startup smoke                       |                  28s |                                  12s | Passed                                                     |
+| Artifact upload                                       |                  42s |                                  22s | Passed                                                     |
+
+The portable archive uploaded in about three seconds. Native download, extraction
+and validation took seven seconds, including 2.200s in the importer. Turbo reported
+zero of four build-task cache hits. Sharing these outputs is verified; attributing
+the whole 30.9% elapsed reduction to code is not justified. Unchanged cold Cargo,
+dependency installation and other local operations also ran faster on this Intel
+runner, and Apple's earlier processing time was not separately observable.
+
+The Cua log explicitly reported a miss for
+`cua-v1-1bbf147cfac72c3da19a8f2ece1fef635dbaccd9253fe5377a31e7fc57398405`.
+Fresh output passed provenance verification and two same-run imports (453ms into
+the verified directory, 415ms into the package). These are not cross-run cache hits.
+Default-branch production, cache restore time and warm-cache savings remain unmeasured.
+
+The preflight regression is preserved: install 27s → 30s, typecheck 33s → 42s,
+tests 8m25s → 10m22s. Server tests remained 500 passing files / 6,982 tests and
+took 483.97s → 594.79s; unchanged web/shared/contracts suites also slowed down.
+Both preflights used the same image/runtime/dependencies and no Turbo task hits.
+The 44 added packaging tests ran in suites that finished well before the server.
+This is consistent with runner variability, not proof of its cause.
+
+### New notarization timings
+
+| Phase                   |     App |                             DMG |
+| ----------------------- | ------: | ------------------------------: |
+| Signing and preparation | 87.939s | Included in container packaging |
+| Submission archive      | 25.626s |                Already packaged |
+| Upload                  | 16.456s |                         17.183s |
+| Apple wait              | 81.780s |                         81.631s |
+| Authenticated status    |   478ms |                           480ms |
+
+Both submissions reached `Accepted`; logs were downloaded, tickets stapled and
+validated, signatures checked, and the DMG passed Gatekeeper assessment. The final
+ZIP was repacked and validated before provenance and isolated startup checks.
+The new app hook is qualified for Intel by this run. Resume after an interrupted
+submission, Apple Silicon, Linux and Windows packaging were not exercised.
 
 Windows originally spent 1m21s installing workspace dependencies, about 1m22s
 installing staged production dependencies and 4m08s in NSIS packaging. No
@@ -49,12 +109,9 @@ one warm-up import, sequentially, using the same local archive.
 | Uncompressed portable tar                  |       1 | 47,443,968 bytes (45.2 MiB)           |
 
 These are different workloads on a different host from CI. They establish local
-import overhead, not a paired release speedup. Artifact upload/download costs,
-default-branch Cua cache hit/restore timings, cold native builds and optimized
-critical-path wall time remain unmeasured. No percentage savings is asserted.
-This machine has Xcode 27, not the required Xcode 16.4/macOS 15 SDK, so it cannot
-qualify the pinned native release path. Signed app/DMG/update-ZIP behavior,
-Windows packaging and Linux native startup require targeted CI qualification.
+import overhead, not a paired release speedup. This machine has Xcode 27, not the
+required Xcode 16.4/macOS 15 SDK. The hosted Intel results above qualify the signed
+app/DMG/update-ZIP path; the other native platforms and warm Cua cache remain unverified.
 
 Reproduce local output validation after `bun run build:desktop`:
 
@@ -86,8 +143,8 @@ Local verification passed the full workspace suite (14,729 tests, 30 skipped),
 formatting, lint (727 warnings, zero errors), all seven package typechecks,
 release smoke and the Windows runtime boundary check. Subsequent digest/state
 directory fixes passed focused packaging/provenance tests and script typecheck.
-All four workflow/action YAML files parsed successfully. These are source-level
-checks; hosted Actions execution and signed/platform packaging remain unverified.
+All four workflow/action YAML files parsed successfully. These source-level checks
+were followed by the successful signed Intel Actions run documented above.
 The verified shared outputs also produced a local `synara-server-0.9.0.tar.gz`
 (18,033,407 bytes); archive inspection confirmed version/name, both CLI entrypoints,
 the bundled client and device-helper sources. No package was published.
@@ -102,14 +159,18 @@ bytes and, after stapling, the resulting bytes. No acceptance shortcut is taken.
 
 This follows Apple's [custom notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
 and [distribution packaging requirements](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution).
-No signed build has yet qualified the new hook. App and DMG service waits remain
-sequential; overlapping ZIP work was considered but deferred to avoid changing
-artifact finalization ordering without signed-platform evidence.
+App and DMG service waits remain sequential. Overlapping ZIP work was considered
+but deferred; the Intel validation preserves the existing finalization ordering.
 
 No larger/paid runners or infrastructure were enabled. Existing runner classes
 remain unchanged. The default-branch producer consumes three native jobs when
 relevant inputs change or an operator dispatches it; the portable build adds one
-Ubuntu job and an artifact transfer. Actual billed cost/savings depends on cache
-reuse, repository entitlements and transfer overhead and has not been measured.
+Ubuntu job and an artifact transfer. This targeted validation consumed 18m28s of
+macOS job time (icon plus Intel) and 14m03s of Ubuntu job time (preflight plus
+portable outputs), 32m31s combined. The old matching jobs consumed 36m36s macOS
+and 9m42s Ubuntu. These are observed runner durations, not billed credits. The
+old complete release consumed 99m30s across all platforms; comparing that total
+to this single-platform validation would overstate savings. Actual billed cost
+depends on cache reuse and repository entitlements and has not been established.
 GitHub's [cache scope rules](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching)
 require the default-branch producer for reuse across distinct release tags.
