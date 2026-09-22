@@ -94,6 +94,38 @@ dependency/download caches in this patch. Cargo output reuse targets the larger
 measured delay; Cargo registry/intermediate caches are not needed for a valid
 artifact hit. No cache speedup is claimed before a real Actions hit.
 
+## SDK-only follow-up attempt
+
+[Run 35717648611](https://github.com/Emanuele-web04/synara/actions/runs/35717648611)
+at `e4b3cdc05cd669fb70daaa0dd768c0999503a568` attempted one cold Intel A/B pair
+against `d4f3b3107f5b3f1af41034e8b92a24c737c84503`. The candidate removes the
+unused SDK `cdylib` output and retains `rlib`, with the same pinned source,
+compiler and native protocol revision. No candidate performance or runtime
+qualification was obtained.
+
+The benchmark exported an incomplete Synara snapshot: it omitted
+`docs/computer-use-cua/CUA-LICENSE.txt`. Baseline Cargo completed in
+**943.080 seconds (15m43.080s)**, but the subsequent license copy failed with
+`ENOENT`. The candidate compilation and both driver probes never started.
+This was a benchmark harness defect, not a candidate compilation failure or an
+artifact-storage failure. The baseline log was uploaded successfully (7,091-byte
+archive); the compiler HTML report was not preserved by the original harness.
+
+The run consumed 17m12s in the Intel job and 39s in Ubuntu preflight, with no
+packaging, publication or automatic retry. The previous 6m32.464s cold Cargo
+observation is not a valid before/after comparison with this incomplete pair.
+Both used the same Intel image and pinned compiler, but this experiment also
+used separate empty Cargo homes and timing instrumentation. Its slowdown cannot
+be attributed to the candidate, which was never built.
+
+The harness now exports the license, prepares and checks both snapshots before
+compilation, verifies the native probe exists, and preserves compiler timing
+reports even if later staging fails. A local preparation-only regression test
+passed without Rust or network access. No further Actions run has been launched.
+The retained 25-minute benchmark cap would not accommodate two builds at the
+observed baseline speed; a future paired measurement needs an explicit time
+budget decision. **No additional minute saved is claimed.**
+
 ## Local measurements
 
 2026-09-22, macOS 27 arm64, 18 available CPUs, 48 GiB RAM, Node 24.13.1, Bun 1.4.2.

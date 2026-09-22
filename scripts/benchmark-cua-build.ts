@@ -1,9 +1,11 @@
 // One paired cold-build experiment on the same Mac. Neither output enters a cache.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,10 +16,15 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const [baseline, outputDirectory] = process.argv.slice(2);
+const [baseline, outputDirectory, mode] = process.argv.slice(2);
+const prepareOnly = mode === "--prepare-only";
 assert(baseline && /^[a-f0-9]{40}$/.test(baseline), "Supply a full baseline commit.");
-assert(outputDirectory && process.platform === "darwin", "Supply an output directory on macOS.");
+assert(!mode || prepareOnly, "Unknown benchmark option.");
+assert(outputDirectory, "Supply an output directory.");
+assert(prepareOnly || process.platform === "darwin", "Build benchmarks require macOS.");
 const root = process.cwd();
+const probePath = join(root, "scripts/computer-use-fixtures/probe-native-cancellation.mjs");
+assert(existsSync(probePath), "Native driver probe is missing.");
 const candidate = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 const evidence = resolve(outputDirectory, "evidence");
 mkdirSync(evidence, { recursive: true });
@@ -30,6 +37,7 @@ const exportedPaths = [
   "apps/desktop/patches/cua-driver",
   "apps/desktop/scripts",
   "scripts/lib/build-timing.ts",
+  "docs/computer-use-cua/CUA-LICENSE.txt",
 ];
 const currentRelease = JSON.parse(readFileSync(join(root, releasePath), "utf8"));
 const results: Array<{
@@ -68,10 +76,13 @@ async function build(script: string, env: NodeJS.ProcessEnv, logPath: string): P
   return log;
 }
 
-for (const [name, commit] of [
-  ["baseline", baseline],
-  ["candidate", candidate],
-] as const) {
+// Validate both archived inputs before starting any expensive compilation.
+const snapshots = (
+  [
+    ["baseline", baseline],
+    ["candidate", candidate],
+  ] as const
+).map(([name, commit]) => {
   const directory = join(work, name);
   const checkout = join(directory, "checkout");
   const target = join(directory, "target");
@@ -87,6 +98,14 @@ for (const [name, commit] of [
   const release = JSON.parse(readFileSync(join(checkout, releasePath), "utf8"));
   for (const key of ["source", "version", "nativeRevision", "rustVersion"])
     assert.equal(release[key], currentRelease[key], `A/B builds must share ${key}.`);
+  assert(
+    readFileSync(join(checkout, "docs/computer-use-cua/CUA-LICENSE.txt")).length > 0,
+    "Cua license missing from benchmark snapshot.",
+  );
+  const patch = readFileSync(
+    join(checkout, "apps/desktop/patches/cua-driver/0001-synara-native.patch"),
+  );
+  assert.equal(createHash("sha256").update(patch).digest("hex"), release.patchSha256);
 
   // Apply identical timing-only instrumentation to both archived provisioners.
   const script = join(checkout, provisionPath);
@@ -94,6 +113,11 @@ for (const [name, commit] of [
   const marker = '          "--release",';
   assert.equal(source.split(marker).length, 2, "Expected one Cargo release invocation.");
   writeFileSync(script, source.replace(marker, `${marker}\n          "--timings",`));
+  console.log(`[cua-benchmark] prepared ${name}: ${commit}; license and patch verified`);
+  return { name, commit, directory, target, cargoHome, script };
+});
+
+for (const { name, commit, directory, target, cargoHome, script } of prepareOnly ? [] : snapshots) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     CARGO_HOME: cargoHome,
@@ -103,7 +127,15 @@ for (const [name, commit] of [
   delete env.SYNARA_CUA_ARTIFACT_DIR;
   delete env.SYNARA_CUA_SIGN_IDENTITY;
   console.log(`[cua-benchmark] ${name}: ${commit}; fresh Cargo home and target directory`);
-  const log = await build(script, env, join(evidence, `${name}.log`));
+  let log: string;
+  try {
+    log = await build(script, env, join(evidence, `${name}.log`));
+  } finally {
+    // Preserve compiler evidence even when later staging/provenance checks fail.
+    const timings = join(target, "cargo-timings");
+    if (existsSync(timings))
+      cpSync(timings, join(evidence, `${name}-timings`), { recursive: true });
+  }
   const stages = [...log.matchAll(/\[build-timing\] (\{[^\n]+\})/g)].map((match) =>
     JSON.parse(match[1]!),
   );
@@ -112,7 +144,6 @@ for (const [name, commit] of [
     assert(record && Number.isFinite(record.durationMs), `Missing successful ${stage} timing.`);
     return record.durationMs;
   };
-  cpSync(join(target, "cargo-timings"), join(evidence, `${name}-timings`), { recursive: true });
   const files = readdirSync(target, { recursive: true }) as string[];
   const sdkDylibs = files.filter((file) => /libcua_driver_sdk[^/]*\.dylib$/.test(file));
   assert(
@@ -124,11 +155,11 @@ for (const [name, commit] of [
   const linkage = execFileSync("otool", ["-L", driver], { encoding: "utf8" });
   writeFileSync(join(evidence, `${name}-linkage.txt`), linkage);
   assert(!linkage.includes("libcua_driver_sdk"), "Driver unexpectedly requires the SDK dylib.");
-  const probe = spawnSync(
-    process.execPath,
-    [join(root, "scripts/computer-use-fixtures/probe-native-cancellation.mjs"), driver],
-    { env, encoding: "utf8", timeout: 60_000 },
-  );
+  const probe = spawnSync(process.execPath, [probePath, driver], {
+    env,
+    encoding: "utf8",
+    timeout: 60_000,
+  });
   writeFileSync(join(evidence, `${name}-probe.json`), probe.stdout || "");
   writeFileSync(join(evidence, `${name}-probe.stderr`), probe.stderr || "");
   assert.equal(
@@ -151,9 +182,11 @@ for (const [name, commit] of [
   console.log(`[cua-benchmark] ${JSON.stringify(results.at(-1))}`);
   rmSync(directory, { recursive: true, force: true });
 }
-const savedMs = results[0]!.cargoMs - results[1]!.cargoMs;
-const summary = `Cua cold Cargo: baseline ${(results[0]!.cargoMs / 1000).toFixed(3)}s; candidate ${(results[1]!.cargoMs / 1000).toFixed(3)}s; saved ${(savedMs / 1000).toFixed(3)}s (${((savedMs / results[0]!.cargoMs) * 100).toFixed(1)}%). One sequential pair, same runner, fresh source/Cargo/target directories; not a repeated-sample guarantee.\n`;
-writeFileSync(join(evidence, "summary.txt"), summary);
-if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
-console.log(summary);
+if (!prepareOnly) {
+  const savedMs = results[0]!.cargoMs - results[1]!.cargoMs;
+  const summary = `Cua cold Cargo: baseline ${(results[0]!.cargoMs / 1000).toFixed(3)}s; candidate ${(results[1]!.cargoMs / 1000).toFixed(3)}s; saved ${(savedMs / 1000).toFixed(3)}s (${((savedMs / results[0]!.cargoMs) * 100).toFixed(1)}%). One sequential pair, same runner, fresh source/Cargo/target directories; not a repeated-sample guarantee.\n`;
+  writeFileSync(join(evidence, "summary.txt"), summary);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+  console.log(summary);
+}
 rmSync(work, { recursive: true, force: true });

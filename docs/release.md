@@ -124,6 +124,16 @@ builds baseline then candidate on the same runner with separate empty Cargo/targ
 directories, and uploads Cargo timing reports, native linkage and isolated daemon
 probe results. It checks that only the baseline emits the unused SDK dynamic
 library. No app packaging or publication runs; the native job is capped at 25 minutes.
+Validate both archived inputs locally before considering a CI dispatch:
+
+```bash
+node scripts/benchmark-cua-build.ts FULL_COMMIT /tmp/cua-benchmark-inputs --prepare-only
+```
+
+This preparation check includes the license, patch checksum and instrumentation
+for both snapshots and performs no native compilation or network operation.
+The [first paired attempt](release-build-optimization.md#sdk-only-follow-up-attempt)
+failed before reaching the candidate and does not establish an SDK build speedup.
 
 `native` verifies the pinned Cua artifact/source path only; `icon` compiles the
 macOS catalog only; `js` builds and records portable outputs only. These stages
