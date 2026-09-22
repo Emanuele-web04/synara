@@ -586,6 +586,11 @@ export const DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL = "deepseek-v4-flash-0731" 
 export const MODEL_OPTIONS_BY_PROVIDER = {
   codex: [
     {
+      slug: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      capabilities: CODEX_GPT_6_CAPABILITIES,
+    },
+    {
       slug: "gpt-6-sol",
       name: "GPT-6 Sol",
       capabilities: CODEX_GPT_6_CAPABILITIES,
@@ -594,11 +599,6 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       slug: "gpt-6-luna",
       name: "GPT-6 Luna",
       capabilities: CODEX_GPT_6_LUNA_CAPABILITIES,
-    },
-    {
-      slug: "gpt-6-astra",
-      name: "GPT-6 Astra",
-      capabilities: CODEX_GPT_6_CAPABILITIES,
     },
     {
       slug: "gpt-5.5",

@@ -26,7 +26,8 @@
 ### Verification
 
 - Local formatting, lint, typecheck, release smoke, app and marketing builds, Windows source-boundary check, and the full Bun test suite passed using pinned Node 24.13.1 and Bun 1.4.2. An initial run under Node 26 failed 33 web tests because that Node build did not provide usable `localStorage`; the pinned-runtime rerun passed.
-- The two browser cases that failed on the pre-release main CI run were rerun directly: the chat anchor case passed and the Computer settings case reproduced, was fixed, then passed. The Windows CI credential-reader test hit its previous 10-second timeout; the increased timeout needs a Windows runner rerun.
+- The two browser cases that failed on the pre-release main CI run were rerun directly: the chat anchor case passed and the Computer settings case reproduced, was fixed, then passed. The Windows CI credential-reader test hit its previous 10-second timeout; the first 0.9.1 CI run passed it after the timeout increase.
+- The first 0.9.1 CI run also passed those browser cases but exposed a model-cycle ordering regression. Astra was restored to the first catalog position, and the exact failed browser case passed locally.
 - Public website documentation checks, lint and build passed locally. Windows packaging, startup smoke, provenance, and public publication remain unverified until the release workflow succeeds.
 
 [Complete commit comparison](https://github.com/Emanuele-web04/synara/compare/v0.9.0...v0.9.1).
