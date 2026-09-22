@@ -33,7 +33,14 @@ export interface OrchestrationThreadMentionContext {
   readonly id: ThreadId;
   readonly title: OrchestrationThread["title"];
   readonly modelSelection: OrchestrationThread["modelSelection"];
+  /** The newest `messageLimit` messages, oldest first. */
   readonly messages: OrchestrationThread["messages"];
+  /**
+   * How many messages the thread holds in total (capped at the transcript
+   * read limit, matching what a full detail read would have returned), so a
+   * context block can still say how many older messages it omitted.
+   */
+  readonly totalMessageCount: number;
 }
 
 export interface ProjectionSnapshotCounts {

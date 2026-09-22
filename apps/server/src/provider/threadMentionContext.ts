@@ -94,8 +94,11 @@ export function formatThreadMentionContextBlock(input: {
     "Recent transcript (newest last):",
   ].join("\n");
   const footer = THREAD_MENTION_CONTEXT_CLOSE_TAG;
+  // The thread only carries the newest page, so the omitted count comes from
+  // the total the read reported rather than from what pagination could see.
+  const omittedOlderMessages = Math.max(0, input.thread.totalMessageCount - page.messages.length);
   const transcript = [
-    ...(page.nextCursor !== undefined ? [`[... ${page.nextCursor} older messages omitted]`] : []),
+    ...(omittedOlderMessages > 0 ? [`[... ${omittedOlderMessages} older messages omitted]`] : []),
     ...page.messages.map((message) => `[${message.role}]\n${message.text}`),
   ].join("\n\n");
   const availableTranscriptChars = Math.max(0, maxChars - header.length - footer.length - 2);

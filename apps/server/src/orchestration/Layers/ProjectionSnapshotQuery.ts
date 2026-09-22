@@ -1967,6 +1967,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   const ThreadIdsLookupInput = Schema.Struct({ threadIds: Schema.Array(ThreadId) });
 
+  const countThreadMessageRows = SqlSchema.findOne({
+    Request: ThreadIdLookupInput,
+    Result: Schema.Struct({ count: Schema.Number }),
+    execute: ({ threadId }) =>
+      sql`
+        SELECT COUNT(*) AS count
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+      `,
+  });
+
   const listThreadRowsByIds = SqlSchema.findAll({
     Request: ThreadIdsLookupInput,
     Result: ProjectionThreadDbRowSchema,
@@ -3316,17 +3327,27 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           if (Option.isNone(threadRow)) {
             return Option.none<OrchestrationThreadMentionContext>();
           }
-          const messageRows = yield* listThreadMessageRowsByThread({
-            threadId,
-            maxMessages: options.messageLimit,
-          }).pipe(
-            Effect.mapError(
-              toPersistenceSqlOrDecodeError(
-                `${tracePrefix}:listMessages:query`,
-                `${tracePrefix}:listMessages:decodeRows`,
+          const [messageRows, messageCount] = yield* Effect.all([
+            listThreadMessageRowsByThread({
+              threadId,
+              maxMessages: options.messageLimit,
+            }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  `${tracePrefix}:listMessages:query`,
+                  `${tracePrefix}:listMessages:decodeRows`,
+                ),
               ),
             ),
-          );
+            countThreadMessageRows({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  `${tracePrefix}:countMessages:query`,
+                  `${tracePrefix}:countMessages:decodeRow`,
+                ),
+              ),
+            ),
+          ]);
           const segmentRows = yield* loadMessageSegments(messageRows, tracePrefix);
           return Option.some<OrchestrationThreadMentionContext>({
             id: threadRow.value.threadId,
@@ -3335,6 +3356,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             messages: attachThreadMessageSegments(messageRows, segmentRows).map(
               orchestrationMessageFromProjectionRow,
             ),
+            totalMessageCount: Math.min(messageCount.count, MAX_THREAD_MESSAGES),
           });
         }),
       )
