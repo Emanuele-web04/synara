@@ -23,17 +23,22 @@ import {
   getUnpinnedThreadsForSidebar,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  formatThreadElapsed,
   partitionSidebarThreadsByProjectIds,
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
   pruneProjectThreadListPagingForCollapsedProjects,
+  pruneProjectThreadListExtraPagesById,
   recoverExistingAddProjectTarget,
   runExclusiveProjectAddition,
   runProjectProvisionWithCancellationRecovery,
   resolvePullRequestReviewBadge,
   resolveSidebarThreadPullRequest,
   resolveThreadDisplayBranch,
+  resolveThreadElapsedMs,
+  resolveUrgentThreadTimeLabel,
+  shouldShowThreadStartingLabel,
   resolveSidebarThreadListPaging,
   resolveProjectEmptyState,
   resolveSettingsBackTarget,
@@ -44,6 +49,7 @@ import {
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
+  isUrgentThreadStatusPill,
   type ThreadStatusPill,
   shouldShowDebugFeatureFlagsMenu,
   shouldUseLivePullRequestForSidebarThread,
@@ -368,6 +374,170 @@ describe("hasUnseenCompletion", () => {
   });
 });
 
+function makeRunningTurn(
+  startedAt: string | null,
+  requestedAt = "2026-03-09T10:00:00.000Z",
+): Thread["latestTurn"] {
+  return {
+    turnId: "turn-1" as never,
+    state: "running",
+    assistantMessageId: null,
+    requestedAt,
+    startedAt,
+    completedAt: null,
+  };
+}
+
+describe("resolveThreadElapsedMs", () => {
+  const nowMs = Date.parse("2026-03-09T10:12:00.000Z");
+
+  it("measures from the turn start while the turn is unfinished", () => {
+    expect(
+      resolveThreadElapsedMs({ latestTurn: makeRunningTurn("2026-03-09T10:00:00.000Z") }, nowMs),
+    ).toBe(12 * 60 * 1000);
+  });
+
+  it("falls back to the request time when the turn never started", () => {
+    expect(
+      resolveThreadElapsedMs(
+        { latestTurn: makeRunningTurn(null, "2026-03-09T10:10:00.000Z") },
+        nowMs,
+      ),
+    ).toBe(2 * 60 * 1000);
+  });
+
+  it("returns null for finished turns and threads without turns", () => {
+    expect(resolveThreadElapsedMs({ latestTurn: makeLatestTurn() }, nowMs)).toBeNull();
+    expect(resolveThreadElapsedMs({ latestTurn: null }, nowMs)).toBeNull();
+  });
+
+  it("clamps future start timestamps to zero", () => {
+    expect(
+      resolveThreadElapsedMs(
+        {
+          latestTurn: makeRunningTurn("2026-03-09T10:30:00.000Z", "2026-03-09T10:30:00.000Z"),
+        },
+        nowMs,
+      ),
+    ).toBe(0);
+  });
+});
+
+describe("formatThreadElapsed", () => {
+  it("matches the chat Working-for clock (seconds under a minute)", () => {
+    expect(formatThreadElapsed(45_000)).toBe("45s");
+  });
+
+  it("keeps seconds past the minute like the chat clock", () => {
+    expect(formatThreadElapsed(90_000)).toBe("1m 30s");
+    expect(formatThreadElapsed(12 * 60 * 1000)).toBe("12m");
+  });
+
+  it("renders hours with minutes only when nonzero", () => {
+    expect(formatThreadElapsed(60 * 60 * 1000)).toBe("1h");
+    expect(formatThreadElapsed(65 * 60 * 1000)).toBe("1h 5m");
+  });
+});
+
+describe("resolveUrgentThreadTimeLabel", () => {
+  it("prefers the live elapsed over recency", () => {
+    expect(
+      resolveUrgentThreadTimeLabel({
+        elapsedMs: 12 * 60 * 1000,
+        isStarting: true,
+        recencyLabel: "6m",
+      }),
+    ).toEqual({ text: "12m", title: "Running for 12m" });
+  });
+
+  it("reads as starting while the new turn has not arrived yet", () => {
+    expect(
+      resolveUrgentThreadTimeLabel({ elapsedMs: null, isStarting: true, recencyLabel: "6m" }),
+    ).toEqual({ text: "0s", title: "Starting…" });
+  });
+
+  it("falls back to recency when the thread is not running", () => {
+    expect(
+      resolveUrgentThreadTimeLabel({ elapsedMs: null, isStarting: false, recencyLabel: "6m" }),
+    ).toEqual({ text: "6m" });
+  });
+
+  it("shows nothing without elapsed, start, or recency", () => {
+    expect(
+      resolveUrgentThreadTimeLabel({ elapsedMs: null, isStarting: false, recencyLabel: null }),
+    ).toBeNull();
+  });
+});
+
+describe("shouldShowThreadStartingLabel", () => {
+  const runningSession: Thread["session"] = {
+    provider: "codex" as const,
+    status: "running" as const,
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:11:00.000Z",
+    orchestrationStatus: "running" as const,
+  };
+  const idleSession: Thread["session"] = {
+    provider: "codex" as const,
+    status: "closed" as const,
+    createdAt: "2026-03-09T10:00:00.000Z",
+    updatedAt: "2026-03-09T10:11:00.000Z",
+    orchestrationStatus: "running" as const,
+  };
+
+  it("starts while the new turn has not arrived yet", () => {
+    expect(shouldShowThreadStartingLabel({ latestTurn: null, session: runningSession })).toBe(true);
+  });
+
+  it("never starts off a finished turn, even when running flags lag behind", () => {
+    expect(
+      shouldShowThreadStartingLabel({ latestTurn: makeLatestTurn(), session: runningSession }),
+    ).toBe(false);
+    expect(
+      shouldShowThreadStartingLabel({
+        latestTurn: makeLatestTurn(),
+        hasLiveTailWork: true,
+        session: runningSession,
+      }),
+    ).toBe(false);
+  });
+
+  it("reads as starting when the session already runs a newer turn than the finished summary", () => {
+    // New run began; its turn summary has not replaced the finished one yet, so
+    // the old recency must not stand in for the live elapsed.
+    expect(
+      shouldShowThreadStartingLabel({
+        latestTurn: makeLatestTurn(),
+        session: {
+          ...runningSession,
+          activeTurnId: "turn-next" as never,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not flash starting while the running session still owns the finished turn", () => {
+    expect(
+      shouldShowThreadStartingLabel({
+        latestTurn: makeLatestTurn(),
+        session: {
+          ...runningSession,
+          activeTurnId: "turn-1" as never,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("stays quiet on idle threads", () => {
+    expect(
+      shouldShowThreadStartingLabel({
+        latestTurn: makeRunningTurn("2026-03-09T10:00:00.000Z"),
+        session: idleSession,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("shouldClearThreadSelectionOnMouseDown", () => {
   it("preserves selection for thread items", () => {
     const child = {
@@ -674,6 +844,36 @@ describe("pruneProjectThreadListPagingForCollapsedProjects", () => {
       threadListExtraPagesByProjectCwd: current,
       projects: [{ cwd: "/Users/tester/Code/one", expanded: true }],
       normalizeProjectCwd: (cwd) => cwd.replace(/\/+$/, ""),
+    });
+
+    expect(next).toBe(current);
+  });
+});
+
+describe("pruneProjectThreadListExtraPagesById", () => {
+  it("clears remembered show-more paging when a project is collapsed", () => {
+    const current = new Map([
+      ["project-one" as ProjectId, 2],
+      ["project-two" as ProjectId, 1],
+    ]);
+
+    const next = pruneProjectThreadListExtraPagesById({
+      threadListExtraPagesByProjectId: current,
+      projects: [
+        { id: "project-one" as ProjectId, expanded: false },
+        { id: "project-two" as ProjectId, expanded: true },
+      ],
+    });
+
+    expect([...next]).toEqual([["project-two", 1]]);
+  });
+
+  it("preserves the existing map when no collapsed project needs pruning", () => {
+    const current = new Map([["project-one" as ProjectId, 1]]);
+
+    const next = pruneProjectThreadListExtraPagesById({
+      threadListExtraPagesByProjectId: current,
+      projects: [{ id: "project-one" as ProjectId, expanded: true }],
     });
 
     expect(next).toBe(current);
@@ -1151,6 +1351,17 @@ describe("pin helpers", () => {
 function statusPill(label: ThreadStatusPill["label"]): ThreadStatusPill {
   return { label, colorClass: "", dotClass: "", pulse: false };
 }
+
+describe("isUrgentThreadStatusPill", () => {
+  it("treats every status but a finished turn as urgent", () => {
+    expect(isUrgentThreadStatusPill(statusPill("Pending Approval"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Awaiting Input"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Plan Ready"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Working"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Connecting"))).toBe(true);
+    expect(isUrgentThreadStatusPill(statusPill("Completed"))).toBe(false);
+  });
+});
 
 describe("resolveThreadStatusTrailingIndicator", () => {
   it("shows nothing when there is no status", () => {
@@ -1920,6 +2131,8 @@ describe("deriveSidebarProjectData", () => {
       child.id,
     ]);
     expect(data.get(project.id)?.activeEntryId).toBe(child.id);
+    // The reveal renders every row, so nothing is hidden even though the page cap is 1.
+    expect(data.get(project.id)?.hiddenRowCount).toBe(0);
   });
 
   it("uses the provided thread-status resolver for project status", () => {
@@ -1969,6 +2182,7 @@ describe("deriveSidebarProjectData", () => {
 
     expect(derive(0)).toMatchObject({
       threadListExtraPages: 0,
+      hiddenRowCount: 7,
       canShowMoreThreads: true,
       canShowLessThreads: false,
     });
@@ -1976,6 +2190,7 @@ describe("deriveSidebarProjectData", () => {
 
     expect(derive(1)).toMatchObject({
       threadListExtraPages: 1,
+      hiddenRowCount: 2,
       canShowMoreThreads: true,
       canShowLessThreads: true,
     });
@@ -1984,6 +2199,7 @@ describe("deriveSidebarProjectData", () => {
     // Stale persisted paging beyond the real thread count clamps to the last useful page.
     expect(derive(7)).toMatchObject({
       threadListExtraPages: 2,
+      hiddenRowCount: 0,
       canShowMoreThreads: false,
       canShowLessThreads: true,
     });

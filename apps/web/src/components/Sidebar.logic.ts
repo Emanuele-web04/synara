@@ -30,6 +30,7 @@ import {
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import {
   canSessionAnswerPendingRequests,
+  formatClockDuration,
   hasLiveLatestTurn,
   findLatestProposedPlan,
   hasActionableProposedPlan,
@@ -331,6 +332,12 @@ export type SidebarDerivedProjectData = {
   projectThreads: SidebarThreadSummary[];
   orderedProjectThreadIds: ThreadId[];
   visibleEntries: SidebarProjectEntry[];
+  /**
+   * Rows the render is NOT showing: the tree total minus what is actually
+   * rendered. The active-thread reveal can force rows past the page cap, so this
+   * cannot be derived from the cap alone.
+   */
+  hiddenRowCount: number;
   /** Extra "Show more" pages currently applied, clamped to the real row count. */
   threadListExtraPages: number;
   canShowMoreThreads: boolean;
@@ -352,6 +359,15 @@ export interface ThreadStatusPill {
   pulse: boolean;
   dismissible?: boolean;
   dismissalKey?: string;
+}
+
+/**
+ * A status that still asks something of the user or is producing output right
+ * now. Surfaces that dim finished work (the Activity Done section) keep showing
+ * these pills, so a thread that restarts or asks for approval stays visible.
+ */
+export function isUrgentThreadStatusPill(pill: ThreadStatusPill): boolean {
+  return pill.label !== "Completed";
 }
 
 /**
@@ -520,6 +536,35 @@ export function pruneProjectThreadListPagingForCollapsedProjects<
   return changed ? nextThreadListExtraPagesByProjectCwd : threadListExtraPagesByProjectCwd;
 }
 
+// Id-keyed twin of the cwd prune above: drops remembered "show more" paging for
+// projects that are currently collapsed. Entries for unknown ids are kept, matching
+// the legacy behavior for cwds that no longer match a project.
+export function pruneProjectThreadListExtraPagesById(input: {
+  threadListExtraPagesByProjectId: ReadonlyMap<Project["id"], number>;
+  projects: readonly Pick<Project, "id" | "expanded">[];
+}): ReadonlyMap<Project["id"], number> {
+  const { projects, threadListExtraPagesByProjectId } = input;
+  const collapsedProjectIds = new Set(
+    projects.filter((project) => !project.expanded).map((project) => project.id),
+  );
+
+  if (collapsedProjectIds.size === 0) {
+    return threadListExtraPagesByProjectId;
+  }
+
+  let changed = false;
+  const nextThreadListExtraPagesByProjectId = new Map<Project["id"], number>();
+  for (const [projectId, extraPages] of threadListExtraPagesByProjectId) {
+    if (collapsedProjectIds.has(projectId)) {
+      changed = true;
+      continue;
+    }
+    nextThreadListExtraPagesByProjectId.set(projectId, extraPages);
+  }
+
+  return changed ? nextThreadListExtraPagesByProjectId : threadListExtraPagesByProjectId;
+}
+
 /**
  * Trailing padding that protects the title from the absolutely-positioned
  * trailing cluster, sized to what the slot ACTUALLY shows so the title runs as
@@ -597,6 +642,86 @@ export function isThreadActivelyWorking(thread: {
     session?.status === "running" &&
     (thread.latestTurn == null || hasLiveLatestTurn(thread.latestTurn, session))
   );
+}
+
+/**
+ * Elapsed wall-clock time of the thread's unfinished turn, for "running for Xm"
+ * row labels. Null once the turn completes (recency labels take over) or when
+ * no start timestamp exists — callers fall back to the recency label.
+ */
+export function resolveThreadElapsedMs(
+  thread: Pick<Thread, "latestTurn">,
+  nowMs: number,
+): number | null {
+  const turn = thread.latestTurn;
+  if (turn == null || turn.completedAt != null) {
+    return null;
+  }
+  const startIso = turn.startedAt ?? turn.requestedAt ?? null;
+  if (startIso == null) {
+    return null;
+  }
+  const startMs = Date.parse(startIso);
+  if (Number.isNaN(startMs)) {
+    return null;
+  }
+  return Math.max(0, nowMs - startMs);
+}
+
+/** Compact elapsed label; same formatter the chat "Working for" header uses. */
+export function formatThreadElapsed(elapsedMs: number): string {
+  return formatClockDuration(elapsedMs);
+}
+
+/**
+ * Whether a running row is still waiting for its new turn (shows "Starting…").
+ * A finished latest turn means the run is over even if the running flags lag a
+ * frame behind — without this gate the row flashes "0s" on completion instead
+ * of simply dropping the elapsed label. The mirror case matters too: when the
+ * session is already running a *different* turn than the finished summary, the
+ * new turn has started and its summary has not arrived yet, so the row must
+ * read as starting instead of showing the previous turn's recency.
+ */
+export function shouldShowThreadStartingLabel(thread: {
+  hasLiveTailWork?: boolean | undefined;
+  session?: Thread["session"] | undefined;
+  latestTurn?: Thread["latestTurn"] | undefined;
+}): boolean {
+  const turn = thread.latestTurn;
+  if (turn != null && turn.completedAt != null) {
+    const runningTurnId =
+      thread.session?.orchestrationStatus === "running"
+        ? (thread.session.activeTurnId ?? null)
+        : null;
+    return runningTurnId !== null && runningTurnId !== turn.turnId;
+  }
+  return isThreadActivelyWorking(thread) || thread.session?.status === "connecting";
+}
+
+export type UrgentThreadTimeLabel = {
+  text: string;
+  title?: string | undefined;
+};
+
+/**
+ * Which time label an urgent row shows. A running thread whose new turn has
+ * not arrived yet (stale finished turn still in the summary) must not flash
+ * the old recency ("6m") for a frame and then jump to "0s" — it reads as
+ * starting instead.
+ */
+export function resolveUrgentThreadTimeLabel(input: {
+  elapsedMs: number | null;
+  isStarting: boolean;
+  recencyLabel: string | null;
+}): UrgentThreadTimeLabel | null {
+  if (input.elapsedMs !== null) {
+    const text = formatThreadElapsed(input.elapsedMs);
+    return { text, title: `Running for ${text}` };
+  }
+  if (input.isStarting) {
+    return { text: "0s", title: "Starting…" };
+  }
+  return input.recencyLabel !== null ? { text: input.recencyLabel } : null;
 }
 
 export function resolveThreadStatusPill(input: {
@@ -1461,6 +1586,7 @@ export function deriveSidebarProjectData(input: {
         orderedProjectThreadIds,
         visibleEntries,
         // The thread list is hidden while the folder is closed, so paging affordances are moot.
+        hiddenRowCount: 0,
         threadListExtraPages: 0,
         canShowMoreThreads: false,
         canShowLessThreads: false,
@@ -1505,6 +1631,7 @@ export function deriveSidebarProjectData(input: {
       projectThreads,
       orderedProjectThreadIds,
       visibleEntries: renderedEntries,
+      hiddenRowCount: Math.max(0, orderedEntries.length - renderedEntries.length),
       threadListExtraPages: paging.effectiveExtraPages,
       // The active-thread reveal can force rows beyond the page cap; only offer "Show more"
       // while rows are genuinely hidden.
