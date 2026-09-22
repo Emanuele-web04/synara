@@ -39,7 +39,7 @@ export function resolveReleaseBuildScope(
   publish = false,
   cuaBenchmarkBaseline = "",
 ) {
-  if (!["artifact", "native", "icon", "js"].includes(stage))
+  if (!["artifact", "native", "icon", "js", "preflight"].includes(stage))
     throw new Error(`Unknown build stage: ${stage}`);
   const selected = platforms.filter((entry) => platform === "all" || platform === entry.id);
   if (selected.length === 0) throw new Error(`Unknown build platform: ${platform}`);
@@ -67,6 +67,10 @@ export function resolveReleaseBuildScope(
     build_js: stage === "js" || stage === "artifact",
     build_native: stage === "native" || stage === "artifact",
     benchmark_native: cuaBenchmarkBaseline !== "",
+    // Lint, typecheck and the complete test suite. The preflight stage runs
+    // only these gates, so quality-gate timing can be measured without native
+    // builds, packaging or publication.
+    quality_gates: stage === "artifact" || stage === "preflight",
     package_artifacts: stage === "artifact",
     build_server: stage === "artifact" && platform === "all",
   };

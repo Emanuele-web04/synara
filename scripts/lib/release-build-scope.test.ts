@@ -33,6 +33,25 @@ describe("release validation scope", () => {
       build_js: true,
     });
   });
+  it("runs only the quality gates for the preflight stage", () => {
+    expect(resolveReleaseBuildScope("all", "preflight")).toMatchObject({
+      quality_gates: true,
+      build_icon: false,
+      build_js: false,
+      build_native: false,
+      package_artifacts: false,
+      build_server: false,
+    });
+    expect(resolveReleaseBuildScope("all", "artifact")).toMatchObject({
+      quality_gates: true,
+      package_artifacts: true,
+    });
+    for (const stage of ["native", "icon", "js"])
+      expect(resolveReleaseBuildScope("all", stage)).toMatchObject({ quality_gates: false });
+    expect(() => resolveReleaseBuildScope("all", "preflight", true)).toThrow(
+      "Publication requires",
+    );
+  });
   it("rejects typos and unsupported Windows source compilation", () => {
     expect(() => resolveReleaseBuildScope("linux")).toThrow("Unknown build platform");
     expect(() => resolveReleaseBuildScope("all", "package")).toThrow("Unknown build stage");

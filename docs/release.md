@@ -115,7 +115,12 @@ For a narrower diagnosis:
 gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f platform=linux-x64 -f stage=native
 gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f platform=mac-arm64 -f stage=icon
 gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f stage=js
+gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f stage=preflight
 ```
+
+`stage=preflight` runs only the quality gates (lint, typecheck and every test
+package, with the server suite in three shards) on Ubuntu runners. Use it to
+measure or debug the gates without native builds, packaging or publication.
 
 For a paired cold Cua build comparison, add `-f cua_benchmark_baseline=FULL_COMMIT`
 to a single-Mac `stage=native` invocation. The baseline must use the same Cua
@@ -332,7 +337,7 @@ full subject distinguished name.
 5. Create release tag: `vX.Y.Z`.
 6. Push tag.
 7. Verify workflow steps:
-   - preflight passes
+   - preflight, quality gates and all three server test shards pass
    - all matrix builds pass
    - release job uploads expected files
 8. For a stable clean-lane release, confirm the new versioned release is GitHub Latest, contains all three default `latest` manifests plus all three `synara` aliases, and left the historical compatibility release unchanged.

@@ -147,9 +147,22 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     buildJob,
-    "needs: [preflight, build_mac_icon, build_portable]",
-    "Native builds require exact-source prerequisites.",
+    "needs: [preflight, quality, server_tests, build_mac_icon, build_portable]",
+    "Native builds require exact-source prerequisites and every quality gate.",
   );
+  assertContains(
+    buildJob,
+    "needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped')",
+    "Native builds must not run after a failed lint, typecheck or test gate.",
+  );
+  for (const gate of [
+    "  quality:\n    name: Quality gates\n    needs: preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
+    "  server_tests:\n    name: Server tests (${{ matrix.shard }})\n    needs: preflight\n    if: needs.preflight.outputs.quality_gates == 'true'\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
+    "bunx turbo run test --filter='!@synara/cli'",
+    "bunx turbo run test --filter=@synara/cli -- --shard=${{ matrix.shard }}",
+  ]) {
+    assertContains(workflow, gate, "Expected read-only, sharded quality gates before any build.");
+  }
   assertContains(
     buildJob,
     "permissions:\n      contents: read",
