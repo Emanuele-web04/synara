@@ -8,9 +8,9 @@ import { extname, join, posix, win32 } from "node:path";
 
 export interface ExecutableLookupOptions {
   /** Defaults to `process.platform`. Injectable for cross-platform tests. */
-  readonly platform?: NodeJS.Platform;
+  readonly platform?: NodeJS.Platform | undefined;
   /** Defaults to `process.env`. Callers should pass the already-hydrated runtime environment. */
-  readonly env?: NodeJS.ProcessEnv;
+  readonly env?: NodeJS.ProcessEnv | undefined;
   /**
    * Working directory the launch will use. Qualified relative commands such as
    * `./bin/tool` resolve against it, matching what the spawned child sees.
@@ -38,10 +38,18 @@ const DEFAULT_POSIX_PATH_ENTRIES: readonly string[] = ["/usr/bin", "/bin"];
 const WINDOWS_DIRECT_LAUNCH_EXTENSIONS = new Set(DEFAULT_WINDOWS_PATH_EXTENSIONS);
 
 /** Windows exposes PATH under any capitalization; the first key present is the live one. */
-export function envPathKeyFor(env: NodeJS.ProcessEnv): "PATH" | "Path" | "path" {
+export function envPathKeyFor(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): "PATH" | "Path" | "path" {
   if ("PATH" in env) return "PATH";
   if ("Path" in env) return "Path";
-  return "path";
+  if ("path" in env) {
+    // Windows merges PATH casings, so keep the live key rather than duplicating it;
+    // POSIX ignores lowercase `path` outright, so a usable PATH must be created.
+    return platform === "win32" ? "path" : "PATH";
+  }
+  return "PATH";
 }
 
 /** True when the command already names a location, in which case PATH is not consulted. */

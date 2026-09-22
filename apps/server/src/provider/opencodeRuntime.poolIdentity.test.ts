@@ -5,7 +5,7 @@
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 
 import { Effect, Exit, Layer, Scope, Sink, Stream } from "effect";
@@ -59,6 +59,7 @@ function openCodeRuntimePoolTestLayer(state: {
       reserveLoopbackPort: () => Effect.succeed(59_000),
       findAvailablePort: () => Effect.succeed(59_000),
     },
+    fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
     teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
   }).pipe(Layer.provide(mockPooledOpenCodeServerSpawnerLayer(state)));
 }
@@ -87,6 +88,40 @@ describe("OpenCode local server pool identity", () => {
           expect(second.url).toBe(first.url);
           expect(state.spawnUrls).toEqual(["http://127.0.0.1:59000"]);
           expect(state.spawnCwds).toEqual([process.cwd()]);
+
+          yield* Scope.close(firstScope, Exit.void);
+          yield* Scope.close(secondScope, Exit.void);
+        }),
+      ).pipe(Effect.provide(openCodeRuntimePoolTestLayer(state))),
+    );
+  });
+
+  it("expands tilde binary paths and cwd to the same pooled server", async () => {
+    const state = {
+      spawnUrls: [] as Array<string>,
+      spawnCwds: [] as Array<string | undefined>,
+    };
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* OpenCodeRuntime;
+          const firstScope = yield* Scope.make();
+          const secondScope = yield* Scope.make();
+
+          const first = yield* runtime
+            .connectToOpenCodeServer({ binaryPath: "~/bin/opencode", cwd: "~/work" })
+            .pipe(Effect.provideService(Scope.Scope, firstScope));
+          const second = yield* runtime
+            .connectToOpenCodeServer({
+              binaryPath: join(homedir(), "bin", "opencode"),
+              cwd: join(homedir(), "work"),
+            })
+            .pipe(Effect.provideService(Scope.Scope, secondScope));
+
+          expect(second.url).toBe(first.url);
+          expect(state.spawnUrls).toEqual(["http://127.0.0.1:59000"]);
+          expect(state.spawnCwds).toEqual([join(homedir(), "work")]);
 
           yield* Scope.close(firstScope, Exit.void);
           yield* Scope.close(secondScope, Exit.void);

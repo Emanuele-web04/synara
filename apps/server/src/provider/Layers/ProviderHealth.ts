@@ -20,6 +20,7 @@ import type {
 import { ServerProviderUpdateError } from "@synara/contracts";
 import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
+import { expandHomePath } from "@synara/shared/synaraHome";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,
@@ -55,6 +56,7 @@ import {
   buildProviderChildEnvironment,
   type ProviderChildKind,
 } from "../../providerChildEnvironment.ts";
+import { buildOpenCodeServerProcessEnv } from "../providerBinaryResolution.ts";
 import { ServerSettingsService } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
 import {
@@ -145,7 +147,9 @@ const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
   provider === CLAUDE_AGENT_PROVIDER ? "claude" : provider;
 
 const providerCommandEnv = (provider: ProviderKind): NodeJS.ProcessEnv =>
-  buildProviderChildEnvironment({ provider: providerChildKind(provider) });
+  provider === OPENCODE_PROVIDER
+    ? buildOpenCodeServerProcessEnv({})
+    : buildProviderChildEnvironment({ provider: providerChildKind(provider) });
 
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
 const MAX_REFRESH_REVISION_RETRIES = 1;
@@ -1350,7 +1354,7 @@ export const makeCheckOpenCodeProviderStatus = (
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
+    const executable = expandHomePath(nonEmptyTrimmed(binaryPath) ?? "opencode");
 
     const versionProbe = yield* probeProviderCliVersion(
       runOpenCodeCommand(["--version"], executable),
@@ -2148,7 +2152,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
           case "droid":
             return settings.providers.droid.binaryPath;
           case "opencode":
-            return settings.providers.opencode.binaryPath;
+            return expandHomePath(settings.providers.opencode.binaryPath);
           case "pi":
             return settings.providers.pi.binaryPath;
           case "devin":

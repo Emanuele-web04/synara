@@ -197,6 +197,18 @@ keeps the message on hold. If delivery is uncertain, Synara does not automatical
 See [cache recovery behavior and verification](claude-cache-recovery.md) for the implementation
 boundaries and remaining live validation.
 
+### OpenCode
+
+Synara drives the `opencode-ai` 1.18.x line through the legacy endpoint family
+(the newer `/api/*` engine has no MCP support, and every managed session
+carries the Synara MCP tools), so a 2.x-only CLI is rejected at startup. The
+SDK is pinned exactly (`1.18.31`) — bump it deliberately, never by range.
+
+The `opencode` executable resolves from `PATH` first, then the standard install
+locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,
+Volta, asdf, mise, proto, Deno, nvm/fnm). Set an explicit binary path in
+provider settings only when the install lives somewhere else entirely.
+
 ### Claude Artifacts, `/design` and `/slides`
 
 Claude Code keeps [Artifacts](https://code.claude.com/docs/en/artifacts) off by default for Agent
