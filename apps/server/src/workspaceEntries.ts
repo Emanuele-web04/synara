@@ -1071,7 +1071,27 @@ function normalizedWorkspaceFileReference(reference: string): string | null {
   return normalized.length > 0 && normalized !== "." ? normalized : null;
 }
 
+// The index is immutable once built and replaced wholesale on rebuild, so the
+// basename map can live alongside it instead of being rebuilt over up to 25k
+// entries on every reference-resolution RPC.
+const pathsByBasenameByIndex = new WeakMap<
+  WorkspaceIndex,
+  ReadonlyMap<string, ReadonlyArray<string>>
+>();
+
 function filePathsByBasename(index: WorkspaceIndex): ReadonlyMap<string, ReadonlyArray<string>> {
+  const cached = pathsByBasenameByIndex.get(index);
+  if (cached) {
+    return cached;
+  }
+  const built = buildFilePathsByBasename(index);
+  pathsByBasenameByIndex.set(index, built);
+  return built;
+}
+
+function buildFilePathsByBasename(
+  index: WorkspaceIndex,
+): ReadonlyMap<string, ReadonlyArray<string>> {
   const pathsByBasename = new Map<string, string[]>();
   for (const entry of index.entries) {
     if (entry.kind !== "file") {

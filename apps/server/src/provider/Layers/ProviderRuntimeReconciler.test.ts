@@ -104,6 +104,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
       listStaleInFlightThreadIds: () => Effect.succeed([THREAD_ID]),
       getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
       getThreadShellById: () => Effect.succeed(Option.some(staleShellSnapshot().threads[0]!)),
+      getThreadShellsByIds: () => Effect.succeed([staleShellSnapshot().threads[0]!]),
       getShellSnapshot: () => Effect.die("full shell snapshot should not be loaded"),
     } as unknown as ProjectionSnapshotQueryShape;
     const directory = {

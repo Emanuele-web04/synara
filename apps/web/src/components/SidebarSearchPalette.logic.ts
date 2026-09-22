@@ -68,6 +68,34 @@ export interface SidebarSearchThread {
   }[];
 }
 
+/** Field-wise equality so a rebuilt search thread list can keep its previous identity. */
+export function areSidebarSearchThreadListsEqual(
+  previous: readonly SidebarSearchThread[],
+  next: readonly SidebarSearchThread[],
+): boolean {
+  if (previous === next) return true;
+  if (previous.length !== next.length) return false;
+  for (let index = 0; index < previous.length; index += 1) {
+    const left = previous[index]!;
+    const right = next[index]!;
+    if (
+      left.id !== right.id ||
+      left.title !== right.title ||
+      left.projectId !== right.projectId ||
+      left.projectName !== right.projectName ||
+      left.projectRemoteName !== right.projectRemoteName ||
+      left.spaceName !== right.spaceName ||
+      left.provider !== right.provider ||
+      left.createdAt !== right.createdAt ||
+      left.updatedAt !== right.updatedAt ||
+      left.messages !== right.messages
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export interface SidebarSearchThreadMatch {
   id: string;
   thread: SidebarSearchThread;

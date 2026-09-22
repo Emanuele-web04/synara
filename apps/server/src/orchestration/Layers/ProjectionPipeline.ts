@@ -798,20 +798,27 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
-          const [messages, session] = yield* Effect.all([
-            projectionThreadMessageRepository.listByThreadId({
-              threadId: event.payload.threadId,
-            }),
-            projectionThreadSessionRepository.getByThreadId({
-              threadId: event.payload.threadId,
-            }),
-          ]);
+          const session = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const hasLatestTurn = existingRow.value.latestTurnId !== null;
+          const hasSession = Option.isSome(session);
+          // `canAdoptFirstTurnProvider` only consults the transcript on a brand-new
+          // thread (no turn, no session). This projector runs inside the hot
+          // turn-start commit, so an established thread must not pay a full
+          // transcript + text-segment load just to have it discarded.
+          const messages =
+            hasLatestTurn || hasSession
+              ? []
+              : yield* projectionThreadMessageRepository.listByThreadId({
+                  threadId: event.payload.threadId,
+                });
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: existingRow.value.modelSelection,
             requestedModelSelection: event.payload.modelSelection,
             canAdoptRequestedProvider: canAdoptFirstTurnProvider({
-              hasLatestTurn: existingRow.value.latestTurnId !== null,
-              hasSession: Option.isSome(session),
+              hasLatestTurn,
+              hasSession,
               messages,
             }),
           });
@@ -1481,24 +1488,33 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             turnId: event.payload.turnId,
           });
           if (Option.isSome(existingTurn)) {
+            const existing = existingTurn.value;
             const existingIsTerminal =
-              existingTurn.value.state === "completed" ||
-              existingTurn.value.state === "error" ||
-              existingTurn.value.state === "interrupted";
-            yield* projectionTurnRepository.upsertByTurnId({
-              ...existingTurn.value,
+              existing.state === "completed" ||
+              existing.state === "error" ||
+              existing.state === "interrupted";
+            const nextTurn = {
+              ...existing,
               assistantMessageId: event.payload.messageId,
-              state:
-                event.payload.streaming && !existingIsTerminal
-                  ? "running"
-                  : existingTurn.value.state,
+              state: event.payload.streaming && !existingIsTerminal ? "running" : existing.state,
               completedAt:
-                event.payload.streaming && !existingIsTerminal
-                  ? null
-                  : existingTurn.value.completedAt,
-              startedAt: existingTurn.value.startedAt ?? event.payload.createdAt,
-              requestedAt: existingTurn.value.requestedAt ?? event.payload.createdAt,
-            });
+                event.payload.streaming && !existingIsTerminal ? null : existing.completedAt,
+              startedAt: existing.startedAt ?? event.payload.createdAt,
+              requestedAt: existing.requestedAt ?? event.payload.createdAt,
+            } satisfies ProjectionTurn;
+            // Every streaming delta of an assistant message replays this event.
+            // After the first delta the row already carries these exact values,
+            // so skip the rewrite instead of issuing a full-row UPDATE per token.
+            if (
+              nextTurn.assistantMessageId === existing.assistantMessageId &&
+              nextTurn.state === existing.state &&
+              nextTurn.completedAt === existing.completedAt &&
+              nextTurn.startedAt === existing.startedAt &&
+              nextTurn.requestedAt === existing.requestedAt
+            ) {
+              return;
+            }
+            yield* projectionTurnRepository.upsertByTurnId(nextTurn);
             return;
           }
           yield* projectionTurnRepository.upsertByTurnId({

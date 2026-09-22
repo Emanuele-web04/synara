@@ -28,7 +28,7 @@ import { cn } from "~/lib/utils";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
-import { createAllThreadsSelector } from "~/storeSelectors";
+import { createSidebarThreadSummariesSelector } from "~/storeSelectors";
 import {
   type AutomationFormState,
   AutomationDialog,
@@ -53,7 +53,10 @@ export const Route = createFileRoute("/_chat/automations/")({
   component: AutomationsRouteView,
 });
 
-const selectAllThreads = createAllThreadsSelector();
+// Sidebar summaries carry every field these surfaces read (id, projectId, title,
+// sidechatSourceThreadId) and do not rebuild on streamed message/activity deltas
+// the way the fully derived thread list does.
+const selectAllThreads = createSidebarThreadSummariesSelector();
 
 /** Unread successful result the user has not opened yet — surfaced as quiet row meta. */
 function hasUnreadResult(run: AutomationRun | null): boolean {

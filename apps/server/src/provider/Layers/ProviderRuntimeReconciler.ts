@@ -13,7 +13,7 @@ import {
   type OrchestrationSession,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Cause, Duration, Effect, Layer, Option, Schedule } from "effect";
+import { Cause, Duration, Effect, Layer, Schedule } from "effect";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationReactor } from "../../orchestration/Services/OrchestrationReactor.ts";
@@ -230,11 +230,9 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         ],
         { concurrency: 4 },
       );
-      const threads = (yield* Effect.forEach(
-        candidateThreadIds,
-        (threadId) => projectionSnapshotQuery.getThreadShellById(threadId),
-        { concurrency: 8 },
-      )).flatMap(Option.toArray);
+      // One batched read instead of up to `candidateLimit` point reads
+      // contending on the single SQLite handle every reconciliation tick.
+      const threads = yield* projectionSnapshotQuery.getThreadShellsByIds(candidateThreadIds);
       const threadById = new Map(threads.map((thread) => [thread.id, thread]));
       const bindingByThreadId = new Map(bindings.map((binding) => [binding.threadId, binding]));
       const plans = planProviderRuntimeReconciliation({

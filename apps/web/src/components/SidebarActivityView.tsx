@@ -5,6 +5,7 @@
 // Exports: SidebarActivityView
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -602,11 +603,20 @@ export function SidebarActivityView({
     () => new Map(),
   );
 
-  const isRealProject = (projectId: ProjectId) => projectById.get(projectId)?.kind === "project";
+  const isRealProject = useCallback(
+    (projectId: ProjectId) => projectById.get(projectId)?.kind === "project",
+    [projectById],
+  );
+  // The feed derivations below are pure and `threads` is reference-stable
+  // across most sidebar renders, so each is memoized on its own inputs instead
+  // of re-running six passes and four sorts over every activity thread per render.
   // Scope options and the unread sweep intentionally ignore the active scope:
   // the menu must keep offering every project, and "Mark all as read" means all.
-  const scopeOptions = collectActivityScopeOptions(threads, isRealProject);
-  const unreadThreads = collectUnreadActivityThreads(threads);
+  const scopeOptions = useMemo(
+    () => collectActivityScopeOptions(threads, isRealProject),
+    [isRealProject, threads],
+  );
+  const unreadThreads = useMemo(() => collectUnreadActivityThreads(threads), [threads]);
 
   const { scope: activeScope, projectFilterIds } = resolveActivityScope(
     scopeSelection,
@@ -616,23 +626,35 @@ export function SidebarActivityView({
     if (scopeSelection !== activeScope) setScopeSelection(activeScope);
   }, [activeScope, scopeSelection]);
 
-  const model = buildActivityViewModel({
-    threads,
-    pinnedThreadIdSet,
-    settledOverrideByThreadId,
-    projectFilterIds,
-  });
-  const scopedPinnedThreads = model.pinned;
-  const nowMs = Date.now();
-  const { recent: recentThreads, rest: remainingActiveThreads } = splitRecentActivityThreads(
-    model.active,
-    { nowMs },
+  const model = useMemo(
+    () =>
+      buildActivityViewModel({
+        threads,
+        pinnedThreadIdSet,
+        settledOverrideByThreadId,
+        projectFilterIds,
+      }),
+    [pinnedThreadIdSet, projectFilterIds, settledOverrideByThreadId, threads],
   );
-  const dateBuckets = splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs);
-  const projectGroups =
-    groupMode === "project"
-      ? groupActivityThreadsByProject(model.active, isRealProject)
-      : EMPTY_PROJECT_GROUPS;
+  const scopedPinnedThreads = model.pinned;
+  // Coarse clock so the date bucketing memo stays effective across renders that
+  // happen within the same minute; buckets are day-granular anyway.
+  const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
+  const { recent: recentThreads, rest: remainingActiveThreads } = useMemo(
+    () => splitRecentActivityThreads(model.active, { nowMs }),
+    [model.active, nowMs],
+  );
+  const dateBuckets = useMemo(
+    () => splitActivityThreadsByDateBucket(remainingActiveThreads, nowMs),
+    [nowMs, remainingActiveThreads],
+  );
+  const projectGroups = useMemo(
+    () =>
+      groupMode === "project"
+        ? groupActivityThreadsByProject(model.active, isRealProject)
+        : EMPTY_PROJECT_GROUPS,
+    [groupMode, isRealProject, model.active],
+  );
 
   const earlierPaging = resolveSidebarThreadListPaging({
     totalCount: dateBuckets.earlier.length,

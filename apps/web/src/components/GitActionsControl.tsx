@@ -102,7 +102,7 @@ import {
 import { cn, newCommandId, randomUUID } from "~/lib/utils";
 import { resolvePathLinkTarget } from "~/terminal-links";
 import { readNativeApi } from "~/nativeApi";
-import { createThreadSelector } from "~/storeSelectors";
+import { createThreadGitActionsMetadataSelector } from "~/storeSelectors";
 import { useStore } from "~/store";
 
 interface GitActionsControlProps {
@@ -264,8 +264,10 @@ export default function GitActionsControl({
     }),
     [settings.textGenerationModel, settings.textGenerationProvider],
   );
+  // Shell-only slice: the full derived Thread gets a new reference on every
+  // streamed delta, which re-rendered this always-mounted control per token.
   const activeThread = useStore(
-    useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
+    useMemo(() => createThreadGitActionsMetadataSelector(activeThreadId), [activeThreadId]),
   );
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const threadToastData = useMemo(

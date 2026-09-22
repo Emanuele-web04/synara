@@ -38,13 +38,19 @@ const STORAGE_KEY = "synara:theme";
 const MEDIA_QUERY = "(prefers-color-scheme: dark)";
 
 let listeners: Array<() => void> = [];
-let lastSnapshot: ThemeSnapshot | null = null;
-let lastSnapshotKey = "";
+// Refreshed only when the store actually changes (a write, a cross-tab storage
+// event, or a media-query flip) so `getSnapshot` is a plain field read.
+// React re-reads the snapshot after a listener fires, which is exactly when
+// this cache is rebuilt, so the tearing guarantee holds. Reading and parsing
+// localStorage on every render of every theme consumer was measurable during
+// transcript streaming.
+let currentSnapshot: ThemeSnapshot | null = null;
 let lastDesktopTheme: ThemeMode | null = null;
 
 // ─── Store wiring ─────────────────────────────────────────────────────────
 
 function emitChange() {
+  refreshSnapshot();
   for (const listener of listeners) {
     listener();
   }
@@ -78,18 +84,29 @@ function writeStoredThemeState(state: ThemeState) {
   localStorage.setItem(STORAGE_KEY, serializeThemeState(state));
 }
 
-function getSnapshot(): ThemeSnapshot {
+function computeSnapshot(): ThemeSnapshot {
   const state = readStoredThemeState();
   const systemDark = state.mode === "system" ? getSystemDark() : false;
-  const snapshotKey = `${serializeThemeState(state)}|${systemDark ? "dark" : "light"}`;
+  return { state, systemDark };
+}
 
-  if (lastSnapshot && lastSnapshotKey === snapshotKey) {
-    return lastSnapshot;
+function refreshSnapshot(): ThemeSnapshot {
+  const next = computeSnapshot();
+  // Keep the previous object when nothing changed so consumers' memoization
+  // and `useSyncExternalStore` see a stable reference.
+  if (
+    currentSnapshot &&
+    currentSnapshot.systemDark === next.systemDark &&
+    serializeThemeState(currentSnapshot.state) === serializeThemeState(next.state)
+  ) {
+    return currentSnapshot;
   }
+  currentSnapshot = next;
+  return next;
+}
 
-  lastSnapshotKey = snapshotKey;
-  lastSnapshot = { state, systemDark };
-  return lastSnapshot;
+function getSnapshot(): ThemeSnapshot {
+  return currentSnapshot ?? refreshSnapshot();
 }
 
 function updateStoredThemeState(update: (state: ThemeState) => ThemeState) {

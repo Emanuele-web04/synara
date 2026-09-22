@@ -41,7 +41,6 @@ import {
 } from "@synara/shared/runtimeMode";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  Array as EffectArray,
   Cause,
   Deferred,
   Duration,
@@ -3245,23 +3244,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const activeSessions = (yield* Effect.forEach(adapters, (adapter) =>
           adapter.listSessions(),
         )).flatMap((sessions) => sessions);
-        const persistedBindings = yield* directory.listThreadIds().pipe(
-          Effect.flatMap((threadIds) =>
-            Effect.forEach(
-              threadIds,
-              (threadId) =>
-                directory
-                  .getBinding(threadId)
-                  .pipe(Effect.orElseSucceed(() => Option.none<ProviderRuntimeBinding>())),
-              { concurrency: "unbounded" },
-            ),
-          ),
-          Effect.orElseSucceed(() => [] as Array<Option.Option<ProviderRuntimeBinding>>),
-        );
+        // One `list()` query: `listBindings` already returns every persisted
+        // binding (skipping rows with unknown providers, exactly as the per-thread
+        // `getBinding` fallback did), so enumerating thread ids and re-fetching
+        // each row was N redundant SELECTs per call on the ingestion/reconcile path.
+        const persistedBindings = yield* directory
+          .listBindings()
+          .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<ProviderRuntimeBinding>));
         const bindingsByThreadId = new Map(
-          EffectArray.getSomes(persistedBindings).map(
-            (binding) => [binding.threadId, binding] as const,
-          ),
+          persistedBindings.map((binding) => [binding.threadId, binding] as const),
         );
 
         return activeSessions.map((session) => {

@@ -727,6 +727,39 @@ describe("DeviceManager lifecycle and agent activity", () => {
     expect(backend.hasStream(DEVICE_A)).toBe(true);
   });
 
+  it("publishes agent activity without re-running device discovery", async () => {
+    const { backend, manager, events } = makeManager();
+    await manager.boot(DEVICE_A);
+    await manager.attach(THREAD_A, DEVICE_A);
+    // The background stream bring-up publishes with fresh discovery once it
+    // settles; wait for it so only the activity publishes are observed below.
+    await waitForStream(backend, DEVICE_A, true);
+    await settleAttach(manager, THREAD_A);
+    const availability = vi.spyOn(backend, "availability");
+    const listDevices = vi.spyOn(backend, "listDevices");
+    events.length = 0;
+
+    await manager.withAgentActivity(THREAD_A, async () => undefined);
+    await manager.recordThreadError(THREAD_A, "tap failed");
+
+    // Only the badge and the error changed; the pane's device list was reused
+    // from the attach publish instead of spawning discovery twice per action.
+    expect(availability).not.toHaveBeenCalled();
+    expect(listDevices).not.toHaveBeenCalled();
+    const states = events.flatMap((event) =>
+      event.type === "device.thread-state" ? [event.state] : [],
+    );
+    expect(states.map((state) => state.agentActive)).toEqual([true, false, false]);
+    expect(states.at(-1)?.lastError).toBe("tap failed");
+    expect(states.every((state) => state.devices.some((device) => device.udid === DEVICE_A))).toBe(
+      true,
+    );
+
+    // An explicit read still discovers fresh state.
+    await manager.getThreadState(THREAD_A);
+    expect(availability).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the badge lit until the last overlapping agent action finishes", async () => {
     const { manager } = makeManager();
     let innerFinished = false;
