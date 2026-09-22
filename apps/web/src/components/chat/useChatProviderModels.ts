@@ -235,7 +235,11 @@ export function useChatProviderModels({
       ? activeProject?.defaultModelSelection?.provider === selectedProvider
         ? activeProject.defaultModelSelection
         : null
-      : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
+      : activeThread?.modelSelection.provider === selectedProvider
+        ? activeThread.modelSelection
+        : activeProject?.defaultModelSelection?.provider === selectedProvider
+          ? activeProject.defaultModelSelection
+          : null;
   const providerModelsLoading = selectedProviderModelsLoading;
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
