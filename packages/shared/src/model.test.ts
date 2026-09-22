@@ -132,6 +132,8 @@ describe("resolveDevinModelVariant", () => {
 
 describe("normalizeModelSlug", () => {
   it("maps known aliases to canonical slugs", () => {
+    expect(normalizeModelSlug("sol")).toBe("gpt-6-sol");
+    expect(normalizeModelSlug("luna")).toBe("gpt-6-luna");
     expect(normalizeModelSlug("5.5")).toBe("gpt-5.5");
     expect(normalizeModelSlug("5.3")).toBe("gpt-5.3-codex");
     expect(normalizeModelSlug("gpt-5.3")).toBe("gpt-5.3-codex");
@@ -312,6 +314,18 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
   it("returns codex reasoning options for codex", () => {
     expect(values("codex", "gpt-5.5")).toEqual([...CODEX_REASONING_EFFORT_OPTIONS]);
     expect(values("codex", "gpt-5.4")).toEqual([...CODEX_REASONING_EFFORT_OPTIONS]);
+  });
+
+  it("keeps the GPT-6 Sol and Luna effort ranges distinct", () => {
+    expect(values("codex", "gpt-6-sol")).toEqual([
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(values("codex", "gpt-6-luna")).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   it("matches Droid's GPT-5.5 and GPT-5.6 fallback effort ladders", () => {

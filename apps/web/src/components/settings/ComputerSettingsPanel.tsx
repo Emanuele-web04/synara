@@ -322,12 +322,15 @@ export function ComputerSettingsPanel({
    */
   const captureUnavailable = health?.captureAvailable === false;
   const captureBlocked = captureUnavailable && health?.status === "connected";
+  const localPlatformUnsupported =
+    localPermissionBridge !== null && appSnapState !== null && appSnapState.platform !== "macos";
   // Shared with the chat's setup card, which asks the same question of the same
   // status after pressing the same server-side Set up.
   const needsSetup =
-    nativePermissionSetupError !== null ||
-    nativeMissingPermissions.length > 0 ||
-    computerStatusNeedsSetup(status, grantsConfirmed);
+    !localPlatformUnsupported &&
+    (nativePermissionSetupError !== null ||
+      nativeMissingPermissions.length > 0 ||
+      computerStatusNeedsSetup(status, grantsConfirmed));
   // The one counter worth carrying beside the status sentence; a last failure
   // is already the reconnect sentence, so it is not repeated here.
   const healthNotes = [computerReconnectsNote(health)].filter(

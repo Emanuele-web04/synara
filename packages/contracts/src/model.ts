@@ -251,6 +251,13 @@ const CODEX_GPT_6_CAPABILITIES: ModelCapabilities = {
   ],
 };
 
+const CODEX_GPT_6_LUNA_CAPABILITIES: ModelCapabilities = {
+  ...CODEX_GPT_6_CAPABILITIES,
+  reasoningEffortLevels: CODEX_GPT_6_CAPABILITIES.reasoningEffortLevels.filter(
+    (level) => level.value !== "ultra",
+  ),
+};
+
 const GROK_CLI_EFFORT_DESCRIPTIONS = {
   low: "Quick, fast implementations",
   medium: "Balanced effort with standard implementation and testing",
@@ -578,6 +585,16 @@ export const DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL = "deepseek-v4-flash-0731" 
 
 export const MODEL_OPTIONS_BY_PROVIDER = {
   codex: [
+    {
+      slug: "gpt-6-sol",
+      name: "GPT-6 Sol",
+      capabilities: CODEX_GPT_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-6-luna",
+      name: "GPT-6 Luna",
+      capabilities: CODEX_GPT_6_LUNA_CAPABILITIES,
+    },
     {
       slug: "gpt-6-astra",
       name: "GPT-6 Astra",
@@ -1173,6 +1190,8 @@ export type GitTextGenerationProvider = (typeof GIT_TEXT_GENERATION_PROVIDERS)[n
 
 export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string, ModelSlug>> = {
   codex: {
+    sol: "gpt-6-sol",
+    luna: "gpt-6-luna",
     astra: "gpt-6-astra",
     "6": "gpt-6-astra",
     "gpt-6": "gpt-6-astra",
