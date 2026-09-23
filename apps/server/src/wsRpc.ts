@@ -1026,8 +1026,13 @@ const makeWsRpcHandlersLayer = () =>
             groupsWorkspaceRoot: config.groupsWorkspaceRoot,
             studioWorkspaceRoot: config.studioWorkspaceRoot,
             isCustomPath: agentConfig?.libraryPath !== undefined,
+            projectId,
           });
-          return { root, agentConfig };
+          return {
+            root,
+            agentConfig,
+            libraryIsManaged: agentConfig?.libraryPath === undefined,
+          };
         });
 
       // Push is detached from the request (still serialized on the library
@@ -2370,11 +2375,13 @@ const makeWsRpcHandlersLayer = () =>
             withLibraryRootLock(
               input.projectId,
               Effect.gen(function* () {
-                const { root } = yield* resolveGroupLibrary(input.projectId);
+                const { root, libraryIsManaged } = yield* resolveGroupLibrary(input.projectId);
                 const entries = yield* withLibraryQueue(
                   root,
                   Effect.gen(function* () {
-                    yield* ensureLibraryRepo(git, root);
+                    yield* ensureLibraryRepo(git, root, input.projectId, {
+                      isManaged: libraryIsManaged,
+                    });
                     return yield* listLibraryEntries(root, input.relativePath);
                   }),
                 );
@@ -2390,11 +2397,15 @@ const makeWsRpcHandlersLayer = () =>
                 withLibraryRootLock(
                   input.projectId,
                   Effect.gen(function* () {
-                    const { root, agentConfig } = yield* resolveGroupLibrary(input.projectId);
+                    const { root, agentConfig, libraryIsManaged } = yield* resolveGroupLibrary(
+                      input.projectId,
+                    );
                     return yield* withLibraryQueue(
                       root,
                       Effect.gen(function* () {
-                        yield* ensureLibraryRepo(git, root);
+                        yield* ensureLibraryRepo(git, root, input.projectId, {
+                          isManaged: libraryIsManaged,
+                        });
                         yield* createLibraryDirectory(root, input.relativePath);
                         const { commitSha } = yield* commitLibraryChange(
                           git,
@@ -2418,11 +2429,15 @@ const makeWsRpcHandlersLayer = () =>
                 withLibraryRootLock(
                   input.projectId,
                   Effect.gen(function* () {
-                    const { root, agentConfig } = yield* resolveGroupLibrary(input.projectId);
+                    const { root, agentConfig, libraryIsManaged } = yield* resolveGroupLibrary(
+                      input.projectId,
+                    );
                     return yield* withLibraryQueue(
                       root,
                       Effect.gen(function* () {
-                        yield* ensureLibraryRepo(git, root);
+                        yield* ensureLibraryRepo(git, root, input.projectId, {
+                          isManaged: libraryIsManaged,
+                        });
                         yield* renameLibraryEntry(root, input.from, input.to);
                         const { commitSha } = yield* commitLibraryChange(
                           git,
@@ -2446,11 +2461,15 @@ const makeWsRpcHandlersLayer = () =>
                 withLibraryRootLock(
                   input.projectId,
                   Effect.gen(function* () {
-                    const { root, agentConfig } = yield* resolveGroupLibrary(input.projectId);
+                    const { root, agentConfig, libraryIsManaged } = yield* resolveGroupLibrary(
+                      input.projectId,
+                    );
                     return yield* withLibraryQueue(
                       root,
                       Effect.gen(function* () {
-                        yield* ensureLibraryRepo(git, root);
+                        yield* ensureLibraryRepo(git, root, input.projectId, {
+                          isManaged: libraryIsManaged,
+                        });
                         yield* deleteLibraryEntry(root, input.relativePath);
                         const { commitSha } = yield* commitLibraryChange(
                           git,
@@ -2472,11 +2491,13 @@ const makeWsRpcHandlersLayer = () =>
             withLibraryRootLock(
               input.projectId,
               Effect.gen(function* () {
-                const { root } = yield* resolveGroupLibrary(input.projectId);
+                const { root, libraryIsManaged } = yield* resolveGroupLibrary(input.projectId);
                 const commits = yield* withLibraryQueue(
                   root,
                   Effect.gen(function* () {
-                    yield* ensureLibraryRepo(git, root);
+                    yield* ensureLibraryRepo(git, root, input.projectId, {
+                      isManaged: libraryIsManaged,
+                    });
                     const relativePath =
                       input.relativePath === undefined
                         ? undefined
@@ -2496,11 +2517,15 @@ const makeWsRpcHandlersLayer = () =>
                 withLibraryRootLock(
                   input.projectId,
                   Effect.gen(function* () {
-                    const { root, agentConfig } = yield* resolveGroupLibrary(input.projectId);
+                    const { root, agentConfig, libraryIsManaged } = yield* resolveGroupLibrary(
+                      input.projectId,
+                    );
                     return yield* withLibraryQueue(
                       root,
                       Effect.gen(function* () {
-                        yield* ensureLibraryRepo(git, root);
+                        yield* ensureLibraryRepo(git, root, input.projectId, {
+                          isManaged: libraryIsManaged,
+                        });
                         const relativePath = yield* normalizeLibraryRelativePath(
                           input.relativePath,
                         );

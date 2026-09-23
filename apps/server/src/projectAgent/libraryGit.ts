@@ -5,7 +5,7 @@
 //          identity; remote pushes are best-effort, non-interactive, and never
 //          block a write.
 // Layer: Server domain helper
-// Exports: withLibraryQueue, withLibraryRootLock, initLibraryRepo, commitLibraryChange,
+// Exports: withLibraryQueue, withLibraryQueues, withLibraryRootLock, initLibraryRepo, commitLibraryChange,
 //          libraryHistory, restoreLibraryEntry, pushLibraryIfConfigured,
 //          readLibraryPushStatus, redactLibraryRemoteUrl
 
@@ -130,6 +130,28 @@ export function withLibraryQueue<A, E, R>(
   return Effect.flatMap(
     Effect.promise(() => canonicalizeLibraryKey(root)),
     (key) => withKeyedLock(locks, key, effect),
+  );
+}
+
+// Multi-root operations take every involved queue in one canonical, sorted
+// order. Roots resolving to the same physical folder degrade to a single
+// acquisition — the keyed semaphores are not re-entrant, so nesting the same
+// key would deadlock — and a deterministic order prevents hold-and-wait cycles
+// between two opposite moves.
+export function withLibraryQueues<A, E, R>(
+  roots: readonly string[],
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> {
+  return Effect.flatMap(
+    Effect.promise(() => Promise.all(roots.map((root) => canonicalizeLibraryKey(root)))),
+    (keys) => {
+      const uniqueKeys = [...new Set(keys)].toSorted();
+      let queued = effect;
+      for (const key of uniqueKeys) {
+        queued = withKeyedLock(locks, key, queued);
+      }
+      return queued;
+    },
   );
 }
 

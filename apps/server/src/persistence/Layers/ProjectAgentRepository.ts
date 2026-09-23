@@ -1252,6 +1252,29 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           ),
         ),
       ),
+    getInboxEvent: (input) =>
+      sql<Record<string, unknown>>`
+        SELECT
+          inbox_id AS "id", project_id AS "projectId", source_thread_id AS "sourceThreadId",
+          source_event_id AS "sourceEventId", event_type AS "eventType", task_id AS "taskId",
+          eligible_wake AS "eligibleWake", created_at AS "createdAt"
+        FROM project_agent_event_inbox
+        WHERE project_id = ${input.projectId} AND inbox_id = ${input.inboxId}
+        LIMIT 1
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.getInboxEvent")),
+        Effect.flatMap((rows) =>
+          rows[0]
+            ? Schema.decodeUnknownEffect(ProjectInboxEvent)({
+                ...rows[0],
+                eligibleWake: rows[0].eligibleWake === 1 || rows[0].eligibleWake === true,
+              }).pipe(
+                Effect.map(Option.some),
+                Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.getInboxEvent")),
+              )
+            : Effect.succeed(Option.none()),
+        ),
+      ),
     getCursor: (projectId) =>
       sql<{
         readonly processedThroughInboxId: string | null;

@@ -1115,11 +1115,14 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
             groupsWorkspaceRoot: config.groupsWorkspaceRoot,
             studioWorkspaceRoot: config.studioWorkspaceRoot,
             isCustomPath: agentConfig?.libraryPath !== undefined,
+            projectId,
           });
           return yield* withLibraryQueue(
             root,
             Effect.gen(function* () {
-              yield* ensureLibraryRepo(git, root);
+              yield* ensureLibraryRepo(git, root, projectId, {
+                isManaged: agentConfig?.libraryPath === undefined,
+              });
               const relativePath = relativeDirectory
                 ? `${yield* normalizeLibraryRelativePath(relativeDirectory)}/${normalizedName}`
                 : normalizedName;

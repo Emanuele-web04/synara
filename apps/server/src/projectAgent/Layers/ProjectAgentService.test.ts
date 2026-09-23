@@ -1,3 +1,6 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -22,6 +25,8 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { coordinatorWelcomeMessageId } from "../groupCoordinatorHost.ts";
+import { wakeReceiptRequestId } from "../digest.ts";
+import { resolveLibraryRoot } from "../libraryStore.ts";
 import { ProjectAgentService } from "../Services/ProjectAgentService.ts";
 import { ProjectAgentServiceLive } from "./ProjectAgentService.ts";
 
@@ -54,6 +59,8 @@ function makeTestLayer(options?: {
       projectId: ProjectId;
       title: string;
       session: { status: string; updatedAt: string; lastError: string | null } | null;
+      latestTurn?: { state: string } | null;
+      hasPendingApprovals?: boolean;
     }
   > = {
     [groupMemberThreadId]: {
@@ -88,7 +95,8 @@ function makeTestLayer(options?: {
         workingDirectory: null,
         envMode: "local",
         messages: [],
-        latestTurn: null,
+        latestTurn: row.latestTurn ?? null,
+        hasPendingApprovals: row.hasPendingApprovals === true,
         archivedAt: null,
         deletedAt: null,
         settledAt: null,
@@ -101,6 +109,8 @@ function makeTestLayer(options?: {
   };
   const dispatched: OrchestrationCommand[] = [];
   const automationUpdates: Array<{ readonly id: string; readonly enabled?: boolean }> = [];
+  const runNowCalls: string[] = [];
+  const automationRuns: Array<{ readonly id: string }> = [];
   let failFirstImport = options?.failFirstImport === true;
   let shellBatchCalls = 0;
   const snapshotLayer = Layer.effect(
@@ -237,11 +247,18 @@ function makeTestLayer(options?: {
       });
       return Effect.succeed({ id: input.id, prompt: "" });
     },
-    runNow: () => Effect.succeed({ run: { id: "run-test-1" } }),
+    runNow: (input: { readonly automationId: string }) => {
+      runNowCalls.push(String(input.automationId));
+      return Effect.succeed({ run: { id: `run-test-${runNowCalls.length}` } });
+    },
+    listRunsForDefinition: () => Effect.succeed([...automationRuns]),
   } as unknown as AutomationService["Service"]);
   return {
     dispatched,
     automationUpdates,
+    runNowCalls,
+    automationRuns,
+    threadShells,
     shellBatchCalls: () => shellBatchCalls,
     layer: ProjectAgentServiceLive.pipe(
       Layer.provide(snapshotLayer),
@@ -1189,6 +1206,343 @@ it.effect("clears a bare busy cursor left by a crash before freezing", () => {
     const cursor = yield* repository.getCursor(groupId);
     assert.equal(cursor.coordinatorBusy, false);
     assert.equal(cursor.coordinatorBusySince, null);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("pages past a full page of non-wake rows to reach a worker alert", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-paging-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    // 60 consumed-only rows fill more than one 50-row read window.
+    for (let i = 0; i < 60; i += 1) {
+      yield* repository.insertInboxEvent({
+        id: ProjectInboxEventId.makeUnsafe(`inbox-nonwake-${i}`),
+        projectId: groupId,
+        sourceThreadId: groupMemberThreadId,
+        sourceEventId: `nonwake-${i}`,
+        eventType: "thread.settled",
+        taskId: null,
+        eligibleWake: false,
+        createdAt: `2026-09-20T00:05:${String(i).padStart(2, "0")}.000Z`,
+      });
+    }
+    yield* repository.insertInboxEvent({
+      id: ProjectInboxEventId.makeUnsafe("inbox-alert-1"),
+      projectId: groupId,
+      sourceThreadId: groupMemberThreadId,
+      sourceEventId: "alert-1",
+      eventType: "worker.error",
+      taskId: null,
+      eligibleWake: true,
+      createdAt: "2026-09-20T00:06:00.000Z",
+    });
+    yield* service.processPendingWakes(groupId);
+    // The scan consumed every non-wake row across both pages and dispatched
+    // exactly one continuation for the alert it finally reached.
+    assert.equal(harness.runNowCalls.length, 1);
+    const cursor = yield* repository.getCursor(groupId);
+    assert.equal(cursor.processedThroughInboxId, "inbox-alert-1");
+    assert.equal(cursor.processedThroughCreatedAt, "2026-09-20T00:06:00.000Z");
+    assert.equal(cursor.coordinatorBusy, false);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("restores the frozen boundary row by id past the 500-row window", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-boundary-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    // The boundary row sits outside any single page window: 550 rows were
+    // indexed before it, so a window scan can never find it by position.
+    for (let i = 0; i < 550; i += 1) {
+      yield* repository.insertInboxEvent({
+        id: ProjectInboxEventId.makeUnsafe(`inbox-filler-${i}`),
+        projectId: groupId,
+        sourceThreadId: groupMemberThreadId,
+        sourceEventId: `filler-${i}`,
+        eventType: "thread.settled",
+        taskId: null,
+        eligibleWake: false,
+        createdAt: `2026-09-20T00:01:${String(i).padStart(3, "0")}.000Z`,
+      });
+    }
+    yield* repository.insertInboxEvent({
+      id: ProjectInboxEventId.makeUnsafe("inbox-boundary"),
+      projectId: groupId,
+      sourceThreadId: groupMemberThreadId,
+      sourceEventId: "boundary",
+      eventType: "worker.error",
+      taskId: null,
+      eligibleWake: true,
+      createdAt: "2026-09-20T02:00:00.000Z",
+    });
+    yield* repository.saveCursor({
+      projectId: groupId,
+      processedThroughInboxId: "inbox-filler-0",
+      processedThroughCreatedAt: "2026-09-20T00:01:000.000Z",
+      frozenFromInboxId: "inbox-boundary",
+      frozenToInboxId: "inbox-boundary",
+      coordinatorBusy: true,
+      coordinatorBusySince: "2026-09-20T00:03:01.000Z",
+      updatedAt: "2026-09-20T00:03:01.000Z",
+    });
+    yield* service.reconcilePendingWakes();
+    const cursor = yield* repository.getCursor(groupId);
+    // Both cursor fields come from the boundary row itself — never a stale
+    // timestamp paired with the new id.
+    assert.equal(cursor.processedThroughInboxId, "inbox-boundary");
+    assert.equal(cursor.processedThroughCreatedAt, "2026-09-20T02:00:00.000Z");
+    assert.equal(cursor.coordinatorBusy, false);
+    assert.equal(harness.runNowCalls.length, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("leaves a young busy cursor alone while the coordinator is mid-turn", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-livebusy-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const config = yield* repository.getConfig(groupId);
+    assert.equal(Option.isSome(config), true);
+    if (Option.isNone(config)) return;
+    // The coordinator thread is genuinely mid-turn — the busy marker is live
+    // work, not a crash remnant, so recovery must not stack a second
+    // continuation on top of it.
+    harness.threadShells[config.value.coordinatorThreadId] = {
+      projectId: groupId,
+      title: "Alpha Coordinator",
+      session: { status: "running", updatedAt: now, lastError: null },
+      latestTurn: { state: "running" },
+    };
+    yield* repository.insertInboxEvent({
+      id: ProjectInboxEventId.makeUnsafe("inbox-livebusy"),
+      projectId: groupId,
+      sourceThreadId: groupMemberThreadId,
+      sourceEventId: "livebusy",
+      eventType: "worker.error",
+      taskId: null,
+      eligibleWake: true,
+      createdAt: "2026-09-20T00:03:00.000Z",
+    });
+    yield* repository.saveCursor({
+      projectId: groupId,
+      processedThroughInboxId: null,
+      processedThroughCreatedAt: null,
+      frozenFromInboxId: "inbox-livebusy",
+      frozenToInboxId: "inbox-livebusy",
+      coordinatorBusy: true,
+      coordinatorBusySince: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    yield* service.reconcilePendingWakes();
+    assert.equal(harness.runNowCalls.length, 0);
+    const cursor = yield* repository.getCursor(groupId);
+    assert.equal(cursor.coordinatorBusy, true);
+    assert.equal(cursor.frozenToInboxId, "inbox-livebusy");
+
+    // An idle coordinator behind a young marker is still dispatched — the
+    // marker alone does not suppress recovery.
+    harness.threadShells[config.value.coordinatorThreadId] = {
+      projectId: groupId,
+      title: "Alpha Coordinator",
+      session: { status: "ready", updatedAt: now, lastError: null },
+      latestTurn: { state: "completed" },
+    };
+    yield* service.reconcilePendingWakes();
+    assert.equal(harness.runNowCalls.length, 1);
+    const after = yield* repository.getCursor(groupId);
+    assert.equal(after.coordinatorBusy, false);
+    assert.equal(after.processedThroughInboxId, "inbox-livebusy");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("adopts the run behind a young claim instead of double-dispatching", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-claim-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    yield* repository.insertInboxEvent({
+      id: ProjectInboxEventId.makeUnsafe("inbox-claim-1"),
+      projectId: groupId,
+      sourceThreadId: groupMemberThreadId,
+      sourceEventId: "claim-1",
+      eventType: "worker.error",
+      taskId: null,
+      eligibleWake: true,
+      createdAt: "2026-09-20T00:03:00.000Z",
+    });
+    const receiptId = wakeReceiptRequestId({
+      projectId: groupId,
+      fromInboxId: "inbox-claim-1",
+      toInboxId: "inbox-claim-1",
+    });
+    // The previous attempt claimed the range and started a run, then died
+    // before storing the wake receipt. The claim resolves the run it launched
+    // — a second runNow would double-dispatch the same continuation.
+    yield* repository.saveReceipt({
+      requestId: `${receiptId}:claim`,
+      projectId: groupId,
+      operation: "wake-claim",
+      resultJson: JSON.stringify({ claimedAt: new Date().toISOString() }),
+      createdAt: new Date().toISOString(),
+    });
+    harness.automationRuns.push({ id: "run-rescued-1" });
+    yield* repository.saveCursor({
+      projectId: groupId,
+      processedThroughInboxId: null,
+      processedThroughCreatedAt: null,
+      frozenFromInboxId: "inbox-claim-1",
+      frozenToInboxId: "inbox-claim-1",
+      coordinatorBusy: true,
+      coordinatorBusySince: "2026-09-20T00:03:01.000Z",
+      updatedAt: "2026-09-20T00:03:01.000Z",
+    });
+    yield* service.reconcilePendingWakes();
+    assert.equal(harness.runNowCalls.length, 0);
+    const receipt = yield* repository.getReceipt({ requestId: receiptId, projectId: groupId });
+    assert.equal(Option.isSome(receipt), true);
+    if (Option.isSome(receipt)) {
+      assert.equal(JSON.parse(receipt.value.resultJson).runId, "run-rescued-1");
+    }
+    const cursor = yield* repository.getCursor(groupId);
+    assert.equal(cursor.coordinatorBusy, false);
+    assert.equal(cursor.processedThroughInboxId, "inbox-claim-1");
+
+    // A young claim whose run is not yet visible leaves the range for the
+    // next wake instead of racing a duplicate dispatch.
+    yield* repository.insertInboxEvent({
+      id: ProjectInboxEventId.makeUnsafe("inbox-claim-2"),
+      projectId: groupId,
+      sourceThreadId: groupMemberThreadId,
+      sourceEventId: "claim-2",
+      eventType: "worker.error",
+      taskId: null,
+      eligibleWake: true,
+      createdAt: "2026-09-20T00:04:00.000Z",
+    });
+    const pendingReceiptId = wakeReceiptRequestId({
+      projectId: groupId,
+      fromInboxId: "inbox-claim-2",
+      toInboxId: "inbox-claim-2",
+    });
+    yield* repository.saveReceipt({
+      requestId: `${pendingReceiptId}:claim`,
+      projectId: groupId,
+      operation: "wake-claim",
+      resultJson: JSON.stringify({ claimedAt: new Date().toISOString() }),
+      createdAt: new Date().toISOString(),
+    });
+    harness.automationRuns.length = 0;
+    yield* repository.saveCursor({
+      projectId: groupId,
+      processedThroughInboxId: "inbox-claim-1",
+      processedThroughCreatedAt: "2026-09-20T00:03:00.000Z",
+      frozenFromInboxId: "inbox-claim-2",
+      frozenToInboxId: "inbox-claim-2",
+      coordinatorBusy: true,
+      coordinatorBusySince: "2026-09-20T00:04:01.000Z",
+      updatedAt: "2026-09-20T00:04:01.000Z",
+    });
+    yield* service.reconcilePendingWakes();
+    assert.equal(harness.runNowCalls.length, 0);
+    const stillFrozen = yield* repository.getCursor(groupId);
+    assert.equal(stillFrozen.coordinatorBusy, true);
+    assert.equal(stillFrozen.frozenToInboxId, "inbox-claim-2");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("configure onto the same canonical library root returns promptly", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const serverConfig = yield* ServerConfig;
+    yield* service.configure(
+      {
+        requestId: "req-lock-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const defaultRoot = yield* resolveLibraryRoot({
+      stateDir: serverConfig.stateDir,
+      projectId: groupId,
+    });
+    // Re-pointing the library at the same physical folder — literally, with a
+    // trailing slash, or through a symlink — used to nest the same
+    // non-re-entrant queue inside itself and hang configure forever. Each
+    // variant completing inside the suite timeout is the regression
+    // assertion.
+    const aliasLink = path.join(serverConfig.stateDir, "library-alias");
+    yield* Effect.promise(() => fs.symlink(defaultRoot, aliasLink, "dir"));
+    let revision = 0;
+    for (const libraryPath of [defaultRoot, `${defaultRoot}/`, aliasLink]) {
+      revision += 1;
+      yield* service.configure(
+        {
+          requestId: `req-lock-${revision}`,
+          projectId: groupId,
+          coordinatorModelSelection: modelSelection,
+          libraryPath,
+        },
+        { kind: "user" },
+      );
+    }
+    const config = yield* repository.getConfig(groupId);
+    assert.equal(Option.isSome(config), true);
+    if (Option.isSome(config)) {
+      assert.equal(config.value.libraryPath, aliasLink);
+    }
+    // A real relocation still moves the tree.
+    const elsewhere = path.join(serverConfig.stateDir, "library-moved");
+    yield* service.configure(
+      {
+        requestId: "req-lock-moved",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+        libraryPath: elsewhere,
+      },
+      { kind: "user" },
+    );
+    const moved = yield* repository.getConfig(groupId);
+    assert.equal(Option.isSome(moved), true);
+    if (Option.isSome(moved)) {
+      assert.equal(moved.value.libraryPath, elsewhere);
+    }
   }).pipe(Effect.provide(harness.layer));
 });
 

@@ -23,6 +23,7 @@ import {
   ThreadId,
   type OrchestrationCommand,
   type ProjectActivity,
+  type ProjectInboxEvent,
   type ProjectAgentOverview,
   type ProjectAgentSummary,
   type ProjectAgentStreamEvent,
@@ -37,7 +38,7 @@ import {
   isGroupCoordinatorHostProject,
 } from "../groupCoordinatorHost.ts";
 import { assertLibraryRootLocation, moveLibraryRoot, resolveLibraryRoot } from "../libraryStore.ts";
-import { withLibraryQueue, withLibraryRootLock } from "../libraryGit.ts";
+import { withLibraryQueues, withLibraryRootLock } from "../libraryGit.ts";
 import {
   canWriteMemoryDocument,
   decodeProjectAgentListCursor,
@@ -124,6 +125,20 @@ const fail = (message: string, code?: ProjectAgentServiceError["code"]) =>
   new ProjectAgentServiceError({ message, ...(code ? { code } : {}) });
 
 const isoNow = () => new Date().toISOString();
+
+// A wake claim stays fresh long enough to cover crash-vs-slow dispatch; an
+// expired claim means the earlier runNow threw and the range is re-dispatched.
+const WAKE_CLAIM_TTL_MS = 10 * 60_000;
+// A busy marker younger than this while the coordinator thread is mid-turn
+// (or awaiting approvals) is live work, not a crash: recovery must not
+// re-dispatch a second continuation on top of it.
+const COORDINATOR_BUSY_LIVE_MS = 15 * 60_000;
+
+// The dispatch claim for a wake range lives on a sibling receipt id —
+// receipts are insert-only, so it is written before runNow and a crash
+// between run start and receipt save can never queue a second run.
+const wakeClaimRequestId = (receiptId: string) => `${receiptId}:claim`;
+
 const branded = {
   thread: (id = randomUUID()) => ThreadId.makeUnsafe(id),
   command: (id = randomUUID()) => CommandId.makeUnsafe(id),
@@ -648,6 +663,68 @@ export const makeProjectAgentService = Effect.gen(function* () {
       })
       .pipe(Effect.mapError(toServiceError("Failed to persist request receipt.")));
 
+  interface WakeReceiptResult {
+    readonly runId?: string;
+    readonly claimedAt?: string;
+  }
+
+  const readWakeReceipt = (projectId: ProjectId, requestId: string) =>
+    repository.getReceipt({ requestId, projectId }).pipe(
+      Effect.mapError(toServiceError("Failed to load wake receipt.")),
+      Effect.map((option) =>
+        Option.isSome(option) ? (JSON.parse(option.value.resultJson) as WakeReceiptResult) : null,
+      ),
+    );
+
+  // Dispatches the coordinator continuation for an inbox range exactly once.
+  // Receipts are insert-only, so the range's claim lives on a sibling id:
+  // `${receiptId}:claim` is written BEFORE runNow, meaning a crash between run
+  // start and receipt save can never enqueue a second run. On re-drive a young
+  // claim resolves the run it launched from the automation history; an expired
+  // one means the earlier dispatch threw and the range is re-dispatched.
+  const dispatchWakeContinuation = (input: {
+    readonly projectId: ProjectId;
+    readonly receiptId: string;
+    readonly automationId: AutomationId;
+    readonly existingWake: WakeReceiptResult | null;
+  }) =>
+    Effect.gen(function* () {
+      if (input.existingWake?.runId) {
+        return { runId: input.existingWake.runId, dispatched: false as const };
+      }
+      const claimId = wakeClaimRequestId(input.receiptId);
+      const claim = yield* repository
+        .getReceipt({ requestId: claimId, projectId: input.projectId })
+        .pipe(Effect.mapError(toServiceError("Failed to load wake claim.")));
+      if (Option.isSome(claim)) {
+        const claimAge = Date.now() - Date.parse(claim.value.createdAt);
+        if (claimAge < WAKE_CLAIM_TTL_MS) {
+          // The earlier dispatch claimed this range — adopt the run it
+          // launched rather than queueing a duplicate continuation.
+          const runs = yield* automationService
+            .listRunsForDefinition({ automationId: input.automationId, limit: 1 })
+            .pipe(Effect.mapError(toServiceError("Failed to list coordinator runs.")));
+          const runId = runs[0]?.id;
+          if (runId === undefined) {
+            // The claimed run is not visible yet; leave the range for the
+            // next wake rather than racing a second dispatch.
+            return { runId: null, dispatched: false as const };
+          }
+          yield* storeReceipt(input.receiptId, input.projectId, "wake", { runId });
+          return { runId, dispatched: false as const };
+        }
+      }
+      yield* storeReceipt(claimId, input.projectId, "wake-claim", {
+        claimedAt: isoNow(),
+      });
+      const run = yield* automationService
+        .runNow({ automationId: input.automationId })
+        .pipe(Effect.mapError(toServiceError("Failed to dispatch coordinator continuation.")));
+      const runId = run.run.id;
+      yield* storeReceipt(input.receiptId, input.projectId, "wake", { runId });
+      return { runId, dispatched: true as const };
+    });
+
   const createCoordinatorThread = (input: {
     readonly projectId: ProjectId;
     readonly title: string;
@@ -1110,15 +1187,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
                     groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
                     studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
                     isCustomPath: true,
+                    projectId: input.projectId,
                   }).pipe(
                     Effect.mapError(toServiceError("Failed to validate the new library path.")),
                   );
-                  const moveResult = yield* withLibraryQueue(
-                    previousRoot,
-                    withLibraryQueue(
-                      nextRoot,
-                      moveLibraryRoot({ fromRoot: previousRoot, toRoot: nextRoot }),
-                    ),
+                  // Both queues are taken in canonical sorted order: equal
+                  // keys (same folder via slash/default/symlink) collapse to
+                  // one acquisition — the keyed locks are not re-entrant — and
+                  // opposite moves cannot interleave into a deadlock.
+                  const moveResult = yield* withLibraryQueues(
+                    [previousRoot, nextRoot],
+                    moveLibraryRoot({
+                      fromRoot: previousRoot,
+                      toRoot: nextRoot,
+                      projectId: input.projectId,
+                    }),
                   ).pipe(
                     Effect.mapError((cause) =>
                       fail(`Could not move the group library: ${cause.message}`, "invalid"),
@@ -2884,25 +2967,39 @@ export const makeProjectAgentService = Effect.gen(function* () {
             const fromInboxId = cursor.frozenFromInboxId;
             const toInboxId = cursor.frozenToInboxId;
             const receiptId = wakeReceiptRequestId({ projectId, fromInboxId, toInboxId });
-            const existingWake = yield* repository
-              .getReceipt({ requestId: receiptId, projectId })
-              .pipe(Effect.mapError(toServiceError("Failed to load wake receipt.")));
-            let runId = Option.isSome(existingWake)
-              ? (JSON.parse(existingWake.value.resultJson) as { runId?: string }).runId
-              : undefined;
+            const existingWake = yield* readWakeReceipt(projectId, receiptId);
+            let runId = existingWake?.runId;
             if (!runId) {
               if (!config.automationId) {
                 yield* clearWakeCursor(projectId, cursor);
                 return;
               }
-              const run = yield* automationService
-                .runNow({ automationId: config.automationId })
-                .pipe(
-                  Effect.mapError(toServiceError("Failed to dispatch coordinator continuation.")),
-                );
-              runId = run.run.id;
-              yield* storeReceipt(receiptId, projectId, "wake", { runId });
-              if (activeGoal) {
+              // A busy marker younger than the live window while the
+              // coordinator thread is mid-turn (or awaiting approvals) is live
+              // work, not a crash — leave the range frozen for the next wake
+              // instead of stacking a second continuation on top of it.
+              if (cursor.coordinatorBusySince !== null) {
+                const busyAge = Date.now() - Date.parse(cursor.coordinatorBusySince);
+                if (busyAge < COORDINATOR_BUSY_LIVE_MS) {
+                  const coordinator = yield* snapshotQuery
+                    .getThreadShellById(config.coordinatorThreadId)
+                    .pipe(Effect.mapError(toServiceError("Failed to load coordinator thread.")));
+                  const midTurn =
+                    Option.isSome(coordinator) &&
+                    (coordinator.value.latestTurn?.state === "running" ||
+                      coordinator.value.hasPendingApprovals === true);
+                  if (midTurn) return;
+                }
+              }
+              const dispatch = yield* dispatchWakeContinuation({
+                projectId,
+                receiptId,
+                automationId: config.automationId,
+                existingWake,
+              });
+              if (dispatch.runId === null) return;
+              runId = dispatch.runId;
+              if (dispatch.dispatched && activeGoal) {
                 yield* repository
                   .saveGoal(
                     {
@@ -2918,21 +3015,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   );
               }
             }
-            // The keyset cursor needs the frozen range's last row's createdAt.
-            const tail = yield* repository
-              .listInboxAfter({
-                projectId,
-                afterCreatedAt: cursor.processedThroughCreatedAt,
-                afterId: cursor.processedThroughInboxId,
-                limit: 500,
-              })
-              .pipe(Effect.mapError(toServiceError("Failed to load project inbox.")));
-            const toRow = tail.find((event) => event.id === toInboxId);
+            // The keyset cursor needs the frozen range's last row's createdAt;
+            // fetch the boundary row by id — a page scan can miss a row that
+            // sits beyond the window and would keep a stale timestamp.
+            const toRow = yield* repository
+              .getInboxEvent({ projectId, inboxId: toInboxId })
+              .pipe(Effect.mapError(toServiceError("Failed to load frozen inbox boundary.")));
             yield* repository
               .saveCursor({
                 projectId,
                 processedThroughInboxId: toInboxId,
-                processedThroughCreatedAt: toRow?.createdAt ?? cursor.processedThroughCreatedAt,
+                processedThroughCreatedAt: Option.isSome(toRow)
+                  ? toRow.value.createdAt
+                  : cursor.processedThroughCreatedAt,
                 frozenFromInboxId: null,
                 frozenToInboxId: null,
                 coordinatorBusy: false,
@@ -2960,15 +3055,44 @@ export const makeProjectAgentService = Effect.gen(function* () {
             yield* clearWakeCursor(projectId, cursor);
             cursor = { ...cursor, coordinatorBusy: false, coordinatorBusySince: null };
           }
-          const pending = yield* repository
-            .listInboxAfter({
-              projectId,
-              afterCreatedAt: cursor.processedThroughCreatedAt,
-              afterId: cursor.processedThroughInboxId,
-              limit: 50,
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to load project inbox.")));
-          const eligible = pending.filter((event) => event.eligibleWake);
+          // Pages the inbox until a wake-eligible row appears or the tail is
+          // exhausted. Every consumed row advances the keyset cursor, so a
+          // page of non-wake rows can no longer hide later worker alerts
+          // behind the 50-row read window.
+          let eligible: ReadonlyArray<ProjectInboxEvent> = [];
+          let scanAfterId = cursor.processedThroughInboxId;
+          let scanAfterCreatedAt = cursor.processedThroughCreatedAt;
+          for (;;) {
+            const pending = yield* repository
+              .listInboxAfter({
+                projectId,
+                afterCreatedAt: scanAfterCreatedAt,
+                afterId: scanAfterId,
+                limit: 50,
+              })
+              .pipe(Effect.mapError(toServiceError("Failed to load project inbox.")));
+            if (pending.length === 0) break;
+            const found = pending.filter((event) => event.eligibleWake);
+            if (found.length > 0) {
+              eligible = found;
+              break;
+            }
+            const last = pending[pending.length - 1]!;
+            yield* repository
+              .saveCursor({
+                projectId,
+                processedThroughInboxId: last.id,
+                processedThroughCreatedAt: last.createdAt,
+                frozenFromInboxId: null,
+                frozenToInboxId: null,
+                coordinatorBusy: false,
+                coordinatorBusySince: null,
+                updatedAt: isoNow(),
+              })
+              .pipe(Effect.mapError(toServiceError("Failed to advance project event cursor.")));
+            scanAfterId = last.id;
+            scanAfterCreatedAt = last.createdAt;
+          }
           if (eligible.length === 0) return;
           const coordinator = yield* snapshotQuery
             .getThreadShellById(config.coordinatorThreadId)
@@ -2986,14 +3110,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
             fromInboxId,
             toInboxId,
           });
-          const existingWake = yield* repository
-            .getReceipt({ requestId: receiptId, projectId })
-            .pipe(Effect.mapError(toServiceError("Failed to load wake receipt.")));
+          const existingWake = yield* readWakeReceipt(projectId, receiptId);
           yield* repository
             .saveCursor({
               projectId,
-              processedThroughInboxId: cursor.processedThroughInboxId,
-              processedThroughCreatedAt: cursor.processedThroughCreatedAt,
+              processedThroughInboxId: scanAfterId,
+              processedThroughCreatedAt: scanAfterCreatedAt,
               frozenFromInboxId: fromInboxId,
               frozenToInboxId: toInboxId,
               coordinatorBusy: true,
@@ -3001,18 +3123,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
               updatedAt: isoNow(),
             })
             .pipe(Effect.mapError(toServiceError("Failed to freeze project event range.")));
-          let runId = Option.isSome(existingWake)
-            ? (JSON.parse(existingWake.value.resultJson) as { runId?: string }).runId
-            : undefined;
+          let runId = existingWake?.runId;
           if (!runId) {
-            const run = yield* automationService
-              .runNow({ automationId: config.automationId })
-              .pipe(
-                Effect.mapError(toServiceError("Failed to dispatch coordinator continuation.")),
-              );
-            runId = run.run.id;
-            yield* storeReceipt(receiptId, projectId, "wake", { runId });
-            if (activeGoal) {
+            const dispatch = yield* dispatchWakeContinuation({
+              projectId,
+              receiptId,
+              automationId: config.automationId,
+              existingWake,
+            });
+            if (dispatch.runId === null) return;
+            runId = dispatch.runId;
+            if (dispatch.dispatched && activeGoal) {
               yield* repository
                 .saveGoal(
                   {

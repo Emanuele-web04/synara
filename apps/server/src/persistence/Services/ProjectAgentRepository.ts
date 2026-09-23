@@ -193,6 +193,10 @@ export interface ProjectAgentRepositoryShape {
     readonly afterId?: string | null;
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<ProjectInboxEvent>, ProjectAgentRepositoryError>;
+  readonly getInboxEvent: (input: {
+    readonly projectId: ProjectId;
+    readonly inboxId: string;
+  }) => Effect.Effect<Option.Option<ProjectInboxEvent>, ProjectAgentRepositoryError>;
   readonly getCursor: (projectId: ProjectId) => Effect.Effect<
     {
       readonly processedThroughInboxId: string | null;
