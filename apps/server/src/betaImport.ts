@@ -12,9 +12,12 @@
 // point back at this install's own home before anything is read or written.
 
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   cpSync,
@@ -22,11 +25,13 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import {
   BETA_IMPORT_REQUEST_FILE_NAME,
   BETA_IMPORT_RESULT_FILE_NAME,
+  SYNARA_STABLE_HOME_ENV,
   type BetaImportRequest,
 } from "@synara/shared/betaChannel";
 
@@ -107,7 +112,51 @@ function copyStateEntries(sourceStateDir: string, targetStateDir: string): void 
   }
 }
 
-const SNAPSHOT_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
+/** Sidecars that carry committed state. `-shm` is only a rebuildable index. */
+const SNAPSHOT_SIDECAR_SUFFIXES = ["-wal", "-journal"] as const;
+const LIVE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
+const LIVE_COPY_ATTEMPTS = 5;
+
+/**
+ * Identifies the moments a live copy can tear: a checkpoint rewrites the main
+ * file (size/mtime change) and a WAL restart rewrites the WAL header salts.
+ */
+function liveDatabaseSignature(sourceDbPath: string): string {
+  const main = statSync(sourceDbPath);
+  let walHeader = "none";
+  try {
+    const fd = openSync(`${sourceDbPath}-wal`, "r");
+    try {
+      const header = Buffer.alloc(32);
+      walHeader = header.subarray(0, readSync(fd, header, 0, 32, 0)).toString("hex");
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    // No WAL: nothing to tear against.
+  }
+  return `${main.size}:${main.mtimeMs}:${walHeader}`;
+}
+
+/** Highest applied migration in a database file, or null without a tracker. */
+async function readMigrationHighWaterMark(dbPath: string): Promise<number | null> {
+  const { DatabaseSync } = await import("node:sqlite");
+  const database = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const table = database
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'",
+      )
+      .get();
+    if (!table) return null;
+    const row = database
+      .prepare("SELECT max(migration_id) AS id FROM effect_sql_migrations")
+      .get() as { id: number | null } | undefined;
+    return typeof row?.id === "number" ? row.id : null;
+  } finally {
+    database.close();
+  }
+}
 
 async function vacuumInto(sourceDbPath: string, targetPath: string): Promise<void> {
   const { DatabaseSync } = await import("node:sqlite");
@@ -122,44 +171,67 @@ async function vacuumInto(sourceDbPath: string, targetPath: string): Promise<voi
 /**
  * File-level snapshot of a database another process holds open. The stable
  * server keeps `state.sqlite` under `PRAGMA locking_mode = EXCLUSIVE`, so no
- * second connection can `VACUUM INTO` it while it runs. Copying the sidecars
- * first and the main file last yields a crash-consistent pair: a checkpoint or
- * commit landing between the copies can only add committed state, and a torn
- * WAL tail is discarded by SQLite's frame checksums on recovery.
+ * second connection can `VACUUM INTO` it while it runs. The main file and WAL
+ * are only a consistent pair if no checkpoint or WAL restart lands between
+ * the two copies, so the copy is retried until the database signature is the
+ * same before and after, and fails rather than import a torn pair. Appends to
+ * the WAL during the copy are fine: a torn tail frame fails its checksum and
+ * is discarded on recovery.
  */
-function copyLiveDatabase(sourceDbPath: string, stagingDir: string): string {
-  mkdirSync(stagingDir, { recursive: true });
-  for (const suffix of SNAPSHOT_SIDECAR_SUFFIXES) {
-    const sidecarPath = `${sourceDbPath}${suffix}`;
-    if (!existsSync(sidecarPath)) continue;
-    try {
-      if (statSync(sidecarPath).isFile()) {
+export function copyLiveDatabase(
+  sourceDbPath: string,
+  stagingDir: string,
+  signature: (dbPath: string) => string = liveDatabaseSignature,
+): string {
+  const stagedDbPath = join(stagingDir, "state.sqlite");
+  for (let attempt = 0; attempt < LIVE_COPY_ATTEMPTS; attempt += 1) {
+    rmSync(stagingDir, { recursive: true, force: true });
+    mkdirSync(stagingDir, { recursive: true });
+    const before = signature(sourceDbPath);
+    cpSync(sourceDbPath, stagedDbPath, { force: true });
+    for (const suffix of SNAPSHOT_SIDECAR_SUFFIXES) {
+      const sidecarPath = `${sourceDbPath}${suffix}`;
+      if (existsSync(sidecarPath) && statSync(sidecarPath).isFile()) {
         cpSync(sidecarPath, join(stagingDir, `state.sqlite${suffix}`), { force: true });
       }
-    } catch {
-      // A sidecar vanishing mid-import means the source checkpointed; the copy
-      // of the main file below already carries that state.
     }
+    if (signature(sourceDbPath) === before) return stagedDbPath;
   }
-  const stagedDbPath = join(stagingDir, "state.sqlite");
-  cpSync(sourceDbPath, stagedDbPath, { force: true });
-  return stagedDbPath;
+  throw new Error("Synara kept rewriting its database during the copy. Try again in a moment.");
 }
 
-async function snapshotStableDatabase(sourceDbPath: string, targetDbPath: string): Promise<void> {
+async function snapshotStableDatabase(
+  sourceDbPath: string,
+  targetDbPath: string,
+  latestMigrationId: number,
+): Promise<void> {
   const stagingPath = `${targetDbPath}.import-${process.pid}`;
   const stagingDir = `${stagingPath}.src`;
   rmSync(stagingPath, { force: true });
   rmSync(stagingDir, { recursive: true, force: true });
+  mkdirSync(resolve(targetDbPath, ".."), { recursive: true });
   try {
     try {
       await vacuumInto(sourceDbPath, stagingPath);
     } catch {
+      // VACUUM INTO refuses an existing target; drop any partial output.
+      rmSync(stagingPath, { force: true });
       const stagedDbPath = copyLiveDatabase(sourceDbPath, stagingDir);
       // Opening the staged copy replays its WAL, so the vacuumed output is a
       // fully checkpointed database — and a corrupt copy surfaces here as an
       // error instead of landing in the beta home.
       await vacuumInto(stagedDbPath, stagingPath);
+    }
+    const sourceMigration = await readMigrationHighWaterMark(stagingPath);
+    if (sourceMigration !== null && sourceMigration > latestMigrationId) {
+      throw new Error(
+        "Synara is newer than this Synara Beta. Update Synara Beta, then copy your data again.",
+      );
+    }
+    // A leftover WAL from an earlier unclean beta exit is not tied to a
+    // database file and would replay old pages over the imported one.
+    for (const suffix of LIVE_SIDECAR_SUFFIXES) {
+      rmSync(`${targetDbPath}${suffix}`, { force: true });
     }
     renameSync(stagingPath, targetDbPath);
   } finally {
@@ -168,9 +240,18 @@ async function snapshotStableDatabase(sourceDbPath: string, targetDbPath: string
   }
 }
 
+/** Stable homes a beta may import from: the one stable handed over, else the default. */
+export function allowedImportSourceHomes(env: NodeJS.ProcessEnv = process.env): string[] {
+  const handedOver = env[SYNARA_STABLE_HOME_ENV]?.trim();
+  return [handedOver ? resolve(handedOver) : resolve(homedir(), ".synara")];
+}
+
 export async function runBetaImportIfRequested(input: {
   readonly betaHomeDir: string;
   readonly stateDir: string;
+  /** Newest migration this beta build knows; newer source databases are refused. */
+  readonly latestMigrationId: number;
+  readonly allowedSourceHomes?: readonly string[];
 }): Promise<{ readonly consumed: boolean; readonly ok: boolean; readonly error?: string }> {
   const markerPath = join(input.betaHomeDir, BETA_IMPORT_REQUEST_FILE_NAME);
   if (!existsSync(markerPath)) {
@@ -215,6 +296,9 @@ export async function runBetaImportIfRequested(input: {
   if (sourceHomeDir === resolve(input.betaHomeDir)) {
     return finish(false, "import source points at the beta home itself");
   }
+  if (!(input.allowedSourceHomes ?? allowedImportSourceHomes()).includes(sourceHomeDir)) {
+    return finish(false, "import source is not the Synara data folder");
+  }
 
   const sourceStateDir = join(sourceHomeDir, "userdata");
   const sourceDbPath = join(sourceStateDir, "state.sqlite");
@@ -226,7 +310,11 @@ export async function runBetaImportIfRequested(input: {
     // Snapshot the database first: if it fails, beta must keep its own db and
     // receive none of stable's files — copying entries first would leave
     // stable's settings/secrets on top of beta's existing database.
-    await snapshotStableDatabase(sourceDbPath, join(input.stateDir, "state.sqlite"));
+    await snapshotStableDatabase(
+      sourceDbPath,
+      join(input.stateDir, "state.sqlite"),
+      input.latestMigrationId,
+    );
     copyStateEntries(sourceStateDir, input.stateDir);
     return finish(true);
   } catch (error) {

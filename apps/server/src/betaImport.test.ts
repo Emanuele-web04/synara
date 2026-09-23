@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -19,7 +19,7 @@ import {
   BETA_IMPORT_REQUEST_FILE_NAME,
   BETA_IMPORT_RESULT_FILE_NAME,
 } from "@synara/shared/betaChannel";
-import { runBetaImportIfRequested } from "./betaImport";
+import { copyLiveDatabase, runBetaImportIfRequested } from "./betaImport";
 
 const roots: string[] = [];
 
@@ -61,11 +61,33 @@ function writeMarker(betaHome: string, sourceHomeDir: string): void {
   );
 }
 
+/** Runs the import allowing whatever source the marker names, unless overridden. */
+function run(
+  input: { readonly betaHomeDir: string; readonly stateDir: string },
+  overrides: Partial<Parameters<typeof runBetaImportIfRequested>[0]> = {},
+) {
+  let allowedSourceHomes: string[] = [];
+  try {
+    const marker = JSON.parse(
+      readFileSync(join(input.betaHomeDir, BETA_IMPORT_REQUEST_FILE_NAME), "utf8"),
+    );
+    allowedSourceHomes = [resolve(marker.sourceHomeDir)];
+  } catch {
+    // no or malformed marker
+  }
+  return runBetaImportIfRequested({
+    ...input,
+    latestMigrationId: 1_000,
+    allowedSourceHomes,
+    ...overrides,
+  });
+}
+
 describe("runBetaImportIfRequested", () => {
   it("does nothing without a marker", async () => {
     const root = makeRoot();
     const betaHome = join(root, ".synara-beta");
-    const outcome = await runBetaImportIfRequested({
+    const outcome = await run({
       betaHomeDir: betaHome,
       stateDir: join(betaHome, "userdata"),
     });
@@ -79,7 +101,7 @@ describe("runBetaImportIfRequested", () => {
     const betaState = join(betaHome, "userdata");
     writeMarker(betaHome, root);
 
-    const outcome = await runBetaImportIfRequested({ betaHomeDir: betaHome, stateDir: betaState });
+    const outcome = await run({ betaHomeDir: betaHome, stateDir: betaState });
     expect(outcome).toEqual({ consumed: true, ok: true });
     expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(false);
 
@@ -114,7 +136,7 @@ describe("runBetaImportIfRequested", () => {
     const betaState = join(betaHome, "userdata");
     writeMarker(betaHome, root);
 
-    const outcome = await runBetaImportIfRequested({ betaHomeDir: betaHome, stateDir: betaState });
+    const outcome = await run({ betaHomeDir: betaHome, stateDir: betaState });
     expect(outcome).toEqual({ consumed: true, ok: true });
     expect(existsSync(join(betaState, "state.sqlite"))).toBe(true);
     // Only the checkpointed snapshot lands — no live-database sidecars.
@@ -142,7 +164,7 @@ describe("runBetaImportIfRequested", () => {
       liveDb.exec("PRAGMA locking_mode = EXCLUSIVE");
       liveDb.exec("INSERT INTO threads VALUES ('t2', 'written while locked')");
 
-      const outcome = await runBetaImportIfRequested({
+      const outcome = await run({
         betaHomeDir: betaHome,
         stateDir: betaState,
       });
@@ -164,7 +186,7 @@ describe("runBetaImportIfRequested", () => {
     const betaHome = join(root, ".synara-beta");
     writeMarker(betaHome, betaHome);
 
-    const outcome = await runBetaImportIfRequested({
+    const outcome = await run({
       betaHomeDir: betaHome,
       stateDir: join(betaHome, "userdata"),
     });
@@ -181,7 +203,7 @@ describe("runBetaImportIfRequested", () => {
     const betaHome = join(root, ".synara-beta");
     writeMarker(betaHome, stableHome);
 
-    const outcome = await runBetaImportIfRequested({
+    const outcome = await run({
       betaHomeDir: betaHome,
       stateDir: join(betaHome, "userdata"),
     });
@@ -205,7 +227,7 @@ describe("runBetaImportIfRequested", () => {
     const betaState = join(betaHome, "userdata");
     writeMarker(betaHome, stableHome);
 
-    const outcome = await runBetaImportIfRequested({
+    const outcome = await run({
       betaHomeDir: betaHome,
       stateDir: betaState,
     });
@@ -223,7 +245,7 @@ describe("runBetaImportIfRequested", () => {
     // — that throw is a StartupError on every launch.
     mkdirSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME), { recursive: true });
 
-    const outcome = await runBetaImportIfRequested({
+    const outcome = await run({
       betaHomeDir: betaHome,
       stateDir: join(betaHome, "userdata"),
     });
@@ -251,7 +273,7 @@ describe("runBetaImportIfRequested", () => {
       JSON.stringify({ version: 1, completedAt: new Date().toISOString(), ok: true }),
     );
 
-    const outcome = await runBetaImportIfRequested({
+    const outcome = await run({
       betaHomeDir: betaHome,
       stateDir: betaState,
     });
@@ -269,7 +291,7 @@ describe("runBetaImportIfRequested", () => {
     writeMarker(betaHome, root);
     writeFileSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME), "garbage");
 
-    const outcome = await runBetaImportIfRequested({
+    const outcome = await run({
       betaHomeDir: betaHome,
       stateDir: join(betaHome, "userdata"),
     });
@@ -277,5 +299,104 @@ describe("runBetaImportIfRequested", () => {
     expect(outcome.ok).toBe(false);
     // Marker is gone — a second boot does not retry a malformed request.
     expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(false);
+  });
+
+  it("refuses a source that is not the Synara data folder", async () => {
+    const root = await seedStableHome(makeRoot());
+    const betaHome = join(root, ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    writeMarker(betaHome, root);
+
+    const outcome = await run(
+      { betaHomeDir: betaHome, stateDir: betaState },
+      { allowedSourceHomes: [join(root, "..", "somewhere-else")] },
+    );
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("not the Synara data folder");
+    expect(existsSync(join(betaState, "state.sqlite"))).toBe(false);
+  });
+
+  it("refuses a stable database newer than this beta understands", async () => {
+    const root = await seedStableHome(makeRoot());
+    const { DatabaseSync } = await import("node:sqlite");
+    const stableDb = new DatabaseSync(join(root, "userdata", "state.sqlite"));
+    stableDb.exec("CREATE TABLE effect_sql_migrations (migration_id INTEGER, name TEXT)");
+    stableDb.exec("INSERT INTO effect_sql_migrations VALUES (1, 'a'), (51, 'from-the-future')");
+    stableDb.close();
+    const betaHome = join(root, ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    writeMarker(betaHome, root);
+
+    const outcome = await run(
+      { betaHomeDir: betaHome, stateDir: betaState },
+      { latestMigrationId: 50 },
+    );
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("Update Synara Beta");
+    expect(existsSync(join(betaState, "state.sqlite"))).toBe(false);
+    expect(existsSync(join(betaState, "settings.json"))).toBe(false);
+  });
+
+  it("drops a stale beta WAL so it cannot replay over the imported database", async () => {
+    const root = await seedStableHome(makeRoot());
+    const betaHome = join(root, ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    mkdirSync(betaState, { recursive: true });
+
+    // Leave a real, un-checkpointed WAL from an "unclean" earlier beta run.
+    const { DatabaseSync } = await import("node:sqlite");
+    const betaDbPath = join(betaState, "state.sqlite");
+    const oldBeta = new DatabaseSync(betaDbPath);
+    oldBeta.exec("PRAGMA journal_mode = WAL");
+    oldBeta.exec("PRAGMA wal_autocheckpoint = 0");
+    oldBeta.exec("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT)");
+    oldBeta.exec("INSERT INTO threads VALUES ('old', 'stale beta row')");
+    const staleWal = readFileSync(`${betaDbPath}-wal`);
+    oldBeta.close();
+    writeFileSync(`${betaDbPath}-wal`, staleWal);
+    writeFileSync(`${betaDbPath}-shm`, "stale index");
+
+    writeMarker(betaHome, root);
+    const outcome = await run({ betaHomeDir: betaHome, stateDir: betaState });
+    expect(outcome).toEqual({ consumed: true, ok: true });
+    expect(existsSync(`${betaDbPath}-wal`)).toBe(false);
+    expect(existsSync(`${betaDbPath}-shm`)).toBe(false);
+
+    const db = new DatabaseSync(betaDbPath, { readOnly: true });
+    const titles = (db.prepare("SELECT title FROM threads").all() as Array<{ title: string }>).map(
+      (row) => row.title,
+    );
+    db.close();
+    expect(titles).toEqual(["hello stable"]);
+  });
+});
+
+describe("copyLiveDatabase", () => {
+  function seedDbFile(root: string): string {
+    const dbPath = join(root, "state.sqlite");
+    writeFileSync(dbPath, "db");
+    writeFileSync(`${dbPath}-wal`, "wal");
+    writeFileSync(`${dbPath}-shm`, "shm");
+    return dbPath;
+  }
+
+  it("retries a copy torn by a checkpoint and skips the shm index", () => {
+    const root = makeRoot();
+    const dbPath = seedDbFile(root);
+    const stagingDir = join(root, "staging");
+    const signatures = ["a", "b", "b", "b"];
+    const staged = copyLiveDatabase(dbPath, stagingDir, () => signatures.shift() ?? "b");
+    expect(signatures).toEqual([]);
+    expect(readFileSync(staged, "utf8")).toBe("db");
+    expect(readdirSync(stagingDir).toSorted()).toEqual(["state.sqlite", "state.sqlite-wal"]);
+  });
+
+  it("fails instead of importing a torn pair when the database never settles", () => {
+    const root = makeRoot();
+    const dbPath = seedDbFile(root);
+    let tick = 0;
+    expect(() => copyLiveDatabase(dbPath, join(root, "staging"), () => String(tick++))).toThrow(
+      /kept rewriting/,
+    );
   });
 });
