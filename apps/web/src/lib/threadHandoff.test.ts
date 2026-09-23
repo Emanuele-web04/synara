@@ -1,15 +1,20 @@
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS_VIEW,
+  EventId,
   MessageId,
   type ModelSelection,
+  type OrchestrationThreadActivity,
   type ProviderKind,
   type ServerProviderStatus,
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
   resolveAvailableHandoffTargetProviders,
+  resolveThreadHandoffAvailability,
+  resolveThreadHandoffTitle,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
@@ -98,6 +103,36 @@ describe("threadHandoff", () => {
     ).toHaveLength(4);
   });
 
+  it("drops usage invalidated by the latest compaction before handoff appends", () => {
+    const activity = (
+      kind: string,
+      payload: OrchestrationThreadActivity["payload"] = {},
+    ): OrchestrationThreadActivity => ({
+      id: EventId.makeUnsafe(`activity-${kind}`),
+      createdAt: "2026-07-21T00:00:00.000Z",
+      tone: "info",
+      kind,
+      summary: kind,
+      payload,
+      turnId: null,
+    });
+
+    const imported = buildThreadHandoffImportedActivities({
+      activities: [
+        activity("context-window.configured"),
+        activity("context-window.updated"),
+        activity("context-compaction", { state: "compacted" }),
+        activity("context-window.updated", { usedTokens: 20_000 }),
+        activity("tool.started"),
+      ],
+    });
+
+    expect(imported.map(({ kind }) => kind)).toEqual([
+      "context-compaction",
+      "context-window.updated",
+    ]);
+  });
+
   it("excludes disabled, missing, unavailable, and unauthenticated handoff targets", () => {
     const readyStatus = (
       provider: ProviderKind,
@@ -152,6 +187,13 @@ describe("threadHandoff", () => {
     ).toEqual([]);
   });
 
+  it("preserves the source thread title for the created handoff thread", () => {
+    expect(resolveThreadHandoffTitle({ title: "General Greeting" })).toBe("General Greeting");
+    expect(resolveThreadHandoffTitle({ title: "  Debug   Grok handoff  " })).toBe(
+      "Debug Grok handoff",
+    );
+  });
+
   it("prefers sticky model selection for the chosen handoff target", () => {
     const stickySelection = {
       provider: "antigravity",
@@ -195,5 +237,38 @@ describe("threadHandoff", () => {
       provider: "codex",
       model: DEFAULT_MODEL_BY_PROVIDER.codex,
     });
+  });
+
+  it("offers provider and workspace handoff for an ordinary project thread", () => {
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: false,
+        isCoordinatorThread: false,
+      }),
+    ).toEqual({ providerHandoff: true, workspaceHandoff: true });
+  });
+
+  it("keeps provider handoff for a group chat but hides workspace handoff", () => {
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: true,
+        isCoordinatorThread: false,
+      }),
+    ).toEqual({ providerHandoff: true, workspaceHandoff: false });
+  });
+
+  it("hides every handoff action for the coordinator thread", () => {
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: true,
+        isCoordinatorThread: true,
+      }),
+    ).toEqual({ providerHandoff: false, workspaceHandoff: false });
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: false,
+        isCoordinatorThread: true,
+      }),
+    ).toEqual({ providerHandoff: false, workspaceHandoff: false });
   });
 });
